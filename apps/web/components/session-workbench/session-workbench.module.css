@@ -94,12 +94,11 @@
 .send {
   order: 2;
   margin-left: 4px;
-  flex: 0 0 44px;
-  border-radius: 50%;
-  height: 44px;
-  min-height: 44px;
-  padding: 0;
-  width: 44px;
+  border-radius: 8px;
+  height: 42px;
+  min-height: 42px;
+  min-width: 60px;
+  padding: 0 16px;
 }
 
 .danger {
@@ -116,9 +115,9 @@
 }
 
 .primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
-  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--ink) 86%, var(--background));
+  border-color: color-mix(in srgb, var(--ink) 86%, var(--background));
+  color: var(--background);
 }
 
 .primary:disabled,
@@ -195,7 +194,7 @@
   background: var(--accent-soft);
   border-radius: 999px;
   color: var(--accent-strong);
-  font-size: 0.68rem;
+  font-size: 0.8125rem;
   font-weight: 700;
   padding: 2px 8px;
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowUpRight,
   Browser,
   FileImage,
   FileText,
@@ -264,7 +263,13 @@ function HistoryRow({
   disabled: boolean;
   onSelect: (id: string) => void;
 }) {
-  const title = item.contact?.display_name ?? item.source?.title ?? "来源";
+  const title = item.source?.title ?? item.contact?.display_name ?? "来源";
+  const meta = [
+    item.contact?.display_name,
+    new Date(item.created_at).toLocaleDateString("zh-CN"),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <button
       type="button"
@@ -278,15 +283,15 @@ function HistoryRow({
       </span>
       <span className={styles.historyBody}>
         <strong>{title}</strong>
-        {item.contact && item.source ? (
-          <span className={styles.recentSource} title={item.source.title}>
-            {item.source.title}
-          </span>
-        ) : null}
-        <span>{new Date(item.created_at).toLocaleDateString("zh-CN")}</span>
+        <span className={styles.historyMeta}>{meta}</span>
         <span className={styles.statusLabel} data-status={item.status}>
           {states[item.status]}
         </span>
+      </span>
+      <span className={styles.historyAction}>
+        {item.status === "running" || isAttention(item.status)
+          ? "查看进度"
+          : "查看结果"}
       </span>
     </button>
   );
@@ -1381,12 +1386,11 @@ function CaptureWorkspace({
   const shown = task ? [task] : profileTasks;
   const hasRecords =
     allScopedRecent.length > 0 || profileTasks.length > 0 || Boolean(task);
-  const showSidebar = !dialogMode && hasRecords;
-  const showEmpty = !dialogMode && historyStatus === "ready" && !hasRecords;
   const personName =
     archiveName ??
     profileTasks[0]?.contact?.display_name ??
     task?.contact?.display_name;
+  const showEmpty = !dialogMode && historyStatus === "ready" && !hasRecords;
   const composerCollapsible =
     !dialogMode && !showEmpty && Boolean(personID || task);
   const composerExpanded = composerCollapsible ? composerOpen : true;
@@ -1483,7 +1487,6 @@ function CaptureWorkspace({
                 onClick={() => fileInput.current?.click()}
                 disabled={attachmentsLocked}
               >
-                <Plus aria-hidden />{" "}
                 {attachments.length > 0 ? "添加更多截图" : "选择截图"}
               </button>
             </div>
@@ -1510,9 +1513,7 @@ function CaptureWorkspace({
         )}
 
         <details className={styles.intentDetails}>
-          <summary>
-            添加整理要求 <span>可选</span>
-          </summary>
+          <summary>添加整理要求</summary>
           <label className={styles.label}>
             这次想了解什么？
             <textarea
@@ -1572,7 +1573,7 @@ function CaptureWorkspace({
               (inputMode === "image" ? attachments.length === 0 : !text.trim())
             }
           >
-            <ArrowUpRight aria-hidden /> {busy ? "正在提交…" : "保存并整理"}
+            {busy ? "正在提交…" : "保存并整理"}
           </button>
         </div>
         {unresolved ? (
@@ -1613,10 +1614,14 @@ function CaptureWorkspace({
     ) : null;
     if (scopedRecent.length === 0) {
       if (errorBanner) return errorBanner;
+      if (filter === "attention")
+        return <p className={styles.muted}>暂时没有待处理的来源。</p>;
       return (
-        <p className={styles.muted}>
-          {filter === "attention" ? "暂时没有待处理的来源。" : "还没有来源记录。"}
-        </p>
+        <div className={styles.emptyHistory}>
+          <Tray aria-hidden />
+          <strong>还没有来源</strong>
+          <p>添加后，处理进度与结果会留在这里。</p>
+        </div>
       );
     }
     return (
@@ -1651,7 +1656,7 @@ function CaptureWorkspace({
       ) : null}
 
       <Layout
-        className={`${styles.layout} ${!showSidebar ? styles.emptyLayout : ""}`}
+        className={styles.layout}
         id={dialogMode ? undefined : "main-content"}
       >
         {!dialogMode ? (
@@ -1659,7 +1664,7 @@ function CaptureWorkspace({
             <div className={styles.titleBlock}>
               {personID ? <p className={styles.eyebrow}>联系人档案</p> : null}
               <h1>{personID ? (personName ?? "联系人") : "来源"}</h1>
-              <p>截图、文字与网页，整理成可追溯的人物线索。</p>
+              <p>截图与文字，整理成可追溯的人物线索。</p>
             </div>
             {task ? (
               <button
@@ -1683,40 +1688,9 @@ function CaptureWorkspace({
           </header>
         ) : null}
 
-        {showSidebar ? (
-          <aside className={styles.sidebar} aria-label="来源记录">
-            <div className={styles.historyHeading}>
-              <p className={styles.eyebrow}>
-                {personID ? "这位联系人的整理记录" : "采集记录"}
-              </p>
-              {hasRecords && !task ? (
-                <button
-                  type="button"
-                  className={styles.newSource}
-                  onClick={startNewSource}
-                  disabled={busy}
-                >
-                  <Plus aria-hidden /> 添加来源
-                </button>
-              ) : null}
-            </div>
-            <div className={styles.filters}>
-              <button
-                type="button"
-                aria-pressed={filter === "all"}
-                onClick={() => setFilter("all")}
-              >
-                全部 <span>{allScopedRecent.length}</span>
-              </button>
-              <button
-                type="button"
-                aria-pressed={filter === "attention"}
-                onClick={() => setFilter("attention")}
-              >
-                待处理 <span>{attentionCount}</span>
-              </button>
-            </div>
-            {renderHistory()}
+        {!dialogMode ? (
+          <aside className={styles.guideRail} aria-label="来源会如何整理">
+            <IntakeGuide />
           </aside>
         ) : null}
 
@@ -1730,20 +1704,6 @@ function CaptureWorkspace({
                 撤销归档
               </button>
             </div>
-          ) : !hasRecords ? (
-            <>
-              <div className={styles.intakeGrid}>
-                {composer}
-                <IntakeGuide />
-              </div>
-              {historyStatus === "loading" ? <HistorySkeleton /> : historyError ? (
-                <HistoryError message={historyError} disabled={busy} onRetry={() => void loadRecords()} />
-              ) : <div className={styles.emptyHistory}>
-                <Tray aria-hidden />
-                <strong>还没有来源</strong>
-                <p>添加后，处理进度与结果会留在这里。</p>
-              </div>}
-            </>
           ) : (
             composer
           )}
@@ -1774,6 +1734,43 @@ function CaptureWorkspace({
               onDelete={removeSource}
             />
           ))}
+
+          {!dialogMode ? (
+            <section className={styles.recent} aria-label="来源记录">
+              <div className={styles.recentHeading}>
+                <h2>{personID ? "这位联系人的整理记录" : "最近来源"}</h2>
+                {hasRecords && !task ? (
+                  <button
+                    type="button"
+                    className={styles.newSource}
+                    onClick={startNewSource}
+                    disabled={busy}
+                  >
+                    <Plus aria-hidden /> 添加来源
+                  </button>
+                ) : null}
+              </div>
+              {hasRecords ? (
+                <div className={styles.filters} role="group" aria-label="筛选来源记录">
+                  <button
+                    type="button"
+                    aria-pressed={filter === "all"}
+                    onClick={() => setFilter("all")}
+                  >
+                    全部 <span>{allScopedRecent.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={filter === "attention"}
+                    onClick={() => setFilter("attention")}
+                  >
+                    待处理 <span>{attentionCount}</span>
+                  </button>
+                </div>
+              ) : null}
+              {renderHistory()}
+            </section>
+          ) : null}
         </div>
       </Layout>
 

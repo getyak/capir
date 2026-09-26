@@ -3,7 +3,6 @@ import {
   AddressBook,
   ArrowRight,
   MagnifyingGlass,
-  UserPlus,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import Form from "next/form";
@@ -36,7 +35,9 @@ export function PeopleDirectoryApp({
             <div>
               <h1>人物</h1>
               <p>
-                查找你认识的人，回顾沟通与下一步。
+                {error
+                  ? "目录暂时不可用；已保存的联系人资料不会改变。"
+                  : `${people.length} 位${query ? "匹配联系人" : "联系人"} · 每段关系保留自己的上下文`}
                 {returnSessionId
                   ? " 这次选择会保留原对话入口，但不会自动改变对话范围。"
                   : ""}
@@ -49,14 +50,13 @@ export function PeopleDirectoryApp({
                 returnSessionId,
               )}
             >
-              <UserPlus aria-hidden="true" size={16} />
               添加联系人
             </Link>
           </header>
 
           <div className={styles.listTools}>
             <Form action="/workspace/people" className={styles.search} scroll={false}>
-              <MagnifyingGlass aria-hidden="true" size={16} />
+              <MagnifyingGlass aria-hidden="true" size={20} />
               <input
                 aria-label="按姓名或已确认联系方式搜索人物"
                 defaultValue={query}
@@ -125,12 +125,15 @@ export function PeopleDirectoryApp({
             <>
               <div aria-hidden="true" className={styles.tableHeader}>
                 <span>人物</span>
-                <span>关系与最近变化</span>
+                <span>关系情境与资料</span>
                 <span>更新</span>
               </div>
               <PeopleDirectoryList people={people} returnSessionId={returnSessionId} />
             </>
           )}
+          <p className={styles.directoryNote}>
+            每位联系人保留独立身份，资料只在对应关系情境中使用。
+          </p>
         </div>
       </main>
     </div>

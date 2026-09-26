@@ -63,8 +63,11 @@ export function SettingsWorkspace({ initial, sessionVersion, section, labEnabled
   const primary = ["overview", "account", "appearance", "workspace", "connections"];
   const link = (id: SettingsSection) => { const item = SETTINGS_SECTIONS.find(item => item.id === id)!; return <Link key={id} href={item.href} aria-current={section === id ? "page" : undefined}>{titles[id]}</Link>; };
   return <main className={styles.page} id="main-content" tabIndex={-1} data-settings-workspace>
-    <nav className={styles.navigation} aria-label="设置分区" data-settings-navigation>
+    <header className={styles.header}>
       <h1>设置</h1>
+      <p>管理账号、外观与工作偏好。</p>
+    </header>
+    <nav className={styles.navigation} aria-label="设置分区" data-settings-navigation>
       <div className={styles.primaryNav}>{primary.map(id => link(id as SettingsSection))}</div>
       <details className={styles.more} open={section === "advanced" || section === "testing" ? true : undefined}>
         <summary>更多设置</summary>{link("advanced")}{labEnabled && link("testing")}

@@ -39,6 +39,17 @@ export function PursuitReviewGate({
 
   return (
     <div className={styles.reviewGate}>
+      {pending ? (
+        <aside className={styles.pendingPanel} aria-label="待你审阅">
+          <p>待你审阅</p>
+          <h2>{pending.summary}</h2>
+          <p className={styles.pendingBody}>
+            共 {pending.items.length} 项拟议变更；审阅前不会改变任何状态。
+          </p>
+          <p className={styles.pendingMeta}>尚未应用 · 审阅后由你决定</p>
+          <a href="#proposal">审阅建议</a>
+        </aside>
+      ) : null}
       <aside className={styles.section}>
         <header>
           <div>

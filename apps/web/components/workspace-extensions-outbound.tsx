@@ -97,11 +97,8 @@ export function OutboundPanel({
 
           {grants.length === 0 ? (
             <div className={styles.empty}>
-              <Key aria-hidden="true" size={22} />
-              <div>
-                <strong>尚未添加客户端</strong>
-                <p>令牌只显示一次，可随时单独撤销而不影响其他客户端。</p>
-              </div>
+              <strong>尚未添加客户端</strong>
+              <p>令牌只显示一次，可随时单独撤销而不影响其他客户端。</p>
               <button
                 className={styles.primary}
                 disabled={!configured}

@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ConversationResponse } from "./conversation-response";
+import { ConversationProvenance, ConversationResponse } from "./conversation-response";
 
 describe("conversation reading boundary", () => {
   it("renders paragraphs, emphasis, lists and bounded tables semantically", () => {
@@ -21,6 +21,17 @@ describe("conversation reading boundary", () => {
     expect(html).toContain("&lt;script&gt;");
     expect(html).toContain("追踪");
     expect(html).toContain("https://example.com/report");
+  });
+
+  it("marks the response lead only when asked and shows real provenance honestly", () => {
+    const lead = renderToStaticMarkup(createElement(ConversationResponse, { lead: true }, "先把一页方案整理清楚。"));
+    const plain = renderToStaticMarkup(createElement(ConversationResponse, null, "先把一页方案整理清楚。"));
+    expect(lead).toContain('data-lead="true"');
+    expect(plain).toContain('data-lead="false"');
+    const withSources = renderToStaticMarkup(createElement(ConversationProvenance, { sources: [{ display_name: "试点合作讨论" }, { display_name: "陈夏主页" }] }));
+    expect(withSources).toContain("依据 · 试点合作讨论 · 陈夏主页");
+    const withoutSources = renderToStaticMarkup(createElement(ConversationProvenance, null));
+    expect(withoutSources).toContain("依据 · 未附引用来源");
   });
 
   it("preserves literal user-visible code instead of interpreting it as markup", () => {

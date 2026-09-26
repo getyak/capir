@@ -54,7 +54,7 @@ export function AccountSettingsPanel({initial,section,embedded=false,recovery,av
     <nav className={styles.tabs} aria-label="账号设置"><Link href="/workspace/settings" aria-current={section==='account'?'page':undefined}>账号与安全</Link><Link href="/workspace/settings?section=workspace" aria-current={section==='workspace'?'page':undefined}>工作空间</Link>{data.lab_enabled&&<Link href="/workspace/settings/testing">测试空间</Link>}</nav></>}
     {section==='profile'?<>
       <section className={styles.section}>
-        <div className={styles.profileIdentity}><AvatarEditor id="self" self label={data.user.display_name} url={avatarUrl} size={72} triggerLabel="更换头像" /><div><h2>{data.user.display_name}</h2><p className={styles.secondary}>{data.user.email}</p></div></div>
+        <div className={styles.profileIdentity}><AvatarEditor id="self" self label={data.user.display_name} url={avatarUrl} size={64} shape="squircle" triggerLabel="更换头像" /><div><h2>{data.user.display_name}</h2><p className={styles.secondary}>{data.user.email}</p></div></div>
         {data.user.kind==='lab_human'?<p className={styles.secondary}>测试身份由隔离空间管理。返回自己的账号后可以修改资料。</p>:<NameForm key={`profile-${data.user.revision}`} name={data.user.display_name} kind="profile" revision={data.user.revision} label="显示名称" onSaved={setData}/>}
       </section>
       <section className={styles.section}><h2>个人介绍</h2><div className={styles.row}><p className={styles.secondary}>主页和个人介绍</p><Link className={styles.button} href="/onboarding?edit=true&callbackUrl=%2Fworkspace%2Fsettings">编辑资料 →</Link></div></section>

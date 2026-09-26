@@ -17,17 +17,23 @@ describe("people directory states", () => {
   it("distinguishes unavailable data from an empty directory", () => {
     const unavailable = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, error: "暂时无法连接" }));
     expect(unavailable).toContain("暂不可用");
+    expect(unavailable).toContain("目录暂时不可用；已保存的联系人资料不会改变。");
     expect(unavailable).not.toContain("0 位人物");
+    expect(unavailable).not.toContain("0 位联系人");
     expect(unavailable).not.toContain("还没有人物");
     const empty = renderToStaticMarkup(createElement(PeopleDirectoryApp, props));
     expect(empty).toContain("0 位人物");
+    expect(empty).toContain("0 位联系人 · 每段关系保留自己的上下文");
     expect(empty).toContain("添加第一位联系人");
+    expect(empty).toContain("每位联系人保留独立身份，资料只在对应关系情境中使用。");
   });
   it("keeps historical identity and relationship scope explicit", () => {
     const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, people: [person], query: "林", returnSessionId: "session-a" }));
     expect(html).toContain("历史邮箱：l***@example.test");
     expect(html).toContain("项目沟通");
+    expect(html).toContain("关系情境与资料");
     expect(html).toContain("1 位匹配人物");
+    expect(html).toContain("1 位匹配联系人 · 每段关系保留自己的上下文");
     expect(html).toContain("/workspace/people/person-a?session=session-a");
     expect(html).toContain("项目沟通");
     expect(html).toContain('name="session"');

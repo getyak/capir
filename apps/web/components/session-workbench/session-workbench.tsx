@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ArrowUp,
   Copy,
   Trash,
   Warning,
@@ -12,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { QueuedConversation } from "../conversation/queued-conversation";
 import { useWorkspaceChat } from "../relationship-workspace/use-workspace-chat";
-import { ConversationResponse } from "../conversation-response";
+import { ConversationProvenance, ConversationResponse } from "../conversation-response";
 import { WorkspaceComposer } from "../workspace-composer";
 import { workspaceSessionFetch } from "@/components/workspace-session-request";
 import {
@@ -791,9 +790,12 @@ function LegacySessionWorkbench({
       data-conversation-canvas="session"
     >
       <header className={chatStyles.header}>
-        <h1 className={chatStyles.title} id="session-title">
-          {sessionDisplayTitle(detail.title)}
-        </h1>
+        <div className={chatStyles.headingText}>
+          <h1 className={chatStyles.title} id="session-title">
+            {sessionDisplayTitle(detail.title)}
+          </h1>
+          <p className={chatStyles.subtitle}>{scope.label}</p>
+        </div>
         <details
           className={chatStyles.conversationDetails}
           onKeyDown={(event) => {
@@ -962,7 +964,8 @@ function LegacySessionWorkbench({
                         return (
                           <article key={block.id}>
                             {title ? <h3>{title}</h3> : null}
-                            <ConversationResponse>{block.body}</ConversationResponse>
+                            <ConversationResponse lead={!title}>{block.body}</ConversationResponse>
+                            <ConversationProvenance sources={block.public_source_refs} />
                           </article>
                         );
                       })}
@@ -996,7 +999,7 @@ function LegacySessionWorkbench({
               {sendPending && !sending ? <button className={styles.secondary} type="button" onClick={endSendRetry}>保留草稿，结束重试</button> : null}
               {accountId && chatSessionVersion && canAsk ? <button className={`${styles.primary} ${styles.send}`} aria-label={sending ? "发送中" : sendPending ? "重试同一条消息" : "发送"} title="发送 · Enter" type="button"
                 disabled={!canSend}
-                onClick={() => void sendMessage()}><ArrowUp aria-hidden="true" size={18} /><span className="sr-only">{sending ? "发送中…" : sendPending ? "重试同一条消息" : "发送"}</span></button> : null}
+                onClick={() => void sendMessage()}><span>{sending ? "发送中" : sendPending ? "重试" : "发送"}</span></button> : null}
             </div>
           }
           footerStart={
