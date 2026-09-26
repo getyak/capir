@@ -1,6 +1,6 @@
 # Figma-led product craft
 
-Status: active — Figma module authoring and first implementation batch.
+Status: restoration implemented and verified — PR pending.
 
 ## Outcome and boundary
 
@@ -53,11 +53,25 @@ decisions remain provisional until current screenshots and interaction agree.
 3. Delegate settled implementation batches to Pi + MiMo, preserving one writer
    per owned area and Codex ownership of Figma and final integration. Read back
    the optimized Figma before applying the corresponding implementation.
+   **Restoration pass (2026-09-27):** Figma editing is frozen; the R4 frames are
+   the source of truth. `restoration-spec.md` converts them into per-module
+   implementation contracts. Five parallel batches (today/pursuit,
+   people/person, time/sources, extensions/settings, conversation) run with
+   disjoint file ownership; the integrator owns shared tokens
+   (`packages/workspace-ui`), the Web theme adapter, shell CSS, verification
+   tooling, docs and the branch.
 4. Independently review code and compare real UI against the updated designs.
    Exercise navigation, populated/empty/error states, keyboard, narrow layout,
    light/dark appearance, and reduced motion as relevant. Fix confirmed defects.
 5. Complete appropriate lint, type checks, tests, build, and `pnpm docs:check`;
    record exactly what is complete and any remaining platform limitations.
+   **2026-09-27 verification:** Web 1399 tests + workspace-ui 18 + macos-hybrid
+   14 green, `tsc6 --noEmit` clean, ESLint 0 errors (5 pre-existing warnings in
+   untouched files), production `next build` passes with a local `AUTH_SECRET`,
+   `pnpm docs:check` passes. Compared each of the nine frames plus the dark
+   people frame against live fixture screenshots at 1280x820 and a 900px
+   narrow viewport; DOM measurements prove the shared frame (236px sidebar,
+   1040px content, 8/12px radii, 24/22/18/15/13 scale).
 
 ## Decisions and unknowns
 
@@ -79,3 +93,19 @@ decisions remain provisional until current screenshots and interaction agree.
   57014 statement timeout. This is not proven to be caused by visual changes.
   Diagnostic receipts are under the external artifact runtime directory.
 - No release or complete product acceptance has been recorded yet.
+- Shared foundation landed on the branch: canonical tokens now match the
+  contract palette (light canvas #FCFBF7 / chrome #F4F3EF / accent #BC3827,
+  warm dark #171816/#20211E/#F18F7D), type scale 24/22/18/15/13, radii 8/12.
+  `workspace-ui` (18) and `macos-hybrid` (14) tests stay green after the token
+  change; DOM measurement at 1280x820 confirms sidebar 236px, canvas/ink/
+  accent/divider and radii on the live fixture app.
+- Visual review channel caveat: batched image reads can deliver stale or
+  shifted screenshots; screenshots are burned with file labels
+  (`/tmp/ui-craft/label.mjs`) and structure is verified through DOM
+  measurements (`/tmp/ui-craft/verify-dom.mjs`), not eyes alone.
+- First parallel batch pass (2026-09-27) exhausted its 45-minute budget in
+  analysis-heavy exploration; all five were revived with tight implementation
+  budgets. Partial work already in the worktree: people directory + person
+  memory CSS/TSX, time workspace, extensions. The R4 frame list in Figma matches
+  `design-frames.json` exactly (Today 63:1453 … Settings 63:2075, People dark
+  63:2414); one batch briefly suspected extra frame versions — there are none.
