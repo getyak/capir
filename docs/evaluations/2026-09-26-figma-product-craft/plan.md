@@ -1,6 +1,6 @@
 # Figma-led product craft
 
-Status: active — source and runtime audit.
+Status: active — Figma module authoring and first implementation batch.
 
 ## Outcome and boundary
 
@@ -68,5 +68,14 @@ decisions remain provisional until current screenshots and interaction agree.
   shared Web verification cannot establish native iOS acceptance.
 - Before adding any new module, establish its canonical owner and existing
   supported behavior. A design proposal must not imply a backend capability.
-- No implementation changes, quality verdict, release, or complete product
-  acceptance have been recorded yet.
+- Selected People A after exporting and viewing both compositions; 9 editable
+  module frames are linked in the design contract. Final refinement is active.
+- Pi foundation batch: `20260926-192733-9cdd2855`, frozen base `4af6de96`.
+- Parent owns deadline presentation and product-facing pursuit copy. Four
+  deadline regression cases plus six projection cases passed; integration and
+  final visual review remain open.
+- Synthetic runtime exposes intermittent database read/connection timeouts.
+  Liveness remains responsive; Time activity source-redaction SQL has a recorded
+  57014 statement timeout. This is not proven to be caused by visual changes.
+  Diagnostic receipts are under the external artifact runtime directory.
+- No release or complete product acceptance has been recorded yet.

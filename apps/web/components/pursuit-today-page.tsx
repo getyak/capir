@@ -33,6 +33,7 @@ import {
 } from "./workspace-session-request";
 import { WorkspaceDisconnectedState } from "./workspace-disconnected-state";
 import styles from "./pursuit-today-page.module.css";
+import { PursuitDeadline } from "./pursuit-deadline";
 
 type Props = {
   error: string | null;
@@ -53,7 +54,7 @@ const evidenceCopy = {
   available: "证据可用",
   partial: "部分证据可用",
   unavailable: "证据不可用",
-  not_required: "招聘顾问撰写",
+  not_required: "由你记录",
 } as const;
 
 function formatDate(value: string): string {
@@ -68,19 +69,6 @@ function formatDate(value: string): string {
       }).format(date);
 }
 
-function formatDue(value: string | null): string {
-  if (!value) return "没有截止时间";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : new Intl.DateTimeFormat("zh-CN", {
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        month: "short",
-        timeZone: "UTC",
-      }).format(date);
-}
 
 function kindCopy(item: PursuitTodayItem): string {
   if (item.attentionKind === "review") {
@@ -129,7 +117,7 @@ function AgentComposer({
   const router = useRouter();
   const defaultObjective = useMemo(
     () =>
-      `只审阅“${item.title}”范围内已授权的证据。暂存一项最小且有证据支持的寻访更新；如果没有安全、真实的变化，则记录无需行动。`,
+      `只审阅“${item.title}”范围内已授权的证据。暂存一项最小且有证据支持的目标更新；如果没有安全、真实的变化，则记录无需行动。`,
     [item.title],
   );
   const [objective, setObjective] = useState(defaultObjective);
@@ -282,7 +270,7 @@ function AgentComposer({
   const disabledReason =
     item.evidenceState === "unavailable"
       ? "来源权限不可用，因此新的运行无法引用它。"
-      : "该寻访尚未关联经过审阅且获得授权的采集内容。";
+      : "该目标尚未关联经过审阅且获得授权的采集内容。";
   const successfulResult =
     result?.status === "proposal_staged" || result?.status === "no_action";
 
@@ -293,7 +281,7 @@ function AgentComposer({
           <Sparkle size={18} weight="fill" />
         </span>
         <div>
-          <h3 id="agent-composer-title">在本次寻访范围内询问</h3>
+          <h3 id="agent-composer-title">在本次目标范围内询问</h3>
           <p>
             {providerMode === "live_remote"
               ? "固定远程模型 · 仅处理合成内容 · 四项受治理工具"
@@ -392,7 +380,7 @@ function FocusItem({
 }) {
   return (
     <article className={styles.focus} data-evidence-state={item.evidenceState}>
-      <div className={styles.focusRedline} aria-hidden="true" />
+      {item.attentionKind === "review" ? <div className={styles.focusRedline} aria-hidden="true" /> : null}
       <header className={styles.focusHeader}>
         <div>
           <p className={styles.kicker}>
@@ -411,7 +399,11 @@ function FocusItem({
         </div>
       </header>
 
-      <p className={styles.focusDetail}>{item.attentionDetail}</p>
+      <p className={styles.focusDetail}>
+        {item.attentionKind === "action" && item.action ? (
+          <>负责人：{item.action.owner} · <PursuitDeadline value={item.action.dueAt} /></>
+        ) : item.attentionDetail}
+      </p>
 
       <dl className={styles.focusFacts}>
         <div>
@@ -430,14 +422,14 @@ function FocusItem({
 
       {item.action || item.gap ? (
         <div className={styles.supportingWork}>
-          {item.action ? (
+          {item.action && item.attentionKind !== "action" ? (
             <div>
               <Clock aria-hidden="true" size={18} />
               <p>
                 <span>已分配行动</span>
                 <strong>{item.action.title}</strong>
                 <small>
-                  {item.action.owner} · {formatDue(item.action.dueAt)}
+                  {item.action.owner} · <PursuitDeadline value={item.action.dueAt} />
                 </small>
               </p>
             </div>
@@ -459,7 +451,7 @@ function FocusItem({
           {item.attentionKind === "review" &&
           item.proposalStatus === "needs_review"
             ? "审阅提案"
-            : "打开寻访房间"}
+            : "打开目标工作区"}
           <ArrowRight aria-hidden="true" size={17} />
         </Link>
         <span>打开此视图不会改变任何状态。</span>
@@ -493,7 +485,7 @@ function Continuation({ item }: { item: PursuitTodayItem }) {
       </p>
       <footer>
         <span>{formatDate(item.targetDate)}</span>
-        {item.action ? <span>{formatDue(item.action.dueAt)}</span> : null}
+        {item.action ? <span><PursuitDeadline value={item.action.dueAt} /></span> : null}
         <ArrowRight aria-hidden="true" size={16} />
       </footer>
     </Link>
@@ -545,7 +537,7 @@ export function PursuitTodayPage({
           >
             <WarningCircle aria-hidden="true" size={23} />
             <div>
-              <h2>登录后继续本次寻访。</h2>
+              <h2>登录后继续本次目标。</h2>
               <p>
                 上一次核验的今日视图仍保持可见。在账号会话恢复前，新的智能助理与审阅写入都会暂停。
               </p>
@@ -605,7 +597,7 @@ export function PursuitTodayPage({
                 <div className={styles.quietState}>
                   <CheckCircle aria-hidden="true" size={22} />
                   <p>
-                    <strong>没有其他受治理的工作需要关注。</strong>
+                    <strong>没有其他事项需要关注。</strong>
                     <span>安静是一种有效状态。</span>
                   </p>
                 </div>
@@ -645,8 +637,8 @@ export function PursuitTodayPage({
             <h2>今天不需要凭空制造任务。</h2>
             <p>
               {projection?.totalPursuits
-                ? `${projection.noActionCount} 项活跃寻访没有待审阅内容、已分配行动或有证据支撑的缺口。`
-                : "还没有活跃寻访进入此工作台。"}
+                ? `${projection.noActionCount} 项活跃目标没有待审阅内容、已分配行动或有证据支撑的缺口。`
+                : "还没有活跃目标进入此工作台。"}
             </p>
             <Link href="/workspace">打开关系工作台</Link>
           </section>

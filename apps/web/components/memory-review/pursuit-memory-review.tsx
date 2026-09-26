@@ -32,7 +32,7 @@ export function PursuitMemoryReview({
     <section aria-labelledby="pursuit-memory-heading">
       <header>
         <p>关系记忆</p>
-        <h2 id="pursuit-memory-heading">这段寻访的待确认变化</h2>
+        <h2 id="pursuit-memory-heading">当前目标的待确认变化</h2>
       </header>
       {scopes.length === 0 ? (
         <p>

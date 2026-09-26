@@ -82,3 +82,27 @@ feeds macOS WKWebView; it does not prove native iOS or separate native settings.
 Run focused existing tests, Web lint/typecheck/build and docs check. Behavioral
 fixes need meaningful regression coverage. No snapshot test merely mirroring CSS.
 Independent review and final visual adjudication remain the parent agent's job.
+
+## Editable module sources
+
+All links target the existing formal file. The new R4 section retains the
+original exploration and previous designs. Source data is synthetic and
+illustrative; implementations must render actual current state.
+
+| Module | Editable frame | Implementation boundary |
+| --- | --- | --- |
+| Today | [63:1453](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-1453) | Focus, continuation, real review state |
+| Conversation | [63:1722](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-1722) | Reading rhythm and shared composer, preserve queue |
+| People | [63:1198](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-1198) | Full directory with supported search |
+| Person | [63:1537](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-1537) | Stable identity, context navigation, accepted/pending memory |
+| Pursuit | [63:1631](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-1631) | Real gaps/actions/review, no fabricated proposal |
+| Time | [63:1804](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-1804) | Calendar hierarchy; preserve timeline, hour grid and inspector |
+| Sources | [63:1905](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-1905) | Screenshot/text input, provenance, review workflow |
+| Extensions | [63:1997](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-1997) | Existing inbound/outbound tabs and verified connection state |
+| Settings | [63:2075](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=63-2075) | Existing section navigation and actual editable profile fields |
+
+The calendar composition is a hierarchy study, not permission to remove the
+existing hour grid, all-day region, time-zone picker, or activity inspector.
+Profile fields and relationship metadata only appear when supported by data.
+The implementation should improve beyond a static frame through keyboard,
+responsive layout, readable state labels, precise source links, and recovery.

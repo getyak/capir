@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   description:
-    "受治理的寻访关注事项、待审阅内容、已分配行动与边界明确的智能助理工作。",
+    "需要关注的目标、待审阅内容和已分配行动。",
   robots: { follow: false, index: false },
   title: "今日",
 };
@@ -45,7 +45,7 @@ export default async function TodayPage({
       sessionRecoveryHref = backendSessionRecoveryHref("/workspace/today");
     } else {
       error =
-        "无法核验账号专属的寻访 API；系统没有使用缓存或测试状态替代。";
+        "暂时无法读取当前账号的目标，请稍后重试。";
     }
   }
 

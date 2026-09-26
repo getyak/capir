@@ -6,6 +6,7 @@ import { PursuitMemoryReview } from "@/components/memory-review/pursuit-memory-r
 import { PursuitReviewGate } from "@/components/pursuit-review-gate";
 import { PursuitAgentRail } from "@/components/pursuit-agent-rail";
 import styles from "@/components/pursuit-room.module.css";
+import { PursuitDeadline } from "@/components/pursuit-deadline";
 import {
   backendSessionRecoveryHref,
   isBackendSessionExpiredError,
@@ -22,9 +23,9 @@ import { loadPursuitMemoryScopes } from "@/lib/server/localBackend";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  description: "规范的寻访目标、有证据支撑的缺口、行动与审阅。",
+  description: "规范的目标目标、有证据支撑的缺口、行动与审阅。",
   robots: { follow: false, index: false },
-  title: "寻访房间",
+  title: "目标工作区",
 };
 
 function formatDate(value: string | null): string {
@@ -51,6 +52,19 @@ const pursuitValueLabels: Record<string, string> = {
   mutual_final_decision: "双方最终决定",
   offer_review: "录用意向审阅",
   recruiting: "招聘",
+  sales: "客户合作",
+  partnership: "伙伴协作",
+  collaboration: "合作",
+  draft: "草稿",
+  paused: "已暂停",
+  drafted: "待推进",
+  awaiting_confirmation: "待确认",
+  scheduled: "已安排",
+  in_progress: "进行中",
+  available: "证据可用",
+  partial: "部分证据可用",
+  unavailable: "证据不可用",
+  not_required: "由你记录",
   shortlist_review: "候选名单审阅",
 };
 
@@ -113,7 +127,7 @@ export default async function PursuitRoomPage({
     <div className={styles.page}>
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.hero}>
-          <p className={styles.eyebrow}>{displayPursuitValue(pursuit.type)}寻访</p>
+          <p className={styles.eyebrow}>{displayPursuitValue(pursuit.type)}目标</p>
           <h1>{pursuit.title}</h1>
           <p>{displayPursuitValue(pursuit.target_outcome)}</p>
           <dl>
@@ -152,7 +166,7 @@ export default async function PursuitRoomPage({
                     <article className={styles.row} key={gap.id}>
                       <div>
                         <strong>{gap.title}</strong>
-                        <span>{gap.basis.evidence_state.availability}</span>
+                        <span>{displayPursuitValue(gap.basis.evidence_state.availability)}</span>
                       </div>
                       <p>{gap.close_condition}</p>
                     </article>
@@ -180,7 +194,7 @@ export default async function PursuitRoomPage({
                         <span>{displayPursuitValue(action.status)}</span>
                       </div>
                       <p>
-                        {action.owner_display_name} · {formatDate(action.due_at)} · 无外部效果
+                        {action.owner_display_name} · <PursuitDeadline value={action.due_at} /> · 仅记录在工作区
                       </p>
                     </article>
                   ))}

@@ -42,7 +42,7 @@ export function PursuitReviewGate({
       <aside className={styles.section}>
         <header>
           <div>
-            <p>人工决策门</p>
+            <p>待你决定</p>
             <h2>审阅队列</h2>
           </div>
           <span>{visible.length} 项等待处理</span>
