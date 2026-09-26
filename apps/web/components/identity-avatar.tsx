@@ -5,9 +5,10 @@ import { resolveAvatar, type AvatarPreference, type AvatarStyle } from "@/lib/av
 import { generatedAvatar } from "@/lib/generated-avatar";
 import styles from "./identity-avatar.module.css";
 
-export function IdentityAvatar({ id, label, url, className = "", size, preference, defaultStyle, dataSize }: {
+export function IdentityAvatar({ id, label, url, className = "", size, preference, defaultStyle, dataSize, shape }: {
   id: string; label: string; url?: string | null; className?: string; size?: number;
   preference?: AvatarPreference; defaultStyle?: AvatarStyle; dataSize?: string;
+  shape?: "circle" | "squircle";
 }) {
   const avatar = useMemo(() => resolveAvatar({ id, label, url, preference, defaultStyle }), [id, label, url, preference, defaultStyle]);
   const [loaded, setLoaded] = useState<string | null>(null);
@@ -26,7 +27,7 @@ export function IdentityAvatar({ id, label, url, className = "", size, preferenc
     "--avatar-dark-bg": avatar.color[2], "--avatar-dark-fg": avatar.color[3],
     ...(size ? { width: size, height: size, fontSize: size * .34 } : {}),
   } as CSSProperties;
-  return <span aria-hidden="true" className={`${className} ${styles.avatar}`} style={variables} data-size={dataSize} data-avatar-style={avatar.style} data-photo-loaded={Boolean(photo && loaded === photo)}>
+  return <span aria-hidden="true" className={`${className} ${styles.avatar}`} style={variables} data-size={dataSize} data-shape={shape ?? "circle"} data-avatar-style={avatar.style} data-photo-loaded={Boolean(photo && loaded === photo)}>
     {avatar.style === "initials" ? <span className={styles.initials}>{avatar.initials}</span> : generated ? <>
       {/* eslint-disable-next-line @next/next/no-img-element -- local generated SVG, no network or optimizer. */}
       <img alt="" src={generated.light} width={192} height={192} className={styles.generated} data-appearance="light" />

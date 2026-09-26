@@ -3,6 +3,7 @@
   --background: var(--ts-content-surface);
   --surface: var(--ts-panel-surface);
   --surface-muted: var(--ts-chrome-surface);
+  --surface-selected: var(--ts-selected-surface);
   --background-deep: var(--ts-chrome-surface);
   --ink: var(--ts-ink);
   --ink-soft: var(--ts-ink);
@@ -11,16 +12,19 @@
   --line: var(--ts-divider);
   --line-soft: var(--ts-divider);
   --accent: var(--ts-accent);
+  --accent-strong: var(--ts-accent);
   --workspace-title-size: 1.5rem;
-  --workspace-object-size: 1.5rem;
+  --workspace-object-size: 1.375rem;
   --workspace-section-size: 1.125rem;
   --workspace-body-size: 0.9375rem;
   --workspace-meta-size: 0.8125rem;
   --workspace-page-padding: clamp(20px, 3vw, 40px);
   --workspace-section-gap: 24px;
-  --button-radius: 6px;
-  --card-radius: 8px;
+  --button-radius: 8px;
+  --input-radius: 8px;
+  --card-radius: 12px;
   --object-radius: 8px;
+  --focus-radius: 12px;
   --shadow-object: none;
   --shadow-accent: none;
   background: var(--background);
@@ -44,8 +48,8 @@
   box-shadow: none;
   background: transparent;
 }
-.quiet-workspace .context-chat__composer textarea { font-size: 14px; }
-.quiet-workspace .context-chat__response-meta { font-size: 12px; }
+.quiet-workspace .context-chat__composer textarea { font-size: 15px; }
+.quiet-workspace .context-chat__response-meta { font-size: 13px; }
 .quiet-workspace .context-onboarding__header h1 { font-size: 24px; }
 .quiet-workspace :focus-visible { outline-offset: 3px; }
 

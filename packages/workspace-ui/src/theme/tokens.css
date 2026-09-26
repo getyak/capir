@@ -7,17 +7,18 @@
  */
 
 :where(.ts-workspace-theme, .ts-workspace-surface) {
-  --ts-accent: #b94632;
-  --ts-chrome-muted: #707571;
-  --ts-chrome-surface: #f5f5f3;
-  --ts-content-surface: #fdfdfc;
-  --ts-divider: #e7e8e5;
-  --ts-ink: #292b2b;
+  --ts-accent: #bc3827;
+  --ts-chrome-muted: #6a675f;
+  --ts-chrome-surface: #f4f3ef;
+  --ts-content-surface: #fcfbf7;
+  --ts-divider: #e2e0d8;
+  --ts-ink: #171715;
   --ts-panel-surface: #ffffff;
+  --ts-selected-surface: #e8e6df;
   --ts-sidebar-width: 236px;
   --ts-rail-width: 56px;
-  --ts-radius-control: 6px;
-  --ts-radius-frame: 8px;
+  --ts-radius-control: 8px;
+  --ts-radius-frame: 12px;
   --ts-space-xs: 4px;
   --ts-space-sm: 8px;
   --ts-space-md: 12px;
@@ -25,9 +26,11 @@
   --ts-space-xl: 24px;
   --ts-space-xxl: 32px;
   --ts-type-title: 24px;
-  --ts-type-body: 14px;
-  --ts-type-nav: 13px;
-  --ts-type-meta: 12px;
+  --ts-type-object: 22px;
+  --ts-type-section: 18px;
+  --ts-type-body: 15px;
+  --ts-type-nav: 14px;
+  --ts-type-meta: 13px;
 
   color: var(--ts-ink);
   font-family:
@@ -38,23 +41,27 @@
 
 @media (prefers-color-scheme: dark) {
   :where(.ts-workspace-theme, .ts-workspace-surface):not([data-theme="light"]):not(:where([data-theme="light"] *)) {
-    --ts-chrome-muted: #a4aaa6;
-    --ts-chrome-surface: #1b1c1c;
-    --ts-content-surface: #141515;
-    --ts-divider: #2c2e2e;
-    --ts-ink: #ecece8;
-    --ts-panel-surface: #1f2020;
+    --ts-accent: #f18f7d;
+    --ts-chrome-muted: #b2afa5;
+    --ts-chrome-surface: #20211e;
+    --ts-content-surface: #171816;
+    --ts-divider: #3b3d35;
+    --ts-ink: #f2f0e9;
+    --ts-panel-surface: #24251f;
+    --ts-selected-surface: #34362e;
   }
 }
 
 :where([data-theme="dark"]) :where(.ts-workspace-theme, .ts-workspace-surface),
 :where(.ts-workspace-theme, .ts-workspace-surface)[data-theme="dark"] {
-  --ts-chrome-muted: #a4aaa6;
-  --ts-chrome-surface: #1b1c1c;
-  --ts-content-surface: #141515;
-  --ts-divider: #2c2e2e;
-  --ts-ink: #ecece8;
-  --ts-panel-surface: #1f2020;
+  --ts-accent: #f18f7d;
+  --ts-chrome-muted: #b2afa5;
+  --ts-chrome-surface: #20211e;
+  --ts-content-surface: #171816;
+  --ts-divider: #3b3d35;
+  --ts-ink: #f2f0e9;
+  --ts-panel-surface: #24251f;
+  --ts-selected-surface: #34362e;
 }
 
 .ts-workspace-surface *,
@@ -83,14 +90,14 @@
   cursor: pointer;
   display: inline-flex;
   gap: var(--ts-space-sm);
-  min-height: 36px;
-  padding: 0 var(--ts-space-md);
+  min-height: 40px;
+  padding: 0 var(--ts-space-lg);
 }
 
 .ts-workspace-surface .ts-btn[data-primary="true"] {
   background: var(--ts-ink);
   border-color: var(--ts-ink);
-  color: var(--ts-content-surface);
+  color: var(--ts-panel-surface);
 }
 
 .ts-workspace-surface .ts-btn:disabled {
@@ -124,7 +131,7 @@
 }
 
 .ts-workspace-surface .ts-heading {
-  font-size: var(--ts-type-title);
+  font-size: var(--ts-type-object);
   font-weight: 580;
   letter-spacing: 0;
   margin: var(--ts-space-xs) 0 0;

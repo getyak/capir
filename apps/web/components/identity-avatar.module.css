@@ -17,6 +17,7 @@
   line-height: 1;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 6%);
 }
+.avatar.avatar[data-shape="squircle"] { border-radius: 12px; }
 .avatar::after { position: absolute; inset: 0; border: 1px solid rgb(90 80 70 / 10%); border-radius: inherit; pointer-events: none; content: ""; }
 .initials { position: relative; }
 .avatar[data-photo-loaded="true"] :is(.initials, .generated) { visibility: hidden; }
@@ -27,9 +28,10 @@
 :global([data-theme="dark"]) .generated[data-appearance="dark"] { display: block; }
 .photo { opacity: 0; transition: opacity 180ms ease-out; }
 .photo[data-loaded="true"] { opacity: 1; }
-.avatar[data-size="account"], .avatar[data-size="tiny"] { width: 24px; height: 24px; font-size: 10px; }
-.avatar[data-size="small"] { width: 28px; height: 28px; font-size: 11px; }
-.avatar[data-size="row"] { width: 36px; height: 36px; font-size: 12px; }
+.avatar.avatar[data-size="account"] { width: 32px; height: 32px; font-size: 12px; }
+.avatar.avatar[data-size="tiny"] { width: 24px; height: 24px; font-size: 10px; }
+.avatar.avatar[data-size="small"] { width: 24px; height: 24px; font-size: 11px; }
+.avatar.avatar[data-size="row"] { width: 28px; height: 28px; font-size: 12px; }
 :global([data-theme="dark"]) .avatar.avatar { background: var(--avatar-dark-bg); color: var(--avatar-dark-fg); }
 :global([data-theme="dark"]) .avatar::after { border-color: rgb(255 255 255 / 10%); }
 @media (prefers-reduced-motion: reduce) { .photo { transition: none; } }
