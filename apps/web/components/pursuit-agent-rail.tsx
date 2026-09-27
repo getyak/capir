@@ -44,11 +44,11 @@ type Props = {
 const runningStatuses = new Set<AgentTaskProjection["status"]>(["active"]);
 
 const statusCopy: Record<AgentTaskProjection["status"], string> = {
-  active: "正在核对受治理的上下文",
+  active: "正在核对相关资料",
   waiting_for_clarification: "等待一项澄清",
   waiting_for_domain_decision: "等待你的决定",
   waiting_for_external: "等待外部结果核验",
-  needs_rebase: "寻访已变化，需要重新建立快照",
+  needs_rebase: "目标已更新，需要重新核对",
   completed: "简报已完成",
   no_action: "当前无需新增行动",
   abstained: "已安全停止，可由你决定是否继续",
@@ -242,7 +242,7 @@ export function PursuitAgentRail({
           <Sparkle size={17} weight="fill" />
         </div>
         <div>
-          <p>受治理的简报</p>
+          <p>当前简报</p>
           <h2 id="pursuit-agent-title">现在最重要的是什么</h2>
         </div>
         <ShieldCheck aria-label="仅限审阅；没有外部效果" size={21} />
@@ -268,7 +268,7 @@ export function PursuitAgentRail({
               <WarningCircle aria-hidden="true" size={18} />
               <p>
                 <strong>还不能形成有根据的简报。</strong>
-                <span>此寻访尚无可用的已审阅证据清单；系统不会用完整档案或未确认来源填空。</span>
+                <span>先关联并审阅资料，再生成有依据的简报。</span>
               </p>
             </div>
           )}
@@ -324,7 +324,7 @@ export function PursuitAgentRail({
                   <li data-status="current">
                     <span aria-hidden="true" />
                     <p>
-                      <strong>正在形成受治理的简报</strong>
+                      <strong>正在形成当前简报</strong>
                       <small>
                         {streamState.connected
                           ? "事件流已连接；只展示可核验阶段，不展示模型私有推理。"
@@ -343,7 +343,7 @@ export function PursuitAgentRail({
               <h3>{task.clarification.question}</h3>
               <p>{task.clarification.reason}</p>
               <span>
-                这里不会自动执行动作；继续前必须由受治理流程记录回答并重新核对任务范围。
+                这里不会自动执行动作。先确认回答与任务范围，再决定下一步。
               </span>
             </section>
           ) : null}
@@ -371,10 +371,10 @@ export function PursuitAgentRail({
                   {block.citationIds.length > 0 ? (
                     evidenceHref ? (
                       <Link href={evidenceHref}>
-                        {block.citationIds.length} 条受治理来源已连接
+                        {block.citationIds.length} 条来源可核对
                       </Link>
                     ) : (
-                      <span>{block.citationIds.length} 条受治理来源已连接</span>
+                      <span>{block.citationIds.length} 条来源可核对</span>
                     )
                   ) : null}
                 </section>

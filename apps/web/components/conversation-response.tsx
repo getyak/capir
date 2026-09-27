@@ -4,6 +4,26 @@ import remarkGfm from "remark-gfm";
 
 import styles from "./conversation-response.module.css";
 
+/**
+ * Provenance line for one response block: real, governed source names only.
+ * Source URLs stay behind their explicit evidence controls and are never
+ * promoted to citations by this presentation.
+ */
+export function ConversationProvenance({
+  sources,
+}: {
+  sources?: ReadonlyArray<{ display_name: string }> | null;
+}) {
+  const names = (sources ?? [])
+    .map((source) => source.display_name.trim())
+    .filter((name) => name.length > 0);
+  return (
+    <p className={styles.provenance}>
+      依据 · {names.length ? names.join(" · ") : "未附引用来源"}
+    </p>
+  );
+}
+
 /** Presentation only: model text cannot load images or acquire citation authority.
  * React Markdown escapes raw HTML by default; do not add a raw-HTML plugin.
  * https://github.com/remarkjs/react-markdown#security
@@ -11,11 +31,14 @@ import styles from "./conversation-response.module.css";
  */
 export const ConversationResponse = memo(function ConversationResponse({
   children,
+  lead = false,
 }: {
-  children: string;
+  children?: string;
+  /** First line plays the response lead (larger emphasis) when no block title stands in for it. */
+  lead?: boolean;
 }) {
   return (
-    <div className={styles.response}>
+    <div className={styles.response} data-lead={lead ? "true" : "false"}>
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{

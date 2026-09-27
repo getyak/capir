@@ -1,13 +1,20 @@
-.response { color: var(--ink); font-size: 1rem; line-height: 1.85; min-width: 0; overflow-wrap: anywhere; }
+.response { color: var(--ink); font-size: 0.9375rem; line-height: 1.533; min-width: 0; overflow-wrap: anywhere; }
+.response[data-lead="true"] > p:first-child { font-size: 1.125rem; font-weight: 600; line-height: 1.555; }
+.provenance { color: var(--muted); font-size: 0.8125rem; line-height: 1.538; margin: 16px 0 0; }
 .response > :first-child { margin-top: 0; }
 .response > :last-child { margin-bottom: 0; }
-.response p { margin: 0 0 1em; white-space: pre-wrap; }
-.response :is(h3, h4, h5, h6) { color: var(--ink); font-size: 1rem; font-weight: 620; line-height: 1.6; margin: 1.5em 0 0.65em; }
-.response :is(ol, ul) { margin: 0.75em 0 1.1em; padding-left: 1.5em; }
-.response ol { list-style: decimal; }
-.response ul { list-style: disc; }
-.response li { margin: 0.35em 0; padding-left: 0.2em; }
-.response li p { margin-bottom: 0.5em; }
+.response p { margin: 0 0 16px; white-space: pre-wrap; }
+.response ol { counter-reset: response-point; list-style: none; margin: 16px 0; padding: 0; }
+.response ol > li { color: var(--ink); counter-increment: response-point; font-size: 0.9375rem; font-weight: 600; line-height: 1.533; margin: 16px 0; padding-left: 2em; position: relative; }
+.response ol > li::before { color: var(--ink); content: counter(response-point, decimal-leading-zero); font-variant-numeric: tabular-nums; font-weight: 600; left: 0; position: absolute; }
+.response ol > li > p { margin: 0; }
+.response ol > li > p:first-child { margin-bottom: 5px; }
+.response ol > li > p + p { color: var(--muted); font-weight: 400; }
+.response ol > li strong { color: var(--ink); font-weight: 600; }
+.response :is(h3, h4, h5, h6) { color: var(--ink); font-size: 0.9375rem; font-weight: 600; line-height: 1.533; margin: 16px 0 8px; }
+.response ul { list-style: disc; margin: 16px 0; padding-left: 1.5em; }
+.response ul li { margin: 0.35em 0; padding-left: 0.2em; }
+.response ul li p { margin-bottom: 0.5em; }
 .response strong { font-weight: 620; }
 .response blockquote { border-left: 2px solid var(--line-strong); color: var(--muted-strong); margin: 1em 0; padding: 0.15em 0 0.15em 1em; }
 .response blockquote p:last-child { margin-bottom: 0; }

@@ -167,8 +167,8 @@ export function TimeScheduleEditor({ record: initial, draftId, day, zone, person
     <p className={styles.muted} role="status">{terminal.message}</p>
     <button className={styles.primary} type="button" onClick={onClose}>关闭</button>
   </section>;
-  return <section className={styles.editor} aria-label={record ? "编辑安排" : "新建安排"}>
-    <div className={styles.inspectorHeading}><div><span className={styles.eyebrow}>{record ? "你的安排" : "留一个时间"}</span><h2>{record ? "编辑安排" : "新建安排"}</h2></div><button type="button" aria-label="关闭编辑" onClick={() => { if ((!dirty && !unknown) || window.confirm(unknown ? "操作结果尚未核实，关闭后可继续核实。" : "离开会放弃尚未保存的修改。")) onClose(); }}>×</button></div>
+  return <section className={styles.editor} aria-label={record ? "编辑安排" : "添加日程"}>
+    <div className={styles.inspectorHeading}><div><span className={styles.eyebrow}>{record ? "你的安排" : "留一个时间"}</span><h2>{record ? "编辑安排" : "添加日程"}</h2></div><button type="button" aria-label="关闭编辑" onClick={() => { if ((!dirty && !unknown) || window.confirm(unknown ? "操作结果尚未核实，关闭后可继续核实。" : "离开会放弃尚未保存的修改。")) onClose(); }}>×</button></div>
     <p className={styles.muted}>保存在工作台。系统日历提醒需下载文件并确认导入。</p>
     <form onKeyDown={(event) => { if (event.key === "Enter" && event.nativeEvent.isComposing) event.preventDefault(); }} onSubmit={(event) => { event.preventDefault(); if (!busy) void mutate("PUT"); }}>
       <fieldset disabled={disabled} className={styles.formFields}>

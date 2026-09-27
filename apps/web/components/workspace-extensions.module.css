@@ -1,104 +1,83 @@
 .page {
   display: grid;
-  gap: 22px;
+  gap: 24px;
   margin: 0 auto;
-  max-width: 900px;
-  padding: 40px 64px 86px;
+  max-width: 1040px;
+  padding: 40px 40px 86px;
   width: 100%;
 }
 
 .header h1 {
   color: var(--ink);
   font-size: 1.5rem;
-  font-weight: 620;
-  line-height: 1.25;
+  font-weight: 600;
+  line-height: 1.42;
   margin: 0;
 }
 
 .header > div > p {
   color: var(--muted);
-  font-size: 0.875rem;
-  line-height: 1.7;
-  margin: 9px 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  margin: 8px 0 0;
   max-width: 68ch;
 }
 
 .directionCards {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .directionCards > button {
   align-items: center;
-  background: var(--surface-muted);
+  background: transparent;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  color: var(--muted);
+  border-radius: 8px;
+  color: var(--ink);
   cursor: pointer;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: 34px minmax(0, 1fr) 16px;
-  min-height: 68px;
-  padding: 13px 16px;
+  display: inline-flex;
+  flex: 0 1 auto;
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 18px;
   text-align: left;
 }
 
 .directionCards > button:hover {
-  border-color: color-mix(in srgb, var(--ink) 28%, var(--line));
-  color: var(--ink);
+  border-color: var(--ink);
 }
 
 .directionCards > button[aria-selected="true"] {
-  background: var(--background);
-  border-color: color-mix(in srgb, var(--ink) 45%, var(--line));
-  color: var(--ink);
-}
-
-.directionIcon {
-  align-items: center;
-  background: var(--background);
-  border: 1px solid var(--line-soft);
-  border-radius: 9px;
-  color: var(--muted);
-  display: inline-flex;
-  height: 34px;
-  justify-content: center;
-  width: 34px;
-}
-
-.directionCards > button[aria-selected="true"] .directionIcon {
-  color: var(--ink);
-}
-
-.directionCards strong,
-.directionCards small {
-  display: block;
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--background);
 }
 
 .directionCards strong {
-  font-size: 0.875rem;
-  font-weight: 600;
+  font: inherit;
 }
 
-.directionCards small {
-  color: var(--muted);
-  font-size: 0.75rem;
-  margin-top: 3px;
-}
-
-.directionCheck {
-  color: var(--accent);
-  opacity: 0;
-}
-
-.directionCards > button[aria-selected="true"] .directionCheck {
-  opacity: 1;
+.visuallyHidden {
+  border: 0;
+  clip-path: inset(50%);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 .panel {
+  border-top: 1px solid var(--line-soft);
   display: grid;
-  gap: 14px;
+  gap: 16px;
+  padding-top: 26px;
 }
 
 .sectionHeading {
@@ -110,8 +89,9 @@
 
 .sectionHeading h2 {
   color: var(--ink);
-  font-size: 0.8125rem;
-  font-weight: 650;
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 28px;
   margin: 0;
 }
 
@@ -123,21 +103,21 @@
 
 .headingActions > span {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
 }
 
 .addButton {
   align-items: center;
   background: transparent;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--ink);
   cursor: pointer;
   display: inline-flex;
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   gap: 5px;
-  min-height: 32px;
-  padding: 0 11px;
+  min-height: 40px;
+  padding: 0 14px;
 }
 
 .addButton:hover {
@@ -200,7 +180,7 @@
 .status {
   color: var(--muted);
   flex: 0 0 auto;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
 }
 
 .row[data-status="verified"] .status {
@@ -216,26 +196,26 @@
 
 .url {
   color: var(--muted-strong);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }
 
 .rowBody > small {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }
 
 .recovery {
   color: var(--error);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   line-height: 1.6;
   margin: 2px 0 0;
 }
 
 .tools {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   margin-top: 4px;
 }
 
@@ -263,20 +243,20 @@
 
 .tools li strong {
   color: var(--ink);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .tools li span {
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.8125rem;
 }
 
 .tools li small,
 .toolNote {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   line-height: 1.6;
   margin: 0;
 }
@@ -295,14 +275,14 @@
 .quiet,
 .danger {
   align-items: center;
-  border-radius: 7px;
+  border-radius: 8px;
   cursor: pointer;
   display: inline-flex;
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   gap: 5px;
   justify-content: center;
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 40px;
+  padding: 0 16px;
 }
 
 .primary {
@@ -344,7 +324,35 @@
   }
 }
 
-.empty,
+.empty {
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  padding: 28px;
+}
+
+.empty strong {
+  color: var(--ink);
+  display: block;
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.empty p {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.empty > .primary {
+  margin-top: 6px;
+}
+
 .boundary,
 .error {
   align-items: start;
@@ -353,31 +361,6 @@
   display: flex;
   gap: 12px;
   padding: 16px;
-}
-
-.empty {
-  align-items: center;
-  background: var(--surface-muted);
-  color: var(--muted);
-}
-
-.empty > div {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.empty strong {
-  color: var(--ink);
-  display: block;
-  font-size: 0.875rem;
-  font-weight: 600;
-}
-
-.empty p {
-  color: var(--muted);
-  font-size: 0.8125rem;
-  line-height: 1.6;
-  margin: 4px 0 0;
 }
 
 .boundary {
@@ -416,10 +399,10 @@
 .error button {
   background: transparent;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--ink);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   min-height: 32px;
   padding: 0 11px;
 }
@@ -430,13 +413,18 @@
   color: var(--muted);
   display: flex;
   flex-wrap: wrap;
-  font-size: 0.75rem;
-  gap: 10px;
-  padding-top: 14px;
+  font-size: 0.8125rem;
+  gap: 12px;
+  padding-top: 18px;
 }
 
 .utilityNote a {
   color: var(--ink);
+  text-decoration: none;
+}
+
+.utilityNote a:hover {
+  text-decoration: underline;
   text-underline-offset: 3px;
 }
 
@@ -471,14 +459,14 @@
 .token {
   color: var(--ink);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   overflow-wrap: anywhere;
 }
 
 .endpoint small,
 .scopeNote {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   line-height: 1.6;
 }
 
@@ -552,7 +540,7 @@
   align-items: center;
   background: transparent;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--muted);
   cursor: pointer;
   display: inline-flex;
@@ -592,7 +580,7 @@
 
 .field small {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   line-height: 1.6;
 }
 
@@ -653,7 +641,7 @@
 .scopes small {
   color: var(--muted);
   display: block;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   line-height: 1.55;
   margin-top: 3px;
 }
@@ -686,7 +674,7 @@
 
 .reveal small {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
 }
 
 .reveal pre {
@@ -700,7 +688,7 @@
 .reveal code {
   color: var(--ink);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   line-height: 1.55;
 }
 
@@ -713,7 +701,7 @@
 
 .copyArea small {
   color: var(--error);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
 }
 
 @media (max-width: 760px) {
@@ -731,13 +719,13 @@
     justify-content: flex-start;
   }
 
-  .directionCards {
-    grid-template-columns: 1fr;
+  .directionCards > button {
+    flex: 1 1 100%;
   }
 
   .empty {
-    align-items: flex-start;
-    flex-direction: column;
+    justify-items: start;
+    padding: 22px;
   }
 
   .dialogFooter {

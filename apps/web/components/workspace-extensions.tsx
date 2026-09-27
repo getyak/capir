@@ -5,12 +5,7 @@ import type {
   McpConnection,
   McpEndpointsResponse,
 } from "@talent-signal/contracts";
-import {
-  ArrowSquareOut,
-  Check,
-  Plugs,
-  WarningCircle,
-} from "@phosphor-icons/react";
+import { WarningCircle } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useRef, useState } from "react";
 
@@ -253,18 +248,8 @@ export function WorkspaceExtensions({
           tabIndex={direction === "inbound" ? 0 : -1}
           type="button"
         >
-          <span aria-hidden="true" className={styles.directionIcon}>
-            <Plugs size={17} />
-          </span>
-          <span>
-            <strong>连接服务</strong>
-            <small>从外部 MCP 服务读取</small>
-          </span>
-          <Check
-            aria-hidden="true"
-            className={styles.directionCheck}
-            size={15}
-          />
+          <strong>连接服务</strong>
+          <small className={styles.visuallyHidden}>从外部 MCP 服务读取</small>
         </button>
         <button
           aria-controls="extensions-outbound"
@@ -282,18 +267,8 @@ export function WorkspaceExtensions({
           tabIndex={direction === "outbound" ? 0 : -1}
           type="button"
         >
-          <span aria-hidden="true" className={styles.directionIcon}>
-            <ArrowSquareOut size={17} />
-          </span>
-          <span>
-            <strong>接入客户端</strong>
-            <small>把工作区作为 MCP 服务</small>
-          </span>
-          <Check
-            aria-hidden="true"
-            className={styles.directionCheck}
-            size={15}
-          />
+          <strong>接入客户端</strong>
+          <small className={styles.visuallyHidden}>把工作区作为 MCP 服务</small>
         </button>
       </div>
 

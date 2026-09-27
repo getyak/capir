@@ -13,14 +13,16 @@
 .row { display: flex; justify-content: space-between; align-items: center; gap: 20px; min-height: 48px; padding: 10px 0; }
 .row + .row { border-top: 1px solid var(--line-soft); }
 .row > div { min-width: 0; }
-.row time { color: var(--muted); font-size: 12px; }
-.badge { background: var(--surface-muted); border: 1px solid var(--line-soft); padding: 4px 9px; border-radius: 999px; font-size: 11.5px; white-space: nowrap; }
+.row time { color: var(--muted); font-size: 13px; }
+.badge { background: var(--surface-muted); border: 1px solid var(--line-soft); padding: 4px 9px; border-radius: 999px; font-size: 13px; white-space: nowrap; }
 .form { margin: 6px 0; }
 .form fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
 .form label { display: grid; gap: 7px; font-size: 12.5px; }
 .form input:not([type=hidden]), .form select { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 9px; min-height: 38px; padding: 8px 11px; font: inherit; font-size: 13px; min-width: 0; }
-.form button, .button { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 9px; padding: 8px 14px; min-height: 36px; cursor: pointer; font: inherit; font-size: 12.5px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
-.form button:hover, .button:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); }
+.form button { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 8px 14px; min-height: 40px; cursor: pointer; font: inherit; font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.button { background: transparent; border: 0; color: var(--ink); border-radius: 8px; padding: 8px 10px; margin: 0 -10px; min-height: 40px; cursor: pointer; font: inherit; font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.form button:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); }
+.button:hover { background: var(--surface-muted); text-decoration: underline; text-underline-offset: 3px; }
 .form :disabled, .button:disabled { opacity: .5; cursor: wait; }
 .form :focus-visible, .tabs a:focus-visible, .button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .editRow { display: flex; gap: 10px; width: 100%; }
@@ -30,7 +32,7 @@
 .error { color: #b34430; }
 .member { border-top: 1px solid var(--line-soft); padding: 18px 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
 .member > div { flex: 1; min-width: 180px; }
-.member span { font-size: 12px; color: var(--muted); }
+.member span { font-size: 13px; color: var(--muted); }
 .banner { display:flex; align-items:center; justify-content:flex-start; flex-wrap:wrap; gap:20px; padding:12px 24px; background:var(--surface); border-bottom:1px solid var(--line); font-size:13px; }
 .banner button { background:transparent; border:1px solid var(--line); color:var(--ink); padding:8px 12px; border-radius:8px; cursor:pointer; }
 @media(max-width:640px) { .page { padding:28px 20px 100px; } .tabs { gap:20px; font-size:14px; } .row { align-items:flex-start; flex-wrap:wrap; gap:8px; min-height: 0; } .member { align-items:flex-start; } .form button, .button, .form input:not([type=hidden]), .form select { min-height: 44px; } }
@@ -42,21 +44,23 @@
 /* One readable edit surface, shared by the web page and native settings window. */
 .section:first-child { padding-top: 0; }
 .section { padding: 24px 0; }
-.secondary, .form label, .form input:not([type=hidden]), .form select, .form button, .button { font-size: 14px; }
+.secondary { font-size: 13px; }
+.form label, .form input:not([type=hidden]), .form select, .form button { font-size: 14px; }
 .form button, .button, .form input:not([type=hidden]), .form select { min-height: 44px; }
 .profileIdentity { gap: 20px; margin-bottom: 28px; align-items: center; }
-.profileIdentity h2 { font-size: 18px; }
+.profileIdentity h2 { font-size: 15px; line-height: 24px; font-weight: 600; }
 .profileIdentity .secondary { margin-bottom: 0; }
 .nameField { display: grid; gap: 10px; }
-.fieldLabel { font-size: 14px; font-weight: 600; }
-.editValue { width: 100%; min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 1px solid transparent; border-radius: 9px; padding: 12px 14px; color: var(--ink); background: var(--surface-muted); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
-.editValue > span:first-child { overflow-wrap: anywhere; min-width: 0; }
-.editValue > span:last-child { flex-shrink: 0; color: var(--muted); font-size: 13px; }
-.editValue:hover { border-color: var(--line); }
+.fieldLabel { font-size: 15px; line-height: 24px; font-weight: 600; }
+.editValue { width: calc(100% + 24px); min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 0; border-radius: 8px; padding: 10px 12px; margin: 0 -12px; color: var(--ink); background: transparent; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.editValue > span:first-child { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
+.editValue > span:last-child { flex-shrink: 0; color: var(--ink); font-size: 13px; }
+.editValue:hover { border-color: transparent; background: var(--surface-muted); }
+.editValue:hover > span:last-child { text-decoration: underline; text-underline-offset: 3px; }
 .editValue:focus-visible, .disclosure summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .form .saveButton { color: var(--surface); background: var(--ink); border-color: var(--ink); }
 .editRow { flex-wrap: wrap; }
 .editRow input { flex: 1 1 180px; max-width: none; }
 .disclosure { padding: 18px 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-.disclosure summary { cursor: pointer; min-height: 44px; padding: 11px 0; color: var(--ink); }
+.disclosure summary { cursor: pointer; min-height: 44px; padding: 11px 0; color: var(--muted); font-size: 13px; }
 .disclosure a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: underline; }

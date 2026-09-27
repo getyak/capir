@@ -6,7 +6,6 @@ import {
   LinkSimple,
   PencilSimple,
   Plus,
-  Plugs,
   SpinnerGap,
   WarningCircle,
 } from "@phosphor-icons/react";
@@ -78,11 +77,8 @@ export function InboundPanel({
         </div>
       ) : connections.length === 0 ? (
         <div className={styles.empty}>
-          <Plugs aria-hidden="true" size={22} />
-          <div>
-            <strong>还没有连接外部 MCP 服务</strong>
-            <p>添加 HTTPS 地址后，握手成功才会标记为已验证。</p>
-          </div>
+          <strong>还没有连接外部服务</strong>
+          <p>添加 HTTPS 地址后，握手成功才会标记为已验证。</p>
           <button className={styles.primary} onClick={onAdd} type="button">
             <Plus aria-hidden="true" size={14} />
             添加连接
@@ -187,9 +183,9 @@ export function InboundPanel({
       )}
 
       <p className={styles.utilityNote}>
-        资料仍可继续导入与核对：
-        <Link href="/workspace/captures">截图与文档</Link>
-        <Link href="/workspace/meetings">会议草稿</Link>
+        资料仍可继续导入与核对
+        <Link className={styles.quiet} href="/workspace/captures">截图与文档</Link>
+        <Link className={styles.quiet} href="/workspace/meetings">时间与安排</Link>
       </p>
     </section>
   );

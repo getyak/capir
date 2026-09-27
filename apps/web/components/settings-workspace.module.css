@@ -1,8 +1,10 @@
-.page { display: grid; grid-template-columns: 180px minmax(0, 1fr); width: 100%; max-width: 1000px; min-height: 640px; margin: 0 auto; padding: 40px 32px 80px; gap: 40px; color: var(--ink); }
-.navigation { min-width: 0; align-self: start; position: sticky; top: 32px; }
-.navigation h1 { font-size: 18px; line-height: 28px; font-weight: 650; margin: 0 12px 24px; }
+.page { display: grid; grid-template-columns: 220px minmax(0, 1fr); width: 100%; max-width: 1040px; min-height: 640px; margin: 0 auto; padding: 40px 40px 80px; column-gap: 48px; row-gap: 28px; color: var(--ink); }
+.header { grid-column: 1 / -1; }
+.header h1 { font-size: 1.5rem; line-height: 34px; font-weight: 600; margin: 0; }
+.header p { color: var(--muted); font-size: 0.8125rem; line-height: 20px; margin: 6px 0 0; }
+.navigation { min-width: 0; align-self: start; position: sticky; top: 24px; }
 .primaryNav { display: grid; gap: 4px; }
-.navigation a, .more summary { display: flex; align-items: center; min-height: 44px; padding: 10px 12px; border-radius: 8px; font-size: 14px; color: var(--muted); cursor: pointer; }
+.navigation a, .more summary { display: flex; align-items: center; min-height: 40px; padding: 10px 12px; border-radius: 8px; font-size: 14px; color: var(--muted); cursor: pointer; }
 .navigation a:hover, .more summary:hover { color: var(--ink); background: var(--surface-muted); }
 .navigation a[aria-current="page"] { color: var(--ink); background: var(--surface-muted); font-weight: 600; }
 .more { margin-top: 24px; }
@@ -12,8 +14,8 @@
 .more[open] summary::after { transform: rotate(90deg); }
 .content { min-width: 0; width: 100%; max-width: 640px; }
 .heading { margin-bottom: 28px; }
-.heading h2 { font-size: 24px; line-height: 1.5; font-weight: 650; margin: 0; letter-spacing: -.02em; }
-.heading p, .notice { color: var(--muted); font-size: 14px; line-height: 1.65; margin-top: 6px; }
+.heading h2 { font-size: 1.375rem; line-height: 32px; font-weight: 600; margin: 0; letter-spacing: 0; }
+.heading p, .notice { color: var(--muted); font-size: 0.8125rem; line-height: 1.55; margin-top: 6px; }
 .pane { display: grid; gap: 28px; min-width: 0; }
 .group { padding: 0 0 28px; border-bottom: 1px solid var(--line-soft); }
 .group h2 { font-size: 15px; font-weight: 600; margin: 0 0 16px; }
@@ -53,16 +55,17 @@
 .page :is(a,button,summary):focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 :global(html[data-desktop-surface="settings"]) .page { display: block; padding: 32px 40px 60px; max-width: 720px; min-height: 0; }
 :global(html[data-desktop-surface="settings"]) .navigation { display: none; }
-@media (max-width: 1000px) { .page { padding: 28px 24px 64px; grid-template-columns: 152px minmax(0,1fr); gap: 24px; } }
+:global(html[data-desktop-surface="settings"]) .header { display: none; }
+@media (max-width: 1000px) { .page { padding: 28px 24px 64px; grid-template-columns: 152px minmax(0,1fr); column-gap: 24px; } }
 @media (max-width: 640px) {
   .page { display: block; padding: 20px 20px 80px; }
   .navigation { position: static; margin-bottom: 28px; }
-  .navigation h1 { margin: 0 0 12px; }
   .primaryNav { display: flex; overflow-x: auto; gap: 4px; padding: 3px; margin: 0 -3px; }
+  .navigation a, .more summary { min-height: 44px; }
   .navigation a { white-space: nowrap; flex-shrink: 0; }
   .more { margin-top: 4px; }
   .more summary { padding-left: 3px; width: fit-content; gap: 16px; }
-  .heading h2 { font-size: 22px; }
+  .heading h2 { font-size: 1.25rem; line-height: 28px; }
   .heading { margin-bottom: 22px; }
   .row { gap: 12px; flex-wrap: wrap; }
   .themePreview { height: 76px; }

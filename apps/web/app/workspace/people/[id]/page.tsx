@@ -133,7 +133,8 @@ export default async function PersonMemoryPage({
       <header className={styles.identity}>
         <AvatarEditor
           id={person?.id ?? id}
-          size={72}
+          size={64}
+          shape="squircle"
           label={person?.display_label ?? "人物"}
           url={person?.avatar?.url ?? null}
         />
@@ -148,106 +149,117 @@ export default async function PersonMemoryPage({
         </div>
       </header>
 
-      {person && person.contexts.length > 0 ? (
-        <nav className={styles.contexts} aria-labelledby="person-contexts">
-          <h2 className={styles.sectionTitle} id="person-contexts">
-            关系情境
-          </h2>
-          <ul className={styles.contextList}>
-            {person.contexts.map((context) => (
-              <li key={context.id}>
-                <Link
-                  className={styles.contextRow}
-                  href={withReturnSession(
-                    `/workspace?person=${encodeURIComponent(person.id)}&context=${encodeURIComponent(context.id)}`,
-                    returnSessionId,
-                  )}
-                >
-                  <span className={styles.contextLabel}>
-                    {context.display_label ?? "关系情境"}
-                  </span>
-                  <CaretRight aria-hidden="true" size={15} />
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-      ) : (
-        <p className={`${styles.quiet} ${styles.contextsEmpty}`}>
-          {person
-            ? "这个人还没有关系情境；先从这里查看人物记忆，或在对话中建立关系。"
-            : "人物目录暂时没有这个人的条目。"}
-        </p>
-      )}
-
-      {proposals.length === 0 ? (
-        <p className={styles.pendingEmpty}>暂无待确认变化</p>
-      ) : (
-        <section className={styles.section} aria-labelledby="person-memory-pending">
-          <h2 className={styles.sectionTitle} id="person-memory-pending">
-            待确认变化
-          </h2>
-          <ul className={styles.pendingList}>
-            {proposals.map((proposal) => (
-              <li key={proposal.proposal_id}>
-                <MemoryReviewCard
-                  binding={binding}
-                  contextId={proposal.relationship_context_id ?? null}
-                  entryCapability={entryCapability}
-                  personId={person?.id ?? id}
-                  proposal={{
-                    proposal_id: proposal.proposal_id,
-                    revision: proposal.revision,
-                  }}
-                  purpose="people"
-                />
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      <section
-        className={styles.section}
-        aria-labelledby="person-memory-accepted"
-      >
-        <h2 className={styles.sectionTitle} id="person-memory-accepted">
-          已保存的记忆
-        </h2>
-        {items.length === 0 ? (
-          <p className={styles.quiet}>还没有在这个人物上保存记忆。</p>
-        ) : (
-          Array.from(grouped.entries()).map(([scope, scopeItems]) => (
-            <article className={styles.scopeGroup} key={scope}>
-              <h3 className={styles.scopeTitle}>
-                {SCOPE_LABELS[scope] ?? scope}
-              </h3>
-              <ul className={styles.memoryList}>
-                {scopeItems.map((item) => (
-                  <li className={styles.memoryItem} key={item.id}>
-                    <p className={styles.memoryText}>{item.display_text}</p>
-                    <small className={styles.memoryKind}>
-                      {item.statement_kind === "source_statement"
-                        ? `来源陈述${item.speaker ? ` · ${item.speaker}` : ""}`
-                        : item.statement_kind === "user_opinion"
-                          ? "用户观点"
-                          : "已保存事实"}
-                    </small>
+      <div className={styles.columns}>
+        <div className={styles.contextColumn}>
+          {person && person.contexts.length > 0 ? (
+            <nav className={styles.contexts} aria-labelledby="person-contexts">
+              <h2 className={styles.sectionTitle} id="person-contexts">
+                关系情境
+              </h2>
+              <ul className={styles.contextList}>
+                {person.contexts.map((context) => (
+                  <li key={context.id}>
+                    <Link
+                      className={styles.contextRow}
+                      href={withReturnSession(
+                        `/workspace?person=${encodeURIComponent(person.id)}&context=${encodeURIComponent(context.id)}`,
+                        returnSessionId,
+                      )}
+                    >
+                      <span className={styles.contextLabel}>
+                        {context.display_label ?? "关系情境"}
+                      </span>
+                      <CaretRight aria-hidden="true" size={15} />
+                    </Link>
                   </li>
                 ))}
               </ul>
-            </article>
-          ))
-        )}
-      </section>
+              <p className={styles.contextHelper}>
+                进入对应关系继续查看资料与对话。
+              </p>
+            </nav>
+          ) : (
+            <p className={`${styles.quiet} ${styles.contextsEmpty}`}>
+              {person
+                ? "这个人还没有关系情境；先从这里查看人物记忆，或在对话中建立关系。"
+                : "人物目录暂时没有这个人的条目。"}
+            </p>
+          )}
+          <Link
+            className={styles.backLink}
+            href={withReturnSession("/workspace/people", returnSessionId)}
+          >
+            <ArrowLeft aria-hidden="true" size={16} />
+            返回人物目录
+          </Link>
+        </div>
 
-      <Link
-        className={styles.backLink}
-        href={withReturnSession("/workspace/people", returnSessionId)}
-      >
-        <ArrowLeft aria-hidden="true" size={16} />
-        返回人物目录
-      </Link>
+        <div className={styles.memoryColumn}>
+          {proposals.length === 0 ? (
+            <p className={styles.pendingEmpty}>暂无待确认变化</p>
+          ) : (
+            <section
+              className={styles.section}
+              aria-labelledby="person-memory-pending"
+            >
+              <h2 className={styles.sectionTitle} id="person-memory-pending">
+                待确认变化
+              </h2>
+              <ul className={styles.pendingList}>
+                {proposals.map((proposal) => (
+                  <li key={proposal.proposal_id}>
+                    <MemoryReviewCard
+                      binding={binding}
+                      contextId={proposal.relationship_context_id ?? null}
+                      entryCapability={entryCapability}
+                      personId={person?.id ?? id}
+                      proposal={{
+                        proposal_id: proposal.proposal_id,
+                        revision: proposal.revision,
+                      }}
+                      purpose="people"
+                    />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          <section
+            className={styles.section}
+            aria-labelledby="person-memory-accepted"
+          >
+            <h2 className={styles.memoryTitle} id="person-memory-accepted">
+              已保存的记忆
+            </h2>
+            {items.length === 0 ? (
+              <p className={styles.quiet}>还没有在这个人物上保存记忆。</p>
+            ) : (
+              Array.from(grouped.entries()).map(([scope, scopeItems]) => (
+                <article className={styles.scopeGroup} key={scope}>
+                  <h3 className={styles.scopeTitle}>
+                    {SCOPE_LABELS[scope] ?? scope}
+                  </h3>
+                  <ul className={styles.memoryList}>
+                    {scopeItems.map((item) => (
+                      <li className={styles.memoryItem} key={item.id}>
+                        <p className={styles.memoryText}>{item.display_text}</p>
+                        <small className={styles.memoryKind}>
+                          {item.statement_kind === "source_statement"
+                            ? `来源陈述${item.speaker ? ` · ${item.speaker}` : ""}`
+                            : item.statement_kind === "user_opinion"
+                              ? "用户观点"
+                              : "已保存事实"}
+                        </small>
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              ))
+            )}
+          </section>
+        </div>
+      </div>
     </main>
   );
 }

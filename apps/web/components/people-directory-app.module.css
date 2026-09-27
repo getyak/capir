@@ -1,9 +1,12 @@
 /*
- * People directory — reference row composition.
+ * People directory — reference row composition (Figma 63:1198).
  *
- * A 1040px reading page, a compact list tool row, and a three-column directory
- * row (person / relationship & change / update). Search uses client navigation with GET URLs so a
- * query is shareable; nothing here owns or reinterprets identity.
+ * A 1040px reading page with 40px padding, one bounded search field, and a
+ * three-column directory row (person / relationship context & material /
+ * update) on an 83px row rhythm with hairline dividers. Search uses client
+ * navigation with GET URLs so a query is shareable; nothing here owns or
+ * reinterprets identity. Column labels describe what the row shows; the update
+ * column is an update time, never "last contact".
  */
 
 .shell {
@@ -16,9 +19,12 @@
 }
 
 .page {
+  display: flex;
+  flex-direction: column;
   margin: 0 auto;
   max-width: 1040px;
-  padding: 54px 64px 86px;
+  min-height: calc(100svh - 58px);
+  padding: 40px 40px 72px;
 }
 
 .pageHeading {
@@ -26,40 +32,41 @@
   display: flex;
   gap: 24px;
   justify-content: space-between;
-  margin-bottom: 30px;
+  margin-bottom: 28px;
 }
 
 .pageHeading h1 {
   font-size: var(--workspace-title-size);
-  font-weight: 620;
+  font-weight: 600;
   letter-spacing: 0;
-  line-height: 1.25;
+  line-height: 1.42;
 }
 
 .pageHeading p {
   color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.65;
-  margin-top: 9px;
+  font-size: var(--workspace-meta-size);
+  line-height: 1.55;
+  margin-top: 8px;
   max-width: 52ch;
 }
 
 .createPerson {
   align-items: center;
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--muted-strong);
+  border-radius: 8px;
+  color: var(--ink);
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 0.75rem;
+  font-size: var(--workspace-body-size);
   font-weight: 500;
   gap: 7px;
-  min-height: 34px;
-  padding: 0 14px;
+  min-height: 44px;
+  padding: 0 17px;
 }
 
 .createPerson:hover {
-  background: color-mix(in srgb, var(--ink) 5%, var(--surface));
+  background: var(--surface-muted);
   color: var(--ink);
 }
 
@@ -67,24 +74,22 @@
   align-items: center;
   color: var(--muted);
   display: flex;
-  font-size: 0.75rem;
-  gap: 16px;
+  font-size: var(--workspace-meta-size);
+  gap: 20px;
   justify-content: space-between;
-  margin-bottom: 9px;
-  padding: 0 5px;
+  margin-bottom: 26px;
 }
 
 .search {
   align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
   display: flex;
   flex: 1 1 auto;
-  gap: 9px;
-  max-width: 390px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: var(--surface);
-  padding: 0 6px 0 11px;
-  min-height: 40px;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 6px 0 15px;
 }
 
 .search > svg {
@@ -96,7 +101,7 @@
   background: transparent;
   border: 0;
   font: inherit;
-  font-size: 0.875rem;
+  font-size: var(--workspace-body-size);
   min-width: 0;
   outline: 0;
   padding: 6px 0;
@@ -111,11 +116,10 @@
   border-bottom: 1px solid var(--line-soft);
   color: var(--muted);
   display: grid;
-  font-size: 0.75rem;
-  gap: 0;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) 88px;
-  column-gap: 20px;
-  padding: 11px 14px;
+  font-size: var(--workspace-meta-size);
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr) 62px;
+  column-gap: 16px;
+  padding: 0 12px 12px;
 }
 
 .tableHeader > span:last-child {
@@ -134,43 +138,27 @@
 
 .personRow {
   align-items: center;
-  border-radius: 10px;
   color: var(--ink);
   display: grid;
-  font-size: 0.875rem;
-  gap: 0;
-  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr) 88px;
-  column-gap: 20px;
+  font-size: var(--workspace-body-size);
+  grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr) 62px;
+  column-gap: 16px;
   min-height: 83px;
-  padding: 15px 14px;
+  padding: 15px 12px;
   text-decoration: none;
   transition: background 140ms var(--ease-out);
 }
 
 .personRow:hover {
-  background: color-mix(in srgb, var(--hover, var(--surface-muted)) 62%, transparent);
+  background: color-mix(in srgb, var(--surface-muted) 62%, transparent);
 }
 
 .personIdentity {
   align-items: center;
   display: flex;
-  gap: 12px;
+  gap: 16px;
   min-width: 0;
-}
-
-.avatar {
-  align-items: center;
-  aspect-ratio: 1;
-  background: color-mix(in srgb, var(--surface-muted) 82%, var(--surface));
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1px var(--line);
-  color: var(--muted-strong);
-  display: inline-flex;
-  flex: 0 0 auto;
-  font-size: 0.75rem;
-  justify-content: center;
-  height: 28px;
-  width: 28px;
+  padding-left: 56px;
 }
 
 .personName {
@@ -179,8 +167,9 @@
 
 .personName strong {
   display: block;
-  font-size: 0.875rem;
-  font-weight: 560;
+  font-size: var(--workspace-body-size);
+  font-weight: 600;
+  line-height: 1.55;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -189,7 +178,8 @@
 .personName small {
   color: var(--muted);
   display: block;
-  font-size: 0.75rem;
+  font-size: var(--workspace-meta-size);
+  line-height: 1.55;
   margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -197,14 +187,14 @@
 }
 
 .personChange {
-  line-height: 1.6;
+  line-height: 1.55;
   min-width: 0;
-  padding-right: 20px;
+  padding-right: 16px;
 }
 
 .contextLabel {
   display: block;
-  font-size: 0.75rem;
+  font-size: var(--workspace-body-size);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -213,8 +203,9 @@
 .personChange small {
   color: var(--muted);
   display: block;
-  font-size: 0.75rem;
-  margin-top: 3px;
+  font-size: var(--workspace-meta-size);
+  line-height: 1.55;
+  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -224,9 +215,15 @@
   align-items: center;
   color: var(--muted);
   display: flex;
-  font-size: 0.75rem;
+  font-size: var(--workspace-meta-size);
   gap: 8px;
   justify-content: flex-end;
+  line-height: 1.55;
+}
+
+.personMeta time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .personMeta svg {
@@ -240,10 +237,19 @@
   opacity: 1;
 }
 
+.directoryNote {
+  color: var(--muted);
+  font-size: var(--workspace-meta-size);
+  line-height: 1.55;
+  margin: auto 0 0;
+  padding-top: 28px;
+}
+
 .empty {
   align-items: center;
+  background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 12px;
   display: flex;
   gap: 18px;
   margin-top: 12px;
@@ -254,7 +260,7 @@
 .empty > svg {
   align-items: center;
   background: var(--surface-muted);
-  border-radius: 14px;
+  border-radius: 8px;
   color: var(--muted-strong);
   display: flex;
   flex: 0 0 auto;
@@ -269,21 +275,30 @@
 }
 
 .empty strong {
-  font-size: 0.85rem;
+  font-size: var(--workspace-body-size);
+  font-weight: 600;
 }
 
 .empty p {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--workspace-meta-size);
   line-height: 1.55;
   margin-top: 5px;
 }
 
 .empty > a {
+  align-items: center;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 0.75rem;
-  padding: 9px 15px;
+  border-radius: 8px;
+  color: var(--ink);
+  display: inline-flex;
+  font-size: var(--workspace-body-size);
+  min-height: 44px;
+  padding: 0 17px;
+}
+
+.empty > a:hover {
+  background: var(--surface-muted);
 }
 
 .disconnectedState {
@@ -292,13 +307,13 @@
 
 @media (max-width: 1100px) {
   .page {
-    padding: 43px 40px 72px;
+    padding: 32px 24px 72px;
   }
 }
 
 @media (max-width: 760px) {
   .page {
-    padding: 28px 20px 96px;
+    padding: 24px 20px 96px;
   }
 
   .pageHeading {
@@ -306,16 +321,15 @@
     gap: 14px;
   }
 
-  .pageHeading h1 {
-    font-size: 1.5rem;
-  }
-
   .listTools {
+    flex-wrap: wrap;
+    gap: 12px;
     padding: 0;
   }
 
   .search {
-    max-width: none;
+    flex-basis: 100%;
+    min-height: 44px;
   }
 
   .tableHeader {
@@ -332,19 +346,29 @@
     padding: 13px 6px;
   }
 
+  .personIdentity {
+    padding-left: 54px;
+  }
+
   .personChange {
     display: block;
     grid-column: 1;
     grid-row: 2;
-    padding: 5px 0 0 40px;
+    padding: 5px 0 0 54px;
   }
 
-  .personMeta { grid-column: 2; grid-row: 1; }
-  .empty { flex-wrap: wrap; }
-  .empty div { min-width: 180px; }
-  .empty > a { min-height: 44px; display: inline-flex; align-items: center; }
-  .search { min-height: 44px; }
+  .personMeta {
+    grid-column: 2;
+    grid-row: 1;
+  }
 
+  .empty {
+    flex-wrap: wrap;
+  }
+
+  .empty div {
+    min-width: 180px;
+  }
 
   .createPerson {
     align-self: flex-start;
@@ -359,36 +383,66 @@
   }
 }
 
-.search:focus-within { border-radius: 6px; outline: 2px solid var(--accent); outline-offset: 4px; }
+.search:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
 
 .search button {
-  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  min-height: 32px;
-  min-width: 32px;
-  border: 0;
-  border-radius: 7px;
   background: transparent;
+  border: 0;
+  border-radius: 8px;
   color: var(--muted-strong);
   cursor: pointer;
-}
-.search button:hover { background: var(--surface-muted); color: var(--ink); }
-.personRow:focus-visible, .createPerson:focus-visible, .empty > a:focus-visible,
-.search button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.listTools > span { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-
-.avatar { overflow: hidden; }
-.avatar img { width: 100%; height: 100%; object-fit: cover; }
-@media (max-width: 760px) {
-  .search button { min-width: 44px; min-height: 44px; }
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  min-height: 32px;
+  min-width: 32px;
 }
 
-.peopleList > li { position: relative; }
-.rowAvatar { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); z-index: 1; }
-.personIdentity { padding-left: 54px; }
+.search button:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.personRow:focus-visible,
+.createPerson:focus-visible,
+.empty > a:focus-visible,
+.search button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.listTools > span {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  min-width: 104px;
+  text-align: right;
+}
+
+.peopleList > li {
+  position: relative;
+}
+
+.rowAvatar {
+  left: 12px;
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+}
+
 @media (max-width: 760px) {
-  .rowAvatar { left: 6px; top: 13px; transform: none; }
-  .personChange { padding-left: 54px; }
+  .search button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .rowAvatar {
+    left: 6px;
+    top: 13px;
+    transform: none;
+  }
 }

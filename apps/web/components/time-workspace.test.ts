@@ -109,7 +109,7 @@ describe("rendered time workspace", () => {
     mock.read.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));
     await render(); await click("核实上次操作"); await click("周");
     expect(mock.push).not.toHaveBeenCalled();
-    expect([...host.querySelectorAll("button")].find((b) => b.textContent === "新建安排")!.disabled).toBe(true);
+    expect([...host.querySelectorAll("button")].find((b) => b.textContent === "添加日程")!.disabled).toBe(true);
     await act(async () => resolve(timeFixtureSchedule));
     expect(host.textContent).toContain("原输入和操作 ID 已保留");
   });

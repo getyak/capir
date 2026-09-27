@@ -33,7 +33,7 @@
 
 .lede {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   line-height: 1.65;
   margin-top: 9px;
   max-width: 56ch;
@@ -42,16 +42,16 @@
 .primary,
 .secondary {
   align-items: center;
-  border-radius: 999px;
+  border-radius: 8px;
   cursor: pointer;
   display: inline-flex;
   flex: 0 0 auto;
   font: inherit;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   font-weight: 520;
   gap: 7px;
   justify-content: center;
-  min-height: 34px;
+  min-height: 40px;
   padding: 0 15px;
   text-decoration: none;
 }
@@ -100,7 +100,7 @@
 
 .row {
   align-items: center;
-  border-radius: 10px;
+  border-radius: 8px;
   color: var(--ink);
   display: grid;
   gap: 12px;
@@ -147,18 +147,18 @@
 }
 
 .unread {
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  background: var(--surface-selected, var(--surface-muted));
   border-radius: 999px;
-  color: var(--accent-strong);
+  color: var(--ink);
   flex: 0 0 auto;
-  font-size: 0.625rem;
+  font-size: 0.8125rem;
   font-weight: 620;
   padding: 2px 8px;
 }
 
 .rowMeta {
   color: var(--muted);
-  font-size: 0.6875rem;
+  font-size: 0.8125rem;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -184,8 +184,8 @@
   text-align: center;
 }
 .empty > svg { margin-bottom: 18px; }
-.empty h2 { color: var(--ink); font-size: 16px; font-weight: 550; line-height: 1.5; margin: 0 0 8px; }
-.empty p { font-size: 14px; line-height: 1.7; margin: 0; }
+.empty h2 { color: var(--ink); font-size: 18px; font-weight: 550; line-height: 1.5; margin: 0 0 8px; }
+.empty p { font-size: 15px; line-height: 1.7; margin: 0; }
 
 .error {
   color: var(--accent-strong);

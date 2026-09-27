@@ -1,7 +1,9 @@
 /* One conversation viewport: quiet header, readable history, stable input. */
 .conversation { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; min-width: 0; position: relative; width: 100%; }
-.header { align-items: center; border-bottom: 1px solid var(--line-soft); display: flex; flex: 0 0 auto; gap: 20px; justify-content: space-between; min-height: 68px; padding: 10px 32px; position: relative; z-index: 35; }
-.title { color: var(--ink); font-size: 1rem; font-weight: 580; line-height: 1.5; margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header { align-items: flex-start; border-bottom: 0; display: flex; gap: 24px; justify-content: space-between; padding: 40px 40px 24px; position: relative; z-index: 35; }
+.headingText { min-width: 0; }
+.title { color: var(--ink); font-size: 24px; font-weight: 600; letter-spacing: 0; line-height: 34px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.subtitle { color: var(--muted); font-size: 13px; line-height: 20px; margin: 8px 0 0; overflow-wrap: anywhere; }
 .conversationDetails { flex: 0 0 auto; }
 .conversationDetails > summary { align-items: center; border-radius: 9px; color: var(--muted); cursor: pointer; display: flex; font-size: 0.8125rem; gap: 7px; list-style: none; min-height: 44px; padding: 8px 12px; }
 .conversationDetails > summary::-webkit-details-marker { display: none; }
@@ -15,35 +17,35 @@
 .feedback:empty { display: none; }
 .feedback > * + * { margin-top: 8px; }
 .conversation > :is(p, aside, [role="alert"]) { flex: 0 0 auto; margin: 8px auto; max-width: calc(100% - 48px); width: 736px; }
-.transcript { flex: 1 1 auto; min-height: 72px; min-width: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 36px 32px 32px; scrollbar-color: var(--line-strong) transparent; scrollbar-gutter: stable both-edges; scrollbar-width: thin; }
-.transcript > p { color: var(--muted); margin: 24px auto; max-width: 720px; }
-.turnList { display: grid; gap: 42px; list-style: none; margin: 0 auto; max-width: 720px; padding: 0; }
+.transcript { flex: 1 1 auto; min-height: 72px; min-width: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 0 40px 24px; scrollbar-color: var(--line-strong) transparent; scrollbar-gutter: stable both-edges; scrollbar-width: thin; }
+.transcript > p { color: var(--muted); margin: 24px auto; max-width: 760px; }
+.turnList { display: grid; gap: 36px; list-style: none; margin: 0 auto; max-width: 760px; padding: 0; }
 .turn { display: flex; flex-direction: column; min-width: 0; }
-.userMessage { align-self: flex-end; background: color-mix(in srgb, var(--surface-muted) 90%, var(--line)); border-radius: 20px 20px 5px 20px; color: var(--ink); font-size: 0.9375rem; line-height: 1.8; margin: 0; max-width: 85%; overflow-wrap: anywhere; padding: 11px 18px; white-space: pre-wrap; width: fit-content; }
-.messageMeta { color: var(--muted); font-size: 0.75rem; line-height: 1.6; margin: 7px 2px 28px; text-align: right; }
+.userMessage { background: var(--surface-muted); border-radius: 8px; color: var(--ink); font-size: 15px; line-height: 23px; margin: 0; overflow-wrap: anywhere; padding: 16px; white-space: pre-wrap; width: 100%; }
+.messageMeta { color: var(--muted); font-size: 13px; line-height: 20px; margin: 8px 2px 20px; text-align: right; }
 .assistantMessage { color: var(--ink); min-width: 0; }
-.assistantLabel { align-items: center; display: flex; font-size: 0.8125rem; font-weight: 560; gap: 9px; margin: 0 0 14px; }
-.assistantLabel::before { background: var(--workspace-brand-image) center / contain no-repeat; content: ""; height: 21px; width: 21px; }
+.assistantLabel { align-items: center; color: var(--muted); display: flex; font-size: 13px; font-weight: 500; gap: 8px; margin: 0 0 12px; }
+.assistantLabel::before { background: var(--workspace-brand-image) center / contain no-repeat; content: ""; height: 18px; width: 18px; }
 .assistantMessage article { background: transparent; border: 0; padding: 0; }
 .assistantMessage article + article { margin-top: 20px; }
-.assistantMessage h3 { color: var(--ink); font-size: 0.9375rem; font-weight: 620; line-height: 1.6; margin: 0 0 10px; }
-.messageBody { color: var(--ink); font-size: 1rem; line-height: 1.9; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.composerDock { align-self: center; flex: 0 0 auto; min-width: 0; padding: 16px 32px 22px; position: relative; width: min(100%, 800px); }
-.composerDock :is([role="status"], [role="alert"]) { font-size: 0.75rem; }
+.assistantMessage h3 { color: var(--ink); font-size: 18px; font-weight: 600; line-height: 28px; margin: 0 0 16px; }
+.messageBody { color: var(--ink); font-size: 15px; line-height: 23px; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.composerDock { align-self: center; flex: 0 0 auto; min-width: 0; padding: 0 40px 32px; position: relative; width: min(100%, 1040px); }
+.composerDock :is([role="status"], [role="alert"]) { font-size: 0.8125rem; }
 .composerDock [role="status"]:empty { display: none; }
-.keyboardHint { color: var(--muted); font-size: 0.6875rem; line-height: 1.5; margin: 10px 0 0; text-align: center; }
+.keyboardHint { color: var(--muted); font-size: 13px; line-height: 20px; margin: 10px 0 0; text-align: center; }
 .jumpToLatest { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; bottom: calc(100% + 4px); box-shadow: 0 3px 12px color-mix(in srgb, var(--ink) 7%, transparent); color: var(--ink); cursor: pointer; display: flex; font: inherit; font-size: 0.8125rem; gap: 6px; left: 50%; min-height: 40px; padding: 8px 14px; position: absolute; transform: translateX(-50%); white-space: nowrap; z-index: 2; }
 .conversation :is(a, button, summary, [tabindex]):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .transcript:focus-visible { outline-offset: -4px; }
 @media (max-width: 760px) {
-  .header { gap: 10px; min-height: 54px; padding: 4px 16px; }
-  .title { font-size: 0.9375rem; }
+  .header { gap: 12px; padding: 20px 20px 16px; }
+  .title { font-size: 20px; line-height: 30px; }
   .conversationDetails > summary { padding: 8px; }
   .detailsPanel { right: 12px; max-height: 52dvh; }
   .transcript { padding: 24px 18px; scrollbar-gutter: auto; }
   .turnList { gap: 32px; }
-  .userMessage { max-width: 92%; padding: 10px 15px; }
-  .composerDock { padding: 10px 14px 12px; }
+  .userMessage { padding: 14px; }
+  .composerDock { padding: 0 20px max(16px, env(safe-area-inset-bottom)); }
   .keyboardHint { display: none; }
   .feedback { padding: 10px 16px 0; }
 }

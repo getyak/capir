@@ -161,8 +161,7 @@
 }
 
 .navLink[aria-current="page"] {
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--line-soft);
+  background: var(--surface-selected, var(--surface-muted));
   color: var(--ink);
   font-weight: 560;
 }
@@ -235,7 +234,7 @@
   color: var(--muted);
   display: flex;
   flex: 0 0 auto;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   gap: 4px;
   height: 27px;
   margin-top: 13px;
@@ -492,27 +491,6 @@
   width: 100%;
 }
 
-.avatar[data-size="tiny"] {
-  font-size: 0.625rem;
-  height: 23px;
-  width: 23px;
-}
-
-.avatar[data-size="small"] {
-  height: 24px;
-  width: 24px;
-}
-
-.avatar[data-size="row"] {
-  height: 28px;
-  width: 28px;
-}
-
-.avatar[data-size="account"] {
-  font-size: 0.625rem;
-  height: 23px;
-  width: 23px;
-}
 
 /* ── Account footer ──────────────────────────────────────────────────── */
 
@@ -559,7 +537,7 @@
 
 .accountName {
   flex: 1;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   min-width: 0;
 }
 
@@ -575,7 +553,7 @@
 .accountName small {
   color: var(--muted);
   display: block;
-  font-size: 0.6875rem;
+  font-size: 0.8125rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
