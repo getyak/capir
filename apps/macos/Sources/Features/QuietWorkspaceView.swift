@@ -69,6 +69,14 @@ struct WorkspaceOrigin: Equatable {
     }
 }
 
+/// An honest recovery state when a client-side hop tries to render the
+/// workbench inside Settings. It carries the destination for an explicit
+/// user-opened main-window handoff, never an automatic one.
+struct WorkspaceSettingsRecoveryNotice: Equatable {
+    let message: String
+    let destination: URL
+}
+
 @MainActor
 final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     let origin: WorkspaceOrigin
@@ -79,11 +87,18 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     @Published var canGoBack = false
     @Published var externalURL: URL?
     @Published var downloadStatus: String?
+    /// Set when the settings WebView lands on an ordinary workspace route it
+    /// must not render. The view offers an explicit main-window handoff.
+    @Published var settingsRecovery: WorkspaceSettingsRecoveryNotice?
     var openSettings: (() -> Void)?
+    /// Brings the main workspace window forward for a trusted Settings handoff.
+    var openWorkspace: (() -> Void)?
     private var updateObservation: AnyCancellable?
     private var calendarDownloads = Set<ObjectIdentifier>()
     private var navigationObservation: NSKeyValueObservation?
     private var locationObservation: NSKeyValueObservation?
+    private var lastValidSettingsSection: WorkspaceSettingsSection?
+    private var isRestoringSettings = false
 
     init(origin: WorkspaceOrigin, settings: Bool = false, initialURL: URL? = nil) {
         self.origin = origin
@@ -114,12 +129,11 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             }
         }
         if settings {
+            lastValidSettingsSection = WorkspaceSettingsNavigation.shared.selection.isWeb
+                ? WorkspaceSettingsNavigation.shared.selection : .profile
             locationObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor [weak self] in
-                    guard let self, WorkspaceSettingsNavigation.shared.selection.isWeb,
-                          let url = self.webView.url,
-                          let section = WorkspaceSettingsSection.resolve(url, origin: self.origin) else { return }
-                    WorkspaceSettingsNavigation.shared.selection = section
+                    self?.observeSettingsLocationForRecovery()
                 }
             }
         }
@@ -132,8 +146,52 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         webView.load(URLRequest(url: destination.url(in: origin)))
     }
 
+    /// Recovers from a client-side navigation that bypassed the navigation
+    /// delegate. It never renders the workbench: it restores the last valid
+    /// Settings section and surfaces an explicit main-window handoff.
+    private func observeSettingsLocationForRecovery() {
+        guard isSettingsSurface, let url = webView.url else { return }
+        switch WorkspaceSurfacePolicy.classifySettingsURL(url, origin: origin) {
+        case .settingsSection(let section):
+            lastValidSettingsSection = section
+            if !isRestoringSettings {
+                WorkspaceSettingsNavigation.shared.selection = section
+                settingsRecovery = nil
+            }
+            isRestoringSettings = false
+        case .settingsOwnedSubpage:
+            // Account, diagnostics and linking flows stay in the settings window.
+            break
+        case .unexpectedRoute(let unexpected):
+            recoverFromUnexpectedNavigation(to: unexpected)
+        case .ignore:
+            break
+        }
+    }
+
+    private func recoverFromUnexpectedNavigation(to url: URL) {
+        let section = lastValidSettingsSection
+            ?? (WorkspaceSettingsNavigation.shared.selection.isWeb ? WorkspaceSettingsNavigation.shared.selection : .profile)
+        let restore = section.url(in: origin)
+        isRestoringSettings = true
+        settingsRecovery = WorkspaceSettingsRecoveryNotice(
+            message: "设置内的这次页面跳转没有经过导航确认；该页面只能在主窗口打开。已恢复到“\(section.title)”。",
+            destination: url)
+        if webView.url != restore {
+            webView.load(URLRequest(url: restore))
+        } else {
+            isRestoringSettings = false
+        }
+    }
+
     func retry() {
         failure = nil
+        if isSettingsSurface,
+           let target = WorkspaceSurfacePolicy.settingsRetryURL(
+                currentURL: webView.url, origin: origin, lastSection: lastValidSettingsSection) {
+            webView.load(URLRequest(url: target))
+            return
+        }
         if let current = webView.url, origin.contains(current) { webView.reload() }
         else { webView.load(URLRequest(url: origin.entryURL)) }
     }
@@ -170,8 +228,42 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             return
         }
         if origin.contains(url) {
-            if !isSettingsSurface, action.sourceFrame.isMainFrame,
-               action.targetFrame?.isMainFrame != false,
+            let mainFrame = action.sourceFrame.isMainFrame
+            let targetsMainFrame = action.targetFrame?.isMainFrame != false
+            // A trusted Settings link to an ordinary workspace page — or the
+            // account profile editor at /onboarding — opens the main window at
+            // that URL; the workbench never loads inside Settings.
+            if let handoff = WorkspaceSurfacePolicy.mainWindowHandoffURL(
+                for: url, origin: origin, isSettingsSurface: isSettingsSurface,
+                mainFrame: mainFrame, targetsMainFrame: targetsMainFrame,
+                userActivated: action.navigationType == .linkActivated)
+                ?? WorkspaceSurfacePolicy.accountEditHandoffURL(
+                    for: url, origin: origin, isSettingsSurface: isSettingsSurface,
+                    mainFrame: mainFrame, targetsMainFrame: targetsMainFrame,
+                    userActivated: action.navigationType == .linkActivated) {
+                WorkspaceNavigation.shared.pendingURL = handoff
+                openWorkspace?()
+                decisionHandler(.cancel)
+                return
+            }
+            // A non-click same-origin navigation that would render the workbench
+            // is cancelled rather than trapping it inside the settings window.
+            if WorkspaceSurfacePolicy.blocksWorkbenchNavigation(
+                url: url, origin: origin, isSettingsSurface: isSettingsSurface,
+                mainFrame: mainFrame, targetsMainFrame: targetsMainFrame) {
+                decisionHandler(.cancel)
+                return
+            }
+            // A non-handoff full navigation to the account editor must not
+            // transiently render it inside Settings; `/login` and
+            // settings-owned auth routes stay allowed.
+            if WorkspaceSurfacePolicy.blocksAccountEditNavigation(
+                url: url, origin: origin, isSettingsSurface: isSettingsSurface,
+                mainFrame: mainFrame, targetsMainFrame: targetsMainFrame) {
+                decisionHandler(.cancel)
+                return
+            }
+            if !isSettingsSurface, mainFrame, targetsMainFrame,
                action.navigationType == .linkActivated,
                let selection = WorkspaceSettingsSection.resolve(url, origin: origin) {
                 WorkspaceSettingsNavigation.shared.selection = selection
@@ -369,6 +461,14 @@ private struct ConnectedQuietWorkspace: View {
     init(origin: WorkspaceOrigin) { _browser = StateObject(wrappedValue: WorkspaceBrowser(origin: origin)) }
 
     private func consumeDestination() {
+        if let url = navigation.pendingURL {
+            navigation.pendingURL = nil
+            // Only the configured origin may be loaded from a handoff.
+            if browser.origin.contains(url) {
+                browser.webView.load(URLRequest(url: url))
+            }
+            return
+        }
         guard let destination = navigation.pending else { return }
         navigation.pending = nil
         browser.navigate(destination)
@@ -404,6 +504,7 @@ private struct ConnectedQuietWorkspace: View {
         .onAppear { browser.openSettings = { openSettings() }; consumeDestination() }
         .onChange(of: connection.inspectorEnabled) { _, enabled in browser.webView.isInspectable = enabled }
         .onChange(of: navigation.pending) { _, _ in consumeDestination() }
+        .onChange(of: navigation.pendingURL) { _, _ in consumeDestination() }
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left") }

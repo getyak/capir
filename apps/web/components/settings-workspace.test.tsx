@@ -1,8 +1,15 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const { save } = vi.hoisted(() => ({ save: vi.fn() }));
+vi.mock("next/link", async () => {
+  const React = await import("react");
+  return {
+    default: ({ children, ...props }: { children?: ReactNode; href: string }) =>
+      React.createElement("a", { ...props, "data-next-link": "" }, children),
+  };
+});
 vi.mock("@/app/workspace/settings/actions", () => ({ saveAccountSettings: save }));
 vi.mock("./account-sign-in-methods", () => ({ AccountSignInMethods: () => null, AccountDataSync: () => null }));
 vi.mock("./account-conflict-recovery", () => ({ AccountConflictRecovery: () => null }));
@@ -32,6 +39,11 @@ it("makes editing explicit and discards a cancelled name draft", async () => {
   await click("取消"); await click("编辑显示名称");
   expect(host.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe(settingsAccount.user.display_name);
   expect(save).not.toHaveBeenCalled();
+});
+it("opens the profile editor as a document navigation for the macOS window handoff", () => {
+  const edit = host.querySelector<HTMLAnchorElement>('a[href^="/onboarding?edit=true"]');
+  expect(edit?.textContent).toContain("编辑资料");
+  expect(edit?.hasAttribute("data-next-link")).toBe(false);
 });
 it("keeps the editable name and recovery message after a failed save", async () => {
   save.mockResolvedValue({ error: "资料已更新，请重新载入后重试。" });

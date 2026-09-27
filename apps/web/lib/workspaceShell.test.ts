@@ -227,7 +227,10 @@ describe("settings composition", () => {
     expect(settings).toContain('href="/workspace/extensions"');
     expect(settings).toContain('href="/workspace/captures"');
     expect(settings).toContain('href="/workspace/settings/diagnostics"');
-    expect(settings).toContain("<AgentResponsePreference");
+    // Reply preference has one edit owner: the settings surface links to the
+    // existing page instead of mounting a second editor.
+    expect(settings).toContain('href="/workspace/preferences"');
+    expect(settings).not.toContain("<AgentResponsePreference");
     expect(settings).not.toContain("localStorage.setItem(\"talent-signal-account");
     expect(panel).toContain("embedded");
     expect(panel).toContain("saveAccountSettings");
