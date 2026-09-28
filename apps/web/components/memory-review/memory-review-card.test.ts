@@ -83,9 +83,9 @@ async function flush() {
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fetcher.mockReset();
-  fetcher.mockResolvedValue(
+  fetcher.mockImplementation(() => Promise.resolve(
     Response.json({ review_credential: "cred-1234567890", review: review() }),
-  );
+  ));
   mount = document.createElement("div");
   document.body.append(mount);
   root = createRoot(mount);
@@ -118,7 +118,7 @@ function clickByText(text: string) {
 describe("shared Memory review card", () => {
   it("offers a contact-only save without an empty Memory counter",async()=>{
     const contact={...review(),items:[],visible_item_count:0,visible_default_selected_count:0};
-    fetcher.mockResolvedValue(Response.json({review_credential:"cred-1234567890",review:contact}));
+    fetcher.mockImplementation(() => Promise.resolve(Response.json({review_credential:"cred-1234567890",review:contact})));
     await act(async()=>root.render(createElement(MemoryReviewCard,{key:"contact-only",binding:"binding-1",proposal:{proposal_id:PROPOSAL,revision:1},purpose:"chat"})));await flush();
     expect(document.body.textContent).toContain("仅添加陈宇");
     expect(document.body.textContent).not.toContain("已选 0 条");
@@ -127,7 +127,7 @@ describe("shared Memory review card", () => {
   it("keeps a business entry fixed to its person and shows old to new in the folded preview",async()=>{
     const scoped=review();scoped.purpose="relationship";scoped.allowed_scope="relationship";scoped.contact_decision="existing";scoped.contact_status="resolved";
     scoped.items=[{...item("change","relationship","原型已发出。"),operation:"update",previous_text:"原型计划周五发出。"}];
-    fetcher.mockResolvedValue(Response.json({review_credential:"cred-1234567890",review:scoped}));
+    fetcher.mockImplementation(() => Promise.resolve(Response.json({review_credential:"cred-1234567890",review:scoped})));
     await act(async()=>root.render(createElement(MemoryReviewCard,{key:"scoped",binding:"binding-1",proposal:{proposal_id:PROPOSAL,revision:1},purpose:"relationship"})));await flush();
     expect(document.body.textContent).toContain("原型计划周五发出。 → 原型已发出。");
     expect(document.body.textContent).not.toContain("换个人");expect(document.body.textContent).not.toContain("本次不关联此人");

@@ -1,13 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const { auth, loadAccountSettings, claims } = vi.hoisted(() => ({
+const { auth, loadAccountSettings, claims, redirect } = vi.hoisted(() => ({
   auth: vi.fn(),
   loadAccountSettings: vi.fn(),
   claims: vi.fn(),
+  redirect: vi.fn(),
 }));
 
 vi.mock("@/auth", () => ({ auth }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  redirect,
+}));
 vi.mock("@/lib/server/accountBackend", () => ({ loadAccountSettings }));
 vi.mock("@/lib/server/backendAuth", () => ({
   readBackendSessionClaims: claims,
@@ -55,6 +60,16 @@ const account = {
 };
 
 describe("settings page server composition", () => {
+  beforeEach(() => {
+    // Next's redirect throws a control-flow error; mirror it so the page stops
+    // and the test can assert the exact callback target.
+    redirect.mockImplementation((url: string) => {
+      throw Object.assign(new Error("NEXT_REDIRECT"), {
+        digest: `NEXT_REDIRECT;replace;${url};307;`,
+      });
+    });
+  });
+
   afterEach(() => vi.clearAllMocks());
 
   it("renders every section from the server without calling a client predicate", async () => {
@@ -92,6 +107,58 @@ describe("settings page server composition", () => {
     );
     expect(html).toContain("账号与安全");
     expect(html).not.toContain("测试与诊断");
+  });
+
+  it("carries a validated section into the login callback", async () => {
+    auth.mockResolvedValue(null);
+    await expect(
+      SettingsPage({ searchParams: Promise.resolve({ section: "connections" }) }),
+    ).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirect).toHaveBeenCalledWith(
+      "/login?callbackUrl=%2Fworkspace%2Fsettings%3Fsection%3Dconnections",
+    );
+  });
+
+  it("preserves every schema section through login", async () => {
+    auth.mockResolvedValue(null);
+    for (const section of [
+      "overview",
+      "account",
+      "workspace",
+      "appearance",
+      "connections",
+      "advanced",
+      "testing",
+    ]) {
+      redirect.mockClear();
+      await expect(
+        SettingsPage({ searchParams: Promise.resolve({ section }) }),
+      ).rejects.toThrow("NEXT_REDIRECT");
+      expect(redirect).toHaveBeenCalledWith(
+        `/login?callbackUrl=${encodeURIComponent(`/workspace/settings?section=${section}`)}`,
+      );
+    }
+  });
+
+  it("drops unknown, malformed, and empty sections instead of reflecting them", async () => {
+    auth.mockResolvedValue(null);
+    for (const section of [
+      undefined,
+      "",
+      "billing",
+      "connections ",
+      "//evil.example",
+      "https://evil.example/login",
+      "/login?callbackUrl=https://evil.example",
+    ]) {
+      redirect.mockClear();
+      await expect(
+        SettingsPage({
+          searchParams: Promise.resolve(section === undefined ? {} : { section }),
+        }),
+      ).rejects.toThrow("NEXT_REDIRECT");
+      expect(redirect).toHaveBeenCalledWith("/login?callbackUrl=%2Fworkspace%2Fsettings");
+    }
   });
 
   it("renders a truthful unavailable pane when settings cannot be read", async () => {

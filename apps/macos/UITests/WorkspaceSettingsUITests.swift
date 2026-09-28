@@ -37,4 +37,31 @@ final class WorkspaceSettingsUITests: XCTestCase {
         XCTAssertEqual(app.windows.count, 2)
         app.terminate()
     }
+
+    func testHelpLabelAndNativeSearchStayOnAResolvedDestination() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-workspace.web.origin", "http://127.0.0.1:1",
+            "-workspace.connection.localDevelopment", "YES"
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        app.typeKey(",", modifierFlags: [.command])
+
+        let help = app.buttons["settings.section.advanced"]
+        XCTAssertTrue(help.waitForExistence(timeout: 20))
+        XCTAssertEqual(help.label, "帮助与诊断")
+        XCTAssertFalse(app.buttons["settings.section.more"].exists)
+
+        let field = app.textFields["settings.search.field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        field.click()
+        field.typeText("截图")
+        XCTAssertTrue(app.buttons["settings.search.result.captures"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["settings.search.result.screen-recording"].exists)
+
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertFalse(app.buttons["settings.search.result.captures"].waitForExistence(timeout: 2))
+        app.terminate()
+    }
 }

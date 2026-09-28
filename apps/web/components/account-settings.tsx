@@ -57,7 +57,7 @@ export function AccountSettingsPanel({initial,section,embedded=false,recovery,av
         <div className={styles.profileIdentity}><AvatarEditor id="self" self label={data.user.display_name} url={avatarUrl} size={64} shape="squircle" triggerLabel="更换头像" /><div><h2>{data.user.display_name}</h2><p className={styles.secondary}>{data.user.email}</p></div></div>
         {data.user.kind==='lab_human'?<p className={styles.secondary}>测试身份由隔离空间管理。返回自己的账号后可以修改资料。</p>:<NameForm key={`profile-${data.user.revision}`} name={data.user.display_name} kind="profile" revision={data.user.revision} label="显示名称" onSaved={setData}/>}
       </section>
-      <section className={styles.section}><h2>个人介绍</h2><div className={styles.row}><p className={styles.secondary}>主页和个人介绍</p><Link className={styles.button} href="/onboarding?edit=true&callbackUrl=%2Fworkspace%2Fsettings">编辑资料 →</Link></div></section>
+      <section className={styles.section}><h2>个人介绍</h2><div className={styles.row}><p className={styles.secondary}>主页和个人介绍</p><a className={styles.button} href="/onboarding?edit=true&callbackUrl=%2Fworkspace%2Fsettings">编辑资料 →</a></div></section>
       <details className={styles.disclosure}><summary>头像保存在哪里？</summary><p>头像保存在当前浏览器或应用的这台设备上，按账号隔离，暂不跨设备同步。不会修改来源平台的照片。</p><Link href="/workspace/settings?section=appearance">管理头像风格与本机数据 →</Link></details>
     </>:section==='account'?<>
       {data.user.login_methods.length ? <>

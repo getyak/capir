@@ -22,12 +22,18 @@ export default async function SettingsPage({
 }: {
   searchParams: Promise<{ section?: string }>;
 }) {
+  const requested = (await searchParams).section;
   const session = await auth();
   if (!session?.user) {
-    redirect("/login?callbackUrl=%2Fworkspace%2Fsettings");
+    // Preserve only a schema-validated section so returning from login opens
+    // the requested pane. An unknown or malformed value is dropped rather than
+    // reflected, which keeps the callback on a fixed same-origin path.
+    const callback = isSettingsSection(requested)
+      ? `/workspace/settings?section=${requested}`
+      : "/workspace/settings";
+    redirect(`/login?callbackUrl=${encodeURIComponent(callback)}`);
   }
 
-  const requested = (await searchParams).section;
   let data: Awaited<ReturnType<typeof loadAccountSettings>> | null = null;
   try {
     data = await loadAccountSettings();

@@ -1,74 +1,914 @@
-.page { display: grid; grid-template-columns: 220px minmax(0, 1fr); width: 100%; max-width: 1040px; min-height: 640px; margin: 0 auto; padding: 40px 40px 80px; column-gap: 48px; row-gap: 28px; color: var(--ink); }
-.header { grid-column: 1 / -1; }
-.header h1 { font-size: 1.5rem; line-height: 34px; font-weight: 600; margin: 0; }
-.header p { color: var(--muted); font-size: 0.8125rem; line-height: 20px; margin: 6px 0 0; }
-.navigation { min-width: 0; align-self: start; position: sticky; top: 24px; }
-.primaryNav { display: grid; gap: 4px; }
-.navigation a, .more summary { display: flex; align-items: center; min-height: 40px; padding: 10px 12px; border-radius: 8px; font-size: 14px; color: var(--muted); cursor: pointer; }
-.navigation a:hover, .more summary:hover { color: var(--ink); background: var(--surface-muted); }
-.navigation a[aria-current="page"] { color: var(--ink); background: var(--surface-muted); font-weight: 600; }
-.more { margin-top: 24px; }
-.more summary { list-style: none; justify-content: space-between; font-size: 13px; }
-.more summary::-webkit-details-marker { display: none; }
-.more summary::after { content: "›"; font-size: 18px; transition: transform 140ms ease; }
-.more[open] summary::after { transform: rotate(90deg); }
-.content { min-width: 0; width: 100%; max-width: 640px; }
-.heading { margin-bottom: 28px; }
-.heading h2 { font-size: 1.375rem; line-height: 32px; font-weight: 600; margin: 0; letter-spacing: 0; }
-.heading p, .notice { color: var(--muted); font-size: 0.8125rem; line-height: 1.55; margin-top: 6px; }
-.pane { display: grid; gap: 28px; min-width: 0; }
-.group { padding: 0 0 28px; border-bottom: 1px solid var(--line-soft); }
-.group h2 { font-size: 15px; font-weight: 600; margin: 0 0 16px; }
-.row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 16px 0; }
-.row strong { font-size: 14px; font-weight: 500; }
-.row p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
-.rowValue { color: var(--muted); font-size: 13px; text-align: right; overflow-wrap: anywhere; }
-.destination { display: flex; align-items: center; gap: 24px; justify-content: space-between; padding: 18px 4px; min-height: 72px; border-radius: 8px; }
-.destination + .destination { border-top: 1px solid var(--line-soft); }
-.destination:hover { background: var(--surface-muted); }
-.destination strong { display: block; font-size: 14px; font-weight: 550; }
-.destination small { display: block; color: var(--muted); font-size: 13px; line-height: 1.6; margin-top: 5px; }
-.destination svg { flex-shrink: 0; color: var(--muted); }
-.themes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.themes button { padding: 7px; background: transparent; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); cursor: pointer; font: inherit; }
-.themes button[aria-pressed="true"] { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
-.themePreview { height: 90px; display: flex; overflow: hidden; background: #fdfdfc; border: 1px solid #e7e8e5; border-radius: 6px; }
-.themePreview > i { width: 26%; background: #f0f1ee; border-right: 1px solid #e7e8e5; }
-.themePreview > span { display: grid; gap: 8px; align-content: center; flex: 1; padding: 18px; }
-.themePreview b { height: 5px; border-radius: 2px; background: #dbded9; }
-.themePreview b:first-child { width: 48%; background: #727873; }
-.themePreview b:last-child { width: 70%; }
-.themePreview[data-theme-preview="dark"] { background: #141515; border-color: #2c2e2e; }
-.themePreview[data-theme-preview="dark"] > i { background: #232525; border-color: #2c2e2e; }
-.themePreview[data-theme-preview="dark"] b { background: #444845; }
-.themePreview[data-theme-preview="dark"] b:first-child { background: #afb5ae; }
-.themeLabel { display: flex; align-items: center; gap: 8px; padding: 12px 5px 5px; font-size: 14px; }
-.radio { margin-left: auto; width: 14px; height: 14px; border: 1px solid var(--line); border-radius: 50%; }
-[aria-pressed="true"] .radio { border: 4px solid var(--ink); }
-.disclosure { color: var(--muted); font-size: 13px; line-height: 1.7; }
-.disclosure summary { cursor: pointer; min-height: 44px; padding: 11px 0; color: var(--ink); }
-.unavailable { padding: 24px 0; }
-.unavailable h3 { font-size: 16px; }
-.unavailable p { color: var(--muted); line-height: 1.7; font-size: 14px; margin: 12px 0; }
-.unavailable > div { display: flex; flex-wrap: wrap; gap: 16px; }
-.unavailable a { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; text-decoration: underline; font-size: 14px; }
-.page :is(a,button,summary):focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
-:global(html[data-desktop-surface="settings"]) .page { display: block; padding: 32px 40px 60px; max-width: 720px; min-height: 0; }
-:global(html[data-desktop-surface="settings"]) .navigation { display: none; }
-:global(html[data-desktop-surface="settings"]) .header { display: none; }
-@media (max-width: 1000px) { .page { padding: 28px 24px 64px; grid-template-columns: 152px minmax(0,1fr); column-gap: 24px; } }
-@media (max-width: 640px) {
-  .page { display: block; padding: 20px 20px 80px; }
-  .navigation { position: static; margin-bottom: 28px; }
-  .primaryNav { display: flex; overflow-x: auto; gap: 4px; padding: 3px; margin: 0 -3px; }
-  .navigation a, .more summary { min-height: 44px; }
-  .navigation a { white-space: nowrap; flex-shrink: 0; }
-  .more { margin-top: 4px; }
-  .more summary { padding-left: 3px; width: fit-content; gap: 16px; }
-  .heading h2 { font-size: 1.25rem; line-height: 28px; }
-  .heading { margin-bottom: 22px; }
-  .row { gap: 12px; flex-wrap: wrap; }
-  .themePreview { height: 76px; }
-  :global(html[data-desktop-surface="settings"]) .page { padding: 24px; }
+/*
+ * Authenticated settings surface.
+ *
+ * One settings category navigation lives inside the normal workspace shell;
+ * the workspace rail, header and account controls are owned by the shell.
+ * The native macOS settings scene hides this inner navigation through
+ * `html[data-desktop-surface="settings"]` because it renders its own rail.
+ */
+
+.page {
+  color: var(--ink);
+  margin: 0 auto;
+  max-width: 1240px;
+  padding: 40px 30px 80px;
+  width: 100%;
 }
-@media (prefers-reduced-motion: reduce) { .more summary::after { transition: none; } }
+
+.layout {
+  align-items: start;
+  column-gap: 32px;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+}
+
+/* ── Settings navigation ──────────────────────────────────────────────── */
+
+.sidebar {
+  min-width: 0;
+  position: sticky;
+  top: 24px;
+}
+
+.sidebarHeading {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.3;
+  margin: 0 0 14px;
+}
+
+.search {
+  margin-bottom: 22px;
+  position: relative;
+}
+
+.searchField {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 10px;
+}
+
+.searchField:focus-within {
+  border-color: var(--ink);
+}
+
+.searchField input {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  flex: 1;
+  font: inherit;
+  font-size: 14px;
+  min-height: 38px;
+  min-width: 0;
+  outline: none;
+  padding: 4px 2px;
+}
+
+.searchField input::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
+.searchField kbd {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 5px;
+}
+
+.searchPanel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--ink) 12%, transparent);
+  left: 0;
+  max-height: min(60vh, 440px);
+  overflow-y: auto;
+  padding: 6px;
+  position: absolute;
+  width: min(440px, calc(100vw - 40px));
+  top: calc(100% + 6px);
+  z-index: 20;
+}
+
+.searchResult {
+  align-items: center;
+  border-radius: 9px;
+  color: var(--ink);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 10px;
+  text-decoration: none;
+}
+
+.searchResult:hover,
+.searchResult:focus-visible,
+.searchResult[aria-selected="true"] {
+  background: var(--surface-muted);
+}
+
+.searchResult:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.searchResultText {
+  min-width: 0;
+}
+
+.searchResultText strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.searchResultText small {
+  color: var(--muted);
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin-top: 3px;
+}
+
+.searchResultMeta {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 4px;
+  text-align: right;
+}
+
+.searchScope {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11.5px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
+.searchDestination {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.searchEmpty {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 14px 10px;
+}
+
+.searchEmpty p + p {
+  margin-top: 6px;
+}
+
+.visuallyHidden {
+  clip: rect(0 0 0 0);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.navigation {
+  display: grid;
+  gap: 18px;
+}
+
+.navGroup {
+  display: grid;
+  gap: 2px;
+}
+
+.navGroupLabel {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+  padding: 0 12px 6px;
+}
+
+.navigation a {
+  align-items: center;
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  font-size: 14px;
+  min-height: 40px;
+  padding: 9px 12px;
+  text-decoration: none;
+}
+
+.navigation a:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.navigation a[aria-current="page"] {
+  background: var(--surface-muted);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ── Content column ───────────────────────────────────────────────────── */
+
+.content {
+  max-width: 830px;
+  min-width: 0;
+  width: 100%;
+}
+
+.heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding-bottom: 22px;
+}
+
+.breadcrumb {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 0 0 8px;
+}
+
+.heading h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+}
+
+.scopePill {
+  background: var(--surface-muted);
+  border-radius: 999px;
+  color: var(--muted);
+  flex-shrink: 0;
+  font-size: 12.5px;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+
+/* Display-only pairing: the macOS Settings scene says "this Mac", the Web
+ * surface stays browser-specific. Neither grants any capability. */
+.webOnly {
+  display: inline;
+}
+
+.desktopOnly {
+  display: none;
+}
+
+.pane {
+  display: grid;
+  gap: 28px;
+  min-width: 0;
+}
+
+.group {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 0 0 28px;
+}
+
+.group h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 16px;
+}
+
+/* ── Boundary and sources (connections) ───────────────────────────────── */
+
+.boundary {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.boundary li strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  margin: 10px 0 4px;
+}
+
+.boundary li p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.boundaryIndex {
+  align-items: center;
+  background: var(--surface-muted);
+  border-radius: 50%;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 600;
+  height: 26px;
+  justify-content: center;
+  width: 26px;
+}
+
+.destination {
+  align-items: center;
+  border-radius: 8px;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  min-height: 72px;
+  padding: 18px 4px;
+  text-decoration: none;
+}
+
+.destination + .destination {
+  border-top: 1px solid var(--line-soft);
+}
+
+.destination:hover {
+  background: var(--surface-muted);
+}
+
+.destination strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.destination small {
+  color: var(--muted);
+  display: block;
+  font-size: 13px;
+  line-height: 1.6;
+  margin-top: 5px;
+}
+
+.destinationMeta {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+.destinationBadge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+
+.destinationNote {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+  margin: 14px 4px 0;
+}
+
+.devicePermissions {
+  display: grid;
+  gap: 8px;
+}
+
+.devicePermissions h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.devicePermissions p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.callout {
+  align-items: center;
+  background: color-mix(in srgb, var(--ink) 90%, var(--background));
+  border-radius: 14px;
+  color: var(--background);
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 22px 24px;
+}
+
+.callout strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.callout p {
+  color: color-mix(in srgb, var(--background) 72%, transparent);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 6px 0 0;
+}
+
+.callout a {
+  align-items: center;
+  color: var(--background);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 13.5px;
+  gap: 6px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* ── Appearance ───────────────────────────────────────────────────────── */
+
+.themes {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.themes button {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  padding: 8px;
+  text-align: left;
+}
+
+.themes button[aria-checked="true"] {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.themePreview {
+  background: #fdfdfc;
+  border: 1px solid #e7e8e5;
+  border-radius: 7px;
+  display: flex;
+  height: 82px;
+  overflow: hidden;
+}
+
+.themePreview > i {
+  background: #f0f1ee;
+  border-right: 1px solid #e7e8e5;
+  width: 26%;
+}
+
+.themePreview > span {
+  align-content: center;
+  display: grid;
+  flex: 1;
+  gap: 8px;
+  padding: 16px;
+}
+
+.themePreview b {
+  background: #dbded9;
+  border-radius: 2px;
+  height: 5px;
+}
+
+.themePreview b:first-child {
+  background: #727873;
+  width: 48%;
+}
+
+.themePreview b:last-child {
+  width: 70%;
+}
+
+.themePreview[data-theme-preview="dark"] {
+  background: #141515;
+  border-color: #2c2e2e;
+}
+
+.themePreview[data-theme-preview="dark"] > i {
+  background: #232525;
+  border-color: #2c2e2e;
+}
+
+.themePreview[data-theme-preview="dark"] b {
+  background: #444845;
+}
+
+.themePreview[data-theme-preview="dark"] b:first-child {
+  background: #afb5ae;
+}
+
+.themePreview[data-theme-preview="system"] {
+  background: linear-gradient(100deg, #fdfdfc 62%, #1d1f1e 62%);
+  border-color: #d9dcd7;
+}
+
+.themePreview[data-theme-preview="system"] > i {
+  background: #f0f1ee;
+}
+
+.themePreview[data-theme-preview="system"] > span b {
+  background: #cfd3cd;
+}
+
+.themePreview[data-theme-preview="system"] > span b:first-child {
+  background: #7b817c;
+}
+
+.themeLabel {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  padding: 12px 5px 5px;
+  font-size: 13.5px;
+}
+
+.themeName {
+  display: grid;
+}
+
+.themeName small {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-top: 1px;
+}
+
+.themeSelected {
+  align-items: center;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 12px;
+  gap: 2px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.scopeNote,
+.sampleNote {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+  margin: 14px 0 0;
+}
+
+.sampleNote {
+  margin: -6px 0 12px;
+}
+
+.sample {
+  background: var(--surface-muted);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.sampleHead {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+}
+
+.sampleHead strong {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.sampleHead span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.sampleHead small {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-left: auto;
+}
+
+.sampleLine {
+  border-top: 1px solid var(--line-soft);
+  font-size: 14.5px;
+  line-height: 1.6;
+  margin: 16px 0 0;
+  padding-top: 16px;
+}
+
+.sampleMeta {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 12.5px;
+  gap: 5px;
+  margin: 12px 0 0;
+}
+
+.actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.actionNote {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 60%;
+}
+
+.actionStatus {
+  display: grid;
+  gap: 4px;
+  max-width: 62%;
+}
+
+.actionStatus .actionNote {
+  max-width: none;
+}
+
+.errorNote {
+  color: var(--accent);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.unsaved {
+  color: var(--accent);
+}
+
+.savedNote {
+  color: var(--muted);
+}
+
+.actionButtons {
+  display: flex;
+  gap: 8px;
+}
+
+.actionButtons button {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  min-height: 40px;
+  padding: 8px 18px;
+}
+
+.actionButtons button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.primaryButton {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  color: var(--background) !important;
+}
+
+/* ── Shared rows and states ───────────────────────────────────────────── */
+
+.row {
+  align-items: center;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 12px 0;
+}
+
+.row span {
+  font-size: 13.5px;
+}
+
+.rowValue {
+  color: var(--muted);
+  text-align: right;
+}
+
+.notice {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 10px 0 0;
+}
+
+.disclosure {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.disclosure summary {
+  color: var(--ink);
+  cursor: pointer;
+  min-height: 44px;
+  padding: 11px 0;
+}
+
+.unavailable {
+  padding: 24px 0;
+}
+
+.unavailable h3 {
+  font-size: 16px;
+}
+
+.unavailable p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 12px 0;
+}
+
+.unavailable > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.unavailable a {
+  align-items: center;
+  display: inline-flex;
+  font-size: 14px;
+  gap: 6px;
+  min-height: 44px;
+  text-decoration: underline;
+}
+
+.page :is(a, button, summary):focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+/* The native settings scene owns its own navigation. Presentation only. */
+:global(html[data-desktop-surface="settings"]) .page {
+  display: block;
+  max-width: 720px;
+  min-height: 0;
+  padding: 32px 40px 60px;
+}
+
+:global(html[data-desktop-surface="settings"]) .layout {
+  display: block;
+}
+
+:global(html[data-desktop-surface="settings"]) .sidebar {
+  display: none;
+}
+
+:global(html[data-desktop-surface="settings"]) .webOnly {
+  display: none;
+}
+
+:global(html[data-desktop-surface="settings"]) .desktopOnly {
+  display: inline;
+}
+
+@media (max-width: 1000px) {
+  .page {
+    padding: 28px 24px 64px;
+  }
+  .layout {
+    column-gap: 24px;
+    grid-template-columns: 176px minmax(0, 1fr);
+  }
+}
+
+/* The workspace rail may still be expanded at tablet widths. Give Settings the
+   available stage width instead of squeezing a second rail beside its content. */
+@media (max-width: 900px) {
+  .layout {
+    display: block;
+  }
+  .sidebar {
+    margin-bottom: 24px;
+    position: static;
+  }
+  .search {
+    max-width: 260px;
+  }
+  .navigation {
+    display: grid;
+    gap: 4px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .navGroup {
+    display: contents;
+  }
+  .navGroupLabel {
+    display: none;
+  }
+  .navigation a {
+    justify-content: center;
+    min-width: 0;
+    text-align: center;
+  }
+  .content {
+    max-width: none;
+  }
+  .heading {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .scopePill {
+    align-self: flex-start;
+  }
+  .boundary {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .searchResult {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .searchResultMeta {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+    text-align: left;
+  }
+  .page {
+    padding: 20px 20px 80px;
+  }
+  .layout {
+    display: block;
+  }
+  .sidebar {
+    margin-bottom: 28px;
+    position: static;
+  }
+  .navigation {
+    gap: 4px;
+  }
+  .scopePill {
+    align-self: flex-start;
+    margin-top: 10px;
+  }
+  .heading {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .boundary {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .themes {
+    grid-template-columns: 1fr;
+  }
+  .actionNote {
+    max-width: none;
+  }
+  .actionStatus {
+    max-width: none;
+  }
+  .callout {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+  :global(html[data-desktop-surface="settings"]) .page {
+    padding: 24px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .searchPanel {
+    scroll-behavior: auto;
+  }
+}
