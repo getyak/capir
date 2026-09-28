@@ -8,6 +8,7 @@ import { registerAccountOnboarding } from "./modules/accountOnboardingRoutes.js"
 import { registerAgentSessionRoutes } from "./modules/agentSessionRoutes.js";
 import { registerConversationQueueRoutes } from "./modules/conversationQueueRoutes.js";
 import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.js";
+import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
@@ -763,6 +764,7 @@ export async function buildApp(
     createMemoryRegenerationImageLoader(pool),
   );
   registerConversationQueueRoutes(app, pool, authenticate);
+  registerDesktopCaptureReceipt(app, pool, authenticate);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);
   registerFeedbackRoutes(app, pool, authenticate);

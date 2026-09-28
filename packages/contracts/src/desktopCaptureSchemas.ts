@@ -1,4 +1,6 @@
 import { Type, type Static } from "@sinclair/typebox";
+import { ConversationImageManifestSchema, ConversationQueueEntryStatusSchema } from "./conversationQueueSchemas.js";
+import { CONTRACT_VERSION } from "./constants.js";
 
 /** Discloses the processor set that may receive an intentional Mac capture. */
 export const DesktopCapturePolicySchema = Type.Object({
@@ -18,3 +20,16 @@ export const DesktopCaptureContextSchema = Type.Object({
   processing: DesktopCapturePolicySchema,
 }, { additionalProperties: false });
 export type DesktopCaptureContext = Static<typeof DesktopCaptureContextSchema>;
+
+/** Bounded readback for one screenshot message; it never includes image bytes or answer text. */
+export const DesktopCaptureReceiptSchema = Type.Object({
+  contract_version: Type.Literal(CONTRACT_VERSION),
+  session_id: Type.String({ format: "uuid" }),
+  message_id: Type.String({ format: "uuid" }),
+  queue_entry_id: Type.String({ format: "uuid" }),
+  status: ConversationQueueEntryStatusSchema,
+  image_manifest: Type.Array(ConversationImageManifestSchema, { maxItems: 1 }),
+  observed_at: Type.String({ format: "date-time" }),
+  result_recorded: Type.Boolean(),
+}, { additionalProperties: false });
+export type DesktopCaptureReceipt = Static<typeof DesktopCaptureReceiptSchema>;
