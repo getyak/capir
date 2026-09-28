@@ -86,6 +86,7 @@ import { ConversationProvenance, ConversationResponse } from "../conversation-re
 import { MemoryReviewCard } from "../memory-review/memory-review-card";
 import { sessionBlockTitle } from "../session-workbench/session-presentation";
 import { ConversationImageStrip } from "./conversation-images";
+import { SessionCalendarDraftCard } from "./session-calendar-draft-card";
 import styles from "./queued-conversation.module.css";
 
 type RenderContext = {
@@ -123,11 +124,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
       onCommentItem={context.onCardComment}/>;
   }
   if (name === "talent-signal.calendar" && data.version === 1 && typeof data.draftId === "string") {
-    return <section aria-label="日历草稿核对入口" className="context-calendar-draft-handoff">
-      <strong>{typeof data.title === "string" ? data.title : "日历草稿"}</strong>
-      <p>日历草稿已准备好，核对时间后可下载并在日历应用中导入。</p>
-      <a href={`/workspace/meetings?draft=${encodeURIComponent(data.draftId)}`}>核对日历草稿 →</a>
-    </section>;
+    return <SessionCalendarDraftCard draftId={data.draftId} binding={context.binding} sessionId={context.sessionId}/>;
   }
   if (name === "talent-signal.progress") {
     const text = typeof data.text === "string" ? data.text : "";
