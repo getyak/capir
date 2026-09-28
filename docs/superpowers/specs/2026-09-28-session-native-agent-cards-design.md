@@ -1,6 +1,6 @@
 # Session-native result cards with assistant-ui
 
-Status: Proposed for written review
+Status: Approved baseline; 2026-09-29 expansion covers three Web/macOS cards
 
 Date: 2026-09-28
 
@@ -10,7 +10,7 @@ Scope: First delivery slice for Talent Signal's Web conversation and the macOS W
 
 A user reads an Agent reply and handles its useful result in the same Session. A card shows one concrete change, the short source passage that supports it, and specific actions immediately below it. The user can save, edit, or pass without opening a review page or a second card. After an action, that card shows the actual result. The conversation remains calm when a tool only read data or found nothing actionable.
 
-The first complete slice is a self Memory item or an item for an already confirmed Person or relationship, proposed in a Web Session, including edit, skip, commit, unknown-result recovery, receipt, and undo. macOS gets the same behavior through its existing Web workspace. A new-contact dependency keeps its current governed path until the contact card is designed and verified. This slice establishes a rendering rule for the other tools; it does not claim that every tool and platform has already been converted.
+The first delivery phase includes three Web Session card types: a new contact, an atomic Memory item, and a calendar draft. macOS gets the same behavior through its existing Web workspace. Each card has edit, pass, action, unknown-result recovery, and an effect-specific receipt. Native iOS and external MCP Apps remain separate platform slices using the same governed semantics; this phase does not claim they are converted.
 
 User-facing copy is short and concrete. Do not label a card "AI suggestion", "tool result", "review required", or show internal IDs, scores, and diagnostic stages. The visible verbs name the effect: "Remember", "Edit", "Not now", "Add to calendar", or their localized equivalents.
 
@@ -64,7 +64,13 @@ The exact locale, calendar date, time zone, and speaker must be resolved before 
 
 Remember commits this displayed item directly. Edit replaces the sentence with an inline editor in the same card, then shows Save and Cancel there. Not now dismisses only this item. No action first requires an "Open review" or "Expand review" click. The source may expand for inspection, but inspection is not a mandatory navigation step.
 
-Show at most three decision cards initially for one assistant turn. If more pending items exist, show a small "More suggestions" control inside that Session; no item, visible or hidden, is selected or committed by default. The additional items use the same immediate-action card grammar. A later card for adding a new contact may combine contact creation with one Memory item only when the complete combined effect and identity clue are visible on that card. Ambiguous identity produces a separate in-Session comparison with no preselection.
+Show at most three decision cards initially for one assistant turn. If more pending items exist, show a small "More suggestions" control inside that Session; no item, visible or hidden, is selected or committed by default. The additional items use the same immediate-action card grammar. The new-contact card shows the identity clue, relationship purpose, exact source and the fields that will be created. Its direct Add/Edit/Pass decision creates only the contact; every Memory sibling remains pending for a separate decision. Ambiguous identity produces an in-Session comparison with no preselection. Contact creation never confirms a Memory item by implication.
+
+### Contact and calendar examples
+
+A contact card names the proposed person and relationship context, shows the exact excerpt, then offers Add contact, Edit and Not now. An existing possible match is shown without a preselected identity. Contact-only approval and its canonical receipt preserve every untouched Memory proposal item.
+
+A calendar card names title, local date/time, IANA zone and destination. In this phase the destination is a calendar file for the user to confirm in their calendar app. The primary verb is Download calendar draft; Edit and Not now stay in the card. A fresh source- and revision-checked server read precedes export. The receipt says the file was generated or downloaded, never that an event was added. Reopening, editing, source loss, and repeated export retain their truthful states; an import in another app is not observable or undoable here.
 
 ### State transitions
 
@@ -90,19 +96,19 @@ The following mapping covers the current Agent catalog and adjacent conversation
 | search_web, fetch_web | Untrusted public lead or fetched source | Brief progress while running; cited research answer or draft, never a confirmed fact card |
 | search_douyin_profiles, search_tiktok_profiles, search_weibo_profiles, search_threads_profiles | Possible or ambiguous public match | Possible-match row with source; identity comparison only when a human choice is required |
 | contact_workspace search | Limited account-scoped candidates | Inline comparison on ambiguity, with no preselected person; otherwise quiet handoff |
-| contact_workspace propose_create or propose_update | Review-only contact candidate and fingerprint | One in-Session contact decision with proposed fields, exact excerpts, Save/Edit/Pass |
+| contact_workspace propose_create or propose_update | Review-only contact candidate and fingerprint | One in-Session contact decision with proposed fields, exact excerpts, Add/Edit/Pass; contact-only commit preserves Memory siblings |
 | memory_review propose | Proposal reference and item revisions | Atomic in-Session Memory decision cards |
 | stage_pursuit_proposal | Review-only Pursuit proposal | One dependency or action decision card; no implied fact confirmation |
-| stage_calendar_draft | Calendar draft reference | Time, zone, destination calendar, and direct Add/Edit/Pass controls; device or external write gets its own exact-effect approval |
+| stage_calendar_draft | Calendar draft reference | Time, zone, calendar-file destination and direct Download/Edit/Pass controls; importing remains the calendar app’s decision |
 | create_research_artifact, create_person_research_artifact | Discardable cited draft | Draft artifact summary and source coverage; no confirmation or publication claim |
 | Screenshot understanding and source-review tools | Bounded interpretation and source receipts | Short progress and answer citations; show a card only when a governed decision results |
 | Domain commit, dismiss, reconcile, and undo | Verified receipt or unresolved operation | In-place state of the original card |
 
-The public MCP tools talent_signal_workspace and talent_signal_people remain read-only and outside this delivery slice. A later MCP Apps slice can render a small people directory from the existing restricted projection, with a text fallback. It requires separate OAuth and UI-resource work; assistant-ui and the external host do not share login credentials or decision authority.
+The public MCP tools talent_signal_workspace and talent_signal_people remain read-only and outside this delivery phase. A later MCP Apps slice can render a small people directory from the existing restricted projection, with a text fallback. It requires separate OAuth and UI-resource work; assistant-ui and the external host do not share login credentials or decision authority.
 
 ## Per-item Memory decision contract
 
-Preserve the existing batch commit behavior for existing clients. Add a separate protected item-decision operation for the new card. Its input identifies the frozen review scope, proposal item, expected proposal and item revisions, idempotency key, decision (accept, edited accept, or skip), and edited text only when needed. The server rechecks the current source and authorization in the same transaction as the decision.
+Preserve the existing batch commit behavior for existing clients. Add a separate protected item-decision operation for the new Memory card and a contact-only decision that leaves Memory siblings pending. Its input identifies the frozen review scope, proposal item, expected proposal and item revisions, idempotency key, decision (accept, edited accept, or skip), and edited text only when needed. The server rechecks the current source and authorization in the same transaction as the decision.
 
 Accept commits exactly the displayed item. Skip marks exactly that item skipped. All other pending items remain pending and visible in their existing cards. A successful decision returns an item-scoped receipt, the new proposal revision, and the remaining-item count. The client refreshes sibling cards against the new revision rather than replaying stale actions. If the proposal has an unresolved contact dependency, the operation returns a typed requirement for identity resolution; it never creates or binds a person by inference.
 
@@ -132,19 +138,21 @@ The selected approach uses assistant-ui for the Web message surface and Talent S
 
 The implementation plan should have independently verifiable milestones:
 
-1. Render existing Session text, images, progress, and Memory reference through an ExternalStoreRuntime adapter without changing send, queue, persistence, or login behavior.
-2. Add the protected per-item Memory decision and readback semantics while preserving batch clients.
+1. Render existing Session text, images, progress, and governed card references through an ExternalStoreRuntime adapter without changing send, queue, persistence, or login behavior.
+2. Add protected per-item Memory and contact-only decisions that preserve untouched siblings and existing batch clients.
 3. Replace the large in-chat Memory form with atomic direct-action cards and real in-place receipts.
-4. Verify Web and macOS surfaces, accessibility, and regression boundaries; record what is still pending for iOS and other tools.
+4. Render new-contact and calendar-draft cards in the same Session, with direct actions and truthful calendar-file handoff.
+5. Verify Web and macOS surfaces, accessibility, source loss and regression boundaries; record what is still pending for iOS and external MCP Apps.
 
 Acceptance requires:
 
 - A user sees a proposed item, its exact source, and legal action buttons in the same assistant turn without an intermediate review click.
-- One Remember or Not now click decides only that item; untouched siblings remain pending and unselected.
+- One Remember or Not now click decides only that item; contact-only creation also leaves untouched siblings pending and unselected.
 - Edit stays inline and preserves the original proposal for audit.
 - A confirmed write appears only after authoritative readback; an unknown result reconciles the original operation.
 - Source revocation, stale revision, account switch, expiry, undo conflict, and retry have truthful, recoverable states.
 - Long names and excerpts, narrow Web, keyboard focus, screen reader labels, reduced motion, and macOS WKWebView are checked on the real surface.
+- A calendar-file receipt never claims an event was imported or saved in another app.
 - Existing queue, draft, attachment, cancellation, and batch Memory flows still work.
 - No test substitutes a helper fixture for the production entry, dispatch, transition, and readback chain.
 
