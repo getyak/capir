@@ -53,6 +53,8 @@ Hosted workspace changes remain independent of the desktop binary.
 
 ## Connection and diagnostics
 
+The optional menu-bar capture entry uses the same configured Web workspace login. On first use it discloses the current workspace and available image processors before an intentional selection can upload. The device-owned capture permission is separate from that login. The ordinary path is configurable shortcut, region selection and release; the Agent then processes an image-only Session message. Settings → This device controls the menu-bar icon, shortcut, default preview choice and optional top status hint. Hiding the icon leaves the main window and Settings reachable. An unadmitted screenshot is encrypted for bounded device recovery, while an admitted image follows the workspace Session/source lifecycle.
+
 **Settings (⌘ ,) → Connection**, the native toolbar and the Web account menu open
 the same native controls. Enter an HTTPS origin or a `/workspace/...` link without
 credentials, query parameters or fragments. Test the draft before saving; a stale

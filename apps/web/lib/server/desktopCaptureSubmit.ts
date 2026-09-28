@@ -35,6 +35,9 @@ export async function desktopCaptureSubmitRoute(request: Request, sessionId: str
     if (request.headers.get("x-workspace-session") !== contactHandoffSessionVersion(claims)) {
       return reply({ code: "session_stale", message: "登录已改变；截图未上传。" }, 409);
     }
+    if (request.headers.get("x-talent-signal-workspace") !== claims.backendAccountId) {
+      return reply({ code: "session_stale", message: "工作区已改变；截图未上传。" }, 409);
+    }
 
     const reader = request.body?.getReader();
     if (!reader) return reply({ message: "截图内容为空。" }, 400);

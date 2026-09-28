@@ -34,9 +34,10 @@ it("keeps recovery scope stable across login rotation while changing its authori
   const first = await (await desktopCaptureContextRoute(request())).json();
   const second = await (await desktopCaptureContextRoute(request())).json();
   expect(first.owner_scope).toBe(second.owner_scope);
+  expect(first.workspace_account_id).toBe("account-one");
   expect(first.login_binding).not.toBe(second.login_binding);
   expect(JSON.stringify(first)).not.toContain("token-a");
-  expect(first.processing).toMatchObject({ available: true, processor_labels: ["Claude · sonnet"] });
+  expect(first.processing).toMatchObject({ available: true, processor_labels: ["Claude · sonnet"], workspace_label: "Workspace" });
 });
 
 it("fences one account's staged screenshot from another account", async () => {

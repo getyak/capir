@@ -15,6 +15,8 @@ vi.mock("./conversationQueue", () => ({ conversationQueueRoute: f.admit }));
 import { desktopCaptureSubmitRoute } from "./desktopCaptureSubmit";
 import { contactHandoffSessionVersion } from "./contact-handoff-session";
 import { workspaceSessionDraftStorageScope } from "./workspaceSessions";
+import { proxy } from "../../proxy";
+import { NextRequest } from "next/server";
 
 const sid = "72ce7ff4-a5a8-40d0-b1d7-d84a13adcd30";
 const mid = "a072ed54-6d56-413d-af4b-3ebc01ba646a";
@@ -31,6 +33,7 @@ const payload = () => ({ policy_version: "current-policy", owner_scope: workspac
 const request = (body: unknown, origin = "https://workspace.example", extraHeaders: Record<string,string> = {}) =>
   new Request(`https://workspace.example/api/desktop-capture/${sid}/${mid}`, { method: "POST", headers: {
     "content-type": "application/json", "host": "workspace.example", "origin": origin, "x-forwarded-proto": "https",
+    "x-talent-signal-workspace": claims.backendAccountId,
     "x-workspace-session": contactHandoffSessionVersion(claims), ...extraHeaders,
   }, body: JSON.stringify(body) });
 
@@ -50,6 +53,12 @@ it("admits one immutable screenshot through the existing durable queue", async (
   expect(body).toEqual({ idempotency_key: mid, session_id: sid, message_id: mid, objective: "", images: [image] });
 });
 
+it("passes the real workspace mutation gate for the pinned account", () => {
+  const incoming = request(payload());
+  const gated = proxy(new NextRequest(incoming.url, { method: "POST", headers: incoming.headers }));
+  expect(gated.status).toBe(200);
+});
+
 it("refuses changed processing policy or account scope before admission", async () => {
   expect((await desktopCaptureSubmitRoute(request({ ...payload(), policy_version: "old" }), sid, mid)).status).toBe(409);
   expect((await desktopCaptureSubmitRoute(request({ ...payload(), owner_scope: "b".repeat(64) }), sid, mid)).status).toBe(409);
@@ -60,6 +69,8 @@ it("refuses cross-origin submission, stale login, and mismatched message identit
   expect((await desktopCaptureSubmitRoute(request(payload(), "https://other.example"), sid, mid)).status).toBe(403);
   expect((await desktopCaptureSubmitRoute(request(payload(), undefined, { "x-workspace-session": "stale" }), sid, mid)).status).toBe(409);
   expect((await desktopCaptureSubmitRoute(request({ ...payload(), message_id: aid }), sid, mid)).status).toBe(400);
+  expect((await desktopCaptureSubmitRoute(request(payload(), undefined,
+    { "x-talent-signal-workspace": "other-account" }), sid, mid)).status).toBe(409);
   expect(f.admit).not.toHaveBeenCalled();
 });
 

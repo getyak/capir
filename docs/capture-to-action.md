@@ -28,6 +28,8 @@ The product should feel like finishing a thought, not administering a database.
 
 ## Intentional capture
 
+On macOS, the native menu or a configured shortcut starts a single region or window screenshot. Once the user has seen the current workspace and processor scope and the OS has granted screen access, releasing a region directly admits one image-only Agent message to a new recoverable Session. Optional preview retains pixels locally until Send; it may crop or permanently cover selected pixels before upload. Admission, Agent processing, interpretation, fact confirmation and external effects remain separate states and decisions. The page cannot request native capture. A failed or uncertain upload keeps the exact local message identity for owner-scoped reconciliation; changing the workspace or processor scope requires review before another send. The native transport boundary is recorded in [ADR 0016](decisions/0016-shared-desktop-workspace-surface.md#2026-09-29-intentional-mac-screenshot-submission).
+
 Capture begins with a deliberate user action from mobile, web, a share surface,
 or an authorized channel.
 

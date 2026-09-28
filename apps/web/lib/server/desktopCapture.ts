@@ -20,9 +20,10 @@ export async function desktopCaptureContextRoute(_request: Request): Promise<Res
     return response({
       protocol_version: 1,
       owner_scope: workspaceSessionDraftStorageScope(claims),
+      workspace_account_id: claims.backendAccountId,
       login_binding: contactHandoffSessionVersion(claims),
       expires_at,
-      processing,
+      processing: { ...processing, workspace_label: claims.backendAccountName },
     });
   } catch (error) {
     if (isBackendSessionExpiredError(error)) return response({ code: "backend_session_expired", message: "请重新登录。" }, 401);

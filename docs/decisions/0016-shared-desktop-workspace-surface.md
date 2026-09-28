@@ -47,3 +47,9 @@ capture becomes a supported product requirement with a typed authenticated
 transport contract.
 
 API basis: [Apple WKNavigationDelegate](https://developer.apple.com/documentation/webkit/wknavigationdelegate).
+
+## 2026-09-29: Intentional Mac screenshot submission
+
+The owner requested a menu-bar screenshot that enters the existing Agent Session without a second Send. The Mac app now owns an explicitly initiated capture surface. The Web product page still receives no general native bridge or screenshot authority. A separate content-free, same-origin WebKit document carries fixed native-initiated requests in an isolated content world; WebKit keeps its login cookies in the existing origin-partitioned store. The native code neither copies those cookies into URLSession nor accepts capture commands from page JavaScript. Submission is fenced by the current login, stable owner scope and reviewed processing policy, then uses the existing durable conversation queue.
+
+First-use disclosure and OS screen permission remain distinct. Selecting a region authorizes that one purpose-bound upload and Agent analysis, not a relationship fact, external effect or future ambient collection. The exception should be reconsidered if an implementation needs page-callable methods, persistent bearer credentials, cross-origin transfer or a second canonical task store.

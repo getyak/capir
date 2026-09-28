@@ -501,7 +501,12 @@ private struct ConnectedQuietWorkspace: View {
         }
         .focusedSceneObject(browser)
         .background(WorkspaceWindowBehavior(floating: floating))
-        .onAppear { browser.openSettings = { openSettings() }; consumeDestination() }
+        .onAppear {
+            browser.openSettings = { openSettings() }
+            CaptureRuntime.shared.start()
+            CaptureRuntime.shared.setOpenWorkspace { openWindow(id: "workspace") }
+            consumeDestination()
+        }
         .onChange(of: connection.inspectorEnabled) { _, enabled in browser.webView.isInspectable = enabled }
         .onChange(of: navigation.pending) { _, _ in consumeDestination() }
         .onChange(of: navigation.pendingURL) { _, _ in consumeDestination() }
