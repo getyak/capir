@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { MemoryDecision, MemoryProposalItem } from "@talent-signal/contracts";
 import type { MemoryItemOutcome } from "./use-memory-review";
 import styles from "./memory-review.module.css";
@@ -79,10 +79,13 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
 }
 
 import type { MemoryReviewController } from "./use-memory-review";
+import { ContactDecisionCard } from "./contact-decision-card";
 
-export function SessionMemoryCards({ controller, onComment }: {
+export function SessionMemoryCards({ controller, onComment, onCompare, comparison }: {
   controller: MemoryReviewController;
   onComment?: (item: MemoryProposalItem) => void;
+  onCompare?: () => void;
+  comparison?: ReactNode;
 }) {
   const [showAll, setShowAll] = useState(false);
   const review = controller.review;
@@ -97,8 +100,27 @@ export function SessionMemoryCards({ controller, onComment }: {
   const shown = showAll ? items : items.slice(0, 3);
   const frozen = controller.frozen || controller.phase === "processed" || controller.phase === "dismissed"
     || review.source_status === "unavailable";
+  const contactSource = review.items.find((item) => item.scope !== "self"
+    && Boolean(review.person_display_label)
+    && item.source_excerpt.includes(review.person_display_label!))?.source_excerpt
+    ?? review.person_display_label ?? "";
+  const showContact = Boolean((review.contact_decision === "new" && review.person_display_label) || controller.contactOutcome);
   return <div className={styles.actionStack} data-memory-review aria-label="会话中的记忆操作">
-    {review.contact_status === "pending" && review.person_display_label ? <p className={styles.actionHint}>关于{review.person_display_label}的内容，先确认联系人后可处理。</p> : null}
+    {showContact ? <ContactDecisionCard
+      displayLabel={controller.contactOutcome?.receipt?.person_display_label ?? review.person_display_label ?? "联系人"}
+      relationshipContext={review.relationship_display_label ?? ""}
+      sourceExcerpt={contactSource}
+      status={review.contact_status === "ambiguous" ? "ambiguous" : "pending"}
+      busy={controller.frozen}
+      outcome={controller.contactOutcome}
+      onAdd={(displayLabel, relationshipContext) => void controller.decideContactOnly({ displayLabel, relationshipContext })}
+      onCorrectName={(displayLabel, relationshipContext) => controller.rebase({ contactDecision: "new", newContactLabel: displayLabel, newContactRelationship: relationshipContext })}
+      onPass={() => void controller.rebase({ contactDecision: "none" })}
+      onCompare={() => onCompare?.()}
+      onCheck={() => void controller.checkContact()}
+      onUndo={() => void controller.undoContact()}
+      comparison={comparison}/>
+      : review.contact_decision === "none" && review.person_display_label ? <p className={styles.actionHint}>本次未添加{review.person_display_label}。</p> : null}
     {shown.map((item) => <MemoryItemCard key={item.id} item={item}
       personLabel={review.person_display_label ?? null}
       busy={frozen || (item.scope !== "self" && review.contact_status !== "resolved")}

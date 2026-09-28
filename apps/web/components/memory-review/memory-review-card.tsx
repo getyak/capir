@@ -631,6 +631,7 @@ export function MemoryReviewCard(props: MemoryReviewCardProps) {
 }
 
 function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
+  const [comparing, setComparing] = useState(false);
   const controller = useMemoryReview({
     binding: props.binding,
     proposal: props.proposal,
@@ -640,7 +641,14 @@ function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
   });
   const openReview = controller.open;
   useEffect(() => { void openReview(); }, [openReview, props.binding, props.proposal.proposal_id, props.proposal.revision]);
-  return <SessionMemoryCards controller={controller} onComment={props.onCommentItem}/>;
+  return <SessionMemoryCards controller={controller} onComment={props.onCommentItem}
+    onCompare={() => setComparing(true)}
+    comparison={comparing ? <ChangePersonPanel
+      failure={controller.rebaseError}
+      onCancel={() => setComparing(false)}
+      onChoose={(input) => { void controller.rebase(input).then((ok) => { if (ok) setComparing(false); }); }}
+      pending={controller.rebaseState === "pending"}
+    /> : null}/>;
 }
 
 function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {

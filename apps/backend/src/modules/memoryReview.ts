@@ -70,6 +70,7 @@ export {
 export {
   commitMemoryReview,
   decideMemoryReviewItem,
+  decideMemoryContactOnly,
   mutateMemoryItem,
   readMemoryItem,
   readMemoryOperation,

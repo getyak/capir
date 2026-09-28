@@ -115,6 +115,21 @@ describe("same-origin Memory BFF", () => {
     expect(url).not.toContain("credential");
   });
 
+  it("forwards a contact-only decision only within the signed Session", async () => {
+    const fetchMock = vi.fn(async (url: string) => String(url).endsWith(`/v1/memory/reviews/${UUID}`)
+      ? jsonResponse({ review: { purpose: "chat", source_session_id: UUID } })
+      : jsonResponse({ receipt: { created_person_id: PERSON } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await memoryReviewRoute(new Request(`http://web.local/api/memory/reviews/${UUID}/contact-decisions`, {
+      method: "POST",
+      headers: headers(capability("chat"), { "content-type": "application/json", "x-memory-review-credential": "cred-1234567890" }),
+      body: JSON.stringify({ display_label: "陈宇" }),
+    }), ["reviews", UUID, "contact-decisions"]);
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect((fetchMock.mock.calls[1] as unknown as [string])[0]).toBe(`http://127.0.0.1:55442/v1/memory/reviews/${UUID}/contact-decisions`);
+  });
+
   it("forwards one item decision only after checking the signed review lineage", async () => {
     const fetchMock = vi.fn(async (url: string) => String(url).endsWith(`/v1/memory/reviews/${UUID}`)
       ? jsonResponse({ review: { purpose: "chat", source_session_id: UUID } })

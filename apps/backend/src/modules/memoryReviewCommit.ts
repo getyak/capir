@@ -6,6 +6,8 @@ import {
   type IdentityHandleType,
   type MemoryCommitRequest,
   type MemoryCommitResponse,
+  type MemoryContactOnlyDecisionRequest,
+  type MemoryContactOnlyDecisionResponse,
   type MemoryDecision,
   type MemoryItemDecisionRequest,
   type MemoryItemDecisionResponse,
@@ -330,6 +332,12 @@ export async function commitMemoryReview(
           current_proposal_revision: proposal.revision,
         },
       );
+    }
+    if (mode === "item" && request.contact_decision === "new"
+      && request.selected_item_ids.length === 0
+      && request.new_contact?.display_label?.normalize("NFKC").trim()
+        !== proposal.person_display_label?.normalize("NFKC").trim()) {
+      throw new ApiError(409, "MEMORY_CONTACT_LABEL_REBASE_REQUIRED", "A changed contact name needs a guarded source rebase.");
     }
     if (
       request.person_id
@@ -781,6 +789,18 @@ export async function commitMemoryReview(
          WHERE account_id = $1 AND id = $2`,
         [auth.accountId, proposal.id],
       );
+    } else if (mode === "item" && request.contact_decision === "new" && createdPerson && personId) {
+      // Contact approval binds the remaining proposal target, but never
+      // confirms an untouched Memory item.
+      await client.query(
+        `UPDATE memory_proposals
+         SET revision = revision + 1, status = $3, target_person_id = $4,
+             target_relationship_context_id = $5, contact_decision = 'existing',
+             contact_status = 'resolved', identity_authority = 'human_selection',
+             person_display_label = $6, updated_at = now()
+         WHERE account_id = $1 AND id = $2`,
+        [auth.accountId, proposal.id, nextStatus, personId, contextId, binding.displayLabel],
+      );
     } else {
       await client.query(
         `UPDATE memory_proposals
@@ -1015,6 +1035,40 @@ export async function decideMemoryReviewItem(
     kind: "committed",
     applied_display_text: applied?.rows[0]?.display_text ?? null,
     item_id: request.item_id,
+    replayed: committed.replayed,
+    receipt: committed.body.receipt,
+    proposal_revision: current.proposalRevision,
+    remaining_pending_item_count: current.remainingCount,
+  };
+}
+
+/** A contact card creates one Person without accepting its Memory siblings. */
+export async function decideMemoryContactOnly(
+  pool: Pool,
+  auth: AuthContext,
+  reviewScopeId: string,
+  credential: string | null,
+  request: MemoryContactOnlyDecisionRequest,
+): Promise<MemoryContactOnlyDecisionResponse> {
+  const body: MemoryCommitRequest = {
+    idempotency_key: request.idempotency_key,
+    expected_proposal_revision: request.expected_proposal_revision,
+    contact_decision: "new",
+    selected_item_ids: [],
+    edited_text: {},
+    item_decisions: {},
+    expected_item_versions: {},
+    new_contact: {
+      display_label: request.display_label,
+      identity_clue: request.identity_clue ?? null,
+      relationship_context: request.relationship_context,
+    },
+    reason: request.reason,
+  };
+  const committed = await commitMemoryReview(pool, auth, reviewScopeId, credential, body, "item");
+  const current = await itemDecisionSnapshot(pool, auth, reviewScopeId);
+  return {
+    contract_version: CONTRACT_VERSION,
     replayed: committed.replayed,
     receipt: committed.body.receipt,
     proposal_revision: current.proposalRevision,
@@ -1291,6 +1345,7 @@ export async function undoMemoryCommitInTransaction(
         handles: number;
         profiles: number;
         manifests: number;
+        pending_proposals: number;
       }>(
         `SELECT
            (SELECT COUNT(*)::integer FROM memory_items
@@ -1304,7 +1359,13 @@ export async function undoMemoryCommitInTransaction(
            (SELECT COUNT(*)::integer FROM person_profiles
              WHERE account_id = $1 AND subject_id = $2) AS profiles,
            (SELECT COUNT(*)::integer FROM context_manifests
-             WHERE account_id = $1 AND subject_id = $2 AND status = 'active') AS manifests`,
+             WHERE account_id = $1 AND subject_id = $2 AND status = 'active') AS manifests,
+           (SELECT COUNT(*)::integer FROM memory_proposals proposal
+             WHERE proposal.account_id = $1 AND proposal.target_person_id = $2
+               AND proposal.status IN ('open', 'partially_committed')
+               AND EXISTS (SELECT 1 FROM memory_proposal_items item
+                 WHERE item.account_id = proposal.account_id AND item.proposal_id = proposal.id
+                   AND item.status = 'pending')) AS pending_proposals`,
         [auth.accountId, row.created_person_id],
       );
       const counts = dependence.rows[0] ?? {
@@ -1314,6 +1375,7 @@ export async function undoMemoryCommitInTransaction(
         handles: 0,
         profiles: 0,
         manifests: 0,
+        pending_proposals: 0,
       };
       const safe = contactReclaimIsSafe({
         laterMemoryItemCount: counts.memories,
@@ -1326,6 +1388,7 @@ export async function undoMemoryCommitInTransaction(
         laterHandleCount: counts.handles,
         laterProfileCount: counts.profiles,
         laterManifestCount: counts.manifests,
+        pendingProposalCount: counts.pending_proposals,
       });
       contactOutcome = safe ? "reclaimed" : "retained";
       contextOutcome = row.created_relationship_context_id ? contactOutcome : null;
@@ -1342,7 +1405,7 @@ export async function undoMemoryCommitInTransaction(
         );
       } else {
         limits.push(
-          "The contact now has later sources, memory, handles, profiles, contexts, or manifests and was retained.",
+          "The contact now has pending Memory proposals or later sources, memory, handles, profiles, contexts, or manifests and was retained.",
         );
       }
     }

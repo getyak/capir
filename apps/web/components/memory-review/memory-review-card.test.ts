@@ -83,6 +83,7 @@ async function flush() {
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fetcher.mockReset();
+  window.sessionStorage.clear();
   fetcher.mockImplementation(() => Promise.resolve(
     Response.json({ review_credential: "cred-1234567890", review: review() }),
   ));
@@ -144,11 +145,29 @@ describe("shared Memory review card", () => {
     expect(clickByText("记住")).toBeTruthy();
     expect(clickByText("更多建议")).toBeTruthy();
   });
+  it("adds the contact in its card and leaves Memory decisions separate", async () => {
+    const fresh = { ...review(), contact_decision: "existing" as const, contact_status: "resolved" as const,
+      person_id: "33333333-3333-4333-8333-333333333333", proposal_revision: 2 };
+    fetcher.mockImplementation((path: string) => String(path).endsWith("/contact-decisions")
+      ? Promise.resolve(Response.json({ replayed: false,
+          receipt: { operation_key: "op-contact", created_person_id: fresh.person_id, person_display_label: "陈宇", applied_item_count: 0 },
+          remaining_pending_item_count: 5, proposal_revision: 2 }))
+      : Promise.resolve(Response.json({ review_credential: "cred-next", review: fresh })));
+    await act(async () => clickByText("添加联系人").click());
+    await flush();
+    const contact = document.querySelector("[data-contact-decision-card]")!;
+    expect(contact.textContent).toContain("已添加联系人");
+    expect(document.querySelector('[data-memory-item-card="self-1"] button')?.textContent).toContain("记住");
+    const call = fetcher.mock.calls.find(([path]) => String(path).endsWith("/contact-decisions")) as [string, RequestInit];
+    expect(JSON.parse(call[1].body as string)).not.toHaveProperty("selected_item_ids");
+  });
+
   it("keeps a contact-only proposal visible without an empty Memory counter",async()=>{
     const contact={...review(),items:[],visible_item_count:0,visible_default_selected_count:0};
     fetcher.mockImplementation(() => Promise.resolve(Response.json({review_credential:"cred-1234567890",review:contact})));
     await act(async()=>root.render(createElement(MemoryReviewCard,{key:"contact-only",binding:"binding-1",proposal:{proposal_id:PROPOSAL,revision:1},purpose:"chat"})));await flush();
-    expect(document.body.textContent).toContain("先确认联系人");
+    expect(document.querySelector("[data-contact-decision-card]")).not.toBeNull();
+    expect(clickByText("添加联系人")).toBeTruthy();
     expect(document.body.textContent).not.toContain("已选 0 条");
   });
   it("keeps a business entry fixed to its person and shows old to new in the folded preview",async()=>{

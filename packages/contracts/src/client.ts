@@ -30,6 +30,8 @@ import type {
   MemoryCommitResponse,
   MemoryItemDecisionRequest,
   MemoryItemDecisionResponse,
+  MemoryContactOnlyDecisionRequest,
+  MemoryContactOnlyDecisionResponse,
   MemoryDismissRequest,
   MemoryDismissResponse,
   MemoryItemMutationRequest,
@@ -1403,6 +1405,13 @@ export class TalentSignalClient {
     return this.request(`/v1/memory/reviews/${encodeURIComponent(reviewScopeId)}/commits`, {
       method: "POST",
       body,
+      headers: { "x-memory-review-credential": credential },
+    });
+  }
+
+  decideMemoryContactOnly(reviewScopeId: string, credential: string, body: MemoryContactOnlyDecisionRequest): Promise<MemoryContactOnlyDecisionResponse> {
+    return this.request(`/v1/memory/reviews/${encodeURIComponent(reviewScopeId)}/contact-decisions`, {
+      method: "POST", body,
       headers: { "x-memory-review-credential": credential },
     });
   }

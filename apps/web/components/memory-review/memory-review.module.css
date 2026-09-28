@@ -614,3 +614,11 @@
 .actionMore { border:0; background:none; color:var(--muted); font:inherit; font-size:13px; min-height:38px; padding:5px 2px; cursor:pointer; }
 .actionMore:hover { color:var(--ink); }
 @media(max-width:640px) { .actionMore { min-height:44px; } }
+.contactDecisionIdentity { display:flex; align-items:center; gap:10px; margin:14px 0 12px; }
+.contactDecisionIdentity strong { display:block; font-size:16px; line-height:1.4; font-weight:600; }
+.contactDecisionIdentity small { display:block; margin-top:3px; color:var(--muted); font-size:12px; }
+.contactDecisionEdit { display:grid; gap:9px; }
+.contactDecisionEdit label { display:grid; gap:4px; color:var(--muted); font-size:12px; }
+.contactDecisionEdit input { width:100%; box-sizing:border-box; padding:9px 10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface); color:var(--ink); font:inherit; font-size:14px; }
+.contactDecisionEdit .actionButtons { margin-top:3px; }
+.actionReceipt a { color:var(--ink); text-decoration:underline; margin-left:auto; }

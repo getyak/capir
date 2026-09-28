@@ -631,6 +631,35 @@ export const MemoryCommitResponseSchema = Type.Object(
   obj,
 );
 
+export const MemoryContactOnlyDecisionRequestSchema = Type.Object(
+  {
+    idempotency_key: id,
+    expected_proposal_revision: Type.Integer({ minimum: 1 }),
+    display_label: Type.String({ minLength: 1, maxLength: 200 }),
+    identity_clue: optional(Type.Object({
+      type: Type.Union([
+        Type.Literal("email"), Type.Literal("phone"), Type.Literal("wechat"),
+        Type.Literal("linkedin_url"), Type.Literal("public_profile_url"), Type.Literal("source_native_id"),
+      ]),
+      value: Type.String({ minLength: 1, maxLength: 500 }),
+    }, obj)),
+    relationship_context: Type.String({ maxLength: 200 }),
+    reason: text(500),
+  },
+  obj,
+);
+
+export const MemoryContactOnlyDecisionResponseSchema = Type.Object(
+  {
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    replayed: Type.Boolean(),
+    receipt: MemoryReceiptSchema,
+    proposal_revision: Type.Integer({ minimum: 1 }),
+    remaining_pending_item_count: Type.Integer({ minimum: 0 }),
+  },
+  obj,
+);
+
 export const MemoryItemDecisionResponseSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
@@ -876,6 +905,8 @@ export type MemoryOpenReviewRequest = Static<
 export type MemoryReviewResponse = Static<typeof MemoryReviewResponseSchema>;
 export type MemoryCommitRequest = Static<typeof MemoryCommitRequestSchema>;
 export type MemoryItemDecisionRequest = Static<typeof MemoryItemDecisionRequestSchema>;
+export type MemoryContactOnlyDecisionRequest = Static<typeof MemoryContactOnlyDecisionRequestSchema>;
+export type MemoryContactOnlyDecisionResponse = Static<typeof MemoryContactOnlyDecisionResponseSchema>;
 export type MemoryItemDecisionResponse = Static<typeof MemoryItemDecisionResponseSchema>;
 export type MemoryReceipt = Static<typeof MemoryReceiptSchema>;
 export type MemoryOperationReadback = Static<

@@ -180,6 +180,63 @@ describe("shared Memory review controller", () => {
     expect(JSON.stringify(window.sessionStorage)).not.toContain("cred-1234567890");
   });
 
+  it("undoes a contact-only approval while reporting that dependent records retain the contact", async () => {
+    const opened = review();
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: opened }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockResolvedValueOnce(Response.json({ replayed: false,
+      receipt: { operation_key: "op-contact", created_person_id: "33333333-3333-4333-8333-333333333333", applied_item_count: 0,
+        undo: { allowed: true, limits: [] } }, proposal_revision: 2, remaining_pending_item_count: 5 }));
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-next", review: { ...opened,
+      contact_decision: "existing", contact_status: "resolved", proposal_revision: 2 } }));
+    await act(async () => { await controller.decideContactOnly({ displayLabel: "陈宇", relationshipContext: "设计合作" }); });
+    fetcher.mockResolvedValueOnce(Response.json({ state: "applied", commit_revision: 1, undo: { allowed: true, limits: [] }, visible_receipt: { operation_key: "op-contact" } }));
+    fetcher.mockResolvedValueOnce(Response.json({ receipt: { operation_key: "op-contact", status: "undone", undo_contact_outcome: "retained" } }));
+    await act(async () => { await controller.undoContact(); });
+    expect(controller.contactOutcome?.kind).toBe("undone");
+    expect(controller.contactOutcome?.receipt?.undo_contact_outcome).toBe("retained");
+  });
+
+  it("restores a contact receipt after reload before enabling Memory siblings", async () => {
+    window.sessionStorage.setItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`, JSON.stringify({
+      version: 1, binding: "binding-1", proposal_id: PROPOSAL, purpose: "chat",
+      person_id: null, relationship_context_id: null,
+      operation_key: "op-contact", contact_operation_key: "op-contact", contact_pending: true,
+      undo_key: null,
+    }));
+    const resolved = { ...review(), contact_decision: "existing" as const, contact_status: "resolved" as const };
+    fetcher.mockImplementation((path: string) => String(path).includes("/operation-views/op-contact")
+      ? Promise.resolve(Response.json({ state: "applied", visible_receipt: {
+          operation_key: "op-contact", created_person_id: "33333333-3333-4333-8333-333333333333",
+          applied_item_count: 0, decisions: [],
+        }, undo: { allowed: true, limits: [] } }))
+      : Promise.resolve(Response.json({ review_credential: "cred-next", review: resolved })));
+    await act(async () => { await controller.open(); });
+    expect(controller.contactOutcome?.kind).toBe("committed");
+    expect(controller.review?.contact_status).toBe("resolved");
+    expect(controller.review?.items.filter((entry) => entry.status === "pending")).toHaveLength(5);
+  });
+
+  it("adds a contact without deciding the pending Memory cards", async () => {
+    const opened = review();
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: opened }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockResolvedValueOnce(Response.json({
+      replayed: false, receipt: { operation_key: "op-contact", created_person_id: "33333333-3333-4333-8333-333333333333", applied_item_count: 0 },
+      proposal_revision: 2, remaining_pending_item_count: 5,
+    }));
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-next", review: {
+      ...opened, contact_decision: "existing", contact_status: "resolved", proposal_revision: 2,
+    } }));
+    await act(async () => { await controller.decideContactOnly({ displayLabel: "陈宇", relationshipContext: "设计合作" }); });
+    expect(controller.contactOutcome?.kind).toBe("committed");
+    expect(controller.contactOutcome?.receipt?.created_person_id).toBe("33333333-3333-4333-8333-333333333333");
+    expect(controller.review?.items.filter((entry) => entry.status === "pending")).toHaveLength(5);
+    const call = fetcher.mock.calls.find(([path]) => String(path).endsWith("/contact-decisions")) as [string, RequestInit];
+    expect(call[0]).toBe(`/api/memory/reviews/${SCOPE}/contact-decisions`);
+    expect(JSON.parse(call[1].body as string)).not.toHaveProperty("selected_item_ids");
+  });
+
   it("does not send an item decision when its recovery key cannot be saved", async () => {
     fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: review() }));
     await act(async () => { await controller.open(); });

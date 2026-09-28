@@ -28,6 +28,7 @@ import {
 import {
   commitMemoryReview,
   decideMemoryReviewItem,
+  decideMemoryContactOnly,
   listMemoryProposals,
   mutateMemoryItem,
   openMemoryReview,
@@ -1978,6 +1979,70 @@ describe.skipIf(!pool)("Memory review integration", () => {
       [second!.id]: "pending",
     });
    }, 30_000);
+
+  it("requires a guarded rebase before a contact card changes the sourced name", async () => {
+    const auth = await makeAuth("contact-card-name-change");
+    const staged = await stage(auth, {
+      items: [], contactDecision: "new",
+      newContact: { display_label: "陈宇", relationship_context: "" },
+      authorityText: "陈宇负责设计系统", sessionId: randomUUID(), messageId: randomUUID(),
+    });
+    const opened = await open(auth, staged!.proposal.proposal_id, "chat");
+    await expect(decideMemoryContactOnly(pool!, auth, opened.review.review_scope_id, opened.review_credential!, {
+      idempotency_key: randomUUID(), expected_proposal_revision: opened.review.proposal_revision,
+      display_label: "林岚", relationship_context: "", reason: "Correct name",
+    })).rejects.toMatchObject({ code: "MEMORY_CONTACT_LABEL_REBASE_REQUIRED" });
+    const people = await pool!.query<{ count: number }>(
+      "SELECT count(*)::integer AS count FROM subjects WHERE account_id=$1 AND display_label='林岚'",
+      [auth.accountId],
+    );
+    expect(people.rows[0]?.count).toBe(0);
+  }, 30_000);
+
+  it("adds only the contact and keeps both related Memory items pending", async () => {
+    const auth = await makeAuth("contact-card-siblings");
+    const sessionId = randomUUID();
+    const messageId = randomUUID();
+    const staged = await stage(auth, {
+      items: [
+        candidate({ scope: "person", statement_kind: "source_statement", speaker: "陈宇",
+          display_text: "陈宇负责设计系统", source_excerpt: "陈宇负责设计系统" }),
+        candidate({ scope: "person", statement_kind: "source_statement", speaker: "陈宇",
+          display_text: "陈宇参加试点合作", source_excerpt: "陈宇参加试点合作" }),
+      ],
+      contactDecision: "new",
+      newContact: { display_label: "陈宇", relationship_context: "试点合作" },
+      sessionId, messageId,
+    });
+    const opened = await open(auth, staged!.proposal.proposal_id, "chat");
+    const body = {
+      idempotency_key: randomUUID(),
+      expected_proposal_revision: opened.review.proposal_revision,
+      display_label: "陈宇",
+      relationship_context: "试点合作",
+      reason: "Add only the contact",
+    };
+    const result = await decideMemoryContactOnly(pool!, auth, opened.review.review_scope_id, opened.review_credential!, body);
+    expect(result.receipt.created_person_id).toBeTruthy();
+    expect(result.receipt.applied_item_count).toBe(0);
+    expect(result.remaining_pending_item_count).toBe(2);
+    const rows = await pool!.query<{ status: string }>(
+      "SELECT status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2",
+      [auth.accountId, staged!.proposal.proposal_id],
+    );
+    expect(rows.rows.map((row) => row.status)).toEqual(["pending", "pending"]);
+    const fresh = await open(auth, staged!.proposal.proposal_id, "chat");
+    expect(fresh.review.contact_status).toBe("resolved");
+    expect(fresh.review.contact_decision).toBe("existing");
+    const replay = await decideMemoryContactOnly(pool!, auth, opened.review.review_scope_id, opened.review_credential!, body);
+    expect(replay.replayed).toBe(true);
+    expect(replay.receipt.created_person_id).toBe(result.receipt.created_person_id);
+    const undone = await undoMemoryCommit(pool!, auth, result.receipt.commit_id, {
+      idempotency_key: randomUUID(), expected_commit_revision: 1, reason: "Undo contact card",
+    });
+    expect(undone.receipt.status).toBe("undone");
+    expect(undone.receipt.undo_contact_outcome).toBe("retained");
+  }, 30_000);
 
   it("stages a name-only contact with zero Memory items and records its confirmed receipt", async () => {
     const auth = await makeAuth("contact-only");
