@@ -7,6 +7,7 @@ import type { MailDelivery } from "./lib/mail.js";
 import { registerAccountOnboarding } from "./modules/accountOnboardingRoutes.js";
 import { registerAgentSessionRoutes } from "./modules/agentSessionRoutes.js";
 import { registerConversationQueueRoutes } from "./modules/conversationQueueRoutes.js";
+import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
@@ -778,6 +779,7 @@ export async function buildApp(
   registerLabWorkspaceRoutes(app,new LabWorkspaceService(pool,chatMediaStorage,config.sessionTtlSeconds),authenticate,config.internalLabEnabled===true);
 
   const labProviders = dependencies.labProviders ?? labModelProviders(remoteChatProvider);
+  registerDesktopCaptureContext(app, authenticate, remoteChatProvider, labProviders, config.internalLabEnabled === true);
   const labTrials = new LabTaskTrialService(pool, labProviders, remoteChatProvider,
     process.env.TALENT_SIGNAL_BACKEND_REVISION?.trim() || null);
   registerLabTaskTrialRoutes(app, labTrials, authenticate, config.internalLabEnabled === true);
