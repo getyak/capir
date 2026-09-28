@@ -93,6 +93,12 @@ struct CaptureIntent: Codable, Equatable, Sendable {
     let attachmentId: UUID
     let origin: String
     let ownerScope: String
+    /// Optional only so an intent staged by an earlier build remains readable.
+    /// A missing binding cannot authorize a new upload.
+    let loginBinding: String?
+    /// Set only after an explicit retry has confirmed the old message absent
+    /// under the same owner. The original binding remains available for audit.
+    var authorizedReplayLoginBinding: String?
     let policyVersion: String
     let capturedAt: Date
     let imagePNG: Data
@@ -102,7 +108,8 @@ struct CaptureIntent: Codable, Equatable, Sendable {
 
     init(imagePNG: Data, context: CaptureContext, capturedAt: Date = Date(),
          id: UUID = UUID(), sessionId: UUID = UUID(), messageId: UUID = UUID(), attachmentId: UUID = UUID()) throws {
-        guard context.processing.available, !context.ownerScope.isEmpty, !context.processing.policyVersion.isEmpty
+        guard context.processing.available, !context.ownerScope.isEmpty, !context.loginBinding.isEmpty,
+              !context.processing.policyVersion.isEmpty
         else { throw CaptureIntentError.invalidContext }
         guard !imagePNG.isEmpty else { throw CaptureIntentError.emptyImage }
         guard imagePNG.count <= 10_000_000 else { throw CaptureIntentError.imageTooLarge }
@@ -112,6 +119,8 @@ struct CaptureIntent: Codable, Equatable, Sendable {
         self.attachmentId = attachmentId
         self.origin = context.origin
         self.ownerScope = context.ownerScope
+        self.loginBinding = context.loginBinding
+        self.authorizedReplayLoginBinding = nil
         self.policyVersion = context.processing.policyVersion
         self.capturedAt = capturedAt
         self.imagePNG = imagePNG
@@ -126,7 +135,16 @@ struct CaptureIntent: Codable, Equatable, Sendable {
     func isLocallyExpired(at date: Date) -> Bool { date >= localRecoveryDeadline }
 
     func canSubmit(context: CaptureContext, now: Date) -> Bool {
-        context.processing.available && origin == context.origin && ownerScope == context.ownerScope &&
-            policyVersion == context.processing.policyVersion && context.expiresAt > now && !isLocallyExpired(at: now)
+        canExplicitlyReplay(context: context, now: now) &&
+            (authorizedReplayLoginBinding ?? loginBinding) == context.loginBinding
+    }
+
+    func canExplicitlyReplay(context: CaptureContext, now: Date) -> Bool {
+        loginBinding != nil && canReadback(context: context, now: now) && context.processing.available &&
+            policyVersion == context.processing.policyVersion && !isLocallyExpired(at: now)
+    }
+
+    func canReadback(context: CaptureContext, now: Date) -> Bool {
+        origin == context.origin && ownerScope == context.ownerScope && context.expiresAt > now
     }
 }

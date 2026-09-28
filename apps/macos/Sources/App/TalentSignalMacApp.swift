@@ -11,6 +11,19 @@ struct TalentSignalMacApp: App {
         ProcessInfo.processInfo.arguments.contains("--quick-panel-preview")
     }
 
+    private var menuBarInsertion: Binding<Bool> {
+        Binding(
+            get: { capturePreferences.showMenuBar },
+            set: { isInserted in
+                // AppKit reports the current insertion state during scene
+                // reconciliation. Publishing that same value would schedule
+                // another scene update and keep the app's main thread busy.
+                guard capturePreferences.showMenuBar != isInserted else { return }
+                capturePreferences.showMenuBar = isInserted
+            }
+        )
+    }
+
     var body: some Scene {
         Window("Talent Signal", id: "workspace") {
             ApplicationZoomContainer(enabled: model.isAccessibilityZoomPreview) {
@@ -76,7 +89,7 @@ struct TalentSignalMacApp: App {
         .defaultSize(width: 560, height: 640)
         .windowResizability(.contentSize)
 
-        MenuBarExtra(isInserted: $capturePreferences.showMenuBar) {
+        MenuBarExtra(isInserted: menuBarInsertion) {
             CaptureMenuView()
         } label: {
             TSBrandMark(size: 22, monochrome: true)

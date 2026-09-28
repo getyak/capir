@@ -194,7 +194,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
 
     func receipt(for intent: CaptureIntent, context: CaptureContext) async throws -> CaptureReceipt? {
         let fresh = try await self.context()
-        guard intent.canSubmit(context: fresh, now: Date()) else { throw CaptureTransportError.staleOrigin }
+        guard intent.canReadback(context: fresh, now: Date()) else { throw CaptureTransportError.staleOrigin }
         let path = "/api/desktop-capture/\(intent.sessionId.uuidString.lowercased())/\(intent.messageId.uuidString.lowercased())"
         do {
             let result = try await fetch(path: path, method: "GET",

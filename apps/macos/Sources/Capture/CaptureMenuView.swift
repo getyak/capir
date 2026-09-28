@@ -50,7 +50,10 @@ struct CaptureMenuView: View {
         }
         .frame(width: 320)
         .background(.regularMaterial)
-        .background(CaptureMenuWindowReader { window in menuWindow = window })
+        .background(CaptureMenuWindowReader { window in
+            guard menuWindow !== window else { return }
+            menuWindow = window
+        })
         .onAppear {
             runtime.start()
             runtime.setOpenWorkspace { openWindow(id: "workspace") }

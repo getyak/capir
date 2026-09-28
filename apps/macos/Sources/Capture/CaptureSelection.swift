@@ -130,9 +130,12 @@ final class CaptureOverlayController: CaptureSelecting {
     private var panels: [CaptureSelectionPanel] = []
     private var images: [ObjectIdentifier: CGImage] = [:]
     private var capturedAt = Date()
+    private var selecting = false
 
     func select() async throws -> CaptureSelectionResult {
-        guard continuation == nil else { throw CaptureSelectionError.busy }
+        guard !selecting, continuation == nil else { throw CaptureSelectionError.busy }
+        selecting = true
+        defer { selecting = false }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let screens = NSScreen.screens
         var pairs: [(NSScreen, CGImage)] = []

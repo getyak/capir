@@ -6,9 +6,10 @@ final class CaptureIntentTests: XCTestCase {
     private let date = Date(timeIntervalSince1970: 1_800_000_000)
     private let png = Data([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3])
 
-    private func context(owner: String = "owner-one", policy: String = "policy-one") -> CaptureContext {
+    private func context(owner: String = "owner-one", policy: String = "policy-one",
+                         login: String = "login-one") -> CaptureContext {
         CaptureContext(origin: "https://workspace.example", ownerScope: owner,
-                       loginBinding: "login-one", expiresAt: date.addingTimeInterval(300),
+                       loginBinding: login, expiresAt: date.addingTimeInterval(300),
                        processing: CaptureProcessing(policyVersion: policy,
                                                      workspaceLabel: "Workspace", processorLabels: ["Claude · sonnet"],
                                                      sourceRetentionDays: 30, available: true))
@@ -19,10 +20,25 @@ final class CaptureIntentTests: XCTestCase {
         XCTAssertTrue(intent.canSubmit(context: context(), now: date.addingTimeInterval(10)))
         XCTAssertFalse(intent.canSubmit(context: context(owner: "owner-two"), now: date))
         XCTAssertFalse(intent.canSubmit(context: context(policy: "policy-two"), now: date))
+        XCTAssertFalse(intent.canSubmit(context: context(login: "login-two"), now: date))
+        XCTAssertTrue(intent.canReadback(context: context(login: "login-two"), now: date),
+                      "The same owner may reconcile the original receipt after reauthentication")
+        XCTAssertTrue(intent.canExplicitlyReplay(context: context(login: "login-two"), now: date))
         XCTAssertFalse(intent.canSubmit(context: context(), now: date.addingTimeInterval(301)))
         XCTAssertEqual(intent.idempotencyKey, intent.messageId.uuidString.lowercased())
         XCTAssertEqual(intent.contentHash.count, 64)
         XCTAssertEqual(intent.imageByteSize, png.count)
+    }
+
+    func testEarlierRecoveryWithoutLoginBindingCannotAuthorizeUpload() throws {
+        let intent = try CaptureIntent(imagePNG: png, context: context(), capturedAt: date)
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(intent)) as? [String: Any])
+        encoded.removeValue(forKey: "loginBinding")
+        let recovered = try JSONDecoder().decode(CaptureIntent.self, from: JSONSerialization.data(withJSONObject: encoded))
+        XCTAssertNil(recovered.loginBinding)
+        XCTAssertFalse(recovered.canSubmit(context: context(), now: date))
+        XCTAssertFalse(recovered.canExplicitlyReplay(context: context(), now: date))
+        XCTAssertTrue(recovered.canReadback(context: context(), now: date))
     }
 
     func testRecoveryDeadlineDoesNotMoveWhenRetryPhaseChanges() throws {

@@ -7,6 +7,8 @@ import XCTest
 private final class FixtureSelector: CaptureSelecting {
     let image: CGImage
     var calls = 0
+    var suspendNextSelection = false
+    var pendingSelection: CheckedContinuation<CaptureSelectionResult, Error>?
     init() {
         let data = Data(repeating: 255, count: 4 * 4 * 4)
         let provider = CGDataProvider(data: data as CFData)!
@@ -17,6 +19,10 @@ private final class FixtureSelector: CaptureSelecting {
     }
     func select() async throws -> CaptureSelectionResult {
         calls += 1
+        if suspendNextSelection {
+            suspendNextSelection = false
+            return try await withCheckedThrowingContinuation { pendingSelection = $0 }
+        }
         return CaptureSelectionResult(image: image, capturedAt: Date(timeIntervalSince1970: 1_800_000_000), preview: false)
     }
     func cancel() {}
@@ -24,7 +30,8 @@ private final class FixtureSelector: CaptureSelecting {
 
 @MainActor
 private final class FixtureTransport: CaptureTransporting {
-    let current: CaptureContext
+    var current: CaptureContext
+    var contextRequests = 0
     var submissions = 0
     var loseFirstResponse = false
     var canonical: CaptureReceipt?
@@ -33,6 +40,7 @@ private final class FixtureTransport: CaptureTransporting {
     var pendingContext: CheckedContinuation<CaptureContext, Error>?
     init(current: CaptureContext) { self.current = current }
     func context() async throws -> CaptureContext {
+        contextRequests += 1
         if suspendNextContext {
             suspendNextContext = false
             return try await withCheckedThrowingContinuation { pendingContext = $0 }
@@ -40,6 +48,8 @@ private final class FixtureTransport: CaptureTransporting {
         return current
     }
     func admit(_ intent: CaptureIntent, context: CaptureContext) async throws -> CaptureAdmission {
+        guard intent.canSubmit(context: current, now: Date(timeIntervalSince1970: 1_800_000_000))
+        else { throw CaptureTransportError.staleOrigin }
         submissions += 1
         canonical = CaptureReceipt(sessionId: intent.sessionId, messageId: intent.messageId,
                                    queueEntryId: UUID(), status: "queued",
@@ -184,5 +194,49 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertTrue(recovery.saved.isEmpty)
         XCTAssertEqual(transport.submissions, 1)
         XCTAssertEqual(transport.receiptReads, 0)
+    }
+
+    @MainActor
+    func testRepeatedShortcutDuringContextFetchStartsOnlyOneSelection() async throws {
+        let (_, prefs, selector, transport, recovery) = fixture()
+        transport.suspendNextContext = true
+        let coordinator = CaptureCoordinator(transport: transport, selector: selector, recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        let first = Task { await coordinator.startCapture() }
+        for _ in 0..<100 where transport.pendingContext == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingContext)
+        await coordinator.startCapture()
+        XCTAssertEqual(transport.contextRequests, 1)
+        transport.pendingContext?.resume(returning: transport.current)
+        transport.pendingContext = nil
+        await first.value
+        XCTAssertEqual(selector.calls, 1)
+        XCTAssertEqual(transport.submissions, 1)
+    }
+
+    @MainActor
+    func testReauthenticationDuringSelectionNeedsExactReadbackAndExplicitRetry() async throws {
+        let (_, prefs, selector, transport, recovery) = fixture()
+        selector.suspendNextSelection = true
+        let coordinator = CaptureCoordinator(transport: transport, selector: selector, recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        let capture = Task { await coordinator.startCapture() }
+        for _ in 0..<100 where selector.pendingSelection == nil { await Task.yield() }
+        XCTAssertNotNil(selector.pendingSelection)
+        let old = transport.current
+        transport.current = CaptureContext(origin: old.origin, ownerScope: old.ownerScope,
+                                           loginBinding: "login-two", expiresAt: old.expiresAt,
+                                           processing: old.processing)
+        selector.pendingSelection?.resume(returning: .init(image: selector.image,
+                                                            capturedAt: Date(timeIntervalSince1970: 1_800_000_000), preview: false))
+        selector.pendingSelection = nil
+        await capture.value
+        XCTAssertEqual(transport.submissions, 0)
+        guard case .unknown(let intentID) = coordinator.presentation else { return XCTFail("Expected held recovery") }
+        XCTAssertNil(recovery.saved.first?.authorizedReplayLoginBinding)
+        await coordinator.retry(intentID: intentID)
+        XCTAssertEqual(transport.receiptReads, 2, "Read absence before replay and the exact manifest after admission")
+        XCTAssertEqual(transport.submissions, 1, "Only explicit retry may send the old image with the new login")
+        guard case .processing = coordinator.presentation else { return XCTFail("Expected canonical admission") }
     }
 }

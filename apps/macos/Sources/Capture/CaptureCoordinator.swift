@@ -30,6 +30,7 @@ final class CaptureCoordinator: ObservableObject {
     private var intentGenerations: [UUID: Int] = [:]
     private var progressPoll: Task<Void, Never>?
     private var lastVerifiedContext: CaptureContext?
+    private var captureInFlight = false
 
     init(transport: CaptureTransporting, selector: CaptureSelecting, recovery: CaptureRecoveryPersisting,
          preferences: CapturePreferences, now: @escaping () -> Date = Date.init) {
@@ -43,7 +44,11 @@ final class CaptureCoordinator: ObservableObject {
     deinit { progressPoll?.cancel() }
 
     func startCapture(prepareToSelect: () -> Void = {}) async {
-        guard presentation != .selecting else { return }
+        guard !captureInFlight, pendingPreview == nil else { return }
+        // Reserve the gesture before fetching context. Two shortcut/menu events
+        // must never enter the screen selector while either awaits that fetch.
+        captureInFlight = true
+        defer { captureInFlight = false }
         do {
             let context = try await transport.context()
             lastVerifiedContext = context
@@ -78,7 +83,9 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func acknowledgeAndCapture(prepareToSelect: () -> Void = {}) async {
-        guard case .needsDisclosure(let context) = presentation else { return }
+        guard !captureInFlight, case .needsDisclosure(let context) = presentation else { return }
+        captureInFlight = true
+        defer { captureInFlight = false }
         preferences.acknowledgeProcessingScope(origin: context.origin, ownerScope: context.ownerScope,
                                                policyVersion: context.processing.policyVersion, at: now())
         prepareToSelect()
@@ -214,7 +221,7 @@ final class CaptureCoordinator: ObservableObject {
         do {
             let current = try await transport.context()
             guard intentIsCurrent(intent.id, generation: generation) else { return }
-            guard intent.canSubmit(context: current, now: now()) else {
+            guard intent.canReadback(context: current, now: now()) else {
                 presentation = .failed(intent.id, "工作区或处理方式已改变，请重新打开会话。")
                 return
             }
@@ -245,7 +252,7 @@ final class CaptureCoordinator: ObservableObject {
         do {
             let current = try await transport.context()
             guard intentIsCurrent(intentID, generation: generation) else { return }
-            guard intent.canSubmit(context: current, now: now()) else {
+            guard intent.canReadback(context: current, now: now()) else {
                 presentation = .failed(intentID, "工作区或处理方式已改变，请查看后重新截图。")
                 return
             }
@@ -255,9 +262,22 @@ final class CaptureCoordinator: ObservableObject {
                 guard receipt.messageId == intent.messageId else { throw CaptureTransportError.malformedResponse }
                 await reconcile(intent, context: current, generation: generation)
             } else {
+                guard intent.canExplicitlyReplay(context: current, now: now()) else {
+                    presentation = .failed(intentID, "工作区或处理方式已改变，请重新截图。")
+                    return
+                }
+                var replay = intent
+                if !intent.canSubmit(context: current, now: now()) {
+                    // This is the user's explicit retry after a definitive
+                    // absence readback. Preserve every image/message ID and
+                    // pin only the newly authorized login before upload.
+                    replay.authorizedReplayLoginBinding = current.loginBinding
+                    try recovery.save(replay)
+                    intents[intentID] = replay
+                }
                 presentation = .uploading(intentID)
                 guard intentIsCurrent(intentID, generation: generation) else { return }
-                await submit(intent, context: current, generation: generation)
+                await submit(replay, context: current, generation: generation)
             }
         } catch {
             if intentIsCurrent(intentID, generation: generation) { presentation = .unknown(intentID) }
