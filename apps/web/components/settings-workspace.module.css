@@ -190,19 +190,7 @@
 
 .navigation {
   display: grid;
-  gap: 18px;
-}
-
-.navGroup {
-  display: grid;
-  gap: 2px;
-}
-
-.navGroupLabel {
-  color: var(--muted);
-  font-size: 12px;
-  margin: 0;
-  padding: 0 12px 6px;
+  gap: 4px;
 }
 
 .navigation a {
@@ -411,6 +399,103 @@
   font-size: 13px;
   line-height: 1.7;
   margin: 0;
+}
+
+/* ── Versions & status ────────────────────────────────────────────────── */
+
+.pane:has(.versionRow) {
+  gap: 18px;
+}
+
+.pane:has(.versionRow) .group {
+  padding-bottom: 16px;
+}
+
+.pane:has(.versionRow) .group h2 {
+  margin-bottom: 4px;
+}
+
+.versionRow {
+  border-top: 1px solid var(--line-soft);
+  display: grid;
+  gap: 5px;
+  padding: 13px 0;
+}
+
+.versionRow + .versionRow {
+  margin-top: 0;
+}
+
+.versionRow[data-unknown="true"] .versionIdentity {
+  color: var(--muted);
+}
+
+.versionHead {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  justify-content: space-between;
+}
+
+.versionHead strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.versionIdentity {
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.versionMeta {
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 2px 14px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.versionStatus {
+  font-size: 12.5px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.versionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.versionRefresh {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 12px;
+  gap: 6px;
+  min-height: 34px;
+  padding: 5px 11px;
+  text-decoration: none;
+}
+
+.versionRefresh:hover {
+  background: var(--surface-muted);
+}
+
+.versionRefresh:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .callout {
@@ -824,12 +909,6 @@
     display: grid;
     gap: 4px;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .navGroup {
-    display: contents;
-  }
-  .navGroupLabel {
-    display: none;
   }
   .navigation a {
     justify-content: center;

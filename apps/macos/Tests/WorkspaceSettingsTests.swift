@@ -9,7 +9,7 @@ final class WorkspaceSettingsTests: XCTestCase {
             XCTAssertEqual(WorkspaceSettingsSection.resolve(section.url(in: origin), origin: origin), section)
         }
         XCTAssertEqual(WorkspaceSettingsSection.resolve(URL(string: "https://workspace.example:10443/workspace/settings?section=overview")!, origin: origin), .profile)
-        for url in ["https://workspace.example/workspace/settings", "https://other.example/workspace/settings", "https://workspace.example:10443/workspace/settings-evil", "https://workspace.example:10443/workspace/settings?section=device", "https://workspace.example:10443/workspace/settings?section=updates", "https://workspace.example:10443/workspace/settings?section=testing", "https://workspace.example:10443/workspace/settings?section=unknown", "https://workspace.example:10443/workspace/settings/diagnostics"] {
+        for url in ["https://workspace.example/workspace/settings", "https://other.example/workspace/settings", "https://workspace.example:10443/workspace/settings-evil", "https://workspace.example:10443/workspace/settings?section=device", "https://workspace.example:10443/workspace/settings?section=updates", "https://workspace.example:10443/workspace/settings?section=advanced", "https://workspace.example:10443/workspace/settings?section=testing", "https://workspace.example:10443/workspace/settings?section=unknown", "https://workspace.example:10443/workspace/settings/diagnostics"] {
             XCTAssertNil(WorkspaceSettingsSection.resolve(URL(string: url)!, origin: origin), url)
         }
     }
@@ -18,9 +18,9 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertEqual(WorkspaceSettingsSection.advanced.title, "帮助与诊断")
         XCTAssertEqual(WorkspaceSettingsSection.advanced.rawValue, "advanced")
         XCTAssertFalse(WorkspaceSettingsSection.allCases.contains { $0.title == "更多设置" })
-        // The group heading and its only row must not read the same.
+        // The group heading and its rows must not read the same.
         XCTAssertEqual(WorkspaceSettingsSection.groups.last?.title, "支持")
-        XCTAssertEqual(WorkspaceSettingsSection.groups.last?.sections, [.advanced])
+        XCTAssertEqual(WorkspaceSettingsSection.groups.last?.sections, [.versions, .advanced])
     }
 
     func testProfileScopeStatesMixedAccountAndLocalAvatar() {
@@ -92,6 +92,80 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertFalse(WorkspaceSettingsSection.updates.isWeb)
     }
 
+    func testVersionsSectionIsWebOwnedAndUpdatesIsNativelyLabeled() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        XCTAssertEqual(WorkspaceSettingsSection.versions.title, "版本与状态")
+        XCTAssertTrue(WorkspaceSettingsSection.versions.isWeb)
+        XCTAssertEqual(WorkspaceSettingsSection.versions.url(in: origin).query, "section=versions")
+        XCTAssertEqual(WorkspaceSettingsSection.resolve(
+            WorkspaceSettingsSection.versions.url(in: origin), origin: origin), .versions)
+        XCTAssertEqual(WorkspaceSettingsPane.resolve(selection: .versions, connected: true), .web(.versions))
+        XCTAssertEqual(WorkspaceSettingsPane.resolve(selection: .versions, connected: false), .requiresConnection(.versions))
+
+        // Updates keeps its native/offline pane but no longer shares an
+        // ambiguous version title with the Web versions section.
+        XCTAssertEqual(WorkspaceSettingsSection.updates.title, "Mac 软件更新")
+        XCTAssertFalse(WorkspaceSettingsSection.updates.isWeb)
+        XCTAssertEqual(WorkspaceSettingsSection.updates.scope, "仅此 Mac · 本机保存")
+        XCTAssertNotEqual(WorkspaceSettingsSection.updates.title, WorkspaceSettingsSection.versions.title)
+    }
+
+    func testAdvancedHelpIsANativeOfflineSupportPane() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        XCTAssertFalse(WorkspaceSettingsSection.advanced.isWeb)
+        XCTAssertEqual(WorkspaceSettingsSection.advanced.title, "帮助与诊断")
+        let pane = WorkspaceSettingsPane.resolve(selection: .advanced, connected: false)
+        XCTAssertEqual(pane, .support)
+        XCTAssertTrue(pane.isNativeSupport)
+        XCTAssertEqual(pane.title, "帮助与诊断")
+        XCTAssertFalse(pane.showsWebContent)
+        // A native support pane never embeds the Web advanced subpage.
+        XCTAssertNil(WorkspaceSettingsSection.resolve(
+            WorkspaceSettingsSection.advanced.url(in: origin), origin: origin))
+    }
+
+    func testSupportHandoffDestinationsAreExactAndSameOrigin() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let destinations = WorkspaceSettingsSection.supportDestinations
+        XCTAssertEqual(destinations.map(\.id), ["diagnostics", "monitor", "boundaries"])
+        XCTAssertEqual(destinations.map(\.path), [
+            "/workspace/settings/diagnostics",
+            "/workspace/monitor",
+            "/workspace/boundaries",
+        ])
+        for destination in destinations {
+            let url = try XCTUnwrap(destination.url(in: origin))
+            XCTAssertTrue(origin.contains(url), destination.id)
+            XCTAssertEqual(url, origin.url.appending(path: destination.path))
+        }
+        // The diagnostics handoff is settings-owned and the other two are
+        // ordinary workspace routes; all are opened in the main window.
+        let diagnostics = try XCTUnwrap(destinations[0].url(in: origin))
+        XCTAssertTrue(WorkspaceSurfacePolicy.isSettingsOwned(diagnostics))
+        XCTAssertFalse(WorkspaceSurfacePolicy.isOrdinaryWorkspaceDestination(diagnostics))
+        for destination in destinations.dropFirst() {
+            let url = try XCTUnwrap(destination.url(in: origin))
+            XCTAssertTrue(WorkspaceSurfacePolicy.isOrdinaryWorkspaceDestination(url), destination.id)
+        }
+    }
+
+    func testDesktopChromePayloadCarriesAppVersionAndUpdateState() {
+        var presentation = DesktopUpdatePresentation()
+        presentation.phase = .available
+        presentation.version = "0.2.0"
+        presentation.progress = 42
+        let payload = WorkspaceSurfacePolicy.desktopChromePayload(
+            surface: "settings", presentation: presentation, appVersion: "0.1.0 (29)")
+        XCTAssertEqual(payload["protocolVersion"] as? Int, 1)
+        XCTAssertEqual(payload["surface"] as? String, "settings")
+        XCTAssertEqual(payload["appVersion"] as? String, "0.1.0 (29)")
+        XCTAssertEqual(payload["availableVersion"] as? String, "0.2.0")
+        XCTAssertEqual(payload["phase"] as? String, "available")
+        XCTAssertEqual(payload["progress"] as? Int, 42)
+        XCTAssertTrue(payload["offerID"] is NSNull)
+        XCTAssertNoThrow(try JSONSerialization.data(withJSONObject: payload))
+    }
+
     // MARK: Search mapping
 
     func testSearchFindsScreenshotAliasesWithExactScopeAndDestination() {
@@ -121,6 +195,21 @@ final class WorkspaceSettingsTests: XCTestCase {
         // Full-width and spaced Latin input folds to the same alias.
         XCTAssertEqual(WorkspaceSettingsSearchEntry.normalized("  SCREEN  Shot "), "screenshot")
         XCTAssertTrue(WorkspaceSettingsSearchEntry.search("ＳＣＲＥＥＮ SＨＯＴ").contains { $0.id == "captures" })
+    }
+
+    func testSearchFindsVersionsAndLocalMacUpdateWithExactDestinations() throws {
+        let versions = try XCTUnwrap(WorkspaceSettingsSearchEntry.search("版本与状态").first { $0.id == "versions" })
+        XCTAssertEqual(versions.action, .section(.versions))
+        XCTAssertEqual(versions.destination, "设置 · 版本与状态")
+        XCTAssertEqual(versions.scope, "各组件分别显示")
+        XCTAssertEqual(WorkspaceSettingsSearchEntry.search("后端版本").first?.id, "versions")
+
+        let updates = try XCTUnwrap(WorkspaceSettingsSearchEntry.search("Mac 软件更新").first { $0.id == "updates" })
+        XCTAssertEqual(updates.action, .section(.updates))
+        XCTAssertEqual(updates.destination, "设置 · Mac 软件更新")
+        XCTAssertEqual(WorkspaceSettingsSearchEntry.search("本机更新").first?.id, "updates")
+        // The two version/update destinations stay distinct.
+        XCTAssertNotEqual(versions.action, updates.action)
     }
 
     func testSearchNeverSurfacesUnknownSectionsOrSettingsOwnedHandoffs() throws {
@@ -663,6 +752,301 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertEqual(opened, 3)
         XCTAssertEqual(WorkspaceSettingsNavigation.shared.selection, .appearance)
     }
+
+    // MARK: Settings Web compatibility gate
+
+    func testSettingsSurfaceStatusRequiresCleanProvenProof() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let settings = URL(string: "https://workspace.example/workspace/settings")!
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: settings, hasSettingsRootMarker: true,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .supported)
+        // Marker present but the settings nav or the workspace chrome still shows.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: settings, hasSettingsRootMarker: true,
+                       innerNavigationHidden: false, workspaceChromeHidden: true),
+            origin: origin), .unsupported)
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: settings, hasSettingsRootMarker: true,
+                       innerNavigationHidden: true, workspaceChromeHidden: false),
+            origin: origin), .unsupported)
+        // Old release: no marker at all on the exact settings route.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: settings, hasSettingsRootMarker: false,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .unsupported)
+        // Cross-origin and unparseable URLs never render.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: URL(string: "https://evil.example/workspace/settings")!, hasSettingsRootMarker: true,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .unknown)
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: nil, hasSettingsRootMarker: true,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .unknown)
+    }
+
+    func testSettingsSurfaceStatusRoutesLoginAndSubpagesToHandoff() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let login = URL(string: "https://workspace.example/login?callbackUrl=%2Fworkspace%2Fsettings")!
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: login, hasSettingsRootMarker: false,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .loginRequired(login))
+
+        let diagnostics = URL(string: "https://workspace.example/workspace/settings/diagnostics")!
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: diagnostics, hasSettingsRootMarker: false,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .handoff(diagnostics))
+        // A clean proof still renders a settings-owned subpage.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: diagnostics, hasSettingsRootMarker: true,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .supported)
+        // An unknown settings section is settings-owned but not a native section.
+        let testing = URL(string: "https://workspace.example/workspace/settings?section=testing")!
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: testing, hasSettingsRootMarker: false,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .handoff(testing))
+        // A non-settings same-origin route is unsupported, never a handoff.
+        let people = URL(string: "https://workspace.example/workspace/people")!
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: people, hasSettingsRootMarker: false,
+                       innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .unsupported)
+    }
+
+    func testSettingsSurfaceProbeParsesJavaScriptResult() throws {
+        let result: [String: Any] = [
+            "href": "https://workspace.example/workspace/settings?section=connections",
+            "hasMarker": true, "innerNavHidden": false, "workspaceChromeHidden": true,
+        ]
+        let probe = try XCTUnwrap(WorkspaceSurfacePolicy.settingsSurfaceProbe(fromJavaScriptResult: result))
+        XCTAssertEqual(probe.url, URL(string: "https://workspace.example/workspace/settings?section=connections"))
+        XCTAssertTrue(probe.hasSettingsRootMarker)
+        XCTAssertFalse(probe.innerNavigationHidden)
+        XCTAssertTrue(probe.workspaceChromeHidden)
+        XCTAssertNil(WorkspaceSurfacePolicy.settingsSurfaceProbe(fromJavaScriptResult: ["nope": 1]))
+        XCTAssertNil(WorkspaceSurfacePolicy.settingsSurfaceProbe(fromJavaScriptResult: nil))
+    }
+
+    func testCompatibilityHandoffTargetsAreNotReinterceptedAsNativeSettings() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        // The unsupported/old-release next action opens the workbench entry; the
+        // main browser must load it instead of bouncing back to native Settings.
+        XCTAssertNil(WorkspaceSettingsSection.resolve(origin.entryURL, origin: origin))
+        // Subpage, unknown-section and login handoffs are likewise not native
+        // settings routes, so the main window renders them directly.
+        for value in [
+            "https://workspace.example/workspace/settings/diagnostics",
+            "https://workspace.example/workspace/settings?section=testing",
+            "https://workspace.example/workspace/settings/link-complete",
+            "https://workspace.example/login?callbackUrl=%2Fworkspace%2Fsettings",
+        ] {
+            XCTAssertNil(WorkspaceSettingsSection.resolve(URL(string: value)!, origin: origin), value)
+        }
+    }
+
+    func testSettingsProbeIsCurrentRejectsStaleDocuments() throws {
+        let expected = URL(string: "https://workspace.example/workspace/settings?section=connections")!
+        let other = URL(string: "https://workspace.example/workspace/settings?section=appearance")!
+        XCTAssertTrue(WorkspaceSurfacePolicy.settingsProbeIsCurrent(
+            generation: 3, currentGeneration: 3, loading: false,
+            expectedURL: expected, currentURL: expected, probeURL: expected))
+        // A completion from an older document invocation is ignored even when
+        // the URL happens to match.
+        XCTAssertFalse(WorkspaceSurfacePolicy.settingsProbeIsCurrent(
+            generation: 2, currentGeneration: 3, loading: false,
+            expectedURL: expected, currentURL: expected, probeURL: expected))
+        // A navigation in flight must never be revealed.
+        XCTAssertFalse(WorkspaceSurfacePolicy.settingsProbeIsCurrent(
+            generation: 3, currentGeneration: 3, loading: true,
+            expectedURL: expected, currentURL: expected, probeURL: expected))
+        // The current URL moved on (SPA or new load): the old result is stale.
+        XCTAssertFalse(WorkspaceSurfacePolicy.settingsProbeIsCurrent(
+            generation: 3, currentGeneration: 3, loading: false,
+            expectedURL: expected, currentURL: other, probeURL: expected))
+        // The result reports a different document than the invocation expected.
+        XCTAssertFalse(WorkspaceSurfacePolicy.settingsProbeIsCurrent(
+            generation: 3, currentGeneration: 3, loading: false,
+            expectedURL: expected, currentURL: expected, probeURL: other))
+        XCTAssertFalse(WorkspaceSurfacePolicy.settingsProbeIsCurrent(
+            generation: 3, currentGeneration: 3, loading: false,
+            expectedURL: nil, currentURL: expected, probeURL: expected))
+        // No usable result from a current invocation may still retry.
+        XCTAssertTrue(WorkspaceSurfacePolicy.settingsProbeIsCurrent(
+            generation: 3, currentGeneration: 3, loading: false,
+            expectedURL: expected, currentURL: expected, probeURL: nil))
+    }
+
+    func testSettingsSurfaceStatusForProbeSupportsOnlyCurrentDocument() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let current = URL(string: "https://workspace.example/workspace/settings?section=connections")!
+        let clean = WorkspaceSurfacePolicy.SettingsWebSurfaceProbe(
+            url: current, hasSettingsRootMarker: true,
+            innerNavigationHidden: true, workspaceChromeHidden: true)
+        // A clean probe from an older invocation must not reveal the WebView.
+        XCTAssertNil(WorkspaceSurfacePolicy.settingsSurfaceStatusForProbe(
+            generation: 1, currentGeneration: 2, loading: false,
+            expectedURL: current, currentURL: current, probe: clean, origin: origin))
+        XCTAssertNil(WorkspaceSurfacePolicy.settingsSurfaceStatusForProbe(
+            generation: 2, currentGeneration: 2, loading: true,
+            expectedURL: current, currentURL: current, probe: clean, origin: origin))
+        XCTAssertNil(WorkspaceSurfacePolicy.settingsSurfaceStatusForProbe(
+            generation: 2, currentGeneration: 2, loading: false,
+            expectedURL: current, currentURL: current,
+            probe: .init(url: URL(string: "https://workspace.example/workspace/settings?section=appearance")!,
+                         hasSettingsRootMarker: true, innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin))
+        // Current invocation: the clean proof is accepted.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatusForProbe(
+            generation: 2, currentGeneration: 2, loading: false,
+            expectedURL: current, currentURL: current, probe: clean, origin: origin), .supported)
+        // Current invocation with an old release is classified honestly.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatusForProbe(
+            generation: 2, currentGeneration: 2, loading: false,
+            expectedURL: current, currentURL: current,
+            probe: .init(url: current, hasSettingsRootMarker: false,
+                         innerNavigationHidden: true, workspaceChromeHidden: true),
+            origin: origin), .unsupported)
+        // A missing result is retryable, not a reveal.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatusForProbe(
+            generation: 2, currentGeneration: 2, loading: false,
+            expectedURL: current, currentURL: current, probe: nil, origin: origin), .unknown)
+    }
+
+    func testSettingsProbeOutcomeRetriesAbsentMarkerWithinTheBound() throws {
+        // An absent root marker (old or still-streaming content) gets the same
+        // bounded retry window as a marker whose chrome is not hidden yet.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsProbeOutcome(
+            status: .unsupported, attempts: 1, maxAttempts: 5), .retry)
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsProbeOutcome(
+            status: .unsupported, attempts: 4, maxAttempts: 5), .retry)
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsProbeOutcome(
+            status: .unsupported, attempts: 5, maxAttempts: 5), .apply(.unsupported))
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsProbeOutcome(
+            status: .unknown, attempts: 1, maxAttempts: 5), .retry)
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsProbeOutcome(
+            status: .unknown, attempts: 5, maxAttempts: 5), .apply(.unknown))
+        // Definitive outcomes apply immediately.
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsProbeOutcome(
+            status: .supported, attempts: 1, maxAttempts: 5), .apply(.supported))
+        let login = URL(string: "https://workspace.example/login")!
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsProbeOutcome(
+            status: .loginRequired(login), attempts: 1, maxAttempts: 5), .apply(.loginRequired(login)))
+    }
+
+    @MainActor
+    func testSettingsSurfaceProbeDetectsCleanSupportedRelease() async throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let handler = FixtureSchemeHandler()
+        handler.routes["/workspace/settings"] = Self.supportedFixture
+        let flags = try await runSettingsProbe(handler: handler, path: "/workspace/settings")
+        XCTAssertTrue(flags.hasMarker)
+        XCTAssertTrue(flags.innerNavHidden)
+        XCTAssertTrue(flags.chromeHidden)
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: URL(string: "https://workspace.example/workspace/settings")!,
+                       hasSettingsRootMarker: flags.hasMarker, innerNavigationHidden: flags.innerNavHidden,
+                       workspaceChromeHidden: flags.chromeHidden),
+            origin: origin), .supported)
+    }
+
+    @MainActor
+    func testSettingsSurfaceProbeRejectsOldReleaseAndPartialChrome() async throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let settings = URL(string: "https://workspace.example/workspace/settings")!
+
+        let oldHandler = FixtureSchemeHandler()
+        oldHandler.routes["/workspace/settings"] = Self.oldFixture
+        let oldFlags = try await runSettingsProbe(handler: oldHandler, path: "/workspace/settings")
+        XCTAssertFalse(oldFlags.hasMarker)
+        XCTAssertFalse(oldFlags.chromeHidden)
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: settings, hasSettingsRootMarker: oldFlags.hasMarker,
+                       innerNavigationHidden: oldFlags.innerNavHidden, workspaceChromeHidden: oldFlags.chromeHidden),
+            origin: origin), .unsupported)
+        // The same old document classifies login and subpages honestly.
+        let login = URL(string: "https://workspace.example/login")!
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: login, hasSettingsRootMarker: oldFlags.hasMarker,
+                       innerNavigationHidden: oldFlags.innerNavHidden, workspaceChromeHidden: oldFlags.chromeHidden),
+            origin: origin), .loginRequired(login))
+        let diagnostics = URL(string: "https://workspace.example/workspace/settings/diagnostics")!
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: diagnostics, hasSettingsRootMarker: oldFlags.hasMarker,
+                       innerNavigationHidden: oldFlags.innerNavHidden, workspaceChromeHidden: oldFlags.chromeHidden),
+            origin: origin), .handoff(diagnostics))
+
+        // Marker present but the workspace chrome is still visible: not supported.
+        let partialHandler = FixtureSchemeHandler()
+        partialHandler.routes["/workspace/settings"] = Self.partialFixture
+        let partialFlags = try await runSettingsProbe(handler: partialHandler, path: "/workspace/settings")
+        XCTAssertTrue(partialFlags.hasMarker)
+        XCTAssertFalse(partialFlags.chromeHidden)
+        XCTAssertEqual(WorkspaceSurfacePolicy.settingsSurfaceStatus(
+            for: .init(url: settings, hasSettingsRootMarker: partialFlags.hasMarker,
+                       innerNavigationHidden: partialFlags.innerNavHidden, workspaceChromeHidden: partialFlags.chromeHidden),
+            origin: origin), .unsupported)
+    }
+
+    private static let supportedFixture = """
+    <!doctype html><html><head><meta charset="utf-8"><style>
+      aside[aria-label="Talent Signal 工作台"] { display: none; }
+      nav[aria-label="工作台导航"] { display: none; }
+      [data-settings-navigation] { display: none; }
+    </style></head><body>
+      <aside aria-label="Talent Signal 工作台"><nav aria-label="工作台导航">rail</nav></aside>
+      <div id="workspace-content">
+        <main id="main-content" data-desktop-settings-surface="1">
+          <div data-settings-navigation>设置分区</div>
+          <h2>连接与权限</h2>
+        </main>
+      </div>
+    </body></html>
+    """
+
+    private static let oldFixture = """
+    <!doctype html><html><head><meta charset="utf-8"></head><body>
+      <aside aria-label="Talent Signal 工作台"><nav aria-label="工作台导航">rail</nav></aside>
+      <div id="workspace-content">
+        <main id="main-content"><h2>设置</h2><div data-settings-navigation>设置分区</div></main>
+      </div>
+    </body></html>
+    """
+
+    private static let partialFixture = """
+    <!doctype html><html><head><meta charset="utf-8"></head><body>
+      <aside aria-label="Talent Signal 工作台"><nav aria-label="工作台导航">rail</nav></aside>
+      <div id="workspace-content">
+        <main id="main-content" data-desktop-settings-surface="1">
+          <div data-settings-navigation>设置分区</div>
+        </main>
+      </div>
+    </body></html>
+    """
+
+    @MainActor
+    private func runSettingsProbe(handler: FixtureSchemeHandler, path: String) async throws -> SettingsProbeFlags {
+        let configuration = WKWebViewConfiguration()
+        configuration.setURLSchemeHandler(handler, forURLScheme: "get51test")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let probe = TestNavigationProbe()
+        webView.navigationDelegate = probe
+        let loaded = expectation(description: "fixture loaded")
+        probe.onFinish = { loaded.fulfill() }
+        webView.load(URLRequest(url: URL(string: "get51test://workspace.test\(path)")!))
+        await fulfillment(of: [loaded], timeout: 15)
+        let result = try await webView.evaluateJavaScript(WorkspaceBrowser.settingsSurfaceProbeScript)
+        let parsed = try XCTUnwrap(WorkspaceSurfacePolicy.settingsSurfaceProbe(fromJavaScriptResult: result))
+        withExtendedLifetime(handler) {}
+        return SettingsProbeFlags(hasMarker: parsed.hasSettingsRootMarker,
+                                  innerNavHidden: parsed.innerNavigationHidden,
+                                  chromeHidden: parsed.workspaceChromeHidden)
+    }
 }
 
 @MainActor
@@ -685,6 +1069,33 @@ private final class TestSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked 
         }
         urlSchemeTask.didReceive(response)
         urlSchemeTask.didReceive(data)
+        urlSchemeTask.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
+}
+
+private struct SettingsProbeFlags {
+    let hasMarker: Bool
+    let innerNavHidden: Bool
+    let chromeHidden: Bool
+}
+
+/// Serves per-path HTML fixtures so the settings-surface probe can be exercised
+/// against a real WebKit document with real computed styles.
+private final class FixtureSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendable {
+    var routes: [String: String] = [:]
+
+    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        guard let url = urlSchemeTask.request.url,
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                             headerFields: ["Content-Type": "text/html; charset=utf-8"]) else {
+            urlSchemeTask.didFailWithError(URLError(.badURL))
+            return
+        }
+        let body = routes[url.path] ?? "<!doctype html><meta charset=utf-8><title>missing</title><body>missing</body>"
+        urlSchemeTask.didReceive(response)
+        urlSchemeTask.didReceive(Data(body.utf8))
         urlSchemeTask.didFinish()
     }
 

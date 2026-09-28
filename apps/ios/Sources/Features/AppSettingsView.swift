@@ -208,6 +208,45 @@ struct AppSettingsView: View {
     }
 }
 
+enum InstalledAppVersion {
+    static func label(in bundle: Bundle = .main) -> String? {
+        guard let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        return build.flatMap { $0.isEmpty ? nil : "\(version) (\($0))" } ?? version
+    }
+}
+
+struct AppVersionStatusView: View {
+    @Environment(\.appLanguage) private var appLanguage
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent(appLanguage.text("Installed iOS app", zhHans: "本机 iOS 应用")) {
+                    Text(InstalledAppVersion.label() ?? appLanguage.text("Unavailable", zhHans: "无法读取"))
+                        .accessibilityIdentifier("ios-installed-version")
+                }
+                LabeledContent(appLanguage.text("Update status", zhHans: "更新状态")) {
+                    Text(appLanguage.text("Not verified", zhHans: "未核验"))
+                        .foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text(appLanguage.text(
+                    "This is the build installed on this iPhone. Check TestFlight or the App Store for a newer release; this screen does not infer updates from another device.",
+                    zhHans: "这里显示这台 iPhone 实际安装的版本。请在 TestFlight 或 App Store 检查新版本；这里不会推断其他设备的安装状态。"
+                ))
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.tsSurface)
+        .navigationTitle(appLanguage.text("Version & status", zhHans: "版本与状态"))
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("ios-version-status")
+    }
+}
+
 struct DisplaySettingsView: View {
     @AppStorage(LabDisplayStore.themeKey) private var theme = LabDisplayConfiguration.Theme.system.rawValue
     @AppStorage(WorkspaceTextSizePreference.storageKey)

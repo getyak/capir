@@ -1,5 +1,6 @@
 import {
   CONTRACT_VERSION,
+  isGitRevision,
   type SystemHealthComponent,
   type SystemHealthResponse,
   type SystemHealthStatus,
@@ -72,11 +73,15 @@ export function parseSystemHealth(value: unknown): SystemHealthResponse | null {
   }
   const components = payload.components as SystemHealthComponent[];
   if (new Set(components.map((item) => item.id)).size !== 4) return null;
+  const backendRevision = isGitRevision(payload.backend_revision)
+    ? payload.backend_revision.toLowerCase()
+    : undefined;
   return {
     contract_version: CONTRACT_VERSION,
     schema_version: "system-health.v1",
     status: summarizeSystemHealth(components),
     observed_at: payload.observed_at,
+    ...(backendRevision ? { backend_revision: backendRevision } : {}),
     components,
   };
 }

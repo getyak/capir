@@ -4,10 +4,6 @@ import { ArrowDown, ArrowClockwise, GearSix } from "@phosphor-icons/react";
 import { useSyncExternalStore } from "react";
 import styles from "./workspace-shell.module.css";
 
-type UpdatePhase = "disabled" | "idle" | "checking" | "available" | "downloading" | "installing" | "failed" | "information";
-export type DesktopChromeState = { protocolVersion: 1; surface?: "workspace" | "settings"; availableVersion: string | null; phase?: UpdatePhase; progress?: number | null; offerID?: string | null };
-declare global { interface Window { talentSignalDesktop?: DesktopChromeState } }
-
 // Presentation only: the native host owns trust, the offered version and installation.
 export function desktopVersion(state: unknown): string | null {
   if (!state || typeof state !== "object" || !("protocolVersion" in state) || state.protocolVersion !== 1 || !("availableVersion" in state)) return null;

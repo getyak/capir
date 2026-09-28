@@ -104,6 +104,7 @@ afterEach(async () => {
 
 describe("settings shell", () => {
   it("renders one settings navigation whose selected section matches the content title", async () => {
+    expect(host.querySelector('[data-desktop-settings-surface="1"]')).toBeTruthy();
     const navs = host.querySelectorAll("[data-settings-navigation]");
     expect(navs).toHaveLength(1);
     expect(navs[0].getAttribute("aria-label")).toBe("设置分区");
@@ -119,6 +120,26 @@ describe("settings shell", () => {
     expect(host.textContent).not.toContain("测试与诊断");
     await render({ labEnabled: true });
     expect(host.textContent).toContain("测试与诊断");
+  });
+
+  it("keeps one flat navigation with a versions destination", async () => {
+    const nav = host.querySelector("[data-settings-navigation]")!;
+    expect(nav.querySelectorAll(":scope > p")).toHaveLength(0);
+    const labels = [...nav.querySelectorAll("a")].map((anchor) => anchor.textContent);
+    expect(labels).toContain("版本与状态");
+    expect(
+      host.querySelector('a[href="/workspace/settings?section=versions"]'),
+    ).toBeTruthy();
+  });
+
+  it("renders the versions pane with honest unknown states", async () => {
+    await render({ section: "versions" });
+    expect(host.querySelector("h2")?.textContent).toBe("版本与状态");
+    expect(host.querySelector('[data-version-component="web"]')).toBeTruthy();
+    expect(host.querySelector('[data-version-component="backend"]')).toBeTruthy();
+    expect(host.querySelector('[data-version-component="macos"]')).toBeTruthy();
+    expect(host.textContent).toContain("此设备无法读取");
+    expect(host.textContent).not.toContain("最新");
   });
 });
 
