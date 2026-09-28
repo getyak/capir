@@ -7,6 +7,8 @@ import {
   type MemoryCommitRequest,
   type MemoryCommitResponse,
   type MemoryDecision,
+  type MemoryItemDecisionRequest,
+  type MemoryItemDecisionResponse,
   type MemoryItemMutationRequest,
   type MemoryItemMutationResponse,
   type MemoryOperationReadback,
@@ -29,7 +31,7 @@ import {
   undoIsCompensable,
   validateMemorySelection,
 } from "./memoryReviewPolicy.js";
-import { assertReviewCredential, visibleReviewItems } from "./memoryReviewRead.js";
+import { assertReviewCredential, dismissMemoryReview, visibleReviewItems } from "./memoryReviewRead.js";
 import { assertPursuitAssociationCurrent } from "./memoryPursuitScopes.js";
 
 /** Same-transaction revalidation of a stored Pursuit association. */
@@ -219,6 +221,16 @@ export interface MemoryCommitResult {
   status: number;
 }
 
+export function skippedVisibleItemIds<T extends { id: string }>(
+  visible: readonly T[],
+  selectedItemIds: readonly string[],
+  mode: "batch" | "item",
+): string[] {
+  if (mode === "item") return [];
+  const selected = new Set(selectedItemIds);
+  return visible.filter((item) => !selected.has(item.id)).map((item) => item.id);
+}
+
 /**
  * Atomic per-scope commit: auth + purpose credential -> frozen review ->
  * exact selection and explicit judgment -> contact dependency -> all-or-none
@@ -231,12 +243,14 @@ export async function commitMemoryReview(
   reviewScopeId: string,
   credential: string | null,
   request: MemoryCommitRequest,
+  mode: "batch" | "item" = "batch",
+  itemExpectation?: { id: string; addedRevision: number },
 ): Promise<MemoryCommitResult> {
   return inTransaction(pool, async (client) => {
     const idempotency = await claimIdempotency(
       client,
       { accountId: auth.accountId, actorUserId: auth.userId },
-      "commit_memory_review",
+      mode === "item" ? "commit_memory_review_item" : "commit_memory_review",
       request.idempotency_key,
       { review_scope_id: reviewScopeId, ...request },
     );
@@ -330,10 +344,13 @@ export async function commitMemoryReview(
 
     const items = await loadProposalItems(client, auth.accountId, proposal.id, true);
     const visible = await visibleReviewItems(client, auth, scope, proposal, items);
-    // Source availability is checked before selection validation so a pending
-    // proposal whose original source expired/was deleted reports the real
-    // source state instead of a generic missing-item error. Runs even for a
-    // contact-only commit (selected.length === 0).
+    if (mode === "item" && itemExpectation) {
+      const target = visible.find((item) => item.id === itemExpectation.id);
+      if (!target || target.status !== "pending" || target.added_revision !== itemExpectation.addedRevision
+        || request.selected_item_ids.length !== 1 || request.selected_item_ids[0] !== target.id) {
+        throw new ApiError(409, "MEMORY_ITEM_STALE", "This Memory item changed; reopen the review.");
+      }
+    }
     const sourceVerification = await verifyPendingSourceAuthority(
       client,
       auth,
@@ -737,14 +754,13 @@ export async function commitMemoryReview(
     // pending so restoring the same identity recovers the prior selection.
     const contactSkipped = request.contact_decision === "none";
     if (!contactSkipped) {
-      for (const item of visible) {
-        if (request.selected_item_ids.includes(item.id)) continue;
+      for (const itemId of skippedVisibleItemIds(visible, request.selected_item_ids, mode)) {
         await client.query(
           `UPDATE memory_proposal_items SET status = 'skipped'
            WHERE account_id = $1 AND id = $2`,
-          [auth.accountId, item.id],
+          [auth.accountId, itemId],
         );
-        skippedItemIds.push(item.id);
+        skippedItemIds.push(itemId);
       }
     }
 
@@ -917,6 +933,89 @@ export async function receiptSourceAvailable(
     || (result.rows[0]?.unavailable ?? 0) === 0;
 }
 
+async function itemDecisionSnapshot(
+  pool: Pool,
+  auth: AuthContext,
+  reviewScopeId: string,
+): Promise<{ proposalRevision: number; remainingCount: number }> {
+  const current = await pool.query<{ proposal_revision: number; remaining_count: number }>(
+    `SELECT proposal.revision AS proposal_revision,
+            COUNT(item.id) FILTER (WHERE item.status = 'pending')::integer AS remaining_count
+     FROM memory_review_scopes scope
+     JOIN memory_proposals proposal
+       ON proposal.account_id = scope.account_id AND proposal.id = scope.proposal_id
+     LEFT JOIN memory_proposal_items item
+       ON item.account_id = proposal.account_id AND item.proposal_id = proposal.id
+     WHERE scope.account_id = $1 AND scope.id = $2 AND scope.reader_user_id = $3
+     GROUP BY proposal.revision`,
+    [auth.accountId, reviewScopeId, auth.userId],
+  );
+  const row = current.rows[0];
+  if (!row) throw new ApiError(404, "MEMORY_NOT_FOUND", "The Memory review was not found.");
+  return { proposalRevision: row.proposal_revision, remainingCount: row.remaining_count };
+}
+
+/** One protected card decision; the existing batch route keeps its semantics. */
+export async function decideMemoryReviewItem(
+  pool: Pool,
+  auth: AuthContext,
+  reviewScopeId: string,
+  credential: string | null,
+  request: MemoryItemDecisionRequest,
+): Promise<MemoryItemDecisionResponse> {
+  const expectation = {
+    proposalRevision: request.expected_proposal_revision,
+    itemId: request.item_id,
+    addedRevision: request.expected_item_added_revision,
+  };
+  if (request.decision === "skip") {
+    const dismissed = await dismissMemoryReview(pool, auth, reviewScopeId, credential, {
+      idempotency_key: request.idempotency_key,
+      expected_review_revision: request.expected_review_revision,
+      item_ids: [request.item_id],
+      reason: request.reason,
+    }, expectation);
+    const current = await itemDecisionSnapshot(pool, auth, reviewScopeId);
+    return {
+      contract_version: CONTRACT_VERSION,
+      kind: "skipped",
+      item_id: request.item_id,
+      replayed: dismissed.replayed,
+      receipt: null,
+      proposal_revision: current.proposalRevision,
+      remaining_pending_item_count: current.remainingCount,
+    };
+  }
+  const body: MemoryCommitRequest = {
+    idempotency_key: request.idempotency_key,
+    expected_proposal_revision: request.expected_proposal_revision,
+    contact_decision: request.contact_decision,
+    ...(request.contact_decision === "existing" ? { identity_authority: "human_selection" as const } : {}),
+    selected_item_ids: [request.item_id],
+    edited_text: request.edited_text ? { [request.item_id]: request.edited_text } : {},
+    item_decisions: { [request.item_id]: request.decision },
+    expected_item_versions: request.expected_item_version
+      ? { [request.item_id]: request.expected_item_version }
+      : {},
+    new_contact: null,
+    reason: request.reason,
+  };
+  const committed = await commitMemoryReview(
+    pool, auth, reviewScopeId, credential, body, "item",
+    { id: request.item_id, addedRevision: request.expected_item_added_revision },
+  );
+  const current = await itemDecisionSnapshot(pool, auth, reviewScopeId);
+  return {
+    contract_version: CONTRACT_VERSION,
+    kind: "committed",
+    item_id: request.item_id,
+    replayed: committed.replayed,
+    receipt: committed.body.receipt,
+    proposal_revision: current.proposalRevision,
+    remaining_pending_item_count: current.remainingCount,
+  };
+}
+
 export async function readMemoryOperation(
   pool: Pool,
   auth: AuthContext,
@@ -967,7 +1066,7 @@ export async function readMemoryOperation(
   const pending = await client.query<{ status: string }>(
     `SELECT status FROM idempotency_records
      WHERE account_id = $1 AND actor_user_id = $2
-       AND operation_scope = 'commit_memory_review'
+       AND operation_scope IN ('commit_memory_review', 'commit_memory_review_item')
        AND idempotency_key = $3`,
     [auth.accountId, auth.userId, operationKey],
   );

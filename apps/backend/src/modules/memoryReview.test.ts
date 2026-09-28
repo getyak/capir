@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { skippedVisibleItemIds } from "./memoryReviewCommit.js";
 
 import {
   checkMemoryDependence,
@@ -292,5 +293,14 @@ describe("Memory review policy", () => {
     expect(contactReclaimIsSafe({ laterSourceCount: 0, laterMemoryItemCount: 0, laterAssignmentCount: 1 })).toBe(false);
     expect(evidenceIsAvailable({ itemStatus: "active", evidenceStatus: "active", sourceDeleted: false, authorizationRevoked: false })).toBe(true);
     expect(evidenceIsAvailable({ itemStatus: "active", evidenceStatus: "active", sourceDeleted: false, authorizationRevoked: true })).toBe(false);
+  });
+});
+
+
+describe("item-scoped Memory decisions", () => {
+  it("keeps untouched siblings pending while an older batch commit still skips them", () => {
+    const visible = [{ id: "first" }, { id: "second" }, { id: "third" }];
+    expect(skippedVisibleItemIds(visible, ["first"], "item")).toEqual([]);
+    expect(skippedVisibleItemIds(visible, ["first"], "batch")).toEqual(["second", "third"]);
   });
 });

@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import {
   CONTRACT_VERSION,
   MemoryCommitRequestSchema,
+  MemoryItemDecisionRequestSchema,
   MemoryDismissRequestSchema,
   MemoryItemMutationRequestSchema,
   MemoryOpenReviewRequestSchema,
@@ -12,6 +13,7 @@ import {
   MemoryScopeSchema,
   MemoryUndoRequestSchema,
   type MemoryCommitRequest,
+  type MemoryItemDecisionRequest,
   type MemoryDismissRequest,
   type MemoryItemMutationRequest,
   type MemoryOpenReviewRequest,
@@ -31,6 +33,7 @@ import { ApiError } from "../lib/apiError.js";
 import { claimIdempotency, completeIdempotency } from "../lib/idempotency.js";
 import {
   commitMemoryReview,
+  decideMemoryReviewItem,
   dismissMemoryReview,
   listMemoryProposals,
   mutateMemoryItem,
@@ -408,6 +411,29 @@ export function registerMemoryReviewRoutes(
         .header("idempotent-replayed", result.replayed)
         .status(result.status)
         .send(result.body);
+    },
+  );
+
+  app.post<{ Params: { reviewScopeId: string }; Body: unknown }>(
+    "/v1/memory/reviews/:reviewScopeId/item-decisions",
+    {
+      preHandler: authenticate,
+      schema: {
+        tags: ["memory"],
+        security,
+        params: reviewParams,
+        body: MemoryItemDecisionRequestSchema,
+      },
+    },
+    async (request, reply) => {
+      const result = await decideMemoryReviewItem(
+        pool,
+        request.auth,
+        request.params.reviewScopeId,
+        reviewCredential(request),
+        request.body as MemoryItemDecisionRequest,
+      );
+      return reply.header("idempotent-replayed", result.replayed).status(200).send(result);
     },
   );
 

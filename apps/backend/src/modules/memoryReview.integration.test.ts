@@ -27,6 +27,7 @@ import {
 } from "./sourceAuthorization.js";
 import {
   commitMemoryReview,
+  decideMemoryReviewItem,
   listMemoryProposals,
   mutateMemoryItem,
   openMemoryReview,
@@ -1863,6 +1864,105 @@ describe.skipIf(!pool)("Memory review integration", () => {
     ).rejects.toThrow(/source/i);
     expect(first.body.receipt.item_count).toBe(1);
   });
+
+  it("rejects a stale item revision before committing any Memory", async () => {
+    const auth = await makeAuth("item-decision-stale");
+    const staged = await stage(auth, {
+      items: [candidate({ display_text: "I want direct answers" })],
+      contactDecision: "none",
+      sessionId: randomUUID(),
+      messageId: randomUUID(),
+    });
+    const opened = await open(auth, staged!.proposal.proposal_id, "chat");
+    const target = opened.review.items[0]!;
+    await expect(decideMemoryReviewItem(pool!, auth, opened.review.review_scope_id, opened.review_credential!, {
+      idempotency_key: randomUUID(),
+      expected_proposal_revision: opened.review.proposal_revision,
+      expected_review_revision: opened.review.review_revision,
+      item_id: target.id,
+      expected_item_added_revision: target.added_revision + 1,
+      contact_decision: "none",
+      decision: "accept",
+      reason: "stale item",
+    })).rejects.toMatchObject({ code: "MEMORY_ITEM_STALE" });
+    const row = await pool!.query<{ status: string }>(
+      "SELECT status FROM memory_proposal_items WHERE account_id=$1 AND id=$2",
+      [auth.accountId, target.id],
+    );
+    expect(row.rows[0]?.status).toBe("pending");
+  }, 30_000);
+
+  it("passes one Memory item without deciding its sibling and replays the same key", async () => {
+    const auth = await makeAuth("item-decision-pass");
+    const staged = await stage(auth, {
+      items: [
+        candidate({ display_text: "I prefer written summaries" }),
+        candidate({ display_text: "I keep a weekly contact list" }),
+      ],
+      contactDecision: "none",
+      sessionId: randomUUID(),
+      messageId: randomUUID(),
+    });
+    const opened = await open(auth, staged!.proposal.proposal_id, "chat");
+    const [first, second] = opened.review.items;
+    const body = {
+      idempotency_key: randomUUID(),
+      expected_proposal_revision: opened.review.proposal_revision,
+      expected_review_revision: opened.review.review_revision,
+      item_id: first!.id,
+      expected_item_added_revision: first!.added_revision,
+      contact_decision: "none" as const,
+      decision: "skip" as const,
+      reason: "Not useful now",
+    };
+    const decided = await decideMemoryReviewItem(pool!, auth, opened.review.review_scope_id, opened.review_credential!, body);
+    expect(decided).toMatchObject({ kind: "skipped", item_id: first!.id, receipt: null, remaining_pending_item_count: 1 });
+    const replay = await decideMemoryReviewItem(pool!, auth, opened.review.review_scope_id, opened.review_credential!, body);
+    expect(replay.replayed).toBe(true);
+    const status = await pool!.query<{ id: string; status: string }>(
+      "SELECT id,status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2",
+      [auth.accountId, staged!.proposal.proposal_id],
+    );
+    expect(Object.fromEntries(status.rows.map((row) => [row.id, row.status]))).toMatchObject({
+      [first!.id]: "skipped",
+      [second!.id]: "pending",
+    });
+  }, 30_000);
+
+  it("decides one Memory item without skipping an untouched sibling", async () => {
+    const auth = await makeAuth("item-decision-siblings");
+    const staged = await stage(auth, {
+      items: [
+        candidate({ display_text: "I prefer concise updates" }),
+        candidate({ display_text: "I prepare notes before meetings" }),
+      ],
+      contactDecision: "none",
+      sessionId: randomUUID(),
+      messageId: randomUUID(),
+    });
+    const opened = await open(auth, staged!.proposal.proposal_id, "chat");
+    const [first, second] = opened.review.items;
+    const decided = await decideMemoryReviewItem(pool!, auth, opened.review.review_scope_id, opened.review_credential!, {
+      idempotency_key: randomUUID(),
+      expected_proposal_revision: opened.review.proposal_revision,
+      expected_review_revision: opened.review.review_revision,
+      item_id: first!.id,
+      expected_item_added_revision: first!.added_revision,
+      contact_decision: "none",
+      decision: "accept",
+      reason: "Remember only this item",
+    });
+    expect(decided.kind).toBe("committed");
+    expect(decided.receipt?.decisions.map((decision) => decision.proposal_item_id)).toEqual([first!.id]);
+    const status = await pool!.query<{ id: string; status: string }>(
+      "SELECT id,status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2 ORDER BY id",
+      [auth.accountId, staged!.proposal.proposal_id],
+    );
+    expect(Object.fromEntries(status.rows.map((row) => [row.id, row.status]))).toMatchObject({
+      [first!.id]: "committed",
+      [second!.id]: "pending",
+    });
+   }, 30_000);
 
   it("stages a name-only contact with zero Memory items and records its confirmed receipt", async () => {
     const auth = await makeAuth("contact-only");

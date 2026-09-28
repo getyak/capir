@@ -28,6 +28,8 @@ import type { SystemHealthResponse } from "./systemHealthSchemas.js";
 import type {
   MemoryCommitRequest,
   MemoryCommitResponse,
+  MemoryItemDecisionRequest,
+  MemoryItemDecisionResponse,
   MemoryDismissRequest,
   MemoryDismissResponse,
   MemoryItemMutationRequest,
@@ -1399,6 +1401,14 @@ export class TalentSignalClient {
 
   commitMemoryReview(reviewScopeId: string, credential: string, body: MemoryCommitRequest): Promise<MemoryCommitResponse> {
     return this.request(`/v1/memory/reviews/${encodeURIComponent(reviewScopeId)}/commits`, {
+      method: "POST",
+      body,
+      headers: { "x-memory-review-credential": credential },
+    });
+  }
+
+  decideMemoryReviewItem(reviewScopeId: string, credential: string, body: MemoryItemDecisionRequest): Promise<MemoryItemDecisionResponse> {
+    return this.request(`/v1/memory/reviews/${encodeURIComponent(reviewScopeId)}/item-decisions`, {
       method: "POST",
       body,
       headers: { "x-memory-review-credential": credential },

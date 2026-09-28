@@ -455,6 +455,23 @@ export const MemoryCommitRequestSchema = Type.Object(
   obj,
 );
 
+/** One explicit Session card decision; a new contact has its own operation. */
+export const MemoryItemDecisionRequestSchema = Type.Object(
+  {
+    idempotency_key: id,
+    expected_proposal_revision: Type.Integer({ minimum: 1 }),
+    expected_review_revision: Type.Integer({ minimum: 0 }),
+    item_id: id,
+    expected_item_added_revision: Type.Integer({ minimum: 1 }),
+    expected_item_version: Type.Optional(Type.Integer({ minimum: 1 })),
+    contact_decision: Type.Union([Type.Literal("existing"), Type.Literal("none")]),
+    decision: MemoryDecisionSchema,
+    edited_text: Type.Optional(Type.String({ maxLength: 1_000 })),
+    reason: text(500),
+  },
+  obj,
+);
+
 export const MemoryReceiptSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
@@ -610,6 +627,19 @@ export const MemoryCommitResponseSchema = Type.Object(
     contract_version: Type.Literal(CONTRACT_VERSION),
     replayed: Type.Boolean(),
     receipt: MemoryReceiptSchema,
+  },
+  obj,
+);
+
+export const MemoryItemDecisionResponseSchema = Type.Object(
+  {
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    kind: Type.Union([Type.Literal("committed"), Type.Literal("skipped")]),
+    item_id: id,
+    replayed: Type.Boolean(),
+    receipt: Type.Union([MemoryReceiptSchema, Type.Null()]),
+    proposal_revision: Type.Integer({ minimum: 1 }),
+    remaining_pending_item_count: Type.Integer({ minimum: 0 }),
   },
   obj,
 );
@@ -841,6 +871,8 @@ export type MemoryOpenReviewRequest = Static<
 >;
 export type MemoryReviewResponse = Static<typeof MemoryReviewResponseSchema>;
 export type MemoryCommitRequest = Static<typeof MemoryCommitRequestSchema>;
+export type MemoryItemDecisionRequest = Static<typeof MemoryItemDecisionRequestSchema>;
+export type MemoryItemDecisionResponse = Static<typeof MemoryItemDecisionResponseSchema>;
 export type MemoryReceipt = Static<typeof MemoryReceiptSchema>;
 export type MemoryOperationReadback = Static<
   typeof MemoryOperationReadbackSchema

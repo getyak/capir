@@ -69,6 +69,7 @@ export {
 } from "./memoryReviewRead.js";
 export {
   commitMemoryReview,
+  decideMemoryReviewItem,
   mutateMemoryItem,
   readMemoryItem,
   readMemoryOperation,
