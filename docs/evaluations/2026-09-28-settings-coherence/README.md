@@ -24,10 +24,12 @@ The original screenshot is not a valid aesthetic baseline for the merged GET-51 
 | Installed macOS app | `0.1.0 (29)` in the app's native Update pane | Installed Mac build; its signed update check was current at that check time. |
 | Resident Web | `26a664bb` from the active release receipt | The connected service was still older than merged GET-51 Web source `a12d51bc`; this explains the full Web shell in the user's screenshot. |
 | Backend | Not verified from the host during this review | No backend revision is inferred from a healthy Web page or from the repo checkout. |
-| iOS | Public release tag `v0.1.88` was visible, installed device unknown | A release tag is not the build installed on a particular iPhone. |
+| iOS | Generic tag `v0.1.88` was visible; latest inspected processed TestFlight receipt was `v0.1.87`; installed device unknown | The generic tag had no IPA/processing receipt, and neither tag proves what a particular iPhone installed. |
 | Browser extension | Source manifest `0.2.0`, installed browser unknown | The packaged source version does not prove what another browser installed. |
 
 These are component-specific identifiers; the digits and Git revisions are not directly comparable across platforms. The new version surface makes that provenance visible instead of assigning one synthetic shared version.
+
+The [processed TestFlight release receipt](https://github.com/getyak/talent-signal/releases/tag/v0.1.87) reports version `0.1.87` and a processed build; the later [generic `v0.1.88` release](https://github.com/getyak/talent-signal/releases/tag/v0.1.88) has no TestFlight receipt. This is why the UI does not use GitHub's latest tag as an iOS update verdict.
 
 ## Running synthetic surfaces
 
