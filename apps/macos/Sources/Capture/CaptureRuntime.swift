@@ -167,17 +167,30 @@ private final class CaptureHintController {
         case .deletionFailed: title = "本机删除未完成"; detail = "从菜单栏重试删除"
         default: return
         }
-        guard let screen = NSScreen.main else { return }
+        // A region is usually released on the screen the pointer occupies.
+        // Keep feedback there instead of always jumping to the primary display.
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(NSEvent.mouseLocation) })
+            ?? NSScreen.main else { return }
         let content = CaptureHintView(title: title, detail: detail, canOpen: target != nil) {
             if let target { open(target) }
         }
         let width: CGFloat = 310, height: CGFloat = 66
-        let x = topActivity ? screen.visibleFrame.midX - width / 2 : screen.visibleFrame.maxX - width - 16
-        let y = screen.visibleFrame.maxY - height - 8
-        let next = NSPanel(contentRect: CGRect(x: x, y: y, width: width, height: height),
+        let insets = screen.safeAreaInsets
+        let safeFrame = CGRect(x: screen.frame.minX + insets.left,
+                               y: screen.frame.minY + insets.bottom,
+                               width: screen.frame.width - insets.left - insets.right,
+                               height: screen.frame.height - insets.top - insets.bottom)
+        let hasCameraHousing = screen.auxiliaryTopLeftArea?.isEmpty == false ||
+            screen.auxiliaryTopRightArea?.isEmpty == false
+        guard let frame = CaptureHintPlacement.frame(visible: screen.visibleFrame, safe: safeFrame,
+                                                     size: CGSize(width: width, height: height),
+                                                     prefersTop: topActivity, hasCameraHousing: hasCameraHousing,
+                                                     fullScreen: NSApp.currentSystemPresentationOptions.contains(.fullScreen))
+        else { return }
+        let next = NSPanel(contentRect: frame,
                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         next.level = .statusBar
-        next.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        next.collectionBehavior = [.canJoinAllSpaces]
         next.backgroundColor = .clear
         next.isOpaque = false
         next.contentViewController = NSHostingController(rootView: content)
@@ -189,5 +202,22 @@ private final class CaptureHintController {
             self?.panel?.orderOut(nil)
             self?.panel = nil
         }
+    }
+}
+
+/// Screen-local placement for a brief, content-free processing hint.
+/// A Mac camera housing permits the optional centered capsule; an external
+/// display uses the ordinary menu-edge toast. Full-screen work stays quiet.
+enum CaptureHintPlacement {
+    static func frame(visible: CGRect, safe: CGRect, size: CGSize,
+                      prefersTop: Bool, hasCameraHousing: Bool, fullScreen: Bool) -> CGRect? {
+        // AppKit exposes the active application's full-screen presentation
+        // globally, not per display. Suppress rather than guess a Space from
+        // visibleFrame (which only describes menu bar and Dock reservations).
+        guard !fullScreen else { return nil }
+        let available = visible.intersection(safe).insetBy(dx: 12, dy: 8)
+        guard !available.isNull, available.width >= size.width, available.height >= size.height else { return nil }
+        let x = prefersTop && hasCameraHousing ? available.midX - size.width / 2 : available.maxX - size.width
+        return CGRect(x: x, y: available.maxY - size.height, width: size.width, height: size.height)
     }
 }
