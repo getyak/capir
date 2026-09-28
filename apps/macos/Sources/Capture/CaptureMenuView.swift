@@ -19,6 +19,7 @@ struct CaptureMenuView: View {
 
             if let coordinator = runtime.coordinator {
                 CaptureMenuActions(coordinator: coordinator, preferences: preferences,
+                                   recentConversation: runtime.recentConversation,
                                    dismissMenu: dismissMenu,
                                    openWorkspace: { openWindow(id: "workspace") },
                                    continueRecent: { Task { await runtime.resumeRecentConversation() } })
@@ -57,6 +58,7 @@ struct CaptureMenuView: View {
         .onAppear {
             runtime.start()
             runtime.setOpenWorkspace { openWindow(id: "workspace") }
+            Task { await runtime.refreshRecentConversation() }
         }
     }
 
@@ -92,6 +94,7 @@ private final class CaptureMenuProbeView: NSView {
 private struct CaptureMenuActions: View {
     @ObservedObject var coordinator: CaptureCoordinator
     @ObservedObject var preferences: CapturePreferences
+    let recentConversation: CaptureRecentConversation
     let dismissMenu: () -> Void
     let openWorkspace: () -> Void
     let continueRecent: () -> Void
@@ -160,9 +163,10 @@ private struct CaptureMenuActions: View {
 
             Divider().padding(.horizontal, 15).padding(.vertical, 10)
             Button(action: continueRecent) {
-                Label("继续上次会话", systemImage: "bubble.left")
+                Label(recentConversation.menuTitle, systemImage: "bubble.left")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .disabled(!recentConversation.canContinue)
             .accessibilityIdentifier("capture.menu.continue")
             Button(action: openWorkspace) {
                 Label("打开工作区", systemImage: "arrow.up.right")

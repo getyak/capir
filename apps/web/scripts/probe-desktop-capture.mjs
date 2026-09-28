@@ -97,8 +97,13 @@ const turn = session.session?.payload?.turns?.find(item => item.id === messageId
 assert(turn, "The exact message must appear in its canonical Session.");
 assert.equal(turn.images?.[0]?.content_hash, contentHash);
 assert(JSON.stringify(turn.response).includes("Synthetic capture received"));
+const recent = await json(await fetch(new URL("/api/desktop-capture/recent-session", web), {
+  headers: { ...headers, "x-workspace-session": context.login_binding }, cache: "no-store",
+}), "recent Session");
+assert.equal(recent.session_id, sessionId, "Continue must resolve the same authorized Session.");
 process.stdout.write(JSON.stringify({ proof: "desktop-capture-bff-to-agent",
   sessionId, messageId, queueEntryId: admitted.queue_entry_id,
   contentHash, imageBytes: image.length, status: receipt.status, resultRecorded: true,
   originalImageReadback: true, idempotentReplay: true, deniedStaleLogin: true,
-  deniedWrongAccount: true, deniedStalePolicy: true, realProvider: false }) + "\n");
+  deniedWrongAccount: true, deniedStalePolicy: true, recentSessionReadback: true,
+  realProvider: false }) + "\n");

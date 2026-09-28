@@ -65,7 +65,18 @@ final class CaptureWebSessionIntegrationTests: XCTestCase {
         defer { store.delete(cookie) {} }
 
         let transport = CaptureWebSession(origin: origin)
-        let context = try await transport.context()
+        async let firstContext = transport.context()
+        async let concurrentContext = transport.context()
+        let (context, secondContext) = try await (firstContext, concurrentContext)
+        // The BFF sets a fresh five-minute expiry on each response, so compare
+        // the stable authorization/policy fields rather than wall-clock expiry.
+        XCTAssertEqual(context.origin, secondContext.origin)
+        XCTAssertEqual(context.ownerScope, secondContext.ownerScope)
+        XCTAssertEqual(context.workspaceAccountID, secondContext.workspaceAccountID)
+        XCTAssertEqual(context.loginBinding, secondContext.loginBinding)
+        XCTAssertEqual(context.processing, secondContext.processing)
+        XCTAssertGreaterThan(context.expiresAt, Date())
+        XCTAssertGreaterThan(secondContext.expiresAt, Date())
         XCTAssertEqual(context.workspaceAccountID, proof.accountId)
         XCTAssertTrue(context.processing.available)
         let pixels = Data(repeating: 216, count: 4 * 4 * 4)
@@ -153,5 +164,31 @@ final class CaptureWebSessionIntegrationTests: XCTestCase {
         XCTAssertNotEqual(sessionID, UUID(uuidString: "00000000-0000-0000-0000-000000000000"))
         XCTAssertTrue(try recovery.load(origin: context.origin, ownerScope: context.ownerScope).isEmpty,
                       "A verified canonical image receipt must release the local raw screenshot.")
+    }
+
+    @MainActor
+    func testConcurrentHostWaitersFailRecoverablyWhenLocalServiceIsUnavailable() async throws {
+        let path = ProcessInfo.processInfo.environment["DESKTOP_CAPTURE_PROOF_COOKIE_FILE"] ??
+            "/private/tmp/ts-capture-proof-cookie.json"
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("Explicit disposable proof cookie is required.")
+        }
+        let proof = try JSONDecoder().decode(ProofCookie.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        let unavailable = try XCTUnwrap(WorkspaceOrigin("http://127.0.0.1:1", allowLocalDevelopment: true))
+        XCTAssertTrue(WorkspaceConnection.shared.save(unavailable.url.absoluteString, allowLocalDevelopment: true))
+        defer { _ = WorkspaceConnection.shared.save(proof.origin, allowLocalDevelopment: true) }
+        let transport = CaptureWebSession(origin: unavailable)
+        let first = Task { try await transport.context() }
+        let second = Task { try await transport.context() }
+        let started = Date()
+        for request in [first, second] {
+            do {
+                _ = try await request.value
+                XCTFail("An unavailable host must not return a capture context.")
+            } catch {
+                XCTAssertLessThan(Date().timeIntervalSince(started), 20,
+                                  "Every waiter must receive a recoverable navigation failure or timeout.")
+            }
+        }
     }
 }

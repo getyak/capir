@@ -77,18 +77,24 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     if (method === 'POST') headers['content-type'] = 'application/json';
     if (binding) headers['x-workspace-session'] = binding;
     if (account) headers['x-talent-signal-workspace'] = account;
-    const response = await fetch(destination, {
-      method, headers, credentials: 'same-origin', redirect: 'error', cache: 'no-store',
-      ...(body === null ? {} : { body }),
-    });
-    return { status: response.status, text: await response.text() };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(destination, {
+        method, headers, credentials: 'same-origin', redirect: 'error', cache: 'no-store',
+        signal: controller.signal, ...(body === null ? {} : { body }),
+      });
+      return { status: response.status, text: await response.text() };
+    } finally { clearTimeout(timer); }
     """
 
     let origin: WorkspaceOrigin
     private let webView: WKWebView
     private let hostURL: URL
     private var loaded = false
-    private var loading: CheckedContinuation<Void, Error>?
+    private var loadingWaiters: [CheckedContinuation<Void, Error>] = []
+    private var loadTimeout: Task<Void, Never>?
+    private var activeNavigation: WKNavigation?
 
     init(origin: WorkspaceOrigin) {
         self.origin = origin
@@ -109,12 +115,35 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     private func ensureLoaded() async throws {
         try assertOrigin()
         if loaded && webView.url == hostURL { return }
-        if loading != nil { throw CaptureTransportError.unavailable }
         try await withCheckedThrowingContinuation { continuation in
-            loading = continuation
-            webView.load(URLRequest(url: hostURL, cachePolicy: .reloadIgnoringLocalCacheData))
+            let shouldLoad = loadingWaiters.isEmpty
+            loadingWaiters.append(continuation)
+            if shouldLoad {
+                guard let navigation = webView.load(URLRequest(url: hostURL, cachePolicy: .reloadIgnoringLocalCacheData))
+                else {
+                    finishLoading(.failure(CaptureTransportError.unavailable))
+                    return
+                }
+                activeNavigation = navigation
+                loadTimeout = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(15))
+                    guard !Task.isCancelled, let self, !self.loadingWaiters.isEmpty else { return }
+                    self.loaded = false
+                    self.finishLoading(.failure(CaptureTransportError.unavailable))
+                    self.webView.stopLoading()
+                }
+            }
         }
         try assertOrigin()
+    }
+
+    private func finishLoading(_ result: Result<Void, Error>) {
+        loadTimeout?.cancel()
+        loadTimeout = nil
+        activeNavigation = nil
+        let pending = loadingWaiters
+        loadingWaiters.removeAll()
+        for continuation in pending { continuation.resume(with: result) }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -123,21 +152,26 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard navigation === activeNavigation, !loadingWaiters.isEmpty else { return }
         loaded = webView.url == hostURL
-        let pending = loading; loading = nil
-        if loaded { pending?.resume() }
-        else { pending?.resume(throwing: CaptureTransportError.untrustedHost) }
+        finishLoading(loaded ? .success(()) : .failure(CaptureTransportError.untrustedHost))
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard navigation === activeNavigation else { return }
         loaded = false
-        let pending = loading; loading = nil; pending?.resume(throwing: error)
+        finishLoading(.failure(error))
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        guard navigation === activeNavigation else { return }
+        loaded = false
+        finishLoading(.failure(error))
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         loaded = false
-        let pending = loading; loading = nil
-        pending?.resume(throwing: CaptureTransportError.unavailable)
+        finishLoading(.failure(CaptureTransportError.unavailable))
     }
 
     private func fetch(path: String, method: String, body: String? = nil,

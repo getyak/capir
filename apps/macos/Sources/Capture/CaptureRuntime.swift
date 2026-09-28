@@ -2,6 +2,29 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum CaptureRecentConversation: Equatable {
+    case checking
+    case available(UUID)
+    case empty
+    case needsSignIn
+    case unavailable
+
+    var canContinue: Bool {
+        if case .available = self { return true }
+        return false
+    }
+
+    var menuTitle: String {
+        switch self {
+        case .checking: "正在查找最近会话"
+        case .available: "继续上次会话"
+        case .empty: "暂无可继续的会话"
+        case .needsSignIn: "登录后可继续会话"
+        case .unavailable: "暂时无法读取上次会话"
+        }
+    }
+}
+
 /** One device-owned capture runtime; Web Session data remains server-owned. */
 @MainActor
 final class CaptureRuntime: ObservableObject {
@@ -10,6 +33,7 @@ final class CaptureRuntime: ObservableObject {
     let preferences = CapturePreferences()
     @Published private(set) var coordinator: CaptureCoordinator?
     @Published private(set) var shortcutError: String?
+    @Published private(set) var recentConversation: CaptureRecentConversation = .checking
 
     private let shortcut = CaptureHotKeyController()
     private let previewWindow = CapturePreviewWindowController()
@@ -24,6 +48,8 @@ final class CaptureRuntime: ObservableObject {
     private var shortcutInitiated = false
     private var registeredShortcut: CaptureShortcutPreference?
     private var restoringShortcut = false
+    private var recentRequestRevision = 0
+    private var resumingBrowser: CaptureWebSession?
 
     func start() {
         guard !started else { return }
@@ -41,9 +67,15 @@ final class CaptureRuntime: ObservableObject {
 
     private func configure(origin: WorkspaceOrigin?) {
         guard let origin else {
+            recentRequestRevision += 1
+            recentConversation = .unavailable
+            resumingBrowser = nil
             browser = nil; coordinator = nil; presentationObserver = nil; return
         }
         if browser?.origin == origin { return }
+        recentRequestRevision += 1
+        recentConversation = .checking
+        resumingBrowser = nil
         let next = CaptureWebSession(origin: origin)
         browser = next
         let coordinator = CaptureCoordinator(transport: next, selector: CaptureOverlayController.shared,
@@ -66,6 +98,7 @@ final class CaptureRuntime: ObservableObject {
             }
         }
         Task { await coordinator.restoreRecovery() }
+        Task { await refreshRecentConversation() }
     }
 
     private func register(_ choice: CaptureShortcutPreference) {
@@ -111,11 +144,45 @@ final class CaptureRuntime: ObservableObject {
     }
 
     func resumeRecentConversation() async {
-        guard let browser else { openWorkspace?(); return }
+        guard recentConversation.canContinue, let browser, resumingBrowser == nil else { return }
+        resumingBrowser = browser
+        defer { if resumingBrowser === browser { resumingBrowser = nil } }
+        let revision = recentRequestRevision + 1
+        recentRequestRevision = revision
+        recentConversation = .checking
         do {
-            if let session = try await browser.recentSession() { openSession(session) }
-            else { openWorkspace?() }
-        } catch { openWorkspace?() }
+            let session = try await browser.recentSession()
+            guard self.browser === browser, recentRequestRevision == revision else { return }
+            if let session {
+                recentConversation = .available(session)
+                openSession(session)
+            } else {
+                recentConversation = .empty
+            }
+        } catch CaptureTransportError.server(401, _) {
+            if self.browser === browser, recentRequestRevision == revision { recentConversation = .needsSignIn }
+        } catch {
+            if self.browser === browser, recentRequestRevision == revision { recentConversation = .unavailable }
+        }
+    }
+
+    func refreshRecentConversation() async {
+        guard let browser else { recentConversation = .unavailable; return }
+        // A passive menu refresh cannot cancel a click that the user already
+        // made. A real origin change clears resumingBrowser and starts fresh.
+        guard resumingBrowser !== browser else { return }
+        let revision = recentRequestRevision + 1
+        recentRequestRevision = revision
+        recentConversation = .checking
+        do {
+            let session = try await browser.recentSession()
+            guard self.browser === browser, recentRequestRevision == revision else { return }
+            recentConversation = session.map(CaptureRecentConversation.available) ?? .empty
+        } catch CaptureTransportError.server(401, _) {
+            if self.browser === browser, recentRequestRevision == revision { recentConversation = .needsSignIn }
+        } catch {
+            if self.browser === browser, recentRequestRevision == revision { recentConversation = .unavailable }
+        }
     }
 }
 
