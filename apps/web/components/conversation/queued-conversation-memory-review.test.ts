@@ -172,6 +172,17 @@ afterEach(async () => {
 });
 
 describe("queued conversation memory review", () => {
+  it("renders the Session through one assistant-ui transcript while retaining the existing composer", async () => {
+    await act(async () => root?.render(createElement(QueuedConversation, {
+      chatBinding: "chat-binding", detailBinding: "detail-binding", initialDetail,
+      scope: "a".repeat(64),
+    })));
+    await flush();
+    expect(document.querySelectorAll("[data-session-runtime]")).toHaveLength(1);
+    expect(document.querySelectorAll("#queued-conversation-composer")).toHaveLength(1);
+    expect(mount?.textContent).toContain("这位是周明");
+    expect(mount?.textContent).toContain("周明");
+  });
   it("shows a direct calendar handoff for a completed queue turn",async()=>{
     const detail={...initialDetail,turns:initialDetail.turns.map(turn=>({...turn,response:{...turn.response,meetingDraft:{id:PROPOSAL,title:"Coffee"}}}))};
     await act(async()=>root?.render(createElement(QueuedConversation,{chatBinding:"chat-binding",detailBinding:"detail-binding",initialDetail:detail,scope:"a".repeat(64)})));
