@@ -90,7 +90,12 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     /// Set when the settings WebView lands on an ordinary workspace route it
     /// must not render. The view offers an explicit main-window handoff.
     @Published var settingsRecovery: WorkspaceSettingsRecoveryNotice?
-    var openSettings: (() -> Void)?
+    /// Explicit, honest notice when the main window could not restore the prior
+    /// workbench state after a client-side Settings hop.
+    @Published var workbenchNotice: String?
+    var openSettings: (() -> Void)? {
+        didSet { flushPendingSettingsOpen() }
+    }
     /// Brings the main workspace window forward for a trusted Settings handoff.
     var openWorkspace: (() -> Void)?
     private var updateObservation: AnyCancellable?
@@ -99,6 +104,11 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private var locationObservation: NSKeyValueObservation?
     private var lastValidSettingsSection: WorkspaceSettingsSection?
     private var isRestoringSettings = false
+    /// Last same-origin workbench URL seen by the main window, used to restore
+    /// the conversation after a client-side hop into Web Settings.
+    private var lastWorkbenchURL: URL?
+    private var isRestoringWorkbench = false
+    private var pendingSettingsOpen = false
 
     init(origin: WorkspaceOrigin, settings: Bool = false, initialURL: URL? = nil) {
         self.origin = origin
@@ -131,9 +141,19 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         if settings {
             lastValidSettingsSection = WorkspaceSettingsNavigation.shared.selection.isWeb
                 ? WorkspaceSettingsNavigation.shared.selection : .profile
-            locationObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
-                Task { @MainActor [weak self] in
-                    self?.observeSettingsLocationForRecovery()
+        } else {
+            lastWorkbenchURL = WorkspaceSurfacePolicy.initialWorkbenchURL(initialURL: initialURL, origin: origin)
+        }
+        // KVO observes `history.pushState`/`replaceState` (proved in
+        // WorkspaceSettingsTests), so it catches client-side transitions that
+        // never reach `decidePolicyFor`.
+        locationObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.isSettingsSurface {
+                    self.observeSettingsLocationForRecovery()
+                } else {
+                    self.observeWorkbenchLocationForSettingsTransition()
                 }
             }
         }
@@ -142,8 +162,22 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     }
 
     func navigate(_ destination: WorkspaceDestination) {
-        if destination == .settings, !isSettingsSurface { openSettings?(); return }
+        if destination == .settings, !isSettingsSurface { requestSettingsOpen(); return }
         webView.load(URLRequest(url: destination.url(in: origin)))
+    }
+
+    /// Opens the one native Settings scene, deferring until the view has wired
+    /// `openSettings` if a cold-load KVO fires first. Passing `section` also
+    /// selects it; omitting it preserves the current selection.
+    func requestSettingsOpen(_ section: WorkspaceSettingsSection? = nil) {
+        if let section { WorkspaceSettingsNavigation.shared.selection = section }
+        if let openSettings { openSettings() } else { pendingSettingsOpen = true }
+    }
+
+    private func flushPendingSettingsOpen() {
+        guard pendingSettingsOpen, let openSettings else { return }
+        pendingSettingsOpen = false
+        openSettings()
     }
 
     /// Recovers from a client-side navigation that bypassed the navigation
@@ -184,12 +218,58 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         }
     }
 
+    /// Compatibility fallback for a Web revision whose Settings entry uses a
+    /// client-side `Next.js Link`/`pushState`. `decidePolicyFor` never sees it,
+    /// so the exact Settings route is detected here: open the one native
+    /// Settings scene and return the workbench to its previous URL with a
+    /// same-document back navigation, preserving unsent state where the Web app
+    /// keeps it in memory. Only the exact `/workspace/settings` route with a
+    /// valid section query is handled; subpages and arbitrary routes are not.
+    private func observeWorkbenchLocationForSettingsTransition() {
+        guard !isSettingsSurface, let url = webView.url else { return }
+        guard let transition = WorkspaceSurfacePolicy.workbenchSettingsTransition(
+            from: lastWorkbenchURL, to: url, origin: origin) else {
+            if WorkspaceSurfacePolicy.isTrackableWorkbenchURL(url, origin: origin) {
+                lastWorkbenchURL = url
+            }
+            isRestoringWorkbench = false
+            return
+        }
+        guard !isRestoringWorkbench else { return }
+        requestSettingsOpen(transition.section)
+        restoreWorkbench(after: transition)
+    }
+
+    private func restoreWorkbench(after transition: WorkspaceSurfacePolicy.WorkbenchSettingsTransition) {
+        isRestoringWorkbench = true
+        workbenchNotice = nil
+        switch WorkspaceSurfacePolicy.workbenchRestorePlan(
+            for: transition, canGoBack: webView.canGoBack,
+            backItemURL: webView.backForwardList.backItem?.url, entryURL: origin.entryURL) {
+        case .back:
+            // Pop the proven same-document entry; no timer, no reload.
+            webView.goBack()
+        case .load(let url, let notice):
+            workbenchNotice = notice
+            webView.load(URLRequest(url: url))
+        }
+    }
+
     func retry() {
         failure = nil
-        if isSettingsSurface,
-           let target = WorkspaceSurfacePolicy.settingsRetryURL(
+        if isSettingsSurface {
+            if let target = WorkspaceSurfacePolicy.settingsRetryURL(
                 currentURL: webView.url, origin: origin, lastSection: lastValidSettingsSection) {
-            webView.load(URLRequest(url: target))
+                webView.load(URLRequest(url: target))
+                return
+            }
+        } else if let current = webView.url,
+                  let transition = WorkspaceSurfacePolicy.workbenchSettingsTransition(
+                    from: lastWorkbenchURL, to: current, origin: origin) {
+            // Retry from a client-side Settings hop re-opens native Settings and
+            // restores the workbench instead of reloading Web Settings.
+            requestSettingsOpen(transition.section)
+            restoreWorkbench(after: transition)
             return
         }
         if let current = webView.url, origin.contains(current) { webView.reload() }
@@ -205,12 +285,10 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                                                         userActivated: action.navigationType == .linkActivated) {
                 switch command {
                 case .settings:
-                    WorkspaceSettingsNavigation.shared.selection = .profile
-                    openSettings?()
+                    requestSettingsOpen(.profile)
                 case .updates:
                     if DesktopUpdater.shared.presentation.canInstall {
-                        WorkspaceSettingsNavigation.shared.selection = .updates
-                        openSettings?()
+                        requestSettingsOpen(.updates)
                     }
                     else { DesktopUpdater.shared.checkForUpdates() }
                 // linkActivated also includes synthetic page clicks. Installation
@@ -264,10 +342,8 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                 return
             }
             if !isSettingsSurface, mainFrame, targetsMainFrame,
-               action.navigationType == .linkActivated,
                let selection = WorkspaceSettingsSection.resolve(url, origin: origin) {
-                WorkspaceSettingsNavigation.shared.selection = selection
-                openSettings?()
+                requestSettingsOpen(selection)
                 decisionHandler(.cancel)
                 return
             }
@@ -487,6 +563,18 @@ private struct ConnectedQuietWorkspace: View {
                     Button("关闭") { browser.downloadStatus = nil }
                 }.padding(12).background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 8))
                     .padding().accessibilityElement(children: .contain)
+            }
+            if let notice = browser.workbenchNotice {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
+                    Text(notice).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Button("关闭") { browser.workbenchNotice = nil }
+                }
+                .padding(12)
+                .frame(maxWidth: 560, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .padding()
+                .accessibilityIdentifier("workspace.settingsRecoveryNotice")
             }
             if let failure = browser.failure {
                 VStack(spacing: 18) {

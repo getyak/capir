@@ -40,10 +40,7 @@ struct WorkspaceDesktopCommands: Commands {
                 .keyboardShortcut("1").disabled(browser == nil)
             Button("时间") { browser?.navigate(.calendar) }
                 .keyboardShortcut("2").disabled(browser == nil)
-            Button("工作区设置") {
-                WorkspaceSettingsNavigation.shared.selection = .workspace
-                browser?.openSettings?()
-            }
+            Button("工作区设置") { browser?.requestSettingsOpen(.workspace) }
             .keyboardShortcut(",", modifiers: [.command, .shift]).disabled(browser == nil)
         }
     }
@@ -175,6 +172,23 @@ enum WorkspaceSurfacePolicy {
         return path == "/workspace/settings" || path.hasPrefix("/workspace/settings/")
     }
 
+    /// The main window may only remember an ordinary `/workspace` route as a
+    /// restore target. Foreign origins, `about:blank`, `/login`, `/onboarding`
+    /// and settings-owned routes are never tracked, so a later fallback cannot
+    /// reload them.
+    static func isTrackableWorkbenchURL(_ url: URL?, origin: WorkspaceOrigin) -> Bool {
+        guard let url, origin.contains(url) else { return false }
+        return isOrdinaryWorkspaceDestination(url)
+    }
+
+    /// The seeded restore target when the main workbench starts. A non-workbench
+    /// initial target (for example an `/onboarding` or `/login` callback) must
+    /// not become a restore target, so it falls back to the known entry route.
+    static func initialWorkbenchURL(initialURL: URL?, origin: WorkspaceOrigin) -> URL {
+        guard let initialURL, isTrackableWorkbenchURL(initialURL, origin: origin) else { return origin.entryURL }
+        return initialURL
+    }
+
     /// Ordinary workspace destinations own the full workbench chrome.
     static func isOrdinaryWorkspaceDestination(_ url: URL) -> Bool {
         let path = url.path
@@ -265,6 +279,48 @@ enum WorkspaceSurfacePolicy {
         if isSettingsOwned(url) { return .settingsOwnedSubpage }
         if isOrdinaryWorkspaceDestination(url) || isAccountEditRoute(url) { return .unexpectedRoute(url) }
         return .ignore
+    }
+
+    /// A main-window client-side transition to the exact Web Settings route
+    /// that bypassed the navigation delegate (`Next.js Link` + `pushState`).
+    /// Native-only sections, unknown sections and settings-owned subpages are
+    /// excluded; `restoreURL` is the prior same-origin workbench URL, when one
+    /// is known and is not itself a Settings route.
+    struct WorkbenchSettingsTransition: Equatable {
+        let section: WorkspaceSettingsSection
+        let restoreURL: URL?
+    }
+
+    static func workbenchSettingsTransition(from previous: URL?, to current: URL?,
+                                            origin: WorkspaceOrigin) -> WorkbenchSettingsTransition? {
+        guard let current, let section = WorkspaceSettingsSection.resolve(current, origin: origin) else { return nil }
+        return WorkbenchSettingsTransition(
+            section: section,
+            restoreURL: isTrackableWorkbenchURL(previous, origin: origin) ? previous : nil)
+    }
+
+    /// How the main window returns after a client-side Settings hop. A matching
+    /// same-document back item is popped without any reload (the URL KVO fires
+    /// with `backItem` already set for `pushState`). Otherwise the fallback is
+    /// explicit: load a safe URL and say drafts may not have survived.
+    enum WorkbenchRestorePlan: Equatable {
+        case back(URL)
+        case load(URL, notice: String)
+    }
+
+    static func workbenchRestorePlan(for transition: WorkbenchSettingsTransition,
+                                     canGoBack: Bool, backItemURL: URL?,
+                                     entryURL: URL) -> WorkbenchRestorePlan {
+        if let target = transition.restoreURL, canGoBack, backItemURL == target {
+            return .back(target)
+        }
+        // No safe prior state or no matching history entry. Do not claim a
+        // draft was preserved; be explicit about what the user should check.
+        let safe = transition.restoreURL ?? entryURL
+        let notice = transition.restoreURL == nil
+            ? "已在设置中打开。无法确认先前的对话位置，主窗口已回到工作区首页；未保存的输入可能未保留。"
+            : "已在设置中打开，但返回历史不可用，已重新载入上次工作区地址；未保存的输入可能未保留。"
+        return .load(safe, notice: notice)
     }
 }
 

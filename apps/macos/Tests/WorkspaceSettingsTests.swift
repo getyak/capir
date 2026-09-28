@@ -1,4 +1,5 @@
 import XCTest
+import WebKit
 @testable import TalentSignalMac
 
 final class WorkspaceSettingsTests: XCTestCase {
@@ -206,6 +207,55 @@ final class WorkspaceSettingsTests: XCTestCase {
         let restore = WorkspaceSettingsSection.connections.url(in: origin)
         XCTAssertEqual(restore.path, "/workspace/settings")
         XCTAssertTrue(WorkspaceSurfacePolicy.isSettingsOwned(restore))
+    }
+
+    func testWorkbenchSettingsTransitionClassifiesClientSideSettingsRoutes() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let workbench = origin.url.appending(path: "/workspace")
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(
+                from: workbench, to: WorkspaceSettingsSection.connections.url(in: origin), origin: origin),
+            .init(section: .connections, restoreURL: workbench))
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(
+                from: workbench, to: URL(string: "https://workspace.example/workspace/settings")!, origin: origin),
+            .init(section: .profile, restoreURL: workbench))
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(
+                from: workbench, to: URL(string: "https://workspace.example/workspace/settings?section=overview")!, origin: origin),
+            .init(section: .profile, restoreURL: workbench))
+        // A deep workbench URL survives as the restore target.
+        let person = origin.url.appending(path: "/workspace/people/abc")
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(
+                from: person, to: WorkspaceSettingsSection.appearance.url(in: origin), origin: origin),
+            .init(section: .appearance, restoreURL: person))
+        // No prior workbench state still opens Settings with nothing to restore.
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(
+                from: nil, to: WorkspaceSettingsSection.account.url(in: origin), origin: origin),
+            .init(section: .account, restoreURL: nil))
+        // A Settings URL is never a valid restore target.
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(
+                from: WorkspaceSettingsSection.account.url(in: origin),
+                to: WorkspaceSettingsSection.connections.url(in: origin), origin: origin),
+            .init(section: .connections, restoreURL: nil))
+        // Native-only sections, unknown sections, settings-owned subpages and
+        // foreign origins must not be intercepted as client-side transitions.
+        for value in [
+            "https://workspace.example/workspace/settings?section=device",
+            "https://workspace.example/workspace/settings?section=updates",
+            "https://workspace.example/workspace/settings?section=testing",
+            "https://workspace.example/workspace/settings?section=unknown",
+            "https://workspace.example/workspace/settings/diagnostics",
+            "https://workspace.example/workspace/settings/testing",
+            "https://workspace.example/workspace/settings/link-complete",
+            "https://evil.example/workspace/settings",
+        ] {
+            XCTAssertNil(WorkspaceSurfacePolicy.workbenchSettingsTransition(
+                from: workbench, to: URL(string: value)!, origin: origin), value)
+        }
     }
 
     func testAccountEditRouteHandsOffToMainWindowPreservingCallback() throws {
@@ -450,4 +500,193 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertEqual(WorkspaceSettingsPane.resolve(selection: navigation.selection, connected: false).section,
                        navigation.selection)
     }
+
+    // MARK: WebKit client-side navigation evidence
+
+    /// Proves `WKWebView.url` KVO observes `history.pushState` on a normally
+    /// loaded (HTTP-like) document, and that a same-document restore returns
+    /// the WebView to the prior workbench URL. This is the evidence behind the
+    /// narrow compatibility fallback.
+    @MainActor
+    func testWebViewURLKVOObservesClientSidePushStateAndRestores() async throws {
+        let configuration = WKWebViewConfiguration()
+        let handler = TestSchemeHandler()
+        configuration.setURLSchemeHandler(handler, forURLScheme: "get51test")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let probe = TestNavigationProbe()
+        webView.navigationDelegate = probe
+        let loaded = expectation(description: "initial load")
+        probe.onFinish = { loaded.fulfill() }
+        webView.load(URLRequest(url: URL(string: "get51test://workspace.test/workspace")!))
+        await fulfillment(of: [loaded], timeout: 15)
+
+        let pushed = expectation(description: "pushState observed by url KVO")
+        pushed.assertForOverFulfill = false
+        var observed: [URL] = []
+        let observation = webView.observe(\.url, options: [.new]) { view, _ in
+            guard let url = view.url else { return }
+            observed.append(url)
+            if url.path == "/workspace/settings" { pushed.fulfill() }
+        }
+        _ = try await webView.evaluateJavaScript("history.pushState({}, '', '/workspace/settings?section=connections')")
+        await fulfillment(of: [pushed], timeout: 5)
+        let historyLength = try await webView.evaluateJavaScript("history.length") as? Int ?? -1
+        XCTAssertTrue(observed.contains { $0.path == "/workspace/settings" },
+                      "WKWebView.url KVO must observe history.pushState")
+        XCTAssertEqual(historyLength, 2, "pushState must add one session history entry")
+        // Proven history semantics for the no-timer restore: the back item is
+        // already the previous workbench URL when the URL KVO fires.
+        XCTAssertTrue(webView.canGoBack)
+        XCTAssertEqual(webView.backForwardList.backItem?.url.absoluteString,
+                       "get51test://workspace.test/workspace")
+
+        webView.goBack()
+        var restored = webView.url?.path == "/workspace"
+        for _ in 0..<20 where !restored {
+            try await Task.sleep(for: .milliseconds(100))
+            restored = webView.url?.path == "/workspace"
+        }
+        if !restored {
+            _ = try? await webView.evaluateJavaScript("history.back()")
+            for _ in 0..<20 where !restored {
+                try await Task.sleep(for: .milliseconds(100))
+                restored = webView.url?.path == "/workspace"
+            }
+        }
+        XCTAssertTrue(restored, "a same-document restore must return to the workbench")
+        withExtendedLifetime(observation) {}
+        withExtendedLifetime(handler) {}
+    }
+
+    func testTrackableWorkbenchURLExcludesForeignAndSettingsRoutes() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        XCTAssertTrue(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(
+            origin.url.appending(path: "/workspace"), origin: origin))
+        XCTAssertTrue(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(
+            origin.url.appending(path: "/workspace/people/1"), origin: origin))
+        // Root auth/onboarding callbacks and Settings routes are never tracked.
+        XCTAssertFalse(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(
+            URL(string: "https://workspace.example/login")!, origin: origin))
+        XCTAssertFalse(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(
+            URL(string: "https://workspace.example/onboarding")!, origin: origin))
+        XCTAssertFalse(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(
+            URL(string: "https://workspace.example/onboarding?edit=true&callbackUrl=%2Fworkspace%2Fsettings")!, origin: origin))
+        XCTAssertFalse(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(URL(string: "about:blank")!, origin: origin))
+        XCTAssertFalse(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(
+            URL(string: "https://evil.example/workspace")!, origin: origin))
+        XCTAssertFalse(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(nil, origin: origin))
+        XCTAssertFalse(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(
+            URL(string: "https://workspace.example/workspace/settings")!, origin: origin))
+        XCTAssertFalse(WorkspaceSurfacePolicy.isTrackableWorkbenchURL(
+            URL(string: "https://workspace.example/workspace/settings/diagnostics")!, origin: origin))
+    }
+
+    func testInitialWorkbenchTargetAndTransitionRejectRootCallbacks() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let workbench = origin.url.appending(path: "/workspace/people/1")
+        let onboarding = URL(string: "https://workspace.example/onboarding?edit=true&callbackUrl=%2Fworkspace%2Fsettings")!
+        let login = URL(string: "https://workspace.example/login?callbackUrl=%2Fworkspace%2Fsettings")!
+
+        // Initial-target policy: only ordinary /workspace routes seed the target.
+        XCTAssertEqual(WorkspaceSurfacePolicy.initialWorkbenchURL(initialURL: workbench, origin: origin), workbench)
+        XCTAssertEqual(WorkspaceSurfacePolicy.initialWorkbenchURL(initialURL: onboarding, origin: origin), origin.entryURL)
+        XCTAssertEqual(WorkspaceSurfacePolicy.initialWorkbenchURL(initialURL: login, origin: origin), origin.entryURL)
+        XCTAssertEqual(WorkspaceSurfacePolicy.initialWorkbenchURL(
+            initialURL: URL(string: "https://workspace.example/workspace/settings")!, origin: origin), origin.entryURL)
+        XCTAssertEqual(WorkspaceSurfacePolicy.initialWorkbenchURL(initialURL: nil, origin: origin), origin.entryURL)
+        XCTAssertEqual(WorkspaceSurfacePolicy.initialWorkbenchURL(
+            initialURL: URL(string: "https://evil.example/workspace")!, origin: origin), origin.entryURL)
+
+        // A root callback can never become the transition's restoreURL.
+        let toSettings = WorkspaceSettingsSection.connections.url(in: origin)
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(from: onboarding, to: toSettings, origin: origin),
+            .init(section: .connections, restoreURL: nil))
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(from: login, to: toSettings, origin: origin),
+            .init(section: .connections, restoreURL: nil))
+        XCTAssertEqual(
+            WorkspaceSurfacePolicy.workbenchSettingsTransition(from: workbench, to: toSettings, origin: origin),
+            .init(section: .connections, restoreURL: workbench))
+    }
+
+    func testWorkbenchRestorePlanUsesBackItemWithoutTimer() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let workbench = origin.url.appending(path: "/workspace")
+        let transition = try XCTUnwrap(WorkspaceSurfacePolicy.workbenchSettingsTransition(
+            from: workbench, to: WorkspaceSettingsSection.connections.url(in: origin), origin: origin))
+        // A matching same-document back item is popped; no reload is scheduled.
+        XCTAssertEqual(WorkspaceSurfacePolicy.workbenchRestorePlan(
+            for: transition, canGoBack: true, backItemURL: workbench, entryURL: origin.entryURL),
+            .back(workbench))
+        // No/mismatched back item loads a safe URL with an explicit notice.
+        guard case .load(let url, let notice) = WorkspaceSurfacePolicy.workbenchRestorePlan(
+            for: transition, canGoBack: false, backItemURL: nil, entryURL: origin.entryURL) else {
+            return XCTFail("expected a load fallback when there is no back item")
+        }
+        XCTAssertEqual(url, workbench)
+        XCTAssertTrue(notice.contains("未保存的输入可能未保留"))
+        guard case .load(let mismatched, _) = WorkspaceSurfacePolicy.workbenchRestorePlan(
+            for: transition, canGoBack: true,
+            backItemURL: origin.url.appending(path: "/workspace/people/1"), entryURL: origin.entryURL) else {
+            return XCTFail("a mismatched back item must not be popped")
+        }
+        XCTAssertEqual(mismatched, workbench)
+        // No safe prior state restores the entry URL and says the location is unknown.
+        let noPrior = try XCTUnwrap(WorkspaceSurfacePolicy.workbenchSettingsTransition(
+            from: nil, to: WorkspaceSettingsSection.account.url(in: origin), origin: origin))
+        guard case .load(let entry, let entryNotice) = WorkspaceSurfacePolicy.workbenchRestorePlan(
+            for: noPrior, canGoBack: true, backItemURL: workbench, entryURL: origin.entryURL) else {
+            return XCTFail("expected the entry-URL fallback with no prior state")
+        }
+        XCTAssertEqual(entry, origin.entryURL)
+        XCTAssertTrue(entryNotice.contains("无法确认先前的对话位置"))
+        XCTAssertTrue(entryNotice.contains("未保存的输入可能未保留"))
+    }
+
+    @MainActor
+    func testColdLoadSettingsOpenDefersUntilWired() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let browser = WorkspaceBrowser(origin: origin)
+        browser.webView.stopLoading()
+        // A KVO-driven request can arrive before the view wires `openSettings`.
+        browser.requestSettingsOpen(.connections)
+        XCTAssertEqual(WorkspaceSettingsNavigation.shared.selection, .connections)
+        var opened = 0
+        browser.openSettings = { opened += 1 }
+        XCTAssertEqual(opened, 1, "a deferred cold-load request must flush once wired")
+        browser.requestSettingsOpen(.appearance)
+        XCTAssertEqual(opened, 2)
+        XCTAssertEqual(WorkspaceSettingsNavigation.shared.selection, .appearance)
+        // Omitting the section preserves the current selection.
+        browser.requestSettingsOpen()
+        XCTAssertEqual(opened, 3)
+        XCTAssertEqual(WorkspaceSettingsNavigation.shared.selection, .appearance)
+    }
+}
+
+@MainActor
+private final class TestNavigationProbe: NSObject, WKNavigationDelegate {
+    var onFinish: (() -> Void)?
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        onFinish?()
+    }
+}
+
+private final class TestSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendable {
+    func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
+        let body = "<!doctype html><meta charset=utf-8><title>workbench</title><body>workbench</body>"
+        let data = Data(body.utf8)
+        guard let url = urlSchemeTask.request.url,
+              let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                             headerFields: ["Content-Type": "text/html; charset=utf-8"]) else {
+            urlSchemeTask.didFailWithError(URLError(.badURL))
+            return
+        }
+        urlSchemeTask.didReceive(response)
+        urlSchemeTask.didReceive(data)
+        urlSchemeTask.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop urlSchemeTask: WKURLSchemeTask) {}
 }
