@@ -663,17 +663,16 @@ struct RelationshipMenuView: View {
                     } label: {
                         RelationshipMenuUtilityRow(
                             systemImage: "info.circle",
-                            title: appLanguage.text("Version & status", zhHans: "版本与状态"),
+                            title: appLanguage.text("Version & status"),
                             detail: appLanguage.text(
-                                "Installed build on this iPhone and update-check source.",
-                                zhHans: "查看这台 iPhone 安装的版本与更新核验来源。"
+                                "Installed build on this device and update-check source."
                             ),
                             value: InstalledAppVersion.label()
                         )
                     }
                     .accessibilityIdentifier("open-version-status")
                 } header: {
-                    Text(appLanguage.text("About this app", zhHans: "关于此应用"))
+                    Text(appLanguage.text("About this app"))
                 }
 
                 Section {

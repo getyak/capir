@@ -223,25 +223,24 @@ struct AppVersionStatusView: View {
     var body: some View {
         List {
             Section {
-                LabeledContent(appLanguage.text("Installed iOS app", zhHans: "本机 iOS 应用")) {
-                    Text(InstalledAppVersion.label() ?? appLanguage.text("Unavailable", zhHans: "无法读取"))
+                LabeledContent(appLanguage.text("Installed iOS app")) {
+                    Text(InstalledAppVersion.label() ?? appLanguage.text("Unavailable"))
                         .accessibilityIdentifier("ios-installed-version")
                 }
-                LabeledContent(appLanguage.text("Update status", zhHans: "更新状态")) {
-                    Text(appLanguage.text("Not verified", zhHans: "未核验"))
+                LabeledContent(appLanguage.text("Update status")) {
+                    Text(appLanguage.text("Not verified"))
                         .foregroundStyle(.secondary)
                 }
             } footer: {
                 Text(appLanguage.text(
-                    "This is the build installed on this iPhone. Check TestFlight or the App Store for a newer release; this screen does not infer updates from another device.",
-                    zhHans: "这里显示这台 iPhone 实际安装的版本。请在 TestFlight 或 App Store 检查新版本；这里不会推断其他设备的安装状态。"
+                    "This is the build installed on this device. Check TestFlight or the App Store for a newer release; this screen does not infer updates from another device."
                 ))
             }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(Color.tsSurface)
-        .navigationTitle(appLanguage.text("Version & status", zhHans: "版本与状态"))
+        .navigationTitle(appLanguage.text("Version & status"))
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("ios-version-status")
     }

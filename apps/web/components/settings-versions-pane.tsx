@@ -258,7 +258,7 @@ export function SettingsVersionsPane({
             <span className={styles.versionIdentity}>此设备无法读取</span>
           </div>
           <p className={styles.versionStatus}>
-            已安装版本只在手机上可见：打开 Talent Signal → 设置 → 版本与状态。这里不会从发布清单推断。
+            已安装版本只在对应的 iPhone 或 iPad 上可见：打开 Talent Signal → 设置 → 版本与状态。这里不会从发布清单推断。
           </p>
         </section>
         <section
