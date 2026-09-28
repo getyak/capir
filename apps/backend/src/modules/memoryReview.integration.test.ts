@@ -1938,14 +1938,16 @@ describe.skipIf(!pool)("Memory review integration", () => {
 
   it("decides one Memory item without skipping an untouched sibling", async () => {
     const auth = await makeAuth("item-decision-siblings");
+    const sessionId = randomUUID();
+    const messageId = randomUUID();
     const staged = await stage(auth, {
       items: [
         candidate({ display_text: "I prefer concise updates" }),
         candidate({ display_text: "I prepare notes before meetings" }),
       ],
       contactDecision: "none",
-      sessionId: randomUUID(),
-      messageId: randomUUID(),
+      sessionId,
+      messageId,
     });
     const opened = await open(auth, staged!.proposal.proposal_id, "chat");
     const [first, second] = opened.review.items;
@@ -1957,9 +1959,15 @@ describe.skipIf(!pool)("Memory review integration", () => {
       expected_item_added_revision: first!.added_revision,
       contact_decision: "none",
       decision: "accept",
+      edited_text: "I prefer concise written updates",
       reason: "Remember only this item",
     });
     expect(decided.kind).toBe("committed");
+    expect(decided.applied_display_text).toBe("I prefer concise written updates");
+    const readback = await readMemoryScopedOperationView(pool!, auth, decided.receipt!.operation_key, {
+      purpose: "chat", session_id: sessionId,
+    });
+    expect(readback.applied_display_text).toBe("I prefer concise written updates");
     expect(decided.receipt?.decisions.map((decision) => decision.proposal_item_id)).toEqual([first!.id]);
     const status = await pool!.query<{ id: string; status: string }>(
       "SELECT id,status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2 ORDER BY id",

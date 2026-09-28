@@ -36,6 +36,7 @@ import {
   type MemoryReviewDraftState,
 } from "@/lib/memory-review-draft";
 import { useMemoryReview, type MemoryReviewPurpose, type MemoryRebaseInput } from "./use-memory-review";
+import { SessionMemoryCards } from "./memory-item-card";
 import styles from "./memory-review.module.css";
 
 export type MemoryReviewCardProps = {
@@ -51,6 +52,7 @@ export type MemoryReviewCardProps = {
   } | null;
   entryCapability?: string | null;
   sessionId?: string | null;
+  onCommentItem?: (item: MemoryProposalItem) => void;
 };
 
 const PREVIEW_LIMIT = 4;
@@ -623,6 +625,25 @@ function ChangePersonPanel({
 }
 
 export function MemoryReviewCard(props: MemoryReviewCardProps) {
+  return props.purpose === "chat"
+    ? <SessionChatMemoryReviewCard {...props}/>
+    : <LegacyMemoryReviewCard {...props}/>;
+}
+
+function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
+  const controller = useMemoryReview({
+    binding: props.binding,
+    proposal: props.proposal,
+    purpose: "chat",
+    entryCapability: props.entryCapability ?? null,
+    sessionId: props.sessionId ?? null,
+  });
+  const openReview = controller.open;
+  useEffect(() => { void openReview(); }, [openReview, props.binding, props.proposal.proposal_id, props.proposal.revision]);
+  return <SessionMemoryCards controller={controller} onComment={props.onCommentItem}/>;
+}
+
+function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
   const controller = useMemoryReview({
     binding: props.binding,
     proposal: props.proposal,

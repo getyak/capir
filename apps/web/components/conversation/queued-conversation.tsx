@@ -7,7 +7,7 @@ import { ThreadPrimitive } from "@assistant-ui/react";
 import { conversationHome } from "@/lib/conversation-local";
 import type { LegacyConversationRecovery } from "@/lib/conversation-legacy";
 import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
-import type { ConversationImageManifest } from "@talent-signal/contracts";
+import type { ConversationImageManifest, MemoryProposalItem } from "@talent-signal/contracts";
 import { ComposerAddMenu } from "../new-conversation-add-menu";
 import { WorkspaceComposer } from "../workspace-composer";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
@@ -137,6 +137,12 @@ export function QueuedConversation(props: Props) {
     scope: props.scope,
     sessionId: chat.detail?.session_id ?? id ?? "",
     status,
+    onCardComment: (item: MemoryProposalItem) => {
+      const label = item.display_text.length > 48 ? `${item.display_text.slice(0, 48)}…` : item.display_text;
+      const next = `${chat.draft}${chat.draft ? "\n" : ""}关于「${label}」：`;
+      if (next.length <= 1000) chat.changeDraft(next);
+      document.getElementById("queued-conversation-composer")?.focus();
+    },
   };
   useEffect(() => {
     const node = content.current; const scroll = viewport.current; if (!node || !scroll) return;

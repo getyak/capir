@@ -116,13 +116,40 @@ function clickByText(text: string) {
 }
 
 describe("shared Memory review card", () => {
-  it("offers a contact-only save without an empty Memory counter",async()=>{
+  it("saves one self item and leaves the next card actionable in place", async () => {
+    const latest = { ...review(), items: review().items.map((entry) => entry.id === "self-1"
+      ? { ...entry, status: "committed" } : entry) };
+    fetcher.mockImplementation((path: string) => String(path).endsWith("/item-decisions")
+      ? Promise.resolve(Response.json({ kind: "committed", item_id: "self-1", replayed: false,
+          receipt: { operation_key: "op-one", decisions: [{ proposal_item_id: "self-1", decision: "accept" }] },
+          proposal_revision: 1, remaining_pending_item_count: 4 }))
+      : Promise.resolve(Response.json({ review_credential: "cred-next", review: latest })));
+    const first = document.querySelector<HTMLElement>('[data-memory-item-card="self-1"]')!;
+    const save = [...first.querySelectorAll("button")].find((button) => button.textContent === "记住")!;
+    await act(async () => save.click());
+    await flush();
+    expect(first.textContent).toContain("已记住");
+    expect([...first.querySelectorAll("button")].some((button) => button.textContent === "撤销")).toBe(true);
+    expect(document.querySelector('[data-memory-item-card="self-2"] button')?.textContent).toContain("记住");
+    const call = fetcher.mock.calls.find(([path]) => String(path).endsWith("/item-decisions")) as [string, RequestInit];
+    const body = JSON.parse(call[1].body as string);
+    expect(body.item_id).toBe("self-1");
+    expect(body).not.toHaveProperty("selected_item_ids");
+  });
+
+  it("shows three direct Session cards with source and no selection checklist", () => {
+    expect(document.querySelectorAll("[data-memory-item-card]")).toHaveLength(3);
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(document.body.textContent).toContain("用户要求回复先给结论。");
+    expect(clickByText("记住")).toBeTruthy();
+    expect(clickByText("更多建议")).toBeTruthy();
+  });
+  it("keeps a contact-only proposal visible without an empty Memory counter",async()=>{
     const contact={...review(),items:[],visible_item_count:0,visible_default_selected_count:0};
     fetcher.mockImplementation(() => Promise.resolve(Response.json({review_credential:"cred-1234567890",review:contact})));
     await act(async()=>root.render(createElement(MemoryReviewCard,{key:"contact-only",binding:"binding-1",proposal:{proposal_id:PROPOSAL,revision:1},purpose:"chat"})));await flush();
-    expect(document.body.textContent).toContain("仅添加陈宇");
+    expect(document.body.textContent).toContain("先确认联系人");
     expect(document.body.textContent).not.toContain("已选 0 条");
-    expect(document.body.textContent).toContain("先保存姓名");
   });
   it("keeps a business entry fixed to its person and shows old to new in the folded preview",async()=>{
     const scoped=review();scoped.purpose="relationship";scoped.allowed_scope="relationship";scoped.contact_decision="existing";scoped.contact_status="resolved";
@@ -132,85 +159,41 @@ describe("shared Memory review card", () => {
     expect(document.body.textContent).toContain("原型计划周五发出。 → 原型已发出。");
     expect(document.body.textContent).not.toContain("换个人");expect(document.body.textContent).not.toContain("本次不关联此人");
   });
-  it("shows the pending new-contact header, real group labels and a calm folded overview", () => {
+  it("shows direct source-backed decisions without checkboxes", () => {
     const text = document.body.textContent ?? "";
-    expect(text).toContain("陈宇");
-    expect(text).toContain("本次对话 · 待添加");
-    expect(text).toContain("关联已有联系人");
-    expect(text).toContain("暂不添加联系人");
-    expect(text).toContain("关于我");
     expect(text).toContain("关于陈宇");
-    expect(text).toContain("我们之间");
-    // Folded overview: exactly one checkbox per group, no per-item checkboxes
-    // and no remaining link before expansion.
-    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(3);
-    expect(text).not.toContain("查看其余");
-    // Meaningful full-sentence preview is present as the disclosure target.
-    expect(text).toContain("用户要求回复先给结论。");
+    expect(text).toContain("关于我");
+    expect(text).toContain("更多建议 · 2");
+    expect(document.querySelectorAll("[data-memory-item-card]")).toHaveLength(3);
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
   });
 
-  it("expands a group inline to at most four item choices with a remaining link", async () => {
+  it("reveals remaining cards without writing a decision or draft", async () => {
     const before = fetcher.mock.calls.length;
-    await act(async () => {
-      clickByText("陈宇说，他目前负责设计系统。").click();
-    });
-    const text = document.body.textContent ?? "";
-    expect(text).toContain("陈宇说，他计划下个月换到增长团队，现在还没换。");
-    // three group checkboxes plus the two inline person item checkboxes
-    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(5);
-    // Visual disclosure must not trigger a draft write.
-    const draftCalls = fetcher.mock.calls
-      .slice(before)
-      .filter(([path]) => typeof path === "string" && path.includes("/draft"));
-    expect(draftCalls).toHaveLength(0);
+    await act(async () => { clickByText("更多建议").click(); });
+    expect(document.querySelectorAll("[data-memory-item-card]")).toHaveLength(5);
+    expect(document.body.textContent).toContain("我答应这周五把原型发给陈宇");
+    expect(fetcher.mock.calls).toHaveLength(before);
   });
 
-  it("does not reopen or reset an unsaved uncheck when the parent rerenders a new proposal object", async () => {
-    const reviewsBefore = fetcher.mock.calls.filter(([path]) =>
-      String(path).includes("/reviews"),
-    ).length;
-    // Expand the person group and uncheck one item without saving.
+  it("retains an inline edit when the parent rerenders the same proposal", async () => {
+    const reviewsBefore = fetcher.mock.calls.filter(([path]) => String(path).includes("/reviews")).length;
+    await act(async () => { clickByText("改一下").click(); });
+    const editor = document.querySelector<HTMLTextAreaElement>("[data-memory-item-card] textarea")!;
     await act(async () => {
-      clickByText("陈宇说，他目前负责设计系统。").click();
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(editor,"我希望先看结论和依据。");
+      editor.dispatchEvent(new Event("input",{bubbles:true}));
     });
-    const checkbox = document.querySelector<HTMLInputElement>(
-      'input[aria-label^="选择：陈宇说，他目前负责设计系统"]',
-    );
-    expect(checkbox).toBeTruthy();
-    await act(async () => {
-      checkbox!.click();
-    });
-    expect(checkbox!.checked).toBe(false);
-    // Re-render with a brand-new proposal object carrying the same id/revision.
-    await act(async () => {
-      root.render(
-        createElement(MemoryReviewCard, {
-          binding: "binding-1",
-          proposal: { proposal_id: PROPOSAL, revision: 1 },
-          purpose: "chat",
-        }),
-      );
-    });
+    await act(async () => root.render(createElement(MemoryReviewCard,{
+      binding:"binding-1",proposal:{proposal_id:PROPOSAL,revision:1},purpose:"chat",
+    })));
     await flush();
-    const reviewsAfter = fetcher.mock.calls.filter(([path]) =>
-      String(path).includes("/reviews"),
-    ).length;
-    expect(reviewsAfter).toBe(reviewsBefore);
-    const after = document.querySelector<HTMLInputElement>(
-      'input[aria-label^="选择：陈宇说，他目前负责设计系统"]',
-    );
-    expect(after?.checked).toBe(false);
+    expect(document.querySelector<HTMLTextAreaElement>("[data-memory-item-card] textarea")?.value).toBe("我希望先看结论和依据。");
+    expect(fetcher.mock.calls.filter(([path]) => String(path).includes("/reviews"))).toHaveLength(reviewsBefore);
   });
 
-  it("keeps a not-yet-expanded group free of individual checkbox targets", () => {
-    // Relationship group is folded, so its sentence is not an ItemRow checkbox.
-    const relationshipInputs = Array.from(
-      document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
-    ).filter((input) => input.getAttribute("aria-label")?.includes("我答应这周五"));
-    expect(relationshipInputs).toHaveLength(0);
-    const preview = Array.from(document.querySelectorAll("button")).find((node) =>
-      node.textContent?.includes("我答应这周五把原型发给陈宇，目前还没有发送。"),
-    );
-    expect(preview).toBeTruthy();
+  it("does not hide a selectable item behind a checkbox", () => {
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(document.body.textContent).not.toContain("我答应这周五把原型发给陈宇，目前还没有发送。");
   });
 });

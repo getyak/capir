@@ -172,6 +172,23 @@ afterEach(async () => {
 });
 
 describe("queued conversation memory review", () => {
+  it("lets a person add a card-specific comment in the existing composer without saving", async () => {
+    const activeDetail = { ...initialDetail, state: "active" as const, expires_at: "2099-01-01T00:00:00.000Z" };
+    await act(async () => root?.render(createElement(QueuedConversation, {
+      chatBinding: "chat-binding", detailBinding: "detail-binding", entryCapability: "entry-capability", initialDetail: activeDetail,
+      scope: "a".repeat(64),
+    })));
+    await flush();
+    const comment = [...mount!.querySelectorAll("button")].find((node) => node.textContent?.includes("补充一句"));
+    expect(comment).toBeTruthy();
+    expect(comment!.disabled).toBe(false);
+    expect(mount!.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")?.disabled).toBe(false);
+    await act(async () => comment!.click());
+    await flush();
+    expect(mount!.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")?.value).toContain("周明");
+    expect(fetcher.mock.calls.some(([path]) => String(path).endsWith("/item-decisions"))).toBe(false);
+  });
+
   it("renders the Session through one assistant-ui transcript while retaining the existing composer", async () => {
     await act(async () => root?.render(createElement(QueuedConversation, {
       chatBinding: "chat-binding", detailBinding: "detail-binding", initialDetail,

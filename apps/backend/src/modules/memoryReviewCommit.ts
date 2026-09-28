@@ -1005,9 +1005,15 @@ export async function decideMemoryReviewItem(
     { id: request.item_id, addedRevision: request.expected_item_added_revision },
   );
   const current = await itemDecisionSnapshot(pool, auth, reviewScopeId);
+  const memoryItemId = committed.body.receipt.decisions.find((entry) => entry.proposal_item_id === request.item_id)?.memory_item_id;
+  const applied = memoryItemId ? await pool.query<{ display_text: string }>(
+    `SELECT display_text FROM memory_items WHERE account_id = $1 AND owner_user_id = $2 AND id = $3`,
+    [auth.accountId, auth.userId, memoryItemId],
+  ) : null;
   return {
     contract_version: CONTRACT_VERSION,
     kind: "committed",
+    applied_display_text: applied?.rows[0]?.display_text ?? null,
     item_id: request.item_id,
     replayed: committed.replayed,
     receipt: committed.body.receipt,

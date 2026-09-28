@@ -638,6 +638,7 @@ export const MemoryItemDecisionResponseSchema = Type.Object(
     item_id: id,
     replayed: Type.Boolean(),
     receipt: Type.Union([MemoryReceiptSchema, Type.Null()]),
+    applied_display_text: optional(text(1_000)),
     proposal_revision: Type.Integer({ minimum: 1 }),
     remaining_pending_item_count: Type.Integer({ minimum: 0 }),
   },
@@ -755,6 +756,7 @@ export const MemoryScopedOperationViewSchema = Type.Object(
     operation_key: id,
     commit_id: optional(id),
     dismissed_item_id: optional(id),
+    applied_display_text: optional(text(1_000)),
     commit_revision: optional(Type.Integer({ minimum: 1 })),
     state: Type.Union([
       Type.Literal("applied"),

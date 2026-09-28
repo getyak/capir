@@ -433,6 +433,12 @@ async function readMemoryScopedOperationViewInTransaction(
       personId: query.purpose === "chat" ? null : query.person_id ?? null,
       contextId: query.purpose === "chat" ? null : query.relationship_context_id ?? null,
     });
+    const singleMemoryId = visibleReceipt.decisions.length === 1
+      ? visibleReceipt.decisions[0]?.memory_item_id ?? null : null;
+    const applied = singleMemoryId ? await client.query<{ display_text: string }>(
+      `SELECT display_text FROM memory_items WHERE account_id = $1 AND owner_user_id = $2 AND id = $3`,
+      [auth.accountId, auth.userId, singleMemoryId],
+    ) : null;
     return {
       contract_version: CONTRACT_VERSION,
       operation_key: operationKey,
@@ -450,6 +456,7 @@ async function readMemoryScopedOperationViewInTransaction(
       pursuit_capture_version: storedScope?.pursuit_capture_version ?? null,
       visible_effect_count: visibleIds.size,
       visible_receipt: visibleReceipt,
+      applied_display_text: applied?.rows[0]?.display_text ?? null,
       undo: { allowed: undoAllowed, limits },
     };
 }

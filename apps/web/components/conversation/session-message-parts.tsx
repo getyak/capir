@@ -81,7 +81,7 @@ export function sessionMessages(input: {
 }
 
 import { MessagePrimitive } from "@assistant-ui/react";
-import type { ConversationImageManifest } from "@talent-signal/contracts";
+import type { ConversationImageManifest, MemoryProposalItem } from "@talent-signal/contracts";
 import { ConversationProvenance, ConversationResponse } from "../conversation-response";
 import { MemoryReviewCard } from "../memory-review/memory-review-card";
 import { sessionBlockTitle } from "../session-workbench/session-presentation";
@@ -94,6 +94,7 @@ type RenderContext = {
   scope: string;
   sessionId: string;
   status: string;
+  onCardComment?: (item: MemoryProposalItem) => void;
 };
 
 function dataRecord(value: unknown): Record<string, unknown> | null {
@@ -118,7 +119,8 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
   if (name === "talent-signal.memory" && data.version === 1 && typeof data.proposalId === "string"
     && typeof data.revision === "number") {
     return <MemoryReviewCard binding={context.binding} entryCapability={context.entryCapability}
-      proposal={{ proposal_id: data.proposalId, revision: data.revision }} purpose="chat" sessionId={context.sessionId}/>;
+      proposal={{ proposal_id: data.proposalId, revision: data.revision }} purpose="chat" sessionId={context.sessionId}
+      onCommentItem={context.onCardComment}/>;
   }
   if (name === "talent-signal.calendar" && data.version === 1 && typeof data.draftId === "string") {
     return <section aria-label="日历草稿核对入口" className="context-calendar-draft-handoff">

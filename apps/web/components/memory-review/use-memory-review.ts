@@ -36,6 +36,7 @@ type Locator = {
   operation_key: string | null;
   item_pending_id?: string | null;
   item_operation_keys?: Record<string, string>;
+  item_undo_keys?: Record<string, string>;
   /** Non-sensitive compensation idempotency key so a lost undo response can
    *  reconcile the same operation after a reload. */
   undo_key: string | null;
@@ -44,9 +45,10 @@ type Locator = {
 };
 
 export type MemoryItemOutcome = {
-  kind: "committed" | "skipped" | "unknown" | "unavailable";
+  kind: "committed" | "skipped" | "unknown" | "undo_unknown" | "undone" | "unavailable";
   receipt: MemoryReceipt | null;
   operationKey: string;
+  finalText?: string | null;
 };
 
 export type MemoryReviewPhase =
@@ -82,6 +84,8 @@ export interface MemoryReviewController {
   commit: (body: MemoryCommitInput) => Promise<MemoryCommitResponse | null>;
   decideItem: (input: { itemId: string; decision: MemoryDecision; editedText?: string }) => Promise<MemoryItemDecisionResponse | null>;
   refreshReview: () => Promise<boolean>;
+  undoItem: (itemId: string) => Promise<boolean>;
+  checkItem: (itemId: string) => Promise<void>;
   dismiss: (itemIds: string[], reason: string) => Promise<boolean>;
   reconcile: () => Promise<void>;
   undo: () => Promise<MemoryUndoOutcome>;
@@ -354,9 +358,27 @@ export function useMemoryReview(options: {
       }
       const view = (await response.json()) as MemoryScopedOperationView;
       if ((view.state === "applied" || view.state === "undone") && view.visible_receipt) {
+        const pendingUndo = key ? Boolean(readLocator(key)?.item_undo_keys?.[itemId]) : false;
+        if (view.state === "applied" && pendingUndo) {
+          setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+            kind: "undo_unknown", receipt: view.visible_receipt, operationKey,
+          } }));
+          setPhase("unknown");
+          setNotice("正在核对撤销结果…");
+          return;
+        }
         setItemOutcomes((previous) => ({ ...previous, [itemId]: {
-          kind: "committed", receipt: view.visible_receipt, operationKey,
+          kind: view.state === "undone" ? "undone" : "committed", receipt: view.visible_receipt, operationKey,
+          finalText: view.applied_display_text ?? null,
         } }));
+        if (view.state === "undone" && key) {
+          const current = readLocator(key);
+          if (current) {
+            const undoKeys = { ...(current.item_undo_keys ?? {}) };
+            delete undoKeys[itemId];
+            writeLocator(key, { ...current, item_undo_keys: undoKeys });
+          }
+        }
         operationRef.current = null;
         if (key) {
           const current = readLocator(key);
@@ -899,7 +921,8 @@ export function useMemoryReview(options: {
         return null;
       }
       const result = (await response.json()) as MemoryItemDecisionResponse;
-      setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: result.kind, receipt: result.receipt, operationKey } }));
+      setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: result.kind, receipt: result.receipt, operationKey,
+        finalText: result.applied_display_text ?? null } }));
       operationRef.current = null;
       if (key) writeLocator(key, { ...nextLocator, operation_key: null, item_pending_id: null });
       setPhase("review");
@@ -915,6 +938,73 @@ export function useMemoryReview(options: {
       inflight.current = false;
     }
   }, [binding, proposalId, purpose, personId, contextId, request, key, refreshReview, errorMessage]);
+
+  const undoItem = useCallback(async (itemId: string): Promise<boolean> => {
+    const outcome = itemOutcomes[itemId];
+    if (!outcome || outcome.kind !== "committed" || !key || inflight.current) return false;
+    const operationKey = outcome.operationKey;
+    const prior = readLocator(key);
+    if (!prior) return false;
+    const undoKey = prior.item_undo_keys?.[itemId] ?? crypto.randomUUID();
+    const pending: Locator = { ...prior, item_undo_keys: { ...(prior.item_undo_keys ?? {}), [itemId]: undoKey } };
+    if (!writeRequiredLocator(key, pending)) {
+      setError("浏览器无法保存这次撤销操作，已停止提交。");
+      return false;
+    }
+    inflight.current = true;
+    try {
+      const viewResponse = await request(`/api/memory/operation-views/${operationKey}?purpose=${purpose}${personId ? `&person_id=${personId}` : ""}${contextId ? `&relationship_context_id=${contextId}` : ""}`, { method: "GET" });
+      if (!viewResponse.ok) {
+        setError("无法核对这次保存，撤销尚未进行。");
+        return false;
+      }
+      const view = (await viewResponse.json()) as MemoryScopedOperationView;
+      if (view.state === "undone") {
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: { kind: "undone", receipt: view.visible_receipt, operationKey } }));
+        return true;
+      }
+      if (!view.undo.allowed || !view.commit_revision) {
+        setError("这条记忆已变化，不能从这里撤销。");
+        return false;
+      }
+      const response = await request(`/api/memory/operation-views/${operationKey}/undo`, {
+        method: "POST",
+        body: JSON.stringify({
+          idempotency_key: undoKey,
+          expected_commit_revision: view.commit_revision,
+          purpose,
+          person_id: personId,
+          relationship_context_id: contextId,
+          reason: "用户撤销这一条记忆。",
+        }),
+      });
+      if (!response.ok) {
+        setError(await errorMessage(response, "这条记忆尚未撤销。"));
+        return false;
+      }
+      const body = (await response.json()) as { receipt: MemoryReceipt };
+      setItemOutcomes((previous) => ({ ...previous, [itemId]: { kind: "undone", receipt: body.receipt, operationKey } }));
+      const current = readLocator(key);
+      if (current) {
+        const undoKeys = { ...(current.item_undo_keys ?? {}) };
+        delete undoKeys[itemId];
+        writeLocator(key, { ...current, item_undo_keys: undoKeys });
+      }
+      setError(null);
+      return true;
+    } catch {
+      setItemOutcomes((previous) => ({ ...previous, [itemId]: { kind: "undo_unknown", receipt: outcome.receipt, operationKey } }));
+      setNotice("正在核对撤销结果…");
+      return false;
+    } finally {
+      inflight.current = false;
+    }
+  }, [itemOutcomes, key, request, purpose, personId, contextId, errorMessage]);
+
+  const checkItem = useCallback(async (itemId: string): Promise<void> => {
+    const operationKey = itemOutcomes[itemId]?.operationKey;
+    if (operationKey) await reconcileItemKey(itemId, operationKey);
+  }, [itemOutcomes, reconcileItemKey]);
 
   const dismiss = useCallback(
     async (itemIds: string[], reason: string): Promise<boolean> => {
@@ -1180,6 +1270,8 @@ export function useMemoryReview(options: {
     commit,
     decideItem,
     refreshReview,
+    undoItem,
+    checkItem,
     dismiss,
     reconcile,
     undo,

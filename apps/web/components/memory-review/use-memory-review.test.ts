@@ -201,6 +201,50 @@ describe("shared Memory review controller", () => {
     expect(controller.receipt).toBeNull();
   });
 
+  it("keeps a lost undo unresolved until authoritative readback says undone", async () => {
+    const opened = review();
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: opened }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockResolvedValueOnce(Response.json({ kind: "committed", item_id: "self-1", replayed: false,
+      receipt: { operation_key: "op-one", decisions: [{ proposal_item_id: "self-1", decision: "accept" }] },
+      proposal_revision: 1, remaining_pending_item_count: 4 }));
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-next", review: opened }));
+    await act(async () => { await controller.decideItem({ itemId: "self-1", decision: "accept" }); });
+    fetcher.mockResolvedValueOnce(Response.json({ state: "applied", commit_revision: 1,
+      undo: { allowed: true, limits: [] }, visible_receipt: { operation_key: "op-one" } }));
+    fetcher.mockRejectedValueOnce(new Error("undo response lost"));
+    await act(async () => { await controller.undoItem("self-1"); });
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("undo_unknown");
+    fetcher.mockResolvedValueOnce(Response.json({ state: "applied", visible_receipt: { operation_key: "op-one" }, undo: { allowed: true, limits: [] } }));
+    await act(async () => { await controller.checkItem("self-1"); });
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("undo_unknown");
+    fetcher.mockResolvedValueOnce(Response.json({ state: "undone", visible_receipt: { operation_key: "op-one", status: "undone" }, undo: { allowed: false, limits: [] } }));
+    await act(async () => { await controller.checkItem("self-1"); });
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("undone");
+  });
+
+  it("undoes the exact item receipt without touching a sibling", async () => {
+    const opened = review();
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: opened }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockResolvedValueOnce(Response.json({ kind: "committed", item_id: "self-1", replayed: false,
+      receipt: { operation_key: "op-one", decisions: [{ proposal_item_id: "self-1", decision: "accept" }] },
+      proposal_revision: 1, remaining_pending_item_count: 4 }));
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-next", review: opened }));
+    await act(async () => { await controller.decideItem({ itemId: "self-1", decision: "accept" }); });
+    fetcher.mockResolvedValueOnce(Response.json({ state: "applied", commit_revision: 1,
+      undo: { allowed: true, limits: [] }, visible_receipt: { operation_key: "op-one" } }));
+    fetcher.mockResolvedValueOnce(Response.json({ receipt: { operation_key: "op-one", status: "undone" } }));
+    await act(async () => { await controller.undoItem("self-1"); });
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("undone");
+    expect(controller.review?.items.find((entry) => entry.id === "self-2")?.status).toBe("pending");
+    const decision = fetcher.mock.calls.find(([path]) => String(path).endsWith("/item-decisions")) as [string, RequestInit];
+    const operationKey = JSON.parse(decision[1].body as string).idempotency_key;
+    const undo = fetcher.mock.calls.find(([path]) => String(path).includes(`/operation-views/${operationKey}/undo`)) as [string, RequestInit];
+    expect(undo[0]).toContain(`${operationKey}/undo`);
+    expect(JSON.parse(undo[1].body as string).expected_commit_revision).toBe(1);
+  });
+
   it("closes stale actions when the final item has been processed", async () => {
     const single = { ...review(), items: [item("self-1", "self")] };
     fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: single }));
