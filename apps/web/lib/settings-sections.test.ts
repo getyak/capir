@@ -6,7 +6,6 @@ import {
   settingsDrilldownSections,
   SETTINGS_SEARCH_ENTRIES,
   SETTINGS_SECTIONS,
-  SETTINGS_SECTION_GROUPS,
   type SettingsSection,
 } from "./settings-sections";
 
@@ -18,6 +17,7 @@ describe("settings section schema", () => {
       "workspace",
       "appearance",
       "connections",
+      "versions",
       "advanced",
       "testing",
     ]);
@@ -44,6 +44,7 @@ describe("settings section schema", () => {
       "workspace",
       "appearance",
       "connections",
+      "versions",
       "advanced",
       "testing",
     ]);
@@ -52,25 +53,17 @@ describe("settings section schema", () => {
       "workspace",
       "appearance",
       "connections",
+      "versions",
       "advanced",
     ]);
   });
 
-  it("describes the visible settings groups in navigation order", () => {
-    expect(SETTINGS_SECTION_GROUPS.map((group) => group.id)).toEqual([
-      "personal",
-      "trust",
-      "support",
-    ]);
-    expect(SETTINGS_SECTION_GROUPS.flatMap((group) => group.sections)).toEqual([
-      "overview",
-      "account",
-      "appearance",
-      "connections",
-      "workspace",
-      "advanced",
-      "testing",
-    ]);
+  it("exposes one flat versions destination inside the settings route", () => {
+    const versions = SETTINGS_SECTIONS.find((section) => section.id === "versions");
+    expect(versions).toMatchObject({
+      label: "版本与状态",
+      href: "/workspace/settings?section=versions",
+    });
   });
 });
 

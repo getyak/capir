@@ -17,6 +17,7 @@ export const SETTINGS_SECTIONS = [
   { id: "workspace", label: "工作空间", href: "/workspace/settings?section=workspace" },
   { id: "appearance", label: "外观与偏好", href: "/workspace/settings?section=appearance" },
   { id: "connections", label: "连接与权限", href: "/workspace/settings?section=connections" },
+  { id: "versions", label: "版本与状态", href: "/workspace/settings?section=versions" },
   { id: "advanced", label: "帮助与诊断", href: "/workspace/settings?section=advanced" },
   { id: "testing", label: "测试与诊断", href: "/workspace/settings?section=testing" },
 ] as const;
@@ -28,17 +29,6 @@ export function isSettingsSection(
 ): value is SettingsSection {
   return SETTINGS_SECTIONS.some((section) => section.id === value);
 }
-
-/** Visible group headings for the single settings category navigation. */
-export const SETTINGS_SECTION_GROUPS = [
-  { id: "personal", label: "个人", sections: ["overview", "account", "appearance"] },
-  { id: "trust", label: "工作与信任", sections: ["connections", "workspace"] },
-  { id: "support", label: "支持", sections: ["advanced", "testing"] },
-] as const satisfies readonly {
-  id: string;
-  label: string;
-  sections: readonly SettingsSection[];
-}[];
 
 /**
  * Sections shown in the drilldown row. The overview is reachable through its
@@ -102,6 +92,12 @@ const SECTION_SEARCH: Record<
     destination: "设置 · 连接与权限",
     scope: "当前空间",
     keywords: ["连接", "权限", "来源", "授权", "资料", "数据", "外部服务", "边界"],
+  },
+  versions: {
+    description: "查看 Web、后端与各设备的实际版本、来源和检查时间。",
+    destination: "设置 · 版本与状态",
+    scope: "各组件分别显示",
+    keywords: ["版本", "状态", "构建", "revision", "build", "更新", "升级", "release"],
   },
   advanced: {
     description: "连接诊断、运行记录与数据边界。",

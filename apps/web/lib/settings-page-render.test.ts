@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const { auth, loadAccountSettings, claims, redirect } = vi.hoisted(() => ({
+const { auth, loadAccountSettings, claims, redirect, webRelease } = vi.hoisted(() => ({
   auth: vi.fn(),
   loadAccountSettings: vi.fn(),
   claims: vi.fn(),
   redirect: vi.fn(),
+  webRelease: vi.fn(),
 }));
 
 vi.mock("@/auth", () => ({ auth }));
@@ -21,6 +22,7 @@ vi.mock("@/lib/server/backendAuth", () => ({
 vi.mock("@/lib/server/contact-handoff-session", () => ({
   contactHandoffSessionVersion: () => "session-version",
 }));
+vi.mock("@/lib/web-release", () => ({ readWebReleaseIdentity: webRelease }));
 
 import SettingsPage from "@/app/workspace/settings/page";
 
@@ -68,6 +70,7 @@ describe("settings page server composition", () => {
         digest: `NEXT_REDIRECT;replace;${url};307;`,
       });
     });
+    webRelease.mockReturnValue({ revision: "a12d51bc", source: "release_file" });
   });
 
   afterEach(() => vi.clearAllMocks());
@@ -85,6 +88,7 @@ describe("settings page server composition", () => {
       "workspace",
       "appearance",
       "connections",
+      "versions",
       "advanced",
       "testing",
     ]) {
@@ -127,6 +131,7 @@ describe("settings page server composition", () => {
       "workspace",
       "appearance",
       "connections",
+      "versions",
       "advanced",
       "testing",
     ]) {
@@ -159,6 +164,39 @@ describe("settings page server composition", () => {
       ).rejects.toThrow("NEXT_REDIRECT");
       expect(redirect).toHaveBeenCalledWith("/login?callbackUrl=%2Fworkspace%2Fsettings");
     }
+  });
+
+  it("passes only the validated Web release identity into the versions pane", async () => {
+    auth.mockResolvedValue({ user: { name: "林顾问" } });
+    loadAccountSettings.mockResolvedValue(account);
+    claims.mockResolvedValue(null);
+    const html = renderToStaticMarkup(
+      await SettingsPage({ searchParams: Promise.resolve({ section: "versions" }) }),
+    );
+    expect(html).toContain("版本与状态");
+    expect(html).toContain("a12d51bc");
+    expect(html).toContain("来源：");
+    expect(html).toContain("读取于");
+  });
+
+  it("renders unknown version states when no Web release identity is available", async () => {
+    auth.mockResolvedValue({ user: { name: "林顾问" } });
+    loadAccountSettings.mockResolvedValue(account);
+    claims.mockResolvedValue(null);
+    webRelease.mockReturnValue(null);
+    const html = renderToStaticMarkup(
+      await SettingsPage({ searchParams: Promise.resolve({ section: "versions" }) }),
+    );
+    expect(html).toContain("无法确认版本");
+    expect(html).not.toContain("最新");
+  });
+
+  it("does not read release metadata for an unauthenticated request", async () => {
+    auth.mockResolvedValue(null);
+    await expect(
+      SettingsPage({ searchParams: Promise.resolve({ section: "versions" }) }),
+    ).rejects.toThrow("NEXT_REDIRECT");
+    expect(webRelease).not.toHaveBeenCalled();
   });
 
   it("renders a truthful unavailable pane when settings cannot be read", async () => {

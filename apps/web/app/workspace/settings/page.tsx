@@ -8,6 +8,7 @@ import { readBackendSessionClaims } from "@/lib/server/backendAuth";
 import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
 import { backendSessionIsExpired } from "@/lib/backend-session";
 import { loadAccountSettings } from "@/lib/server/accountBackend";
+import { readWebReleaseIdentity } from "@/lib/web-release";
 
 export const dynamic = "force-dynamic";
 
@@ -124,6 +125,8 @@ export default async function SettingsPage({
       labEnabled={labEnabled}
       section={section}
       sessionVersion={sessionVersion}
+      webRelease={readWebReleaseIdentity()}
+      webReleaseObservedAt={new Date().toISOString()}
     />
   );
 }

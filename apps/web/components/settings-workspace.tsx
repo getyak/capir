@@ -21,10 +21,10 @@ import {
 } from "react";
 import { AccountSettingsPanel } from "./account-settings";
 import { AvatarDefaultSettings } from "./avatar-editor";
+import { SettingsVersionsPane, type WebReleaseView } from "./settings-versions-pane";
 import {
   searchSettings,
   SETTINGS_SECTIONS,
-  SETTINGS_SECTION_GROUPS,
   type SettingsSearchEntry,
   type SettingsSection,
 } from "@/lib/settings-sections";
@@ -41,8 +41,6 @@ import styles from "./settings-workspace.module.css";
 const SECTION_LABELS = new Map(
   SETTINGS_SECTIONS.map((section) => [section.id, section.label]),
 );
-const sectionHref = (id: SettingsSection) =>
-  SETTINGS_SECTIONS.find((section) => section.id === id)!.href;
 const sectionLabel = (id: SettingsSection) => SECTION_LABELS.get(id)!;
 
 /**
@@ -528,6 +526,7 @@ const PANE_HINTS: Record<SettingsSection, string> = {
   workspace: "空间资料、成员与访问权限。",
   appearance: "先看真实内容如何变化，再保存偏好。",
   connections: "理解资料的使用范围，每一步都能回到原处。",
+  versions: "查看 Web、后端与各设备的实际版本和检查时间。",
   advanced: "遇到问题时，检查服务状态与运行记录。",
   testing: "使用隔离的合成资料验证功能。",
 };
@@ -539,12 +538,16 @@ export function SettingsWorkspace({
   labEnabled,
   recovery,
   avatarUrl,
+  webRelease,
+  webReleaseObservedAt,
 }: {
   avatarUrl?: string | null;
   initial: AccountSettings | null;
   sessionVersion: string | null;
   section: SettingsSection;
   labEnabled: boolean;
+  webRelease?: WebReleaseView | null;
+  webReleaseObservedAt?: string;
   recovery?: {
     operationRef: string | null;
     roles: {
@@ -563,39 +566,32 @@ export function SettingsWorkspace({
         ? { web: "账号 · 本机头像", desktop: "账号 · 本机头像" }
         : section === "connections" && workspaceName
           ? { web: `当前空间 · ${workspaceName}`, desktop: `当前空间 · ${workspaceName}` }
-          : section === "testing"
-            ? { web: "测试空间", desktop: "测试空间" }
-            : section === "account"
-              ? { web: "账号", desktop: "账号" }
-              : { web: "当前空间", desktop: "当前空间" };
+          : section === "versions"
+            ? { web: "各组件分别显示", desktop: "各组件分别显示" }
+            : section === "testing"
+              ? { web: "测试空间", desktop: "测试空间" }
+              : section === "account"
+                ? { web: "账号", desktop: "账号" }
+                : { web: "当前空间", desktop: "当前空间" };
 
   return (
-    <main className={styles.page} id="main-content" tabIndex={-1} data-settings-workspace>
+    <main className={styles.page} id="main-content" tabIndex={-1} data-settings-workspace data-desktop-settings-surface="1">
       <div className={styles.layout}>
         <div className={styles.sidebar}>
           <h1 className={styles.sidebarHeading}>设置</h1>
           <SettingsSearch labEnabled={labEnabled} />
           <nav className={styles.navigation} aria-label="设置分区" data-settings-navigation>
-            {SETTINGS_SECTION_GROUPS.map((group) => {
-              const sections = group.sections.filter(
-                (id) => id !== "testing" || labEnabled,
-              );
-              if (!sections.length) return null;
-              return (
-                <div className={styles.navGroup} key={group.id}>
-                  <p className={styles.navGroupLabel}>{group.label}</p>
-                  {sections.map((id) => (
-                    <Link
-                      key={id}
-                      href={sectionHref(id)}
-                      aria-current={section === id ? "page" : undefined}
-                    >
-                      {sectionLabel(id)}
-                    </Link>
-                  ))}
-                </div>
-              );
-            })}
+            {SETTINGS_SECTIONS.filter(
+              (item) => item.id !== "testing" || labEnabled,
+            ).map((item) => (
+              <Link
+                key={item.id}
+                href={item.href}
+                aria-current={section === item.id ? "page" : undefined}
+              >
+                {item.label}
+              </Link>
+            ))}
           </nav>
         </div>
 
@@ -641,6 +637,12 @@ export function SettingsWorkspace({
           ) : null}
           {section === "appearance" ? <AppearancePane sessionVersion={sessionVersion} /> : null}
           {section === "connections" ? <ConnectionsPane workspaceName={workspaceName} /> : null}
+          {section === "versions" ? (
+            <SettingsVersionsPane
+              webRelease={webRelease ?? null}
+              webReleaseObservedAt={webReleaseObservedAt ?? ""}
+            />
+          ) : null}
           {section === "advanced" || section === "testing" ? (
             <AdvancedPane labEnabled={labEnabled} />
           ) : null}
