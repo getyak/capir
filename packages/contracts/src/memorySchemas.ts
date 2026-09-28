@@ -754,11 +754,13 @@ export const MemoryScopedOperationViewSchema = Type.Object(
     contract_version: Type.Literal(CONTRACT_VERSION),
     operation_key: id,
     commit_id: optional(id),
+    dismissed_item_id: optional(id),
     commit_revision: optional(Type.Integer({ minimum: 1 })),
     state: Type.Union([
       Type.Literal("applied"),
       Type.Literal("undone"),
       Type.Literal("pending"),
+      Type.Literal("skipped"),
       Type.Literal("unavailable"),
       Type.Literal("source_revoked"),
       Type.Literal("scope_mismatch"),

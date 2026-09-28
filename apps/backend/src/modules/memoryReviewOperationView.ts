@@ -132,6 +132,70 @@ export async function readMemoryScopedOperationView(
   return inTransaction(pool, (client) => readMemoryScopedOperationViewInTransaction(client, auth, operationKey, query));
 }
 
+async function readSkippedItemOperation(
+  client: PoolClient,
+  auth: AuthContext,
+  operationKey: string,
+  query: ScopedOperationQuery,
+): Promise<MemoryScopedOperationView | null> {
+  const records = await client.query<{
+    operation_scope: string;
+    status: string;
+    response_body: { dismissed_item_ids?: unknown } | null;
+  }>(
+    `SELECT operation_scope, status, response_body
+     FROM idempotency_records
+     WHERE account_id = $1 AND actor_user_id = $2 AND idempotency_key = $3
+       AND operation_scope LIKE 'dismiss_memory_review:%'`,
+    [auth.accountId, auth.userId, operationKey],
+  );
+  if (records.rows.length !== 1) return null;
+  const record = records.rows[0]!;
+  const scopeId = record.operation_scope.slice("dismiss_memory_review:".length);
+  const scope = await loadReviewScope(client, auth.accountId, scopeId, true);
+  if (!scope || scope.reader_user_id !== auth.userId) return null;
+  if (scope.purpose !== query.purpose
+    || (query.session_id && query.session_id !== scope.source_session_id)
+    || (query.person_id && query.person_id !== scope.person_id)
+    || (query.relationship_context_id && query.relationship_context_id !== scope.relationship_context_id)
+    || (query.pursuit_id && (query.pursuit_id !== scope.pursuit_id
+      || query.pursuit_role_id !== scope.pursuit_role_id
+      || query.pursuit_role_evidence_fragment_id !== scope.pursuit_role_evidence_fragment_id
+      || query.pursuit_capture_id !== scope.pursuit_capture_id
+      || query.pursuit_capture_version !== scope.pursuit_capture_version))) {
+    throw new ApiError(403, "MEMORY_ENTRY_SCOPE_MISMATCH", "This operation belongs to a different entry.");
+  }
+  await assertScopePursuitCurrent(client, auth, scope, true, true);
+  if (query.purpose !== "chat") await assertScopeTargetAuthorized(client, auth, query);
+  const ids = record.response_body?.dismissed_item_ids;
+  const itemId = record.status === "completed" && Array.isArray(ids) && ids.length === 1
+    && typeof ids[0] === "string" ? ids[0] : null;
+  const item = itemId ? await client.query<{ status: string }>(
+    `SELECT status FROM memory_proposal_items
+     WHERE account_id = $1 AND proposal_id = $2 AND id = $3`,
+    [auth.accountId, scope.proposal_id, itemId],
+  ) : null;
+  const skipped = item?.rows[0]?.status === "skipped";
+  return {
+    contract_version: CONTRACT_VERSION,
+    operation_key: operationKey,
+    state: record.status === "processing" ? "pending" : skipped ? "skipped" : "unavailable",
+    dismissed_item_id: skipped ? itemId : null,
+    purpose: query.purpose,
+    person_id: query.person_id ?? null,
+    relationship_context_id: query.relationship_context_id ?? null,
+    source_session_id: scope.source_session_id,
+    pursuit_id: scope.pursuit_id,
+    pursuit_role_id: scope.pursuit_role_id,
+    pursuit_role_evidence_fragment_id: scope.pursuit_role_evidence_fragment_id,
+    pursuit_capture_id: scope.pursuit_capture_id,
+    pursuit_capture_version: scope.pursuit_capture_version,
+    visible_effect_count: 0,
+    visible_receipt: null,
+    undo: { allowed: false, limits: [] },
+  };
+}
+
 async function readMemoryScopedOperationViewInTransaction(
   client: PoolClient, auth: AuthContext, operationKey: string, query: ScopedOperationQuery,
 ): Promise<MemoryScopedOperationView> {
@@ -180,10 +244,12 @@ async function readMemoryScopedOperationViewInTransaction(
       }
     }
     if (!row) {
+      const skipped = await readSkippedItemOperation(client, auth, operationKey, query);
+      if (skipped) return skipped;
       const pending = await client.query<{ status: string }>(
         `SELECT status FROM idempotency_records
          WHERE account_id = $1 AND actor_user_id = $2
-           AND operation_scope = 'commit_memory_review'
+           AND operation_scope IN ('commit_memory_review', 'commit_memory_review_item')
            AND idempotency_key = $3`,
         [auth.accountId, auth.userId, operationKey],
       );

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   MemoryCommitResponse,
+  MemoryDecision,
+  MemoryItemDecisionResponse,
   MemoryProposalReference,
   MemoryReceipt,
   MemoryReviewView,
@@ -32,11 +34,19 @@ type Locator = {
   person_id: string | null;
   relationship_context_id: string | null;
   operation_key: string | null;
+  item_pending_id?: string | null;
+  item_operation_keys?: Record<string, string>;
   /** Non-sensitive compensation idempotency key so a lost undo response can
    *  reconcile the same operation after a reload. */
   undo_key: string | null;
   /** Non-sensitive terminal marker: this source version was already dismissed. */
   dismissed?: boolean;
+};
+
+export type MemoryItemOutcome = {
+  kind: "committed" | "skipped" | "unknown" | "unavailable";
+  receipt: MemoryReceipt | null;
+  operationKey: string;
 };
 
 export type MemoryReviewPhase =
@@ -58,6 +68,7 @@ export interface MemoryReviewController {
   review: MemoryReviewView | null;
   draft: MemoryReviewDraftState | null;
   receipt: MemoryReceipt | null;
+  itemOutcomes: Record<string, MemoryItemOutcome>;
   error: string | null;
   notice: string | null;
   frozen: boolean;
@@ -69,6 +80,8 @@ export interface MemoryReviewController {
   scheduleDraft: () => void;
   flushDraft: () => Promise<boolean>;
   commit: (body: MemoryCommitInput) => Promise<MemoryCommitResponse | null>;
+  decideItem: (input: { itemId: string; decision: MemoryDecision; editedText?: string }) => Promise<MemoryItemDecisionResponse | null>;
+  refreshReview: () => Promise<boolean>;
   dismiss: (itemIds: string[], reason: string) => Promise<boolean>;
   reconcile: () => Promise<void>;
   undo: () => Promise<MemoryUndoOutcome>;
@@ -123,6 +136,16 @@ function writeLocator(key: string, locator: Locator): void {
   }
 }
 
+function writeRequiredLocator(key: string, locator: Locator): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(locator));
+    return window.sessionStorage.getItem(key) === JSON.stringify(locator);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Shared Memory review controller. Every call is bound to the current rendered
  * login through the `x-workspace-session` header; the browser never supplies
@@ -159,6 +182,7 @@ export function useMemoryReview(options: {
   const [review, setReview] = useState<MemoryReviewView | null>(null);
   const [draft, setDraft] = useState<MemoryReviewDraftState | null>(null);
   const [receipt, setReceipt] = useState<MemoryReceipt | null>(null);
+  const [itemOutcomes, setItemOutcomes] = useState<Record<string, MemoryItemOutcome>>({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [locator, setLocator] = useState<Locator | null>(null);
@@ -180,6 +204,29 @@ export function useMemoryReview(options: {
   const undoKeyRef = useRef<string | null>(null);
   const capabilityRef = useRef<string | null>(options.entryCapability ?? null);
   const inflight = useRef(false);
+  const previousBinding = useRef(binding);
+  useEffect(() => {
+    if (previousBinding.current === binding) return;
+    previousBinding.current = binding;
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = null;
+    openedKeyRef.current = null;
+    operationRef.current = null;
+    credentialRef.current = null;
+    scopeRef.current = null;
+    undoKeyRef.current = null;
+    reviewRef.current = null;
+    draftRef.current = null;
+    inflight.current = false;
+    setReview(null);
+    setDraft(null);
+    setReceipt(null);
+    setItemOutcomes({});
+    setLocator(null);
+    setError(null);
+    setNotice(null);
+    setPhase("idle");
+  }, [binding]);
   // A refreshed server capability must replace the old token even when the
   // current review does not need to reopen.
   useEffect(() => { capabilityRef.current = options.entryCapability ?? null; }, [options.entryCapability]);
@@ -293,6 +340,67 @@ export function useMemoryReview(options: {
     [binding, request, purpose, personId, contextId],
   );
 
+  const reconcileItemKey = useCallback(async (itemId: string, operationKey: string): Promise<void> => {
+    setReconciling(true);
+    try {
+      const response = await request(
+        `/api/memory/operation-views/${operationKey}?purpose=${purpose}${personId ? `&person_id=${personId}` : ""}${contextId ? `&relationship_context_id=${contextId}` : ""}`,
+        { method: "GET" },
+      );
+      if (!response.ok) {
+        setPhase("unknown");
+        setNotice("正在核对这一条的结果…");
+        return;
+      }
+      const view = (await response.json()) as MemoryScopedOperationView;
+      if ((view.state === "applied" || view.state === "undone") && view.visible_receipt) {
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+          kind: "committed", receipt: view.visible_receipt, operationKey,
+        } }));
+        operationRef.current = null;
+        if (key) {
+          const current = readLocator(key);
+          if (current) {
+            const next = { ...current, operation_key: null, item_pending_id: null };
+            setLocator(next);
+            writeLocator(key, next);
+          }
+        }
+        setPhase("review");
+        setNotice(null);
+      } else if (view.state === "skipped" && view.dismissed_item_id === itemId) {
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+          kind: "skipped", receipt: null, operationKey,
+        } }));
+        operationRef.current = null;
+        if (key) {
+          const current = readLocator(key);
+          if (current) {
+            const next = { ...current, operation_key: null, item_pending_id: null };
+            setLocator(next);
+            writeLocator(key, next);
+          }
+        }
+        setPhase("review");
+        setNotice(null);
+      } else if (view.state === "source_revoked") {
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+          kind: "unavailable", receipt: null, operationKey,
+        } }));
+        setPhase("error");
+        setError("来源已失效，这一条不能继续操作。");
+      } else {
+        setPhase("unknown");
+        setNotice("正在核对这一条的结果…");
+      }
+    } catch {
+      setPhase("unknown");
+      setNotice("正在核对这一条的结果…");
+    } finally {
+      setReconciling(false);
+    }
+  }, [request, purpose, personId, contextId, key]);
+
   const open = useCallback(async () => {
     if (!binding || !proposalId || inflight.current) return;
     const entryKey = `${proposalId}:${proposalRevision}:${purpose}:${personId ?? ""}:${contextId ?? ""}`;
@@ -302,6 +410,12 @@ export function useMemoryReview(options: {
     setError(null);
     setNotice(null);
     const existing = key ? readLocator(key) : null;
+    if (existing?.item_operation_keys) {
+      for (const [itemId, operationKey] of Object.entries(existing.item_operation_keys)) {
+        if (itemId === existing.item_pending_id && operationKey === existing.operation_key) continue;
+        await reconcileItemKey(itemId, operationKey);
+      }
+    }
     if (existing?.dismissed) {
       // A dismissed source version stays dismissed; do not offer a retry card.
       inflight.current = false;
@@ -322,8 +436,13 @@ export function useMemoryReview(options: {
       operationRef.current = existing.operation_key;
       inflight.current = false;
       await ensureCapability();
-      await reconcileKey(existing.operation_key);
-      return;
+      if (existing.item_pending_id) {
+        await reconcileItemKey(existing.item_pending_id, existing.operation_key);
+        if (key && readLocator(key)?.operation_key) return;
+      } else {
+        await reconcileKey(existing.operation_key);
+        return;
+      }
     }
     // A normal Session poll or parent rerender with the same entry keys must
     // not reopen and overwrite pending draft/receipt state.
@@ -411,6 +530,8 @@ export function useMemoryReview(options: {
         person_id: personId,
         relationship_context_id: contextId,
         operation_key: null,
+        item_pending_id: null,
+        item_operation_keys: existing?.item_operation_keys ?? {},
         undo_key: existing?.undo_key ?? null,
       };
       operationRef.current = null;
@@ -424,7 +545,7 @@ export function useMemoryReview(options: {
     } finally {
       inflight.current = false;
     }
-  }, [binding, proposalId, proposalRevision, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, request, errorMessage, key, reconcileKey, ensureCapability, sessionId, options.entryCapability]);
+  }, [binding, proposalId, proposalRevision, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, request, errorMessage, key, reconcileKey, reconcileItemKey, ensureCapability, sessionId, options.entryCapability]);
 
   const dispatchDraft = useCallback((next: MemoryReviewDraftState) => {
     const previous = draftRef.current;
@@ -667,6 +788,134 @@ export function useMemoryReview(options: {
     [binding, proposalId, proposalRevision, purpose, personId, contextId, request, review, key, errorMessage, flushDraft],
   );
 
+  const refreshReview = useCallback(async (): Promise<boolean> => {
+    if (!proposalId || !binding) return false;
+    try {
+      const response = await request(`/api/memory/proposals/${proposalId}/reviews`, {
+        method: "POST",
+        body: JSON.stringify({
+          purpose,
+          person_id: personId,
+          relationship_context_id: contextId,
+          ...(pursuitId ? {
+            pursuit_id: pursuitId,
+            pursuit_role_id: pursuitRoleId,
+            pursuit_role_evidence_fragment_id: pursuitEvidenceFragmentId,
+          } : {}),
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.clone().json().catch(() => null);
+        if (body?.code === "MEMORY_REVIEW_PROCESSED" || body?.code === "MEMORY_REVIEW_DISMISSED") {
+          setPhase(body.code === "MEMORY_REVIEW_PROCESSED" ? "processed" : "dismissed");
+          return true;
+        }
+        setError(await errorMessage(response, "剩余内容暂时无法读取，请稍后核对。"));
+        return false;
+      }
+      const body = (await response.json()) as { review_credential?: string; review: MemoryReviewView };
+      credentialRef.current = body.review_credential ?? null;
+      scopeRef.current = body.review.review_scope_id;
+      reviewRef.current = body.review;
+      setReview(body.review);
+      const next = createDraftState(body.review);
+      draftRef.current = next;
+      setDraft(next);
+      setError(null);
+      return true;
+    } catch {
+      setError("剩余内容暂时无法读取，请稍后核对。");
+      return false;
+    }
+  }, [proposalId, binding, request, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, errorMessage]);
+
+  const decideItem = useCallback(async (input: {
+    itemId: string;
+    decision: MemoryDecision;
+    editedText?: string;
+  }): Promise<MemoryItemDecisionResponse | null> => {
+    const current = reviewRef.current;
+    const credential = credentialRef.current;
+    const scopeId = scopeRef.current;
+    const item = current?.items.find((entry) => entry.id === input.itemId);
+    if (!binding || !proposalId || !current || !credential || !scopeId || !item || item.status !== "pending" || inflight.current) return null;
+    const contactDecision = item.scope === "self" ? "none" : current.contact_decision;
+    if (contactDecision === "new" || (item.scope !== "self" && current.contact_status !== "resolved")) {
+      setError("请先确认联系人，再处理关于对方的记忆。");
+      return null;
+    }
+    inflight.current = true;
+    setPhase("saving");
+    setError(null);
+    const operationKey = crypto.randomUUID();
+    const priorLocator = key ? readLocator(key) : null;
+    const nextLocator: Locator = {
+      version: 1, binding, proposal_id: proposalId, purpose,
+      person_id: personId, relationship_context_id: contextId,
+      operation_key: operationKey, item_pending_id: item.id,
+      item_operation_keys: { ...(priorLocator?.item_operation_keys ?? {}), [item.id]: operationKey },
+      undo_key: null,
+    };
+    if (!key || !writeRequiredLocator(key, nextLocator)) {
+      inflight.current = false;
+      setPhase("review");
+      setError("浏览器无法保存这次操作，已停止提交；请稍后重试。");
+      return null;
+    }
+    operationRef.current = operationKey;
+    setLocator(nextLocator);
+    try {
+      const response = await request(`/api/memory/reviews/${scopeId}/item-decisions`, {
+        method: "POST",
+        headers: { "x-memory-review-credential": credential },
+        body: JSON.stringify({
+          idempotency_key: operationKey,
+          expected_proposal_revision: current.proposal_revision,
+          expected_review_revision: current.review_revision,
+          item_id: item.id,
+          expected_item_added_revision: item.added_revision,
+          ...(item.previous_revision ? { expected_item_version: item.previous_revision } : {}),
+          contact_decision: contactDecision,
+          decision: input.decision,
+          ...(input.editedText ? { edited_text: input.editedText } : {}),
+          reason: input.decision === "skip" ? "用户选择暂不保存。" : "用户确认这一条记忆。",
+        }),
+      });
+      if (!response.ok) {
+        if (response.status >= 400 && response.status < 500) {
+          operationRef.current = null;
+          if (key) {
+            const itemKeys = { ...nextLocator.item_operation_keys };
+            delete itemKeys[item.id];
+            writeLocator(key, { ...nextLocator, operation_key: null, item_pending_id: null, item_operation_keys: itemKeys });
+          }
+          setError(await errorMessage(response, "这一条尚未保存。"));
+          setPhase("review");
+          return null;
+        }
+        setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: "unknown", receipt: null, operationKey } }));
+        setNotice("正在核对这一条的结果…");
+        setPhase("unknown");
+        return null;
+      }
+      const result = (await response.json()) as MemoryItemDecisionResponse;
+      setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: result.kind, receipt: result.receipt, operationKey } }));
+      operationRef.current = null;
+      if (key) writeLocator(key, { ...nextLocator, operation_key: null, item_pending_id: null });
+      setPhase("review");
+      setNotice(null);
+      await refreshReview();
+      return result;
+    } catch {
+      setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: "unknown", receipt: null, operationKey } }));
+      setNotice("正在核对这一条的结果…");
+      setPhase("unknown");
+      return null;
+    } finally {
+      inflight.current = false;
+    }
+  }, [binding, proposalId, purpose, personId, contextId, request, key, refreshReview, errorMessage]);
+
   const dismiss = useCallback(
     async (itemIds: string[], reason: string): Promise<boolean> => {
       const credential = credentialRef.current;
@@ -733,8 +982,10 @@ export function useMemoryReview(options: {
 
   const reconcile = useCallback(async () => {
     const operationKey = operationRef.current ?? locator?.operation_key ?? null;
-    if (operationKey) await reconcileKey(operationKey);
-  }, [locator, reconcileKey]);
+    if (!operationKey) return;
+    if (locator?.item_pending_id) await reconcileItemKey(locator.item_pending_id, operationKey);
+    else await reconcileKey(operationKey);
+  }, [locator, reconcileKey, reconcileItemKey]);
 
   const rebase = useCallback(
     async (input: MemoryRebaseInput): Promise<boolean> => {
@@ -915,6 +1166,7 @@ export function useMemoryReview(options: {
     review,
     draft,
     receipt,
+    itemOutcomes,
     error,
     notice,
     frozen: rebaseState === "pending" || phase === "saving" || phase === "unknown" || phase === "undoing" || phase === "opening",
@@ -926,6 +1178,8 @@ export function useMemoryReview(options: {
     scheduleDraft,
     flushDraft,
     commit,
+    decideItem,
+    refreshReview,
     dismiss,
     reconcile,
     undo,

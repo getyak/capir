@@ -1894,14 +1894,16 @@ describe.skipIf(!pool)("Memory review integration", () => {
 
   it("passes one Memory item without deciding its sibling and replays the same key", async () => {
     const auth = await makeAuth("item-decision-pass");
+    const sessionId = randomUUID();
+    const messageId = randomUUID();
     const staged = await stage(auth, {
       items: [
         candidate({ display_text: "I prefer written summaries" }),
         candidate({ display_text: "I keep a weekly contact list" }),
       ],
       contactDecision: "none",
-      sessionId: randomUUID(),
-      messageId: randomUUID(),
+      sessionId,
+      messageId,
     });
     const opened = await open(auth, staged!.proposal.proposal_id, "chat");
     const [first, second] = opened.review.items;
@@ -1919,6 +1921,11 @@ describe.skipIf(!pool)("Memory review integration", () => {
     expect(decided).toMatchObject({ kind: "skipped", item_id: first!.id, receipt: null, remaining_pending_item_count: 1 });
     const replay = await decideMemoryReviewItem(pool!, auth, opened.review.review_scope_id, opened.review_credential!, body);
     expect(replay.replayed).toBe(true);
+    const readback = await readMemoryScopedOperationView(pool!, auth, body.idempotency_key, {
+      purpose: "chat", session_id: sessionId,
+    });
+    expect(readback.state).toBe("skipped");
+    expect(readback.dismissed_item_id).toBe(first!.id);
     const status = await pool!.query<{ id: string; status: string }>(
       "SELECT id,status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2",
       [auth.accountId, staged!.proposal.proposal_id],

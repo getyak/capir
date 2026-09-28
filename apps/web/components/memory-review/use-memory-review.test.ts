@@ -81,9 +81,9 @@ let controller: MemoryReviewController;
 let root: Root;
 let mount: HTMLDivElement;
 
-function Probe({ capability = "test-capability" }: { capability?: string }) {
+function Probe({ capability = "test-capability", binding = "binding-1" }: { capability?: string; binding?: string }) {
   const current = useMemoryReview({
-    binding: "binding-1",
+    binding,
     proposal: { proposal_id: PROPOSAL, revision: 1 },
     purpose: "chat",
     entryCapability: capability,
@@ -178,6 +178,71 @@ describe("shared Memory review controller", () => {
     expect(controller.phase).toBe("review");
     // The credential is never written to browser storage.
     expect(JSON.stringify(window.sessionStorage)).not.toContain("cred-1234567890");
+  });
+
+  it("does not send an item decision when its recovery key cannot be saved", async () => {
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: review() }));
+    await act(async () => { await controller.open(); });
+    const callsBefore = fetcher.mock.calls.length;
+    const storage = vi.spyOn(window.sessionStorage, "setItem").mockImplementation(() => { throw new Error("storage unavailable"); });
+    await act(async () => { await controller.decideItem({ itemId: "self-1", decision: "accept" }); });
+    expect(fetcher.mock.calls.length).toBe(callsBefore);
+    expect(controller.error).toContain("无法保存这次操作");
+    storage.mockRestore();
+  });
+
+  it("drops the former account's review and item receipts when the binding changes", async () => {
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: review() }));
+    await act(async () => { await controller.open(); });
+    expect(controller.review).not.toBeNull();
+    await act(async () => { root.render(createElement(Probe, { binding: "binding-2" })); });
+    expect(controller.review).toBeNull();
+    expect(controller.itemOutcomes).toEqual({});
+    expect(controller.receipt).toBeNull();
+  });
+
+  it("closes stale actions when the final item has been processed", async () => {
+    const single = { ...review(), items: [item("self-1", "self")] };
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: single }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockResolvedValueOnce(Response.json({
+      kind: "committed", item_id: "self-1", replayed: false,
+      receipt: { operation_key: "op-final", decisions: [{ proposal_item_id: "self-1", decision: "accept" }] },
+    }));
+    fetcher.mockResolvedValueOnce(Response.json({ code: "MEMORY_REVIEW_PROCESSED" }, { status: 409 }));
+    await act(async () => { await controller.decideItem({ itemId: "self-1", decision: "accept" }); });
+    expect(controller.phase).toBe("processed");
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("committed");
+  });
+
+  it("decides one item through the protected route and keeps the sibling visible", async () => {
+    const opened = review();
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: opened }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockResolvedValueOnce(Response.json({
+      contract_version: "2026-08-24.10",
+      kind: "committed",
+      item_id: "self-1",
+      replayed: false,
+      receipt: { operation_key: "op-item-1", decisions: [{ proposal_item_id: "self-1", decision: "accept" }] },
+      proposal_revision: 1,
+      remaining_pending_item_count: 4,
+    }));
+    fetcher.mockResolvedValueOnce(Response.json({ review: {
+      ...opened,
+      items: opened.items.map((entry) => entry.id === "self-1" ? { ...entry, status: "committed" } : entry),
+    } }));
+    await act(async () => {
+      await controller.decideItem({ itemId: "self-1", decision: "accept" });
+    });
+    const call = fetcher.mock.calls.find(([path]) => String(path).endsWith("/item-decisions")) as [string, RequestInit];
+    expect(call[0]).toBe(`/api/memory/reviews/${SCOPE}/item-decisions`);
+    const body = JSON.parse(call[1].body as string);
+    expect(body.item_id).toBe("self-1");
+    expect(body.decision).toBe("accept");
+    expect(body).not.toHaveProperty("selected_item_ids");
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("committed");
+    expect(controller.review?.items.find((entry) => entry.id === "self-2")?.status).toBe("pending");
   });
 
   it("persists the exact 16-item selection through the review draft endpoint", async () => {
@@ -369,6 +434,50 @@ describe("shared Memory review controller", () => {
     expect(commitBodies).toHaveLength(1);
   });
 
+  it("recovers a lost skip response from the same operation key", async () => {
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: review() }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockImplementation((path: string) => {
+      if (path.endsWith("/item-decisions")) return Promise.reject(new Error("response lost"));
+      if (path.includes("/operation-views/")) return Promise.resolve(Response.json({
+        state: "skipped", dismissed_item_id: "self-1", visible_receipt: null,
+        undo: { allowed: false, limits: [] },
+      }));
+      return Promise.resolve(Response.json({ review_credential: "cred-next", review: review() }));
+    });
+    await act(async () => { await controller.decideItem({ itemId: "self-1", decision: "skip" }); });
+    expect(controller.phase).toBe("unknown");
+    await act(async () => { await controller.reconcile(); });
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("skipped");
+    expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith("/item-decisions"))).toHaveLength(1);
+  });
+
+  it("reconciles a lost item response into that card without another POST", async () => {
+    const opened = review();
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: opened }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockImplementation((path: string) => {
+      if (path.endsWith("/item-decisions")) return Promise.reject(new Error("response lost"));
+      if (path.includes("/operation-views/")) return Promise.resolve(Response.json({
+        state: "applied",
+        visible_receipt: {
+          operation_key: "op-reconciled",
+          decisions: [{ proposal_item_id: "self-1", decision: "accept" }],
+        },
+        undo: { allowed: true, limits: [] },
+      }));
+      return Promise.resolve(Response.json({ review_credential: "cred-next", review: opened }));
+    });
+    await act(async () => { await controller.decideItem({ itemId: "self-1", decision: "accept" }); });
+    expect(controller.phase).toBe("unknown");
+    const stored = window.sessionStorage.getItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`)!;
+    expect(stored).not.toContain("cred-1234567890");
+    expect(JSON.parse(stored).operation_key).toBeTruthy();
+    await act(async () => { await controller.reconcile(); });
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("committed");
+    expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith("/item-decisions"))).toHaveLength(1);
+  });
+
   it("shows a reconcilable unknown state after a lost commit response and reconciles the same operation", async () => {
     fetcher.mockResolvedValueOnce(
       Response.json({ review_credential: "cred-1234567890", review: review() }),
@@ -461,6 +570,43 @@ describe("shared Memory review controller", () => {
       await controller.flushDraft();
     });
     expect(putBodies).toHaveLength(1);
+  });
+
+  it("reconciles a pending item after reload before showing its action again", async () => {
+    window.sessionStorage.setItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`, JSON.stringify({
+      version: 1, binding: "binding-1", proposal_id: PROPOSAL, purpose: "chat",
+      person_id: null, relationship_context_id: null,
+      operation_key: "op-unknown", item_pending_id: "self-1",
+      item_operation_keys: { "self-1": "op-unknown" }, undo_key: null,
+    }));
+    fetcher.mockImplementation((path: string) => String(path).includes("/operation-views/op-unknown")
+      ? Promise.resolve(Response.json({ state: "applied", visible_receipt: {
+          operation_key: "op-unknown", decisions: [{ proposal_item_id: "self-1", decision: "accept" }],
+        }, undo: { allowed: true, limits: [] } }))
+      : Promise.resolve(Response.json({ review_credential: "cred-next", review: review() })));
+    await act(async () => { await controller.open(); });
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("committed");
+    expect(controller.phase).toBe("review");
+    expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith("/item-decisions"))).toHaveLength(0);
+  });
+
+  it("restores an item receipt on reload and leaves another item actionable", async () => {
+    window.sessionStorage.setItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`, JSON.stringify({
+      version: 1, binding: "binding-1", proposal_id: PROPOSAL, purpose: "chat",
+      person_id: null, relationship_context_id: null,
+      operation_key: null, item_pending_id: null,
+      item_operation_keys: { "self-1": "op-saved" }, undo_key: null,
+    }));
+    const refreshed = { ...review(), items: review().items.map((entry) => entry.id === "self-1"
+      ? { ...entry, status: "committed" } : entry) };
+    fetcher.mockImplementation((path: string) => String(path).includes("/operation-views/op-saved")
+      ? Promise.resolve(Response.json({ state: "applied", visible_receipt: {
+          operation_key: "op-saved", decisions: [{ proposal_item_id: "self-1", decision: "accept" }],
+        }, undo: { allowed: true, limits: [] } }))
+      : Promise.resolve(Response.json({ review_credential: "cred-next", review: refreshed })));
+    await act(async () => { await controller.open(); });
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("committed");
+    expect(controller.review?.items.find((entry) => entry.id === "self-2")?.status).toBe("pending");
   });
 
   it("reconciles a closed proposal receipt from the locator without opening a review", async () => {

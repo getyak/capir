@@ -115,6 +115,30 @@ describe("same-origin Memory BFF", () => {
     expect(url).not.toContain("credential");
   });
 
+  it("forwards one item decision only after checking the signed review lineage", async () => {
+    const fetchMock = vi.fn(async (url: string) => String(url).endsWith(`/v1/memory/reviews/${UUID}`)
+      ? jsonResponse({ review: { purpose: "chat", source_session_id: UUID } })
+      : jsonResponse({ kind: "committed", item_id: PERSON }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await memoryReviewRoute(
+      new Request(`http://web.local/api/memory/reviews/${UUID}/item-decisions`, {
+        method: "POST",
+        headers: headers(capability("chat"), {
+          "content-type": "application/json",
+          "x-memory-review-credential": "cred-1234567890",
+        }),
+        body: JSON.stringify({ item_id: PERSON, decision: "accept" }),
+      }),
+      ["reviews", UUID, "item-decisions"],
+    );
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(url).toBe(`http://127.0.0.1:55442/v1/memory/reviews/${UUID}/item-decisions`);
+    expect((init.headers as Record<string, string>)["x-memory-review-credential"]).toBe("cred-1234567890");
+    expect(url).not.toContain("cred-1234567890");
+  });
+
   it("rejects a stale login binding before any backend request", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
