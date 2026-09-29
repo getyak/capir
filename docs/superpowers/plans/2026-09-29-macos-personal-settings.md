@@ -357,3 +357,33 @@ isolation and refresh (4), legacy/offline/real-surface proof and docs (5).
 No new authentication scheme, team subsystem, dependency or migration is planned.
 Execution started. Recommended method: native sequential implementation, then
 an independent final review; the five tasks share routing and authentication seams.
+
+## Real-browser handoff attempt (2026-09-29, still open)
+
+The handoff was attempted against a task-owned synthetic stack: the backend on
+`127.0.0.1:4399` over the disposable database `ts_settings_acceptance` with
+`SIMULATED_AUTH_ENABLED=true`, a synthetic account seeded by SQL, a real session
+from `POST /v1/auth/simulated-login`, the Web dev server on `4398`, and a logging
+proxy on `4400` in front of it. A disposable-profile headless Chrome opened
+`/workspace/settings?section=account` through the DevTools protocol with a real
+NextAuth session cookie minted by `next-auth/jwt` `encode()`; the page rendered the
+synthetic identity 合成用户 / Synthetic 设置账号 and the session
+`web-browser-acceptance`, and a signed-out profile was sent to `/login`.
+
+The app-to-browser handoff is **not proven**. Run 3
+(`testAccountRowHandsOffToTheDefaultBrowser`, exit 0, `/tmp/ts-ui-handoff3.log`)
+clicked the real account row with no failure banner and the synthetic server then
+logged `GET /workspace/settings` and
+`GET /login?callbackUrl=%2Fworkspace%2Fsettings`, but this task's own disposable
+headless Chrome profiles were still running and also send a Chrome user agent, so
+those requests cannot be attributed to the default browser. Runs 4 and 5 failed
+before the click (`quick.draftEditor` unreachable without
+`--ui-testing --fixture-state`; then a flaky main window), so no attributed
+observation exists yet. The default handler is `com.google.chrome`.
+
+The next attempt must: use a per-run task-owned origin port and a unique request
+marker; close every task-owned browser first; assert the marker request and observe
+the opened page by filtering the browser's tabs to that port only; carry an unsent
+draft through the round trip with `--ui-testing --fixture-state canonical` and the
+draft assertion mandatory. The default browser is only used for the URL the app
+itself hands off, and only against the loopback synthetic server.

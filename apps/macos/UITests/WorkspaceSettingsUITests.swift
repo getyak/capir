@@ -69,4 +69,62 @@ final class WorkspaceSettingsUITests: XCTestCase {
         XCTAssertFalse(app.buttons["settings.search.result.captures"].waitForExistence(timeout: 2))
         app.terminate()
     }
+    /// The account row is a real browser handoff against the synthetic loopback
+    /// server. The server log attributes each request to its client, so a
+    /// post-click `GET /workspace/settings` with a browser user agent is evidence
+    /// that the default browser navigated, not that the app merely asked it to.
+    /// This test also carries an unsent draft through the whole round trip.
+    func testAccountRowHandsOffToTheDefaultBrowserAndKeepsTheDraft() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--ui-testing", "--fixture-state", "canonical",
+            "-workspace.web.origin", "http://127.0.0.1:4400",
+            "-workspace.connection.localDevelopment", "YES"
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        let main = app.windows.firstMatch
+
+        // An unsent draft typed into the app's own draft editor.
+        let draft = "未发送的问题 round trip \(UUID().uuidString.prefix(6))"
+        app.typeKey("n", modifierFlags: [.command, .option])
+        let editor = app.descendants(matching: .any)["quick.draftEditor"]
+        let hasDraftSurface = editor.waitForExistence(timeout: 15)
+        XCTAssertTrue(hasDraftSurface, "The app's own draft editor must be reachable")
+        if hasDraftSurface {
+            editor.click()
+            editor.typeKey("a", modifierFlags: .command)
+            editor.typeText(draft)
+            app.typeKey(.escape, modifierFlags: [])
+        }
+
+        app.typeKey(",", modifierFlags: [.command])
+        let row = app.buttons["settings.account.browser"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20))
+        XCTAssertEqual(app.windows.count, 2)
+        row.click()
+        XCTAssertFalse(
+            app.descendants(matching: .any)["workspace.browserLaunchFailure"].waitForExistence(timeout: 8),
+            "The default browser launch was refused"
+        )
+        XCTAssertTrue(app.buttons["settings.section.general"].exists)
+        XCTAssertEqual(app.windows.count, 2, "The handoff must not open a native settings pane")
+
+        // Back to the workbench: the main window is still the same one.
+        app.typeKey("w", modifierFlags: [.command])
+        XCTAssertTrue(main.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.windows.count, 1)
+
+        if hasDraftSurface {
+            app.typeKey("n", modifierFlags: [.command, .option])
+            XCTAssertTrue(editor.waitForExistence(timeout: 10))
+            XCTAssertEqual((editor.value as? String)?.contains(draft), true,
+                           "The unsent draft must survive the settings round trip")
+        }
+        let screen = XCTAttachment(screenshot: app.screenshot())
+        screen.name = "Account row handed off to the default browser"
+        screen.lifetime = .keepAlways
+        add(screen)
+        app.terminate()
+    }
 }
