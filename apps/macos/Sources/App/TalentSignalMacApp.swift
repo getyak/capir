@@ -41,8 +41,13 @@ struct TalentSignalMacApp: App {
                     .environmentObject(model)
                     .environment(\.dynamicTypeSize, model.isAccessibilityZoomPreview ? .accessibility2 : .large)
                     .preferredColorScheme(model.isDarkAppearancePreview ? .dark : nil)
-                    .task { CaptureRuntime.shared.start(); updater.start(); _ = await model.ensureInitialized() }
+                    .task {
+                        CaptureRuntime.shared.start()
+                        updater.start()
+                        _ = await model.ensureInitialized()
+                    }
                     .background(SelectedTextServiceBridge().environmentObject(model))
+                    .background(DesktopPetWorkspaceLink())
             }
             .frame(
                 minWidth: isQuickPanelPreview ? 520 : 760,
@@ -57,6 +62,7 @@ struct TalentSignalMacApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .commands {
             WorkspaceDesktopCommands()
+            DesktopPetCommands()
             CommandGroup(after: .appInfo) {
                 if let offerID = updater.presentation.offerID {
                     Button("更新并重启") { updater.installUpdate(offerID: offerID) }

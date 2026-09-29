@@ -31,13 +31,14 @@ the shared Web product can supply a scoped, provenance-preserving state feed.
   removes speculative counts and task stages. It opens the existing workspace
   while a trustworthy scoped task feed is unavailable.
 - Use the original Figma vector characters, exported as bundled PNG for native
-  rendering and SVG as inspectable source. Motion changes a character's pose
-  only when a real state changes. Reduced Motion yields a static presentation.
+  rendering and SVG as inspectable source. The first slice has only a subtle
+  optional idle breath; it does not animate a work outcome it cannot verify.
+  Reduced Motion yields a static presentation.
 
 ## Milestones
 
 1. Native settings and state: locally persisted selection, visibility,
-   position, size and motion; import validates custom artwork before use.
+   position and motion. Size control and validated custom artwork remain open.
 2. Desktop surface: a small, nonactivating companion with hide/restore,
    bounded positioning, keyboard/accessibility support and no private text.
 3. Truthful task panel: only real, scoped statuses with an explicit empty or
@@ -49,11 +50,37 @@ the shared Web product can supply a scoped, provenance-preserving state feed.
 ## Current state
 
 - Baseline: `origin/main@e3f5a96d`; branch `codex/get-33-desktop-pet`.
-- Figma visible/hidden designs and exact six illustrations are available.
+- Figma visible, hidden and unavailable-work designs and the exact six
+  illustrations are available. The native settings, bundled selection,
+  floating panel and reversible visibility control now build and launch.
 - Native production app is `apps/macos`; `apps/macos-hybrid` is a feasibility
   shell and is not the GET-33 shipping target.
 - No authenticated, native-readable cross-session background task feed was
   found during initial inspection. A panel must not fabricate running, queued
   or recent counts while this remains unavailable.
 - Local storage audit found 69 GiB free, below the 80 GiB heavy-build guard.
-  Inspect narrowly scoped build products and safe cleanup before building.
+  Scoped cache cleanup was attempted; the macOS build used a registered
+  task-owned artifact directory and occupied about 453 MiB.
+- Native Debug build passed. `WorkspaceSettingsTests` passed all 28 tests on
+  both focused runs, including the final build. The dedicated UI runner
+  exited before test bootstrap twice, including with signing enabled, so its
+  assertions have not executed.
+- Live macOS readback confirmed the settings preview and visible show/hide
+  button, all six bundled illustrations, the floating controls, the truthful
+  unavailable-state popover, hide/restore through the app menu, and reopening
+  the original workspace after closing its main window. Computer Use captures
+  the controls panel separately from the noninteractive artwork panel, so a
+  composite desktop screenshot is not yet available as visual evidence.
+- The first Pi/MiMo batch was cancelled after 194 no-op turns with no source
+  changes. An independent reviewer found no remaining P0/P1 after the
+  workspace reopening and pointer-interception fixes.
+
+## Unmet requirements to adjudicate before issue closure
+
+The issue also proposes 8×9 animated sprite sheets, custom and community pets,
+real cross-session running/queued/recent counts, screenshot and draft handoffs,
+reminders, recovery, and state-specific success/failure/cancel/incomplete
+motion. The current Mac and Web boundary does not provide a trustworthy
+cross-session desktop status feed. These behaviors are not established by the
+first loop or by the Figma exploration and must not be marked complete without
+their own implementation and live readback. GET-33 remains in progress.

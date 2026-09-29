@@ -9,7 +9,7 @@ final class WorkspaceSettingsTests: XCTestCase {
     /// origin, which is what makes Settings usable offline.
     func testEverySectionIsANativeDeviceControlAndStaysOffline() {
         XCTAssertEqual(WorkspaceSettingsSection.allCases.map(\.rawValue),
-                       ["general", "permissions", "connection", "updates"])
+                       ["general", "companion", "permissions", "connection", "updates"])
         for section in WorkspaceSettingsSection.allCases {
             let pane = WorkspaceSettingsPane.resolve(selection: section)
             XCTAssertTrue(pane.isNativeDeviceControl, "\(section) must not need the Web origin")
@@ -27,7 +27,7 @@ final class WorkspaceSettingsTests: XCTestCase {
             XCTAssertFalse(rawValues.contains(removed), "\(removed) must not be a native settings row")
         }
         XCTAssertEqual(WorkspaceSettingsSection.groups.map(\.title), ["此 Mac", "支持"])
-        XCTAssertEqual(WorkspaceSettingsSection.groups.first?.sections, [.general, .permissions, .updates])
+        XCTAssertEqual(WorkspaceSettingsSection.groups.first?.sections, [.general, .companion, .permissions, .updates])
         XCTAssertEqual(WorkspaceSettingsSection.groups.last?.sections, [.connection])
     }
 
@@ -115,6 +115,7 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertEqual(WorkspaceSettingsSearchEntry.search("此设备").first?.id, "permissions")
         XCTAssertEqual(WorkspaceSettingsSearchEntry.search("软件更新").first?.id, "updates")
         XCTAssertEqual(WorkspaceSettingsSearchEntry.search("运行记录").first?.id, "connection")
+        XCTAssertEqual(WorkspaceSettingsSearchEntry.search("隐藏伙伴").first?.id, "companion")
         XCTAssertEqual(WorkspaceSettingsSearchEntry.search("账号").first?.id, "account")
         // Full-width and spaced Latin input folds to the same alias.
         XCTAssertEqual(WorkspaceSettingsSearchEntry.normalized("  SCREEN  Shot "), "screenshot")
