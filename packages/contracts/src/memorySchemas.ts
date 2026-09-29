@@ -786,6 +786,8 @@ export const MemoryScopedOperationViewSchema = Type.Object(
     commit_id: optional(id),
     dismissed_item_id: optional(id),
     applied_display_text: optional(text(1_000)),
+    item_snapshot: Type.Optional(MemoryProposalItemSchema),
+    person_display_label: optional(text(200)),
     commit_revision: optional(Type.Integer({ minimum: 1 })),
     state: Type.Union([
       Type.Literal("applied"),

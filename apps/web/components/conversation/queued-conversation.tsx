@@ -131,12 +131,21 @@ export function QueuedConversation(props: Props) {
   const projectedMessages = useMemo(() => sessionMessages({
     turns, active: activeVisible ? active : null, preview: forming,
   }), [turns, activeVisible, active, forming]);
+  const sourceImagesByMessageId = useMemo(() => Object.fromEntries(
+    turns.map((turn) => [turn.id, turn.images ?? []]),
+  ), [turns]);
+  const sourceTextByMessageId = useMemo(() => Object.fromEntries(
+    turns.map((turn) => [turn.id, turn.objective ?? ""]),
+  ), [turns]);
   const renderContext = {
     binding: props.chatBinding,
+    meetingBinding: props.detailBinding,
     entryCapability: chat.entryCapability ?? props.entryCapability ?? null,
     scope: props.scope,
     sessionId: chat.detail?.session_id ?? id ?? "",
     status,
+    sourceImagesByMessageId,
+    sourceTextByMessageId,
     onCardComment: (item: MemoryProposalItem) => {
       const label = item.display_text.length > 48 ? `${item.display_text.slice(0, 48)}…` : item.display_text;
       const next = `${chat.draft}${chat.draft ? "\n" : ""}关于「${label}」：`;

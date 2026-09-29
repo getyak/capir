@@ -9,6 +9,7 @@ import type {
   MemoryProposalItem,
   MemoryProposalReference,
   MemoryScope,
+  ConversationImageManifest,
   PersonDirectoryItem,
 } from "@talent-signal/contracts";
 
@@ -53,6 +54,9 @@ export type MemoryReviewCardProps = {
   entryCapability?: string | null;
   sessionId?: string | null;
   onCommentItem?: (item: MemoryProposalItem) => void;
+  sourceImages?: readonly ConversationImageManifest[];
+  sourceMessageId?: string | null;
+  sourceText?: string;
 };
 
 const PREVIEW_LIMIT = 4;
@@ -642,6 +646,11 @@ function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
   const openReview = controller.open;
   useEffect(() => { void openReview(); }, [openReview, props.binding, props.proposal.proposal_id, props.proposal.revision]);
   return <SessionMemoryCards controller={controller} onComment={props.onCommentItem}
+    sourceImageContext={props.binding && props.sessionId && props.sourceMessageId ? {
+      binding: props.binding, sessionId: props.sessionId, messageId: props.sourceMessageId,
+      images: props.sourceImages ?? [],
+    } : undefined}
+    sourceText={props.sourceText ?? ""}
     onCompare={() => setComparing(true)}
     comparison={comparing ? <ChangePersonPanel
       failure={controller.rebaseError}

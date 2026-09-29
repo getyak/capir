@@ -91,10 +91,13 @@ import styles from "./queued-conversation.module.css";
 
 type RenderContext = {
   binding: string;
+  meetingBinding: string;
   entryCapability: string | null;
   scope: string;
   sessionId: string;
   status: string;
+  sourceImagesByMessageId: Record<string, readonly ConversationImageManifest[]>;
+  sourceTextByMessageId: Record<string, string>;
   onCardComment?: (item: MemoryProposalItem) => void;
 };
 
@@ -121,10 +124,13 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
     && typeof data.revision === "number") {
     return <MemoryReviewCard binding={context.binding} entryCapability={context.entryCapability}
       proposal={{ proposal_id: data.proposalId, revision: data.revision }} purpose="chat" sessionId={context.sessionId}
+      sourceImages={typeof data.messageId === "string" ? context.sourceImagesByMessageId[data.messageId] ?? [] : []}
+      sourceMessageId={typeof data.messageId === "string" ? data.messageId : null}
+      sourceText={typeof data.messageId === "string" ? context.sourceTextByMessageId[data.messageId] ?? "" : ""}
       onCommentItem={context.onCardComment}/>;
   }
   if (name === "talent-signal.calendar" && data.version === 1 && typeof data.draftId === "string") {
-    return <SessionCalendarDraftCard draftId={data.draftId} binding={context.binding} sessionId={context.sessionId}/>;
+    return <SessionCalendarDraftCard draftId={data.draftId} binding={context.meetingBinding} sessionId={context.sessionId}/>;
   }
   if (name === "talent-signal.progress") {
     const text = typeof data.text === "string" ? data.text : "";

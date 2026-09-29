@@ -79,6 +79,16 @@ describe("Session Memory item card", () => {
     expect(mount.textContent).toContain("无法操作");
   });
 
+  it("redacts the old excerpt when the backend reports source revocation", async () => {
+    await act(async () => root.render(createElement(MemoryItemCard, {
+      item, personLabel: "林岚", busy: false, onDecide: decide,
+      outcome: { kind: "unavailable", receipt: null, operationKey: "op-revoked" },
+    })));
+    expect(mount.textContent).not.toContain(item.source_excerpt);
+    expect(mount.textContent).not.toContain(item.display_text);
+    expect(mount.textContent).toContain("来源已失效");
+  });
+
   it("shows the backend-confirmed edited value in its receipt", async () => {
     await act(async () => root.render(createElement(MemoryItemCard, {
       item, personLabel: "林岚", busy: false, onDecide: decide,

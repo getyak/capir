@@ -5,6 +5,7 @@ import type { MeetingDraftRecord } from "@talent-signal/contracts";
 import { meetingDraftCalendarValue } from "@/lib/meeting-calendar";
 import { CalendarDraftReview } from "../calendar-draft-review";
 import { workspaceSessionFetch } from "../workspace-session-request";
+import styles from "./session-calendar-draft-card.module.css";
 
 type PendingDismiss = { version: 1; operationKey: string; revision: number; expiresAt: string };
 function dismissStorageKey(binding: string, draftId: string) {
@@ -157,6 +158,6 @@ function SessionCalendarDraftCardContent({ draftId, binding, sessionId }: { draf
     revision: record.revision,
     sessionVersion: binding,
   }} variant="session" onDismiss={() => void dismiss()} onDraftSaved={setRecord}/>
-    <a className="context-calendar-draft-handoff" href={`/workspace/meetings?draft=${encodeURIComponent(draftId)}`}>在时间页查看日历草稿</a>
+    <a className={styles.secondaryLink} href={`/workspace/meetings?draft=${encodeURIComponent(draftId)}`}>在时间页查看日历草稿</a>
   </div>;
 }

@@ -609,7 +609,8 @@
 .actionReceipt button { min-height:32px; margin-left:auto; }
 .actionHint { margin:0; font-size:12px; color:var(--muted); }
 @media(max-width:640px) { .actionCard { padding:14px; } .actionButtons button,.actionEdit button { min-height:44px; } .actionButtons .actionComment { margin-left:0; } }
-.actionStack { display:grid; justify-items:start; gap:2px; }
+.actionStack { display:grid; justify-items:stretch; gap:2px; width:min(100%,620px); }
+.actionStack .actionCard { width:100%; box-sizing:border-box; }
 .actionStack > .actionHint { margin:5px 0 8px; }
 .actionMore { border:0; background:none; color:var(--muted); font:inherit; font-size:13px; min-height:38px; padding:5px 2px; cursor:pointer; }
 .actionMore:hover { color:var(--ink); }
@@ -622,3 +623,11 @@
 .contactDecisionEdit input { width:100%; box-sizing:border-box; padding:9px 10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface); color:var(--ink); font:inherit; font-size:14px; }
 .contactDecisionEdit .actionButtons { margin-top:3px; }
 .actionReceipt a { color:var(--ink); text-decoration:underline; margin-left:auto; }
+.sourceImageBackdrop { position:fixed; inset:0; z-index:100; background:rgb(24 28 28 / 64%); }
+.sourceImageDialog { position:fixed; z-index:101; top:50%; left:50%; transform:translate(-50%,-50%); width:min(90vw,900px); max-height:88vh; overflow:auto; box-sizing:border-box; padding:18px; border-radius:14px; background:var(--surface); color:var(--ink); box-shadow:0 18px 60px rgb(0 0 0 / 24%); }
+.sourceImageDialog > button { float:right; border:0; background:none; color:var(--ink); font:inherit; cursor:pointer; }
+.sourceImageDialog > h2 { margin:0 0 16px; font-size:16px; font-weight:600; }
+.sourceImageDialog > p { color:var(--muted); font-size:13px; }
+.sourceImageFrame { position:relative; width:max-content; max-width:100%; margin:auto; }
+.sourceImageFrame img { display:block; max-width:100%; max-height:72vh; object-fit:contain; }
+.sourceImageRegion { position:absolute; box-sizing:border-box; border:2px solid #d97558; border-radius:4px; background:rgb(217 117 88 / 12%); pointer-events:none; }

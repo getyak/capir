@@ -1856,6 +1856,9 @@ describe.skipIf(!pool)("Memory review integration", () => {
     const readback = await readMemoryOperation(pool!, auth, operationKey);
     expect(readback.state).toBe("source_revoked");
     expect(readback.receipt).toBeNull();
+    const scoped = await readMemoryScopedOperationView(pool!, auth, operationKey, { purpose: "chat", session_id: sessionId });
+    expect(scoped.state).toBe("source_revoked");
+    expect(scoped.item_snapshot).toBeUndefined();
     await expect(
       commit(auth, opened.review, opened.review_credential!, {
         selected: opened.review.items.map((item) => item.id),
@@ -1927,6 +1930,8 @@ describe.skipIf(!pool)("Memory review integration", () => {
     });
     expect(readback.state).toBe("skipped");
     expect(readback.dismissed_item_id).toBe(first!.id);
+    expect(readback.item_snapshot?.status).toBe("skipped");
+    expect(readback.item_snapshot?.source_excerpt).toBe(first!.source_excerpt);
     const status = await pool!.query<{ id: string; status: string }>(
       "SELECT id,status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2",
       [auth.accountId, staged!.proposal.proposal_id],
@@ -1969,6 +1974,8 @@ describe.skipIf(!pool)("Memory review integration", () => {
       purpose: "chat", session_id: sessionId,
     });
     expect(readback.applied_display_text).toBe("I prefer concise written updates");
+    expect(readback.item_snapshot?.source_excerpt).toBe(first!.source_excerpt);
+    expect(readback.item_snapshot?.status).toBe("committed");
     expect(decided.receipt?.decisions.map((decision) => decision.proposal_item_id)).toEqual([first!.id]);
     const status = await pool!.query<{ id: string; status: string }>(
       "SELECT id,status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2 ORDER BY id",
@@ -2025,6 +2032,8 @@ describe.skipIf(!pool)("Memory review integration", () => {
     const result = await decideMemoryContactOnly(pool!, auth, opened.review.review_scope_id, opened.review_credential!, body);
     expect(result.receipt.created_person_id).toBeTruthy();
     expect(result.receipt.applied_item_count).toBe(0);
+    const contactView = await readMemoryScopedOperationView(pool!, auth, result.receipt.operation_key, { purpose: "chat", session_id: sessionId });
+    expect(contactView.person_display_label).toBe("陈宇");
     expect(result.remaining_pending_item_count).toBe(2);
     const rows = await pool!.query<{ status: string }>(
       "SELECT status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2",
@@ -2900,6 +2909,79 @@ describe.skipIf(!pool)("Memory review integration", () => {
     expect(committed.body.receipt.created_person_id).toBeTruthy();
     expect(committed.body.receipt.created_relationship_context_id).toBeTruthy();
   });
+
+  it("dispatches a real Session proposal, then decides contact and Memory siblings separately", async () => {
+    const auth = await makeAuth("session-card-dispatch");
+    const sessionId = randomUUID();
+    const messageId = randomUUID();
+    const objective = "陈宇负责设计系统。我偏好先看试点结果。";
+    await insertSourceSession(auth, sessionId, messageId, objective);
+    const source = { kind: "message" as const, session_id: sessionId, message_id: messageId };
+    const provider = {
+      providerId: "zhipu-chat-completions" as const,
+      id: "session-cards-scripted",
+      model: "session-cards-scripted-v1",
+      sdkVersion: "session-cards.v1",
+      supportsImageInput: false,
+      inputCapabilities: { text: true, image: false, imageUnderstanding: false },
+      answer: vi.fn(),
+      run: vi.fn(async (_request: unknown, invokeTool: (name: string, input: unknown) => Promise<{ ok: boolean }>) => {
+        const result = await invokeTool("memory_review", {
+          operation: "propose", contact_decision: "new", person_display_label: "陈宇",
+          new_contact_source_locator: source,
+          items: [
+            candidate({ scope: "person", statement_kind: "source_statement", speaker: "陈宇",
+              display_text: "陈宇负责设计系统", source_excerpt: "陈宇负责设计系统", source_locator: source }),
+            candidate({ display_text: "我偏好先看试点结果", source_excerpt: "我偏好先看试点结果", source_locator: source }),
+          ],
+        });
+        expect(result.ok).toBe(true);
+        return { structuredOutput: { outcome: "reply", title: "已整理", body: "请确认需要保留的内容。" },
+          inputTokens: 1, outputTokens: 1, estimatedUsd: 0, turns: 1, permissionDenials: [] };
+      }),
+    };
+    const execution = await executeUnscopedChatTask({
+      request: { idempotency_key: randomUUID(), objective, session_id: sessionId, message_id: messageId },
+      provider: provider as never, database: pool!, auth, images: [],
+    });
+    const proposalId = execution.body.memory_proposal?.proposal_id;
+    expect(proposalId).toBeTruthy();
+    const first = await open(auth, proposalId!, "chat");
+    expect(first.review.items).toHaveLength(2);
+    const contact = await decideMemoryContactOnly(pool!, auth, first.review.review_scope_id, first.review_credential!, {
+      idempotency_key: randomUUID(), expected_proposal_revision: first.review.proposal_revision,
+      display_label: "陈宇", relationship_context: first.review.relationship_display_label ?? "",
+      reason: "Add this contact only",
+    });
+    expect(contact.receipt.created_person_id).toBeTruthy();
+    expect(contact.remaining_pending_item_count).toBe(2);
+    const second = await open(auth, proposalId!, "chat");
+    const person = second.review.items.find((item) => item.scope === "person")!;
+    const remembered = await decideMemoryReviewItem(pool!, auth, second.review.review_scope_id, second.review_credential!, {
+      idempotency_key: randomUUID(), expected_proposal_revision: second.review.proposal_revision,
+      expected_review_revision: second.review.review_revision, item_id: person.id,
+      expected_item_added_revision: person.added_revision, contact_decision: "existing",
+      decision: "accept", reason: "Remember this person fact",
+    });
+    expect(remembered.kind).toBe("committed");
+    expect(remembered.remaining_pending_item_count).toBe(1);
+    const third = await open(auth, proposalId!, "chat");
+    const self = third.review.items.find((item) => item.scope === "self")!;
+    const passed = await decideMemoryReviewItem(pool!, auth, third.review.review_scope_id, third.review_credential!, {
+      idempotency_key: randomUUID(), expected_proposal_revision: third.review.proposal_revision,
+      expected_review_revision: third.review.review_revision, item_id: self.id,
+      expected_item_added_revision: self.added_revision, contact_decision: "existing",
+      decision: "skip", reason: "Do not save this preference",
+    });
+    expect(passed.kind).toBe("skipped");
+    const stored = await pool!.query<{ id: string; status: string }>(
+      "SELECT id,status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2",
+      [auth.accountId, proposalId],
+    );
+    expect(Object.fromEntries(stored.rows.map((row) => [row.id, row.status]))).toMatchObject({
+      [person.id]: "committed", [self.id]: "skipped",
+    });
+  }, 30_000);
 
 
   it("allows an authorized search and stage followed by a helpful answer with a memory reference", async () => {

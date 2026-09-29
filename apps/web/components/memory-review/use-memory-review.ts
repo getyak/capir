@@ -7,6 +7,7 @@ import type {
   MemoryDecision,
   MemoryItemDecisionResponse,
   MemoryProposalReference,
+  MemoryProposalItem,
   MemoryReceipt,
   MemoryReviewView,
   MemoryScopedOperationView,
@@ -53,6 +54,8 @@ export type MemoryItemOutcome = {
   receipt: MemoryReceipt | null;
   operationKey: string;
   finalText?: string | null;
+  snapshot?: MemoryProposalItem;
+  personLabel?: string | null;
 };
 
 export type MemoryReviewPhase =
@@ -91,7 +94,7 @@ export interface MemoryReviewController {
   decideContactOnly: (input: { displayLabel: string; relationshipContext: string }) => Promise<MemoryContactOnlyDecisionResponse | null>;
   checkContact: () => Promise<void>;
   undoContact: () => Promise<boolean>;
-  refreshReview: () => Promise<boolean>;
+  refreshReview: (decided?: { id: string; kind: "committed" | "skipped" }) => Promise<boolean>;
   undoItem: (itemId: string) => Promise<boolean>;
   checkItem: (itemId: string) => Promise<void>;
   dismiss: (itemIds: string[], reason: string) => Promise<boolean>;
@@ -196,6 +199,7 @@ export function useMemoryReview(options: {
   const [receipt, setReceipt] = useState<MemoryReceipt | null>(null);
   const [itemOutcomes, setItemOutcomes] = useState<Record<string, MemoryItemOutcome>>({});
   const [contactOutcome, setContactOutcome] = useState<MemoryItemOutcome | null>(null);
+  const recoveredItemSnapshots = useRef<Record<string, MemoryProposalItem>>({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [locator, setLocator] = useState<Locator | null>(null);
@@ -236,6 +240,7 @@ export function useMemoryReview(options: {
     setReceipt(null);
     setItemOutcomes({});
     setContactOutcome(null);
+    recoveredItemSnapshots.current = {};
     setLocator(null);
     setError(null);
     setNotice(null);
@@ -368,6 +373,8 @@ export function useMemoryReview(options: {
       }
       const view = (await response.json()) as MemoryScopedOperationView;
       if ((view.state === "applied" || view.state === "undone") && view.visible_receipt) {
+        if (view.item_snapshot) recoveredItemSnapshots.current[itemId] = view.item_snapshot;
+        else delete recoveredItemSnapshots.current[itemId];
         const pendingUndo = key ? Boolean(readLocator(key)?.item_undo_keys?.[itemId]) : false;
         if (view.state === "applied" && pendingUndo) {
           setItemOutcomes((previous) => ({ ...previous, [itemId]: {
@@ -380,6 +387,8 @@ export function useMemoryReview(options: {
         setItemOutcomes((previous) => ({ ...previous, [itemId]: {
           kind: view.state === "undone" ? "undone" : "committed", receipt: view.visible_receipt, operationKey,
           finalText: view.applied_display_text ?? null,
+          ...(view.item_snapshot ? { snapshot: view.item_snapshot } : {}),
+          personLabel: view.person_display_label ?? null,
         } }));
         if (view.state === "undone" && key) {
           const current = readLocator(key);
@@ -401,8 +410,12 @@ export function useMemoryReview(options: {
         setPhase("review");
         setNotice(null);
       } else if (view.state === "skipped" && view.dismissed_item_id === itemId) {
+        if (view.item_snapshot) recoveredItemSnapshots.current[itemId] = view.item_snapshot;
+        else delete recoveredItemSnapshots.current[itemId];
         setItemOutcomes((previous) => ({ ...previous, [itemId]: {
           kind: "skipped", receipt: null, operationKey,
+          ...(view.item_snapshot ? { snapshot: view.item_snapshot } : {}),
+          personLabel: view.person_display_label ?? null,
         } }));
         operationRef.current = null;
         if (key) {
@@ -416,6 +429,7 @@ export function useMemoryReview(options: {
         setPhase("review");
         setNotice(null);
       } else if (view.state === "source_revoked") {
+        delete recoveredItemSnapshots.current[itemId];
         setItemOutcomes((previous) => ({ ...previous, [itemId]: {
           kind: "unavailable", receipt: null, operationKey,
         } }));
@@ -605,8 +619,11 @@ export function useMemoryReview(options: {
       credentialRef.current = body.review_credential ?? null;
       scopeRef.current = body.review.review_scope_id;
       openedKeyRef.current = entryKey;
-      reviewRef.current = body.review;
-      setReview(body.review);
+      const freshIds = new Set(body.review.items.map((item) => item.id));
+      const recovered = Object.values(recoveredItemSnapshots.current).filter((item) => !freshIds.has(item.id));
+      const mergedReview: MemoryReviewView = { ...body.review, items: [...recovered, ...body.review.items] };
+      reviewRef.current = mergedReview;
+      setReview(mergedReview);
       const seeded = createDraftState(body.review, draftRef.current);
       draftRef.current = seeded;
       setDraft(seeded);
@@ -879,7 +896,7 @@ export function useMemoryReview(options: {
     [binding, proposalId, proposalRevision, purpose, personId, contextId, request, review, key, errorMessage, flushDraft],
   );
 
-  const refreshReview = useCallback(async (): Promise<boolean> => {
+  const refreshReview = useCallback(async (decided?: { id: string; kind: "committed" | "skipped" }): Promise<boolean> => {
     if (!proposalId || !binding) return false;
     try {
       const response = await request(`/api/memory/proposals/${proposalId}/reviews`, {
@@ -897,8 +914,9 @@ export function useMemoryReview(options: {
       });
       if (!response.ok) {
         const body = await response.clone().json().catch(() => null);
-        if (body?.code === "MEMORY_REVIEW_PROCESSED" || body?.code === "MEMORY_REVIEW_DISMISSED") {
-          setPhase(body.code === "MEMORY_REVIEW_PROCESSED" ? "processed" : "dismissed");
+        const code = body?.error?.code ?? body?.code;
+        if (code === "MEMORY_REVIEW_PROCESSED" || code === "MEMORY_REVIEW_DISMISSED") {
+          setPhase(code === "MEMORY_REVIEW_PROCESSED" ? "processed" : "dismissed");
           return true;
         }
         setError(await errorMessage(response, "剩余内容暂时无法读取，请稍后核对。"));
@@ -907,8 +925,13 @@ export function useMemoryReview(options: {
       const body = (await response.json()) as { review_credential?: string; review: MemoryReviewView };
       credentialRef.current = body.review_credential ?? null;
       scopeRef.current = body.review.review_scope_id;
-      reviewRef.current = body.review;
-      setReview(body.review);
+      const freshIds = new Set(body.review.items.map((item) => item.id));
+      const retained = (reviewRef.current?.items ?? [])
+        .filter((item) => !freshIds.has(item.id) && (item.status !== "pending" || item.id === decided?.id))
+        .map((item) => item.id === decided?.id ? { ...item, status: decided.kind } : item);
+      const merged: MemoryReviewView = { ...body.review, items: [...retained, ...body.review.items] };
+      reviewRef.current = merged;
+      setReview(merged);
       const next = createDraftState(body.review);
       draftRef.current = next;
       setDraft(next);
@@ -941,11 +964,12 @@ export function useMemoryReview(options: {
     const operationKey = crypto.randomUUID();
     const priorLocator = key ? readLocator(key) : null;
     const nextLocator: Locator = {
+      ...(priorLocator ?? {}),
       version: 1, binding, proposal_id: proposalId, purpose,
       person_id: personId, relationship_context_id: contextId,
       operation_key: operationKey, item_pending_id: item.id,
       item_operation_keys: { ...(priorLocator?.item_operation_keys ?? {}), [item.id]: operationKey },
-      undo_key: null,
+      undo_key: priorLocator?.undo_key ?? null,
     };
     if (!key || !writeRequiredLocator(key, nextLocator)) {
       inflight.current = false;
@@ -990,13 +1014,16 @@ export function useMemoryReview(options: {
         return null;
       }
       const result = (await response.json()) as MemoryItemDecisionResponse;
+      const snapshot: MemoryProposalItem = { ...item, status: result.kind };
+      recoveredItemSnapshots.current[item.id] = snapshot;
       setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: result.kind, receipt: result.receipt, operationKey,
-        finalText: result.applied_display_text ?? null } }));
+        finalText: result.applied_display_text ?? null, snapshot,
+        personLabel: current.person_display_label ?? null } }));
       operationRef.current = null;
       if (key) writeLocator(key, { ...nextLocator, operation_key: null, item_pending_id: null });
       setPhase("review");
       setNotice(null);
-      await refreshReview();
+      await refreshReview({ id: item.id, kind: result.kind });
       return result;
     } catch {
       setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: "unknown", receipt: null, operationKey } }));
@@ -1025,11 +1052,12 @@ export function useMemoryReview(options: {
     const operationKey = crypto.randomUUID();
     const prior = key ? readLocator(key) : null;
     const next: Locator = {
+      ...(prior ?? {}),
       version: 1, binding, proposal_id: proposalId, purpose,
       person_id: personId, relationship_context_id: contextId,
       operation_key: operationKey, contact_operation_key: operationKey,
       contact_pending: true, item_operation_keys: prior?.item_operation_keys ?? {},
-      undo_key: null,
+      undo_key: prior?.undo_key ?? null,
     };
     if (!key || !writeRequiredLocator(key, next)) {
       setError("浏览器无法保存这次操作，已停止提交；请稍后重试。");
@@ -1148,7 +1176,9 @@ export function useMemoryReview(options: {
       }
       const view = (await viewResponse.json()) as MemoryScopedOperationView;
       if (view.state === "undone") {
-        setItemOutcomes((previous) => ({ ...previous, [itemId]: { kind: "undone", receipt: view.visible_receipt, operationKey } }));
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+          ...previous[itemId], kind: "undone", receipt: view.visible_receipt, operationKey,
+        } }));
         return true;
       }
       if (!view.undo.allowed || !view.commit_revision) {
@@ -1171,7 +1201,9 @@ export function useMemoryReview(options: {
         return false;
       }
       const body = (await response.json()) as { receipt: MemoryReceipt };
-      setItemOutcomes((previous) => ({ ...previous, [itemId]: { kind: "undone", receipt: body.receipt, operationKey } }));
+      setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+        ...previous[itemId], kind: "undone", receipt: body.receipt, operationKey,
+      } }));
       const current = readLocator(key);
       if (current) {
         const undoKeys = { ...(current.item_undo_keys ?? {}) };
@@ -1181,7 +1213,9 @@ export function useMemoryReview(options: {
       setError(null);
       return true;
     } catch {
-      setItemOutcomes((previous) => ({ ...previous, [itemId]: { kind: "undo_unknown", receipt: outcome.receipt, operationKey } }));
+      setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+        ...previous[itemId], kind: "undo_unknown", receipt: outcome.receipt, operationKey,
+      } }));
       setNotice("正在核对撤销结果…");
       return false;
     } finally {

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import type { MemoryDecision, MemoryProposalItem } from "@talent-signal/contracts";
+import type { ConversationImageManifest, MemoryDecision, MemoryProposalItem, MemorySourceLocator } from "@talent-signal/contracts";
 import type { MemoryItemOutcome } from "./use-memory-review";
+import { SourceImageButton, type SourceImage } from "./source-image-button";
 import styles from "./memory-review.module.css";
 
 type Props = {
@@ -15,6 +16,8 @@ type Props = {
   onCheck?: (itemId: string) => void;
   onUndo?: (itemId: string) => void;
   onComment?: (itemId: string) => void;
+  sourceImage?: SourceImage | null;
+  sourceUnavailable?: boolean;
 };
 
 function scopeLabel(item: MemoryProposalItem, personLabel: string | null): string {
@@ -23,7 +26,7 @@ function scopeLabel(item: MemoryProposalItem, personLabel: string | null): strin
   return personLabel ? `与${personLabel}的关系` : "关系";
 }
 
-export function MemoryItemCard({ item, personLabel, busy, locked = false, outcome, onDecide, onCheck, onUndo, onComment }: Props) {
+export function MemoryItemCard({ item, personLabel, busy, locked = false, outcome, onDecide, onCheck, onUndo, onComment, sourceImage, sourceUnavailable = false }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.display_text);
   const [sourceOpen, setSourceOpen] = useState(false);
@@ -41,20 +44,23 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
     : isUpdate ? "已更新记忆" : "已记住";
   const pass = isUpdate ? "暂不更新" : "暂不保存";
   const resolved = outcome?.kind === "committed" || outcome?.kind === "skipped" || outcome?.kind === "undone";
-  return <section className={styles.actionCard} aria-label={`记忆 · ${scopeLabel(item, personLabel)}`} data-memory-item-card={item.id}>
-    <div className={styles.actionHead}><span>记忆 · {scopeLabel(item, personLabel)}</span><span>{outcome?.kind === "committed" ? "已保存" : outcome?.kind === "skipped" ? "已跳过" : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? "待核对" : outcome?.kind === "unavailable" ? "不可用" : "待处理"}</span></div>
-    <p className={styles.actionChange}>{item.previous_text ? <><span>{item.previous_text}</span><span aria-hidden="true"> → </span><strong>{shownText}</strong></> : <strong>{shownText}</strong>}</p>
-    <div className={styles.actionSource}>
+  const redacted = sourceUnavailable || outcome?.kind === "unavailable";
+  return <section className={styles.actionCard} aria-label={`记忆 · ${scopeLabel(item, redacted ? null : personLabel)}`} data-memory-item-card={item.id}>
+    <div className={styles.actionHead}><span>记忆 · {scopeLabel(item, redacted ? null : personLabel)}</span><span>{sourceUnavailable ? "不可用" : outcome?.kind === "committed" ? "已保存" : outcome?.kind === "skipped" ? "已跳过" : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? "待核对" : outcome?.kind === "unavailable" ? "不可用" : "待处理"}</span></div>
+    {redacted ? null : <p className={styles.actionChange}>{item.previous_text ? <><span>{item.previous_text}</span><span aria-hidden="true"> → </span><strong>{shownText}</strong></> : <strong>{shownText}</strong>}</p>}
+    {redacted ? null : <div className={styles.actionSource}>
       <blockquote data-expanded={sourceOpen}>{item.source_excerpt}</blockquote>
       {item.source_excerpt.length > 120 ? <button type="button" onClick={() => setSourceOpen(!sourceOpen)}>{sourceOpen ? "收起原句" : "展开原句"}</button> : null}
-    </div>
-    {outcome?.kind === "committed" ? <div className={styles.actionReceipt} role="status">{receiptLabel}{onUndo ? <button type="button" onClick={() => onUndo(item.id)}>撤销</button> : null}</div>
+      {sourceImage ? <SourceImageButton source={sourceImage}/> : null}
+    </div>}
+    {sourceUnavailable ? <p className={styles.actionReceipt} role="alert">来源已失效，不能继续操作。</p>
+      : outcome?.kind === "committed" ? <div className={styles.actionReceipt} role="status">{receiptLabel}{onUndo ? <button type="button" onClick={() => onUndo(item.id)}>撤销</button> : null}</div>
       : outcome?.kind === "skipped" ? <p className={styles.actionReceipt} role="status">本次未保存</p>
       : outcome?.kind === "undone" ? <p className={styles.actionReceipt} role="status">已撤销这条记忆</p>
       : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? <div className={styles.actionReceipt} role="status">{outcome.kind === "undo_unknown" ? "撤销结果待核对" : "结果待核对"}{onCheck ? <button type="button" onClick={() => onCheck(item.id)}>核对结果</button> : null}</div>
       : outcome?.kind === "unavailable" ? <p className={styles.actionReceipt} role="alert">来源已失效，不能继续操作。</p>
       : null}
-    {!resolved && !outcome && !locked && editing ? <form className={styles.actionEdit} onSubmit={(event) => {
+    {!resolved && !outcome && !locked && !sourceUnavailable && editing ? <form className={styles.actionEdit} onSubmit={(event) => {
       event.preventDefault();
       const value = draft.trim();
       if (value) onDecide(item.id, conflict ? "accept_new" : "accept", value);
@@ -63,7 +69,7 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
       <textarea id={`memory-item-edit-${item.id}`} maxLength={1000} value={draft} onChange={(event) => setDraft(event.target.value)}/>
       <div><button type="submit" disabled={busy || !draft.trim()}>保存修改</button><button type="button" onClick={() => { setDraft(item.display_text); setEditing(false); }}>取消</button></div>
     </form> : null}
-    {!resolved && !outcome && !locked && !editing ? <div className={styles.actionButtons}>
+    {!resolved && !outcome && !locked && !sourceUnavailable && !editing ? <div className={styles.actionButtons}>
       {conflict ? <>
         <button className={styles.actionPrimary} disabled={busy} type="button" onClick={() => onDecide(item.id, "accept_new")}>采纳新值</button>
         <button disabled={busy} type="button" onClick={() => onDecide(item.id, "keep_old")}>保留旧值</button>
@@ -73,7 +79,7 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
       <button disabled={busy} type="button" onClick={() => onDecide(item.id, "skip")}>{pass}</button>
       {onComment ? <button className={styles.actionComment} type="button" onClick={() => onComment(item.id)}>补充一句</button> : null}
     </div> : null}
-    {locked && !outcome ? <p className={styles.actionHint} role="status">来源或审阅已变化，无法操作。请重新读取当前内容。</p> : null}
+    {locked && !sourceUnavailable && !outcome ? <p className={styles.actionHint} role="status">来源或审阅已变化，无法操作。请重新读取当前内容。</p> : null}
     {!locked && !canDecide && !outcome && item.status === "pending" ? <p className={styles.actionHint}>这条内容需要先核对归属或来源。</p> : null}
   </section>;
 }
@@ -81,15 +87,50 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
 import type { MemoryReviewController } from "./use-memory-review";
 import { ContactDecisionCard } from "./contact-decision-card";
 
-export function SessionMemoryCards({ controller, onComment, onCompare, comparison }: {
+type SourceImageContext = {
+  binding: string;
+  sessionId: string;
+  messageId: string;
+  images: readonly ConversationImageManifest[];
+};
+
+function sourceImageFor(locator: MemorySourceLocator, context?: SourceImageContext): SourceImage | null {
+  if (!context || locator.kind !== "image_region" || locator.session_id && locator.session_id !== context.sessionId) return null;
+  const index = locator.image_index;
+  if (index === undefined || !Number.isInteger(index)) return null;
+  const image = context.images[index];
+  if (!image || locator.artifact_id !== `conversation-image-${context.messageId}-${index}-${image.attachment_id}`) return null;
+  return {
+    binding: context.binding, sessionId: context.sessionId, messageId: context.messageId,
+    imageIndex: index, fileName: image.file_name, region: locator.region,
+  };
+}
+
+export function SessionMemoryCards({ controller, onComment, onCompare, comparison, sourceImageContext, sourceText }: {
   controller: MemoryReviewController;
   onComment?: (item: MemoryProposalItem) => void;
   onCompare?: () => void;
   comparison?: ReactNode;
+  sourceImageContext?: SourceImageContext;
+  sourceText?: string;
 }) {
   const [showAll, setShowAll] = useState(false);
   const review = controller.review;
   if (!review) {
+    const recovered = Object.entries(controller.itemOutcomes).filter((entry) => Boolean(entry[1].snapshot));
+    if (recovered.length || controller.contactOutcome?.receipt) return <div className={styles.actionStack} data-memory-review aria-label="会话中的操作回执">
+      {controller.contactOutcome?.receipt ? <section className={styles.actionCard} role="status">
+        <div className={styles.actionHead}><span>联系人</span><span>{controller.contactOutcome.kind === "undone" ? "已撤销" : "已处理"}</span></div>
+        <p>{controller.contactOutcome.receipt.person_display_label ?? "联系人"} · {controller.contactOutcome.kind === "undone" ? "已撤销本次添加" : "已添加"}</p>
+        {controller.contactOutcome.receipt.created_person_id ? <a href={`/workspace/people/${controller.contactOutcome.receipt.created_person_id}`}>查看人物</a> : null}
+      </section> : null}
+      {recovered.map(([itemId, outcome]) => <MemoryItemCard key={itemId} item={outcome.snapshot!}
+        personLabel={outcome.personLabel ?? null} busy locked outcome={outcome}
+        sourceImage={sourceImageFor(outcome.snapshot!.source_locator, sourceImageContext)}
+        onDecide={() => undefined}
+        onCheck={() => void controller.checkItem(itemId)}
+        onUndo={() => void controller.undoItem(itemId)}/>) }
+    </div>;
     if (controller.phase === "opening" || controller.phase === "idle") return <p className={styles.actionHint} role="status">正在读取这次可以处理的内容…</p>;
     if (controller.phase === "unknown") return <div className={styles.actionCard} role="status">结果待核对 <button type="button" onClick={() => void controller.reconcile()}>核对结果</button></div>;
     return <div className={styles.actionCard} role="status">{controller.error ?? "这次内容已处理。"}
@@ -100,18 +141,27 @@ export function SessionMemoryCards({ controller, onComment, onCompare, compariso
   const shown = showAll ? items : items.slice(0, 3);
   const frozen = controller.frozen || controller.phase === "processed" || controller.phase === "dismissed"
     || review.source_status === "unavailable";
-  const contactSource = review.items.find((item) => item.scope !== "self"
+  const contactItem = review.items.find((item) => item.scope !== "self"
     && Boolean(review.person_display_label)
-    && item.source_excerpt.includes(review.person_display_label!))?.source_excerpt
-    ?? review.person_display_label ?? "";
+    && item.source_excerpt.includes(review.person_display_label!));
+  const sourceSentence = sourceText?.split(/[。！？\n]/u).find((part) =>
+    Boolean(review.person_display_label) && part.includes(review.person_display_label!))?.trim();
+  const contactSource = contactItem?.source_excerpt ?? sourceSentence ?? review.person_display_label ?? "";
+  const imageContext = sourceImageContext
+    && review.source_session_id === sourceImageContext.sessionId
+    && review.source_message_id === sourceImageContext.messageId ? sourceImageContext : undefined;
   const showContact = Boolean((review.contact_decision === "new" && review.person_display_label) || controller.contactOutcome);
   return <div className={styles.actionStack} data-memory-review aria-label="会话中的记忆操作">
     {showContact ? <ContactDecisionCard
       displayLabel={controller.contactOutcome?.receipt?.person_display_label ?? review.person_display_label ?? "联系人"}
       relationshipContext={review.relationship_display_label ?? ""}
       sourceExcerpt={contactSource}
+      sourceUnavailable={review.source_status === "unavailable"}
+      sourceImage={sourceImageFor(contactItem?.source_locator ?? (imageContext?.images.length === 1
+        ? { kind: "image_region", artifact_id: `conversation-image-${imageContext.messageId}-0-${imageContext.images[0]!.attachment_id}`, image_index: 0 }
+        : { kind: "message" }), imageContext)}
       status={review.contact_status === "ambiguous" ? "ambiguous" : "pending"}
-      busy={controller.frozen}
+      busy={controller.frozen || review.source_status === "unavailable"}
       outcome={controller.contactOutcome}
       onAdd={(displayLabel, relationshipContext) => void controller.decideContactOnly({ displayLabel, relationshipContext })}
       onCorrectName={(displayLabel, relationshipContext) => controller.rebase({ contactDecision: "new", newContactLabel: displayLabel, newContactRelationship: relationshipContext })}
@@ -120,12 +170,14 @@ export function SessionMemoryCards({ controller, onComment, onCompare, compariso
       onCheck={() => void controller.checkContact()}
       onUndo={() => void controller.undoContact()}
       comparison={comparison}/>
-      : review.contact_decision === "none" && review.person_display_label ? <p className={styles.actionHint}>本次未添加{review.person_display_label}。</p> : null}
+      : review.source_status !== "unavailable" && review.contact_decision === "none" && review.person_display_label ? <p className={styles.actionHint}>本次未添加{review.person_display_label}。</p> : null}
     {shown.map((item) => <MemoryItemCard key={item.id} item={item}
       personLabel={review.person_display_label ?? null}
       busy={frozen || (item.scope !== "self" && review.contact_status !== "resolved")}
       locked={controller.phase === "processed" || controller.phase === "dismissed" || review.source_status === "unavailable"}
       outcome={controller.itemOutcomes[item.id]}
+      sourceUnavailable={review.source_status === "unavailable"}
+      sourceImage={sourceImageFor(item.source_locator, imageContext)}
       onDecide={(itemId, decision, editedText) => void controller.decideItem({ itemId, decision, editedText })}
       onCheck={(itemId) => void controller.checkItem(itemId)}
       onUndo={(itemId) => void controller.undoItem(itemId)}

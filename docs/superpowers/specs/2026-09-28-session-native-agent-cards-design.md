@@ -45,7 +45,7 @@ One card represents one decision or one verifiable result. It has four visual zo
 
 1. A quiet type and state line, for example "Memory · Not saved".
 2. One human-readable change or result. For an update, show old value to new value.
-3. One or two lines of exact supporting source text, visibly attributed. A source control opens the original fragment or screenshot region without leaving the Session.
+3. One or two lines of exact supporting source text, visibly attributed. Text evidence remains readable in the card. A screenshot control opens the original image and highlights its region when the authorized locator identifies one. A contact-only proposal with one attached screenshot may open that image; multiple images must never be guessed from a name alone.
 4. Two or three effect-specific actions immediately below the content. The primary action is reachable without opening another surface. Secondary actions are Edit and Pass; the exact labels follow the object and effect.
 
 The card uses warm neutral surfaces, type hierarchy, and restrained vermilion for unresolved attention. Avoid a large black full-width button when the card is a short decision. No avatar, icon, border, or badge may imply a person's value or confidence. Do not repeat the assistant's prose inside the card.

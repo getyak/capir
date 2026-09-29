@@ -117,6 +117,61 @@ function clickByText(text: string) {
 }
 
 describe("shared Memory review card", () => {
+  it("hides source-derived contact and Memory text when the source is withdrawn", async () => {
+    fetcher.mockResolvedValue(Response.json({ review_credential: "cred-revoked", review: {
+      ...review(), source_status: "unavailable",
+    } }));
+    await act(async () => root.render(createElement(MemoryReviewCard, {
+      key: "revoked", binding: "binding-1", proposal: { proposal_id: PROPOSAL, revision: 1 }, purpose: "chat",
+    })));
+    await flush();
+    expect(mount.textContent).toContain("来源已失效");
+    expect(mount.textContent).not.toContain("陈宇");
+    expect(mount.textContent).not.toContain("用户要求回复先给结论");
+    expect(mount.textContent).not.toContain("陈宇说，他目前负责设计系统");
+    expect([...mount.querySelectorAll("button")].some((button) => button.textContent === "添加联系人")).toBe(false);
+  });
+  it("keeps exact text and a single screenshot accessible on a contact-only card", async () => {
+    const sessionId = "33333333-3333-4333-8333-333333333333";
+    const messageId = "44444444-4444-4444-8444-444444444444";
+    const attachmentId = "55555555-5555-4555-8555-555555555555";
+    fetcher.mockResolvedValue(Response.json({ review_credential: "cred-contact-only", review: {
+      ...review(), source_session_id: sessionId, source_message_id: messageId,
+      items: [], visible_item_count: 0, visible_default_selected_count: 0,
+    } }));
+    await act(async () => root.render(createElement(MemoryReviewCard, {
+      key: "contact-only", binding: "binding-1", entryCapability: "entry-capability",
+      proposal: { proposal_id: PROPOSAL, revision: 1 }, purpose: "chat",
+      sessionId, sourceMessageId: messageId, sourceText: "陈宇负责设计系统。我偏好先看试点结果。",
+      sourceImages: [{ attachment_id: attachmentId, file_name: "source.png", media_type: "image/png",
+        byte_size: 8, content_hash: "a".repeat(64) }],
+    })));
+    await flush();
+    const card = document.querySelector('[data-contact-decision-card]')!;
+    expect(card.textContent).toContain("陈宇负责设计系统");
+    expect([...card.querySelectorAll("button")].some((button) => button.textContent === "查看原图")).toBe(true);
+  });
+  it("keeps a verified item receipt visible after the proposal closes and the Session reloads", async () => {
+    window.sessionStorage.setItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`, JSON.stringify({
+      version: 1, binding: "binding-1", proposal_id: PROPOSAL, purpose: "chat",
+      person_id: null, relationship_context_id: null, operation_key: null,
+      item_operation_keys: { "self-1": "op-closed" }, undo_key: null,
+    }));
+    fetcher.mockImplementation((path: string) => String(path).includes("/operation-views/op-closed")
+      ? Promise.resolve(Response.json({ state: "applied", visible_receipt: {
+          operation_key: "op-closed", decisions: [{ proposal_item_id: "self-1", decision: "accept" }],
+        }, item_snapshot: { ...item("self-1", "self", "用户要求回复先给结论。"), status: "committed" },
+        undo: { allowed: true, limits: [] } }))
+      : Promise.resolve(Response.json({ code: "MEMORY_REVIEW_PROCESSED" }, { status: 409 })));
+    await act(async () => root.render(createElement(MemoryReviewCard, {
+      key: "processed", binding: "binding-1", proposal: { proposal_id: PROPOSAL, revision: 1 }, purpose: "chat",
+    })));
+    await flush();
+    const saved = document.querySelector('[data-memory-item-card="self-1"]');
+    expect(saved?.textContent).toContain("已记住");
+    expect([...saved!.querySelectorAll("button")].some((button) => button.textContent === "记住")).toBe(false);
+  });
+
   it("saves one self item and leaves the next card actionable in place", async () => {
     const latest = { ...review(), items: review().items.map((entry) => entry.id === "self-1"
       ? { ...entry, status: "committed" } : entry) };

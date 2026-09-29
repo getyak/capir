@@ -12,7 +12,8 @@ import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
 import { undoMemoryCommitInTransaction, assertScopePursuitCurrent, receiptSourceAvailable } from "./memoryReviewCommit.js";
-import { loadReviewScope, serializeReceipt, type ReviewScopeRow } from "./memoryReviewStore.js";
+import { loadProposal, loadProposalItems, loadReviewScope, serializeProposalItem, serializeReceipt, type ReviewScopeRow } from "./memoryReviewStore.js";
+import { verifyPendingSourceAuthority } from "./memorySourceVerification.js";
 
 interface ScopedCommitRow {
   commit_id: string;
@@ -24,6 +25,7 @@ interface ScopedCommitRow {
   created_person_id: string | null;
   created_relationship_context_id: string | null;
   source_session_id: string | null;
+  person_display_label: string | null;
   undo_contact_outcome: "retained" | "reclaimed" | null;
   undo_context_outcome: "retained" | "reclaimed" | null;
 }
@@ -176,11 +178,18 @@ async function readSkippedItemOperation(
     [auth.accountId, scope.proposal_id, itemId],
   ) : null;
   const skipped = item?.rows[0]?.status === "skipped";
+  const proposal = skipped ? await loadProposal(client, auth.accountId, scope.proposal_id) : null;
+  const proposalItems = proposal ? await loadProposalItems(client, auth.accountId, proposal.id) : [];
+  const verified = proposal ? await verifyPendingSourceAuthority(client, auth, proposal, proposalItems) : null;
+  const snapshotRow = verified?.proposalSourceAvailable && itemId && !verified.unavailableItemIds.has(itemId)
+    ? proposalItems.find((entry) => entry.id === itemId) : null;
+  const itemSnapshot = snapshotRow ? serializeProposalItem(snapshotRow) : null;
   return {
     contract_version: CONTRACT_VERSION,
     operation_key: operationKey,
     state: record.status === "processing" ? "pending" : skipped ? "skipped" : "unavailable",
     dismissed_item_id: skipped ? itemId : null,
+    ...(itemSnapshot ? { item_snapshot: itemSnapshot, person_display_label: proposal?.person_display_label ?? null } : {}),
     purpose: query.purpose,
     person_id: query.person_id ?? null,
     relationship_context_id: query.relationship_context_id ?? null,
@@ -205,7 +214,8 @@ async function readMemoryScopedOperationViewInTransaction(
               commits.review_scope_id, commits.created_person_id,
               commits.created_relationship_context_id,
               receipt.undo_contact_outcome, receipt.undo_context_outcome,
-              proposal.session_id AS source_session_id
+              proposal.session_id AS source_session_id,
+              proposal.person_display_label
        FROM memory_commits commits
        JOIN memory_proposals proposal
          ON proposal.account_id = commits.account_id
@@ -304,9 +314,8 @@ async function readMemoryScopedOperationViewInTransaction(
     }
     // A revoked/deleted source must not restore the old candidate payload on
     // any surface, chat included.
-    const sourceAvailable =
-      row.status === "undone"
-      || (await receiptSourceAvailable(client, auth.accountId, row.commit_id));
+    const sourceCurrent = await receiptSourceAvailable(client, auth.accountId, row.commit_id);
+    const sourceAvailable = row.status === "undone" || sourceCurrent;
     if (!sourceAvailable) {
       return {
         contract_version: CONTRACT_VERSION,
@@ -439,6 +448,12 @@ async function readMemoryScopedOperationViewInTransaction(
       `SELECT display_text FROM memory_items WHERE account_id = $1 AND owner_user_id = $2 AND id = $3`,
       [auth.accountId, auth.userId, singleMemoryId],
     ) : null;
+    const singleProposalId = visibleReceipt.decisions.length === 1
+      ? visibleReceipt.decisions[0]?.proposal_item_id ?? null : null;
+    const itemRows = singleProposalId ? await loadProposalItems(client, auth.accountId, row.proposal_id) : [];
+    const snapshotRow = itemRows.find((item) => item.id === singleProposalId);
+    const itemSnapshot = sourceCurrent && snapshotRow && visibleIds.has(snapshotRow.id)
+      ? serializeProposalItem(snapshotRow) : null;
     return {
       contract_version: CONTRACT_VERSION,
       operation_key: operationKey,
@@ -457,6 +472,8 @@ async function readMemoryScopedOperationViewInTransaction(
       visible_effect_count: visibleIds.size,
       visible_receipt: visibleReceipt,
       applied_display_text: applied?.rows[0]?.display_text ?? null,
+      person_display_label: row.person_display_label,
+      ...(itemSnapshot ? { item_snapshot: itemSnapshot } : {}),
       undo: { allowed: undoAllowed, limits },
     };
 }

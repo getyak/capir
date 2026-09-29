@@ -302,6 +302,19 @@ describe("shared Memory review controller", () => {
     expect(JSON.parse(undo[1].body as string).expected_commit_revision).toBe(1);
   });
 
+  it("recognizes a nested backend terminal code after the last item is skipped", async () => {
+    const single = { ...review(), items: [item("self-1", "self")] };
+    fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: single }));
+    await act(async () => { await controller.open(); });
+    fetcher.mockResolvedValueOnce(Response.json({ kind: "skipped", item_id: "self-1", replayed: false,
+      receipt: null, proposal_revision: 1, remaining_pending_item_count: 0 }));
+    fetcher.mockResolvedValueOnce(Response.json({ error: { code: "MEMORY_REVIEW_DISMISSED" } }, { status: 409 }));
+    await act(async () => { await controller.decideItem({ itemId: "self-1", decision: "skip" }); });
+    expect(controller.phase).toBe("dismissed");
+    expect(controller.error).toBeNull();
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("skipped");
+  });
+
   it("closes stale actions when the final item has been processed", async () => {
     const single = { ...review(), items: [item("self-1", "self")] };
     fetcher.mockResolvedValueOnce(Response.json({ review_credential: "cred-1234567890", review: single }));
@@ -331,8 +344,11 @@ describe("shared Memory review controller", () => {
     }));
     fetcher.mockResolvedValueOnce(Response.json({ review: {
       ...opened,
-      items: opened.items.map((entry) => entry.id === "self-1" ? { ...entry, status: "committed" } : entry),
+      items: opened.items.filter((entry) => entry.id !== "self-1"),
     } }));
+    const locatorKey = `get40:memory-locator:binding-1:${PROPOSAL}:chat`;
+    const prior = JSON.parse(window.sessionStorage.getItem(locatorKey)!);
+    window.sessionStorage.setItem(locatorKey, JSON.stringify({ ...prior, contact_operation_key: "op-contact" }));
     await act(async () => {
       await controller.decideItem({ itemId: "self-1", decision: "accept" });
     });
@@ -343,7 +359,9 @@ describe("shared Memory review controller", () => {
     expect(body.decision).toBe("accept");
     expect(body).not.toHaveProperty("selected_item_ids");
     expect(controller.itemOutcomes["self-1"]?.kind).toBe("committed");
+    expect(controller.review?.items.find((entry) => entry.id === "self-1")?.status).toBe("committed");
     expect(controller.review?.items.find((entry) => entry.id === "self-2")?.status).toBe("pending");
+    expect(JSON.parse(window.sessionStorage.getItem(locatorKey)!).contact_operation_key).toBe("op-contact");
   });
 
   it("persists the exact 16-item selection through the review draft endpoint", async () => {
@@ -691,6 +709,23 @@ describe("shared Memory review controller", () => {
     expect(fetcher.mock.calls.filter(([path]) => String(path).endsWith("/item-decisions"))).toHaveLength(0);
   });
 
+  it("restores a skipped item card after its proposal is dismissed", async () => {
+    window.sessionStorage.setItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`, JSON.stringify({
+      version: 1, binding: "binding-1", proposal_id: PROPOSAL, purpose: "chat",
+      person_id: null, relationship_context_id: null,
+      operation_key: null, item_operation_keys: { "self-1": "op-skip" }, undo_key: null,
+    }));
+    fetcher.mockImplementation((path: string) => String(path).includes("/operation-views/op-skip")
+      ? Promise.resolve(Response.json({ state: "skipped", dismissed_item_id: "self-1",
+          item_snapshot: { ...item("self-1", "self"), status: "skipped" }, visible_receipt: null,
+          undo: { allowed: false, limits: [] } }))
+      : Promise.resolve(Response.json({ error: { code: "MEMORY_REVIEW_DISMISSED" } }, { status: 409 })));
+    await act(async () => { await controller.open(); });
+    expect(controller.phase).toBe("dismissed");
+    expect(controller.itemOutcomes["self-1"]?.kind).toBe("skipped");
+    expect(controller.itemOutcomes["self-1"]?.snapshot?.status).toBe("skipped");
+  });
+
   it("restores an item receipt on reload and leaves another item actionable", async () => {
     window.sessionStorage.setItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`, JSON.stringify({
       version: 1, binding: "binding-1", proposal_id: PROPOSAL, purpose: "chat",
@@ -698,15 +733,16 @@ describe("shared Memory review controller", () => {
       operation_key: null, item_pending_id: null,
       item_operation_keys: { "self-1": "op-saved" }, undo_key: null,
     }));
-    const refreshed = { ...review(), items: review().items.map((entry) => entry.id === "self-1"
-      ? { ...entry, status: "committed" } : entry) };
+    const refreshed = { ...review(), items: review().items.filter((entry) => entry.id !== "self-1") };
     fetcher.mockImplementation((path: string) => String(path).includes("/operation-views/op-saved")
       ? Promise.resolve(Response.json({ state: "applied", visible_receipt: {
           operation_key: "op-saved", decisions: [{ proposal_item_id: "self-1", decision: "accept" }],
-        }, undo: { allowed: true, limits: [] } }))
+        }, item_snapshot: { ...item("self-1", "self"), status: "committed" },
+        undo: { allowed: true, limits: [] } }))
       : Promise.resolve(Response.json({ review_credential: "cred-next", review: refreshed })));
     await act(async () => { await controller.open(); });
     expect(controller.itemOutcomes["self-1"]?.kind).toBe("committed");
+    expect(controller.review?.items.find((entry) => entry.id === "self-1")?.status).toBe("committed");
     expect(controller.review?.items.find((entry) => entry.id === "self-2")?.status).toBe("pending");
   });
 
