@@ -102,3 +102,22 @@ implementation. Desktop rendered account menu was corrected for long workspace
 names (clientWidth=scrollWidth=234); language icon and row alignment checked.
 
 Remaining: latest-head CI and merged revision deployment/readback.
+
+## 2026-09-30 authenticated Web checkpoint
+
+Observed the deployed e3f5a96d Web in Chrome on the Tailnet origin using the
+existing signed-in session. Desktop/light account security, account menu,
+Extensions inbound empty state and outbound client empty state rendered.
+The account language globe and history entry were present; both extension
+modes were reachable without creating a connection, token or authorization.
+No source conversation was opened and no private screenshots were persisted.
+A initially blank restored settings tab recovered after browser reload; the
+cause is not established, and route network continuity is not certified.
+
+Confirmed craft deduction: ordinary Web account controls incorrectly announced
+an external default-browser handoff and a separate application login session.
+The small correction keeps that explanation and external arrow only for native
+hosts; Web keeps its existing settings destination and a plain account label.
+Independent code review found no confirmed P0/P1/P2 issues. Runtime acceptance
+of the corrected build is pending. Narrow, dark, keyboard, failure and expired
+states remain unverified for this checkpoint; no 95-point score is assigned.

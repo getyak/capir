@@ -54,21 +54,29 @@ function settingsHrefFor(hosted: boolean, scheme: string, fallback: string) {
   return hosted ? scheme : fallback;
 }
 
-/** Account management always leaves the app: it opens the default browser so the
- * person's real signed-in account and password manager are used. Never rendered
- * as an in-app settings surface. */
+/** Native account management opens the browser; Web stays in its workspace. */
 export function DesktopAccountLink({ onClick }: { onClick: () => void }) {
   const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   return (
     <a
-      aria-label="账号与偏好（在默认浏览器中打开）"
+      aria-label={state ? "账号与偏好（在默认浏览器中打开）" : "账号与偏好"}
       href={settingsHrefFor(Boolean(state), "talentsignal-desktop://account-settings", "/workspace/settings")}
       onClick={onClick}
     >
       <Globe aria-hidden="true" size={16} />
-      <span>账号与偏好 ↗</span>
+      <span>{state ? "账号与偏好 ↗" : "账号与偏好"}</span>
     </a>
   );
+}
+
+export function DesktopAccountNotice() {
+  const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
+  if (!state) return null;
+  return <span className={styles.accountMetaRow}>
+    <span aria-label="账号与偏好会在此账号的默认浏览器中打开；浏览器的登录状态可能与本应用不同。">
+      在此账号的默认浏览器中打开 · 浏览器登录状态可能与本应用不同
+    </span>
+  </span>;
 }
 
 /** The native window owns device settings only, so it is offered only where a
