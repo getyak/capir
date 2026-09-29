@@ -5,9 +5,23 @@ struct TalentSignalMacApp: App {
     @NSApplicationDelegateAdaptor(TalentSignalMacAppDelegate.self) private var appDelegate
     @StateObject private var updater = DesktopUpdater.shared
     @StateObject private var model = AppModel.bootstrap()
+    @StateObject private var capturePreferences = CaptureRuntime.shared.preferences
 
     private var isQuickPanelPreview: Bool {
         ProcessInfo.processInfo.arguments.contains("--quick-panel-preview")
+    }
+
+    private var menuBarInsertion: Binding<Bool> {
+        Binding(
+            get: { capturePreferences.showMenuBar },
+            set: { isInserted in
+                // AppKit reports the current insertion state during scene
+                // reconciliation. Publishing that same value would schedule
+                // another scene update and keep the app's main thread busy.
+                guard capturePreferences.showMenuBar != isInserted else { return }
+                capturePreferences.showMenuBar = isInserted
+            }
+        )
     }
 
     var body: some Scene {
@@ -27,7 +41,7 @@ struct TalentSignalMacApp: App {
                     .environmentObject(model)
                     .environment(\.dynamicTypeSize, model.isAccessibilityZoomPreview ? .accessibility2 : .large)
                     .preferredColorScheme(model.isDarkAppearancePreview ? .dark : nil)
-                    .task { updater.start(); _ = await model.ensureInitialized() }
+                    .task { CaptureRuntime.shared.start(); updater.start(); _ = await model.ensureInitialized() }
                     .background(SelectedTextServiceBridge().environmentObject(model))
             }
             .frame(
@@ -75,14 +89,14 @@ struct TalentSignalMacApp: App {
         .defaultSize(width: 560, height: 640)
         .windowResizability(.contentSize)
 
-        MenuBarExtra {
-            WorkspaceMenuBar()
+        MenuBarExtra(isInserted: menuBarInsertion) {
+            CaptureMenuView()
         } label: {
             TSBrandMark(size: 22, monochrome: true)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Talent Signal")
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
     }
 }
 
@@ -252,17 +266,6 @@ private struct TalentSignalCommands: Commands {
             .keyboardShortcut("9", modifiers: [.command, .option])
             .disabled(!model.isSyntheticFixture)
         }
-    }
-}
-
-private struct WorkspaceMenuBar: View {
-    @Environment(\.openWindow) private var openWindow
-    var body: some View {
-        Button("打开工作区") { openWindow(id: "workspace") }
-        Button("本机工具") { openWindow(id: "native-tools") }
-        Button("快速收集") { openWindow(id: "quick-panel") }
-        Divider()
-        Button("退出 Talent Signal") { NSApplication.shared.terminate(nil) }
     }
 }
 

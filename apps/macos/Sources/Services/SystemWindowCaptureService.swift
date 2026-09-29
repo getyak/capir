@@ -52,6 +52,10 @@ final class SystemWindowCaptureService: NSObject, WindowCapturing, @preconcurren
     private var continuation: CheckedContinuation<SCContentFilter, Error>?
 
     func captureOneWindow() async throws -> WindowCapturePayload {
+        try await captureOneWindow(maximumDimension: 2_560)
+    }
+
+    func captureOneWindow(maximumDimension: CGFloat?) async throws -> WindowCapturePayload {
         guard continuation == nil else { throw WindowCaptureError.alreadySelecting }
 
         let filter = try await chooseOneWindow()
@@ -60,8 +64,7 @@ final class SystemWindowCaptureService: NSObject, WindowCapturing, @preconcurren
         let pixelScale = max(CGFloat(filter.pointPixelScale), 1)
         let uncappedWidth = max(contentSize.width * pixelScale, 1)
         let uncappedHeight = max(contentSize.height * pixelScale, 1)
-        let maximumDimension: CGFloat = 2_560
-        let downscale = min(1, maximumDimension / max(uncappedWidth, uncappedHeight))
+        let downscale = maximumDimension.map { min(1, $0 / max(uncappedWidth, uncappedHeight)) } ?? 1
         configuration.width = max(1, Int((uncappedWidth * downscale).rounded()))
         configuration.height = max(1, Int((uncappedHeight * downscale).rounded()))
         configuration.showsCursor = false

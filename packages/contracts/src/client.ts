@@ -1292,6 +1292,14 @@ export class TalentSignalClient {
     return this.request(`/v1/agent-sessions/${encodeURIComponent(sessionId)}/conversation-queue`, { method: "GET", ...(signal ? { signal } : {}) });
   }
 
+  getDesktopCapturePolicy(): Promise<import("./desktopCaptureSchemas.js").DesktopCapturePolicy> {
+    return this.request("/v1/desktop-capture/policy", { method: "GET" });
+  }
+
+  getDesktopCaptureReceipt(sessionId: string, messageId: string): Promise<import("./desktopCaptureSchemas.js").DesktopCaptureReceipt> {
+    return this.request(`/v1/desktop-capture/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}`, { method: "GET" });
+  }
+
   mutateConversationQueue(sessionId: string, request: ConversationQueueMutationRequest, signal?: AbortSignal): Promise<ConversationQueueMutationResponse> {
     return this.request(`/v1/agent-sessions/${encodeURIComponent(sessionId)}/conversation-queue/mutations`, { method: "POST", body: request, ...(signal ? { signal } : {}) });
   }

@@ -577,8 +577,8 @@ extension WorkspaceSettingsSearchEntry {
               keywords: ["帮助", "诊断", "问题", "排查", "运行记录", "边界", "权限"],
               action: .section(.advanced)),
         .init(id: "device", title: "此设备",
-              detail: "内容大小、工作窗口与键盘快捷键。", scope: "仅此 Mac · 本机保存", destination: "设置 · 此设备",
-              keywords: ["此设备", "本机", "内容大小", "窗口", "缩放", "显示", "保持最前", "键盘快捷键"],
+              detail: "内容大小、工作窗口、菜单栏与截图。", scope: "仅此 Mac · 本机保存", destination: "设置 · 此设备",
+              keywords: ["此设备", "本机", "内容大小", "窗口", "缩放", "显示", "保持最前", "键盘快捷键", "菜单栏", "截图"],
               action: .section(.device)),
         .init(id: "updates", title: "Mac 软件更新",
               detail: "本机当前版本、更新源与自动检查。", scope: "仅此 Mac · 本机保存", destination: "设置 · Mac 软件更新",
@@ -1042,6 +1042,8 @@ struct WorkspaceDesktopSettings: View {
                     }
                     Toggle("工作窗口保持在最前", isOn: $floating)
                 }
+                Divider()
+                CaptureDeviceSettings()
                 Divider()
                 WorkspaceConnectionForm(mode: .settings) { openWindow(id: "workspace") }
                 DisclosureGroup("键盘快捷键") {
