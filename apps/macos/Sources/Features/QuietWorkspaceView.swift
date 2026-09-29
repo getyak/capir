@@ -230,16 +230,18 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         guard !isRestoringWorkbench else { return }
         // Account settings are owned by the browser; the native window is only
         // opened by an explicit device-settings link.
-        requestAccountSettings(transition.destination)
-        restoreWorkbench(after: transition)
+        let browserOpened = requestAccountSettings(transition.destination)
+        restoreWorkbench(after: transition, browserOpened: browserOpened)
     }
 
-    private func restoreWorkbench(after transition: WorkspaceSurfacePolicy.WorkbenchSettingsTransition) {
+    private func restoreWorkbench(after transition: WorkspaceSurfacePolicy.WorkbenchSettingsTransition,
+                                  browserOpened: Bool) {
         isRestoringWorkbench = true
         workbenchNotice = nil
         switch WorkspaceSurfacePolicy.workbenchRestorePlan(
             for: transition, canGoBack: webView.canGoBack,
-            backItemURL: webView.backForwardList.backItem?.url, entryURL: origin.entryURL) {
+            backItemURL: webView.backForwardList.backItem?.url, entryURL: origin.entryURL,
+            browserOpened: browserOpened) {
         case .back:
             // Pop the proven same-document entry; no timer, no reload.
             webView.goBack()
@@ -259,8 +261,8 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             // Retry from a client-side Settings hop re-opens browser account
             // settings and restores the workbench instead of reloading Web
             // Settings.
-            requestAccountSettings(transition.destination)
-            restoreWorkbench(after: transition)
+            let browserOpened = requestAccountSettings(transition.destination)
+            restoreWorkbench(after: transition, browserOpened: browserOpened)
             return
         }
         if let current = webView.url, origin.contains(current) { webView.reload() }

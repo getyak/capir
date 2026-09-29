@@ -446,6 +446,13 @@ final class WorkspaceSettingsTests: XCTestCase {
         }
         XCTAssertEqual(url, workbench)
         XCTAssertTrue(notice.contains("未保存的输入可能未保留"))
+        guard case .load(_, let refusedNotice) = WorkspaceSurfacePolicy.workbenchRestorePlan(
+            for: transition, canGoBack: false, backItemURL: nil,
+            entryURL: origin.entryURL, browserOpened: false) else {
+            return XCTFail("expected a load fallback after browser launch refusal")
+        }
+        XCTAssertTrue(refusedNotice.contains("未能在默认浏览器中打开"))
+        XCTAssertFalse(refusedNotice.contains("已在默认浏览器中打开"))
         guard case .load(let mismatched, _) = WorkspaceSurfacePolicy.workbenchRestorePlan(
             for: transition, canGoBack: true,
             backItemURL: origin.url.appending(path: "/workspace/people/1"), entryURL: origin.entryURL) else {

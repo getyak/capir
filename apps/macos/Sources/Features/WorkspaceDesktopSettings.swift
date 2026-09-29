@@ -219,16 +219,20 @@ enum WorkspaceSurfacePolicy {
 
     static func workbenchRestorePlan(for transition: WorkbenchSettingsTransition,
                                      canGoBack: Bool, backItemURL: URL?,
-                                     entryURL: URL) -> WorkbenchRestorePlan {
+                                     entryURL: URL, browserOpened: Bool = true) -> WorkbenchRestorePlan {
         if let target = transition.restoreURL, canGoBack, backItemURL == target {
             return .back(target)
         }
         // No safe prior state or no matching history entry. Do not claim a
         // draft was preserved; be explicit about what the user should check.
         let safe = transition.restoreURL ?? entryURL
-        let notice = transition.restoreURL == nil
-            ? "账号设置已在默认浏览器中打开。无法确认先前的对话位置，主窗口已回到工作区首页；未保存的输入可能未保留。"
-            : "账号设置已在默认浏览器中打开，但返回历史不可用，已重新载入上次工作区地址；未保存的输入可能未保留。"
+        let browserStatus = browserOpened
+            ? "账号设置已在默认浏览器中打开。"
+            : "账号设置未能在默认浏览器中打开。"
+        let restoreStatus = transition.restoreURL == nil
+            ? "无法确认先前的对话位置，主窗口已回到工作区首页；未保存的输入可能未保留。"
+            : "返回历史不可用，已重新载入上次工作区地址；未保存的输入可能未保留。"
+        let notice = browserStatus + restoreStatus
         return .load(safe, notice: notice)
     }
 }

@@ -103,8 +103,8 @@ final class WorkspaceSettingsUITests: XCTestCase {
         XCTAssertEqual(app.windows.count, 2)
         row.click()
         XCTAssertFalse(
-            app.descendants(matching: .any)["workspace.browserLaunchFailure"].waitForExistence(timeout: 8),
-            "The default browser launch was refused"
+            app.buttons["settings.account.retry"].waitForExistence(timeout: 8),
+            "The native account row reported that the browser launch was refused"
         )
         XCTAssertEqual(app.windows.count, 2, "The handoff must not open a native settings pane")
         XCTAssertTrue(app.buttons["settings.section.general"].exists)

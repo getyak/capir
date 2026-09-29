@@ -18,6 +18,9 @@ import { mutateAccountSettings, readAccountSettings } from "./accountManagement.
  * guards against is a statement that drops the auth-derived account filter.
  */
 const database = process.env.ACCOUNT_SETTINGS_TEST_DATABASE_URL;
+if (database && !["localhost", "127.0.0.1"].includes(new URL(database).hostname)) {
+  throw new Error("Use an owned disposable loopback database.");
+}
 const pool: Pool | null = database ? new PgPool({ connectionString: database }) : null;
 
 type Seeded = { accountId: string; userId: string; sessionId: string; email: string; name: string; slug: string;
