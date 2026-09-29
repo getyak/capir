@@ -1,12 +1,42 @@
 import XCTest
 
 final class WorkspaceSettingsUITests: XCTestCase {
+    func testCompanionSelectionAndVisibilityInNativeSettings() {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-workspace.web.origin", "http://127.0.0.1:1",
+            "-workspace.connection.localDevelopment", "YES",
+            "-desktopPet.visible", "NO",
+            "-ApplePersistenceIgnoreState", "YES"
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
+        app.typeKey(",", modifierFlags: [.command])
+        let section = app.buttons["settings.section.companion"]
+        XCTAssertTrue(section.waitForExistence(timeout: 20))
+        section.click()
+
+        let visibility = app.buttons["desktopPet.visibility"]
+        XCTAssertTrue(visibility.waitForExistence(timeout: 10))
+        XCTAssertEqual(visibility.label, "显示伙伴")
+        app.buttons["desktopPet.option.owl"].click()
+        XCTAssertTrue(app.descendants(matching: .any)["猫头鹰桌面伙伴预览"].exists)
+
+        visibility.click()
+        XCTAssertEqual(visibility.label, "隐藏伙伴")
+        XCTAssertTrue(app.buttons["隐藏桌面伙伴"].waitForExistence(timeout: 10))
+        app.buttons["隐藏桌面伙伴"].click()
+        XCTAssertEqual(visibility.label, "显示伙伴")
+        app.terminate()
+    }
+
     func testSettingsIsOneIndependentWindowWithOfflineDeviceControls() {
         let app = XCUIApplication()
         // Command-line defaults affect this launch only. No production origin or login.
         app.launchArguments = [
             "-workspace.web.origin", "http://127.0.0.1:1",
             "-workspace.connection.localDevelopment", "YES",
+            "-desktopPet.visible", "NO",
             "-ApplePersistenceIgnoreState", "YES"
         ]
         app.launch()
@@ -44,6 +74,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
         app.launchArguments = [
             "-workspace.web.origin", "http://127.0.0.1:1",
             "-workspace.connection.localDevelopment", "YES",
+            "-desktopPet.visible", "NO",
             "-ApplePersistenceIgnoreState", "YES"
         ]
         app.launch()
@@ -83,6 +114,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
         app.launchArguments = [
             "-workspace.web.origin", handoffOrigin ?? "http://127.0.0.1:4403",
             "-workspace.connection.localDevelopment", "YES",
+            "-desktopPet.visible", "NO",
             "-ApplePersistenceIgnoreState", "YES"
         ]
         app.launch()
@@ -132,6 +164,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
         app.launchArguments = [
             "-workspace.web.origin", origin!,
             "-workspace.connection.localDevelopment", "YES",
+            "-desktopPet.visible", "NO",
             "-ApplePersistenceIgnoreState", "YES",
             "--web-workspace-testing"
         ]

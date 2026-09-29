@@ -42,5 +42,6 @@ final class SelectedTextServiceProvider: NSObject {
 final class TalentSignalMacAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.servicesProvider = SelectedTextServiceProvider.shared
+        Task { @MainActor in DesktopPetController.shared.start() }
     }
 }

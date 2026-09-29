@@ -50,13 +50,14 @@ struct WorkspaceDesktopCommands: Commands {
 /// The one native settings schema. Every case is owned by this Mac or macOS,
 /// never by account data that only the browser can read or write.
 enum WorkspaceSettingsSection: String, CaseIterable, Identifiable {
-    case general, permissions, connection, updates
+    case general, companion, permissions, connection, updates
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .general: "通用"
+        case .companion: "桌面伙伴"
         case .permissions: "权限"
         case .connection: "连接与诊断"
         case .updates: "软件更新"
@@ -66,6 +67,7 @@ enum WorkspaceSettingsSection: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .general: "slider.horizontal.3"
+        case .companion: "bird"
         case .permissions: "lock.shield"
         case .connection: "network"
         case .updates: "arrow.down.circle"
@@ -81,7 +83,7 @@ struct WorkspaceSettingsSectionGroup: Identifiable {
 
 extension WorkspaceSettingsSection {
     static let groups: [WorkspaceSettingsSectionGroup] = [
-        .init(title: "此 Mac", sections: [.general, .permissions, .updates]),
+        .init(title: "此 Mac", sections: [.general, .companion, .permissions, .updates]),
         .init(title: "支持", sections: [.connection]),
     ]
 }
@@ -89,11 +91,12 @@ extension WorkspaceSettingsSection {
 /// The single pane a selection shows. Every pane is a native device control and
 /// stays usable without a workspace connection.
 enum WorkspaceSettingsPane: Equatable, CaseIterable {
-    case general, permissions, connection, updates
+    case general, companion, permissions, connection, updates
 
     static func resolve(selection: WorkspaceSettingsSection) -> WorkspaceSettingsPane {
         switch selection {
         case .general: .general
+        case .companion: .companion
         case .permissions: .permissions
         case .connection: .connection
         case .updates: .updates
@@ -103,6 +106,7 @@ enum WorkspaceSettingsPane: Equatable, CaseIterable {
     var section: WorkspaceSettingsSection {
         switch self {
         case .general: .general
+        case .companion: .companion
         case .permissions: .permissions
         case .connection: .connection
         case .updates: .updates
@@ -116,7 +120,7 @@ enum WorkspaceSettingsPane: Equatable, CaseIterable {
 
     /// The stable inventory of panes, used to prove offline availability
     /// without opening a window.
-    static var allCases: [WorkspaceSettingsPane] { [.general, .permissions, .connection, .updates] }
+    static var allCases: [WorkspaceSettingsPane] { [.general, .companion, .permissions, .connection, .updates] }
 }
 
 /// Classifies same-origin navigation so Settings and the main workspace keep
@@ -270,7 +274,9 @@ struct WorkspaceDesktopSettings: View {
             Divider()
             content
         }
-        .frame(minWidth: 820, idealWidth: 900, maxWidth: .infinity, minHeight: 600, idealHeight: 680, maxHeight: .infinity)
+        .frame(minWidth: 820,
+               idealWidth: navigation.selection == .companion ? 1040 : 900,
+               maxWidth: .infinity, minHeight: 600, idealHeight: 680, maxHeight: .infinity)
         .background(SettingsWindowTitle(title: "此 Mac 设置"))
         .task { updater.start() }
     }
@@ -447,6 +453,7 @@ struct WorkspaceDesktopSettings: View {
     private var paneContent: some View {
         switch pane {
         case .general: generalPane
+        case .companion: DesktopPetSettingsView()
         case .permissions: permissionsPane
         case .connection: connectionPane
         case .updates: updatesPane
