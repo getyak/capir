@@ -193,10 +193,57 @@ restore-plan, search routing and the `WKWebView` `pushState` KVO evidence test w
 retained and adapted to the new `WorkbenchSettingsTransition(destination:restoreURL:)`,
 `WorkspaceSettingsPane`, and `AccountSettingsBrowser` initializer-injection seams.
 
-Limitations: `RUN_MACOS_UI_TESTS` was left at its default (`0`), so
-`WorkspaceSettingsUITests.swift` compiles but has not been executed here; the Web
-account-menu distinction and browser-side sections are not yet implemented; no
-real-surface acceptance run has happened yet.
+Limitations and open defects: `RUN_MACOS_UI_TESTS` was left at its default (`0`), so
+`WorkspaceSettingsUITests.swift` compiles but has not been executed; no real-surface
+acceptance run (offline service, previous Web build, absent endpoint, signed-out
+browser, second synthetic identity, draft preservation while the browser opens) has
+happened yet; no package was produced; no installed-build comparison was run.
+
+Web evidence: `pnpm --filter @talent-signal/web exec vitest run` → 1542 passed,
+1 skipped, 0 failed (the workspace packages must be built first: `pnpm --filter
+@talent-signal/agent build`; without it five suites fail on unresolved
+`@talent-signal/agent/*` imports — a baseline prerequisite, not this change).
+`pnpm typecheck` exit 0. `pnpm lint` 0 errors, 6 pre-existing warnings.
+`pnpm build` fails on an unset `AUTH_SECRET` (baseline; CI injects
+`ci-build-only-not-a-deployment-secret`); with that CI build-time value the
+production build succeeds, exit 0. `pnpm docs:check` passes completely
+(11 canonical documents, 699 Markdown files, wiki, architecture boundaries and
+all three architecture diagrams), so the two broken-link notes previously recorded
+in this plan do not reproduce.
+
+Independent review (Codex, read-only, adversarial, 2026-09-29) found:
+
+1. **P1, open — account settings can paint in the embedded WebView.** A client-side
+   `history.pushState` to `/workspace/settings` bypasses `decidePolicyFor`; the URL
+   KVO handler then schedules the browser handoff and workbench restore
+   asynchronously, so Next.js settings content may render in the visible workbench
+   WebView before the restore runs. The same class of race was previously covered by
+   the removed probe machinery. Not yet fixed; the smallest fix is to make the
+   embedded surface non-painting (hidden/blanked) for the duration of the restore,
+   with a test that asserts the settings URL is never painted.
+2. **P2, fixed — screenshot failure recovery was missing from search.** The new
+   inventory dropped `capture-failure` (“截图处理失败时怎么办”) that exists in
+   `origin/main`. Restored in `WorkspaceSettingsSearch.swift`, now routing to the
+   native 连接与诊断 pane so it still works with no Web origin.
+3. **P2, corrected — the account-isolation test overclaimed.**
+   `apps/web/lib/settings-account-isolation.test.ts` mocks the authenticated client,
+   so it proves wiring (no account parameter can be expressed; a session-less call is
+   refused) and nothing about runtime authorization. Its docstring now says exactly
+   that and names the real enforcement site. Real cross-account authorization lives in
+   `apps/backend/src/modules/accountManagement.ts`, where every statement binds
+   `auth.accountId` (and `auth.userId` when a user is addressed) from the verified
+   session, so a foreign id in the body matches no row — verified by reading the
+   queries, **not** by a runtime two-account test. No integration fixture exists for
+   the settings routes, so this acceptance item remains **unverified**.
+4. **P2, open — the `pushState` test is narrower than its comment implied.**
+   `testWebViewURLKVOObservesClientSidePushStateAndRestores` proves WebKit URL KVO and
+   history semantics on a standalone WebView; it does not exercise `WorkspaceBrowser`,
+   the browser handoff, or a real unsent draft. The comment has been narrowed; real
+   draft-preservation evidence is still owed (see limitation 1 and this list).
+
+The reviewer found no path that opens the native window from a Web settings
+navigation, and no identity, token, email, account id or unvalidated query value
+crossing the desktop scheme handoff or the settings login return path.
 
 ## Plan self-review and status
 

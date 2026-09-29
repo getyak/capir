@@ -675,7 +675,7 @@ struct WorkspaceDesktopSettings: View {
                     ? "需要先连接工作区，浏览器才能打开账号设置。"
                     : "无法打开默认浏览器，账号设置未打开。"
             }
-        case .workspacePath(let path):
+        case .workspacePath:
             guard let url = entry.resolvedURL(in: connection.origin) else {
                 searchMessage = "需要先连接工作区，才能打开这个工作区页面。"
                 return

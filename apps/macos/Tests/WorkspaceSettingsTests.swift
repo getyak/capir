@@ -247,7 +247,6 @@ final class WorkspaceSettingsTests: XCTestCase {
     /// A Web `/workspace/settings` navigation maps onto the browser allowlist
     /// and never onto a native section.
     func testSettingsOwnedRouteOpensBrowserNotNativeWindow() throws {
-        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
         let mapping: [(String, AccountSettingsDestination)] = [
             ("https://workspace.example/workspace/settings", .overview),
             ("https://workspace.example/workspace/settings?section=overview", .overview),

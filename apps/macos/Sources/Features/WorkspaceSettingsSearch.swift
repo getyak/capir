@@ -109,6 +109,14 @@ extension WorkspaceSettingsSearchEntry {
               detail: "由 macOS 管理；返回后重新检查状态。", scope: "此设备", destination: "设置 · 权限 · 打开 macOS 系统设置",
               keywords: ["截图", "截屏", "屏幕录制", "录屏", "屏幕快照", "屏幕截图", "权限", "screenshot", "capture"],
               action: .systemSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")),
+        // Restored from the previous search inventory (build 33 / origin/main):
+        // capture-failure recovery must stay findable. Its old "帮助与诊断"
+        // section no longer exists natively, so it now opens the native
+        // diagnostics pane, which works with no Web origin at all.
+        .init(id: "capture-failure", title: "截图处理失败时怎么办",
+              detail: "在连接与诊断中运行排查，查看设备权限与连接状态。", scope: "此设备", destination: "设置 · 连接与诊断",
+              keywords: ["截图", "截屏", "屏幕录制", "失败", "故障", "恢复", "处理"],
+              action: .section(.connection)),
     ]
 }
 

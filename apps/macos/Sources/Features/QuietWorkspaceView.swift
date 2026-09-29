@@ -99,9 +99,11 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private let accountBrowser: AccountSettingsBrowser
 
     init(origin: WorkspaceOrigin, initialURL: URL? = nil,
-         accountBrowser: AccountSettingsBrowser = .shared) {
+         accountBrowser: AccountSettingsBrowser? = nil) {
         self.origin = origin
-        self.accountBrowser = accountBrowser
+        // Optional default keeps the main-actor singleton out of the default
+        // argument expression, which is evaluated in a nonisolated context.
+        self.accountBrowser = accountBrowser ?? .shared
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: origin.dataStoreIdentifier)
         configuration.userContentController = WKUserContentController()

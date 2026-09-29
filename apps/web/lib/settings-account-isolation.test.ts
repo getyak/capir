@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * The account boundary for settings is the verified server session, not any
- * request parameter: `loadAccountSettings`/`updateAccountSettings` take no
- * account argument, so a signed-in account can only ever address itself. These
- * tests exercise that real module boundary instead of a stubbed success guard.
+ * Wiring-level coverage for the settings account boundary.
+ *
+ * What this proves: the settings backend module takes NO account argument, so
+ * no request-controlled value can select which account is read or written, and
+ * a missing verified session is refused before any backend call. What this does
+ * NOT prove: runtime cross-account authorization. That is enforced inside
+ * `mutateAccountSettings` in apps/backend/src/modules/accountManagement.ts,
+ * where every statement binds `auth.accountId` (and `auth.userId` when a user is
+ * addressed) from the verified session, so a foreign id in the body matches no
+ * row. There is no two-account integration fixture for the settings routes, so
+ * that backend guarantee remains unverified at runtime in this change.
  */
 const { authenticatedBackendClient } = vi.hoisted(() => ({
   authenticatedBackendClient: vi.fn(),
@@ -44,8 +51,8 @@ describe("settings account isolation", () => {
 
     expect(aCalls).toEqual([{ id: "op-a", kind: "profile", name: "A name", expected_revision: 1 }]);
     expect(bCalls).toEqual([{ id: "op-b", kind: "profile", name: "B name", expected_revision: 1 }]);
-    // No mutation payload can carry an account or user id, so account B cannot
-    // address account A by substituting an identifier.
+    // The module's signatures carry no account parameter, so a caller cannot
+    // even express "write to account A" from account B's session.
     for (const call of [...aCalls, ...bCalls]) {
       expect(Object.keys(call as object)).not.toContain("account_id");
       expect(Object.keys(call as object)).not.toContain("workspace_id");
