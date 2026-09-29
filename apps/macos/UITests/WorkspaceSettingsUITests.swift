@@ -118,4 +118,57 @@ final class WorkspaceSettingsUITests: XCTestCase {
         add(screen)
         app.terminate()
     }
+
+    func testMainConversationDraftSurvivesAccountSettingsHandoff() throws {
+        let origin = ProcessInfo.processInfo.environment["TS_DRAFT_ORIGIN"]
+        let cookieFile = ProcessInfo.processInfo.environment["TS_DRAFT_COOKIE_FILE"]
+        try XCTSkipUnless(origin != nil && cookieFile != nil,
+                          "Requires an isolated synthetic Web origin and cookie file")
+        let cookie = try String(contentsOfFile: cookieFile!, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertFalse(cookie.isEmpty)
+
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-workspace.web.origin", origin!,
+            "-workspace.connection.localDevelopment", "YES",
+            "-ApplePersistenceIgnoreState", "YES",
+            "--web-workspace-testing"
+        ]
+        app.launchEnvironment["TS_TEST_SESSION_COOKIE"] =
+            "name=talent-signal.session-v2;value=\(cookie);domain=127.0.0.1;path=/"
+        app.launch()
+
+        // WebKit exposes this textarea as a TextView titled “消息”; its HTML id
+        // does not become an XCTest accessibility identifier on macOS.
+        let composer = app.webViews.textViews["消息"]
+        guard composer.waitForExistence(timeout: 45) else {
+            XCTFail("The signed-in main Web conversation must show its composer")
+            return
+        }
+        let editable = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"), object: composer)
+        guard XCTWaiter.wait(for: [editable], timeout: 60) == .completed else {
+            XCTFail("The main conversation composer did not become editable")
+            return
+        }
+        let draft = "Unsent settings handoff draft"
+        composer.click()
+        composer.typeText(draft)
+        XCTAssertTrue((composer.value as? String)?.contains(draft) == true)
+
+        app.typeKey(",", modifierFlags: [.command])
+        let accountRow = app.buttons["settings.account.browser"]
+        XCTAssertTrue(accountRow.waitForExistence(timeout: 15))
+        accountRow.click()
+        app.activate()
+        XCTAssertFalse(app.descendants(matching: .any)["workspace.browserLaunchFailure"].exists)
+        XCTAssertTrue((composer.value as? String)?.contains(draft) == true,
+                      "Opening account settings must not discard the main conversation draft")
+        app.typeKey("w", modifierFlags: [.command])
+        XCTAssertTrue(composer.waitForExistence(timeout: 15))
+        XCTAssertTrue((composer.value as? String)?.contains(draft) == true,
+                      "The draft must still be present after returning to the main window")
+        app.terminate()
+    }
 }

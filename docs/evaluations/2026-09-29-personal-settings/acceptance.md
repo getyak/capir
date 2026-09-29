@@ -25,7 +25,7 @@ management open in the default browser. The handoff carries a destination only.
 | Production build | `AUTH_SECRET=ci-build-only-not-a-deployment-secret pnpm build` | exit 0 |
 | Account settings, module boundary | `vitest run src/modules/accountSettingsIsolation.integration.test.ts` | 5 passed against local PostgreSQL 18 |
 | Account settings, HTTP boundary | `vitest run src/modules/accountSettingsHttp.integration.test.ts` | 5 passed against local PostgreSQL 18 |
-| Package (preview, unsigned) | `MACOS_OUTPUT_DIR=/tmp/ts-package bash scripts/macos/package.sh` | exit 0, universal DMG + ZIP + SHA256SUMS in a task-owned directory |
+| Final preview package | `MACOS_BUILD_NUMBER=34 MACOS_OUTPUT_DIR=/tmp/ts-package-final-20260929 bash scripts/macos/package.sh` | exit 0; universal DMG + ZIP + SHA256SUMS. Bundle reports `0.1.0 (34)`, contains arm64 and x86_64, passes strict signature verification and both SHA-256 checks. Release binary contains no test-session helper. |
 | Account page in a real browser | disposable-profile headless Chrome over CDP against the loopback Web server | page rendered with the synthetic identity 合成用户 / Synthetic 设置账号 and the session `web-browser-acceptance` |
 
 That browser row is page-level evidence from a task-owned disposable profile: the
@@ -33,15 +33,18 @@ account page renders with a real session cookie. It is not evidence of the
 handoff, which is recorded in the row below.
 
 | Real app-to-browser handoff | `testAccountRowHandsOffToTheDefaultBrowser` (exit 0, `/tmp/ts-ui-handoff10.log`) against a task-owned per-run origin on `127.0.0.1:4403` behind a logging proxy | the proxy log `/tmp/ts-proxy-4403.log` shows the embed loading `/workspace` with a WebKit user agent and no Chrome client hints, then, at the click, a Chrome top-level document navigation to `/workspace/settings` with `sec-ch-ua: "Chromium"` and `sec-fetch-site: none`, followed by `/login?callbackUrl=%2Fworkspace%2Fsettings` from the same browser client |
+| Main conversation draft round trip | `testMainConversationDraftSurvivesAccountSettingsHandoff` against the signed-in synthetic Web service on `127.0.0.1:4404` | 1 UI test passed, exit 0 (`/tmp/ts-draft-ui3.log`); the unsent main Web composer value remained after opening browser account settings and returning to the app. The per-run proxy recorded a Chrome top-level request for `/workspace/settings` after the click. |
 
 A fresh origin port per run plus `-ApplePersistenceIgnoreState YES` removed the
 task-owned state pollution that made earlier runs misleading: a restored Quick Panel
 dialog hid the main window from the harness and a restored embed route produced
 `/workspace/settings` with no click at all.
 
-The package row is a packaging check only. It is not release verification and
-not installation: the artifact is unsigned, it was written to a task-owned
-directory, and no installed application was replaced.
+The package row is a packaging check only. The preview is ad-hoc signed and
+not notarized; it was written to a task-owned directory, and no installed
+application was replaced. Build 34 is newer than the installed build 33. A
+checksum-verified review copy of the DMG, ZIP and manifest is in the ignored
+`output/settings-build34/` directory of this worktree.
 
 The two UI tests launch the real app with `-workspace.web.origin
 http://127.0.0.1:1`, so they are offline evidence: the native window opens, reuses
@@ -57,26 +60,24 @@ stale revision answers `409 ACCOUNT_STALE`. Both are gated on
 `ACCOUNT_SETTINGS_TEST_DATABASE_URL` and wired into the CI step that migrates
 `account_proof`.
 
-## Not verified
+The signed-in run used the existing `--web-workspace-testing` launch path. A DEBUG-only
+test helper seeded a short-lived synthetic session cookie into the isolated WebKit
+store before the first request. It admits only an explicit test launch and a
+loopback origin; release builds exclude the helper. The earlier `--ui-testing`
+attempt displayed a different native fixture surface and could not exercise the
+main Web composer. The first Web run also targeted the HTML `id`, which WebKit did
+not expose as an XCTest identifier; the successful run located the visible
+“消息” text view and waited until it became editable before typing.
 
-- The unsent-draft round trip is **not verified on either surface**, and the two
-  surfaces are different claims: the accepted criterion is the ordinary main Web
-  conversation, while `quick.draftEditor` belongs to the legacy native Quick Panel and
-  does not substitute for it. The Quick Panel surface needs
-  `--ui-testing --fixture-state canonical --quick-panel-preview`, and that
-  configuration never loaded the Web origin at all (run 6 recorded zero requests on
-  the per-run port) and showed no window. The main Web conversation was not exercised
-  against a signed-in session: the app's per-origin data store holds no synthetic
-  cookie, and the embed on a reachable origin requested the settings route instead of
-  the workbench (runs 8 and 9). Web-level draft retention across a settings visit is
-  proved only by `testEmbeddedWorkbenchNeverPaintsWebAccountSettingsAndKeepsDraft`.
+## Not verified
 - VoiceOver was not exercised. Only accessibility identifiers and labels are
   asserted; no screen-reader session was recorded.
 - Light and dark appearance were not captured.
 - No previous Web release and no production-like database or deployment
   configuration were exercised.
-- Installation was not performed: the preview package is unsigned, so the
-  remaining step is a signed and notarized build plus the install decision.
+- Installation was not performed: external distribution needs a Developer ID
+  signed and notarized release. The preview package is for review and local
+  testing, and the installed build 33 is unchanged.
 
 ## Baseline failures this change does not claim
 

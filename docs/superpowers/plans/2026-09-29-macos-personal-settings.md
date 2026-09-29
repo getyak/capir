@@ -236,12 +236,10 @@ restore-plan, search routing and the `WKWebView` `pushState` KVO evidence test w
 retained and adapted to the new `WorkbenchSettingsTransition(destination:restoreURL:)`,
 `WorkspaceSettingsPane`, and `AccountSettingsBrowser` initializer-injection seams.
 
-Limitations and open defects: `RUN_MACOS_UI_TESTS` was left at its default (`0`) in
-`pnpm macos:check`, so that script only compiles the UI target; the two Settings UI
-tests were executed separately with `-only-testing` and passed (see below). Not yet
-done: previous Web build, failed-opener, signed-out browser and second synthetic
-identity exercises; the unsent-draft round trip through the real browser; light/dark
-and VoiceOver captures; no package was produced.
+`pnpm macos:check` compiles the UI target; the Settings UI tests were executed
+separately with `-only-testing`. The later signed-in draft round trip passed as
+recorded in the acceptance evaluation. Remaining scope limits are a previous Web
+build, a second signed-in browser identity, light/dark and VoiceOver captures.
 
 Web evidence: `pnpm --filter @talent-signal/web exec vitest run` → 1542 passed,
 1 skipped, 0 failed (the workspace packages must be built first: `pnpm --filter
@@ -321,7 +319,9 @@ Independent review (Codex, read-only, adversarial, 2026-09-29) found:
    `testEmbeddedWorkbenchNeverPaintsWebAccountSettingsAndKeepsDraft`, which loads the
    production configuration, types into the Web app's draft field, blocks on the
    settings route and restores with the draft intact. Owed: the same round trip through
-   the real app with the real browser open (see limitation 1 and this list).
+   the real app with the real browser open. That round trip was subsequently
+   verified by `testMainConversationDraftSurvivesAccountSettingsHandoff` on an
+   isolated signed-in Web origin; see the acceptance evaluation.
 
 The reviewer found no path that opens the native window from a Web settings
 navigation, and no identity, token, email, account id or unvalidated query value
@@ -414,19 +414,18 @@ no click at all. A fresh origin port for every run plus
 `/workspace` exactly as designed. The lesson for later runs: never reuse an origin
 port or a restored window state when attributing origin traffic.
 
-Still open, with the reason:
+The later signed-in round trip used a DEBUG-only synthetic cookie in the
+per-origin WebKit store. It ran the ordinary main Web conversation, entered an
+unsent draft, opened account settings in Chrome and verified the draft both
+before and after returning to the app. The first harness attempt used
+`--ui-testing`, which selects a different native fixture window; the corrected
+run used `--web-workspace-testing` on a fresh loopback origin. The completed
+result and its logs are in the acceptance evaluation.
 
-- The ordinary main Web conversation draft was not carried through a real handoff.
-  The embed is signed out in this harness, so it shows the login page and no
-  composer exists to type into; the app's per-origin data store holds no synthetic
-  cookie, and injecting one would need a product change. Web-level draft retention
-  across a settings visit is proved by
-  `testEmbeddedWorkbenchNeverPaintsWebAccountSettingsAndKeepsDraft`. The native
-  Quick Panel draft editor (`quick.draftEditor`) is a legacy surface and was not
-  used as a substitute.
+Still outside this acceptance run:
+
 - A second signed-in synthetic identity, light/dark captures, VoiceOver and a
   previous Web release were not exercised.
-- Packaging was verified as packaging only: `MACOS_OUTPUT_DIR=/tmp/ts-package bash
-  scripts/macos/package.sh` produced an unsigned universal preview DMG and ZIP with
-  checksums in a task-owned directory. The installed application was not replaced
-  and installation was not performed.
+- Packaging was verified as packaging only. The final build 34 is Universal,
+  ad-hoc signed, not notarized, and has verified DMG/ZIP checksums. The installed
+  build 33 was not replaced; see the acceptance evaluation for exact paths.

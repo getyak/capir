@@ -162,7 +162,22 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             }
         }
         publishDesktopChrome(state: DesktopUpdater.shared.presentation)
-        webView.load(URLRequest(url: initialURL ?? origin.entryURL))
+        let entry = URLRequest(url: initialURL ?? origin.entryURL)
+        #if DEBUG
+        // UI-test harness only: a synthetic session, supplied by the harness, is
+        // seeded into this origin's own store so the ordinary Web conversation can
+        // be exercised. Release builds and normal launches never see it. The entry
+        // load starts from the store's completion so the first request carries it.
+        if let cookie = WorkspaceTestSession.cookieSpec(
+            from: ProcessInfo.processInfo.environment[WorkspaceTestSession.cookieEnvironmentKey],
+            origin: origin, arguments: ProcessInfo.processInfo.arguments) {
+            configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak self] in
+                Task { @MainActor in self?.webView.load(entry) }
+            }
+            return
+        }
+        #endif
+        webView.load(entry)
     }
 
     func navigate(_ destination: WorkspaceDestination) {
