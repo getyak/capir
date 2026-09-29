@@ -14,14 +14,19 @@ if [[ "$MODE" == signed ]]; then
   [[ "$MACOS_SIGNING_IDENTITY" == 'Developer ID Application:'* ]] || { echo 'Developer ID Application identity required' >&2; exit 1; }
 fi
 if [[ "$MODE" == preview ]]; then export MACOS_SPARKLE_PUBLIC_KEY=""; fi
+VERSION="${MACOS_VERSION:?Set the product tag version, for example MACOS_VERSION=0.1.92}"
+BUILD="${MACOS_BUILD_NUMBER:?Set a monotonic native build number}"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$BUILD" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid version/build' >&2; exit 1; }
+product_tags="$(git -C "$ROOT" tag --points-at HEAD --list 'v[0-9]*.[0-9]*.[0-9]*')"
+if [[ -n "$product_tags" && "$product_tags" != "v$VERSION" ]]; then
+  echo "Package version $VERSION disagrees with the source tag: $product_tags" >&2
+  exit 1
+fi
 mkdir -p "$MACOS_OUTPUT_DIR"
 OUTPUT="$(cd "$MACOS_OUTPUT_DIR" && pwd)"
 # A run gets its own build/staging directory; existing files are never overwritten.
 STAGING="$(mktemp -d "$OUTPUT/package.XXXXXX")"
 "$ROOT/scripts/macos/generate.sh"
-VERSION="${MACOS_VERSION:-0.1.0}"
-BUILD="${MACOS_BUILD_NUMBER:-1}"
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$BUILD" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid version/build' >&2; exit 1; }
 xcodebuild -quiet -project "$ROOT/apps/macos/TalentSignalMac.xcodeproj" \
   -scheme TalentSignalMac -configuration Release -destination 'generic/platform=macOS' \
   -derivedDataPath "$STAGING/DerivedData" ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \

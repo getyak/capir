@@ -53,7 +53,6 @@ jobs:
       MACOS_RELEASE_MODE: ${{ vars.MACOS_RELEASE_MODE || 'preview' }}
       MACOS_UPDATE_CHANNEL: ${{ vars.MACOS_UPDATE_CHANNEL || 'stable' }}
       RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
-      RELEASE_TAG: macos-${{ github.run_id }}-${{ github.run_attempt }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -65,6 +64,8 @@ jobs:
       - name: Verify release policy and native app
         run: |
           node --test scripts/macos/release-policy.test.cjs
+          scripts/macos/package-version.test.sh
+          scripts/macos/publish-versioned-release.test.sh
           node scripts/check-brand-assets.mjs
           scripts/macos/check.sh
       - name: Require signing identity configuration
@@ -95,6 +96,14 @@ jobs:
           export SPARKLE_TOOLS_DIR="$RUNNER_TEMP/sparkle-tools"
           printf 'SPARKLE_TOOLS_DIR=%s\n' "$SPARKLE_TOOLS_DIR" >> "$GITHUB_ENV"
           scripts/macos/sparkle-tools.sh
+      - name: Resolve shared product version
+        id: version
+        run: ./scripts/ci/product-release-version.sh
+      - name: Export product version for packaging
+        run: |
+          printf 'MACOS_VERSION=%s\nRELEASE_TAG=%s\n' \
+            '${{ steps.version.outputs.release_version }}' \
+            '${{ steps.version.outputs.release_tag }}' >> "$GITHUB_ENV"
       - name: Package Universal app
         run: |
           # Start above the existing native build 7; reruns keep the same build number.
@@ -103,25 +112,7 @@ jobs:
           printf 'MACOS_OUTPUT_DIR=%s\nMACOS_BUILD_NUMBER=%s\n' "$MACOS_OUTPUT_DIR" "$MACOS_BUILD_NUMBER" >> "$GITHUB_ENV"
           scripts/macos/package.sh
       - name: Publish verified downloads
-        run: |
-          set -euo pipefail
-          # Avoid labeling a superseded build as the current release.
-          current="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
-          [[ "$current" == "$RELEASE_SHA" ]] || { echo 'Main moved; the next CI run will publish.'; exit 1; }
-          notes="$RUNNER_TEMP/macos-release-notes.md"
-          printf 'Native relationship workspace for clients, partners, collaboration, and recruiting.\n\nRequires macOS 14+. Universal Apple silicon + Intel.\n\nRevision: %s\n\n' "$RELEASE_SHA" > "$notes"
-          flags=(--latest=false)
-          if [[ "$MACOS_UPDATE_CHANNEL" == preview && "$MACOS_RELEASE_MODE" == signed ]]; then flags+=(--prerelease); fi
-          if [[ "$MACOS_RELEASE_MODE" == preview ]]; then
-            printf '**Preview: ad-hoc signed, NOT Apple-notarized. Gatekeeper may block this download.**\n\n' >> "$notes"
-            flags+=(--prerelease)
-          else
-            printf 'Developer ID signed, notarized, and stapled.\n\n' >> "$notes"
-          fi
-          printf 'Download the DMG and verify it using the SHA256SUMS file. Drag Talent Signal to Applications, then enter your HTTPS workspace origin and sign in. Private Tailscale workspaces require authorized network access. No server or credentials are included.\n\n[Installation and update guide](https://github.com/getyak/talent-signal/blob/%s/docs/operations/macos-distribution.md)\n' "$RELEASE_SHA" >> "$notes"
-          gh release create "$RELEASE_TAG" "$MACOS_OUTPUT_DIR"/*.dmg "$MACOS_OUTPUT_DIR"/*.zip "$MACOS_OUTPUT_DIR"/*-SHA256SUMS.txt \
-            --target "$RELEASE_SHA" --title "Talent Signal for macOS · $MACOS_RELEASE_MODE · $MACOS_BUILD_NUMBER" \
-            --notes-file "$notes" "${flags[@]}"
+        run: scripts/macos/publish-versioned-release.sh
       - name: Publish and verify signed update feed
         if: env.MACOS_RELEASE_MODE == 'signed'
         run: scripts/macos/publish-appcast.sh

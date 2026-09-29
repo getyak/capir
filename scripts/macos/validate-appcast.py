@@ -27,7 +27,7 @@ def validate(content, expected_build, before_build=False):
             raise ValueError("Missing archive")
         url = urlparse(enclosure.get("url", ""))
         if url.scheme != "https" or url.netloc != "github.com" or url.query or url.fragment or not re.fullmatch(
-            r"/getyak/talent-signal/releases/download/macos-[0-9]+-[0-9]+/Talent-Signal-[0-9.]+-[0-9]+-macOS-universal-signed\.zip", url.path
+            r"/getyak/talent-signal/releases/download/(?:macos-[0-9]+-[0-9]+|v[0-9]+\.[0-9]+\.[0-9]+)/Talent-Signal-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-macOS-universal-signed\.zip", url.path
         ):
             raise ValueError("Update archive must be a versioned signed macOS release")
         if int(enclosure.get("length", "0")) <= 0:
