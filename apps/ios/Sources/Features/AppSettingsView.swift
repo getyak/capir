@@ -208,6 +208,44 @@ struct AppSettingsView: View {
     }
 }
 
+enum InstalledAppVersion {
+    static func label(in bundle: Bundle = .main) -> String? {
+        guard let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+              !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        return build.flatMap { $0.isEmpty ? nil : "\(version) (\($0))" } ?? version
+    }
+}
+
+struct AppVersionStatusView: View {
+    @Environment(\.appLanguage) private var appLanguage
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent(appLanguage.text("Installed iOS app")) {
+                    Text(InstalledAppVersion.label() ?? appLanguage.text("Unavailable"))
+                        .accessibilityIdentifier("ios-installed-version")
+                }
+                LabeledContent(appLanguage.text("Update status")) {
+                    Text(appLanguage.text("Not verified"))
+                        .foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text(appLanguage.text(
+                    "This is the build installed on this device. Check TestFlight or the App Store for a newer release; this screen does not infer updates from another device."
+                ))
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.tsSurface)
+        .navigationTitle(appLanguage.text("Version & status"))
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("ios-version-status")
+    }
+}
+
 struct DisplaySettingsView: View {
     @AppStorage(LabDisplayStore.themeKey) private var theme = LabDisplayConfiguration.Theme.system.rawValue
     @AppStorage(WorkspaceTextSizePreference.storageKey)

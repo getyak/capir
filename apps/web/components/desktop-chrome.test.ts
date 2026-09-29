@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { DesktopSettingsLink, DesktopUpdateButton, desktopVersion } from "./desktop-chrome";
+import { WorkspaceAccountMenu } from "./workspace-account-menu";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
@@ -14,6 +15,27 @@ afterEach(async () => {
 });
 
 describe("native desktop chrome", () => {
+  it("offers one context-correct Settings entry in the avatar menu", async () => {
+    const host = document.createElement("div"); document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(createElement(WorkspaceAccountMenu, {
+      accountName: "Synthetic User", workspaceName: "Fixture Workspace", signOutAction: () => {},
+    })));
+    const settingsLinks = () => host.querySelectorAll(
+      'a[href="/workspace/settings"], a[href="talentsignal-desktop://settings"]',
+    );
+    expect(settingsLinks()).toHaveLength(1);
+    expect(settingsLinks()[0].getAttribute("href")).toBe("/workspace/settings");
+
+    await act(async () => {
+      window.talentSignalDesktop = { protocolVersion: 1, surface: "workspace", availableVersion: null };
+      window.dispatchEvent(new Event("talent-signal-desktop"));
+    });
+    expect(settingsLinks()).toHaveLength(1);
+    expect(settingsLinks()[0].getAttribute("href")).toBe("talentsignal-desktop://settings");
+    expect(settingsLinks()[0].textContent).toContain("设置");
+  });
+
   it("uses the Web settings route in browsers and the native window in a supported host", async () => {
     const host = document.createElement("div"); document.body.append(host);
     root = createRoot(host);

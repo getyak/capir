@@ -137,6 +137,62 @@ function OperationAuthPanel({ flow, hasPassword, connectedProviders, scope, onUp
   );
 }
 
+type SignInMethod = AccountSettings["sign_in_methods"][number];
+
+/**
+ * One provider row. The same row is used for the always-visible methods and
+ * for the optional providers disclosed under “添加登录方式”, so binding,
+ * step-up, failure and readback behavior cannot drift between them.
+ */
+function MethodRow({ method, showActions, offline, hasPassword, connectedProviders, onLink, onPassword, onUnlink }: {
+  method: SignInMethod;
+  showActions: boolean;
+  offline: boolean;
+  hasPassword: boolean;
+  connectedProviders: Array<'apple' | 'google'>;
+  onLink: () => void;
+  onPassword: () => void;
+  onUnlink: () => void;
+}) {
+  const provider = method.provider;
+  const linkDisabled = offline || (connectedProviders.length === 0 && !hasPassword);
+  return (
+    <li className={styles.row}>
+      <div className={styles.rowHead}>
+        <strong>{providerNames[provider]}</strong>
+        <span className={styles.badge} data-state={method.state}>
+          {stateLabels[method.state]}
+        </span>
+      </div>
+      {method.hint && method.state === 'connected' && (
+        <p className={styles.secondary}>关联邮箱：{method.hint}</p>
+      )}
+      {method.state === 'legacy_unverified' && (
+        <p className={styles.secondary}>这个密码登录还没有验证邮箱所有权。绑定一个提供方并验证后即可解决。</p>
+      )}
+      {showActions && (
+        <div className={styles.actions}>
+          {method.state === 'unconnected' && provider !== 'password' && (
+            <button type="button" className={styles.quiet} disabled={linkDisabled} onClick={onLink}>绑定</button>
+          )}
+          {method.state === 'unconnected' && provider === 'password' && (
+            <button type="button" className={styles.quiet} disabled={offline} onClick={onPassword}>设置密码</button>
+          )}
+          {method.state === 'connected' && provider === 'password' && (
+            <button type="button" className={styles.quiet} disabled={offline} onClick={onPassword}>更换密码</button>
+          )}
+          {method.state !== 'unconnected' && method.can_unlink && (
+            <button type="button" className={styles.quiet} disabled={offline} onClick={onUnlink}>解除绑定</button>
+          )}
+          {method.state !== 'unconnected' && !method.can_unlink && (
+            <span className={styles.secondary}>至少保留一种登录方式</span>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
 function subscribeLocation(onChange: () => void) {
   window.addEventListener('popstate', onChange);
   return () => window.removeEventListener('popstate', onChange);
@@ -178,6 +234,15 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
   const connectedProviders = data.sign_in_methods
     .filter(method => method.state === 'connected' && method.provider !== 'password')
     .map(method => method.provider as 'apple' | 'google');
+  // Connected and legacy-unverified methods stay visible; a password that is
+  // not set yet stays visible too, because setting it is a primary action.
+  // Only optional unconnected providers are disclosed by count.
+  const visibleMethods = data.sign_in_methods.filter(
+    method => method.state !== 'unconnected' || method.provider === 'password',
+  );
+  const addableMethods = data.sign_in_methods.filter(
+    method => method.state === 'unconnected' && method.provider !== 'password',
+  );
   // Success is only claimed after the authoritative settings readback agrees;
   // a bare `?link=done` flag proves nothing, and a failure message never
   // claims the account is unchanged (a prior step may have committed).
@@ -195,53 +260,45 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
   return (
     <section className={styles.section} aria-labelledby="sign-in-methods-title">
       <h2 id="sign-in-methods-title">登录方式</h2>
-      <p className={styles.secondary}>一个账户，多种登录方式。添加登录方式不会创建工作空间、移动记录或更改主邮箱。</p>
+      <p className={styles.secondary}>一个账户，多种登录方式。已绑定和需要验证的方式显示在最前面。</p>
       {notice && <p role="status" className={styles.notice}>{notice}</p>}
       {offline && <p role="status" className={styles.error}>离线，恢复连接后重试</p>}
-      <ul className={styles.rows}>
-        {data.sign_in_methods.map(method => {
-          const provider = method.provider;
-          return (
-            <li key={provider} className={styles.row}>
-              <div className={styles.rowHead}>
-                <strong>{providerNames[provider]}</strong>
-                <span className={styles.badge} data-state={method.state}>
-                  {stateLabels[method.state]}
-                </span>
-              </div>
-              {method.hint && method.state === 'connected' && (
-                <p className={styles.secondary}>关联邮箱：{method.hint}</p>
-              )}
-              {method.state === 'legacy_unverified' && (
-                <p className={styles.secondary}>这个密码登录还没有验证邮箱所有权。绑定一个提供方并验证后即可解决。</p>
-              )}
-              {!flow && (
-                <div className={styles.actions}>
-                  {method.state === 'unconnected' && provider !== 'password' && (
-                    <button type="button" className={styles.quiet} disabled={offline || connectedProviders.length === 0 && !hasPassword}
-                      onClick={() => setFlow({ kind: 'link', provider: provider as 'apple' | 'google' })}>绑定</button>
-                  )}
-                  {method.state === 'unconnected' && provider === 'password' && (
-                    <button type="button" className={styles.quiet} disabled={offline}
-                      onClick={() => setFlow({ kind: 'password' })}>设置密码</button>
-                  )}
-                  {method.state === 'connected' && provider === 'password' && (
-                    <button type="button" className={styles.quiet} disabled={offline}
-                      onClick={() => setFlow({ kind: 'password' })}>更换密码</button>
-                  )}
-                  {method.state !== 'unconnected' && method.can_unlink && (
-                    <button type="button" className={styles.quiet} disabled={offline}
-                      onClick={() => setFlow({ kind: 'unlink', provider })}>解除绑定</button>
-                  )}
-                  {method.state !== 'unconnected' && !method.can_unlink && (
-                    <span className={styles.secondary}>至少保留一种登录方式</span>
-                  )}
-                </div>
-              )}
-            </li>
-          );
-        })}
+      <ul className={styles.rows} data-sign-in-visible>
+        {visibleMethods.map(method => (
+          <MethodRow
+            key={method.provider}
+            method={method}
+            showActions={!flow}
+            offline={offline}
+            hasPassword={hasPassword}
+            connectedProviders={connectedProviders}
+            onLink={() => setFlow({ kind: 'link', provider: method.provider as 'apple' | 'google' })}
+            onPassword={() => setFlow({ kind: 'password' })}
+            onUnlink={() => setFlow({ kind: 'unlink', provider: method.provider })}
+          />
+        ))}
       </ul>
+      {addableMethods.length > 0 && (
+        <details className={styles.addMethods} data-add-login-methods>
+          <summary>{`添加登录方式（${addableMethods.length}）`}</summary>
+          <p className={styles.secondary}>添加登录方式不会创建工作空间、移动记录或更改主邮箱。</p>
+          <ul className={styles.rows}>
+            {addableMethods.map(method => (
+              <MethodRow
+                key={method.provider}
+                method={method}
+                showActions={!flow}
+                offline={offline}
+                hasPassword={hasPassword}
+                connectedProviders={connectedProviders}
+                onLink={() => setFlow({ kind: 'link', provider: method.provider as 'apple' | 'google' })}
+                onPassword={() => setFlow({ kind: 'password' })}
+                onUnlink={() => setFlow({ kind: 'unlink', provider: method.provider })}
+              />
+            ))}
+          </ul>
+        </details>
+      )}
       {flow && (
         <OperationAuthPanel
           flow={flow}
@@ -266,14 +323,14 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
 
 export function AccountDataSync({ lastObservedAt }: { lastObservedAt?: string | null }) {
   return (
-    <section className={styles.section} aria-labelledby="data-sync-title">
-      <h2 id="data-sync-title">数据同步</h2>
+    <details className={styles.disclosure} data-data-sync>
+      <summary>数据同步说明</summary>
       <p className={styles.secondary}>联系人与对话会自动同步到你的设备</p>
       <p className={styles.secondary}>
         {lastObservedAt
           ? `最近一次同步：${new Date(lastObservedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'medium', timeStyle: 'short' })}`
           : '打开或回到应用时会自动检查更新。'}
       </p>
-    </section>
+    </details>
   );
 }
