@@ -14,7 +14,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
         let mainTitle = main.label
 
         app.typeKey(",", modifierFlags: [.command])
-        let device = app.buttons["settings.section.device"]
+        let device = app.buttons["settings.section.general"]
         XCTAssertTrue(device.waitForExistence(timeout: 20))
         XCTAssertEqual(app.windows.count, 2)
         device.click()

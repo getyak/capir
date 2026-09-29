@@ -461,10 +461,12 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertNil(WorkspaceSettingsSection(rawValue: "versions"))
     }
 
-    /// Proves `WKWebView.url` KVO observes `history.pushState` on a normally
-    /// loaded (HTTP-like) document, and that a same-document restore returns the
-    /// WebView to the prior workbench URL. This is the evidence behind the
-    /// narrow compatibility fallback that preserves an unsent draft.
+    /// What this proves: `WKWebView.url` KVO observes `history.pushState` on a
+    /// normally loaded document, and the same-document back navigation returns
+    /// the WebView to the prior URL when the URL KVO fires. That is the WebKit
+    /// mechanism the compatibility fallback depends on. It is proved on a
+    /// standalone WebView; the app-level guarantees (handoff, unsent draft, and
+    /// that account settings never paint) are covered by the two tests below.
     @MainActor
     func testWebViewURLKVOObservesClientSidePushStateAndRestores() async throws {
         let configuration = WKWebViewConfiguration()
@@ -515,6 +517,113 @@ final class WorkspaceSettingsTests: XCTestCase {
         withExtendedLifetime(observation) {}
         withExtendedLifetime(handler) {}
     }
+
+    /// The production main window must install the paint guard, and the guard
+    /// must classify exactly the Web account settings routes on this origin.
+    @MainActor
+    func testProductionBrowserInstallsPaintGuardAndMatchesOnlySettingsRoutes() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let configuration = WorkspaceBrowser.configuration(for: origin)
+        let sources = configuration.userContentController.userScripts.map(\.source)
+        XCTAssertTrue(sources.contains(WorkspaceSettingsPaintGuard.scriptSource),
+                      "the production workbench must install the settings paint guard")
+        XCTAssertTrue(sources.contains { $0.contains("ts-settings-paint-guard") },
+                      "the guard's style half must be installed too")
+        let settings = try XCTUnwrap(URL(string: "https://workspace.example/workspace/settings?section=connections"))
+        let drilldown = try XCTUnwrap(URL(string: "https://workspace.example/workspace/settings/link-complete"))
+        let similar = try XCTUnwrap(URL(string: "https://workspace.example/workspace/settings-archive"))
+        let overview = try XCTUnwrap(URL(string: "https://workspace.example/workspace/settings"))
+        let foreign = try XCTUnwrap(URL(string: "https://other.example/workspace/settings"))
+        XCTAssertTrue(WorkspaceSettingsPaintGuard.isSettings(url: overview, origin: origin))
+        XCTAssertTrue(WorkspaceSettingsPaintGuard.isSettings(url: settings, origin: origin))
+        XCTAssertTrue(WorkspaceSettingsPaintGuard.isSettings(url: drilldown, origin: origin))
+        XCTAssertFalse(WorkspaceSettingsPaintGuard.isSettings(url: similar, origin: origin))
+        XCTAssertFalse(WorkspaceSettingsPaintGuard.isSettings(url: foreign, origin: origin))
+    }
+
+    /// The embedded workbench must never be able to display Web account
+    /// settings, even on a client-side route change that bypasses the
+    /// navigation delegate, and the untouched draft must come back after the
+    /// same-document restore.
+    @MainActor
+    func testEmbeddedWorkbenchNeverPaintsWebAccountSettingsAndKeepsDraft() async throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        // The exact configuration the app runs, so this proves the shipped
+        // guard rather than a test-only script.
+        let configuration = WorkspaceBrowser.configuration(for: origin)
+        let handler = TestSchemeHandler(body: """
+        <!doctype html><meta charset=utf-8><title>workbench</title>
+        <body><input id="draft" value=""><p>workbench</p></body>
+        """)
+        configuration.setURLSchemeHandler(handler, forURLScheme: "get51test")
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let probe = TestNavigationProbe()
+        webView.navigationDelegate = probe
+        let loaded = expectation(description: "initial load")
+        probe.onFinish = { loaded.fulfill() }
+        webView.load(URLRequest(url: URL(string: "get51test://workspace.test/workspace")!))
+        await fulfillment(of: [loaded], timeout: 15)
+
+        _ = try await webView.evaluateJavaScript("document.getElementById('draft').value = 'unsent message'")
+        let initiallyBlocked = try await settingsPaintIsBlocked(webView)
+        XCTAssertFalse(initiallyBlocked, "the workbench itself must stay paintable")
+
+        _ = try await webView.evaluateJavaScript("history.pushState({}, '', '/workspace/today')")
+        let afterOrdinaryNavigation = try await settingsPaintIsBlocked(webView)
+        XCTAssertFalse(afterOrdinaryNavigation, "an ordinary route change must not blank the workbench")
+
+        _ = try await webView.evaluateJavaScript(
+            "history.pushState({}, '', '/workspace/settings?section=connections')")
+        let afterSettingsNavigation = try await settingsPaintIsBlocked(webView)
+        XCTAssertTrue(afterSettingsNavigation,
+                      "Web account settings must never be paintable inside the app")
+        let styleInstalled = try await webView.evaluateJavaScript(
+            "document.getElementById('ts-settings-paint-guard') !== null") as? Bool ?? false
+        XCTAssertTrue(styleInstalled, "the guard must install its stylesheet at document start")
+        let blockedVisibility = try await webView.evaluateJavaScript(
+            "getComputedStyle(document.body).visibility") as? String
+        XCTAssertEqual(blockedVisibility, "hidden",
+                       "a blocked document must actually not paint")
+
+        webView.goBack()
+        var restored = webView.url?.path == "/workspace/today"
+        for _ in 0..<20 where !restored {
+            try await Task.sleep(for: .milliseconds(100))
+            restored = webView.url?.path == "/workspace/today"
+        }
+        XCTAssertTrue(restored, "the same-document restore must return to the workbench")
+        let afterRestore = try await settingsPaintIsBlocked(webView)
+        XCTAssertFalse(afterRestore, "the workbench must be visible again after the restore")
+        let draft = try await webView.evaluateJavaScript("document.getElementById('draft').value") as? String
+        XCTAssertEqual(draft, "unsent message", "an unsent draft must survive the settings handoff")
+        let restoredVisibility = try await webView.evaluateJavaScript(
+            "getComputedStyle(document.body).visibility") as? String
+        XCTAssertEqual(restoredVisibility, "visible", "the restored workbench must paint again")
+
+        // A history call that throws changes no URL. It must never be able to
+        // leave the workbench blank in place of the real page or error overlay.
+        let outcome = try await webView.evaluateJavaScript("""
+        (function () {
+          try {
+            history.pushState({ handler: function () {} }, '', '/workspace/settings');
+            return 'no-throw';
+          } catch (error) { return 'threw'; }
+        })()
+        """) as? String
+        XCTAssertEqual(outcome, "threw", "an unserializable history state must throw")
+        XCTAssertEqual(webView.url?.path, "/workspace/today", "a throwing history call must not navigate")
+        let blockedAfterThrow = try await settingsPaintIsBlocked(webView)
+        XCTAssertFalse(blockedAfterThrow,
+                       "a throwing history call must leave the workbench visible")
+        withExtendedLifetime(handler) {}
+    }
+
+    @MainActor
+    private func settingsPaintIsBlocked(_ webView: WKWebView) async throws -> Bool {
+        let value = try await webView.evaluateJavaScript(
+            "document.documentElement.hasAttribute('\(WorkspaceSettingsPaintGuard.blockedAttribute)')")
+        return value as? Bool ?? false
+    }
 }
 
 @MainActor
@@ -526,8 +635,13 @@ private final class TestNavigationProbe: NSObject, WKNavigationDelegate {
 }
 
 private final class TestSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendable {
+    private let body: String
+
+    init(body: String = "<!doctype html><meta charset=utf-8><title>workbench</title><body>workbench</body>") {
+        self.body = body
+    }
+
     func webView(_ webView: WKWebView, start urlSchemeTask: WKURLSchemeTask) {
-        let body = "<!doctype html><meta charset=utf-8><title>workbench</title><body>workbench</body>"
         let data = Data(body.utf8)
         guard let url = urlSchemeTask.request.url,
               let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",

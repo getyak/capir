@@ -98,15 +98,26 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private var pendingSettingsOpen = false
     private let accountBrowser: AccountSettingsBrowser
 
+    /// The exact configuration every workbench web view is built from. Kept as a
+    /// factory so the settings paint guard and the per-origin data store cannot
+    /// drift from what the app actually runs.
+    static func configuration(for origin: WorkspaceOrigin) -> WKWebViewConfiguration {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: origin.dataStoreIdentifier)
+        configuration.userContentController = WKUserContentController()
+        // Account settings may never paint inside the app, including on a
+        // client-side route change that bypasses the navigation delegate.
+        WorkspaceSettingsPaintGuard.install(on: configuration.userContentController)
+        return configuration
+    }
+
     init(origin: WorkspaceOrigin, initialURL: URL? = nil,
          accountBrowser: AccountSettingsBrowser? = nil) {
         self.origin = origin
         // Optional default keeps the main-actor singleton out of the default
         // argument expression, which is evaluated in a nonisolated context.
         self.accountBrowser = accountBrowser ?? .shared
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: origin.dataStoreIdentifier)
-        configuration.userContentController = WKUserContentController()
+        let configuration = Self.configuration(for: origin)
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         _ = DesktopUpdateClickBridge(controller: configuration.userContentController) { [weak self] url, frame in
