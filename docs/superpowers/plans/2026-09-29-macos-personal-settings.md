@@ -138,26 +138,38 @@ path; account identity comes from verified server sessions, never handoff parame
 and relevant account guidance only where shipped behavior changes. Record evidence
 in `docs/evaluations/2026-09-29-personal-settings/` using synthetic accounts.
 
-- [ ] Run `pnpm macos:check`, the focused Web suites from Tasks 3–4,
-  `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Expected: successful exit;
-  identify any unrelated baseline failures precisely.
+- [x] Run `pnpm macos:check`, the focused Web suites from Tasks 3–4,
+  `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Evidence: `pnpm macos:check`
+  exit 0 (unit `TalentSignalMacTests` 239 tests / 8 skipped / 0 failures, UI target
+  only compiled because `RUN_MACOS_UI_TESTS` defaults to 0); Web `vitest run`
+  1542 passed / 1 skipped; `pnpm typecheck` exit 0; `pnpm lint` 0 errors and 6
+  pre-existing warnings; `pnpm build` passes with the CI build-time
+  `AUTH_SECRET` and fails without it (baseline). `pnpm docs:check` now passes
+  completely, so the two broken links noted here do not reproduce.
 - [ ] Exercise real candidate app with offline service, previous Web build, absent
   endpoint, failed browser opener, signed-out browser and a different signed-in
-  synthetic identity. Record app/Web SHAs and exact outcomes.
+  synthetic identity. Record app/Web SHAs and exact outcomes. Done so far: the
+  real app was launched by two UI tests with an unreachable origin
+  (`http://127.0.0.1:1`) and the native Settings surface stayed usable offline
+  (window opens, rail, search, account link). Not done: previous Web build,
+  failed-opener, signed-out browser, second synthetic identity.
 - [ ] Keep an unsent chat draft while opening settings, opening the browser, saving
   a synthetic profile edit and returning to the app. Verify draft preservation,
   canonical Web readback and refreshed identity. Repeat refresh failure and logout.
+  Draft preservation is proved at WebView level by the paint-guard regression test;
+  the end-to-end browser round trip is still owed.
 - [ ] Capture native Settings and browser pages in light/dark appearance; check
   keyboard navigation and VoiceOver. No unsupported-Web overlay is reachable from
   native Settings. Unsupported remote operations remain honest local failures.
 - [ ] Update canonical documentation; run `pnpm docs:check` and `git diff --check`.
-  Baseline: docs check currently reports two unrelated broken links in
-  `output/evaluation-first-agent-platform-opik-prd-original-en.md`; do not silently
-  count that as a pass or fix unrelated content in this change.
-- [ ] Perform final independent branch review according to selected execution method.
-  Package the verified binary following macOS distribution/storage instructions.
-  Preserve current app and drafts before any replacement/relaunch; do not call a
-  package build proof of installed behavior. Report any remaining installation gate.
+  `pnpm docs:check` passes; `docs/operations/macos-distribution.md` and
+  `docs/design-system.md` are not yet updated for the account/device split.
+- [x] Perform final independent branch review according to selected execution method.
+  Codex read-only adversarial review ran and all four findings are now resolved or
+  explicitly recorded (see the evidence log). Still open: packaging the verified
+  binary. Preserve current app and drafts before any replacement/relaunch; do not
+  call a package build proof of installed behavior. Report any remaining
+  installation gate.
 
 ## Evidence log
 
@@ -193,11 +205,12 @@ restore-plan, search routing and the `WKWebView` `pushState` KVO evidence test w
 retained and adapted to the new `WorkbenchSettingsTransition(destination:restoreURL:)`,
 `WorkspaceSettingsPane`, and `AccountSettingsBrowser` initializer-injection seams.
 
-Limitations and open defects: `RUN_MACOS_UI_TESTS` was left at its default (`0`), so
-`WorkspaceSettingsUITests.swift` compiles but has not been executed; no real-surface
-acceptance run (offline service, previous Web build, absent endpoint, signed-out
-browser, second synthetic identity, draft preservation while the browser opens) has
-happened yet; no package was produced; no installed-build comparison was run.
+Limitations and open defects: `RUN_MACOS_UI_TESTS` was left at its default (`0`) in
+`pnpm macos:check`, so that script only compiles the UI target; the two Settings UI
+tests were executed separately with `-only-testing` and passed (see below). Not yet
+done: previous Web build, failed-opener, signed-out browser and second synthetic
+identity exercises; the unsent-draft round trip through the real browser; light/dark
+and VoiceOver captures; no package was produced.
 
 Web evidence: `pnpm --filter @talent-signal/web exec vitest run` → 1542 passed,
 1 skipped, 0 failed (the workspace packages must be built first: `pnpm --filter
@@ -213,7 +226,7 @@ in this plan do not reproduce.
 
 Independent review (Codex, read-only, adversarial, 2026-09-29) found:
 
-1. **P1, open — account settings can paint in the embedded WebView.** A client-side
+1. **P1, fixed — account settings could paint in the embedded WebView.** A client-side
    `history.pushState` to `/workspace/settings` bypasses `decidePolicyFor`; the URL
    KVO handler then schedules the browser handoff and workbench restore
    asynchronously, so Next.js settings content may render in the visible workbench
@@ -221,6 +234,22 @@ Independent review (Codex, read-only, adversarial, 2026-09-29) found:
    the removed probe machinery. Not yet fixed; the smallest fix is to make the
    embedded surface non-painting (hidden/blanked) for the duration of the restore,
    with a test that asserts the settings URL is never painted.
+   **Resolution (commit `df3464ae`):** the guard does not hide the surface and risk
+   replacing the error overlay with a blank workbench. `WorkspaceSettingsPaintGuard`
+   runs at document start, marks `documentElement` in the same JavaScript turn as the
+   route change, and is backed by an `!important` stylesheet so hydration cannot reveal
+   it; it unblocks on `popstate`, which is the same-document back navigation the native
+   restore already uses. Every failure path is visible-by-default: the whole guard is
+   wrapped so a script error leaves the page unblocked, the `history` wrappers
+   reconcile in a `finally` against the URL that actually committed (a throwing
+   `pushState` cannot leave a blank page), a null `documentElement` is a no-op, and the
+   stylesheet retries on `DOMContentLoaded`/`load`. `WorkspaceBrowser.configuration(for:)`
+   is now the single factory that installs it. New tests: the production configuration
+   installs both halves and classifies only `/workspace/settings[/…]` on this origin; a
+   WebView built from that exact configuration stays paintable on an ordinary route
+   change and on a throwing `history.pushState`, computes to `visibility: hidden` after
+   the settings route change, and after the restore is visible again with the unsent
+   draft intact. `TalentSignalMacTests` 239 tests / 8 skipped / 0 failures, exit 0.
 2. **P2, fixed — screenshot failure recovery was missing from search.** The new
    inventory dropped `capture-failure` (“截图处理失败时怎么办”) that exists in
    `origin/main`. Restored in `WorkspaceSettingsSearch.swift`, now routing to the
@@ -244,6 +273,26 @@ Independent review (Codex, read-only, adversarial, 2026-09-29) found:
 The reviewer found no path that opens the native window from a Web settings
 navigation, and no identity, token, email, account id or unvalidated query value
 crossing the desktop scheme handoff or the settings login return path.
+
+Real-surface natively executed UI tests (not compiled only): XCTest UI automation
+does work on this host, and the UI tests reached their assertions rather than timing
+out or being blocked by permissions. `-only-testing:TalentSignalMacUITests/WorkspaceSettingsUITests`
+→ 2 tests, 0 failures, exit 0 (`/tmp/ts-ui-settings2.log`). Both launch the real app
+with an unreachable origin (`-workspace.web.origin http://127.0.0.1:1` plus
+`-workspace.connection.localDevelopment YES`), so this is real offline evidence: the
+native Settings window opens, reuses one window, the rail exposes 软件更新, the removed
+`settings.section.advanced`/`settings.section.profile` rows are gone, the account row
+reads 账号与偏好 ↗ before the click, and search reaches both screenshot entries. One
+stale identifier (`settings.section.device`) was fixed in this change.
+
+Baseline isolated, not guessed: a full `xcodebuild test` also runs
+`TalentSignalMacUITests`, where 16 tests fail from the first
+`app.syntheticBanner` assertion onward. The same single test
+(`testTodayIsTheDefaultRetrievalSurface`) was then run in a throwaway worktree at
+`origin/main` (`f015f56c`) and failed identically at the same line 35 assertion plus
+the same follow-ups (`/tmp/ts-base-ui.log`), so those 16 failures are pre-existing on
+the base commit and not caused by this branch. They remain **open and unexplained**
+for the repo; this change neither fixes nor claims them.
 
 ## Plan self-review and status
 
