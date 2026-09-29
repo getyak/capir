@@ -30,7 +30,14 @@ management open in the default browser. The handoff carries a destination only.
 
 That browser row is page-level evidence from a task-owned disposable profile: the
 account page renders with a real session cookie. It is not evidence of the
-app-to-browser handoff, which stays unverified.
+handoff, which is recorded in the row below.
+
+| Real app-to-browser handoff | `testAccountRowHandsOffToTheDefaultBrowser` (exit 0, `/tmp/ts-ui-handoff10.log`) against a task-owned per-run origin on `127.0.0.1:4403` behind a logging proxy | the proxy log `/tmp/ts-proxy-4403.log` shows the embed loading `/workspace` with a WebKit user agent and no Chrome client hints, then, at the click, a Chrome top-level document navigation to `/workspace/settings` with `sec-ch-ua: "Chromium"` and `sec-fetch-site: none`, followed by `/login?callbackUrl=%2Fworkspace%2Fsettings` from the same browser client |
+
+A fresh origin port per run plus `-ApplePersistenceIgnoreState YES` removed the
+task-owned state pollution that made earlier runs misleading: a restored Quick Panel
+dialog hid the main window from the harness and a restored embed route produced
+`/workspace/settings` with no click at all.
 
 The package row is a packaging check only. It is not release verification and
 not installation: the artifact is unsigned, it was written to a task-owned
@@ -52,15 +59,6 @@ stale revision answers `409 ACCOUNT_STALE`. Both are gated on
 
 ## Not verified
 
-- The app-to-browser handoff is **not proven**. Runs with a task-owned per-run origin
-  port and a logging proxy showed the app reaching `runningForeground` with no window
-  exposed to the UI test (no click) while the origin still received
-  `GET /workspace/settings` as a top-level document navigation and then
-  `GET /login?callbackUrl=%2Fworkspace%2Fsettings`. Nothing was clicked, so a settings
-  document on the origin cannot be attributed to the default browser; the earlier
-  run that did click carries the same doubt. The default handler is
-  `com.google.chrome` (read-only LaunchServices inspection). The open question of why
-  the embed requests the account route at launch is recorded in the plan.
 - The unsent-draft round trip is **not verified on either surface**, and the two
   surfaces are different claims: the accepted criterion is the ordinary main Web
   conversation, while `quick.draftEditor` belongs to the legacy native Quick Panel and

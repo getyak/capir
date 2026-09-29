@@ -6,7 +6,8 @@ final class WorkspaceSettingsUITests: XCTestCase {
         // Command-line defaults affect this launch only. No production origin or login.
         app.launchArguments = [
             "-workspace.web.origin", "http://127.0.0.1:1",
-            "-workspace.connection.localDevelopment", "YES"
+            "-workspace.connection.localDevelopment", "YES",
+            "-ApplePersistenceIgnoreState", "YES"
         ]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
@@ -42,7 +43,8 @@ final class WorkspaceSettingsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = [
             "-workspace.web.origin", "http://127.0.0.1:1",
-            "-workspace.connection.localDevelopment", "YES"
+            "-workspace.connection.localDevelopment", "YES",
+            "-ApplePersistenceIgnoreState", "YES"
         ]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
@@ -76,8 +78,9 @@ final class WorkspaceSettingsUITests: XCTestCase {
     func testAccountRowHandsOffToTheDefaultBrowser() {
         let app = XCUIApplication()
         app.launchArguments = [
-            "-workspace.web.origin", "http://127.0.0.1:4402",
-            "-workspace.connection.localDevelopment", "YES"
+            "-workspace.web.origin", "http://127.0.0.1:4403",
+            "-workspace.connection.localDevelopment", "YES",
+            "-ApplePersistenceIgnoreState", "YES"
         ]
         app.launch()
         if !app.windows.firstMatch.waitForExistence(timeout: 30) {

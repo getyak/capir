@@ -358,43 +358,68 @@ No new authentication scheme, team subsystem, dependency or migration is planned
 Execution started. Recommended method: native sequential implementation, then
 an independent final review; the five tasks share routing and authentication seams.
 
-## Real-browser handoff attempt (2026-09-29, still open)
+## Real-browser handoff attempt (2026-09-29)
 
-The handoff was attempted against a task-owned synthetic stack: the backend on
-`127.0.0.1:4399` over the disposable database `ts_settings_acceptance` with
+Proven. The stack is task-owned and synthetic: the backend on `127.0.0.1:4399`
+over the disposable database `ts_settings_acceptance` with
 `SIMULATED_AUTH_ENABLED=true`, a synthetic account seeded by SQL, a real session
-from `POST /v1/auth/simulated-login`, the Web dev server on `4398`, and a logging
-proxy on `4400` in front of it. A disposable-profile headless Chrome opened
-`/workspace/settings?section=account` through the DevTools protocol with a real
-NextAuth session cookie minted by `next-auth/jwt` `encode()`; the page rendered the
-synthetic identity 合成用户 / Synthetic 设置账号 and the session
-`web-browser-acceptance`, and a signed-out profile was sent to `/login`.
+minted by `POST /v1/auth/simulated-login`, the Web dev server on `4398`, and a
+per-run logging proxy in front of it on a fresh port. The account pages were also
+rendered in a task-owned disposable headless Chrome over the DevTools protocol with
+a real NextAuth session cookie; the page showed the synthetic identity 合成用户 /
+Synthetic 设置账号 and the session `web-browser-acceptance`, and a signed-out
+profile landed on `/login`.
 
-The app-to-browser handoff is **not proven**, and the per-run-port marker used in
-runs 6, 8 and 9 does not fix attribution by itself. In runs 8 and 9 the app reached
-`runningForeground` but exposed no window to the UI test
-(`app.windows.firstMatch.waitForExistence(timeout: 30)` failed; the failure message
-reported `state=4`), so no click happened — yet about three seconds after launch the
-task-owned origin on the per-run port received
-`GET /workspace/settings` as a top-level document navigation with no referer,
-followed by `GET /login?callbackUrl=%2Fworkspace%2Fsettings` whose referer was that
-settings URL, plus manifest and HMR traffic. Because nothing was clicked, that
-document request is produced on the app side, so a settings document on the app's
-origin port cannot be attributed to a browser handoff. The same pattern appears in
-the earlier runs, including the one that exited 0, so those earlier readings were
-not handoff evidence either.
+The opener itself was exercised on the real surface in
+`testAccountRowHandsOffToTheDefaultBrowser` (`TalentSignalMacUITests`, exit 0,
+`/tmp/ts-ui-handoff10.log`, result bundle `/tmp/ts-handoff10.xcresult`). The
+synthetic origin is served through a per-run proxy on `127.0.0.1:4403`
+(`/tmp/ts-proxy-4403.log`), which logs the user agent, `Sec-Fetch-*` and Chrome
+client hints per request, so the app's own embed can be told apart from a real
+browser:
 
-The pattern also questions one intended invariant: the embed requested the account
-settings route at launch even though `WorkspaceSurfacePolicy.isTrackableWorkbenchURL`
-never accepts a settings URL as a restore target, and no policy bounce for that load
-is proven. The paint guard keeps the route unpainted and the Web server sent the
-signed-out embed to `/login`, so nothing unsafe was displayed; the open question is
-where that launch-time settings navigation comes from and whether the embed should
-bounce it. This is recorded as an open product question, not as shipped behavior.
+- `09:14:01 GET /workspace` — `ua "AppleWebKit/605.1.15 (KHTML, like Gecko)"`,
+  `sf="navigate/document"`, `ch="none"`: the app's embed loads the workbench. A
+  WKWebView sends no Chrome client hints.
+- `09:15:10 GET /login?callbackUrl=%2Fworkspace`, `site="same-origin"`, `ch="none"`:
+  the signed-out embed is sent to login by the Web app.
+- `09:15:24 GET /workspace/settings` — user agent `Chrome/154.0.0.0 Safari/537.36`,
+  `ch=""Chromium";v="15x"`: **a real Chrome top-level document navigation with
+  `site="none"`**, 14 s after the login redirect and at the moment the test clicked
+  the account row. This is the default browser opening the handoff URL; only a
+  browser sends Chrome client hints, so the request cannot be app traffic.
+- `09:15:51 GET /login?callbackUrl=%2Fworkspace%2Fsettings`, same Chrome client
+  hints: the browser follows the Web app's login redirect, so the return path
+  survives into the browser. Both requests carry `ch` set, unlike every embed
+  request in the same log.
 
-Blockers for the next attempt, in order: (1) explain why the app shows no window to
-the UI test when a reachable synthetic origin is configured while the offline origin
-succeeds; (2) make the app-side settings navigation either impossible or provably
-bounced, so a settings document request on the origin means a browser; (3) only then
-re-run the opener test and read the opened page. Until (1) and (2) hold, the real
-handoff stays unverified.
+The test's own assertions passed: no `workspace.browserLaunchFailure`, the settings
+window stays a separate window (two windows before and after the click), the rail
+stays usable, and closing the window returns the app to one window.
+
+The earlier runs that looked like counter-evidence are explained by task-owned state
+pollution, not by the product: after a `--quick-panel-preview` launch the app
+restored a Quick Panel dialog and a web view state from the shared per-origin data
+store, so the harness saw no window (application state `runningForeground`, element
+tree showing only `quick-panel`) and the origin received `/workspace/settings` with
+no click at all. A fresh origin port for every run plus
+`-ApplePersistenceIgnoreState YES` removes both artefacts; the launch then loads
+`/workspace` exactly as designed. The lesson for later runs: never reuse an origin
+port or a restored window state when attributing origin traffic.
+
+Still open, with the reason:
+
+- The ordinary main Web conversation draft was not carried through a real handoff.
+  The embed is signed out in this harness, so it shows the login page and no
+  composer exists to type into; the app's per-origin data store holds no synthetic
+  cookie, and injecting one would need a product change. Web-level draft retention
+  across a settings visit is proved by
+  `testEmbeddedWorkbenchNeverPaintsWebAccountSettingsAndKeepsDraft`. The native
+  Quick Panel draft editor (`quick.draftEditor`) is a legacy surface and was not
+  used as a substitute.
+- A second signed-in synthetic identity, light/dark captures, VoiceOver and a
+  previous Web release were not exercised.
+- Packaging was verified as packaging only: `MACOS_OUTPUT_DIR=/tmp/ts-package bash
+  scripts/macos/package.sh` produced an unsigned universal preview DMG and ZIP with
+  checksums in a task-owned directory. The installed application was not replaced
+  and installation was not performed.
