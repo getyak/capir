@@ -53,11 +53,16 @@ Hosted workspace changes remain independent of the desktop binary.
 
 When a settings change spans the resident Web and macOS client, compare the
 active Web release revision with the approved source and read the installed
-client build before declaring the experience updated. In the running client,
-open the avatar menu and click its **Settings** entry: it must raise the same
-independent window as `⌘,` while preserving the main workspace. A shortcut-only
-check cannot verify the avatar path. If the resident Web is older, keep its
-release active until a clean replacement build and authenticated readback pass.
+client build before declaring the experience updated. Device settings are owned
+by the macOS client alone: `⌘,` raises one independent **此 Mac 设置** window that
+preserves the main workspace and stays usable while the Web server is unreachable
+or was never configured. In the running client the avatar menu's **此 Mac 设置…**
+entry must raise that same window, while its **账号与偏好 ↗** entry must open the
+account pages in the default browser instead of raising a native window. A
+shortcut-only check cannot verify the avatar path. The browser carries its own
+session, so the handoff names a destination only and never a credential, cookie,
+account identifier or email. If the resident Web is older, keep its release
+active until a clean replacement build and authenticated readback pass.
 
 ## Connection and diagnostics
 
