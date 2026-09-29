@@ -37,7 +37,7 @@ struct CaptureMenuView: View {
             Divider().padding(.horizontal, 15).padding(.top, 10)
             HStack {
                 Button {
-                    WorkspaceSettingsNavigation.shared.selection = .device
+                    WorkspaceSettingsNavigation.shared.selection = .general
                     openSettings()
                 } label: { Label("设置…", systemImage: "gearshape") }
                 .accessibilityIdentifier("capture.menu.settings")

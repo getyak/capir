@@ -235,7 +235,11 @@ describe("settings composition", () => {
     expect(panel).toContain("embedded");
     expect(panel).toContain("saveAccountSettings");
     expect(page).toContain("loadAccountSettings");
-    expect(page).toContain("isSettingsSection(requested)");
+    // The login callback and the rendered pane resolve the section through the
+    // single tested helper, never by reflecting the raw query value.
+    expect(page).toContain("settingsReturnPath(requested)");
+    expect(page).toContain("settingsSectionFrom(requested)");
+    expect(page).not.toContain("?section=${requested}");
   });
 });
 

@@ -69,30 +69,21 @@ struct WorkspaceOrigin: Equatable {
     }
 }
 
-/// An honest recovery state when a client-side hop tries to render the
-/// workbench inside Settings. It carries the destination for an explicit
-/// user-opened main-window handoff, never an automatic one.
-struct WorkspaceSettingsRecoveryNotice: Equatable {
-    let message: String
-    let destination: URL
-}
-
 @MainActor
 final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
     let origin: WorkspaceOrigin
     let webView: WKWebView
-    let isSettingsSurface: Bool
     @Published var failure: String?
     @Published var loading = true
     @Published var canGoBack = false
     @Published var externalURL: URL?
     @Published var downloadStatus: String?
-    /// Set when the settings WebView lands on an ordinary workspace route it
-    /// must not render. The view offers an explicit main-window handoff.
-    @Published var settingsRecovery: WorkspaceSettingsRecoveryNotice?
     /// Explicit, honest notice when the main window could not restore the prior
     /// workbench state after a client-side Settings hop.
     @Published var workbenchNotice: String?
+    /// Set only when the OS refuses to open the default browser for account
+    /// settings. Device controls stay available; the view offers a retry.
+    @Published var browserLaunchFailure: String?
     var openSettings: (() -> Void)? {
         didSet { flushPendingSettingsOpen() }
     }
@@ -102,28 +93,42 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private var calendarDownloads = Set<ObjectIdentifier>()
     private var navigationObservation: NSKeyValueObservation?
     private var locationObservation: NSKeyValueObservation?
-    private var lastValidSettingsSection: WorkspaceSettingsSection?
-    private var isRestoringSettings = false
-    /// Last same-origin workbench URL seen by the main window, used to restore
-    /// the conversation after a client-side hop into Web Settings.
     private var lastWorkbenchURL: URL?
     private var isRestoringWorkbench = false
     private var pendingSettingsOpen = false
-    /// Gate state for the settings WebView. The WebView is only shown when this
-    /// is `.supported`; every other state renders natively.
-    @Published var settingsSurfaceStatus: WorkspaceSurfacePolicy.SettingsWebSurfaceStatus = .checking
-    private var settingsProbeAttempts = 0
-    /// Bumped on every new document load so a stale `evaluateJavaScript`
-    /// completion from a previous document can never be applied.
-    private var settingsProbeGeneration = 0
-    private static let settingsProbeMaxAttempts = 5
+    private let accountBrowser: AccountSettingsBrowser
 
-    init(origin: WorkspaceOrigin, settings: Bool = false, initialURL: URL? = nil) {
-        self.origin = origin
-        self.isSettingsSurface = settings
+    /// The exact configuration every workbench web view is built from. Kept as a
+    /// factory so the settings paint guard and the per-origin data store cannot
+    /// drift from what the app actually runs.
+    static func configuration(for origin: WorkspaceOrigin) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: origin.dataStoreIdentifier)
         configuration.userContentController = WKUserContentController()
+        // Account settings may never paint inside the app, including on a
+        // client-side route change that bypasses the navigation delegate.
+        WorkspaceSettingsPaintGuard.install(on: configuration.userContentController)
+        return configuration
+    }
+
+    /// The exact scripts every workbench web view carries once the desktop
+    /// chrome is published. Publishing resets the content controller, so the
+    /// settings paint guard has to be part of this list or a client-side route
+    /// change could paint Web account settings inside the app.
+    static func workbenchUserScripts(chromeScript: String) -> [WKUserScript] {
+        WorkspaceSettingsPaintGuard.userScripts + [
+            DesktopUpdateClickBridge.userScript,
+            WKUserScript(source: chromeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true),
+        ]
+    }
+
+    init(origin: WorkspaceOrigin, initialURL: URL? = nil,
+         accountBrowser: AccountSettingsBrowser? = nil) {
+        self.origin = origin
+        // Optional default keeps the main-actor singleton out of the default
+        // argument expression, which is evaluated in a nonisolated context.
+        self.accountBrowser = accountBrowser ?? .shared
+        let configuration = Self.configuration(for: origin)
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         _ = DesktopUpdateClickBridge(controller: configuration.userContentController) { [weak self] url, frame in
@@ -146,40 +151,58 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                 self.canGoBack = self.webView.canGoBack
             }
         }
-        if settings {
-            lastValidSettingsSection = WorkspaceSettingsNavigation.shared.selection.isWeb
-                ? WorkspaceSettingsNavigation.shared.selection : .profile
-        } else {
-            lastWorkbenchURL = WorkspaceSurfacePolicy.initialWorkbenchURL(initialURL: initialURL, origin: origin)
-        }
+        lastWorkbenchURL = WorkspaceSurfacePolicy.initialWorkbenchURL(initialURL: initialURL, origin: origin)
         // KVO observes `history.pushState`/`replaceState` (proved in
         // WorkspaceSettingsTests), so it catches client-side transitions that
         // never reach `decidePolicyFor`.
         locationObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if self.isSettingsSurface {
-                    self.observeSettingsLocationForRecovery()
-                } else {
-                    self.observeWorkbenchLocationForSettingsTransition()
-                }
+                self.observeWorkbenchLocationForSettingsTransition()
             }
         }
         publishDesktopChrome(state: DesktopUpdater.shared.presentation)
-        webView.load(URLRequest(url: initialURL ?? origin.entryURL))
+        let entry = URLRequest(url: initialURL ?? origin.entryURL)
+        #if DEBUG
+        // UI-test harness only: a synthetic session, supplied by the harness, is
+        // seeded into this origin's own store so the ordinary Web conversation can
+        // be exercised. Release builds and normal launches never see it. The entry
+        // load starts from the store's completion so the first request carries it.
+        if let cookie = WorkspaceTestSession.cookieSpec(
+            from: ProcessInfo.processInfo.environment[WorkspaceTestSession.cookieEnvironmentKey],
+            origin: origin, arguments: ProcessInfo.processInfo.arguments) {
+            configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak self] in
+                Task { @MainActor in self?.webView.load(entry) }
+            }
+            return
+        }
+        #endif
+        webView.load(entry)
     }
 
     func navigate(_ destination: WorkspaceDestination) {
-        if destination == .settings, !isSettingsSurface { requestSettingsOpen(); return }
+        if destination == .settings { requestSettingsOpen(); return }
         webView.load(URLRequest(url: destination.url(in: origin)))
     }
 
     /// Opens the one native Settings scene, deferring until the view has wired
-    /// `openSettings` if a cold-load KVO fires first. Passing `section` also
-    /// selects it; omitting it preserves the current selection.
-    func requestSettingsOpen(_ section: WorkspaceSettingsSection? = nil) {
-        if let section { WorkspaceSettingsNavigation.shared.selection = section }
+    /// `openSettings` if a cold-load KVO fires first.
+    func requestSettingsOpen() {
         if let openSettings { openSettings() } else { pendingSettingsOpen = true }
+    }
+
+    /// Opens account and preference management in the default browser, never in
+    /// an embedded WebView. Returns false and records an honest failure when the
+    /// workspace origin is unknown or the OS refuses the open, so the rest of
+    /// this Mac's settings stay usable offline.
+    @discardableResult
+    func requestAccountSettings(_ destination: AccountSettingsDestination = .overview) -> Bool {
+        guard accountBrowser.open(destination, in: origin) else {
+            browserLaunchFailure = "无法打开默认浏览器。请检查默认浏览器后重试；此 Mac 设置仍可继续使用。"
+            return false
+        }
+        browserLaunchFailure = nil
+        return true
     }
 
     private func flushPendingSettingsOpen() {
@@ -188,62 +211,14 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         openSettings()
     }
 
-    /// Recovers from a client-side navigation that bypassed the navigation
-    /// delegate. It never renders the workbench: it restores the last valid
-    /// Settings section and surfaces an explicit main-window handoff.
-    private func observeSettingsLocationForRecovery() {
-        guard isSettingsSurface, let url = webView.url else { return }
-        switch WorkspaceSurfacePolicy.classifySettingsURL(url, origin: origin) {
-        case .settingsSection(let section):
-            lastValidSettingsSection = section
-            if !isRestoringSettings {
-                WorkspaceSettingsNavigation.shared.selection = section
-                settingsRecovery = nil
-            }
-            isRestoringSettings = false
-            // SPA section changes do not fire `didFinish`; re-verify only when
-            // the surface is not already proven, so a stale surface can never
-            // stay visible without adding churn to a known-good one.
-            if !loading, settingsSurfaceStatus != .supported { probeSettingsSurface() }
-        case .settingsOwnedSubpage:
-            // Account, diagnostics and linking flows stay in the settings window
-            // only when they prove a clean surface; otherwise they are handed off.
-            if !loading {
-                settingsSurfaceStatus = .checking
-                settingsProbeAttempts = 0
-                probeSettingsSurface()
-            }
-        case .unexpectedRoute(let unexpected):
-            recoverFromUnexpectedNavigation(to: unexpected)
-        case .ignore:
-            break
-        }
-    }
-
-    private func recoverFromUnexpectedNavigation(to url: URL) {
-        let section = lastValidSettingsSection
-            ?? (WorkspaceSettingsNavigation.shared.selection.isWeb ? WorkspaceSettingsNavigation.shared.selection : .profile)
-        let restore = section.url(in: origin)
-        isRestoringSettings = true
-        settingsRecovery = WorkspaceSettingsRecoveryNotice(
-            message: "设置内的这次页面跳转没有经过导航确认；该页面只能在主窗口打开。已恢复到“\(section.title)”。",
-            destination: url)
-        if webView.url != restore {
-            webView.load(URLRequest(url: restore))
-        } else {
-            isRestoringSettings = false
-        }
-    }
-
     /// Compatibility fallback for a Web revision whose Settings entry uses a
     /// client-side `Next.js Link`/`pushState`. `decidePolicyFor` never sees it,
     /// so the exact Settings route is detected here: open the one native
-    /// Settings scene and return the workbench to its previous URL with a
+    /// Settings window and return the workbench to its previous URL with a
     /// same-document back navigation, preserving unsent state where the Web app
-    /// keeps it in memory. Only the exact `/workspace/settings` route with a
-    /// valid section query is handled; subpages and arbitrary routes are not.
+    /// keeps it in memory.
     private func observeWorkbenchLocationForSettingsTransition() {
-        guard !isSettingsSurface, let url = webView.url else { return }
+        guard let url = webView.url else { return }
         guard let transition = WorkspaceSurfacePolicy.workbenchSettingsTransition(
             from: lastWorkbenchURL, to: url, origin: origin) else {
             if WorkspaceSurfacePolicy.isTrackableWorkbenchURL(url, origin: origin) {
@@ -253,16 +228,20 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             return
         }
         guard !isRestoringWorkbench else { return }
-        requestSettingsOpen(transition.section)
-        restoreWorkbench(after: transition)
+        // Account settings are owned by the browser; the native window is only
+        // opened by an explicit device-settings link.
+        let browserOpened = requestAccountSettings(transition.destination)
+        restoreWorkbench(after: transition, browserOpened: browserOpened)
     }
 
-    private func restoreWorkbench(after transition: WorkspaceSurfacePolicy.WorkbenchSettingsTransition) {
+    private func restoreWorkbench(after transition: WorkspaceSurfacePolicy.WorkbenchSettingsTransition,
+                                  browserOpened: Bool) {
         isRestoringWorkbench = true
         workbenchNotice = nil
         switch WorkspaceSurfacePolicy.workbenchRestorePlan(
             for: transition, canGoBack: webView.canGoBack,
-            backItemURL: webView.backForwardList.backItem?.url, entryURL: origin.entryURL) {
+            backItemURL: webView.backForwardList.backItem?.url, entryURL: origin.entryURL,
+            browserOpened: browserOpened) {
         case .back:
             // Pop the proven same-document entry; no timer, no reload.
             webView.goBack()
@@ -274,19 +253,16 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     func retry() {
         failure = nil
-        if isSettingsSurface {
-            if let target = WorkspaceSurfacePolicy.settingsRetryURL(
-                currentURL: webView.url, origin: origin, lastSection: lastValidSettingsSection) {
-                webView.load(URLRequest(url: target))
-                return
-            }
-        } else if let current = webView.url,
-                  let transition = WorkspaceSurfacePolicy.workbenchSettingsTransition(
-                    from: lastWorkbenchURL, to: current, origin: origin) {
-            // Retry from a client-side Settings hop re-opens native Settings and
-            // restores the workbench instead of reloading Web Settings.
-            requestSettingsOpen(transition.section)
-            restoreWorkbench(after: transition)
+        // A refused browser handoff stays on screen until it succeeds or the
+        // reader dismisses it; a plain workbench retry does not retry it.
+        if let current = webView.url,
+           let transition = WorkspaceSurfacePolicy.workbenchSettingsTransition(
+            from: lastWorkbenchURL, to: current, origin: origin) {
+            // Retry from a client-side Settings hop re-opens browser account
+            // settings and restores the workbench instead of reloading Web
+            // Settings.
+            let browserOpened = requestAccountSettings(transition.destination)
+            restoreWorkbench(after: transition, browserOpened: browserOpened)
             return
         }
         if let current = webView.url, origin.contains(current) { webView.reload() }
@@ -302,10 +278,13 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                                                         userActivated: action.navigationType == .linkActivated) {
                 switch command {
                 case .settings:
-                    requestSettingsOpen(.profile)
+                    requestSettingsOpen()
+                case .accountSettings(let destination):
+                    requestAccountSettings(destination)
                 case .updates:
                     if DesktopUpdater.shared.presentation.canInstall {
-                        requestSettingsOpen(.updates)
+                        WorkspaceSettingsNavigation.shared.selection = .updates
+                        requestSettingsOpen()
                     }
                     else { DesktopUpdater.shared.checkForUpdates() }
                 // linkActivated also includes synthetic page clicks. Installation
@@ -325,42 +304,14 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         if origin.contains(url) {
             let mainFrame = action.sourceFrame.isMainFrame
             let targetsMainFrame = action.targetFrame?.isMainFrame != false
-            // A trusted Settings link to an ordinary workspace page — or the
-            // account profile editor at /onboarding — opens the main window at
-            // that URL; the workbench never loads inside Settings.
-            if let handoff = WorkspaceSurfacePolicy.mainWindowHandoffURL(
-                for: url, origin: origin, isSettingsSurface: isSettingsSurface,
-                mainFrame: mainFrame, targetsMainFrame: targetsMainFrame,
-                userActivated: action.navigationType == .linkActivated)
-                ?? WorkspaceSurfacePolicy.accountEditHandoffURL(
-                    for: url, origin: origin, isSettingsSurface: isSettingsSurface,
-                    mainFrame: mainFrame, targetsMainFrame: targetsMainFrame,
-                    userActivated: action.navigationType == .linkActivated) {
-                WorkspaceNavigation.shared.pendingURL = handoff
-                openWorkspace?()
-                decisionHandler(.cancel)
-                return
-            }
-            // A non-click same-origin navigation that would render the workbench
-            // is cancelled rather than trapping it inside the settings window.
-            if WorkspaceSurfacePolicy.blocksWorkbenchNavigation(
-                url: url, origin: origin, isSettingsSurface: isSettingsSurface,
-                mainFrame: mainFrame, targetsMainFrame: targetsMainFrame) {
-                decisionHandler(.cancel)
-                return
-            }
-            // A non-handoff full navigation to the account editor must not
-            // transiently render it inside Settings; `/login` and
-            // settings-owned auth routes stay allowed.
-            if WorkspaceSurfacePolicy.blocksAccountEditNavigation(
-                url: url, origin: origin, isSettingsSurface: isSettingsSurface,
-                mainFrame: mainFrame, targetsMainFrame: targetsMainFrame) {
-                decisionHandler(.cancel)
-                return
-            }
-            if !isSettingsSurface, mainFrame, targetsMainFrame,
-               let selection = WorkspaceSettingsSection.resolve(url, origin: origin) {
-                requestSettingsOpen(selection)
+            // The Web Settings route is never rendered inside the workspace
+            // WebView, and it is never silently redirected into the native
+            // device window: `/workspace/settings` is account management, so it
+            // opens the default browser instead. Cancelling the navigation also
+            // leaves the conversation and its unsent draft untouched.
+            if mainFrame, targetsMainFrame, WorkspaceSurfacePolicy.isSettingsOwned(url) {
+                requestAccountSettings(WorkspaceSurfacePolicy.WorkbenchSettingsTransition
+                    .accountDestination(forSettingsURL: url))
                 decisionHandler(.cancel)
                 return
             }
@@ -446,39 +397,30 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         loading = true
         failure = nil
-        if isSettingsSurface {
-            settingsProbeGeneration += 1
-            settingsSurfaceStatus = .checking
-            settingsProbeAttempts = 0
-        }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loading = false
         canGoBack = webView.canGoBack
         publishDesktopChrome(state: DesktopUpdater.shared.presentation)
-        if isSettingsSurface { probeSettingsSurface() }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if isSettingsSurface { settingsSurfaceStatus = .unknown }
         recordFailure(error)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        if isSettingsSurface { settingsSurfaceStatus = .unknown }
         recordFailure(error)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         loading = false
-        if isSettingsSurface { settingsSurfaceStatus = .unknown }
         failure = "页面已暂停，请重新载入。已保存的对话仍保留在工作区。"
     }
 
     func publishDesktopChrome(state presentation: DesktopUpdatePresentation) {
         let state = WorkspaceSurfacePolicy.desktopChromePayload(
-            surface: isSettingsSurface ? "settings" : "workspace",
+            surface: "workspace",
             presentation: presentation,
             appVersion: DesktopUpdater.shared.appVersion)
         guard let bytes = try? JSONSerialization.data(withJSONObject: state),
@@ -489,8 +431,9 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         let script = "if (window.location.origin === \(originJSON)) { window.talentSignalDesktop = \(json); if (document.documentElement) document.documentElement.dataset.desktopSurface = \(json).surface; else document.addEventListener('DOMContentLoaded', () => { document.documentElement.dataset.desktopSurface = \(json).surface; }, { once: true }); window.dispatchEvent(new Event('talent-signal-desktop')); }"
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
-        controller.addUserScript(DesktopUpdateClickBridge.userScript)
-        controller.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        for userScript in Self.workbenchUserScripts(chromeScript: script) {
+            controller.addUserScript(userScript)
+        }
         if let current = webView.url, origin.contains(current) {
             webView.evaluateJavaScript(script, completionHandler: nil)
         }
@@ -500,87 +443,6 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         guard (error as NSError).code != NSURLErrorCancelled else { return }
         loading = false
         failure = "暂时无法打开工作区。请检查网络、Tailscale 和工作区服务，再重试。"
-    }
-
-    // MARK: Settings compatibility gate
-
-    /// Read-only probe. It never exposes a message handler and never navigates.
-    /// The stable hooks are the settings root marker, the settings nav data
-    /// attribute and the workspace chrome aria labels.
-    static let settingsSurfaceProbeScript = """
-    (function () {
-      function isHidden(element) {
-        if (!element) { return true; }
-        var style = window.getComputedStyle(element);
-        if (!style) { return false; }
-        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') { return true; }
-        return element.getClientRects().length === 0;
-      }
-      try {
-        var main = document.querySelector('main[data-desktop-settings-surface="1"]');
-        var innerNav = document.querySelector('[data-settings-navigation]');
-        var workspaceNav = document.querySelector('nav[aria-label="工作台导航"]');
-        var workspaceAside = document.querySelector('aside[aria-label="Talent Signal 工作台"]');
-        var mobileHeader = null;
-        var headers = document.querySelectorAll('header');
-        for (var i = 0; i < headers.length; i++) {
-          if (headers[i].querySelector('a[aria-label="Talent Signal 工作台"]')) { mobileHeader = headers[i]; break; }
-        }
-        var chromeHidden = isHidden(workspaceNav) && isHidden(workspaceAside) && isHidden(mobileHeader);
-        return {
-          href: String(window.location.href),
-          hasMarker: main !== null,
-          innerNavHidden: isHidden(innerNav),
-          workspaceChromeHidden: chromeHidden
-        };
-      } catch (error) {
-        return { href: String(window.location.href), error: String(error) };
-      }
-    })()
-    """
-
-    private func probeSettingsSurface() {
-        guard isSettingsSurface else { return }
-        let generation = settingsProbeGeneration
-        let expectedURL = webView.url
-        settingsProbeAttempts += 1
-        webView.evaluateJavaScript(Self.settingsSurfaceProbeScript) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                self?.applySettingsProbe(result: result, error: error,
-                                         generation: generation, expectedURL: expectedURL)
-            }
-        }
-    }
-
-    private func applySettingsProbe(result: Any?, error: Error?,
-                                    generation: Int, expectedURL: URL?) {
-        guard isSettingsSurface else { return }
-        let parsed = error == nil
-            ? WorkspaceSurfacePolicy.settingsSurfaceProbe(fromJavaScriptResult: result)
-            : nil
-        // `nil` means the result is stale (older document invocation, a
-        // navigation in flight, or a mismatched URL) and must be ignored so it
-        // can never reveal the WebView.
-        guard let status = WorkspaceSurfacePolicy.settingsSurfaceStatusForProbe(
-            generation: generation, currentGeneration: settingsProbeGeneration,
-            loading: loading, expectedURL: expectedURL, currentURL: webView.url,
-            probe: parsed, origin: origin) else { return }
-        switch WorkspaceSurfacePolicy.settingsProbeOutcome(
-            status: status, attempts: settingsProbeAttempts,
-            maxAttempts: Self.settingsProbeMaxAttempts) {
-        case .apply(let final):
-            settingsSurfaceStatus = final
-        case .retry:
-            scheduleSettingsProbeRetry(generation: generation)
-        }
-    }
-
-    private func scheduleSettingsProbeRetry(generation: Int) {
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
-            guard let self, self.settingsProbeGeneration == generation else { return }
-            self.probeSettingsSurface()
-        }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
@@ -680,6 +542,19 @@ private struct ConnectedQuietWorkspace: View {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 .padding()
                 .accessibilityIdentifier("workspace.settingsRecoveryNotice")
+            }
+            if let notice = browser.browserLaunchFailure {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "safari").foregroundStyle(.secondary)
+                    Text(notice).font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Button("重试") { browser.requestAccountSettings() }
+                    Button("关闭") { browser.browserLaunchFailure = nil }
+                }
+                .padding(12)
+                .frame(maxWidth: 560, alignment: .leading)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .padding()
+                .accessibilityIdentifier("workspace.browserLaunchFailure")
             }
             if let failure = browser.failure {
                 VStack(spacing: 18) {

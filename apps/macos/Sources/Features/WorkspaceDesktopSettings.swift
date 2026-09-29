@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SwiftUI
 
 enum WorkspaceDestination: String, CaseIterable {
@@ -13,8 +14,8 @@ enum WorkspaceDestination: String, CaseIterable {
 final class WorkspaceNavigation: ObservableObject {
     static let shared = WorkspaceNavigation()
     @Published var pending: WorkspaceDestination?
-    /// A same-origin workspace URL requested by a trusted link in Settings.
-    /// The main workspace window consumes it; Settings must not render it.
+    /// A same-origin workspace URL requested by a trusted handoff. The main
+    /// workspace window consumes it; Settings must not render it.
     @Published var pendingURL: URL?
 }
 
@@ -40,77 +41,35 @@ struct WorkspaceDesktopCommands: Commands {
                 .keyboardShortcut("1").disabled(browser == nil)
             Button("时间") { browser?.navigate(.calendar) }
                 .keyboardShortcut("2").disabled(browser == nil)
-            Button("工作区设置") { browser?.requestSettingsOpen(.workspace) }
-            .keyboardShortcut(",", modifiers: [.command, .shift]).disabled(browser == nil)
+            Button("此 Mac 设置…") { browser?.requestSettingsOpen() }
+                .keyboardShortcut(",", modifiers: [.command, .shift]).disabled(browser == nil)
         }
     }
 }
 
-/// One native settings schema. Raw values map to the Web section query so a
-/// selected rail row, the loaded Web route and the Web page title stay equal.
+/// The one native settings schema. Every case is owned by this Mac or macOS,
+/// never by account data that only the browser can read or write.
 enum WorkspaceSettingsSection: String, CaseIterable, Identifiable {
-    case profile, account, appearance, workspace, connections, versions, device, updates, advanced
+    case general, permissions, connection, updates
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .profile: "个人资料"
-        case .account: "账号与安全"
-        case .appearance: "外观与偏好"
-        case .workspace: "工作空间"
-        case .connections: "连接与权限"
-        case .versions: "版本与状态"
-        case .device: "此设备"
-        case .updates: "Mac 软件更新"
-        case .advanced: "帮助与诊断"
+        case .general: "通用"
+        case .permissions: "权限"
+        case .connection: "连接与诊断"
+        case .updates: "软件更新"
         }
     }
 
     var symbol: String {
         switch self {
-        case .profile: "person.crop.circle"
-        case .account: "lock"
-        case .appearance: "circle.lefthalf.filled"
-        case .workspace: "person.2"
-        case .connections: "link"
-        case .versions: "info.circle"
-        case .device: "laptopcomputer"
+        case .general: "slider.horizontal.3"
+        case .permissions: "lock.shield"
+        case .connection: "network"
         case .updates: "arrow.down.circle"
-        case .advanced: "lifepreserver"
         }
-    }
-
-    /// Where the preference or authorization actually applies. Profile mixes an
-    /// account display name with avatar choices stored only on this Mac.
-    var scope: String {
-        switch self {
-        case .profile: "账号 · 头像仅此设备"
-        case .account: "账号"
-        case .appearance: "仅此 Mac"
-        case .device, .updates: "仅此 Mac · 本机保存"
-        case .versions: "各组件分别显示"
-        case .connections, .workspace: "当前空间"
-        case .advanced: "本机与当前空间"
-        }
-    }
-
-    /// Device-owned and support sections stay native and never need the Web origin.
-    var isWeb: Bool { self != .device && self != .updates && self != .advanced }
-
-    func url(in origin: WorkspaceOrigin) -> URL {
-        var parts = URLComponents(url: origin.url.appendingPathComponent("workspace/settings"), resolvingAgainstBaseURL: false)!
-        if self != .profile { parts.queryItems = [URLQueryItem(name: "section", value: rawValue)] }
-        return parts.url!
-    }
-
-    /// Only a same-origin Web settings route selects a native section.
-    static func resolve(_ url: URL, origin: WorkspaceOrigin) -> Self? {
-        guard origin.contains(url), url.path == "/workspace/settings" || url.path == "/workspace/settings/" else { return nil }
-        let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "section" })?.value
-        if value == nil || value == "overview" { return .profile }
-        guard let section = Self(rawValue: value!), section.isWeb else { return nil }
-        return section
     }
 }
 
@@ -121,85 +80,52 @@ struct WorkspaceSettingsSectionGroup: Identifiable {
 }
 
 extension WorkspaceSettingsSection {
-    /// Visible rail groups; the last group owns Help & Diagnostics.
     static let groups: [WorkspaceSettingsSectionGroup] = [
-        .init(title: "个人", sections: [.profile, .account, .appearance]),
-        .init(title: "工作与信任", sections: [.connections, .workspace]),
-        .init(title: "此设备", sections: [.device, .updates]),
-        .init(title: "支持", sections: [.versions, .advanced]),
+        .init(title: "此 Mac", sections: [.general, .permissions, .updates]),
+        .init(title: "支持", sections: [.connection]),
     ]
 }
 
-/// A clearly labeled handoff from the native support pane to a protected Web
-/// page. It is opened in the main workspace window, never embedded in Settings.
-struct WorkspaceSupportDestination: Identifiable, Equatable {
-    let id: String
-    let title: String
-    let path: String
+/// The single pane a selection shows. Every pane is a native device control and
+/// stays usable without a workspace connection.
+enum WorkspaceSettingsPane: Equatable, CaseIterable {
+    case general, permissions, connection, updates
 
-    func url(in origin: WorkspaceOrigin) -> URL? {
-        let url = origin.url.appending(path: path)
-        guard origin.contains(url) else { return nil }
-        return url
-    }
-}
-
-extension WorkspaceSettingsSection {
-    /// The bounded set of protected Web pages the native Help pane may hand off.
-    static let supportDestinations: [WorkspaceSupportDestination] = [
-        .init(id: "diagnostics", title: "系统诊断", path: "/workspace/settings/diagnostics"),
-        .init(id: "monitor", title: "运行记录", path: "/workspace/monitor"),
-        .init(id: "boundaries", title: "数据与操作边界", path: "/workspace/boundaries"),
-    ]
-}
-
-/// The single pane a selection shows. Resolving it here keeps the rail row and
-/// the displayed title identical, including when the Web origin is unavailable.
-enum WorkspaceSettingsPane: Equatable {
-    case web(WorkspaceSettingsSection)
-    case device
-    case updates
-    case support
-    case requiresConnection(WorkspaceSettingsSection)
-
-    static func resolve(selection: WorkspaceSettingsSection, connected: Bool) -> WorkspaceSettingsPane {
+    static func resolve(selection: WorkspaceSettingsSection) -> WorkspaceSettingsPane {
         switch selection {
-        case .device: .device
+        case .general: .general
+        case .permissions: .permissions
+        case .connection: .connection
         case .updates: .updates
-        case .advanced: .support
-        default: connected ? .web(selection) : .requiresConnection(selection)
         }
     }
 
     var section: WorkspaceSettingsSection {
         switch self {
-        case .web(let section), .requiresConnection(let section): section
-        case .device: .device
+        case .general: .general
+        case .permissions: .permissions
+        case .connection: .connection
         case .updates: .updates
-        case .support: .advanced
         }
     }
 
     var title: String { section.title }
 
-    var showsWebContent: Bool {
-        if case .web = self { return true }
-        return false
-    }
+    /// Every pane is a native device control and stays usable offline.
+    var isNativeDeviceControl: Bool { true }
 
-    /// Device and Updates stay usable without a service connection.
-    var isNativeDeviceControl: Bool { self == .device || self == .updates }
-
-    /// Help & Diagnostics is a native support pane that also works offline.
-    var isNativeSupport: Bool { self == .support }
+    /// The stable inventory of panes, used to prove offline availability
+    /// without opening a window.
+    static var allCases: [WorkspaceSettingsPane] { [.general, .permissions, .connection, .updates] }
 }
 
 /// Classifies same-origin navigation so Settings and the main workspace keep
 /// distinct owners. Pure and origin-validated, so it is cheap to unit test and
 /// impossible to widen with an unchecked URL.
 enum WorkspaceSurfacePolicy {
-    /// Settings-owned routes stay inside the settings window: the section page,
-    /// diagnostics, testing, login-method, conflict and account-linking flows.
+    /// Settings-owned routes stay out of the main workbench. Web Settings is an
+    /// ordinary browser page; inside the desktop app a settings link opens the
+    /// native window instead of rendering account settings in the workspace.
     static func isSettingsOwned(_ url: URL) -> Bool {
         let path = url.path
         return path == "/workspace/settings" || path.hasPrefix("/workspace/settings/")
@@ -229,135 +155,6 @@ enum WorkspaceSurfacePolicy {
         return !isSettingsOwned(url)
     }
 
-    /// A trusted user-clicked same-origin link to an ordinary workspace route
-    /// must open the main workspace window at that exact URL.
-    static func mainWindowHandoffURL(for url: URL, origin: WorkspaceOrigin,
-                                     isSettingsSurface: Bool, mainFrame: Bool,
-                                     targetsMainFrame: Bool, userActivated: Bool) -> URL? {
-        guard isSettingsSurface, mainFrame, targetsMainFrame, userActivated,
-              origin.contains(url), isOrdinaryWorkspaceDestination(url) else { return nil }
-        return url
-    }
-
-    /// The account profile editor is a same-origin root route (`/onboarding`)
-    /// linked from Settings and returns through a Settings callback. It must
-    /// open in the main window so its full-page chrome and callback stay
-    /// coherent, but the allowance is keyed to the exact edit route plus a
-    /// settings-owned callback. Arbitrary root routes are never widened.
-    static func isAccountEditRoute(_ url: URL) -> Bool {
-        guard url.path == "/onboarding",
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return false }
-        return items.contains { $0.name == "edit" && $0.value == "true" }
-    }
-
-    static func accountEditHandoffURL(for url: URL, origin: WorkspaceOrigin,
-                                      isSettingsSurface: Bool, mainFrame: Bool,
-                                      targetsMainFrame: Bool, userActivated: Bool) -> URL? {
-        guard isSettingsSurface, mainFrame, targetsMainFrame, userActivated,
-              origin.contains(url), isAccountEditRoute(url),
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-              let callback = items.first(where: { $0.name == "callbackUrl" })?.value,
-              let callbackURL = URL(string: callback, relativeTo: origin.url)?.absoluteURL,
-              origin.contains(callbackURL), isSettingsOwned(callbackURL) else { return nil }
-        return url
-    }
-
-    /// Retry inside Settings must never reload an unexpected workbench route
-    /// (or the account editor) and re-trap it. It restores the last valid
-    /// Settings section instead; unrelated same-origin URLs pass through.
-    static func settingsRetryURL(currentURL: URL?, origin: WorkspaceOrigin,
-                                 lastSection: WorkspaceSettingsSection?) -> URL? {
-        guard let currentURL else { return nil }
-        guard case .unexpectedRoute = classifySettingsURL(currentURL, origin: origin) else { return currentURL }
-        return (lastSection ?? .profile).url(in: origin)
-    }
-
-    /// A same-origin main-frame navigation inside Settings that would render
-    /// the workbench without a trusted user click is cancelled instead of
-    /// trapping the full workspace inside the settings window.
-    static func blocksWorkbenchNavigation(url: URL, origin: WorkspaceOrigin,
-                                          isSettingsSurface: Bool, mainFrame: Bool,
-                                          targetsMainFrame: Bool) -> Bool {
-        guard isSettingsSurface, mainFrame, targetsMainFrame, origin.contains(url) else { return false }
-        return isOrdinaryWorkspaceDestination(url)
-    }
-
-    /// A full navigation to the account editor that did not qualify for the
-    /// trusted handoff (for example a server redirect, scripted load or
-    /// new-window fallback) is cancelled instead of transiently rendering the
-    /// editor inside Settings until the URL observer recovers. Only the exact
-    /// `/onboarding?edit=true` route matches, so `/login` and settings-owned
-    /// auth flows are untouched; arbitrary root routes are never blocked.
-    static func blocksAccountEditNavigation(url: URL, origin: WorkspaceOrigin,
-                                            isSettingsSurface: Bool, mainFrame: Bool,
-                                            targetsMainFrame: Bool) -> Bool {
-        guard isSettingsSurface, mainFrame, targetsMainFrame, origin.contains(url) else { return false }
-        return isAccountEditRoute(url)
-    }
-
-    /// What the settings WebView URL actually is. Next.js `Link` can push an
-    /// ordinary workspace route through the History API, bypassing
-    /// `WKNavigationDelegate`; the observer uses this to recover instead of
-    /// letting the workbench render inside Settings.
-    enum SettingsURLObservation: Equatable {
-        case settingsSection(WorkspaceSettingsSection)
-        case settingsOwnedSubpage
-        case unexpectedRoute(URL)
-        case ignore
-    }
-
-    static func classifySettingsURL(_ url: URL, origin: WorkspaceOrigin) -> SettingsURLObservation {
-        guard origin.contains(url) else { return .ignore }
-        if let section = WorkspaceSettingsSection.resolve(url, origin: origin) { return .settingsSection(section) }
-        if isSettingsOwned(url) { return .settingsOwnedSubpage }
-        if isOrdinaryWorkspaceDestination(url) || isAccountEditRoute(url) { return .unexpectedRoute(url) }
-        return .ignore
-    }
-
-    /// A main-window client-side transition to the exact Web Settings route
-    /// that bypassed the navigation delegate (`Next.js Link` + `pushState`).
-    /// Native-only sections, unknown sections and settings-owned subpages are
-    /// excluded; `restoreURL` is the prior same-origin workbench URL, when one
-    /// is known and is not itself a Settings route.
-    struct WorkbenchSettingsTransition: Equatable {
-        let section: WorkspaceSettingsSection
-        let restoreURL: URL?
-    }
-
-    static func workbenchSettingsTransition(from previous: URL?, to current: URL?,
-                                            origin: WorkspaceOrigin) -> WorkbenchSettingsTransition? {
-        guard let current, let section = WorkspaceSettingsSection.resolve(current, origin: origin) else { return nil }
-        return WorkbenchSettingsTransition(
-            section: section,
-            restoreURL: isTrackableWorkbenchURL(previous, origin: origin) ? previous : nil)
-    }
-
-    /// How the main window returns after a client-side Settings hop. A matching
-    /// same-document back item is popped without any reload (the URL KVO fires
-    /// with `backItem` already set for `pushState`). Otherwise the fallback is
-    /// explicit: load a safe URL and say drafts may not have survived.
-    enum WorkbenchRestorePlan: Equatable {
-        case back(URL)
-        case load(URL, notice: String)
-    }
-
-    static func workbenchRestorePlan(for transition: WorkbenchSettingsTransition,
-                                     canGoBack: Bool, backItemURL: URL?,
-                                     entryURL: URL) -> WorkbenchRestorePlan {
-        if let target = transition.restoreURL, canGoBack, backItemURL == target {
-            return .back(target)
-        }
-        // No safe prior state or no matching history entry. Do not claim a
-        // draft was preserved; be explicit about what the user should check.
-        let safe = transition.restoreURL ?? entryURL
-        let notice = transition.restoreURL == nil
-            ? "已在设置中打开。无法确认先前的对话位置，主窗口已回到工作区首页；未保存的输入可能未保留。"
-            : "已在设置中打开，但返回历史不可用，已重新载入上次工作区地址；未保存的输入可能未保留。"
-        return .load(safe, notice: notice)
-    }
-
-    // MARK: Settings Web compatibility gate
-
     /// Display-only desktop chrome projection. The signed host owns truth; this
     /// carries the real bundle-derived app version alongside the update offer so
     /// the Web version pane never has to infer an installed version.
@@ -373,456 +170,81 @@ enum WorkspaceSurfacePolicy {
          "progress": presentation.progress as Any? ?? NSNull()]
     }
 
-    /// Read-only probe result from the settings WebView. Swift evaluates one
-    /// bounded script that checks the exact settings root marker and the
-    /// computed visibility of the settings nav and workspace chrome. No message
-    /// handler or privileged bridge is involved.
-    struct SettingsWebSurfaceProbe: Equatable {
-        let url: URL?
-        let hasSettingsRootMarker: Bool
-        let innerNavigationHidden: Bool
-        let workspaceChromeHidden: Bool
-    }
+    /// A main-window client-side transition to the Web Settings route that
+    /// bypassed the navigation delegate (`Next.js Link` + `pushState`). Account
+    /// settings always go to the browser, never into the native device window;
+    /// `restoreURL` is the prior same-origin workbench URL, when one is known
+    /// and is not itself a Settings route.
+    struct WorkbenchSettingsTransition: Equatable {
+        let destination: AccountSettingsDestination
+        let restoreURL: URL?
 
-    /// The bounded outcome of the gate. `.checking` never exposes the WebView.
-    enum SettingsWebSurfaceStatus: Equatable {
-        case checking
-        case supported
-        case unsupported
-        case loginRequired(URL)
-        case handoff(URL)
-        case unknown
-    }
-
-    static func settingsSurfaceProbe(fromJavaScriptResult result: Any?) -> SettingsWebSurfaceProbe? {
-        guard let dict = result as? [String: Any],
-              let href = dict["href"] as? String,
-              let url = URL(string: href) else { return nil }
-        return SettingsWebSurfaceProbe(
-            url: url,
-            hasSettingsRootMarker: dict["hasMarker"] as? Bool ?? false,
-            innerNavigationHidden: dict["innerNavHidden"] as? Bool ?? false,
-            workspaceChromeHidden: dict["workspaceChromeHidden"] as? Bool ?? false)
-    }
-
-    /// A clean proof renders: the exact settings root marker plus the inner
-    /// settings nav and the workspace chrome actually hidden by computed style.
-    /// The exact settings root without that proof is an incompatible release
-    /// (native unsupported state). A settings-owned subpage without proof is a
-    /// same-origin main-window handoff. Login is owned by the main window.
-    static func settingsSurfaceStatus(for probe: SettingsWebSurfaceProbe,
-                                      origin: WorkspaceOrigin) -> SettingsWebSurfaceStatus {
-        guard let url = probe.url, origin.contains(url) else { return .unknown }
-        if url.path == "/login" || url.path.hasPrefix("/login/") { return .loginRequired(url) }
-        if probe.hasSettingsRootMarker, probe.innerNavigationHidden, probe.workspaceChromeHidden {
-            return .supported
+        init(destination: AccountSettingsDestination, restoreURL: URL?) {
+            self.destination = destination
+            self.restoreURL = restoreURL
         }
-        if WorkspaceSettingsSection.resolve(url, origin: origin) != nil { return .unsupported }
-        if isSettingsOwned(url) { return .handoff(url) }
-        return .unsupported
-    }
 
-    /// A probe result may only be applied to the invocation whose document it
-    /// belongs to. This is the deterministic seam that keeps a stale
-    /// `evaluateJavaScript` completion from a previous document from revealing
-    /// the WebView after a newer navigation has started.
-    static func settingsProbeIsCurrent(generation: Int, currentGeneration: Int,
-                                       loading: Bool,
-                                       expectedURL: URL?, currentURL: URL?,
-                                       probeURL: URL?) -> Bool {
-        guard generation == currentGeneration, !loading else { return false }
-        guard let expectedURL, let currentURL, currentURL == expectedURL else { return false }
-        // A result that reports a different document is stale. A nil probe URL
-        // means the script produced no usable result; the invocation is still
-        // current, so the caller may retry it.
-        if let probeURL { return probeURL == expectedURL }
-        return true
-    }
+        init(from url: URL, restoreURL: URL?) {
+            self.init(destination: Self.accountDestination(forSettingsURL: url), restoreURL: restoreURL)
+        }
 
-    /// Combined gate decision: `nil` means the result is stale and must be
-    /// ignored entirely (never reveal the WebView). Otherwise the classified
-    /// status for the current document is returned; a missing result is
-    /// `.unknown` so the caller can retry it.
-    static func settingsSurfaceStatusForProbe(generation: Int, currentGeneration: Int,
-                                              loading: Bool,
-                                              expectedURL: URL?, currentURL: URL?,
-                                              probe: SettingsWebSurfaceProbe?,
-                                              origin: WorkspaceOrigin) -> SettingsWebSurfaceStatus? {
-        guard settingsProbeIsCurrent(generation: generation, currentGeneration: currentGeneration,
-                                     loading: loading, expectedURL: expectedURL,
-                                     currentURL: currentURL, probeURL: probe?.url) else { return nil }
-        guard let probe else { return .unknown }
-        return settingsSurfaceStatus(for: probe, origin: origin)
-    }
-
-    /// What to do with a classified probe result. `.unsupported` and `.unknown`
-    /// keep retrying until the bounded attempt budget is spent, so streamed or
-    /// hydrating content (including a not-yet-present root marker) is given the
-    /// same bounded chance before the native fallback is finalized.
-    enum SettingsProbeOutcome: Equatable {
-        case apply(SettingsWebSurfaceStatus)
-        case retry
-    }
-
-    static func settingsProbeOutcome(status: SettingsWebSurfaceStatus,
-                                     attempts: Int, maxAttempts: Int) -> SettingsProbeOutcome {
-        switch status {
-        case .supported, .loginRequired, .handoff, .checking:
-            return .apply(status)
-        case .unsupported, .unknown:
-            return attempts < maxAttempts ? .retry : .apply(status)
+        /// Maps a Web Settings URL onto the fixed allowlist of account
+        /// destinations the browser may open. Unknown or absent sections fall
+        /// back to the settings overview; nothing else in the URL is read, so no
+        /// identity, token or arbitrary path can cross the boundary.
+        static func accountDestination(forSettingsURL url: URL) -> AccountSettingsDestination {
+            guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+                  let value = items.first(where: { $0.name == "section" })?.value,
+                  let destination = AccountSettingsDestination(rawValue: value) else { return .overview }
+            return destination
         }
     }
-}
 
-enum WorkspaceSettingsSearchAction: Equatable {
-    case section(WorkspaceSettingsSection)
-    case workspacePath(String)
-    case systemSettings(String)
-}
-
-/// One searchable destination. Results are declared statically, so a query can
-/// never surface a person, conversation, credential or relationship record.
-struct WorkspaceSettingsSearchEntry: Identifiable, Equatable {
-    let id: String
-    let title: String
-    let detail: String
-    let scope: String
-    let destination: String
-    let keywords: [String]
-    let action: WorkspaceSettingsSearchAction
-
-    /// NFKC width folding and whitespace removal make Chinese, full-width and
-    /// spaced variants match the same alias.
-    static func normalized(_ value: String) -> String {
-        value.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-                      locale: Locale(identifier: "zh_CN"))
-            .components(separatedBy: .whitespacesAndNewlines)
-            .joined()
+    static func workbenchSettingsTransition(from previous: URL?, to current: URL?,
+                                            origin: WorkspaceOrigin) -> WorkbenchSettingsTransition? {
+        guard let current, origin.contains(current), isSettingsOwned(current) else { return nil }
+        return WorkbenchSettingsTransition(
+            from: current,
+            restoreURL: isTrackableWorkbenchURL(previous, origin: origin) ? previous : nil)
     }
 
-    func matches(_ normalizedQuery: String) -> Bool {
-        matchScore(normalizedQuery) != nil
+    /// How the main window returns after a client-side Settings hop. A matching
+    /// same-document back item is popped without any reload (the URL KVO fires
+    /// with `backItem` already set for `pushState`). Otherwise the fallback is
+    /// explicit: load a safe URL and say drafts may not have survived.
+    enum WorkbenchRestorePlan: Equatable {
+        case back(URL)
+        case load(URL, notice: String)
     }
 
-    /// Title matches rank first, then keyword/destination, then supporting copy.
-    /// A positive score is the only way an entry becomes searchable.
-    func matchScore(_ normalizedQuery: String) -> Int? {
-        guard !normalizedQuery.isEmpty else { return nil }
-        if Self.normalized(title).contains(normalizedQuery) { return 3 }
-        if keywords.contains(where: { Self.normalized($0).contains(normalizedQuery) }) { return 2 }
-        if Self.normalized(destination).contains(normalizedQuery) { return 2 }
-        if Self.normalized(detail).contains(normalizedQuery) { return 1 }
-        if Self.normalized(scope).contains(normalizedQuery) { return 1 }
-        return nil
-    }
-
-    static func search(_ query: String) -> [WorkspaceSettingsSearchEntry] {
-        let normalizedQuery = normalized(query)
-        guard !normalizedQuery.isEmpty else { return [] }
-        return all.enumerated()
-            .compactMap { index, entry -> (index: Int, entry: WorkspaceSettingsSearchEntry, score: Int)? in
-                guard let score = entry.matchScore(normalizedQuery) else { return nil }
-                return (index, entry, score)
-            }
-            .sorted { $0.score == $1.score ? $0.index < $1.index : $0.score > $1.score }
-            .map(\.entry)
-    }
-
-    /// A same-origin workspace URL for a handoff destination, or nil when the
-    /// entry is native/system-owned or the origin cannot authorize the route.
-    func resolvedURL(in origin: WorkspaceOrigin) -> URL? {
-        switch action {
-        case .workspacePath(let path):
-            guard path == "/workspace" || path.hasPrefix("/workspace/"),
-                  WorkspaceSurfacePolicy.isOrdinaryWorkspaceDestination(origin.url.appending(path: path)) else { return nil }
-            let url = origin.url.appending(path: path)
-            guard origin.contains(url) else { return nil }
-            return url
-        case .systemSettings(let value):
-            return URL(string: value)
-        case .section:
-            return nil
+    static func workbenchRestorePlan(for transition: WorkbenchSettingsTransition,
+                                     canGoBack: Bool, backItemURL: URL?,
+                                     entryURL: URL, browserOpened: Bool = true) -> WorkbenchRestorePlan {
+        if let target = transition.restoreURL, canGoBack, backItemURL == target {
+            return .back(target)
         }
-    }
-}
-
-extension WorkspaceSettingsSearchEntry {
-    /// Static inventory of existing setting owners plus the workspace pages the
-    /// settings panes link to. Counts, permissions and connection state are
-    /// never asserted here.
-    static let all: [WorkspaceSettingsSearchEntry] = [
-        .init(id: "profile", title: "个人资料",
-              detail: "头像、显示名称与个人介绍。", scope: "账号 · 头像仅此设备", destination: "设置 · 个人资料",
-              keywords: ["个人资料", "头像", "名字", "显示名称", "个人介绍", "身份", "profile"],
-              action: .section(.profile)),
-        .init(id: "account", title: "账号与安全",
-              detail: "登录方式、邮箱验证与已登录设备。", scope: "账号", destination: "设置 · 账号与安全",
-              keywords: ["账号", "安全", "登录", "密码", "邮箱", "设备", "会话", "退出", "第三方登录"],
-              action: .section(.account)),
-        .init(id: "workspace", title: "工作空间",
-              detail: "空间名称、成员与所有权。", scope: "当前空间", destination: "设置 · 工作空间",
-              keywords: ["空间", "工作区", "成员", "所有权", "角色", "权限"],
-              action: .section(.workspace)),
-        .init(id: "appearance", title: "外观与偏好",
-              detail: "界面主题与本机头像默认风格。", scope: "仅此 Mac", destination: "设置 · 外观与偏好",
-              keywords: ["外观", "主题", "深色", "浅色", "跟随系统", "夜间", "头像风格", "语言", "时区"],
-              action: .section(.appearance)),
-        .init(id: "connections", title: "连接与权限",
-              detail: "资料从哪里来，助手能做到哪一步。", scope: "当前空间", destination: "设置 · 连接与权限",
-              keywords: ["连接", "权限", "来源", "授权", "资料", "数据", "外部服务", "边界"],
-              action: .section(.connections)),
-        .init(id: "advanced", title: "帮助与诊断",
-              detail: "本机连接排查与受保护的工作区诊断入口。", scope: "本机与当前空间", destination: "设置 · 帮助与诊断",
-              keywords: ["帮助", "诊断", "问题", "排查", "运行记录", "边界", "权限"],
-              action: .section(.advanced)),
-        .init(id: "device", title: "此设备",
-              detail: "内容大小、工作窗口、菜单栏与截图。", scope: "仅此 Mac · 本机保存", destination: "设置 · 此设备",
-              keywords: ["此设备", "本机", "内容大小", "窗口", "缩放", "显示", "保持最前", "键盘快捷键", "菜单栏", "截图"],
-              action: .section(.device)),
-        .init(id: "updates", title: "Mac 软件更新",
-              detail: "本机当前版本、更新源与自动检查。", scope: "仅此 Mac · 本机保存", destination: "设置 · Mac 软件更新",
-              keywords: ["更新", "升级", "版本", "自动检查", "预览版本", "软件更新", "Mac 软件更新", "本机更新", "update"],
-              action: .section(.updates)),
-        .init(id: "versions", title: "版本与状态",
-              detail: "查看 Web、后端与本机 Mac 的实际版本和检查时间。", scope: "各组件分别显示", destination: "设置 · 版本与状态",
-              keywords: ["版本", "状态", "版本与状态", "Web 版本", "后端版本", "本机版本", "Mac 版本", "release", "检查时间"],
-              action: .section(.versions)),
-        .init(id: "screen-recording", title: "屏幕录制权限",
-              detail: "由 macOS 管理；返回后重新检查状态。", scope: "此设备", destination: "此设备 · 打开 macOS 系统设置",
-              keywords: ["截图", "截屏", "屏幕录制", "录屏", "屏幕快照", "屏幕截图", "权限", "screenshot", "capture"],
-              action: .systemSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")),
-        .init(id: "captures", title: "截图作为资料的使用范围",
-              detail: "导入截图与文档，并核对来源与归属。", scope: "当前空间", destination: "资料 · 截图与文档",
-              keywords: ["截图", "截屏", "屏幕录制", "录屏", "屏幕快照", "屏幕截图", "screenshot", "capture", "文档", "导入", "资料", "来源"],
-              action: .workspacePath("/workspace/captures")),
-        .init(id: "capture-failure", title: "截图处理失败时怎么办",
-              detail: "在帮助与诊断中查看故障恢复。", scope: "当前空间", destination: "设置 · 帮助与诊断",
-              keywords: ["截图", "截屏", "屏幕录制", "失败", "故障", "恢复", "处理"],
-              action: .section(.advanced)),
-        .init(id: "extensions", title: "连接服务",
-              detail: "查看可用扩展与真实连接状态。", scope: "当前空间", destination: "资料 · 连接服务",
-              keywords: ["连接", "扩展", "外部服务", "集成", "浏览器收集", "浏览器扩展"],
-              action: .workspacePath("/workspace/extensions")),
-        .init(id: "preferences", title: "回复偏好",
-              detail: "在单独页面管理助手的回复方式。", scope: "账号", destination: "Agent · 回复偏好",
-              keywords: ["回复", "偏好", "回答", "回复方式", "回复顺序"],
-              action: .workspacePath("/workspace/preferences")),
-        .init(id: "monitor", title: "运行记录",
-              detail: "查看任务进度与需要处理的问题。", scope: "当前空间", destination: "工作区 · 运行记录",
-              keywords: ["运行记录", "任务", "进度", "监控", "monitor", "日志"],
-              action: .workspacePath("/workspace/monitor")),
-        .init(id: "boundaries", title: "数据与操作边界",
-              detail: "了解资料访问与操作授权范围。", scope: "当前空间", destination: "工作区 · 数据与操作边界",
-              keywords: ["边界", "数据", "操作", "授权", "权限"],
-              action: .workspacePath("/workspace/boundaries")),
-        .init(id: "lab", title: "功能实验室",
-              detail: "查看当前启用的实验功能。", scope: "当前空间", destination: "工作区 · 功能实验室",
-              keywords: ["实验室", "实验", "功能", "lab"],
-              action: .workspacePath("/workspace/lab")),
-        .init(id: "diagnostics", title: "连接诊断",
-              detail: "遇到加载或连接问题时，检查服务状态。", scope: "当前空间", destination: "设置 · 帮助与诊断 · 连接诊断",
-              keywords: ["诊断", "连接", "服务状态", "加载", "排查"],
-              action: .section(.advanced)),
-    ]
-}
-
-/// Pure search state so keyboard, focus and empty-result behavior can be
-/// verified without a running window.
-struct WorkspaceSettingsSearchState: Equatable {
-    private(set) var query = ""
-    private(set) var activeIndex = -1
-
-    var results: [WorkspaceSettingsSearchEntry] { WorkspaceSettingsSearchEntry.search(query) }
-    var isSearching: Bool { !WorkspaceSettingsSearchEntry.normalized(query).isEmpty }
-    var isEmptyResult: Bool { isSearching && results.isEmpty }
-
-    mutating func update(_ value: String) {
-        query = value
-        activeIndex = -1
-    }
-
-    mutating func clearQuery() {
-        query = ""
-        activeIndex = -1
-    }
-
-    mutating func reset() {
-        query = ""
-        activeIndex = -1
-    }
-
-    mutating func moveDown() {
-        guard !results.isEmpty else { activeIndex = -1; return }
-        activeIndex = activeIndex < 0 ? 0 : (activeIndex + 1) % results.count
-    }
-
-    mutating func moveUp() {
-        guard !results.isEmpty else { activeIndex = -1; return }
-        activeIndex = activeIndex <= 0 ? results.count - 1 : activeIndex - 1
-    }
-
-    var activeEntry: WorkspaceSettingsSearchEntry? {
-        results.indices.contains(activeIndex) ? results[activeIndex] : nil
+        // No safe prior state or no matching history entry. Do not claim a
+        // draft was preserved; be explicit about what the user should check.
+        let safe = transition.restoreURL ?? entryURL
+        let browserStatus = browserOpened
+            ? "账号设置已在默认浏览器中打开。"
+            : "账号设置未能在默认浏览器中打开。"
+        let restoreStatus = transition.restoreURL == nil
+            ? "无法确认先前的对话位置，主窗口已回到工作区首页；未保存的输入可能未保留。"
+            : "返回历史不可用，已重新载入上次工作区地址；未保存的输入可能未保留。"
+        let notice = browserStatus + restoreStatus
+        return .load(safe, notice: notice)
     }
 }
 
 @MainActor
 final class WorkspaceSettingsNavigation: ObservableObject {
     static let shared = WorkspaceSettingsNavigation()
-    @Published var selection: WorkspaceSettingsSection = .profile
+    @Published var selection: WorkspaceSettingsSection = .general
 }
 
-/// A second view of the same origin-specific data store, never a reload of the conversation.
-private struct ConnectedSettingsSurface: View {
-    @StateObject private var browser: WorkspaceBrowser
-    @ObservedObject private var navigation = WorkspaceSettingsNavigation.shared
-    @ObservedObject private var connection = WorkspaceConnection.shared
-    @AppStorage("workspace.desktop.zoom") private var zoom = 1.0
-    @Environment(\.openSettings) private var openSettings
-    @Environment(\.openWindow) private var openWindow
-
-    init(origin: WorkspaceOrigin) {
-        let section = WorkspaceSettingsNavigation.shared.selection
-        _browser = StateObject(wrappedValue: WorkspaceBrowser(origin: origin, settings: true,
-            initialURL: (section.isWeb ? section : .profile).url(in: origin)))
-    }
-    var body: some View {
-        ZStack {
-            // The WebView is never shown until the exact settings surface is
-            // proven clean; every other state renders natively so a stale Web
-            // release can never paint its full workspace inside Settings.
-            WorkspaceWebSurface(browser: browser, zoom: zoom)
-                .opacity(browser.settingsSurfaceStatus == .supported ? 1 : 0)
-                .allowsHitTesting(browser.settingsSurfaceStatus == .supported)
-                .accessibilityHidden(browser.settingsSurfaceStatus != .supported)
-            gateOverlay
-        }
-        .onAppear {
-            browser.openSettings = { openSettings() }
-            // Handoff never loads the workbench here; the main window owns it.
-            browser.openWorkspace = { openWindow(id: "workspace") }
-        }
-        .onChange(of: navigation.selection) { _, section in
-            browser.settingsRecovery = nil
-            guard section.isWeb else { return }
-            let destination = section.url(in: browser.origin)
-            guard browser.webView.url != destination else { return }
-            browser.webView.load(URLRequest(url: destination))
-        }
-        .overlay(alignment: .bottom) {
-            if let recovery = browser.settingsRecovery {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label(recovery.message, systemImage: "exclamationmark.triangle")
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 12) {
-                        Button("在主窗口打开") {
-                            WorkspaceNavigation.shared.pendingURL = recovery.destination
-                            openWindow(id: "workspace")
-                            browser.settingsRecovery = nil
-                        }
-                        Button("关闭") { browser.settingsRecovery = nil }
-                    }
-                }
-                .padding(14)
-                .frame(maxWidth: 520, alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.primary.opacity(0.12)))
-                .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
-                .padding(16)
-                .accessibilityIdentifier("settings.recovery")
-            }
-        }
-        .onChange(of: connection.inspectorEnabled) { _, enabled in browser.webView.isInspectable = enabled }
-        .alert("在浏览器中打开？", isPresented: Binding(get: { browser.externalURL != nil }, set: { if !$0 { browser.externalURL = nil } })) {
-            Button("打开") { if let url = browser.externalURL { NSWorkspace.shared.open(url) }; browser.externalURL = nil }
-            Button("取消", role: .cancel) { browser.externalURL = nil }
-        } message: { Text(browser.externalURL?.host ?? "此链接位于工作区之外。") }
-    }
-
-    @ViewBuilder
-    private var gateOverlay: some View {
-        if let failure = browser.failure {
-            VStack(spacing: 16) {
-                Text("设置暂不可用").font(.title2)
-                Text(failure).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("重新载入", action: browser.retry)
-                Button("检查本机连接") { navigation.selection = .device }
-            }.padding(40).frame(maxWidth: .infinity, maxHeight: .infinity).background(.background)
-        } else {
-            switch browser.settingsSurfaceStatus {
-            case .supported:
-                if browser.loading {
-                    ProgressView().controlSize(.small)
-                        .frame(maxHeight: .infinity, alignment: .top).padding(12)
-                        .allowsHitTesting(false)
-                }
-            case .checking:
-                VStack(spacing: 12) {
-                    ProgressView().controlSize(.small)
-                    Text("正在确认设置界面…").font(.callout).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.background)
-                .accessibilityIdentifier("settings.compatibility")
-            case .unsupported:
-                // Do not hand the exact settings route to the main window: the
-                // main browser would re-intercept it and bounce back here.
-                nativeNotice(
-                    title: "此 Web 版本不支持原生设置界面",
-                    message: "已连接的工作区 Web 版本较旧，无法在设置窗口中安全显示设置内容。请更新工作区 Web，或先在主窗口继续。",
-                    primaryTitle: "打开工作区", primary: { handoff(browser.origin.entryURL) },
-                    secondaryTitle: "重新检查", secondary: { browser.retry() })
-            case .loginRequired(let url):
-                nativeNotice(
-                    title: "需要登录",
-                    message: "登录后才能读取或保存账号设置。设置窗口不会显示完整工作区；请在主窗口完成登录。",
-                    primaryTitle: "在主窗口登录", primary: { handoff(url) },
-                    secondaryTitle: "重新载入", secondary: { browser.retry() })
-            case .handoff(let url):
-                nativeNotice(
-                    title: "此页面需要在主窗口打开",
-                    message: "该页面需要在主窗口重新打开。未保存的输入可能无法保留，请在继续前核对。",
-                    primaryTitle: "在主窗口打开", primary: { handoff(url) },
-                    secondaryTitle: "返回设置", secondary: { navigation.selection = .profile })
-            case .unknown:
-                nativeNotice(
-                    title: "暂时无法确认设置界面",
-                    message: "没有在限定时间内确认此 Web 版本支持原生设置界面。可以重新检查，或改用此设备上的原生控制。",
-                    primaryTitle: "重新检查", primary: { browser.retry() },
-                    secondaryTitle: "此设备", secondary: { navigation.selection = .device })
-            }
-        }
-    }
-
-    private func nativeNotice(title: String, message: String,
-                              primaryTitle: String, primary: @escaping () -> Void,
-                              secondaryTitle: String, secondary: @escaping () -> Void) -> some View {
-        VStack(spacing: 14) {
-            Image(systemName: "info.circle").font(.title2).foregroundStyle(.secondary)
-            Text(title).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
-            Text(message).font(.callout).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 12) {
-                Button(primaryTitle, action: primary).buttonStyle(.borderedProminent)
-                Button(secondaryTitle, action: secondary)
-            }
-        }
-        .padding(40)
-        .frame(maxWidth: 520)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background)
-        .accessibilityIdentifier("settings.compatibility")
-    }
-
-    private func handoff(_ url: URL) {
-        guard browser.origin.contains(url) else { return }
-        WorkspaceNavigation.shared.pendingURL = url
-        openWindow(id: "workspace")
-    }
-}
-
+/// Native settings. It never embeds a WebView and never probes the Web, so it
+/// stays usable when the workspace service is offline or on an old release.
 struct WorkspaceDesktopSettings: View {
     @AppStorage("workspace.desktop.zoom") private var zoom = 1.0
     @AppStorage("workspace.desktop.floating") private var floating = false
@@ -832,12 +254,14 @@ struct WorkspaceDesktopSettings: View {
     @Environment(\.openWindow) private var openWindow
     @State private var search = WorkspaceSettingsSearchState()
     @State private var searchMessage: String?
-    @State private var supportProbe: ConnectionProbeResult?
-    @State private var supportProbing = false
+    @State private var connectionProbe: ConnectionProbeResult?
+    @State private var connectionProbing = false
+    @State private var accountLaunchFailed = false
+    @State private var screenRecordingAllowed = CGPreflightScreenCaptureAccess()
     @FocusState private var searchFocused: Bool
 
     private var pane: WorkspaceSettingsPane {
-        WorkspaceSettingsPane.resolve(selection: navigation.selection, connected: connection.origin != nil)
+        WorkspaceSettingsPane.resolve(selection: navigation.selection)
     }
 
     var body: some View {
@@ -846,16 +270,14 @@ struct WorkspaceDesktopSettings: View {
             Divider()
             content
         }
-        .frame(minWidth: 860, idealWidth: 940, maxWidth: .infinity, minHeight: 620, idealHeight: 700, maxHeight: .infinity)
-        .background(SettingsWindowTitle(title: navigation.selection.title))
+        .frame(minWidth: 820, idealWidth: 900, maxWidth: .infinity, minHeight: 600, idealHeight: 680, maxHeight: .infinity)
+        .background(SettingsWindowTitle(title: "此 Mac 设置"))
         .task { updater.start() }
     }
 
-    // MARK: Rail
-
     private var rail: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("设置")
+            Text("此 Mac 设置")
                 .font(.title3.weight(.semibold))
                 .padding(.horizontal, 18).padding(.top, 20).padding(.bottom, 12)
 
@@ -878,18 +300,19 @@ struct WorkspaceDesktopSettings: View {
                     }
                 }
                 .padding(.horizontal, 8)
-                .padding(.bottom, 20)
+                .padding(.bottom, 12)
             }
 
             Spacer(minLength: 0)
 
             Divider().padding(.horizontal, 16)
+            accountRow.padding(.horizontal, 12).padding(.vertical, 12)
+            Divider().padding(.horizontal, 16)
             VStack(alignment: .leading, spacing: 3) {
                 Text("此 Mac · \(updater.appVersion)")
                     .font(.caption2).foregroundStyle(.secondary)
                 if updater.presentation.offerID != nil {
-                    Text("有可用更新")
-                        .font(.caption2).foregroundStyle(.primary)
+                    Text("有可用更新").font(.caption2).foregroundStyle(.primary)
                 }
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
@@ -901,7 +324,7 @@ struct WorkspaceDesktopSettings: View {
                 .opacity(0)
                 .accessibilityHidden(true)
         }
-        .frame(width: 224)
+        .frame(width: 244)
         .frame(maxHeight: .infinity)
         .background(.bar)
         .onMoveCommand { direction in
@@ -913,11 +336,50 @@ struct WorkspaceDesktopSettings: View {
         }
     }
 
+    /// Account and preferences are owned by the browser. The label says so
+    /// before the click, and the click only asks the OS to open the page.
+    private var accountRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button { openAccountSettings(.overview) } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.right.square")
+                    Text("账号与偏好 ↗")
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("settings.account.browser")
+            .accessibilityHint("在默认浏览器中打开，浏览器使用它自己登录的账号")
+            Text(connection.origin == nil
+                 ? "需要先连接工作区，浏览器才能打开账号设置。"
+                 : "浏览器使用它自己登录的账号，可能与应用内的账号不同。")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if accountLaunchFailed {
+                Text(connection.origin == nil
+                     ? "尚未连接工作区，暂时无法打开账号设置。"
+                     : "无法打开默认浏览器。请检查默认浏览器，然后重试。")
+                    .font(.caption2).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                if connection.origin != nil {
+                    Button("重试") { openAccountSettings(.overview) }
+                        .controlSize(.small)
+                        .accessibilityIdentifier("settings.account.retry")
+                }
+            }
+        }
+    }
+
+    private func openAccountSettings(_ destination: AccountSettingsDestination) {
+        accountLaunchFailed = !AccountSettingsBrowser.shared.open(destination, in: connection.origin)
+    }
+
     private var searchField: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 12)).foregroundStyle(.secondary)
             TextField("搜索设置", text: Binding(
                 get: { search.query },
                 set: { search.update($0); searchMessage = nil }
@@ -935,17 +397,12 @@ struct WorkspaceDesktopSettings: View {
                 return .handled
             }
             if search.query.isEmpty {
-                Text("⌘F")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                Text("⌘F").font(.system(size: 10)).foregroundStyle(.tertiary)
             } else {
-                Button {
-                    search.reset(); searchMessage = nil
-                } label: {
+                Button { search.reset(); searchMessage = nil } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12))
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tertiary)
+                .buttonStyle(.plain).foregroundStyle(.tertiary)
                 .accessibilityLabel("清除搜索")
             }
         }
@@ -967,10 +424,8 @@ struct WorkspaceDesktopSettings: View {
                 .background(selected ? Color.primary.opacity(0.075) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
                 .overlay(alignment: .leading) {
                     if selected {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.accentColor)
-                            .frame(width: 3, height: 15)
-                            .offset(x: 2)
+                        RoundedRectangle(cornerRadius: 2).fill(Color.accentColor)
+                            .frame(width: 3, height: 15).offset(x: 2)
                     }
                 }
                 .contentShape(Rectangle())
@@ -980,61 +435,30 @@ struct WorkspaceDesktopSettings: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    // MARK: Content
-
     private var content: some View {
         ZStack(alignment: .top) {
             paneContent
-            if search.isSearching {
-                searchOverlay
-            }
+            if search.isSearching { searchOverlay }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
     private var paneContent: some View {
-        ZStack {
-            if let origin = connection.origin {
-                // Kept mounted across selection changes so the Web surface and
-                // its one Settings navigation never reload on a rail change.
-                ConnectedSettingsSurface(origin: origin).id(origin.url)
-                    .opacity(pane.showsWebContent ? 1 : 0)
-                    .allowsHitTesting(pane.showsWebContent)
-                    .accessibilityHidden(!pane.showsWebContent)
-            }
-            switch pane {
-            case .device: devicePane
-            case .updates: updatesPane
-            case .support: supportPane
-            case .requiresConnection(let section): offlinePane(section)
-            case .web: EmptyView()
-            }
+        switch pane {
+        case .general: generalPane
+        case .permissions: permissionsPane
+        case .connection: connectionPane
+        case .updates: updatesPane
         }
     }
 
-    private var devicePane: some View {
+    private var generalPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("此设备").font(.title2.weight(.semibold))
-                Text("本机控制在工作空间断线时仍然可用。")
+                Text("通用").font(.title2.weight(.semibold))
+                Text("这些控制只影响这台 Mac，断线时仍然可用。")
                     .font(.callout).foregroundStyle(.secondary)
-
-                if connection.origin == nil {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "bolt.horizontal.circle").foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("尚未连接工作区").font(.callout.weight(.medium))
-                            Text("下方本机控制不受影响；需要读取或保存账号设置时再连接。")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-                }
-
                 VStack(alignment: .leading, spacing: 16) {
                     Picker("内容大小", selection: $zoom) {
                         Text("90%").tag(0.9); Text("100%").tag(1.0); Text("110%").tag(1.1)
@@ -1045,12 +469,11 @@ struct WorkspaceDesktopSettings: View {
                 Divider()
                 CaptureDeviceSettings()
                 Divider()
-                WorkspaceConnectionForm(mode: .settings) { openWindow(id: "workspace") }
                 DisclosureGroup("键盘快捷键") {
                     VStack(spacing: 12) {
                         LabeledContent("新对话", value: "⌘ N")
                         LabeledContent("人物 / 日程", value: "⌘ 1 / ⌘ 2")
-                        LabeledContent("设置", value: "⌘ ,")
+                        LabeledContent("此 Mac 设置", value: "⌘ ,")
                         LabeledContent("重新载入", value: "⌘ R")
                     }.padding(.top, 12)
                 }
@@ -1058,132 +481,117 @@ struct WorkspaceDesktopSettings: View {
         }.background(.background)
     }
 
-    private func offlinePane(_ section: WorkspaceSettingsSection) -> some View {
+    /// Real macOS permission status plus an intentional System Settings link.
+    /// The app never claims a permission was granted from the link click alone.
+    private var permissionsPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text(section.title).font(.title2.weight(.semibold))
-                Text("这部分设置需要连接工作区后才能读取或保存。此设备、Mac 软件更新与帮助与诊断仍可离线使用。")
+                Text("权限").font(.title2.weight(.semibold))
+                Text("截图与文档功能需要由 macOS 管理的屏幕录制权限。这里显示真实状态，授权只能在系统设置中完成。")
                     .font(.callout).foregroundStyle(.secondary)
-                Button("前往此设备") { navigation.selection = .device }
-                    .buttonStyle(.borderedProminent)
-                Divider()
-                WorkspaceConnectionForm(mode: .settings) { openWindow(id: "workspace") }
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        LabeledContent("屏幕录制") {
+                            Label(screenRecordingAllowed ? "已允许" : "未允许",
+                                  systemImage: screenRecordingAllowed ? "checkmark.circle" : "exclamationmark.circle")
+                                .foregroundStyle(screenRecordingAllowed ? Color.secondary : Color.orange)
+                        }
+                        HStack(spacing: 12) {
+                            Button("打开系统设置") {
+                                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                                    _ = NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .accessibilityIdentifier("permissions.systemSettings")
+                            Button("重新检查") { screenRecordingAllowed = CGPreflightScreenCaptureAccess() }
+                                .accessibilityIdentifier("permissions.recheck")
+                        }
+                        Text("点击“打开系统设置”只会打开 macOS 面板，不代表权限已更改。返回后请重新检查。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }.padding(6)
+                } label: {
+                    Text("由 macOS 管理").font(.callout.weight(.medium))
+                }
             }.padding(32).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
         }.background(.background)
     }
 
-    /// Native Help & Diagnostics. It never embeds a Web subpage: connection
-    /// trouble is checked on-device and the protected Web pages are handed off
-    /// to the main workspace window, clearly labeled as such.
-    private var supportPane: some View {
+    /// Connection and diagnostics live under an advanced disclosure and never
+    /// print secrets. Account reading and saving happen in the browser.
+    private var connectionPane: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                Text("帮助与诊断").font(.title2.weight(.semibold))
-                Text("先在本机排查连接；需要更完整的服务状态时，可在主窗口打开受保护的工作区页面。")
+            VStack(alignment: .leading, spacing: 20) {
+                Text("连接与诊断").font(.title2.weight(.semibold))
+                Text("本机控制不依赖连接；需要读取或保存账号设置时，请在浏览器中打开。")
                     .font(.callout).foregroundStyle(.secondary)
-
-                GroupBox {
+                WorkspaceConnectionForm(mode: .settings) { openWindow(id: "workspace") }
+                DisclosureGroup("高级诊断") {
                     VStack(alignment: .leading, spacing: 12) {
                         LabeledContent("当前工作区", value: connection.origin?.url.host ?? "尚未连接")
-                        HStack(spacing: 12) {
-                            Button(supportProbing ? "正在检查…" : "测试连接") { runSupportProbe() }
-                                .disabled(connection.origin == nil || supportProbing)
-                                .accessibilityIdentifier("support.probe")
-                            Button("连接设置") { navigation.selection = .device }
-                        }
-                        if let result = supportProbe {
+                        Button(connectionProbing ? "正在检查…" : "测试连接") { runConnectionProbe() }
+                            .disabled(connection.origin == nil || connectionProbing)
+                            .accessibilityIdentifier("connection.probe")
+                        if let result = connectionProbe {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(result.summary).font(.callout.weight(.medium))
                                 Text(result.detail).font(.caption).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
-                        } else if connection.origin == nil {
-                            Text("尚未连接工作区，本机排查仍可使用。")
-                                .font(.caption).foregroundStyle(.secondary)
                         }
-                    }.padding(6)
-                } label: {
-                    Text("连接诊断").font(.callout.weight(.medium))
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("受保护的工作区页面").font(.callout.weight(.medium))
-                    Text("这些页面需要登录，且只在主窗口打开，不会嵌入设置窗口。")
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(WorkspaceSettingsSection.supportDestinations) { destination in
-                        Button {
-                            openSupportDestination(destination)
-                        } label: {
-                            HStack {
-                                Text("在主窗口打开\(destination.title)")
-                                Spacer()
-                                Image(systemName: "arrow.up.right.square")
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(connection.origin == nil)
-                        .accessibilityIdentifier("support.destination.\(destination.id)")
-                    }
+                        Text("诊断只检查本机到工作区的连接，不包含凭据、令牌或账号标识。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }.padding(.top, 12)
                 }
             }.padding(32).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
         }.background(.background)
     }
 
-    private func runSupportProbe() {
+    private func runConnectionProbe() {
         guard let origin = connection.origin else { return }
-        supportProbing = true
-        supportProbe = nil
+        connectionProbing = true
+        connectionProbe = nil
         Task { @MainActor in
-            supportProbe = await WorkspaceConnectionProbe(origin: origin).run()
-            supportProbing = false
+            connectionProbe = await WorkspaceConnectionProbe(origin: origin).run()
+            connectionProbing = false
         }
     }
 
-    private func openSupportDestination(_ destination: WorkspaceSupportDestination) {
-        guard let origin = connection.origin, let url = destination.url(in: origin) else { return }
-        WorkspaceNavigation.shared.pendingURL = url
-        openWindow(id: "workspace")
-    }
-
     private var updatesPane: some View {
-            Form {
-                Section {
-                    LabeledContent("当前版本", value: updater.appVersion)
-                    Text(updater.status).foregroundStyle(.secondary)
-                    if let checked = updater.presentation.lastChecked {
-                        LabeledContent("上次验证更新源", value: checked.formatted(date: .abbreviated, time: .shortened))
-                    }
-                    if let offerID = updater.presentation.offerID {
-                        Button("更新并重启") { updater.installUpdate(offerID: offerID) }
-                            .accessibilityIdentifier("updates.install")
-                    } else {
-                        Button("检查更新") { updater.checkForUpdates() }
-                            .disabled(!updater.isConfigured || !updater.canCheck || updater.presentation.busy)
-                            .accessibilityIdentifier("updates.check")
-                    }
-                    if updater.canRetryRelaunch {
-                        Button("再次尝试重启") { updater.retryRelaunch() }
-                    }
+        Form {
+            Section {
+                LabeledContent("当前版本", value: updater.appVersion)
+                Text(updater.status).foregroundStyle(.secondary)
+                if let checked = updater.presentation.lastChecked {
+                    LabeledContent("上次验证更新源", value: checked.formatted(date: .abbreviated, time: .shortened))
                 }
-                Section {
-                    Toggle("自动检查更新", isOn: $updater.automaticChecks).disabled(!updater.isConfigured)
-                    Toggle("接收预览版本", isOn: $updater.includesPreview)
-                        .disabled(!updater.isConfigured || updater.sessionInProgress)
-                } footer: {
-                    Text("新版本会在左下角提醒。点击“更新并重启”后，会下载、校验并重新打开应用，不再弹出确认。未点击时不会安装或重启。")
+                if let offerID = updater.presentation.offerID {
+                    Button("更新并重启") { updater.installUpdate(offerID: offerID) }
+                        .accessibilityIdentifier("updates.install")
+                } else {
+                    Button("检查更新") { updater.checkForUpdates() }
+                        .disabled(!updater.isConfigured || !updater.canCheck || updater.presentation.busy)
+                        .accessibilityIdentifier("updates.check")
                 }
-                Section {
-                    Link("版本记录与安装帮助", destination: URL(string: "https://github.com/getyak/talent-signal/releases?q=macos-")!)
-                    if !updater.isConfigured {
-                        Text("正式签名更新尚未配置。可从版本记录下载已发布的安装包。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                if updater.canRetryRelaunch { Button("再次尝试重启") { updater.retryRelaunch() } }
+            }
+            Section {
+                Toggle("自动检查更新", isOn: $updater.automaticChecks).disabled(!updater.isConfigured)
+                Toggle("接收预览版本", isOn: $updater.includesPreview)
+                    .disabled(!updater.isConfigured || updater.sessionInProgress)
+            } footer: {
+                Text("新版本会在左下角提醒。点击“更新并重启”后，会下载、校验并重新打开应用，不再弹出确认。未点击时不会安装或重启。")
+            }
+            Section {
+                Link("版本记录与安装帮助", destination: URL(string: "https://github.com/getyak/talent-signal/releases?q=macos-")!)
+                if !updater.isConfigured {
+                    Text("正式签名更新尚未配置。可从版本记录下载已发布的安装包。")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-            }.formStyle(.grouped)
-
+            }
+        }.formStyle(.grouped)
     }
-
-    // MARK: Search
 
     private var searchOverlay: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1196,92 +604,95 @@ struct WorkspaceDesktopSettings: View {
 
             if search.results.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("没有找到“\(search.query.trimmingCharacters(in: .whitespacesAndNewlines))”对应的设置。")
+                    Text("没有找到与“\(search.query.trimmingCharacters(in: .whitespacesAndNewlines))”匹配的设置。")
                         .font(.callout)
-                    Text("可以试试账号、外观、连接、工作空间、此设备或截图与文档。关系资料不会出现在设置搜索中。")
+                    Text("可以试试通用、权限、连接、软件更新、账号，或截图与文档。关系资料不会出现在设置搜索中。")
                         .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.horizontal, 20).padding(.bottom, 18)
+                .padding(.horizontal, 20).padding(.bottom, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                Text("匹配结果").font(.caption).foregroundStyle(.secondary)
-                    .padding(.horizontal, 20).padding(.bottom, 6)
                 ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(search.results.indices, id: \.self) { index in
-                            searchResultRow(search.results[index], index: index)
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(search.results.enumerated()), id: \.element.id) { index, entry in
+                            searchRow(entry, active: index == search.activeIndex)
                         }
                     }
-                    .padding(.horizontal, 12).padding(.bottom, 16)
+                    .padding(.horizontal, 10).padding(.bottom, 12)
                 }
             }
 
             if let searchMessage {
-                Text(searchMessage).font(.caption).foregroundStyle(.red)
+                Text(searchMessage)
+                    .font(.caption).foregroundStyle(.secondary)
                     .padding(.horizontal, 20).padding(.bottom, 14)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: 580, maxHeight: 440, alignment: .topLeading)
+        .frame(maxWidth: 520, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1)))
+        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.separator) }
         .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
-        .padding(.top, 18)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color.black.opacity(0.05))
+        .padding(.top, 24).padding(.horizontal, 24)
     }
 
-    private func searchResultRow(_ entry: WorkspaceSettingsSearchEntry, index: Int) -> some View {
-        Button {
-            activate(entry)
-        } label: {
-            HStack(alignment: .center, spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.title)
-                        .font(.system(size: 13, weight: index == search.activeIndex ? .semibold : .regular))
-                        .foregroundStyle(.primary)
-                    Text(entry.detail)
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+    private func searchRow(_ entry: WorkspaceSettingsSearchEntry, active: Bool) -> some View {
+        Button { activate(entry) } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(entry.title).font(.system(size: 13, weight: .medium))
+                    Text(entry.scope)
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.primary.opacity(0.07), in: Capsule())
                 }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text(entry.scope).font(.caption2).foregroundStyle(.secondary)
-                    Text(entry.destination).font(.caption2).foregroundStyle(.tertiary)
-                }
+                Text(entry.detail).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(entry.destination).font(.system(size: 10)).foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 10).padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(index == search.activeIndex ? Color.accentColor.opacity(0.1) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(active ? Color.accentColor.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 7))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("settings.search.result.\(entry.id)")
     }
 
-    /// Routing never invents a privileged bridge: native sections select the
-    /// rail, system settings open the OS pane, and workspace destinations hand
-    /// off to the main window only after the origin authorizes the URL.
+    /// Routes a search result to its real owner. Native sections stay in place;
+    /// browser, workspace and macOS destinations each get an explicit handoff,
+    /// and every failure is reported instead of silently doing nothing.
     private func activate(_ entry: WorkspaceSettingsSearchEntry?) {
         guard let entry else { return }
         switch entry.action {
         case .section(let section):
             navigation.selection = section
-            search.reset(); searchMessage = nil; searchFocused = false
+            search.reset()
+            searchMessage = nil
+        case .accountBrowser(let destination):
+            searchMessage = nil
+            accountLaunchFailed = false
+            if !AccountSettingsBrowser.shared.open(destination, in: connection.origin) {
+                searchMessage = connection.origin == nil
+                    ? "需要先连接工作区，浏览器才能打开账号设置。"
+                    : "无法打开默认浏览器，账号设置未打开。"
+            }
         case .workspacePath:
-            guard let origin = connection.origin, let url = entry.resolvedURL(in: origin) else {
-                searchMessage = "需要先连接工作区，才能打开“\(entry.title)”。"
+            guard let url = entry.resolvedURL(in: connection.origin) else {
+                searchMessage = "需要先连接工作区，才能打开这个工作区页面。"
                 return
             }
             WorkspaceNavigation.shared.pendingURL = url
             openWindow(id: "workspace")
-            search.reset(); searchMessage = nil; searchFocused = false
+            searchMessage = nil
         case .systemSettings(let value):
-            guard let url = URL(string: value) else { return }
-            // Only claim System Settings opened, never that permission was granted.
-            if NSWorkspace.shared.open(url) {
-                search.reset(); searchMessage = nil; searchFocused = false
-            } else {
-                searchMessage = "无法打开 macOS 系统设置。请手动打开“系统设置 → 隐私与安全性”，返回后重新检查屏幕录制权限。"
+            guard let url = URL(string: value), NSWorkspace.shared.open(url) else {
+                searchMessage = "无法打开 macOS 系统设置，请手动打开“隐私与安全性 → 屏幕录制”。"
+                return
             }
+            searchMessage = "已请求打开 macOS 系统设置。权限状态返回后请重新检查。"
         }
     }
 }
@@ -1308,16 +719,16 @@ private struct SettingsWindowTitle: NSViewRepresentable {
     let title: String
 
     final class View: NSView {
-        var paneTitle = ""
+        var windowTitle = ""
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if !paneTitle.isEmpty { window?.title = paneTitle }
+            if !windowTitle.isEmpty { window?.title = windowTitle }
         }
     }
 
     func makeNSView(context: Context) -> View { View() }
     func updateNSView(_ view: View, context: Context) {
-        view.paneTitle = title
+        view.windowTitle = title
         view.window?.title = title
         DispatchQueue.main.async { [weak view] in view?.window?.title = title }
     }

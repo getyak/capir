@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowClockwise, GearSix } from "@phosphor-icons/react";
+import { ArrowDown, ArrowClockwise, GearSix, Globe } from "@phosphor-icons/react";
 import { useSyncExternalStore } from "react";
 import styles from "./workspace-shell.module.css";
 
@@ -50,9 +50,37 @@ export function DesktopUpdateButton() {
   </a>;
 }
 
-export function DesktopSettingsLink({ onClick }: { onClick: () => void }) {
+function settingsHrefFor(hosted: boolean, scheme: string, fallback: string) {
+  return hosted ? scheme : fallback;
+}
+
+/** Account management always leaves the app: it opens the default browser so the
+ * person's real signed-in account and password manager are used. Never rendered
+ * as an in-app settings surface. */
+export function DesktopAccountLink({ onClick }: { onClick: () => void }) {
   const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
-  return <a href={state ? "talentsignal-desktop://settings" : "/workspace/settings"} onClick={onClick}>
-    <GearSix aria-hidden="true" size={16} /><span>设置</span>{state ? <kbd>⌘ ,</kbd> : null}
-  </a>;
+  return (
+    <a
+      aria-label="账号与偏好（在默认浏览器中打开）"
+      href={settingsHrefFor(Boolean(state), "talentsignal-desktop://account-settings", "/workspace/settings")}
+      onClick={onClick}
+    >
+      <Globe aria-hidden="true" size={16} />
+      <span>账号与偏好 ↗</span>
+    </a>
+  );
+}
+
+/** The native window owns device settings only, so it is offered only where a
+ * native host exists. Browsers keep the ordinary Web settings route. */
+export function DesktopDeviceSettingsLink({ onClick }: { onClick: () => void }) {
+  const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
+  if (!state) return null;
+  return (
+    <a href="talentsignal-desktop://settings" onClick={onClick}>
+      <GearSix aria-hidden="true" size={16} />
+      <span>此 Mac 设置…</span>
+      <kbd>⌘ ,</kbd>
+    </a>
+  );
 }

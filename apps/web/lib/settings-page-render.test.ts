@@ -139,8 +139,13 @@ describe("settings page server composition", () => {
       await expect(
         SettingsPage({ searchParams: Promise.resolve({ section }) }),
       ).rejects.toThrow("NEXT_REDIRECT");
+      // The overview is the canonical bare route, exactly as its nav href is;
+      // every other section is preserved as an allowlisted query value.
+      const returnPath = section === "overview"
+        ? "/workspace/settings"
+        : `/workspace/settings?section=${section}`;
       expect(redirect).toHaveBeenCalledWith(
-        `/login?callbackUrl=${encodeURIComponent(`/workspace/settings?section=${section}`)}`,
+        `/login?callbackUrl=${encodeURIComponent(returnPath)}`,
       );
     }
   });
