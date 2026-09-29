@@ -30778,6 +30778,66 @@
           }
         }
       }
+    },
+    "Installed iOS app": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本机 iOS 应用"
+          }
+        }
+      }
+    },
+    "Update status": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新状态"
+          }
+        }
+      }
+    },
+    "This is the build installed on this device. Check TestFlight or the App Store for a newer release; this screen does not infer updates from another device.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这里显示这台设备实际安装的版本。请在 TestFlight 或 App Store 检查新版本；这里不会推断其他设备的安装状态。"
+          }
+        }
+      }
+    },
+    "Version & status": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "版本与状态"
+          }
+        }
+      }
+    },
+    "Installed build on this device and update-check source.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看这台设备安装的版本与更新核验来源。"
+          }
+        }
+      }
+    },
+    "About this app": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关于此应用"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

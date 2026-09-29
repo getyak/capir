@@ -51,6 +51,14 @@ that signed updating is not configured and retain the release-download link. Kee
 the previous package for operator rollback; do not lower the feed's build number.
 Hosted workspace changes remain independent of the desktop binary.
 
+When a settings change spans the resident Web and macOS client, compare the
+active Web release revision with the approved source and read the installed
+client build before declaring the experience updated. In the running client,
+open the avatar menu and click its **Settings** entry: it must raise the same
+independent window as `⌘,` while preserving the main workspace. A shortcut-only
+check cannot verify the avatar path. If the resident Web is older, keep its
+release active until a clean replacement build and authenticated readback pass.
+
 ## Connection and diagnostics
 
 The optional menu-bar capture entry uses the same configured Web workspace login. On first use it discloses the current workspace and available image processors before an intentional selection can upload. The device-owned capture permission is separate from that login. The ordinary path is configurable shortcut, region selection and release; the Agent then processes an image-only Session message. Settings → This device controls the menu-bar icon, shortcut, default preview choice and optional top status hint. Hiding the icon leaves the main window and Settings reachable. An unadmitted screenshot is encrypted for bounded device recovery, while an admitted image follows the workspace Session/source lifecycle.

@@ -658,6 +658,24 @@ struct RelationshipMenuView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        expandedDestination(AppVersionStatusView())
+                    } label: {
+                        RelationshipMenuUtilityRow(
+                            systemImage: "info.circle",
+                            title: appLanguage.text("Version & status"),
+                            detail: appLanguage.text(
+                                "Installed build on this device and update-check source."
+                            ),
+                            value: InstalledAppVersion.label()
+                        )
+                    }
+                    .accessibilityIdentifier("open-version-status")
+                } header: {
+                    Text(appLanguage.text("About this app"))
+                }
+
+                Section {
                     if !proposals.isEmpty {
                         NavigationLink {
                             expandedDestination(

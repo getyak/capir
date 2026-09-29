@@ -246,10 +246,12 @@ and the [Auth.js Apple provider](https://authjs.dev/getting-started/providers/ap
 Real Apple secrets are not present in this repository. Missing or malformed
 config keeps the provider unavailable; nothing is faked as enabled.
 
-The avatar menu opens `/workspace/settings`, workspace management, and internal
-test workspaces. Settings require a backend session and never use the legacy
-fixture fallback. Profile names and workspace names are editable; email and
-provider identity remain unchanged.
+On Web, the avatar menu opens `/workspace/settings` inside the workspace. In the
+macOS client, its Settings entry and `⌘,` open the same independent native
+Settings window; Web-owned account panes remain bound to the backend session,
+while device controls remain local. Settings never use the legacy fixture
+fallback. Profile names and workspace names are editable; email and provider
+identity remain unchanged.
 
 ## Ownership and management
 
