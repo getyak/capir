@@ -293,8 +293,9 @@ final class WorkspaceSettingsTests: XCTestCase {
     @MainActor
     func testBrowserFailureRecordsFailureAndKeepsDeviceControls() throws {
         let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        var allowBrowser = false
         let browser = WorkspaceBrowser(origin: origin,
-                                      accountBrowser: AccountSettingsBrowser(openURL: { _ in false }))
+                                      accountBrowser: AccountSettingsBrowser(openURL: { _ in allowBrowser }))
         browser.webView.stopLoading()
         XCTAssertFalse(browser.requestAccountSettings(.overview))
         let message = try XCTUnwrap(browser.browserLaunchFailure)
@@ -304,9 +305,31 @@ final class WorkspaceSettingsTests: XCTestCase {
         for section in WorkspaceSettingsSection.allCases {
             XCTAssertTrue(WorkspaceSettingsPane.resolve(selection: section).isNativeDeviceControl)
         }
-        // Retrying clears the stale failure instead of stacking notices.
+        // A plain workbench retry must not erase a refused browser handoff.
         browser.retry()
+        XCTAssertNotNil(browser.browserLaunchFailure)
+        // Only a successful handoff clears it.
+        allowBrowser = true
+        XCTAssertTrue(browser.requestAccountSettings(.overview))
         XCTAssertNil(browser.browserLaunchFailure)
+    }
+
+    /// Publishing the desktop chrome resets the content controller. The settings
+    /// paint guard has to survive that reset, otherwise a client-side route change
+    /// could paint Web account settings inside the embedded workbench.
+    @MainActor
+    func testPublishingDesktopChromeKeepsThePaintGuard() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let browser = WorkspaceBrowser(origin: origin)
+        browser.webView.stopLoading()
+        browser.publishDesktopChrome(state: DesktopUpdatePresentation())
+        let sources = browser.webView.configuration.userContentController.userScripts.map(\.source)
+        XCTAssertTrue(sources.contains(WorkspaceSettingsPaintGuard.scriptSource),
+                      "The route-change guard must be reinstalled after chrome is published")
+        XCTAssertTrue(sources.contains { $0.contains("ts-settings-paint-guard") },
+                      "The hiding stylesheet must be reinstalled after chrome is published")
+        XCTAssertTrue(sources.contains { $0.contains("talentSignalDesktop") })
+        XCTAssertEqual(sources.count, WorkspaceBrowser.workbenchUserScripts(chromeScript: "x").count)
     }
 
     // MARK: Draft preservation, handoff and recovery

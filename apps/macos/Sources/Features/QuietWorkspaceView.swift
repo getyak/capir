@@ -111,6 +111,17 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         return configuration
     }
 
+    /// The exact scripts every workbench web view carries once the desktop
+    /// chrome is published. Publishing resets the content controller, so the
+    /// settings paint guard has to be part of this list or a client-side route
+    /// change could paint Web account settings inside the app.
+    static func workbenchUserScripts(chromeScript: String) -> [WKUserScript] {
+        WorkspaceSettingsPaintGuard.userScripts + [
+            DesktopUpdateClickBridge.userScript,
+            WKUserScript(source: chromeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true),
+        ]
+    }
+
     init(origin: WorkspaceOrigin, initialURL: URL? = nil,
          accountBrowser: AccountSettingsBrowser? = nil) {
         self.origin = origin
@@ -225,7 +236,8 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     func retry() {
         failure = nil
-        browserLaunchFailure = nil
+        // A refused browser handoff stays on screen until it succeeds or the
+        // reader dismisses it; a plain workbench retry does not retry it.
         if let current = webView.url,
            let transition = WorkspaceSurfacePolicy.workbenchSettingsTransition(
             from: lastWorkbenchURL, to: current, origin: origin) {
@@ -402,8 +414,9 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         let script = "if (window.location.origin === \(originJSON)) { window.talentSignalDesktop = \(json); if (document.documentElement) document.documentElement.dataset.desktopSurface = \(json).surface; else document.addEventListener('DOMContentLoaded', () => { document.documentElement.dataset.desktopSurface = \(json).surface; }, { once: true }); window.dispatchEvent(new Event('talent-signal-desktop')); }"
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
-        controller.addUserScript(DesktopUpdateClickBridge.userScript)
-        controller.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        for userScript in Self.workbenchUserScripts(chromeScript: script) {
+            controller.addUserScript(userScript)
+        }
         if let current = webView.url, origin.contains(current) {
             webView.evaluateJavaScript(script, completionHandler: nil)
         }

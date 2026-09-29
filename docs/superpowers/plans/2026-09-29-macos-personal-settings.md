@@ -262,9 +262,7 @@ Independent review (Codex, read-only, adversarial, 2026-09-29) found:
    KVO handler then schedules the browser handoff and workbench restore
    asynchronously, so Next.js settings content may render in the visible workbench
    WebView before the restore runs. The same class of race was previously covered by
-   the removed probe machinery. Not yet fixed; the smallest fix is to make the
-   embedded surface non-painting (hidden/blanked) for the duration of the restore,
-   Not yet fixed at review time.
+   the removed probe machinery.
    **Resolution (commit `df3464ae`):** the embedded surface is never hidden by native
    state that could outlive the restore and replace the launch-failure banner with a
    blank workbench. Instead `WorkspaceSettingsPaintGuard` runs at document start, marks
@@ -282,6 +280,19 @@ Independent review (Codex, read-only, adversarial, 2026-09-29) found:
    change and on a throwing `history.pushState`, computes to `visibility: hidden` after
    the settings route change, and after the restore is visible again with the unsent
    draft intact. `TalentSignalMacTests` 239 tests / 8 skipped / 0 failures, exit 0.
+   **Follow-up P1, found by the final review and fixed — publishing the desktop
+   chrome removed the guard.** `publishDesktopChrome` called
+   `removeAllUserScripts()` after the configuration had installed the guard, so the
+   shipped web view lost both halves before the first load, and the paint test — which
+   built a web view from the configuration alone — could not see it.
+   `WorkspaceBrowser.workbenchUserScripts(chromeScript:)` is now the single list of
+   scripts every workbench web view carries after the reset, and it starts with the
+   guard. Negative control: with the guard removed from that list,
+   `testPublishingDesktopChromeKeepsThePaintGuard` fails (2 failures, exit 65) and
+   passes with it. Two P2s from the same review are fixed with it: `retry()` no longer
+   erases a refused browser handoff (only a successful open or the banner's own 关闭
+   does), and the non-restorable workbench notices no longer claim the native window
+   opened — they say the account settings opened in the default browser.
 2. **P2, fixed — screenshot failure recovery was missing from search.** The new
    inventory dropped `capture-failure` (“截图处理失败时怎么办”) that exists in
    `origin/main`. Restored in `WorkspaceSettingsSearch.swift`, now routing to the

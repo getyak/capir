@@ -129,11 +129,15 @@ enum WorkspaceSettingsPaintGuard {
         return String(array.dropFirst().dropLast())
     }
 
+    /// Both halves, in the order every workbench web view must carry them. The
+    /// chrome publisher removes all user scripts before reinstalling its own, so
+    /// this list is the single definition of what survives that reset.
+    static var userScripts: [WKUserScript] { [userScript, styleScript] }
+
     /// Installs both halves of the guard on a configuration that has not been
     /// used to build a web view yet.
     static func install(on controller: WKUserContentController) {
-        controller.addUserScript(userScript)
-        controller.addUserScript(styleScript)
+        for script in userScripts { controller.addUserScript(script) }
     }
 
     /// True when `url` is a Web account settings route on `origin`. Mirrors the
