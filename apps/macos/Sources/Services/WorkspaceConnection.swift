@@ -105,6 +105,7 @@ final class WorkspaceConnectionProbe: NSObject, URLSessionTaskDelegate, @uncheck
 /// Only explicit main-frame links from the configured workspace can request native chrome actions.
 enum DesktopChromeAction: Equatable {
     case settings, updates
+    case accountSettings(AccountSettingsDestination)
     case installUpdate(UUID)
 
     static func resolve(_ target: URL, source: URL?, origin: WorkspaceOrigin,
@@ -118,6 +119,21 @@ enum DesktopChromeAction: Equatable {
                   items.count == 1, items[0].name == "offer", let value = items[0].value,
                   let offerID = UUID(uuidString: value) else { return nil }
             return .installUpdate(offerID)
+        }
+        // Account settings always open in the default browser. Only the fixed
+        // allowlisted section may cross the boundary; nothing else is read from
+        // the URL, so no token, email or account identifier can ride along.
+        if host == "account-settings" {
+            // `queryItems` is nil when there is no query at all, which is the
+            // ordinary "open the settings overview" link.
+            let items = URLComponents(url: target, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            guard items.count <= 1 else { return nil }
+            if let item = items.first {
+                guard item.name == "section", let value = item.value,
+                      let destination = AccountSettingsDestination(rawValue: value) else { return nil }
+                return .accountSettings(destination)
+            }
+            return .accountSettings(.overview)
         }
         guard target.query == nil else { return nil }
         switch host {

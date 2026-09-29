@@ -1,0 +1,207 @@
+# Personal Settings Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
+
+**Goal:** Make native Mac settings independent of remote Web availability and open personal account management explicitly in the browser.
+
+**Architecture:** Keep main-workspace WebView, existing authentication and server authorization. Native Settings owns device controls; a validated browser destination owns account links. Remove settings-only embedding and probing.
+
+**Tech Stack:** SwiftUI/AppKit/WebKit, Next.js/React/TypeScript, XCTest, Vitest.
+
+**Spec:** [Approved design](../specs/2026-09-29-macos-personal-settings-design.md).
+
+## Global Constraints
+
+- No team UI, invitations, workspace switching, identity/data migration or new SSO.
+- Preserve all existing account ownership and sensitive-operation reauthentication.
+- Production uses HTTPS; retain the explicit existing loopback development exception.
+- Never transfer cookies, bearer tokens, email addresses or account IDs in handoff URLs.
+- Native settings stays available offline and preserves the main conversation draft.
+- Browser identity is explicit; independent sessions are not claimed to match automatically.
+- No product changes until this plan is reviewed and an execution method selected.
+
+## Review Focus
+
+- Old Web deployment: ordinary settings navigation must work without desktop surface markers (Tasks 1, 5).
+- Different browser identity: clearly show the actual account and mutate only that account (Tasks 3, 4).
+- Expired login on a deep link: preserve only allowlisted settings sections (Task 3).
+- Late refresh after logout or origin change: never restore prior account state (Tasks 4, 5).
+- Missing endpoint or failed OS browser launch: keep native controls usable and show actionable local feedback (Tasks 1, 2).
+
+## Task 1: Safe browser handoff
+
+**Files:** Create `apps/macos/Sources/Services/AccountSettingsBrowser.swift`;
+create `apps/macos/Tests/AccountSettingsBrowserTests.swift`;
+read `apps/macos/Sources/Domain/WorkspaceOrigin.swift` (locate owning file if moved).
+
+**Interfaces:** `AccountSettingsDestination` enum with `overview`, `account`,
+`appearance`, `connections`; `url(in origin: WorkspaceOrigin) -> URL` constructs
+only `/workspace/settings` plus the fixed section query. `AccountSettingsBrowser`
+is MainActor-owned and receives `openURL: (URL) -> Bool` (production:
+`NSWorkspace.shared.open`); `open(_:origin:) -> Bool` returns OS acceptance only.
+
+- [x] Inspect attached worktrees and current remote default branch; select a free
+  managed checkout or create `codex/personal-settings-browser`. Record its base SHA.
+  Inspect installed-build source divergence before edits; preserve screenshot-agent
+  and unrelated work. Do not overwrite another active checkout.
+- [x] Add `testDestinationsAreFixedSameOrigin`, `testNoIdentityInURL`,
+  `testFailedOpenReturnsFalse`, `testMissingOriginDoesNotOpen`, and
+  `testLegacyWebNeedsNoProbe`. Assert exact paths/queries, zero network probes,
+  no callback when origin is absent, and injected opener failure propagation.
+- [x] Run the new XCTest class and confirm failure before implementation.
+- [x] Implement the enum and opener using the existing validated origin type.
+  Never accept a caller-provided arbitrary destination string.
+- [x] Rerun the class; all tests pass. Commit only this task's files.
+
+## Task 2: Native-only settings and explicit destinations
+
+**Files:** Modify `apps/macos/Sources/Features/WorkspaceDesktopSettings.swift`,
+`apps/macos/Sources/Features/QuietWorkspaceView.swift`,
+`apps/macos/Sources/App/TalentSignalMacApp.swift`;
+test `apps/macos/Tests/WorkspaceSettingsTests.swift`;
+modify `apps/web/components/workspace-account-menu.tsx` and its owning tests.
+
+**Interfaces:** Account links use Task 1's opener. Device settings commands retain
+SwiftUI `openSettings`; no account selection creates a settings WebView.
+
+- [x] Add failing tests covering the device-only command, browser routing, and
+  browser-failure recovery. Named as `testSettingsCommandDoesNotNavigateTheConversation`,
+  `testAccountSettingsNeverOpensTheNativeWindow`, `testSettingsOwnedRouteOpensBrowserNotNativeWindow`,
+  `testThisDeviceAndUpdatesStayNativeWithoutAnOrigin`,
+  `testBrowserFailureRecordsFailureAndKeepsDeviceControls`. Assert distinct actions
+  and fixed copy “此 Mac 设置…” / “账号与偏好 ↗”; account link discloses browser
+  session independence.
+- [x] Run the focused native tests and account-menu tests; confirm new assertions fail.
+- [x] Make the native window title “此 Mac 设置”; retain existing supported device,
+  permissions, diagnostics, connection and update controls. Put connection under
+  advanced disclosure. Provide inline retry on rejected browser launch.
+- [x] Route explicitly user-activated account-management actions to the browser;
+  preserve existing trust checks. Never launch a browser from an untrusted frame
+  or automatic redirect. Ordinary Web users keep ordinary Web settings navigation.
+- [x] Remove settings-only embedded browser/probe/unsupported surface state, and
+  unused settings chrome helpers. Preserve main WebView, calendar and update bridges.
+  Reconcile against the chosen base so newer capture features are not regressed.
+- [ ] Rerun focused tests and native build. Commit the task. Native side is green;
+  the Web account-menu distinction in `apps/web/components/workspace-account-menu.tsx`
+  is still pending.
+
+## Task 3: Browser identity and login continuity
+
+**Files:** Modify `apps/web/app/workspace/settings/page.tsx`,
+`apps/web/lib/settings-sections.ts`, `apps/web/components/settings-workspace.tsx`;
+create `apps/web/lib/settings-return-path.ts` and its `.test.ts`;
+extend `apps/web/lib/settings-page-render.test.ts` and
+`apps/web/components/settings-workspace.test.tsx`.
+
+**Interfaces:** `settingsReturnPath(section: string | null | undefined): string`
+returns `/workspace/settings` for unknown/overview values and a fixed section query
+for existing allowlisted sections. No arbitrary URLs accepted.
+
+- [ ] Add tests: `preservesAccountSectionAfterLogin`, `unknownSectionUsesOverview`,
+  `externalURLCannotBecomeReturnTarget`, `showsAuthenticatedIdentity`, and
+  `failedAccountReadShowsRetryNotStaleIdentity`. Include arrays/malformed query input
+  at the request boundary and ensure it never becomes a redirect destination.
+- [ ] Run `pnpm --filter @talent-signal/web exec vitest run lib/settings-return-path.test.ts lib/settings-page-render.test.ts components/settings-workspace.test.tsx`;
+  confirm intended failures.
+- [ ] Resolve section before unauthenticated redirect; encode the helper's return
+  path once. Keep existing auth/step-up machinery unchanged.
+- [ ] Show the authoritative signed-in identity and existing account-change route.
+  Inventory workspace-labeled controls: retain meaningful personal controls and
+  existing restricted admin behavior without introducing team UX. Keep existing
+  section IDs as compatibility aliases. Label browser-only preferences honestly.
+- [ ] Rerun the command plus settings login-method tests; commit.
+
+## Task 4: Account boundaries, save and refresh
+
+**Files:** Extend `apps/web/app/workspace/settings/actions.test.ts`,
+`apps/web/components/settings-workspace.test.tsx`; create
+`apps/web/lib/settings-account-isolation.test.ts`;
+inspect `apps/web/lib/server/accountBackend.ts` and the existing account refresh
+owner before changing behavior. Use the existing refresh coordinator, not a second poller.
+
+**Interfaces:** Existing authenticated settings actions remain the only mutation
+path; account identity comes from verified server sessions, never handoff parameters.
+
+- [ ] Add two synthetic-account tests: account B's request cannot read or modify A
+  by substituting an ID; browser B's normal save modifies B only. Exercise the real
+  authorization boundary in the integration fixture, not a mocked successful guard.
+- [ ] Add tests for failed save retaining draft, canonical readback before success,
+  focus refresh after profile changes, and ignoring late results after logout/origin
+  change. Record existing passing coverage before adding any duplicate tests.
+- [ ] Run targeted settings suites. If a new test fails, implement the smallest fix
+  in the existing action or refresh owner; explicitly record actual files in this plan.
+- [ ] Verify sensitive login-method regression tests still pass; commit tested changes.
+
+## Task 5: Real-surface acceptance and delivery
+
+**Files:** Update `docs/operations/macos-distribution.md`, `docs/design-system.md`
+and relevant account guidance only where shipped behavior changes. Record evidence
+in `docs/evaluations/2026-09-29-personal-settings/` using synthetic accounts.
+
+- [ ] Run `pnpm macos:check`, the focused Web suites from Tasks 3–4,
+  `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Expected: successful exit;
+  identify any unrelated baseline failures precisely.
+- [ ] Exercise real candidate app with offline service, previous Web build, absent
+  endpoint, failed browser opener, signed-out browser and a different signed-in
+  synthetic identity. Record app/Web SHAs and exact outcomes.
+- [ ] Keep an unsent chat draft while opening settings, opening the browser, saving
+  a synthetic profile edit and returning to the app. Verify draft preservation,
+  canonical Web readback and refreshed identity. Repeat refresh failure and logout.
+- [ ] Capture native Settings and browser pages in light/dark appearance; check
+  keyboard navigation and VoiceOver. No unsupported-Web overlay is reachable from
+  native Settings. Unsupported remote operations remain honest local failures.
+- [ ] Update canonical documentation; run `pnpm docs:check` and `git diff --check`.
+  Baseline: docs check currently reports two unrelated broken links in
+  `output/evaluation-first-agent-platform-opik-prd-original-en.md`; do not silently
+  count that as a pass or fix unrelated content in this change.
+- [ ] Perform final independent branch review according to selected execution method.
+  Package the verified binary following macOS distribution/storage instructions.
+  Preserve current app and drafts before any replacement/relaunch; do not call a
+  package build proof of installed behavior. Report any remaining installation gate.
+
+## Evidence log
+
+Base: branch `codex/personal-settings-browser`, base SHA `0c5623e3`, rebased onto
+`origin/main` (`f015f56c`). `WorkspaceDesktopSettings.swift` verified byte-identical
+(sha256 `ac5df981e2f917ac0be536dbf571a4a71a3d541a`) to the installed build-33 copy in
+the `mac-screenshot-agent` worktree before edits, so no newer capture capability was
+dropped.
+
+Task 1 evidence: `xcodebuild -project apps/macos/TalentSignalMac.xcodeproj -scheme
+TalentSignalMac -destination 'platform=macOS' -only-testing:TalentSignalMacTests/AccountSettingsBrowserTests test`
+→ exit 0; 5 tests, 0 failures. Each new test was observed failing before the
+implementation existed.
+
+Task 2 native evidence: `bash scripts/macos/generate.sh` then
+`xcodebuild ... -derivedDataPath /tmp/ts-derived-t2 -only-testing:TalentSignalMacTests test`
+→ `Executed 237 tests, with 8 tests skipped and 0 failures (0 unexpected) in 4.225`,
+`** TEST SUCCEEDED **`. The 8 skips are pre-existing, unrelated to this change.
+
+Defects found by running the real suites rather than by inspection:
+
+1. `apps/macos/Sources/Capture/CaptureMenuView.swift:40` still set the removed
+   `WorkspaceSettingsSection.device`; changed to `.general` so the screenshot menu
+   keeps a working device settings entry.
+2. `DesktopChromeAction.resolve` rejected the bare `talentsignal-desktop://account-settings`
+   link because `queryItems` is `nil` when a URL has no query at all. Fixed with a
+   `?? []` default; this was a real user-visible bug in the new handoff, not a test bug.
+
+Test disposition (no wholesale replacement): the 1103-line suite was edited in place.
+Only the superseded embedded-settings-probe and account-edit surface-classification
+cases were deleted; origin validation, navigation, trusted-click, draft refusal,
+restore-plan, search routing and the `WKWebView` `pushState` KVO evidence test were
+retained and adapted to the new `WorkbenchSettingsTransition(destination:restoreURL:)`,
+`WorkspaceSettingsPane`, and `AccountSettingsBrowser` initializer-injection seams.
+
+Limitations: `RUN_MACOS_UI_TESTS` was left at its default (`0`), so
+`WorkspaceSettingsUITests.swift` compiles but has not been executed here; the Web
+account-menu distinction and browser-side sections are not yet implemented; no
+real-surface acceptance run has happened yet.
+
+## Plan self-review and status
+
+Spec coverage: routing/native separation (1–2), browser identity/auth (3), tenant
+isolation and refresh (4), legacy/offline/real-surface proof and docs (5).
+No new authentication scheme, team subsystem, dependency or migration is planned.
+Execution started. Recommended method: native sequential implementation, then
+an independent final review; the five tasks share routing and authentication seams.

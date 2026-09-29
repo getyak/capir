@@ -38,7 +38,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
         app.terminate()
     }
 
-    func testHelpLabelAndNativeSearchStayOnAResolvedDestination() {
+    func testDeviceSettingsAndNativeSearchStayUsableOffline() {
         let app = XCUIApplication()
         app.launchArguments = [
             "-workspace.web.origin", "http://127.0.0.1:1",
@@ -48,10 +48,15 @@ final class WorkspaceSettingsUITests: XCTestCase {
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         app.typeKey(",", modifierFlags: [.command])
 
-        let help = app.buttons["settings.section.advanced"]
-        XCTAssertTrue(help.waitForExistence(timeout: 20))
-        XCTAssertEqual(help.label, "帮助与诊断")
-        XCTAssertFalse(app.buttons["settings.section.more"].exists)
+        let updates = app.buttons["settings.section.updates"]
+        XCTAssertTrue(updates.waitForExistence(timeout: 20))
+        XCTAssertEqual(updates.label, "软件更新")
+        // Removed embedded-settings rows must not linger in the native rail.
+        XCTAssertFalse(app.buttons["settings.section.advanced"].exists)
+        XCTAssertFalse(app.buttons["settings.section.profile"].exists)
+        // Account settings are browser-owned and say so before the click.
+        XCTAssertTrue(app.buttons["settings.account.browser"].exists)
+        XCTAssertEqual(app.buttons["settings.account.browser"].label, "账号与偏好 ↗")
 
         let field = app.textFields["settings.search.field"]
         XCTAssertTrue(field.waitForExistence(timeout: 10))
