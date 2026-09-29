@@ -322,10 +322,12 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
           ACCOUNT_EVALUATION_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/account_proof
+          ACCOUNT_SETTINGS_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/account_proof
         run: |
           pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE account_proof'); } finally { await pool.end(); }"
           DATABASE_URL="$ACCOUNT_EVALUATION_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runAccountManagementEvaluation.ts
+          pnpm --filter @talent-signal/backend exec vitest run src/modules/accountSettingsIsolation.integration.test.ts
 
       - name: Exercise saved regression lifecycle with a synthetic provider
         env:

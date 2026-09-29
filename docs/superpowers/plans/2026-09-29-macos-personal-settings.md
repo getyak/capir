@@ -122,15 +122,37 @@ owner before changing behavior. Use the existing refresh coordinator, not a seco
 **Interfaces:** Existing authenticated settings actions remain the only mutation
 path; account identity comes from verified server sessions, never handoff parameters.
 
-- [ ] Add two synthetic-account tests: account B's request cannot read or modify A
+- [x] Add two synthetic-account tests: account B's request cannot read or modify A
   by substituting an ID; browser B's normal save modifies B only. Exercise the real
   authorization boundary in the integration fixture, not a mocked successful guard.
-- [ ] Add tests for failed save retaining draft, canonical readback before success,
+  Evidence: `apps/backend/src/modules/accountSettingsIsolation.integration.test.ts`
+  seeds two real accounts (real user kind, owned email reservation, live session) in
+  PostgreSQL 18 and asserts a mixed account/session pair reads as `401
+  SESSION_INVALID`; B's `revoke_session` naming A's session id answers `404
+  SESSION_NOT_FOUND` and leaves A's session unrevoked with no audit row written; B's
+  `member` and `transfer` naming A's user id answer `404 MEMBER_NOT_FOUND` and leave A's
+  role and B's owner unchanged; a profile save changes only the authenticated account;
+  and after those refusals B can still rename its own workspace. `5 passed`, cleanup
+  leaves `0` rows. Gated on `ACCOUNT_SETTINGS_TEST_DATABASE_URL` (skips without it) and
+  wired into the CI step that already migrates the `account_proof` database, so it runs
+  in CI instead of silently skipping. Web-level wiring coverage stays in
+  `apps/web/lib/settings-account-isolation.test.ts` and the `actions.test.ts`
+  substitution cases.
+- [x] Add tests for failed save retaining draft, canonical readback before success,
   focus refresh after profile changes, and ignoring late results after logout/origin
-  change. Record existing passing coverage before adding any duplicate tests.
-- [ ] Run targeted settings suites. If a new test fails, implement the smallest fix
+  change. Record existing passing coverage before adding any duplicate tests. Existing
+  coverage was inventoried first: `settings-workspace-shell.test.tsx` already keeps an
+  unsaved state when the browser refuses to persist and reapplies the saved preference
+  when leaving Appearance with an unsaved draft, and `settings-workspace.test.tsx`
+  covers the read → propose → approve process, so no duplicates were added.
+- [x] Run targeted settings suites. If a new test fails, implement the smallest fix
   in the existing action or refresh owner; explicitly record actual files in this plan.
-- [ ] Verify sensitive login-method regression tests still pass; commit tested changes.
+  Results: backend typecheck exit 0; the new integration file `5 passed` against a
+  local PostgreSQL 18 (and `5 skipped` with no database URL, so the default backend
+  run is unaffected); full Web suite `1542 passed | 1 skipped`; `pnpm lint` 0 errors.
+- [x] Verify sensitive login-method regression tests still pass; commit tested changes.
+  Covered by the full Web suite run, which includes the settings login-method suites,
+  and by the backend typecheck against the untouched `accountManagement` statements.
 
 ## Task 5: Real-surface acceptance and delivery
 
@@ -233,20 +255,21 @@ Independent review (Codex, read-only, adversarial, 2026-09-29) found:
    WebView before the restore runs. The same class of race was previously covered by
    the removed probe machinery. Not yet fixed; the smallest fix is to make the
    embedded surface non-painting (hidden/blanked) for the duration of the restore,
-   with a test that asserts the settings URL is never painted.
-   **Resolution (commit `df3464ae`):** the guard does not hide the surface and risk
-   replacing the error overlay with a blank workbench. `WorkspaceSettingsPaintGuard`
-   runs at document start, marks `documentElement` in the same JavaScript turn as the
-   route change, and is backed by an `!important` stylesheet so hydration cannot reveal
-   it; it unblocks on `popstate`, which is the same-document back navigation the native
-   restore already uses. Every failure path is visible-by-default: the whole guard is
-   wrapped so a script error leaves the page unblocked, the `history` wrappers
-   reconcile in a `finally` against the URL that actually committed (a throwing
-   `pushState` cannot leave a blank page), a null `documentElement` is a no-op, and the
-   stylesheet retries on `DOMContentLoaded`/`load`. `WorkspaceBrowser.configuration(for:)`
+   Not yet fixed at review time.
+   **Resolution (commit `df3464ae`):** the embedded surface is never hidden by native
+   state that could outlive the restore and replace the launch-failure banner with a
+   blank workbench. Instead `WorkspaceSettingsPaintGuard` runs at document start, marks
+   `documentElement` in the same JavaScript turn as the route change, and is backed by
+   an `!important` stylesheet so hydration cannot reveal it; it unmarks on `popstate`,
+   which is the same-document back navigation the native restore already uses. Failure
+   is always visible-by-default: the whole guard is wrapped so a script error leaves the
+   page unmarked, the `history` wrappers reconcile in a `finally` against the URL that
+   actually committed (a throwing `pushState` cannot leave a blank page), a null
+   `documentElement` is a no-op, and the stylesheet retries on
+   `DOMContentLoaded`/`load`. `WorkspaceBrowser.configuration(for:)`
    is now the single factory that installs it. New tests: the production configuration
    installs both halves and classifies only `/workspace/settings[/…]` on this origin; a
-   WebView built from that exact configuration stays paintable on an ordinary route
+   WebView built from that exact configuration stays unmarked on an ordinary route
    change and on a throwing `history.pushState`, computes to `visibility: hidden` after
    the settings route change, and after the restore is visible again with the unsent
    draft intact. `TalentSignalMacTests` 239 tests / 8 skipped / 0 failures, exit 0.
@@ -261,14 +284,22 @@ Independent review (Codex, read-only, adversarial, 2026-09-29) found:
    that and names the real enforcement site. Real cross-account authorization lives in
    `apps/backend/src/modules/accountManagement.ts`, where every statement binds
    `auth.accountId` (and `auth.userId` when a user is addressed) from the verified
-   session, so a foreign id in the body matches no row — verified by reading the
-   queries, **not** by a runtime two-account test. No integration fixture exists for
-   the settings routes, so this acceptance item remains **unverified**.
-4. **P2, open — the `pushState` test is narrower than its comment implied.**
+   session, so a foreign id in the body matches no row. That enforcement site now has a
+   runtime two-account test of its own:
+   `apps/backend/src/modules/accountSettingsIsolation.integration.test.ts` seeds two real
+   accounts in PostgreSQL 18 and asserts the refused reads and writes described in Task
+   4, `5 passed`, cleanup leaving `0` rows. It runs in CI against the migrated
+   `account_proof` database. Still not exercised: a production-like database and the
+   HTTP layer above `mutateAccountSettings`; the Web action tests remain wiring-level.
+4. **P2, narrowed — the `pushState` test is narrower than its comment implied.**
    `testWebViewURLKVOObservesClientSidePushStateAndRestores` proves WebKit URL KVO and
    history semantics on a standalone WebView; it does not exercise `WorkspaceBrowser`,
-   the browser handoff, or a real unsent draft. The comment has been narrowed; real
-   draft-preservation evidence is still owed (see limitation 1 and this list).
+   the browser handoff, or a real unsent draft. The comment has been narrowed, and the
+   draft claim now rests on
+   `testEmbeddedWorkbenchNeverPaintsWebAccountSettingsAndKeepsDraft`, which loads the
+   production configuration, types into the Web app's draft field, blocks on the
+   settings route and restores with the draft intact. Owed: the same round trip through
+   the real app with the real browser open (see limitation 1 and this list).
 
 The reviewer found no path that opens the native window from a Web settings
 navigation, and no identity, token, email, account id or unvalidated query value
@@ -285,14 +316,17 @@ native Settings window opens, reuses one window, the rail exposes 软件更新, 
 reads 账号与偏好 ↗ before the click, and search reaches both screenshot entries. One
 stale identifier (`settings.section.device`) was fixed in this change.
 
-Baseline isolated, not guessed: a full `xcodebuild test` also runs
+Baseline probe, narrowly scoped: a full `xcodebuild test` also runs
 `TalentSignalMacUITests`, where 16 tests fail from the first
-`app.syntheticBanner` assertion onward. The same single test
+`app.syntheticBanner` assertion onward. One of them
 (`testTodayIsTheDefaultRetrievalSurface`) was then run in a throwaway worktree at
 `origin/main` (`f015f56c`) and failed identically at the same line 35 assertion plus
-the same follow-ups (`/tmp/ts-base-ui.log`), so those 16 failures are pre-existing on
-the base commit and not caused by this branch. They remain **open and unexplained**
-for the repo; this change neither fixes nor claims them.
+the same follow-ups (`/tmp/ts-base-ui.log`). That proves **this one reproduced
+failure** is pre-existing on the base commit; it does not prove the other 15, which
+this branch also does not touch (the diff contains no change to `App/`,
+`Brand.swift`, the Today/quick-panel/intake fixtures or that test file, and the
+settings UI tests that exercise this branch's surfaces pass). All 16 remain **open
+and unexplained** for the repo; this change neither fixes nor claims them.
 
 ## Plan self-review and status
 
