@@ -329,6 +329,8 @@ test("automatic releases classify all changes since the last trusted receipt", (
   assert.match(releaseWorkflow, /Confirm exact TestFlight build is valid/);
   assert.match(releaseWorkflow, /existing_sha="\$\(git rev-list -n 1 "\$RELEASE_TAG"\)"/);
   assert.match(releaseWorkflow, /Tag \$RELEASE_TAG already points to the verified release commit/);
+  assert.match(releaseWorkflow, /scripts\/ci\/ensure-release-assets\.sh/);
+  assert.match(releaseWorkflow, /grep -Fxq 'testflight-release-receipt\.json'/);
   assert.match(releaseWorkflow, /gh release upload "\$RELEASE_TAG"[\s\S]*?--clobber/);
 
   assert.match(releaseWorkflow, /TALENT_SIGNAL_API_BASE_URL/);

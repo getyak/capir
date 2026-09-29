@@ -33,7 +33,8 @@ case "$path_set" in
     paths+=(
       .github/workflows/release-ios.yml
       scripts/ci/has-ios-changes.sh
-      scripts/ci/next-ios-version.sh
+      scripts/ci/product-release-version.sh
+      scripts/ci/ensure-release-assets.sh
       scripts/ci/testflight-release-receipt.cjs
       scripts/ci/wait-for-testflight-build.mjs
     )

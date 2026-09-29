@@ -159,7 +159,8 @@ jobs:
         run: |
           ./scripts/ci/check-actions-pinned.sh
           ./scripts/ci/check-secrets.sh
-          ./scripts/ci/test-next-ios-version.sh
+          ./scripts/ci/test-product-release-version.sh
+          ./scripts/ci/test-ensure-release-assets.sh
           node --test scripts/verify-secret-environment.test.mjs scripts/infisical/manifest.test.mjs scripts/infisical/migrate.test.mjs scripts/infisical/run.test.mjs
           node --test scripts/macos/release-prerequisites.test.mjs
           node --test scripts/check-architecture-boundaries.test.mjs
