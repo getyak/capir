@@ -39,7 +39,7 @@ candidate data · understanding never grants execution authority</sub>
 ## Download for macOS
 
 [Download and setup guide](docs/operations/macos-distribution.md) ·
-[macOS releases](https://github.com/getyak/talent-signal/releases?q=macos-)
+[Product releases with macOS downloads](https://github.com/getyak/talent-signal/releases)
 
 The native workspace supports Apple silicon and Intel Macs running macOS 14 or
 later. Connect it to your existing HTTPS workspace and sign in with your own

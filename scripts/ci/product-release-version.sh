@@ -11,6 +11,21 @@ tag_exists() {
 
 git fetch --tags --force origin
 
+# iOS and macOS may publish independently from the same verified commit. Reuse
+# one product tag for that commit even when the other platform published first.
+target_sha="$(git rev-parse HEAD)"
+same_sha_tag=""
+while IFS= read -r candidate; do
+  [[ "$candidate" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+  if [[ "$(git rev-list -n 1 "$candidate")" == "$target_sha" ]]; then
+    if [[ -n "$same_sha_tag" ]]; then
+      printf '::error::Multiple product tags point at this commit: %s and %s\n' "$same_sha_tag" "$candidate" >&2
+      exit 1
+    fi
+    same_sha_tag="$candidate"
+  fi
+done < <(git tag --list 'v*' --sort=-v:refname)
+
 if [ -n "$version_override" ]; then
   if [[ ! "$version_override" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     printf '::error::version_override must use semantic version format such as 0.2.0\n' >&2
@@ -19,12 +34,20 @@ if [ -n "$version_override" ]; then
 
   next_version="$version_override"
   release_tag="v$next_version"
-  if tag_exists "$release_tag"; then
-    printf '::error::Tag %s already exists\n' "$release_tag" >&2
+  if [[ -n "$same_sha_tag" && "$same_sha_tag" != "$release_tag" ]]; then
+    printf '::error::This commit already has product tag %s\n' "$same_sha_tag" >&2
     exit 1
   fi
+  if tag_exists "$release_tag" && [[ "$same_sha_tag" != "$release_tag" ]]; then
+    printf '::error::Tag %s belongs to another commit\n' "$release_tag" >&2
+    exit 1
+  fi
+elif [[ -n "$same_sha_tag" ]]; then
+  release_tag="$same_sha_tag"
+  next_version="${same_sha_tag#v}"
 else
-  latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1 || true)"
+  latest_tag="$(git tag --list 'v*' --sort=-v:refname |
+    awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ && !found {print; found=1}')"
   if [ -n "$latest_tag" ]; then
     base_version="${latest_tag#v}"
   else

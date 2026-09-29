@@ -591,7 +591,7 @@ struct WorkspaceDesktopSettings: View {
                 Text("新版本会在左下角提醒。点击“更新并重启”后，会下载、校验并重新打开应用，不再弹出确认。未点击时不会安装或重启。")
             }
             Section {
-                Link("版本记录与安装帮助", destination: URL(string: "https://github.com/getyak/talent-signal/releases?q=macos-")!)
+                Link("版本记录与安装帮助", destination: URL(string: "https://github.com/getyak/talent-signal/releases")!)
                 if !updater.isConfigured {
                     Text("正式签名更新尚未配置。可从版本记录下载已发布的安装包。")
                         .font(.caption).foregroundStyle(.secondary)
