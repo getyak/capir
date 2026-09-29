@@ -20,7 +20,7 @@ vi.mock("@/lib/server/workspaceSessions", () => ({
   workspaceSessionsBinding: () => "binding",
 }));
 
-import { POST, PUT } from "./route";
+import { GET, POST, PUT } from "./route";
 
 const draftId = "10000000-0000-4000-8000-000000000001";
 const requestId = "20000000-0000-4000-8000-000000000002";
@@ -54,6 +54,21 @@ beforeEach(() => {
 });
 
 describe("meeting draft edit and export authority route", () => {
+  it("reads one current draft for the bound Session without requiring a mutation header", async () => {
+    const response = await GET(new Request(`http://localhost:3000/api/meeting-drafts/${draftId}`, {
+      headers: { "x-workspace-session": "binding" },
+    }), context);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toMatchObject({ draft: activeDraft, session_version: "binding" });
+    expect(mocked.read).toHaveBeenCalledWith(draftId);
+    mocked.read.mockClear();
+    const stale = await GET(new Request(`http://localhost:3000/api/meeting-drafts/${draftId}`, {
+      headers: { "x-workspace-session": "stale" },
+    }), context);
+    expect(stale.status).toBe(409);
+    expect(mocked.read).not.toHaveBeenCalled();
+  });
   it("persists the exact optimistic edit and idempotency identity", async () => {
     const body = {
       expected_revision: 1,

@@ -2,24 +2,24 @@
 
 import { ArrowDown, ArrowUp, PencilSimple, Stop, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ThreadPrimitive } from "@assistant-ui/react";
 import { conversationHome } from "@/lib/conversation-local";
 import type { LegacyConversationRecovery } from "@/lib/conversation-legacy";
 import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
-import type { ConversationImageManifest } from "@talent-signal/contracts";
-import { ConversationProvenance, ConversationResponse } from "../conversation-response";
+import type { ConversationImageManifest, MemoryProposalItem } from "@talent-signal/contracts";
 import { ComposerAddMenu } from "../new-conversation-add-menu";
 import { WorkspaceComposer } from "../workspace-composer";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
-import { conversationNearBottom, sessionBlockTitle, sessionTurnBlocks } from "../session-workbench/session-presentation";
+import { conversationNearBottom } from "../session-workbench/session-presentation";
 import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
 import { ConversationImageStrip } from "./conversation-images";
 import { useConversation } from "./use-conversation";
-import { MemoryReviewCard } from "../memory-review/memory-review-card";
+import { sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
+import { SessionRuntime } from "./session-runtime";
 import styles from "./queued-conversation.module.css";
 
 const stages: Record<string, string> = { queued: "等待开始", preparing: "正在准备回复", thinking: "正在处理", contact_lookup: "正在查找相关人物", contact_read: "正在阅读相关记录", calendar_draft: "正在整理日程草稿", answer: "正在回复", responding: "正在回复", persisting: "正在保存回复", running: "正在处理" };
-function Identity() { return <div className={styles.identity}><span className={styles.mark} aria-hidden="true" />Talent Signal</div>; }
 // Admission may rewrite the draft URL only when the query is empty or holds
 // exactly one draft_session parameter for this session. A duplicated key or
 // any extra parameter is a separate navigation intent whose contents
@@ -114,11 +114,10 @@ export function QueuedConversation(props: Props) {
   const [editValue, setEditValue] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [away, setAway] = useState(false);
-  const [seconds, setSeconds] = useState(0);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
   const active = chat.snapshot?.active;
   const queued = chat.snapshot?.queued ?? [];
-  const turns = chat.detail?.turns ?? [];
+  const turns = useMemo(() => chat.detail?.turns ?? [], [chat.detail?.turns]);
   const imageCount = chat.attachments.length;
   const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && queued.length + chat.messages.length + (active ? 1 : 0) < 50;
   const activeVisible = active && !turns.some(turn => turn.id === active.message_id);
@@ -129,11 +128,31 @@ export function QueuedConversation(props: Props) {
   const contextLabel = chat.detail?.context_label ?? props.initialDetail?.context_label ?? "";
   const scopeLabel = personLabel && contextLabel ? `${personLabel} · ${contextLabel}` : personLabel || contextLabel || "未绑定联系人或关系情境";
   const status = chat.unavailable ? "这段对话已不可用" : chat.connection === "reconnecting" && hasContent ? "连接恢复中，消息已保留" : active?.cancel_requested ? "正在停止…" : active ? (stages[forming?.stage ?? active.stage ?? ""] ?? "正在处理") : paused ? "已暂停，可继续发送到队列" : queued.length ? `${queued.length} 条消息等待处理` : "";
-  useEffect(() => {
-    if (!active?.run_id) return;
-    const start = Date.now(); const timer = setInterval(() => setSeconds(Math.floor((Date.now() - start) / 1000)), 1000);
-    return () => clearInterval(timer);
-  }, [active?.run_id]);
+  const projectedMessages = useMemo(() => sessionMessages({
+    turns, active: activeVisible ? active : null, preview: forming,
+  }), [turns, activeVisible, active, forming]);
+  const sourceImagesByMessageId = useMemo(() => Object.fromEntries(
+    turns.map((turn) => [turn.id, turn.images ?? []]),
+  ), [turns]);
+  const sourceTextByMessageId = useMemo(() => Object.fromEntries(
+    turns.map((turn) => [turn.id, turn.objective ?? ""]),
+  ), [turns]);
+  const renderContext = {
+    binding: props.chatBinding,
+    meetingBinding: props.detailBinding,
+    entryCapability: chat.entryCapability ?? props.entryCapability ?? null,
+    scope: props.scope,
+    sessionId: chat.detail?.session_id ?? id ?? "",
+    status,
+    sourceImagesByMessageId,
+    sourceTextByMessageId,
+    onCardComment: (item: MemoryProposalItem) => {
+      const label = item.display_text.length > 48 ? `${item.display_text.slice(0, 48)}…` : item.display_text;
+      const next = `${chat.draft}${chat.draft ? "\n" : ""}关于「${label}」：`;
+      if (next.length <= 1000) chat.changeDraft(next);
+      document.getElementById("queued-conversation-composer")?.focus();
+    },
+  };
   useEffect(() => {
     const node = content.current; const scroll = viewport.current; if (!node || !scroll) return;
     const observer = new ResizeObserver(() => { if (follows.current) scroll.scrollTop = scroll.scrollHeight; else setAway(true); });
@@ -171,15 +190,20 @@ export function QueuedConversation(props: Props) {
       {props.meetingReadFailed && <p>相关日程暂时无法读取。</p>}
       {!chat.unavailable && (confirmDelete ? <div className={styles.confirm}><p>删除对话、草稿和待处理消息？</p><button onClick={() => void remove()}>确认删除</button><button onClick={() => setConfirmDelete(false)}>保留</button></div> : <button className={styles.textButton} onClick={() => setConfirmDelete(true)}><Trash size={16}/>删除对话</button>)}
     </div></details></header>}
-    <div className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onWheel={() => { userScroll.current = true; }} onTouchStart={() => { userScroll.current = true; }} onPointerDown={() => { userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) userScroll.current = true; }} onScroll={() => { if (viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); } }}>
+    <SessionRuntime key={`${props.chatBinding}:${id ?? "draft"}`} messages={projectedMessages} running={Boolean(activeVisible)}>
+    <ThreadPrimitive.Root className={styles.runtimeRoot} data-session-runtime>
+    <ThreadPrimitive.Viewport autoScroll={false} className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onWheel={() => { userScroll.current = true; }} onTouchStart={() => { userScroll.current = true; }} onPointerDown={() => { userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) userScroll.current = true; }} onScroll={() => { if (viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); } }}>
       <div className={styles.content} ref={content}>
         {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><h2>今天想推进什么？</h2></div>}
-        {turns.map(turn => <article className={styles.turn} key={turn.id}><div className={styles.userRow}><div className={styles.userMessage}>{displayText(turn.objective, turn.images)}{turn.images?.length ? <ConversationImageStrip binding={props.chatBinding} images={turn.images} local={false} messageId={turn.id} scope={props.scope} sessionId={chat.detail?.session_id ?? id ?? ""}/> : null}</div></div><div className={styles.answer}><Identity/>{sessionTurnBlocks(turn.response).map((block, index) => <div key={index}>{sessionBlockTitle(block.title) && <h3>{sessionBlockTitle(block.title)}</h3>}<ConversationResponse lead={!sessionBlockTitle(block.title)}>{block.body}</ConversationResponse><ConversationProvenance sources={block.public_source_refs}/></div>)}{turn.response.meetingDraft ? <section aria-label="日历草稿核对入口" className="context-calendar-draft-handoff"><div><strong>{turn.response.meetingDraft.title}</strong><p>日历草稿已准备好，核对时间后可加入日历。</p><a href={`/workspace/meetings?draft=${encodeURIComponent(turn.response.meetingDraft.id)}`}>核对日历草稿 →</a></div></section> : null}{turn.response.memoryProposal ? <div onFocusCapture={() => { follows.current = false; userScroll.current = true; }} onPointerDown={() => { follows.current = false; userScroll.current = true; }}><MemoryReviewCard binding={props.chatBinding} entryCapability={chat.entryCapability ?? props.entryCapability ?? null} proposal={turn.response.memoryProposal} purpose="chat" sessionId={chat.detail?.session_id ?? id ?? null}/></div> : null}</div></article>)}
+        <ThreadPrimitive.Messages>{({ message }) => message.role === "user"
+          ? <SessionUserMessage context={renderContext}/>
+          : <SessionAssistantMessage context={renderContext}/>}</ThreadPrimitive.Messages>
         {props.meetingLinks?.filter(meeting=>!turns.some(turn=>turn.response.meetingDraft?.id===meeting.id)).map(meeting=><section key={meeting.id} className="context-calendar-draft-handoff" aria-label="日历草稿核对入口"><strong>{meeting.title}</strong><a href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>核对日历草稿 →</a></section>)}
-        {activeVisible && <article className={styles.turn} key={active.message_id}><div className={styles.userRow}><div className={styles.userMessage}>{displayText(active.objective, active.images)}{active.images?.length ? <ConversationImageStrip binding={props.chatBinding} images={active.images} local={false} messageId={active.message_id} scope={props.scope} sessionId={id ?? ""}/> : null}</div></div><div className={styles.answer}><Identity/>{forming?.text ? <div className={styles.forming}><ConversationResponse>{forming.text}</ConversationResponse><span className={styles.cursor} aria-hidden="true"/></div> : <div className={styles.waiting}><span className={styles.pulse} aria-hidden="true"/>{status}</div>}<div className={styles.runMeta}>{forming?.text ? status : ""}{seconds >= 8 && <span>{seconds} 秒{seconds >= 20 ? " · 可以继续补充，我会按顺序处理" : ""}</span>}</div></div></article>}
         {chat.messages.map(message => <article className={styles.localTurn} key={message.id} data-delivery={message.delivery}><div className={styles.userRow}><div className={styles.userMessage}>{displayText(message.objective, message.images)}{message.images?.length ? <ConversationImageStrip binding={props.chatBinding} images={message.images} local messageId={message.id} scope={props.scope} sessionId={id ?? ""}/> : null}</div></div>{message.delivery === "accepted" ? null : <div className={styles.delivery}>{message.delivery === "unknown" || message.delivery === "rejected" ? <>{message.error || "送达结果尚未确认，请核对后重试。"}<button onClick={() => void chat.retryDelivery(message)}>核对并重试</button>{message.delivery === "rejected" && <button onClick={() => chat.discardRejectedDelivery(message.id)}>移除</button>}</> : message.delivery === "pending" ? "等待送达" : "正在送达…"}</div>}</article>)}
       </div>
-    </div>
+    </ThreadPrimitive.Viewport>
+    </ThreadPrimitive.Root>
+    </SessionRuntime>
     <div className={styles.dock}>
       {away && <button className={styles.latest} onClick={latest}><ArrowDown size={15}/>回到最新</button>}
       {props.legacyRecovery && <LegacyRecoveryNotice key={props.legacyRecovery.sessionId} recovery={props.legacyRecovery}/>}

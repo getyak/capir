@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   MemoryCommitResponse,
+  MemoryContactOnlyDecisionResponse,
+  MemoryDecision,
+  MemoryItemDecisionResponse,
   MemoryProposalReference,
+  MemoryProposalItem,
   MemoryReceipt,
   MemoryReviewView,
   MemoryScopedOperationView,
@@ -32,11 +36,26 @@ type Locator = {
   person_id: string | null;
   relationship_context_id: string | null;
   operation_key: string | null;
+  item_pending_id?: string | null;
+  item_operation_keys?: Record<string, string>;
+  contact_operation_key?: string | null;
+  contact_pending?: boolean;
+  contact_undo_key?: string | null;
+  item_undo_keys?: Record<string, string>;
   /** Non-sensitive compensation idempotency key so a lost undo response can
    *  reconcile the same operation after a reload. */
   undo_key: string | null;
   /** Non-sensitive terminal marker: this source version was already dismissed. */
   dismissed?: boolean;
+};
+
+export type MemoryItemOutcome = {
+  kind: "committed" | "skipped" | "unknown" | "undo_unknown" | "undone" | "unavailable";
+  receipt: MemoryReceipt | null;
+  operationKey: string;
+  finalText?: string | null;
+  snapshot?: MemoryProposalItem;
+  personLabel?: string | null;
 };
 
 export type MemoryReviewPhase =
@@ -58,6 +77,8 @@ export interface MemoryReviewController {
   review: MemoryReviewView | null;
   draft: MemoryReviewDraftState | null;
   receipt: MemoryReceipt | null;
+  itemOutcomes: Record<string, MemoryItemOutcome>;
+  contactOutcome: MemoryItemOutcome | null;
   error: string | null;
   notice: string | null;
   frozen: boolean;
@@ -69,6 +90,13 @@ export interface MemoryReviewController {
   scheduleDraft: () => void;
   flushDraft: () => Promise<boolean>;
   commit: (body: MemoryCommitInput) => Promise<MemoryCommitResponse | null>;
+  decideItem: (input: { itemId: string; decision: MemoryDecision; editedText?: string }) => Promise<MemoryItemDecisionResponse | null>;
+  decideContactOnly: (input: { displayLabel: string; relationshipContext: string }) => Promise<MemoryContactOnlyDecisionResponse | null>;
+  checkContact: () => Promise<void>;
+  undoContact: () => Promise<boolean>;
+  refreshReview: (decided?: { id: string; kind: "committed" | "skipped" }) => Promise<boolean>;
+  undoItem: (itemId: string) => Promise<boolean>;
+  checkItem: (itemId: string) => Promise<void>;
   dismiss: (itemIds: string[], reason: string) => Promise<boolean>;
   reconcile: () => Promise<void>;
   undo: () => Promise<MemoryUndoOutcome>;
@@ -123,6 +151,16 @@ function writeLocator(key: string, locator: Locator): void {
   }
 }
 
+function writeRequiredLocator(key: string, locator: Locator): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify(locator));
+    return window.sessionStorage.getItem(key) === JSON.stringify(locator);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Shared Memory review controller. Every call is bound to the current rendered
  * login through the `x-workspace-session` header; the browser never supplies
@@ -159,6 +197,9 @@ export function useMemoryReview(options: {
   const [review, setReview] = useState<MemoryReviewView | null>(null);
   const [draft, setDraft] = useState<MemoryReviewDraftState | null>(null);
   const [receipt, setReceipt] = useState<MemoryReceipt | null>(null);
+  const [itemOutcomes, setItemOutcomes] = useState<Record<string, MemoryItemOutcome>>({});
+  const [contactOutcome, setContactOutcome] = useState<MemoryItemOutcome | null>(null);
+  const recoveredItemSnapshots = useRef<Record<string, MemoryProposalItem>>({});
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [locator, setLocator] = useState<Locator | null>(null);
@@ -180,6 +221,31 @@ export function useMemoryReview(options: {
   const undoKeyRef = useRef<string | null>(null);
   const capabilityRef = useRef<string | null>(options.entryCapability ?? null);
   const inflight = useRef(false);
+  const previousBinding = useRef(binding);
+  useEffect(() => {
+    if (previousBinding.current === binding) return;
+    previousBinding.current = binding;
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = null;
+    openedKeyRef.current = null;
+    operationRef.current = null;
+    credentialRef.current = null;
+    scopeRef.current = null;
+    undoKeyRef.current = null;
+    reviewRef.current = null;
+    draftRef.current = null;
+    inflight.current = false;
+    setReview(null);
+    setDraft(null);
+    setReceipt(null);
+    setItemOutcomes({});
+    setContactOutcome(null);
+    recoveredItemSnapshots.current = {};
+    setLocator(null);
+    setError(null);
+    setNotice(null);
+    setPhase("idle");
+  }, [binding]);
   // A refreshed server capability must replace the old token even when the
   // current review does not need to reopen.
   useEffect(() => { capabilityRef.current = options.entryCapability ?? null; }, [options.entryCapability]);
@@ -293,6 +359,145 @@ export function useMemoryReview(options: {
     [binding, request, purpose, personId, contextId],
   );
 
+  const reconcileItemKey = useCallback(async (itemId: string, operationKey: string): Promise<void> => {
+    setReconciling(true);
+    try {
+      const response = await request(
+        `/api/memory/operation-views/${operationKey}?purpose=${purpose}${personId ? `&person_id=${personId}` : ""}${contextId ? `&relationship_context_id=${contextId}` : ""}`,
+        { method: "GET" },
+      );
+      if (!response.ok) {
+        setPhase("unknown");
+        setNotice("正在核对这一条的结果…");
+        return;
+      }
+      const view = (await response.json()) as MemoryScopedOperationView;
+      if ((view.state === "applied" || view.state === "undone") && view.visible_receipt) {
+        if (view.item_snapshot) recoveredItemSnapshots.current[itemId] = view.item_snapshot;
+        else delete recoveredItemSnapshots.current[itemId];
+        const pendingUndo = key ? Boolean(readLocator(key)?.item_undo_keys?.[itemId]) : false;
+        if (view.state === "applied" && pendingUndo) {
+          setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+            kind: "undo_unknown", receipt: view.visible_receipt, operationKey,
+          } }));
+          setPhase("unknown");
+          setNotice("正在核对撤销结果…");
+          return;
+        }
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+          kind: view.state === "undone" ? "undone" : "committed", receipt: view.visible_receipt, operationKey,
+          finalText: view.applied_display_text ?? null,
+          ...(view.item_snapshot ? { snapshot: view.item_snapshot } : {}),
+          personLabel: view.person_display_label ?? null,
+        } }));
+        if (view.state === "undone" && key) {
+          const current = readLocator(key);
+          if (current) {
+            const undoKeys = { ...(current.item_undo_keys ?? {}) };
+            delete undoKeys[itemId];
+            writeLocator(key, { ...current, item_undo_keys: undoKeys });
+          }
+        }
+        operationRef.current = null;
+        if (key) {
+          const current = readLocator(key);
+          if (current) {
+            const next = { ...current, operation_key: null, item_pending_id: null };
+            setLocator(next);
+            writeLocator(key, next);
+          }
+        }
+        setPhase("review");
+        setNotice(null);
+      } else if (view.state === "skipped" && view.dismissed_item_id === itemId) {
+        if (view.item_snapshot) recoveredItemSnapshots.current[itemId] = view.item_snapshot;
+        else delete recoveredItemSnapshots.current[itemId];
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+          kind: "skipped", receipt: null, operationKey,
+          ...(view.item_snapshot ? { snapshot: view.item_snapshot } : {}),
+          personLabel: view.person_display_label ?? null,
+        } }));
+        operationRef.current = null;
+        if (key) {
+          const current = readLocator(key);
+          if (current) {
+            const next = { ...current, operation_key: null, item_pending_id: null };
+            setLocator(next);
+            writeLocator(key, next);
+          }
+        }
+        setPhase("review");
+        setNotice(null);
+      } else if (view.state === "source_revoked") {
+        delete recoveredItemSnapshots.current[itemId];
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+          kind: "unavailable", receipt: null, operationKey,
+        } }));
+        setPhase("error");
+        setError("来源已失效，这一条不能继续操作。");
+      } else {
+        setPhase("unknown");
+        setNotice("正在核对这一条的结果…");
+      }
+    } catch {
+      setPhase("unknown");
+      setNotice("正在核对这一条的结果…");
+    } finally {
+      setReconciling(false);
+    }
+  }, [request, purpose, personId, contextId, key]);
+
+  const reconcileContactKey = useCallback(async (operationKey: string): Promise<void> => {
+    setReconciling(true);
+    try {
+      const response = await request(`/api/memory/operation-views/${operationKey}?purpose=${purpose}${personId ? `&person_id=${personId}` : ""}${contextId ? `&relationship_context_id=${contextId}` : ""}`, { method: "GET" });
+      if (!response.ok) {
+        setContactOutcome({ kind: "unknown", receipt: null, operationKey });
+        setPhase("unknown");
+        return;
+      }
+      const view = (await response.json()) as MemoryScopedOperationView;
+      if ((view.state === "applied" || view.state === "undone") && view.visible_receipt) {
+        const undoPending = key ? Boolean(readLocator(key)?.contact_undo_key) : false;
+        if (view.state === "applied" && undoPending) {
+          setContactOutcome({ kind: "undo_unknown", receipt: view.visible_receipt, operationKey });
+          setPhase("unknown");
+          setNotice("正在核对联系人撤销结果…");
+          return;
+        }
+        setContactOutcome({ kind: view.state === "undone" ? "undone" : "committed", receipt: view.visible_receipt, operationKey });
+        if (view.state === "undone" && key) {
+          const current = readLocator(key);
+          if (current) writeLocator(key, { ...current, contact_undo_key: null });
+        }
+        operationRef.current = null;
+        if (key) {
+          const current = readLocator(key);
+          if (current) {
+            const next = { ...current, operation_key: null, contact_pending: false };
+            setLocator(next);
+            writeLocator(key, next);
+          }
+        }
+        setPhase("review");
+        setNotice(null);
+      } else if (view.state === "source_revoked") {
+        setContactOutcome({ kind: "unavailable", receipt: null, operationKey });
+        setPhase("error");
+        setError("来源已失效，联系人结果不能从这里继续操作。");
+      } else {
+        setContactOutcome({ kind: "unknown", receipt: null, operationKey });
+        setPhase("unknown");
+        setNotice("正在核对联系人结果…");
+      }
+    } catch {
+      setContactOutcome({ kind: "unknown", receipt: null, operationKey });
+      setPhase("unknown");
+    } finally {
+      setReconciling(false);
+    }
+  }, [request, purpose, personId, contextId, key]);
+
   const open = useCallback(async () => {
     if (!binding || !proposalId || inflight.current) return;
     const entryKey = `${proposalId}:${proposalRevision}:${purpose}:${personId ?? ""}:${contextId ?? ""}`;
@@ -302,6 +507,15 @@ export function useMemoryReview(options: {
     setError(null);
     setNotice(null);
     const existing = key ? readLocator(key) : null;
+    if (existing?.contact_operation_key && !existing.contact_pending) {
+      await reconcileContactKey(existing.contact_operation_key);
+    }
+    if (existing?.item_operation_keys) {
+      for (const [itemId, operationKey] of Object.entries(existing.item_operation_keys)) {
+        if (itemId === existing.item_pending_id && operationKey === existing.operation_key) continue;
+        await reconcileItemKey(itemId, operationKey);
+      }
+    }
     if (existing?.dismissed) {
       // A dismissed source version stays dismissed; do not offer a retry card.
       inflight.current = false;
@@ -322,8 +536,16 @@ export function useMemoryReview(options: {
       operationRef.current = existing.operation_key;
       inflight.current = false;
       await ensureCapability();
-      await reconcileKey(existing.operation_key);
-      return;
+      if (existing.contact_pending) {
+        await reconcileContactKey(existing.operation_key);
+        if (key && readLocator(key)?.operation_key) return;
+      } else if (existing.item_pending_id) {
+        await reconcileItemKey(existing.item_pending_id, existing.operation_key);
+        if (key && readLocator(key)?.operation_key) return;
+      } else {
+        await reconcileKey(existing.operation_key);
+        return;
+      }
     }
     // A normal Session poll or parent rerender with the same entry keys must
     // not reopen and overwrite pending draft/receipt state.
@@ -397,8 +619,11 @@ export function useMemoryReview(options: {
       credentialRef.current = body.review_credential ?? null;
       scopeRef.current = body.review.review_scope_id;
       openedKeyRef.current = entryKey;
-      reviewRef.current = body.review;
-      setReview(body.review);
+      const freshIds = new Set(body.review.items.map((item) => item.id));
+      const recovered = Object.values(recoveredItemSnapshots.current).filter((item) => !freshIds.has(item.id));
+      const mergedReview: MemoryReviewView = { ...body.review, items: [...recovered, ...body.review.items] };
+      reviewRef.current = mergedReview;
+      setReview(mergedReview);
       const seeded = createDraftState(body.review, draftRef.current);
       draftRef.current = seeded;
       setDraft(seeded);
@@ -411,6 +636,10 @@ export function useMemoryReview(options: {
         person_id: personId,
         relationship_context_id: contextId,
         operation_key: null,
+        item_pending_id: null,
+        item_operation_keys: existing?.item_operation_keys ?? {},
+        contact_operation_key: existing?.contact_operation_key ?? null,
+        contact_pending: false,
         undo_key: existing?.undo_key ?? null,
       };
       operationRef.current = null;
@@ -424,7 +653,7 @@ export function useMemoryReview(options: {
     } finally {
       inflight.current = false;
     }
-  }, [binding, proposalId, proposalRevision, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, request, errorMessage, key, reconcileKey, ensureCapability, sessionId, options.entryCapability]);
+  }, [binding, proposalId, proposalRevision, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, request, errorMessage, key, reconcileKey, reconcileItemKey, reconcileContactKey, ensureCapability, sessionId, options.entryCapability]);
 
   const dispatchDraft = useCallback((next: MemoryReviewDraftState) => {
     const previous = draftRef.current;
@@ -667,6 +896,338 @@ export function useMemoryReview(options: {
     [binding, proposalId, proposalRevision, purpose, personId, contextId, request, review, key, errorMessage, flushDraft],
   );
 
+  const refreshReview = useCallback(async (decided?: { id: string; kind: "committed" | "skipped" }): Promise<boolean> => {
+    if (!proposalId || !binding) return false;
+    try {
+      const response = await request(`/api/memory/proposals/${proposalId}/reviews`, {
+        method: "POST",
+        body: JSON.stringify({
+          purpose,
+          person_id: personId,
+          relationship_context_id: contextId,
+          ...(pursuitId ? {
+            pursuit_id: pursuitId,
+            pursuit_role_id: pursuitRoleId,
+            pursuit_role_evidence_fragment_id: pursuitEvidenceFragmentId,
+          } : {}),
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.clone().json().catch(() => null);
+        const code = body?.error?.code ?? body?.code;
+        if (code === "MEMORY_REVIEW_PROCESSED" || code === "MEMORY_REVIEW_DISMISSED") {
+          setPhase(code === "MEMORY_REVIEW_PROCESSED" ? "processed" : "dismissed");
+          return true;
+        }
+        setError(await errorMessage(response, "剩余内容暂时无法读取，请稍后核对。"));
+        return false;
+      }
+      const body = (await response.json()) as { review_credential?: string; review: MemoryReviewView };
+      credentialRef.current = body.review_credential ?? null;
+      scopeRef.current = body.review.review_scope_id;
+      const freshIds = new Set(body.review.items.map((item) => item.id));
+      const retained = (reviewRef.current?.items ?? [])
+        .filter((item) => !freshIds.has(item.id) && (item.status !== "pending" || item.id === decided?.id))
+        .map((item) => item.id === decided?.id ? { ...item, status: decided.kind } : item);
+      const merged: MemoryReviewView = { ...body.review, items: [...retained, ...body.review.items] };
+      reviewRef.current = merged;
+      setReview(merged);
+      const next = createDraftState(body.review);
+      draftRef.current = next;
+      setDraft(next);
+      setError(null);
+      return true;
+    } catch {
+      setError("剩余内容暂时无法读取，请稍后核对。");
+      return false;
+    }
+  }, [proposalId, binding, request, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, errorMessage]);
+
+  const decideItem = useCallback(async (input: {
+    itemId: string;
+    decision: MemoryDecision;
+    editedText?: string;
+  }): Promise<MemoryItemDecisionResponse | null> => {
+    const current = reviewRef.current;
+    const credential = credentialRef.current;
+    const scopeId = scopeRef.current;
+    const item = current?.items.find((entry) => entry.id === input.itemId);
+    if (!binding || !proposalId || !current || !credential || !scopeId || !item || item.status !== "pending" || inflight.current) return null;
+    const contactDecision = item.scope === "self" ? "none" : current.contact_decision;
+    if (contactDecision === "new" || (item.scope !== "self" && current.contact_status !== "resolved")) {
+      setError("请先确认联系人，再处理关于对方的记忆。");
+      return null;
+    }
+    inflight.current = true;
+    setPhase("saving");
+    setError(null);
+    const operationKey = crypto.randomUUID();
+    const priorLocator = key ? readLocator(key) : null;
+    const nextLocator: Locator = {
+      ...(priorLocator ?? {}),
+      version: 1, binding, proposal_id: proposalId, purpose,
+      person_id: personId, relationship_context_id: contextId,
+      operation_key: operationKey, item_pending_id: item.id,
+      item_operation_keys: { ...(priorLocator?.item_operation_keys ?? {}), [item.id]: operationKey },
+      undo_key: priorLocator?.undo_key ?? null,
+    };
+    if (!key || !writeRequiredLocator(key, nextLocator)) {
+      inflight.current = false;
+      setPhase("review");
+      setError("浏览器无法保存这次操作，已停止提交；请稍后重试。");
+      return null;
+    }
+    operationRef.current = operationKey;
+    setLocator(nextLocator);
+    try {
+      const response = await request(`/api/memory/reviews/${scopeId}/item-decisions`, {
+        method: "POST",
+        headers: { "x-memory-review-credential": credential },
+        body: JSON.stringify({
+          idempotency_key: operationKey,
+          expected_proposal_revision: current.proposal_revision,
+          expected_review_revision: current.review_revision,
+          item_id: item.id,
+          expected_item_added_revision: item.added_revision,
+          ...(item.previous_revision ? { expected_item_version: item.previous_revision } : {}),
+          contact_decision: contactDecision,
+          decision: input.decision,
+          ...(input.editedText ? { edited_text: input.editedText } : {}),
+          reason: input.decision === "skip" ? "用户选择暂不保存。" : "用户确认这一条记忆。",
+        }),
+      });
+      if (!response.ok) {
+        if (response.status >= 400 && response.status < 500) {
+          operationRef.current = null;
+          if (key) {
+            const itemKeys = { ...nextLocator.item_operation_keys };
+            delete itemKeys[item.id];
+            writeLocator(key, { ...nextLocator, operation_key: null, item_pending_id: null, item_operation_keys: itemKeys });
+          }
+          setError(await errorMessage(response, "这一条尚未保存。"));
+          setPhase("review");
+          return null;
+        }
+        setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: "unknown", receipt: null, operationKey } }));
+        setNotice("正在核对这一条的结果…");
+        setPhase("unknown");
+        return null;
+      }
+      const result = (await response.json()) as MemoryItemDecisionResponse;
+      const snapshot: MemoryProposalItem = { ...item, status: result.kind };
+      recoveredItemSnapshots.current[item.id] = snapshot;
+      setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: result.kind, receipt: result.receipt, operationKey,
+        finalText: result.applied_display_text ?? null, snapshot,
+        personLabel: current.person_display_label ?? null } }));
+      operationRef.current = null;
+      if (key) writeLocator(key, { ...nextLocator, operation_key: null, item_pending_id: null });
+      setPhase("review");
+      setNotice(null);
+      await refreshReview({ id: item.id, kind: result.kind });
+      return result;
+    } catch {
+      setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: "unknown", receipt: null, operationKey } }));
+      setNotice("正在核对这一条的结果…");
+      setPhase("unknown");
+      return null;
+    } finally {
+      inflight.current = false;
+    }
+  }, [binding, proposalId, purpose, personId, contextId, request, key, refreshReview, errorMessage]);
+
+  const decideContactOnly = useCallback(async (input: {
+    displayLabel: string;
+    relationshipContext: string;
+  }): Promise<MemoryContactOnlyDecisionResponse | null> => {
+    const current = reviewRef.current;
+    const credential = credentialRef.current;
+    const scopeId = scopeRef.current;
+    if (!binding || !proposalId || !current || !credential || !scopeId || inflight.current) return null;
+    if (current.contact_decision !== "new" || current.contact_status === "ambiguous") {
+      setError("请先核对同名联系人，再决定添加或关联。");
+      return null;
+    }
+    const label = input.displayLabel.trim();
+    if (!label) return null;
+    const operationKey = crypto.randomUUID();
+    const prior = key ? readLocator(key) : null;
+    const next: Locator = {
+      ...(prior ?? {}),
+      version: 1, binding, proposal_id: proposalId, purpose,
+      person_id: personId, relationship_context_id: contextId,
+      operation_key: operationKey, contact_operation_key: operationKey,
+      contact_pending: true, item_operation_keys: prior?.item_operation_keys ?? {},
+      undo_key: prior?.undo_key ?? null,
+    };
+    if (!key || !writeRequiredLocator(key, next)) {
+      setError("浏览器无法保存这次操作，已停止提交；请稍后重试。");
+      return null;
+    }
+    inflight.current = true;
+    operationRef.current = operationKey;
+    setLocator(next);
+    setPhase("saving");
+    setError(null);
+    try {
+      const response = await request(`/api/memory/reviews/${scopeId}/contact-decisions`, {
+        method: "POST",
+        headers: { "x-memory-review-credential": credential },
+        body: JSON.stringify({
+          idempotency_key: operationKey,
+          expected_proposal_revision: current.proposal_revision,
+          display_label: label,
+          relationship_context: input.relationshipContext.trim(),
+          reason: "用户确认添加这位联系人。",
+        }),
+      });
+      if (!response.ok) {
+        if (response.status >= 400 && response.status < 500) {
+          operationRef.current = null;
+          writeLocator(key, { ...next, operation_key: null, contact_operation_key: null, contact_pending: false });
+          setError(await errorMessage(response, "联系人尚未添加。"));
+          setPhase("review");
+          return null;
+        }
+        setContactOutcome({ kind: "unknown", receipt: null, operationKey });
+        setPhase("unknown");
+        setNotice("正在核对联系人结果…");
+        return null;
+      }
+      const result = (await response.json()) as MemoryContactOnlyDecisionResponse;
+      setContactOutcome({ kind: "committed", receipt: result.receipt, operationKey });
+      operationRef.current = null;
+      writeLocator(key, { ...next, operation_key: null, contact_pending: false });
+      setPhase("review");
+      setNotice(null);
+      await refreshReview();
+      return result;
+    } catch {
+      setContactOutcome({ kind: "unknown", receipt: null, operationKey });
+      setPhase("unknown");
+      setNotice("正在核对联系人结果…");
+      return null;
+    } finally {
+      inflight.current = false;
+    }
+  }, [binding, proposalId, purpose, personId, contextId, key, request, errorMessage, refreshReview]);
+
+  const undoContact = useCallback(async (): Promise<boolean> => {
+    const outcome = contactOutcome;
+    if (!outcome || outcome.kind !== "committed" || !key || inflight.current) return false;
+    const prior = readLocator(key);
+    if (!prior) return false;
+    const undoKey = prior.contact_undo_key ?? crypto.randomUUID();
+    if (!writeRequiredLocator(key, { ...prior, contact_undo_key: undoKey })) {
+      setError("浏览器无法保存这次撤销操作，已停止提交。");
+      return false;
+    }
+    inflight.current = true;
+    const operationKey = outcome.operationKey;
+    try {
+      const viewResponse = await request(`/api/memory/operation-views/${operationKey}?purpose=${purpose}${personId ? `&person_id=${personId}` : ""}${contextId ? `&relationship_context_id=${contextId}` : ""}`, { method: "GET" });
+      if (!viewResponse.ok) { setError("无法核对联系人保存结果，本次尚未撤销。"); return false; }
+      const view = (await viewResponse.json()) as MemoryScopedOperationView;
+      if (view.state === "undone") {
+        setContactOutcome({ kind: "undone", receipt: view.visible_receipt, operationKey });
+        writeLocator(key, { ...prior, contact_undo_key: null });
+        return true;
+      }
+      if (!view.undo.allowed || !view.commit_revision) { setError("联系人已有后续记录，不能从这里撤销。"); return false; }
+      const response = await request(`/api/memory/operation-views/${operationKey}/undo`, {
+        method: "POST",
+        body: JSON.stringify({
+          idempotency_key: undoKey, expected_commit_revision: view.commit_revision,
+          purpose, person_id: personId, relationship_context_id: contextId,
+          reason: "用户撤销本次联系人添加。",
+        }),
+      });
+      if (!response.ok) { setError(await errorMessage(response, "联系人尚未撤销。")); return false; }
+      const body = (await response.json()) as { receipt: MemoryReceipt };
+      setContactOutcome({ kind: "undone", receipt: body.receipt, operationKey });
+      const current = readLocator(key);
+      if (current) writeLocator(key, { ...current, contact_undo_key: null });
+      setError(null);
+      return true;
+    } catch {
+      setContactOutcome({ kind: "undo_unknown", receipt: outcome.receipt, operationKey });
+      setNotice("正在核对联系人撤销结果…");
+      return false;
+    } finally { inflight.current = false; }
+  }, [contactOutcome, key, request, purpose, personId, contextId, errorMessage]);
+
+  const undoItem = useCallback(async (itemId: string): Promise<boolean> => {
+    const outcome = itemOutcomes[itemId];
+    if (!outcome || outcome.kind !== "committed" || !key || inflight.current) return false;
+    const operationKey = outcome.operationKey;
+    const prior = readLocator(key);
+    if (!prior) return false;
+    const undoKey = prior.item_undo_keys?.[itemId] ?? crypto.randomUUID();
+    const pending: Locator = { ...prior, item_undo_keys: { ...(prior.item_undo_keys ?? {}), [itemId]: undoKey } };
+    if (!writeRequiredLocator(key, pending)) {
+      setError("浏览器无法保存这次撤销操作，已停止提交。");
+      return false;
+    }
+    inflight.current = true;
+    try {
+      const viewResponse = await request(`/api/memory/operation-views/${operationKey}?purpose=${purpose}${personId ? `&person_id=${personId}` : ""}${contextId ? `&relationship_context_id=${contextId}` : ""}`, { method: "GET" });
+      if (!viewResponse.ok) {
+        setError("无法核对这次保存，撤销尚未进行。");
+        return false;
+      }
+      const view = (await viewResponse.json()) as MemoryScopedOperationView;
+      if (view.state === "undone") {
+        setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+          ...previous[itemId], kind: "undone", receipt: view.visible_receipt, operationKey,
+        } }));
+        return true;
+      }
+      if (!view.undo.allowed || !view.commit_revision) {
+        setError("这条记忆已变化，不能从这里撤销。");
+        return false;
+      }
+      const response = await request(`/api/memory/operation-views/${operationKey}/undo`, {
+        method: "POST",
+        body: JSON.stringify({
+          idempotency_key: undoKey,
+          expected_commit_revision: view.commit_revision,
+          purpose,
+          person_id: personId,
+          relationship_context_id: contextId,
+          reason: "用户撤销这一条记忆。",
+        }),
+      });
+      if (!response.ok) {
+        setError(await errorMessage(response, "这条记忆尚未撤销。"));
+        return false;
+      }
+      const body = (await response.json()) as { receipt: MemoryReceipt };
+      setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+        ...previous[itemId], kind: "undone", receipt: body.receipt, operationKey,
+      } }));
+      const current = readLocator(key);
+      if (current) {
+        const undoKeys = { ...(current.item_undo_keys ?? {}) };
+        delete undoKeys[itemId];
+        writeLocator(key, { ...current, item_undo_keys: undoKeys });
+      }
+      setError(null);
+      return true;
+    } catch {
+      setItemOutcomes((previous) => ({ ...previous, [itemId]: {
+        ...previous[itemId], kind: "undo_unknown", receipt: outcome.receipt, operationKey,
+      } }));
+      setNotice("正在核对撤销结果…");
+      return false;
+    } finally {
+      inflight.current = false;
+    }
+  }, [itemOutcomes, key, request, purpose, personId, contextId, errorMessage]);
+
+  const checkItem = useCallback(async (itemId: string): Promise<void> => {
+    const operationKey = itemOutcomes[itemId]?.operationKey;
+    if (operationKey) await reconcileItemKey(itemId, operationKey);
+  }, [itemOutcomes, reconcileItemKey]);
+
   const dismiss = useCallback(
     async (itemIds: string[], reason: string): Promise<boolean> => {
       const credential = credentialRef.current;
@@ -733,8 +1294,15 @@ export function useMemoryReview(options: {
 
   const reconcile = useCallback(async () => {
     const operationKey = operationRef.current ?? locator?.operation_key ?? null;
-    if (operationKey) await reconcileKey(operationKey);
-  }, [locator, reconcileKey]);
+    if (!operationKey) return;
+    if (locator?.contact_pending) await reconcileContactKey(operationKey);
+    else if (locator?.item_pending_id) await reconcileItemKey(locator.item_pending_id, operationKey);
+    else await reconcileKey(operationKey);
+  }, [locator, reconcileKey, reconcileItemKey, reconcileContactKey]);
+  const checkContact = useCallback(async () => {
+    const operationKey = contactOutcome?.operationKey ?? locator?.contact_operation_key;
+    if (operationKey) await reconcileContactKey(operationKey);
+  }, [contactOutcome, locator, reconcileContactKey]);
 
   const rebase = useCallback(
     async (input: MemoryRebaseInput): Promise<boolean> => {
@@ -915,6 +1483,8 @@ export function useMemoryReview(options: {
     review,
     draft,
     receipt,
+    itemOutcomes,
+    contactOutcome,
     error,
     notice,
     frozen: rebaseState === "pending" || phase === "saving" || phase === "unknown" || phase === "undoing" || phase === "opening",
@@ -926,6 +1496,13 @@ export function useMemoryReview(options: {
     scheduleDraft,
     flushDraft,
     commit,
+    decideItem,
+    decideContactOnly,
+    checkContact,
+    undoContact,
+    refreshReview,
+    undoItem,
+    checkItem,
     dismiss,
     reconcile,
     undo,
