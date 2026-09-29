@@ -975,6 +975,11 @@ async function itemDecisionSnapshot(
   return { proposalRevision: row.proposal_revision, remainingCount: row.remaining_count };
 }
 
+/** Build a record without letting a supplied key trigger inherited setters. */
+export function singleItemRecord<T>(itemId: string, value: T | undefined): Record<string, T> {
+  return value === undefined ? {} : Object.fromEntries([[itemId, value]]);
+}
+
 /** One protected card decision; the existing batch route keeps its semantics. */
 export async function decideMemoryReviewItem(
   pool: Pool,
@@ -1012,11 +1017,9 @@ export async function decideMemoryReviewItem(
     contact_decision: request.contact_decision,
     ...(request.contact_decision === "existing" ? { identity_authority: "human_selection" as const } : {}),
     selected_item_ids: [request.item_id],
-    edited_text: request.edited_text ? { [request.item_id]: request.edited_text } : {},
-    item_decisions: { [request.item_id]: request.decision },
-    expected_item_versions: request.expected_item_version
-      ? { [request.item_id]: request.expected_item_version }
-      : {},
+    edited_text: singleItemRecord(request.item_id, request.edited_text || undefined),
+    item_decisions: singleItemRecord(request.item_id, request.decision),
+    expected_item_versions: singleItemRecord(request.item_id, request.expected_item_version),
     new_contact: null,
     reason: request.reason,
   };

@@ -22,7 +22,7 @@ The contact decision creates only a Person and leaves every Memory sibling pendi
 
 ## Verification run
 
-- Backend Memory unit and isolated database integration: 94/94 passed, including actual Agent tool dispatch, contact-only preservation, item decisions, replay, source deletion, and legacy batch behavior.
+- Backend Memory unit and isolated database integration: 95/95 passed, including actual Agent tool dispatch, contact-only preservation, item decisions, replay, source deletion, and legacy batch behavior. A CodeQL finding about a request-derived object key prompted a safe record builder and prototype-pollution regression case before merge.
 - Meeting draft isolated database integration: 9/9 passed.
 - Web conversation, Memory, calendar route, and calendar utility tests: 163/163 passed.
 - Backend and Web TypeScript checks passed after the final test fixture correction.
