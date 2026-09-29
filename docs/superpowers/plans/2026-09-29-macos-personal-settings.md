@@ -370,20 +370,31 @@ NextAuth session cookie minted by `next-auth/jwt` `encode()`; the page rendered 
 synthetic identity 合成用户 / Synthetic 设置账号 and the session
 `web-browser-acceptance`, and a signed-out profile was sent to `/login`.
 
-The app-to-browser handoff is **not proven**. Run 3
-(`testAccountRowHandsOffToTheDefaultBrowser`, exit 0, `/tmp/ts-ui-handoff3.log`)
-clicked the real account row with no failure banner and the synthetic server then
-logged `GET /workspace/settings` and
-`GET /login?callbackUrl=%2Fworkspace%2Fsettings`, but this task's own disposable
-headless Chrome profiles were still running and also send a Chrome user agent, so
-those requests cannot be attributed to the default browser. Runs 4 and 5 failed
-before the click (`quick.draftEditor` unreachable without
-`--ui-testing --fixture-state`; then a flaky main window), so no attributed
-observation exists yet. The default handler is `com.google.chrome`.
+The app-to-browser handoff is **not proven**, and the per-run-port marker used in
+runs 6, 8 and 9 does not fix attribution by itself. In runs 8 and 9 the app reached
+`runningForeground` but exposed no window to the UI test
+(`app.windows.firstMatch.waitForExistence(timeout: 30)` failed; the failure message
+reported `state=4`), so no click happened — yet about three seconds after launch the
+task-owned origin on the per-run port received
+`GET /workspace/settings` as a top-level document navigation with no referer,
+followed by `GET /login?callbackUrl=%2Fworkspace%2Fsettings` whose referer was that
+settings URL, plus manifest and HMR traffic. Because nothing was clicked, that
+document request is produced on the app side, so a settings document on the app's
+origin port cannot be attributed to a browser handoff. The same pattern appears in
+the earlier runs, including the one that exited 0, so those earlier readings were
+not handoff evidence either.
 
-The next attempt must: use a per-run task-owned origin port and a unique request
-marker; close every task-owned browser first; assert the marker request and observe
-the opened page by filtering the browser's tabs to that port only; carry an unsent
-draft through the round trip with `--ui-testing --fixture-state canonical` and the
-draft assertion mandatory. The default browser is only used for the URL the app
-itself hands off, and only against the loopback synthetic server.
+The pattern also questions one intended invariant: the embed requested the account
+settings route at launch even though `WorkspaceSurfacePolicy.isTrackableWorkbenchURL`
+never accepts a settings URL as a restore target, and no policy bounce for that load
+is proven. The paint guard keeps the route unpainted and the Web server sent the
+signed-out embed to `/login`, so nothing unsafe was displayed; the open question is
+where that launch-time settings navigation comes from and whether the embed should
+bounce it. This is recorded as an open product question, not as shipped behavior.
+
+Blockers for the next attempt, in order: (1) explain why the app shows no window to
+the UI test when a reachable synthetic origin is configured while the offline origin
+succeeds; (2) make the app-side settings navigation either impossible or provably
+bounced, so a settings document request on the origin means a browser; (3) only then
+re-run the opener test and read the opened page. Until (1) and (2) hold, the real
+handoff stays unverified.

@@ -28,6 +28,10 @@ management open in the default browser. The handoff carries a destination only.
 | Package (preview, unsigned) | `MACOS_OUTPUT_DIR=/tmp/ts-package bash scripts/macos/package.sh` | exit 0, universal DMG + ZIP + SHA256SUMS in a task-owned directory |
 | Account page in a real browser | disposable-profile headless Chrome over CDP against the loopback Web server | page rendered with the synthetic identity 合成用户 / Synthetic 设置账号 and the session `web-browser-acceptance` |
 
+That browser row is page-level evidence from a task-owned disposable profile: the
+account page renders with a real session cookie. It is not evidence of the
+app-to-browser handoff, which stays unverified.
+
 The package row is a packaging check only. It is not release verification and
 not installation: the artifact is unsigned, it was written to a task-owned
 directory, and no installed application was replaced.
@@ -48,26 +52,26 @@ stale revision answers `409 ACCOUNT_STALE`. Both are gated on
 
 ## Not verified
 
-- The app-to-browser handoff is **not yet proven**. The native click was executed
-  once in a real UI run (exit 0, log `/tmp/ts-ui-handoff3.log`) and the synthetic
-  server then logged `GET /workspace/settings` and
-  `GET /login?callbackUrl=%2Fworkspace%2Fsettings`, but that run cannot be used as
-  proof: this task's own disposable headless Chrome profiles were still running and
-  also send a Chrome user agent, so the requests are not attributable to the
-  default browser. A later run with those instances closed failed before the click,
-  so no attributed handoff observation exists yet. The user's default handler is
-  `com.google.chrome` (read-only LaunchServices inspection). Next attempt must use
-  a task-owned per-run origin port, a unique request marker, and an observed
-  browser URL, with all task-owned browsers closed first.
-- The unsent-draft round trip through a real browser open is **not verified**. The
-  UI attempt failed on its own precondition (`quick.draftEditor` is not reachable
-  without `--ui-testing --fixture-state`; an earlier attempt failed on
-  `XCUIScreen.main.screenshot()` timing out, and a later one on a flaky main window).
-  The test now launches the fixture and asserts the draft surface, so the next run
-  can carry the draft; Web-level retention is proved in
-  `testEmbeddedWorkbenchNeverPaintsWebAccountSettingsAndKeepsDraft`.
-- A Web-conversation draft inside the app's own web view was not exercised against
-  a signed-in session: the app's per-origin data store holds no synthetic cookie.
+- The app-to-browser handoff is **not proven**. Runs with a task-owned per-run origin
+  port and a logging proxy showed the app reaching `runningForeground` with no window
+  exposed to the UI test (no click) while the origin still received
+  `GET /workspace/settings` as a top-level document navigation and then
+  `GET /login?callbackUrl=%2Fworkspace%2Fsettings`. Nothing was clicked, so a settings
+  document on the origin cannot be attributed to the default browser; the earlier
+  run that did click carries the same doubt. The default handler is
+  `com.google.chrome` (read-only LaunchServices inspection). The open question of why
+  the embed requests the account route at launch is recorded in the plan.
+- The unsent-draft round trip is **not verified on either surface**, and the two
+  surfaces are different claims: the accepted criterion is the ordinary main Web
+  conversation, while `quick.draftEditor` belongs to the legacy native Quick Panel and
+  does not substitute for it. The Quick Panel surface needs
+  `--ui-testing --fixture-state canonical --quick-panel-preview`, and that
+  configuration never loaded the Web origin at all (run 6 recorded zero requests on
+  the per-run port) and showed no window. The main Web conversation was not exercised
+  against a signed-in session: the app's per-origin data store holds no synthetic
+  cookie, and the embed on a reachable origin requested the settings route instead of
+  the workbench (runs 8 and 9). Web-level draft retention across a settings visit is
+  proved only by `testEmbeddedWorkbenchNeverPaintsWebAccountSettingsAndKeepsDraft`.
 - VoiceOver was not exercised. Only accessibility identifiers and labels are
   asserted; no screen-reader session was recorded.
 - Light and dark appearance were not captured.
