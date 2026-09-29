@@ -27,6 +27,9 @@ the shared Web product can supply a scoped, provenance-preserving state feed.
   and [hidden state](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=301-1716)
   keep one selected companion while allowing a reversible exit. The hidden
   screen explicitly says work continues and the appearance is remembered.
+- The [unavailable-state task panel](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=305-1897)
+  removes speculative counts and task stages. It opens the existing workspace
+  while a trustworthy scoped task feed is unavailable.
 - Use the original Figma vector characters, exported as bundled PNG for native
   rendering and SVG as inspectable source. Motion changes a character's pose
   only when a real state changes. Reduced Motion yields a static presentation.
