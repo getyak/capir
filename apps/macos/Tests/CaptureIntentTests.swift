@@ -50,6 +50,18 @@ final class CaptureIntentTests: XCTestCase {
         XCTAssertFalse(intent.isLocallyExpired(at: date.addingTimeInterval(86_399)))
     }
 
+    func testVerifiedAdmissionReleasesPixelsButPreservesExactReceiptIdentity() throws {
+        let intent = try CaptureIntent(imagePNG: png, context: context(), capturedAt: date)
+        let admitted = intent.withoutRawImage()
+        XCTAssertFalse(admitted.hasRawImage)
+        XCTAssertEqual(admitted.imageByteSize, png.count)
+        XCTAssertEqual(admitted.contentHash, intent.contentHash)
+        XCTAssertEqual(admitted.sessionId, intent.sessionId)
+        XCTAssertEqual(admitted.messageId, intent.messageId)
+        XCTAssertFalse(admitted.canSubmit(context: context(), now: date))
+        XCTAssertThrowsError(try CaptureTransportPayload.encode(admitted))
+    }
+
     func testContextRejectsMalformedOrUnavailableProcessing() throws {
         let json = Data("""
           {"protocol_version":1,"owner_scope":"owner","login_binding":"login","expires_at":"2027-01-01T00:00:00.000Z",

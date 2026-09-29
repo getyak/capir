@@ -39,6 +39,28 @@ final class CaptureRecoveryStore: CaptureRecoveryPersisting {
             .appending(path: "\(Int(intent.capturedAt.timeIntervalSince1970))-\(intent.id.uuidString.lowercased()).capture")
     }
 
+    private func deadline(for file: URL) -> Date? {
+        let stamp = file.deletingPathExtension().lastPathComponent.split(separator: "-", maxSplits: 1).first
+        guard let stamp, let epoch = TimeInterval(stamp), epoch.isFinite else { return nil }
+        return Date(timeIntervalSince1970: epoch + 86_400)
+    }
+
+    /// The runtime sleeps until the earliest device-owned raw image expires,
+    /// including partitions that are no longer the active workspace.
+    func nextExpiry(now: Date = Date()) throws -> Date? {
+        guard fileManager.fileExists(atPath: directory.path) else { return nil }
+        var next: Date?
+        for folder in try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey]) {
+            guard try folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
+            for file in try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            where file.pathExtension == "capture" {
+                let candidate = deadline(for: file) ?? now
+                if next.map({ candidate < $0 }) ?? true { next = candidate }
+            }
+        }
+        return next
+    }
+
     /// Sweep every capture partition without opening another account's key or
     /// extending retention through a retry's file modification time.
     func purgeExpired(now: Date = Date()) throws {
@@ -47,9 +69,7 @@ final class CaptureRecoveryStore: CaptureRecoveryPersisting {
             guard try folder.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
             for file in try fileManager.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
             where file.pathExtension == "capture" {
-                let stamp = file.deletingPathExtension().lastPathComponent.split(separator: "-", maxSplits: 1).first
-                guard let stamp, let epoch = TimeInterval(stamp), epoch + 86_400 <= now.timeIntervalSince1970 else { continue }
-                try fileManager.removeItem(at: file)
+                if deadline(for: file).map({ $0 <= now }) ?? true { try fileManager.removeItem(at: file) }
             }
         }
     }

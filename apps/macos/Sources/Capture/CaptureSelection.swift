@@ -50,7 +50,7 @@ private final class CaptureSelectionPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
-private final class CaptureSelectionView: NSView {
+final class CaptureSelectionView: NSView {
     let source: CGImage
     var selection: CGRect = .zero { didSet { needsDisplay = true } }
     var preview = false
@@ -162,18 +162,7 @@ final class CaptureOverlayController: CaptureSelecting {
                 panel.backgroundColor = .clear
                 panel.isOpaque = false
                 let view = CaptureSelectionView(frame: CGRect(origin: .zero, size: screen.frame.size), image: image)
-                view.didSelect = { [weak self] area, preview in
-                    guard let self else { return }
-                    guard let pixels = CaptureSelectionGeometry.pixelRect(selection: area, overlaySize: view.bounds.size,
-                                                                             imagePixelSize: CGSize(width: image.width, height: image.height)),
-                          let cropped = image.cropping(to: pixels) else {
-                        self.finish(.failure(area.isEmpty ? CaptureSelectionError.empty : CaptureSelectionError.outsideDisplay))
-                        return
-                    }
-                    self.finish(.success(.init(image: cropped, capturedAt: self.capturedAt, preview: preview)))
-                }
-                view.didCancel = { [weak self] in self?.finish(.failure(CaptureSelectionError.cancelled)) }
-                view.didRequestWindow = { [weak self] in self?.selectWindowInstead() }
+                bindSelectionCallbacks(to: view, image: image)
                 panel.contentView = view
                 panels.append(panel)
                 images[ObjectIdentifier(panel)] = image
@@ -182,6 +171,25 @@ final class CaptureOverlayController: CaptureSelecting {
             }
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    /// Capture geometry by value. The view owns these closures and the full
+    /// display image, so a closure that captures the view would retain both
+    /// after the selection panel closes.
+    func bindSelectionCallbacks(to view: CaptureSelectionView, image: CGImage) {
+        let overlaySize = view.bounds.size
+        view.didSelect = { [weak self] area, preview in
+            guard let self else { return }
+            guard let pixels = CaptureSelectionGeometry.pixelRect(selection: area, overlaySize: overlaySize,
+                                                                  imagePixelSize: CGSize(width: image.width, height: image.height)),
+                  let cropped = image.cropping(to: pixels) else {
+                self.finish(.failure(area.isEmpty ? CaptureSelectionError.empty : CaptureSelectionError.outsideDisplay))
+                return
+            }
+            self.finish(.success(.init(image: cropped, capturedAt: self.capturedAt, preview: preview)))
+        }
+        view.didCancel = { [weak self] in self?.finish(.failure(CaptureSelectionError.cancelled)) }
+        view.didRequestWindow = { [weak self] in self?.selectWindowInstead() }
     }
 
     private func selectWindowInstead() {

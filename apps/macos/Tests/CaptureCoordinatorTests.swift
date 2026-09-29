@@ -38,9 +38,11 @@ private final class FixtureTransport: CaptureTransporting {
     var receiptReads = 0
     var suspendNextContext = false
     var pendingContext: CheckedContinuation<CaptureContext, Error>?
+    var contextError: Error?
     init(current: CaptureContext) { self.current = current }
     func context() async throws -> CaptureContext {
         contextRequests += 1
+        if let contextError { throw contextError }
         if suspendNextContext {
             suspendNextContext = false
             return try await withCheckedThrowingContinuation { pendingContext = $0 }
@@ -107,6 +109,7 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(transport.submissions, 1)
         XCTAssertEqual(recovery.saved.count, 0, "A matching canonical image receipt releases raw local bytes")
         guard case .processing = coordinator.presentation else { return XCTFail("Expected admitted processing") }
+        XCTAssertNil(coordinator.nextLocalExpiry, "Only content-free receipt identity remains after admission")
     }
 
     @MainActor
@@ -238,5 +241,203 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(transport.receiptReads, 2, "Read absence before replay and the exact manifest after admission")
         XCTAssertEqual(transport.submissions, 1, "Only explicit retry may send the old image with the new login")
         guard case .processing = coordinator.presentation else { return XCTFail("Expected canonical admission") }
+    }
+
+    @MainActor
+    func testExpiredUnknownImageKeepsOnlyReceiptIdentityAndCannotReplay() async throws {
+        let (_, prefs, _, transport, recovery) = fixture()
+        transport.loseFirstResponse = true
+        let capturedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let coordinator = CaptureCoordinator(transport: transport, selector: FixtureSelector(), recovery: recovery,
+                                             preferences: prefs, now: { capturedAt })
+        await coordinator.startCapture()
+        guard case .unknown(let id) = coordinator.presentation else { return XCTFail("Expected uncertain delivery") }
+        transport.canonical = nil
+        XCTAssertEqual(recovery.saved.count, 1)
+        coordinator.expireLocalImages(at: capturedAt.addingTimeInterval(86_400))
+        XCTAssertTrue(recovery.saved.isEmpty)
+        XCTAssertFalse(coordinator.hasLocalImage(intentID: id))
+        XCTAssertNil(coordinator.nextLocalExpiry)
+        await coordinator.retry(intentID: id)
+        XCTAssertEqual(transport.submissions, 1, "Expiry must not replay the same image")
+        XCTAssertEqual(transport.receiptReads, 1, "Content-free state may still check the exact receipt")
+    }
+
+    @MainActor
+    func testUnsubmittedPreviewExpiresAtOriginalCaptureTime() async throws {
+        let (_, prefs, selector, transport, recovery) = fixture()
+        prefs.afterSelection = .preview
+        let capturedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let coordinator = CaptureCoordinator(transport: transport, selector: selector, recovery: recovery,
+                                             preferences: prefs, now: { capturedAt })
+        await coordinator.startCapture()
+        XCTAssertEqual(coordinator.presentation, .previewReady)
+        XCTAssertNotNil(coordinator.previewImage)
+        XCTAssertEqual(coordinator.nextLocalExpiry, capturedAt.addingTimeInterval(86_400))
+        coordinator.expireLocalImages(at: capturedAt.addingTimeInterval(86_400))
+        XCTAssertNil(coordinator.previewImage)
+        XCTAssertEqual(transport.submissions, 0)
+        XCTAssertNil(coordinator.nextLocalExpiry)
+    }
+
+    @MainActor
+    func testPreviewWindowRebindsAfterWorkspaceCoordinatorChanges() async throws {
+        let (_, firstPrefs, _, firstTransport, firstRecovery) = fixture()
+        firstPrefs.afterSelection = .preview
+        let first = CaptureCoordinator(transport: firstTransport, selector: FixtureSelector(), recovery: firstRecovery,
+                                       preferences: firstPrefs)
+        await first.startCapture()
+        XCTAssertNotNil(first.previewImage)
+
+        let window = CapturePreviewWindowController()
+        window.show(coordinator: first)
+        let (_, secondPrefs, _, secondTransport, secondRecovery) = fixture()
+        secondPrefs.afterSelection = .preview
+        let second = CaptureCoordinator(transport: secondTransport, selector: FixtureSelector(), recovery: secondRecovery,
+                                        preferences: secondPrefs)
+        await second.startCapture()
+        window.show(coordinator: second)
+        XCTAssertNil(first.previewImage, "The prior workspace preview must be discarded on rebind")
+        XCTAssertNotNil(second.previewImage)
+        window.dismiss()
+        XCTAssertNil(second.previewImage, "Closing the rebound preview must discard only its image")
+    }
+
+    @MainActor
+    func testSignedOutContextCannotRestorePreviousOwnerScreenshot() async throws {
+        let (context, prefs, _, transport, recovery) = fixture()
+        let intent = try CaptureIntent(imagePNG: Data([1, 2, 3]), context: context,
+                                       capturedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        try recovery.save(intent)
+        transport.contextError = CaptureTransportError.server(401, "backend_session_expired")
+        let coordinator = CaptureCoordinator(transport: transport, selector: FixtureSelector(), recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        await coordinator.restoreRecovery()
+        XCTAssertEqual(coordinator.presentation, .needsSignIn)
+        XCTAssertNil(coordinator.nextLocalExpiry, "Signed-out UI must not load the prior owner's raw image")
+        transport.contextError = CaptureTransportError.unavailable
+        await coordinator.restoreRecovery()
+        XCTAssertEqual(coordinator.presentation, .needsSignIn)
+        XCTAssertNil(coordinator.nextLocalExpiry, "Offline fallback cannot undo an explicit sign-out")
+        XCTAssertEqual(recovery.saved.count, 1, "Encrypted recovery remains partitioned for a later authorized login")
+    }
+
+    @MainActor
+    func testSameOriginAccountSwitchClearsOldOwnerPresentationAndPixels() async throws {
+        let (context, prefs, _, transport, recovery) = fixture()
+        transport.loseFirstResponse = true
+        let coordinator = CaptureCoordinator(transport: transport, selector: FixtureSelector(), recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        await coordinator.startCapture()
+        guard case .unknown(let oldID) = coordinator.presentation else { return XCTFail("Expected held old-owner image") }
+        XCTAssertTrue(coordinator.hasLocalImage(intentID: oldID))
+        let otherOwner = CaptureContext(origin: context.origin, ownerScope: "owner-two", loginBinding: "login-two",
+                                        expiresAt: context.expiresAt, processing: context.processing)
+        XCTAssertTrue(coordinator.rebindOwner(to: otherOwner))
+        XCTAssertEqual(coordinator.presentation, .idle)
+        XCTAssertFalse(coordinator.hasLocalImage(intentID: oldID))
+        XCTAssertEqual(coordinator.boundOwnerScope, otherOwner.ownerScope)
+        XCTAssertEqual(recovery.saved.count, 1, "Old-owner encrypted recovery stays out of the new owner's UI")
+    }
+
+    @MainActor
+    func testLateOldOwnerContextCannotRebindOrOpenSelection() async throws {
+        let (old, prefs, selector, transport, recovery) = fixture()
+        transport.suspendNextContext = true
+        let coordinator = CaptureCoordinator(transport: transport, selector: selector, recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        let capture = Task { await coordinator.startCapture() }
+        for _ in 0..<100 where transport.pendingContext == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingContext)
+        let next = CaptureContext(origin: old.origin, ownerScope: "owner-two", loginBinding: "login-two",
+                                  expiresAt: old.expiresAt, processing: old.processing)
+        coordinator.rebindOwner(to: next)
+        transport.pendingContext?.resume(returning: old)
+        transport.pendingContext = nil
+        await capture.value
+        XCTAssertEqual(coordinator.boundOwnerScope, next.ownerScope)
+        XCTAssertEqual(selector.calls, 0)
+        XCTAssertTrue(recovery.saved.isEmpty)
+    }
+
+    @MainActor
+    func testOwnerSwitchWhileSelectingCannotStageOldOwnerPixels() async throws {
+        let (old, prefs, selector, transport, recovery) = fixture()
+        selector.suspendNextSelection = true
+        let coordinator = CaptureCoordinator(transport: transport, selector: selector, recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        let capture = Task { await coordinator.startCapture() }
+        for _ in 0..<100 where selector.pendingSelection == nil { await Task.yield() }
+        XCTAssertNotNil(selector.pendingSelection)
+        let next = CaptureContext(origin: old.origin, ownerScope: "owner-two", loginBinding: "login-two",
+                                  expiresAt: old.expiresAt, processing: old.processing)
+        coordinator.rebindOwner(to: next)
+        selector.pendingSelection?.resume(returning: .init(image: selector.image,
+                                                            capturedAt: Date(timeIntervalSince1970: 1_800_000_000), preview: false))
+        selector.pendingSelection = nil
+        await capture.value
+        XCTAssertEqual(coordinator.boundOwnerScope, next.ownerScope)
+        XCTAssertEqual(coordinator.presentation, .idle)
+        XCTAssertTrue(recovery.saved.isEmpty)
+        XCTAssertEqual(transport.submissions, 0)
+    }
+
+    @MainActor
+    func testOfflineRestoreCannotLoadOldAcknowledgedOwnerAfterRebinding() async throws {
+        let (old, prefs, _, transport, recovery) = fixture()
+        let intent = try CaptureIntent(imagePNG: Data([1, 2, 3]), context: old,
+                                       capturedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        try recovery.save(intent)
+        let coordinator = CaptureCoordinator(transport: transport, selector: FixtureSelector(), recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        let next = CaptureContext(origin: old.origin, ownerScope: "owner-two", loginBinding: "login-two",
+                                  expiresAt: old.expiresAt, processing: old.processing)
+        coordinator.rebindOwner(to: next)
+        transport.contextError = CaptureTransportError.unavailable
+        await coordinator.restoreRecovery()
+        XCTAssertEqual(coordinator.boundOwnerScope, next.ownerScope)
+        XCTAssertEqual(coordinator.presentation, .idle)
+        XCTAssertNil(coordinator.nextLocalExpiry)
+        XCTAssertEqual(recovery.saved.count, 1, "The old encrypted image remains outside the new owner's menu")
+    }
+
+    @MainActor
+    func testLateRecoveryContextCannotRestorePriorOwnerAfterAccountSwitch() async throws {
+        let (old, prefs, _, transport, recovery) = fixture()
+        let intent = try CaptureIntent(imagePNG: Data([1, 2, 3]), context: old,
+                                       capturedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        try recovery.save(intent)
+        transport.suspendNextContext = true
+        let coordinator = CaptureCoordinator(transport: transport, selector: FixtureSelector(), recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        let restore = Task { await coordinator.restoreRecovery() }
+        for _ in 0..<100 where transport.pendingContext == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingContext)
+        let next = CaptureContext(origin: old.origin, ownerScope: "owner-two", loginBinding: "login-two",
+                                  expiresAt: old.expiresAt, processing: old.processing)
+        coordinator.rebindOwner(to: next)
+        transport.pendingContext?.resume(returning: old)
+        transport.pendingContext = nil
+        await restore.value
+        XCTAssertEqual(coordinator.boundOwnerScope, next.ownerScope)
+        XCTAssertEqual(coordinator.presentation, .idle)
+        XCTAssertFalse(coordinator.hasLocalImage(intentID: intent.id))
+    }
+
+    @MainActor
+    func testLateRecoveryContextCannotUndoSignOut() async throws {
+        let (old, prefs, _, transport, recovery) = fixture()
+        transport.suspendNextContext = true
+        let coordinator = CaptureCoordinator(transport: transport, selector: FixtureSelector(), recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        let restore = Task { await coordinator.restoreRecovery() }
+        for _ in 0..<100 where transport.pendingContext == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingContext)
+        coordinator.rebindOwner(to: nil)
+        transport.pendingContext?.resume(returning: old)
+        transport.pendingContext = nil
+        await restore.value
+        XCTAssertNil(coordinator.boundOwnerScope)
+        XCTAssertEqual(coordinator.presentation, .needsSignIn)
     }
 }

@@ -33,6 +33,9 @@ enum CaptureTransportError: Error, Equatable {
 
 enum CaptureTransportPayload {
     static func encode(_ intent: CaptureIntent) throws -> Data {
+        guard intent.hasRawImage, intent.imagePNG.count == intent.imageByteSize else {
+            throw CaptureIntentError.emptyImage
+        }
         let image: [String: Any] = [
             "attachment_id": intent.attachmentId.uuidString.lowercased(),
             "file_name": "capture.png",
@@ -51,6 +54,50 @@ enum CaptureTransportPayload {
             "images": [image],
         ]
         return try JSONSerialization.data(withJSONObject: body)
+    }
+}
+
+/// Later-started authenticated reads may finish first. Once a newer owner,
+/// login or processor policy is observed, an older response cannot restore
+/// authority merely because it arrives last.
+@MainActor
+final class CaptureContextReadFence {
+    private struct Identity: Equatable {
+        let origin: String
+        let ownerScope: String
+        let loginBinding: String
+        let policyVersion: String
+        init(_ context: CaptureContext) {
+            origin = context.origin
+            ownerScope = context.ownerScope
+            loginBinding = context.loginBinding
+            policyVersion = context.processing.policyVersion
+        }
+    }
+    private enum Latest { case context(Identity), signedOut }
+    private var nextSequence = 0
+    private var appliedSequence = 0
+    private var latest: Latest?
+
+    func begin() -> Int { nextSequence += 1; return nextSequence }
+
+    func accept(_ context: CaptureContext, sequence: Int) throws {
+        if sequence < appliedSequence {
+            guard case .some(.context(let current)) = latest, current == Identity(context) else {
+                throw CaptureTransportError.staleOrigin
+            }
+            return
+        }
+        appliedSequence = sequence
+        latest = .context(Identity(context))
+    }
+
+    @discardableResult
+    func signedOut(sequence: Int) -> Bool {
+        guard sequence >= appliedSequence else { return false }
+        appliedSequence = sequence
+        latest = .signedOut
+        return true
     }
 }
 
@@ -95,6 +142,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     private var loadingWaiters: [CheckedContinuation<Void, Error>] = []
     private var loadTimeout: Task<Void, Never>?
     private var activeNavigation: WKNavigation?
+    private let contextFence = CaptureContextReadFence()
 
     init(origin: WorkspaceOrigin) {
         self.origin = origin
@@ -193,12 +241,19 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     }
 
     func context() async throws -> CaptureContext {
-        let data = try await fetch(path: "/api/desktop-capture/context", method: "GET")
-        return try CaptureContext.decode(data, origin: origin.url.absoluteString)
+        let sequence = contextFence.begin()
+        do {
+            let data = try await fetch(path: "/api/desktop-capture/context", method: "GET")
+            let context = try CaptureContext.decode(data, origin: origin.url.absoluteString)
+            try contextFence.accept(context, sequence: sequence)
+            return context
+        } catch CaptureTransportError.server(401, let code) {
+            guard contextFence.signedOut(sequence: sequence) else { throw CaptureTransportError.staleOrigin }
+            throw CaptureTransportError.server(401, code)
+        }
     }
 
-    func recentSession() async throws -> UUID? {
-        let current = try await context()
+    func recentSession(context current: CaptureContext) async throws -> UUID? {
         let data = try await fetch(path: "/api/desktop-capture/recent-session", method: "GET",
                                    binding: current.loginBinding, account: current.workspaceAccountID)
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {

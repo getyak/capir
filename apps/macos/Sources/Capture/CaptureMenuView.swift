@@ -20,6 +20,7 @@ struct CaptureMenuView: View {
             if let coordinator = runtime.coordinator {
                 CaptureMenuActions(coordinator: coordinator, preferences: preferences,
                                    recentConversation: runtime.recentConversation,
+                                   ownerVerified: runtime.captureOwnerVerified,
                                    dismissMenu: dismissMenu,
                                    openWorkspace: { openWindow(id: "workspace") },
                                    continueRecent: { Task { await runtime.resumeRecentConversation() } })
@@ -95,6 +96,7 @@ private struct CaptureMenuActions: View {
     @ObservedObject var coordinator: CaptureCoordinator
     @ObservedObject var preferences: CapturePreferences
     let recentConversation: CaptureRecentConversation
+    let ownerVerified: Bool
     let dismissMenu: () -> Void
     let openWorkspace: () -> Void
     let continueRecent: () -> Void
@@ -123,30 +125,41 @@ private struct CaptureMenuActions: View {
             .accessibilityIdentifier("capture.menu.start")
             .padding(.horizontal, 8)
 
+            if !ownerVerified && coordinator.boundOwnerScope != nil {
+                Text(recentConversation == .checking ? "正在确认当前工作区…" : "暂时无法确认当前工作区。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 17).padding(.top, 9)
+            } else {
             switch coordinator.presentation {
             case .needsDisclosure(let context): disclosure(context)
             case .needsSignIn:
                 inlineNote("请先在工作区登录，然后重试截图。", action: "打开工作区", onAction: openWorkspace)
             case .unknown(let intentID):
-                inlineNote("送达状态未确认，原截图仍在本机。", action: "核对并重试") {
+                let hasRawImage = coordinator.hasLocalImage(intentID: intentID)
+                inlineNote(hasRawImage ? "送达状态未确认，原截图仍在本机。" : "送达状态未确认，本机原图已清除。",
+                           action: hasRawImage ? "核对并重试" : "核对状态") {
                     Task { await coordinator.retry(intentID: intentID) }
                 }
-                Button("删除本机截图") { coordinator.discardLocal(intentID: intentID) }
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 6)
+                if hasRawImage {
+                    Button("删除本机截图") { coordinator.discardLocal(intentID: intentID) }
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 6)
+                }
             case .deletionFailed(let intentID):
                 inlineNote("本机截图删除未完成；不会再次上传。", action: "重试删除") {
                     coordinator.discardLocal(intentID: intentID)
                 }
             case .failed(let intentID, let message):
                 inlineNote(message, action: intentID.flatMap(coordinator.failedSession) != nil ? "查看会话" :
-                           intentID == nil ? "重新截图" : "核对并重试") {
+                           intentID == nil ? "重新截图" :
+                           intentID.map({ coordinator.hasLocalImage(intentID: $0) }) == true ? "核对并重试" : "核对状态") {
                     if let intentID, let sessionID = coordinator.failedSession(intentID: intentID) {
                         CaptureRuntime.shared.openSession(sessionID)
                     } else if let intentID { Task { await coordinator.retry(intentID: intentID) } }
                     else { Task { await coordinator.startCapture(prepareToSelect: dismissMenu) } }
                 }
-                if let intentID, coordinator.failedSession(intentID: intentID) == nil {
+                if let intentID, coordinator.failedSession(intentID: intentID) == nil,
+                   coordinator.hasLocalImage(intentID: intentID) {
                     Button("删除本机截图") { coordinator.discardLocal(intentID: intentID) }
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                         .buttonStyle(.plain).padding(.horizontal, 16).padding(.top, 6)
@@ -159,6 +172,7 @@ private struct CaptureMenuActions: View {
             case .previewReady: Text("截图留在预览中，发送前可以裁剪或遮挡。")
                 .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 17).padding(.top, 9)
             case .idle: EmptyView()
+            }
             }
 
             Divider().padding(.horizontal, 15).padding(.vertical, 10)

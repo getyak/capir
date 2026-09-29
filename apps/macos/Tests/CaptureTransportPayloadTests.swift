@@ -24,4 +24,43 @@ final class CaptureTransportPayloadTests: XCTestCase {
         XCTAssertEqual(images[0]["byte_size"] as? Int, png.count)
         XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("login-one"))
     }
+
+    @MainActor
+    func testOlderContextCannotUndoNewerOwnerOrSignOut() throws {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let processing = CaptureProcessing(policyVersion: "policy", workspaceLabel: "Workspace",
+                                           processorLabels: ["Synthetic"], sourceRetentionDays: 30, available: true)
+        let ownerA = CaptureContext(origin: "https://workspace.example", ownerScope: "owner-a", loginBinding: "login-a",
+                                    expiresAt: at.addingTimeInterval(300), processing: processing)
+        let ownerB = CaptureContext(origin: ownerA.origin, ownerScope: "owner-b", loginBinding: "login-b",
+                                    expiresAt: at.addingTimeInterval(300), processing: processing)
+        let fence = CaptureContextReadFence()
+        let oldA = fence.begin(), newB = fence.begin()
+        try fence.accept(ownerB, sequence: newB)
+        XCTAssertThrowsError(try fence.accept(ownerA, sequence: oldA))
+
+        let oldB = fence.begin(), signedOut = fence.begin()
+        XCTAssertTrue(fence.signedOut(sequence: signedOut))
+        XCTAssertThrowsError(try fence.accept(ownerB, sequence: oldB))
+
+        let staleSignOut = fence.begin(), freshB = fence.begin()
+        try fence.accept(ownerB, sequence: freshB)
+        XCTAssertFalse(fence.signedOut(sequence: staleSignOut),
+                       "A late 401 must surface as stale, never sign out a newer verified owner")
+    }
+
+    @MainActor
+    func testConcurrentSameOwnerContextsMayBothFinish() throws {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let processing = CaptureProcessing(policyVersion: "policy", workspaceLabel: "Workspace",
+                                           processorLabels: ["Synthetic"], sourceRetentionDays: 30, available: true)
+        let earlier = CaptureContext(origin: "https://workspace.example", ownerScope: "owner-a", loginBinding: "login-a",
+                                     expiresAt: at.addingTimeInterval(300), processing: processing)
+        let later = CaptureContext(origin: earlier.origin, ownerScope: earlier.ownerScope, loginBinding: earlier.loginBinding,
+                                   expiresAt: at.addingTimeInterval(301), processing: processing)
+        let fence = CaptureContextReadFence()
+        let first = fence.begin(), second = fence.begin()
+        try fence.accept(later, sequence: second)
+        XCTAssertNoThrow(try fence.accept(earlier, sequence: first))
+    }
 }

@@ -101,7 +101,10 @@ struct CaptureIntent: Codable, Equatable, Sendable {
     var authorizedReplayLoginBinding: String?
     let policyVersion: String
     let capturedAt: Date
-    let imagePNG: Data
+    var imagePNG: Data
+    /// Retains exact receipt matching after verified admission releases pixels.
+    /// Optional so recovery files written before this field existed still load.
+    var recordedImageByteSize: Int?
     let contentHash: String
     var phase: CapturePhase
     var queueEntryId: UUID?
@@ -124,15 +127,25 @@ struct CaptureIntent: Codable, Equatable, Sendable {
         self.policyVersion = context.processing.policyVersion
         self.capturedAt = capturedAt
         self.imagePNG = imagePNG
+        recordedImageByteSize = nil
         contentHash = SHA256.hash(data: imagePNG).map { String(format: "%02x", $0) }.joined()
         phase = .staged
         queueEntryId = nil
     }
 
     var idempotencyKey: String { messageId.uuidString.lowercased() }
-    var imageByteSize: Int { imagePNG.count }
+    var imageByteSize: Int { recordedImageByteSize ?? imagePNG.count }
+    var hasRawImage: Bool { !imagePNG.isEmpty }
     var localRecoveryDeadline: Date { capturedAt.addingTimeInterval(86_400) }
     func isLocallyExpired(at date: Date) -> Bool { date >= localRecoveryDeadline }
+
+    func withoutRawImage() -> CaptureIntent {
+        var admitted = self
+        admitted.recordedImageByteSize = imageByteSize
+        admitted.imagePNG = Data()
+        admitted.phase = .admitted
+        return admitted
+    }
 
     func canSubmit(context: CaptureContext, now: Date) -> Bool {
         canExplicitlyReplay(context: context, now: now) &&
@@ -140,7 +153,7 @@ struct CaptureIntent: Codable, Equatable, Sendable {
     }
 
     func canExplicitlyReplay(context: CaptureContext, now: Date) -> Bool {
-        loginBinding != nil && canReadback(context: context, now: now) && context.processing.available &&
+        hasRawImage && loginBinding != nil && canReadback(context: context, now: now) && context.processing.available &&
             policyVersion == context.processing.policyVersion && !isLocallyExpired(at: now)
     }
 

@@ -6,14 +6,13 @@ import type { BackendConfig } from "../config.js";
 import type { RemoteChatAnswerProviding, RemoteChatAnswerRequest } from "../modules/chatAnswerProvider.js";
 
 /** Disposable loopback proof host. It can never contact a live model. */
-const databaseURL = process.env.DESKTOP_CAPTURE_PROOF_DATABASE_URL;
+const databaseURL = process.env.DATABASE_URL;
 assert(databaseURL && process.env.DESKTOP_CAPTURE_PROOF_DISPOSABLE === "true",
   "An explicitly disposable database is required.");
 const database = new URL(databaseURL);
 assert(database.protocol === "postgresql:" && database.hostname === "127.0.0.1" &&
   database.pathname === "/ts_capture_e2e" && !database.search && !database.hash,
   "The desktop capture proof can use only its disposable loopback database.");
-assert(process.env.DATABASE_URL === databaseURL, "Backend and proof database URLs must match.");
 assert(process.env.NODE_ENV !== "production", "The proof host cannot run in production.");
 const webOrigin = new URL(process.env.DESKTOP_CAPTURE_PROOF_WEB_URL ?? "");
 assert(webOrigin.protocol === "http:" && webOrigin.hostname === "127.0.0.1" &&

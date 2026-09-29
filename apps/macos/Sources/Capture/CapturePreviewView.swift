@@ -120,9 +120,12 @@ final class CapturePreviewWindowController: NSObject, NSWindowDelegate {
     private weak var coordinator: CaptureCoordinator?
 
     func show(coordinator: CaptureCoordinator) {
-        if let window { window.makeKeyAndOrderFront(nil); return }
+        if let window, self.coordinator === coordinator { window.makeKeyAndOrderFront(nil); return }
+        dismiss()
         let new = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
                            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        new.animationBehavior = .none
+        new.isReleasedWhenClosed = false
         new.title = "Talent Signal · 截图预览"
         self.coordinator = coordinator
         new.delegate = self
@@ -138,5 +141,12 @@ final class CapturePreviewWindowController: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         if case .previewReady = coordinator?.presentation { coordinator?.discardPreview() }
         window = nil
+        coordinator = nil
+    }
+
+    func dismiss() {
+        window?.close()
+        window = nil
+        coordinator = nil
     }
 }

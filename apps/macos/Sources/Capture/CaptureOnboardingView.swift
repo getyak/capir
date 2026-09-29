@@ -58,13 +58,18 @@ struct CaptureOnboardingView: View {
 @MainActor
 final class CaptureOnboardingWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
+    private weak var coordinator: CaptureCoordinator?
 
     func show(coordinator: CaptureCoordinator, openWorkspace: @escaping () -> Void) {
-        if let window { window.makeKeyAndOrderFront(nil); return }
+        if let window, self.coordinator === coordinator { window.makeKeyAndOrderFront(nil); return }
+        dismiss()
         let next = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 440, height: 330),
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        next.animationBehavior = .none
+        next.isReleasedWhenClosed = false
         next.title = "Talent Signal · 截图"
         next.delegate = self
+        self.coordinator = coordinator
         next.contentViewController = NSHostingController(rootView: CaptureOnboardingView(coordinator: coordinator,
                                                                                            openWorkspace: openWorkspace) { [weak self] in
             self?.window?.close()
@@ -76,5 +81,11 @@ final class CaptureOnboardingWindowController: NSObject, NSWindowDelegate {
         next.makeKeyAndOrderFront(nil)
     }
 
-    func windowWillClose(_ notification: Notification) { window = nil }
+    func windowWillClose(_ notification: Notification) { window = nil; coordinator = nil }
+
+    func dismiss() {
+        window?.close()
+        window = nil
+        coordinator = nil
+    }
 }

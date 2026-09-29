@@ -60,4 +60,45 @@ final class CaptureRecoveryStoreTests: XCTestCase {
         XCTAssertTrue(try store.load(origin: "https://workspace.example", ownerScope: "owner-one", now: at).isEmpty)
         XCTAssertTrue(try store.load(origin: "https://workspace.example", ownerScope: "owner-two", now: at).isEmpty)
     }
+
+    func testNextExpiryTracksTheOriginalTimestampAcrossOwnerPartitions() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = CaptureRecoveryStore(directory: directory, keyProvider: FixtureCaptureKey())
+        for (owner, offset) in [("owner-one", 90.0), ("owner-two", 30.0)] {
+            let context = CaptureContext(origin: "https://workspace.example", ownerScope: owner,
+                                         loginBinding: "login", expiresAt: at.addingTimeInterval(300),
+                                         processing: .init(policyVersion: "policy", workspaceLabel: "Workspace",
+                                                           processorLabels: ["Claude · sonnet"], sourceRetentionDays: 30, available: true))
+            try store.save(CaptureIntent(imagePNG: Data([1, 2, 3]), context: context,
+                                         capturedAt: at.addingTimeInterval(offset)))
+        }
+        XCTAssertEqual(try store.nextExpiry(now: at), at.addingTimeInterval(30 + 86_400))
+        try store.purgeExpired(now: at.addingTimeInterval(30 + 86_400))
+        XCTAssertEqual(try store.nextExpiry(now: at), at.addingTimeInterval(90 + 86_400))
+    }
+
+    @MainActor
+    func testRunningAppRemovesRawRecoveryAtTheCaptureDeadline() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = CaptureRecoveryStore(directory: directory, keyProvider: FixtureCaptureKey())
+        let current = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let captured = current.addingTimeInterval(-86_400 + 2)
+        let context = CaptureContext(origin: "https://workspace.example", ownerScope: "proof-owner",
+                                     loginBinding: "proof-login", expiresAt: current.addingTimeInterval(300),
+                                     processing: .init(policyVersion: "proof-policy", workspaceLabel: "Proof",
+                                                       processorLabels: ["Synthetic"], sourceRetentionDays: 30, available: true))
+        let intent = try CaptureIntent(imagePNG: Data([1, 2, 3]), context: context, capturedAt: captured)
+        try store.save(intent)
+        let path = try XCTUnwrap(store.fileURL(for: intent))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
+        let runtime = CaptureRuntime(recoveryStore: store)
+        runtime.expireDueLocalImages()
+        for _ in 0..<50 where FileManager.default.fileExists(atPath: path.path) {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path.path),
+                       "A running app must erase the encrypted raw image without a restart or owner reload")
+    }
 }
