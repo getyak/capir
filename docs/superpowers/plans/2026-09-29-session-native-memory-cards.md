@@ -10,6 +10,8 @@
 
 **Spec:** [Session-native result cards with assistant-ui](../specs/2026-09-28-session-native-agent-cards-design.md). The [Figma Session review](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=274-2737) fixes the visible card grammar; canonical domain and evidence rules still govern actions.
 
+**Implementation status (2026-09-29):** Tasks 1–6 are implemented on the isolated `codex/session-agent-cards` branch. Task 7's backend, Web, documentation, and macOS build checks are recorded in the [evaluation](../../evaluations/2026-09-29-session-native-agent-cards/README.md). Actual WKWebView card interaction and calendar save-panel verification remain open because the Mac was locked during inspection.
+
 ## Global constraints
 
 - One card represents one decision or one verifiable result. Show one change, a short exact excerpt, and direct effect-specific actions without a mandatory review-opening step.
