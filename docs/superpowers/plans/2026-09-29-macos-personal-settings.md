@@ -393,6 +393,13 @@ browser:
   survives into the browser. Both requests carry `ch` set, unlike every embed
   request in the same log.
 
+Acceptance invocation:
+`TEST_RUNNER_TS_HANDOFF_ORIGIN=http://127.0.0.1:4403 xcodebuild test -only-testing:TalentSignalMacUITests/WorkspaceSettingsUITests/testAccountRowHandsOffToTheDefaultBrowser`.
+Without that variable the test skips with a pointer to this section, so
+`pnpm macos:check` stays green without the synthetic stack. A second run with the
+variable set (`/tmp/ts-ui-handoff11.log`) passed again and reproduced the same
+Chrome navigations on the per-run port.
+
 The test's own assertions passed: no `workspace.browserLaunchFailure`, the settings
 window stays a separate window (two windows before and after the click), the rail
 stays usable, and closing the window returns the app to one window.

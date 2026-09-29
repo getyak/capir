@@ -75,10 +75,13 @@ final class WorkspaceSettingsUITests: XCTestCase {
     /// origin port is the attribution marker: a document request for
     /// `/workspace/settings` on that port comes from the browser AppKit opened,
     /// because the embed never loads the Web account routes.
-    func testAccountRowHandsOffToTheDefaultBrowser() {
+    func testAccountRowHandsOffToTheDefaultBrowser() throws {
+        let handoffOrigin = ProcessInfo.processInfo.environment["TS_HANDOFF_ORIGIN"]
+        try XCTSkipUnless(handoffOrigin != nil,
+                          "Needs the task-owned synthetic origin and its logging proxy; see the handoff section of docs/superpowers/plans/2026-09-29-macos-personal-settings.md")
         let app = XCUIApplication()
         app.launchArguments = [
-            "-workspace.web.origin", "http://127.0.0.1:4403",
+            "-workspace.web.origin", handoffOrigin ?? "http://127.0.0.1:4403",
             "-workspace.connection.localDevelopment", "YES",
             "-ApplePersistenceIgnoreState", "YES"
         ]
