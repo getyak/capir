@@ -135,7 +135,16 @@ path; account identity comes from verified server sessions, never handoff parame
   and after those refusals B can still rename its own workspace. `5 passed`, cleanup
   leaves `0` rows. Gated on `ACCOUNT_SETTINGS_TEST_DATABASE_URL` (skips without it) and
   wired into the CI step that already migrates the `account_proof` database, so it runs
-  in CI instead of silently skipping. Web-level wiring coverage stays in
+  in CI instead of silently skipping. The layer above it is covered too: `apps/backend/src/modules/accountSettingsHttp.integration.test.ts`
+  builds the real Fastify app over the same database, signs in both accounts through
+  `POST /v1/auth/simulated-login`, and exercises `GET`/`POST /v1/account/settings` — a
+  signed-out caller is refused (401) and the answer is `cache-control: private,
+  no-store`; each Bearer session reads only its own account, members and email; a
+  profile save writes only the authenticated account and a repeated revision answers
+  `409 ACCOUNT_STALE`; B's request naming A's session answers `404 SESSION_NOT_FOUND`
+  with A's session still active and B's `member` payload naming A's user answers `404
+  MEMBER_NOT_FOUND` with A's role unchanged; A can still rename its own workspace. 10
+  passed across both files, database left empty. Web-level wiring coverage stays in
   `apps/web/lib/settings-account-isolation.test.ts` and the `actions.test.ts`
   substitution cases.
 - [x] Add tests for failed save retaining draft, canonical readback before success,
@@ -289,8 +298,10 @@ Independent review (Codex, read-only, adversarial, 2026-09-29) found:
    `apps/backend/src/modules/accountSettingsIsolation.integration.test.ts` seeds two real
    accounts in PostgreSQL 18 and asserts the refused reads and writes described in Task
    4, `5 passed`, cleanup leaving `0` rows. It runs in CI against the migrated
-   `account_proof` database. Still not exercised: a production-like database and the
-   HTTP layer above `mutateAccountSettings`; the Web action tests remain wiring-level.
+   `account_proof` database. Still not exercised: a production-like database and its
+   deployment configuration; the HTTP surface, the signed-out caller and the two-session
+   split are exercised by `accountSettingsHttp.integration.test.ts` on a local
+   PostgreSQL 18 built with the real Fastify app.
 4. **P2, narrowed — the `pushState` test is narrower than its comment implied.**
    `testWebViewURLKVOObservesClientSidePushStateAndRestores` proves WebKit URL KVO and
    history semantics on a standalone WebView; it does not exercise `WorkspaceBrowser`,

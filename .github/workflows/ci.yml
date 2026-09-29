@@ -327,7 +327,7 @@ jobs:
           pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE account_proof'); } finally { await pool.end(); }"
           DATABASE_URL="$ACCOUNT_EVALUATION_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runAccountManagementEvaluation.ts
-          pnpm --filter @talent-signal/backend exec vitest run src/modules/accountSettingsIsolation.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run src/modules/accountSettingsIsolation.integration.test.ts src/modules/accountSettingsHttp.integration.test.ts
 
       - name: Exercise saved regression lifecycle with a synthetic provider
         env:
