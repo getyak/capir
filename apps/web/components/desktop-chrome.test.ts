@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { DesktopSettingsLink, DesktopUpdateButton, desktopVersion } from "./desktop-chrome";
+import { DesktopAccountLink, DesktopDeviceSettingsLink, DesktopUpdateButton, desktopVersion } from "./desktop-chrome";
 import { WorkspaceAccountMenu } from "./workspace-account-menu";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -15,42 +15,64 @@ afterEach(async () => {
 });
 
 describe("native desktop chrome", () => {
-  it("offers one context-correct Settings entry in the avatar menu", async () => {
+  it("keeps account management in the browser and device settings in the native window", async () => {
+    const host = document.createElement("div"); document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(createElement("div", null,
+      createElement(DesktopAccountLink, { onClick() {} }),
+      createElement(DesktopDeviceSettingsLink, { onClick() {} }))));
+    // A plain browser gets the ordinary Web settings route and no device chrome.
+    expect(host.querySelector("a")?.getAttribute("href")).toBe("/workspace/settings");
+    expect(host.querySelector("a")?.textContent).toContain("账号与偏好");
+    expect(host.querySelector("[href^='talentsignal-desktop://']")).toBeNull();
+    expect(host.querySelector("kbd")).toBeNull();
+
+    await act(async () => {
+      window.talentSignalDesktop = { protocolVersion: 1, availableVersion: null };
+      window.dispatchEvent(new Event("talent-signal-desktop"));
+    });
+    // Hosted: account management is still handed to the real browser session.
+    expect(host.querySelector("a[href='talentsignal-desktop://account-settings']")?.textContent)
+      .toContain("账号与偏好");
+    expect(host.querySelector("a[href='/workspace/settings']")).toBeNull();
+    // Device settings are the only thing the native window owns.
+    const device = host.querySelector("a[href='talentsignal-desktop://settings']");
+    expect(device?.textContent).toContain("此 Mac 设置");
+    expect(device?.querySelector("kbd")?.textContent).toBe("⌘ ,");
+  });
+
+  it("offers both account and device entries in the avatar menu without ambiguity", async () => {
     const host = document.createElement("div"); document.body.append(host);
     root = createRoot(host);
     await act(async () => root!.render(createElement(WorkspaceAccountMenu, {
       accountName: "Synthetic User", workspaceName: "Fixture Workspace", signOutAction: () => {},
     })));
-    const settingsLinks = () => host.querySelectorAll(
-      'a[href="/workspace/settings"], a[href="talentsignal-desktop://settings"]',
-    );
-    expect(settingsLinks()).toHaveLength(1);
-    expect(settingsLinks()[0].getAttribute("href")).toBe("/workspace/settings");
+    const accountLinks = () => host.querySelectorAll("a[href='/workspace/settings']");
+    const deviceLinks = () => host.querySelectorAll("a[href='talentsignal-desktop://settings']");
+    expect(accountLinks()).toHaveLength(1);
+    expect(deviceLinks()).toHaveLength(0);
+    // The account link discloses that the browser session is separate.
+    expect(host.textContent).toContain("浏览器登录状态可能与本应用不同");
 
     await act(async () => {
       window.talentSignalDesktop = { protocolVersion: 1, surface: "workspace", availableVersion: null };
       window.dispatchEvent(new Event("talent-signal-desktop"));
     });
-    expect(settingsLinks()).toHaveLength(1);
-    expect(settingsLinks()[0].getAttribute("href")).toBe("talentsignal-desktop://settings");
-    expect(settingsLinks()[0].textContent).toContain("设置");
+    const account = () => host.querySelectorAll("a[href='talentsignal-desktop://account-settings']");
+    expect(account()).toHaveLength(1);
+    expect(account()[0].textContent).toContain("账号与偏好 ↗");
+    expect(deviceLinks()).toHaveLength(1);
+    expect(deviceLinks()[0].textContent).toContain("此 Mac 设置…");
+    // Neither entry may claim to bring account data back into the app.
+    expect(host.textContent).not.toContain("同步");
   });
 
-  it("uses the Web settings route in browsers and the native window in a supported host", async () => {
+  it("shows no device chrome and stays usable when the update state is absent", async () => {
     const host = document.createElement("div"); document.body.append(host);
     root = createRoot(host);
     await act(async () => root!.render(createElement("div", null,
-      createElement(DesktopUpdateButton), createElement(DesktopSettingsLink, { onClick() {} }))));
-    expect(host.querySelector("a")?.getAttribute("href")).toBe("/workspace/settings");
-    expect(host.querySelector("kbd")).toBeNull();
-    await act(async () => {
-      window.talentSignalDesktop = { protocolVersion: 1, availableVersion: null };
-      window.dispatchEvent(new Event("talent-signal-desktop"));
-    });
-    expect(host.textContent).toContain("设置");
-    expect(host.querySelector("a")?.getAttribute("href")).toBe("talentsignal-desktop://settings");
-    expect(host.querySelector("kbd")?.textContent).toBe("⌘ ,");
-    expect(host.querySelector('[href="talentsignal-desktop://updates"]')).toBeNull();
+      createElement(DesktopUpdateButton), createElement(DesktopDeviceSettingsLink, { onClick() {} }))));
+    expect(host.textContent).toBe("");
     await act(async () => {
       window.talentSignalDesktop = { protocolVersion: 1, availableVersion: "0.2.0" };
       window.dispatchEvent(new Event("talent-signal-desktop"));

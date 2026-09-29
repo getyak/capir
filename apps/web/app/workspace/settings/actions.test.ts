@@ -11,6 +11,14 @@ it.each(["old-user", ""])("rejects a form rendered for another or missing actor"
  expect(await saveAccountSettings({}, form)).toHaveProperty("error");
  expect(update).not.toHaveBeenCalled();
 });
+it.each(["other-account", ""]) ("rejects a substituted account before any write", async account => {
+ const form = new FormData();
+ form.set("workspaceId",account); form.set("actorUserId","current-user"); form.set("kind","profile"); form.set("name","Name");
+ // Account identity comes from the verified session, so substituting only the
+ // account id in the form must fail before reaching the backend boundary.
+ expect(await saveAccountSettings({}, form)).toHaveProperty("error");
+ expect(update).not.toHaveBeenCalled();
+});
 it("preserves a same-user profile edit", async () => {
  const form = new FormData();
  for (const [key,value] of Object.entries({workspaceId:"workspace",actorUserId:"current-user",kind:"profile",name:"My name",revision:"1",operationId:"operation"})) form.set(key,value);

@@ -303,7 +303,10 @@ describe("device permissions", () => {
     const section = host.querySelector("#device-permissions")!;
     expect(section).toBeTruthy();
     expect(section.textContent).toContain("屏幕录制权限");
-    expect(section.textContent).toContain("「此设备」");
+    // Names the native window and pane that actually own the permission.
+    expect(section.textContent).toContain("「此 Mac 设置…」");
+    expect(section.textContent).toContain("「权限」");
+    expect(section.textContent).not.toContain("「此设备」");
     expect(section.textContent).toContain("macOS 系统设置");
     expect(section.textContent).toContain("这个 Web 设置页无法授予或更改系统权限");
     expect(section.textContent).toContain("授权后回到应用，重新检查状态");
