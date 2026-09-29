@@ -292,75 +292,124 @@ struct DesktopPetSettingsView: View {
     @ObservedObject private var pet = DesktopPetController.shared
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 23) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("桌面伙伴").font(.title2.weight(.semibold))
-                    Text("一个安静的桌面入口。你可以随时隐藏，选择会保留在这台 Mac。")
-                        .font(.callout).foregroundStyle(.secondary)
-                    Button(pet.isVisible ? "隐藏伙伴" : "显示伙伴") {
-                        pet.isVisible.toggle()
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("desktopPet.visibility")
-                    .padding(.top, 6)
-                }
-
-                VStack(spacing: 10) {
-                    PetArtwork(pet: pet.selectedPet, size: 132, motionEnabled: pet.motionEnabled)
-                        .frame(height: 150)
-                    Text(pet.selectedPet.name).font(.headline)
-                    Text(pet.selectedPet.note).font(.caption).foregroundStyle(.secondary)
-                    Text(pet.isVisible ? "显示在桌面边缘" : "已隐藏 · 你的选择已保留")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(pet.isVisible ? Color.accentColor : .secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
-                .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 18))
-                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.primary.opacity(0.09)))
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("选择伙伴").font(.headline)
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
-                        ForEach(DesktopPet.allCases) { option in
-                            Button {
-                                pet.selectedPet = option
-                            } label: {
-                                VStack(spacing: 5) {
-                                    PetArtwork(pet: option, size: 58, motionEnabled: false)
-                                    Text(option.name).font(.caption.weight(.medium))
-                                }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 95)
-                                .background(pet.selectedPet == option ? Color.accentColor.opacity(0.09) : Color.primary.opacity(0.025),
-                                            in: RoundedRectangle(cornerRadius: 12))
-                                .overlay(RoundedRectangle(cornerRadius: 12)
-                                    .strokeBorder(pet.selectedPet == option ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.07)))
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("desktopPet.option.\(option.rawValue)")
-                            .accessibilityAddTraits(pet.selectedPet == option ? .isSelected : [])
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    if geometry.size.width >= 640 {
+                        HStack(alignment: .top, spacing: 24) {
+                            titleBlock.frame(maxWidth: .infinity, alignment: .leading)
+                            visibilityButton
                         }
+                        HStack(alignment: .top, spacing: 28) {
+                            choices
+                            preview
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            titleBlock
+                            visibilityButton
+                        }
+                        choices
+                        preview
                     }
                 }
-
-                HStack {
-                    Picker("桌面位置", selection: $pet.edge) {
-                        ForEach(DesktopPetEdge.allCases) { edge in Text(edge.title).tag(edge) }
-                    }
-                    .frame(maxWidth: 230)
-                    Spacer()
-                    Toggle("轻微呼吸动画", isOn: $pet.motionEnabled)
-                        .toggleStyle(.switch)
-                }
-                Text("事项状态只来自已验证的工作区数据；没有可靠来源时不会显示进度或数量。")
-                    .font(.caption).foregroundStyle(.secondary)
+                .padding(32)
+                .frame(maxWidth: 900)
+                .frame(maxWidth: .infinity)
             }
-            .padding(32)
-            .frame(maxWidth: 640)
-            .frame(maxWidth: .infinity)
         }
         .background(.background)
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("桌面伙伴").font(.title2.weight(.semibold))
+            Text("留一位安静的桌面伙伴。随时隐藏，选择会保留在这台 Mac。")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
+    private var visibilityButton: some View {
+        Button(pet.isVisible ? "隐藏伙伴" : "显示伙伴") {
+            pet.isVisible.toggle()
+        }
+        .buttonStyle(.bordered)
+        .fixedSize()
+        .accessibilityIdentifier("desktopPet.visibility")
+    }
+
+    private var choices: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("选择伙伴").font(.headline).padding(.bottom, 2)
+            ForEach(DesktopPet.allCases) { option in
+                Button {
+                    pet.selectedPet = option
+                } label: {
+                    HStack(spacing: 11) {
+                        PetArtwork(pet: option, size: 48, motionEnabled: false)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(option.name).font(.subheadline.weight(.medium))
+                            Text(option.note).font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: pet.selectedPet == option ? "largecircle.fill.circle" : "circle")
+                            .font(.system(size: 14))
+                            .foregroundStyle(pet.selectedPet == option ? Color.primary : .secondary)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(height: 65)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(pet.selectedPet == option ? Color.primary.opacity(0.055) : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 11))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("desktopPet.option.\(option.rawValue)")
+                .accessibilityAddTraits(pet.selectedPet == option ? .isSelected : [])
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var preview: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            Text("在桌面上的样子").font(.headline)
+            ZStack(alignment: .bottomTrailing) {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(red: 0.90, green: 0.92, blue: 0.88))
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.white.opacity(0.88))
+                    .frame(width: 160, height: 78)
+                    .overlay(alignment: .topLeading) {
+                        Text("给正在做的事留空间。")
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(11)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                PetArtwork(pet: pet.selectedPet, size: 56, motionEnabled: pet.motionEnabled)
+                    .padding(8)
+            }
+            .frame(height: 180)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(pet.selectedPet.name)桌面伙伴预览")
+
+            Text(pet.selectedPet.name).font(.title3.weight(.semibold))
+            Text(pet.selectedPet.note).font(.callout).foregroundStyle(.secondary)
+            Text(pet.isVisible ? "显示在桌面边缘 · 不展示私人文字" : "已隐藏 · 工作继续，选择已保留")
+                .font(.caption).foregroundStyle(.secondary)
+
+            Divider()
+            Picker("桌面位置", selection: $pet.edge) {
+                ForEach(DesktopPetEdge.allCases) { edge in Text(edge.title).tag(edge) }
+            }
+            Toggle("轻微呼吸动画", isOn: $pet.motionEnabled)
+                .toggleStyle(.switch)
+            Text("事项状态只来自已验证的工作区数据；没有可靠来源时不会显示进度或数量。")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

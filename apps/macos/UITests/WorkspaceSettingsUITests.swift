@@ -20,7 +20,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
         XCTAssertTrue(visibility.waitForExistence(timeout: 10))
         XCTAssertEqual(visibility.label, "显示伙伴")
         app.buttons["desktopPet.option.owl"].click()
-        XCTAssertTrue(app.images["猫头鹰桌面伙伴"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["猫头鹰桌面伙伴预览"].exists)
 
         visibility.click()
         XCTAssertEqual(visibility.label, "隐藏伙伴")

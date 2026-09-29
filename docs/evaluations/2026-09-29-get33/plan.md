@@ -62,14 +62,17 @@ the shared Web product can supply a scoped, provenance-preserving state feed.
   Scoped cache cleanup was attempted; the macOS build used a registered
   task-owned artifact directory and occupied about 453 MiB.
 - Native Debug build passed. `WorkspaceSettingsTests` passed all 28 tests on
-  both focused runs, including the final build. The dedicated UI runner
-  exited before test bootstrap twice, including with signing enabled, so its
-  assertions have not executed.
+  the final responsive build. The updated UI test target also built
+  successfully. The dedicated UI runner exited before
+  test bootstrap twice, including with signing enabled; a later attempt
+  stalled during bootstrap and was stopped. Its assertions have not executed.
 - Live macOS readback confirmed the settings preview and visible show/hide
-  button, all six bundled illustrations, the floating controls, the truthful
-  unavailable-state popover, hide/restore through the app menu, and reopening
-  the original workspace after closing its main window. Computer Use captures
-  the controls panel separately from the noninteractive artwork panel, so a
+  button, all six bundled illustrations, the Figma-inspired two-column layout,
+  the floating controls, the truthful unavailable-state popover, hide/restore
+  through the app menu, and reopening the original workspace after closing
+  its main window. The 820pt narrow layout has a reviewed vertical fallback
+  but no successful window-resize screenshot. Computer Use captures the
+  controls panel separately from the noninteractive artwork panel, so a
   composite desktop screenshot is not yet available as visual evidence.
 - The first Pi/MiMo batch was cancelled after 194 no-op turns with no source
   changes. An independent reviewer found no remaining P0/P1 after the

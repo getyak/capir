@@ -274,7 +274,9 @@ struct WorkspaceDesktopSettings: View {
             Divider()
             content
         }
-        .frame(minWidth: 820, idealWidth: 900, maxWidth: .infinity, minHeight: 600, idealHeight: 680, maxHeight: .infinity)
+        .frame(minWidth: 820,
+               idealWidth: navigation.selection == .companion ? 1040 : 900,
+               maxWidth: .infinity, minHeight: 600, idealHeight: 680, maxHeight: .infinity)
         .background(SettingsWindowTitle(title: "此 Mac 设置"))
         .task { updater.start() }
     }
