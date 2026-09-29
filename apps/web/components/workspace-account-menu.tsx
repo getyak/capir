@@ -14,7 +14,7 @@ import {
   accountWorkspaceLabel,
   type AccountIdentity,
 } from "@/lib/workspace-account";
-import { DesktopAccountLink, DesktopDeviceSettingsLink, DesktopUpdateButton } from "./desktop-chrome";
+import { DesktopAccountLink, DesktopAccountNotice, DesktopDeviceSettingsLink, DesktopUpdateButton } from "./desktop-chrome";
 import { ThemeToggle } from "./theme-toggle";
 import { clearAllPendingSessionDrafts } from "./session-workbench/session-draft-pending";
 import { clearAllPendingMeetingDraftIntents } from "@/lib/meeting-draft-pending";
@@ -132,11 +132,7 @@ export function WorkspaceAccountMenu({
         </span>
         <hr />
         <DesktopAccountLink onClick={() => close()} />
-        <span className={styles.accountMetaRow}>
-          <span aria-label="账号与偏好会在此账号的默认浏览器中打开；浏览器的登录状态可能与本应用不同。">
-            在此账号的默认浏览器中打开 · 浏览器登录状态可能与本应用不同
-          </span>
-        </span>
+        <DesktopAccountNotice />
         <DesktopDeviceSettingsLink onClick={() => close()} />
         <span className={styles.accountMetaRow}>
           <Globe aria-hidden="true" size={16} />

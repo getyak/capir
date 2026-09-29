@@ -51,8 +51,10 @@ describe("native desktop chrome", () => {
     const deviceLinks = () => host.querySelectorAll("a[href='talentsignal-desktop://settings']");
     expect(accountLinks()).toHaveLength(1);
     expect(deviceLinks()).toHaveLength(0);
-    // The account link discloses that the browser session is separate.
-    expect(host.textContent).toContain("浏览器登录状态可能与本应用不同");
+    // Ordinary Web users stay in their current workspace and session.
+    expect(host.textContent).not.toContain("浏览器登录状态可能与本应用不同");
+    expect(accountLinks()[0].textContent).toBe("账号与偏好");
+    expect(accountLinks()[0].getAttribute("aria-label")).toBe("账号与偏好");
 
     await act(async () => {
       window.talentSignalDesktop = { protocolVersion: 1, surface: "workspace", availableVersion: null };
@@ -61,6 +63,7 @@ describe("native desktop chrome", () => {
     const account = () => host.querySelectorAll("a[href='talentsignal-desktop://account-settings']");
     expect(account()).toHaveLength(1);
     expect(account()[0].textContent).toContain("账号与偏好 ↗");
+    expect(host.textContent).toContain("浏览器登录状态可能与本应用不同");
     expect(deviceLinks()).toHaveLength(1);
     expect(deviceLinks()[0].textContent).toContain("此 Mac 设置…");
     // Neither entry may claim to bring account data back into the app.
