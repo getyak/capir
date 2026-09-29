@@ -99,6 +99,17 @@ printf 'iOS release notes\n' > "$FAKE_RELEASE_ASSETS/release-body"
 grep -Fq 'iOS release notes' "$FAKE_RELEASE_ASSETS/release-body"
 grep -Fq '<!-- talent-signal-macos-distribution -->' "$FAKE_RELEASE_ASSETS/release-body"
 
+export MACOS_BUILD_NUMBER=36
+other='Talent-Signal-0.1.92-36-macOS-universal-signed'
+printf 'different signed mac dmg' > "$MACOS_OUTPUT_DIR/$other.dmg"
+printf 'different signed mac zip' > "$MACOS_OUTPUT_DIR/$other.zip"
+(cd "$MACOS_OUTPUT_DIR" && shasum -a 256 "$other.dmg" "$other.zip" > "$other-SHA256SUMS.txt")
+if (cd "$temporary/worktree" && "$root/scripts/macos/publish-versioned-release.sh") >/dev/null 2>&1; then
+  echo 'A second Mac build was accepted under the same product tag' >&2
+  exit 1
+fi
+export MACOS_BUILD_NUMBER=35
+
 printf 'changed zip' > "$MACOS_OUTPUT_DIR/$base.zip"
 (cd "$MACOS_OUTPUT_DIR" && shasum -a 256 "$base.dmg" "$base.zip" > "$base-SHA256SUMS.txt")
 if (cd "$temporary/worktree" && "$root/scripts/macos/publish-versioned-release.sh") >/dev/null 2>&1; then

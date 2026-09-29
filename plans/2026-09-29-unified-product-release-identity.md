@@ -31,7 +31,8 @@ Both workflows use the same version resolver. It reuses an existing `v` tag
 only when that tag resolves to the exact build commit; otherwise it allocates
 the next unused patch version. Publication verifies that the tag points to the
 exact verified commit, then creates or extends the same `v` Release. Asset
-names are unique by platform. Mac assets are never replaced; complete iOS
+names are unique by platform. Mac assets are never replaced or duplicated under
+one product tag; complete iOS
 releases are immutable, while a partial IPA without a TestFlight receipt keeps
 the existing explicit recovery path. Mac's signed Sparkle feed continues to point at the same
 versioned, notarized ZIP and keeps its independent monotonic build number.

@@ -67,6 +67,13 @@ git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null 2>&1 || {
 }
 owner="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json author --jq .author.login)"
 [[ "$owner" == 'github-actions[bot]' ]] || { echo "Release $RELEASE_TAG belongs to $owner" >&2; exit 1; }
+published_names="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+other_mac_builds="$(grep -E '^Talent-Signal-[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-macOS-universal-(signed|preview)\.dmg$' <<< "$published_names" |
+  grep -Fvx "$base.dmg" || true)"
+[[ -z "$other_mac_builds" ]] || {
+  echo "Release $RELEASE_TAG already contains a different Mac build: $other_mac_builds" >&2
+  exit 1
+}
 
 "$(dirname "$0")/../ci/ensure-release-assets.sh" "${assets[@]}"
 

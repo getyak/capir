@@ -28,7 +28,8 @@ clobbers them. A partial iOS release without a TestFlight receipt retains the
 existing explicit recovery path: after a new exact TestFlight build is
 validated, it may replace an incomplete IPA and attach the receipt. Once that
 receipt exists, byte changes require a new version. Mac assets are immutable
-from their first publication.
+from their first publication, and a second Mac build under the same product
+tag is refused so downloaders never have to guess which DMG is current.
 Mac's signed Sparkle feed continues to use a monotonic native build number and
 links to the notarized ZIP on the shared version release.
 
