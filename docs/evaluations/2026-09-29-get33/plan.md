@@ -26,7 +26,7 @@ the shared Web product can supply a scoped, provenance-preserving state feed.
   controls. The [visible state](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=301-1536)
   and [hidden state](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=301-1716)
   keep one selected companion while allowing a reversible exit. The hidden
-  screen explicitly says work continues and the appearance is remembered.
+  screen explicitly says selection and dragged position are remembered.
   The delivered states use the bundled companion names and omit the custom
   sprite importer, which this Mac build does not provide.
 - The [unavailable-state task panel](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=305-1897)
@@ -41,15 +41,16 @@ the shared Web product can supply a scoped, provenance-preserving state feed.
 
 1. Native settings and state: locally persisted selection, visibility,
    position and motion. Size control and validated custom artwork remain open.
-2. Desktop surface: a small, nonactivating companion with hide/restore,
-   bounded positioning, keyboard/accessibility support and no private text.
+2. Desktop surface: a small, nonactivating companion with hide/restore in
+   Settings, bounded dragging, an accessible main-window action and no
+   private text.
 3. Truthful task panel: only real, scoped statuses with an explicit empty or
    unavailable state and a route back to the originating workspace surface.
 4. Focused tests, native build and actual app launch; inspect the rendered
    desktop/settings flow and save evidence outside temporary build output.
 5. Independent review, current-head CI, PR merge and Linear readback.
 
-## Current state
+## First merged slice (historical evidence)
 
 - Baseline: `origin/main@e3f5a96d`; branch `codex/get-33-desktop-pet`.
 - Figma visible, hidden and unavailable-work designs and the exact six
@@ -70,9 +71,9 @@ the shared Web product can supply a scoped, provenance-preserving state feed.
   stalled during bootstrap and was stopped. Its assertions have not executed.
 - Live macOS readback confirmed the settings preview and visible show/hide
   button, all six bundled illustrations, the Figma-inspired two-column layout,
-  the floating controls, the truthful unavailable-state popover, hide/restore
-  through the app menu, and reopening the original workspace after closing
-  its main window. The 820pt narrow layout has a reviewed vertical fallback
+  the initial floating controls and truthful unavailable-state popover, and
+  reopening the original workspace after closing its main window. The 820pt
+  narrow layout has a reviewed vertical fallback
   but no successful window-resize screenshot. Computer Use captures the
   controls panel separately from the noninteractive artwork panel, so a
   composite desktop screenshot is not yet available as visual evidence.
@@ -89,3 +90,44 @@ motion. The current Mac and Web boundary does not provide a trustworthy
 cross-session desktop status feed. These behaviors are not established by the
 first loop or by the Figma exploration and must not be marked complete without
 their own implementation and live readback. GET-33 remains in progress.
+
+## Continuation: simpler draggable companion
+
+- Branch `codex/get-33-capture-loop` starts at merged `origin/main@130a8e9d`.
+  The user asked for subtle motion, direct dragging instead of a position
+  setting, visibility in Settings, simpler artwork chrome, and click-to-home.
+  A proposed capture popover was removed before delivery in response; the
+  companion now renders only its artwork, while the existing menu bar retains
+  screenshot and session actions.
+- [Visible](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=301-1536)
+  and [hidden](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=301-1716)
+  Figma screens were updated in place. Their copy explains the slight float,
+  dragging, click-to-main-window, Settings visibility, and position persistence.
+  Redundant hide, status segment, and shortcut controls were hidden. The saved
+  screenshots `figma/301-1536.png` and `figma/301-1716.png` were inspected for
+  overflow after the edit.
+- Native implementation has one 100×100 transparent artwork panel. A short
+  drag moves and persists a relative position on its display; clamping and
+  display fallback keep it visible. A tap opens the main workspace scene while
+  preserving its current URL and unsent draft. An unconditional route to
+  `/workspace` would reload or discard a draft, so "主页" is interpreted as
+  the app's main window pending the user's answer to this tradeoff. The
+  optional 2pt float respects Reduce Motion. Settings alone owns show/hide
+  and there is no position picker.
+- The focused `WorkspaceSettingsTests` suite passed 30/30 on the final Debug
+  source. The documentation, wiki, architecture boundary and diagram checks
+  passed individually; the `pnpm docs:check` wrapper hung without output and
+  was stopped. An isolated QA bundle built from this branch with identifier
+  `com.talentsignal.macos.get33qa` launched on macOS. Computer Use showed its
+  100×100 artwork panel and two-column Settings. Clicking its artwork after
+  closing the main window reopened the workspace connection screen; Settings
+  hide/restore and motion off/on each read back correctly. The later image
+  cache and hidden-panel pause were rebuilt and retested, but do not have a
+  second UI screenshot. A physical drag to the borderless panel still fails
+  in Computer Use with `noWindowsAvailable`, so the direct input and saved
+  position remain unverified on the real surface. Geometry and the click's
+  no-navigation action have focused unit coverage.
+- Independent review, current-head CI and PR delivery are the active checks.
+  The original issue's broader task feed, draft handoff,
+  community/custom art and state-specific motion remain unmet, so GET-33
+  stays In Progress after this slice.

@@ -1,9 +1,46 @@
+import AppKit
 import XCTest
 import WebKit
 @testable import TalentSignalMac
 
 final class WorkspaceSettingsTests: XCTestCase {
     // MARK: Native-only surface inventory
+
+    func testDesktopPetDragPositionPersistsWithinVisibleScreen() {
+        let first = NSRect(x: 100, y: 50, width: 400, height: 300)
+        let size = NSSize(width: 100, height: 100)
+        XCTAssertEqual(DesktopPetPlacement.clamped(NSPoint(x: 900, y: -30), in: first, size: size),
+                       NSPoint(x: 400, y: 50))
+
+        let saved = DesktopPetPlacement.relative(NSPoint(x: 250, y: 150), in: first, size: size)
+        XCTAssertEqual(saved.x, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(saved.y, 0.5, accuracy: 0.0001)
+
+        let smaller = NSRect(x: -500, y: 100, width: 300, height: 200)
+        XCTAssertEqual(DesktopPetPlacement.origin(saved, in: smaller, size: size),
+                       NSPoint(x: -400, y: 150))
+        XCTAssertEqual(DesktopPetPlacement.origin(NSPoint(x: .infinity, y: -.infinity),
+                                                   in: smaller, size: size),
+                       NSPoint(x: -310, y: 104))
+    }
+
+    @MainActor
+    func testDesktopPetClickOpensMainWorkspaceWithoutNavigatingAwayFromDraft() {
+        let pet = DesktopPetController.shared
+        let previousOpen = pet.openWorkspaceWindow
+        let previousDestination = WorkspaceNavigation.shared.pending
+        defer {
+            pet.openWorkspaceWindow = previousOpen
+            WorkspaceNavigation.shared.pending = previousDestination
+        }
+        WorkspaceNavigation.shared.pending = nil
+        var openCount = 0
+        pet.openWorkspaceWindow = { openCount += 1 }
+        pet.openWorkspace()
+        XCTAssertEqual(openCount, 1)
+        XCTAssertNil(WorkspaceNavigation.shared.pending,
+                     "The existing WebView must keep its URL and unsent draft.")
+    }
 
     /// Every row in the native window is a device control that needs no Web
     /// origin, which is what makes Settings usable offline.

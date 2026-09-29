@@ -30,22 +30,47 @@ enum DesktopPet: String, CaseIterable, Identifiable {
         }
     }
 
-    var image: NSImage? {
-        guard let url = Bundle.main.url(forResource: rawValue, withExtension: "png") else {
-            return nil
+    private static let images: [DesktopPet: NSImage] = {
+        var loaded: [DesktopPet: NSImage] = [:]
+        for pet in allCases {
+            guard let url = Bundle.main.url(forResource: pet.rawValue, withExtension: "png"),
+                  let image = NSImage(contentsOf: url) else { continue }
+            loaded[pet] = image
         }
-        return NSImage(contentsOf: url)
+        return loaded
+    }()
+
+    var image: NSImage? { Self.images[self] }
+}
+
+/// Persist a relative location so unplugging a display or changing its usable
+/// area cannot strand the companion outside the desktop.
+struct DesktopPetPlacement {
+    static func clamped(_ point: NSPoint, in frame: NSRect, size: NSSize) -> NSPoint {
+        NSPoint(
+            x: min(max(point.x, frame.minX), max(frame.minX, frame.maxX - size.width)),
+            y: min(max(point.y, frame.minY), max(frame.minY, frame.maxY - size.height))
+        )
+    }
+
+    static func relative(_ point: NSPoint, in frame: NSRect, size: NSSize) -> NSPoint {
+        let clampedPoint = clamped(point, in: frame, size: size)
+        let width = max(frame.width - size.width, 1)
+        let height = max(frame.height - size.height, 1)
+        return NSPoint(x: (clampedPoint.x - frame.minX) / width,
+                       y: (clampedPoint.y - frame.minY) / height)
+    }
+
+    static func origin(_ relative: NSPoint, in frame: NSRect, size: NSSize) -> NSPoint {
+        let x = relative.x.isFinite ? min(max(relative.x, 0), 1) : 0.95
+        let y = relative.y.isFinite ? min(max(relative.y, 0), 1) : 0.04
+        return clamped(NSPoint(x: frame.minX + x * max(frame.width - size.width, 0),
+                               y: frame.minY + y * max(frame.height - size.height, 0)),
+                       in: frame, size: size)
     }
 }
 
-enum DesktopPetEdge: String, CaseIterable, Identifiable {
-    case left, right
-    var id: String { rawValue }
-    var title: String { self == .left ? "左下" : "右下" }
-}
-
-/// The pet has no background feed. It only displays local controls and an
-/// honest unavailable state until the workspace exposes a scoped task source.
+/// The pet has no background feed. Its appearance is stored only on this Mac.
 @MainActor
 final class DesktopPetController: ObservableObject {
     static let shared = DesktopPetController()
@@ -53,7 +78,10 @@ final class DesktopPetController: ObservableObject {
     private enum Key {
         static let pet = "desktopPet.selection"
         static let visible = "desktopPet.visible"
-        static let edge = "desktopPet.edge"
+        static let x = "desktopPet.location.x"
+        static let y = "desktopPet.location.y"
+        static let display = "desktopPet.location.display"
+        static let legacyEdge = "desktopPet.edge"
         static let motion = "desktopPet.motion"
     }
 
@@ -66,51 +94,34 @@ final class DesktopPetController: ObservableObject {
             updateVisibility()
         }
     }
-    @Published var edge: DesktopPetEdge {
-        didSet {
-            UserDefaults.standard.set(edge.rawValue, forKey: Key.edge)
-            positionPanel()
-        }
-    }
     @Published var motionEnabled: Bool {
         didSet { UserDefaults.standard.set(motionEnabled, forKey: Key.motion) }
     }
 
-    private var artworkPanel: NSPanel?
-    private var controlsPanel: DesktopPetPanel?
+    private let artworkSize = NSSize(width: 100, height: 100)
+    private var artworkPanel: DesktopPetPanel?
     var openWorkspaceWindow: (() -> Void)?
 
     private init() {
         let defaults = UserDefaults.standard
         selectedPet = DesktopPet(rawValue: defaults.string(forKey: Key.pet) ?? "") ?? .pigeon
         isVisible = defaults.object(forKey: Key.visible) as? Bool ?? false
-        edge = DesktopPetEdge(rawValue: defaults.string(forKey: Key.edge) ?? "") ?? .right
         motionEnabled = defaults.object(forKey: Key.motion) as? Bool ?? true
     }
 
     func start() {
-        guard controlsPanel == nil else { return }
-        let artwork = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 132, height: 132),
+        guard artworkPanel == nil else { return }
+        let artwork = DesktopPetPanel(
+            contentRect: NSRect(origin: .zero, size: artworkSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        artwork.ignoresMouseEvents = true
-        artwork.contentView = NSHostingView(rootView: DesktopPetArtworkView(controller: self))
+        let artworkView = DesktopPetInteractionView(rootView: DesktopPetArtworkView(controller: self))
+        artworkView.controller = self
+        artwork.contentView = artworkView
         configure(artwork)
         artworkPanel = artwork
-
-        let controls = DesktopPetPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 176, height: 40),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        controls.contentView = NSHostingView(rootView: DesktopPetControlsView(controller: self))
-        configure(controls)
-        controls.hasShadow = true
-        controlsPanel = controls
         positionPanel()
         updateVisibility()
         NotificationCenter.default.addObserver(
@@ -133,28 +144,58 @@ final class DesktopPetController: ObservableObject {
     }
 
     private func updateVisibility() {
-        guard let artworkPanel, let controlsPanel else { return }
+        guard let artworkPanel else { return }
         if isVisible {
             positionPanel()
             artworkPanel.orderFrontRegardless()
-            controlsPanel.orderFrontRegardless()
         } else {
             artworkPanel.orderOut(nil)
-            controlsPanel.orderOut(nil)
         }
     }
 
     private func positionPanel() {
-        guard let artworkPanel, let controlsPanel,
-              let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        guard let artworkPanel else { return }
+        let defaults = UserDefaults.standard
+        let savedDisplay = (defaults.object(forKey: Key.display) as? NSNumber)?.uint32Value
+        let screen = NSScreen.screens.first { $0.displayID == savedDisplay }
+            ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else { return }
         let frame = screen.visibleFrame
-        let x = edge == .right ? frame.maxX - controlsPanel.frame.width - 24 : frame.minX + 24
-        let y = frame.minY + 20
-        controlsPanel.setFrameOrigin(NSPoint(x: x, y: y))
-        artworkPanel.setFrameOrigin(NSPoint(
-            x: x + (controlsPanel.frame.width - artworkPanel.frame.width) / 2,
-            y: y + controlsPanel.frame.height + 4
-        ))
+        let relative: NSPoint
+        if defaults.object(forKey: Key.x) != nil && defaults.object(forKey: Key.y) != nil {
+            relative = NSPoint(x: defaults.double(forKey: Key.x), y: defaults.double(forKey: Key.y))
+        } else {
+            let legacyLeft = defaults.string(forKey: Key.legacyEdge) == "left"
+            relative = DesktopPetPlacement.relative(
+                NSPoint(x: legacyLeft ? frame.minX + 24 : frame.maxX - artworkSize.width - 24,
+                        y: frame.minY + 20), in: frame, size: artworkSize)
+        }
+        artworkPanel.setFrameOrigin(DesktopPetPlacement.origin(relative, in: frame, size: artworkSize))
+    }
+
+    func moveArtwork(to origin: NSPoint) {
+        guard let artworkPanel else { return }
+        let center = NSPoint(x: origin.x + artworkSize.width / 2,
+                             y: origin.y + artworkSize.height / 2)
+        let screen = NSScreen.screens.first { $0.frame.contains(center) }
+            ?? artworkPanel.screen ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else { return }
+        artworkPanel.setFrameOrigin(DesktopPetPlacement.clamped(origin, in: screen.visibleFrame,
+                                                                 size: artworkSize))
+    }
+
+    func savePosition() {
+        guard let artworkPanel else { return }
+        let center = NSPoint(x: artworkPanel.frame.midX, y: artworkPanel.frame.midY)
+        let screen = NSScreen.screens.first { $0.frame.contains(center) }
+            ?? artworkPanel.screen ?? NSScreen.main ?? NSScreen.screens.first
+        guard let screen else { return }
+        let point = DesktopPetPlacement.relative(artworkPanel.frame.origin,
+                                                  in: screen.visibleFrame, size: artworkSize)
+        let defaults = UserDefaults.standard
+        defaults.set(Double(point.x), forKey: Key.x)
+        defaults.set(Double(point.y), forKey: Key.y)
+        if let displayID = screen.displayID { defaults.set(displayID, forKey: Key.display) }
     }
 
     func openWorkspace() {
@@ -164,8 +205,8 @@ final class DesktopPetController: ObservableObject {
 }
 
 /// Capture the scene-owned open action while the main workspace is present.
-/// The closure remains available after its window closes, so the pet can bring
-/// that same scene back without navigating or discarding a draft.
+/// The closure remains available after its window closes. Reusing the main
+/// scene preserves its current page and any unsent draft.
 struct DesktopPetWorkspaceLink: View {
     @Environment(\.openWindow) private var openWindow
 
@@ -178,12 +219,13 @@ struct DesktopPetWorkspaceLink: View {
 }
 
 struct DesktopPetCommands: Commands {
-    @ObservedObject private var pet = DesktopPetController.shared
+    @Environment(\.openSettings) private var openSettings
 
     var body: some Commands {
         CommandMenu("桌面伙伴") {
-            Button(pet.isVisible ? "隐藏伙伴" : "显示伙伴") {
-                pet.isVisible.toggle()
+            Button("桌面伙伴设置…") {
+                WorkspaceSettingsNavigation.shared.selection = .companion
+                openSettings()
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
         }
@@ -194,32 +236,84 @@ private final class DesktopPetPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+private extension NSScreen {
+    var displayID: UInt32? {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+}
+
+/// AppKit handles the tap/drag distinction before the SwiftUI artwork can
+/// claim the gesture. A small drag threshold keeps ordinary clicks reliable.
+private final class DesktopPetInteractionView: NSHostingView<DesktopPetArtworkView> {
+    weak var controller: DesktopPetController?
+    private var mouseStart: NSPoint?
+    private var frameStart: NSPoint?
+    private var didDrag = false
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseStart = NSEvent.mouseLocation
+        frameStart = window?.frame.origin
+        didDrag = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let mouseStart, let frameStart else { return }
+        let now = NSEvent.mouseLocation
+        let dx = now.x - mouseStart.x
+        let dy = now.y - mouseStart.y
+        if !didDrag && hypot(dx, dy) < 4 { return }
+        didDrag = true
+        controller?.moveArtwork(to: NSPoint(x: frameStart.x + dx, y: frameStart.y + dy))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if didDrag { controller?.savePosition() }
+        else { controller?.openWorkspace() }
+        mouseStart = nil
+        frameStart = nil
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .openHand)
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        controller?.openWorkspace()
+        return true
+    }
+}
+
 private struct PetArtwork: View {
     let pet: DesktopPet
     let size: CGFloat
     let motionEnabled: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var breathing = false
 
     var body: some View {
-        Group {
-            if let image = pet.image {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-            } else {
-                Image(systemName: "bird.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(.tint)
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0,
+                                paused: !motionEnabled || reduceMotion)) { timeline in
+            let wave = motionEnabled && !reduceMotion
+                ? sin(timeline.date.timeIntervalSinceReferenceDate * .pi / 2.4) : -1
+            Group {
+                if let image = pet.image {
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "bird.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .foregroundStyle(.tint)
+                }
             }
+            .frame(width: size, height: size)
+            .scaleEffect(1.015 + 0.015 * wave)
+            .offset(y: -0.5 - 1.5 * wave)
         }
-        .frame(width: size, height: size)
-        .scaleEffect(breathing && motionEnabled && !reduceMotion ? 1.035 : 1)
-        .animation(motionEnabled && !reduceMotion ? .easeInOut(duration: 2.8).repeatForever(autoreverses: true) : nil,
-                   value: breathing)
-        .onAppear { breathing = true }
         .accessibilityLabel("\(pet.name)桌面伙伴")
     }
 }
@@ -228,63 +322,13 @@ private struct DesktopPetArtworkView: View {
     @ObservedObject var controller: DesktopPetController
 
     var body: some View {
-        PetArtwork(pet: controller.selectedPet, size: 120, motionEnabled: controller.motionEnabled)
-            .frame(width: 132, height: 132)
-            .allowsHitTesting(false)
-    }
-}
-
-private struct DesktopPetControlsView: View {
-    @ObservedObject var controller: DesktopPetController
-    @State private var showingWork = false
-
-    var body: some View {
-        HStack(spacing: 0) {
-                Button {
-                    controller.openWorkspace()
-                } label: {
-                    Label("工作区", systemImage: "arrow.up.right")
-                }
-                .help("打开 Talent Signal 工作区")
-                Divider().frame(height: 17).padding(.horizontal, 9)
-                Button {
-                    showingWork = true
-                } label: {
-                    Image(systemName: "tray")
-                }
-                .accessibilityLabel("查看事项")
-                .help("查看事项状态")
-                .popover(isPresented: $showingWork, arrowEdge: .top) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("事项").font(.headline)
-                        Text("当前没有可核验的任务摘要")
-                            .font(.subheadline.weight(.medium))
-                        Text("此 Mac 尚未收到可靠的事项状态。请在工作区查看当前进度。")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("打开工作区") {
-                            showingWork = false
-                            controller.openWorkspace()
-                        }
-                    }
-                    .padding(18)
-                    .frame(width: 260, alignment: .leading)
-                }
-                Divider().frame(height: 17).padding(.horizontal, 9)
-                Button {
-                    controller.isVisible = false
-                } label: {
-                    Image(systemName: "eye.slash")
-                }
-                .accessibilityLabel("隐藏桌面伙伴")
-                .help("隐藏桌面伙伴，可在此 Mac 设置中恢复")
-        }
-        .buttonStyle(.plain)
-        .font(.system(size: 12, weight: .medium))
-        .padding(.horizontal, 12)
-        .frame(width: 176, height: 40)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        PetArtwork(pet: controller.selectedPet, size: 92,
+                   motionEnabled: controller.motionEnabled && controller.isVisible)
+            .frame(width: 100, height: 100)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(controller.selectedPet.name)桌面伙伴")
+            .accessibilityHint("点击打开工作区，拖动调整桌面位置")
+            .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -324,7 +368,7 @@ struct DesktopPetSettingsView: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("桌面伙伴").font(.title2.weight(.semibold))
-            Text("留一位安静的桌面伙伴。随时隐藏，选择会保留在这台 Mac。")
+            Text("轻轻陪在桌面一角。拖动调整位置，点击打开主窗口。")
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
@@ -397,14 +441,11 @@ struct DesktopPetSettingsView: View {
 
             Text(pet.selectedPet.name).font(.title3.weight(.semibold))
             Text(pet.selectedPet.note).font(.callout).foregroundStyle(.secondary)
-            Text(pet.isVisible ? "显示在桌面边缘 · 不展示私人文字" : "已隐藏 · 工作继续，选择已保留")
+            Text(pet.isVisible ? "可拖动 · 点击打开工作区 · 不展示私人文字" : "已隐藏 · 选择和位置已保留")
                 .font(.caption).foregroundStyle(.secondary)
 
             Divider()
-            Picker("桌面位置", selection: $pet.edge) {
-                ForEach(DesktopPetEdge.allCases) { edge in Text(edge.title).tag(edge) }
-            }
-            Toggle("轻微呼吸动画", isOn: $pet.motionEnabled)
+            Toggle("轻微浮动动画", isOn: $pet.motionEnabled)
                 .toggleStyle(.switch)
             Text("事项状态只来自已验证的工作区数据；没有可靠来源时不会显示进度或数量。")
                 .font(.caption).foregroundStyle(.secondary)
