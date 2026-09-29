@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@assistant-ui/react": "0.15.22",
     "@dicebear/core": "10.7.0",
     "@dicebear/styles": "10.6.0",
     "@phosphor-icons/react": "2.1.10",

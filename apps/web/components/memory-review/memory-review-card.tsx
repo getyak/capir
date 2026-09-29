@@ -9,6 +9,7 @@ import type {
   MemoryProposalItem,
   MemoryProposalReference,
   MemoryScope,
+  ConversationImageManifest,
   PersonDirectoryItem,
 } from "@talent-signal/contracts";
 
@@ -36,6 +37,7 @@ import {
   type MemoryReviewDraftState,
 } from "@/lib/memory-review-draft";
 import { useMemoryReview, type MemoryReviewPurpose, type MemoryRebaseInput } from "./use-memory-review";
+import { SessionMemoryCards } from "./memory-item-card";
 import styles from "./memory-review.module.css";
 
 export type MemoryReviewCardProps = {
@@ -51,6 +53,10 @@ export type MemoryReviewCardProps = {
   } | null;
   entryCapability?: string | null;
   sessionId?: string | null;
+  onCommentItem?: (item: MemoryProposalItem) => void;
+  sourceImages?: readonly ConversationImageManifest[];
+  sourceMessageId?: string | null;
+  sourceText?: string;
 };
 
 const PREVIEW_LIMIT = 4;
@@ -623,6 +629,38 @@ function ChangePersonPanel({
 }
 
 export function MemoryReviewCard(props: MemoryReviewCardProps) {
+  return props.purpose === "chat"
+    ? <SessionChatMemoryReviewCard {...props}/>
+    : <LegacyMemoryReviewCard {...props}/>;
+}
+
+function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
+  const [comparing, setComparing] = useState(false);
+  const controller = useMemoryReview({
+    binding: props.binding,
+    proposal: props.proposal,
+    purpose: "chat",
+    entryCapability: props.entryCapability ?? null,
+    sessionId: props.sessionId ?? null,
+  });
+  const openReview = controller.open;
+  useEffect(() => { void openReview(); }, [openReview, props.binding, props.proposal.proposal_id, props.proposal.revision]);
+  return <SessionMemoryCards controller={controller} onComment={props.onCommentItem}
+    sourceImageContext={props.binding && props.sessionId && props.sourceMessageId ? {
+      binding: props.binding, sessionId: props.sessionId, messageId: props.sourceMessageId,
+      images: props.sourceImages ?? [],
+    } : undefined}
+    sourceText={props.sourceText ?? ""}
+    onCompare={() => setComparing(true)}
+    comparison={comparing ? <ChangePersonPanel
+      failure={controller.rebaseError}
+      onCancel={() => setComparing(false)}
+      onChoose={(input) => { void controller.rebase(input).then((ok) => { if (ok) setComparing(false); }); }}
+      pending={controller.rebaseState === "pending"}
+    /> : null}/>;
+}
+
+function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
   const controller = useMemoryReview({
     binding: props.binding,
     proposal: props.proposal,

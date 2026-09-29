@@ -23,3 +23,18 @@
 .conflict strong { color: var(--ink); }
 .conflict .actions { margin-top: 4px; }
 @media (max-width: 600px) { .page { padding: 24px 20px 80px; } .back { margin-bottom: 20px; } .review { padding: 18px; } }
+.sessionCard { max-width:620px; margin:12px 0; padding:16px 18px; gap:10px; border-color:var(--line-soft); border-radius:14px; }
+.sessionCardHead { display:flex; justify-content:space-between; gap:10px; color:var(--muted); font-size:12px; }
+.sessionCard h3 { font-size:16px; line-height:1.4; }
+.sessionCard .sessionCardTime { color:var(--ink); font-size:13px; }
+.sessionCard blockquote { margin:0; padding:9px 11px; border:0; border-radius:8px; background:var(--surface-muted,#f5f4ef); color:var(--muted); font-size:13px; line-height:1.55; }
+.sessionCardFields { display:grid; gap:9px; margin:5px 0; }
+.sessionCardFields .field { gap:4px; font-size:12px; }
+.sessionCardFields .field input { min-height:40px; padding:8px 10px; font-size:14px; }
+.sessionCardFields > button { justify-self:start; }
+.sessionCardActions { display:flex; flex-wrap:wrap; gap:8px; }
+.sessionCardActions .primary,.sessionCardActions .secondary,.sessionCardFields > button { min-height:38px; padding:7px 11px; border-radius:9px; font-size:13px; }
+.sessionCardActions .primary { background:var(--ink); color:var(--surface); }
+.sessionCardActions .secondary { border-color:var(--line-soft); color:var(--ink); }
+.sessionCard [role="status"] { color:var(--muted); font-size:12px; }
+@media(max-width:640px) { .sessionCard { padding:14px; } .sessionCardActions button { min-height:44px; } }
