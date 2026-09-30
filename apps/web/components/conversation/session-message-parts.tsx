@@ -1,11 +1,29 @@
 "use client";
 
+import { MessagePrimitive } from "@assistant-ui/react";
 import type {
+  ConversationImageManifest,
   ConversationQueueEntry,
   ConversationQueuePreview,
+  MemoryProposalItem,
 } from "@talent-signal/contracts";
+import {
+  conversationAwaitingDecision,
+  conversationExecutionPhase,
+  conversationMilestoneUpdates,
+  conversationTurnInterrupted,
+  type ConversationExecutionMilestone,
+  type ConversationExecutionPhase,
+} from "@/lib/conversation-execution";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { sessionTurnBlocks } from "../session-workbench/session-presentation";
+import { SessionExecutionCard, SessionRunUpdate } from "./session-execution-card";
+import { ConversationProvenance, ConversationResponse } from "../conversation-response";
+import { MemoryReviewCard } from "../memory-review/memory-review-card";
+import { sessionBlockTitle } from "../session-workbench/session-presentation";
+import { ConversationImageStrip } from "./conversation-images";
+import { SessionCalendarDraftCard } from "./session-calendar-draft-card";
+import styles from "./queued-conversation.module.css";
 
 export type SessionDataPart = {
   type: "data";
@@ -20,10 +38,40 @@ export type SessionProjectedMessage = {
   createdAt: Date;
 };
 
+const EXECUTION_PHASES = new Set<ConversationExecutionPhase>([
+  "queued", "running", "stopping", "waiting-review", "completed", "failed", "interrupted",
+]);
+
+function executionData(data: Record<string, unknown>) {
+  const phase = typeof data.phase === "string" && EXECUTION_PHASES.has(data.phase as ConversationExecutionPhase)
+    ? data.phase as ConversationExecutionPhase : null;
+  if (!phase) return null;
+  return {
+    phase,
+    stage: typeof data.stage === "string" ? data.stage : null,
+    startedAt: typeof data.startedAt === "string" ? data.startedAt : "",
+    endedAt: typeof data.endedAt === "string" ? data.endedAt : null,
+    failureCode: typeof data.failureCode === "string" ? data.failureCode : null,
+    milestones: Array.isArray(data.milestones) ? data.milestones as ConversationExecutionMilestone[] : [],
+  };
+}
+
+/**
+ * Message projection for the conversation transcript.
+ *
+ * Canonical turns and the live queue entry are the only sources. An in-flight
+ * run projects ephemeral milestone updates plus its collapsible execution
+ * record; the final semantic response blocks appear only after persisted
+ * history readback, so a preview can never become a result. Readback turns
+ * keep one collapsed execution record above the standalone result — state and
+ * elapsed observed time only — while pending memory or calendar decisions
+ * stay distinct blocks after it.
+ */
 export function sessionMessages(input: {
   turns: SessionDetail["turns"];
   active: ConversationQueueEntry | null;
   preview: ConversationQueuePreview | null;
+  milestones?: readonly ConversationExecutionMilestone[];
 }): SessionProjectedMessage[] {
   const messages: SessionProjectedMessage[] = [];
   for (const turn of input.turns) {
@@ -57,6 +105,23 @@ export function sessionMessages(input: {
         fallback: "日历草稿可在这段对话中处理。",
       },
     });
+    const awaiting = conversationAwaitingDecision(turn.response);
+    const interrupted = conversationTurnInterrupted(turn.response, turn.id);
+    // The folded execution record sits above the result and never wraps it:
+    // the final result is standalone and pending memory or calendar decisions
+    // stay distinct blocks. Completed turns keep the record collapsed so the
+    // state stays explicit without taking over the history.
+    content.unshift({
+      type: "data", name: "talent-signal.execution",
+      data: {
+        phase: conversationExecutionPhase({ entry: null, readbackComplete: true, awaitingDecision: awaiting, interrupted }),
+        stage: null,
+        startedAt: turn.createdAt,
+        endedAt: turn.response.createdAt,
+        failureCode: null,
+        milestones: [],
+      },
+    });
     messages.push({ id: `${turn.id}:assistant`, role: "assistant", content, createdAt: new Date(turn.response.createdAt) });
   }
   const active = input.active;
@@ -71,23 +136,27 @@ export function sessionMessages(input: {
     const preview = input.preview?.run_id === active.run_id ? input.preview : null;
     messages.push({
       id: `${active.message_id}:assistant`, role: "assistant",
-      content: [{ type: "data", name: "talent-signal.progress", data: {
-        text: preview?.text ?? "", stage: preview?.stage ?? active.stage ?? "preparing",
-      } }],
+      content: [
+        // Milestone-only dialogue updates, separate from the semantic result
+        // blocks that appear only after terminal history readback.
+        { type: "data", name: "talent-signal.run-update", data: {
+          updates: conversationMilestoneUpdates(preview?.text ?? ""),
+          stage: preview?.stage ?? active.stage ?? null,
+        } },
+        { type: "data", name: "talent-signal.execution", data: {
+          phase: conversationExecutionPhase({ entry: active, readbackComplete: false, awaitingDecision: false }),
+          stage: preview?.stage ?? active.stage ?? null,
+          startedAt: active.created_at,
+          endedAt: null,
+          failureCode: active.failure_code,
+          milestones: input.milestones ?? [],
+        } },
+      ],
       createdAt: new Date(active.updated_at),
     });
   }
   return messages;
 }
-
-import { MessagePrimitive } from "@assistant-ui/react";
-import type { ConversationImageManifest, MemoryProposalItem } from "@talent-signal/contracts";
-import { ConversationProvenance, ConversationResponse } from "../conversation-response";
-import { MemoryReviewCard } from "../memory-review/memory-review-card";
-import { sessionBlockTitle } from "../session-workbench/session-presentation";
-import { ConversationImageStrip } from "./conversation-images";
-import { SessionCalendarDraftCard } from "./session-calendar-draft-card";
-import styles from "./queued-conversation.module.css";
 
 type RenderContext = {
   binding: string;
@@ -132,10 +201,16 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
   if (name === "talent-signal.calendar" && data.version === 1 && typeof data.draftId === "string") {
     return <SessionCalendarDraftCard draftId={data.draftId} binding={context.meetingBinding} sessionId={context.sessionId}/>;
   }
-  if (name === "talent-signal.progress") {
-    const text = typeof data.text === "string" ? data.text : "";
-    return text ? <div className={styles.forming}><ConversationResponse>{text}</ConversationResponse><span className={styles.cursor} aria-hidden="true"/></div>
-      : <div className={styles.waiting}><span className={styles.pulse} aria-hidden="true"/>{context.status || "正在处理"}</div>;
+  if (name === "talent-signal.execution") {
+    const execution = executionData(data);
+    if (!execution) return <span>这项执行记录暂时无法显示。</span>;
+    return <SessionExecutionCard {...execution}/>;
+  }
+  if (name === "talent-signal.run-update" || name === "talent-signal.progress") {
+    const updates = Array.isArray(data.updates)
+      ? data.updates.filter((line): line is string => typeof line === "string")
+      : conversationMilestoneUpdates(typeof data.text === "string" ? data.text : "");
+    return <SessionRunUpdate updates={updates} stage={typeof data.stage === "string" ? data.stage : null} status={context.status}/>;
   }
   return <span>{typeof data.fallback === "string" ? data.fallback : "这项结果暂时无法显示。"}</span>;
 }
@@ -152,9 +227,12 @@ export function SessionUserMessage({ context }: { context: RenderContext }) {
 export function SessionAssistantMessage({ context }: { context: RenderContext }) {
   return <MessagePrimitive.Root className={styles.turn} role="article">
     <div className={styles.answer}>
-      <div className={styles.identity}><span className={styles.mark} aria-hidden="true"/>Talent Signal</div>
-      <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <ConversationResponse>{part.text}</ConversationResponse>
-        : part.type === "data" ? renderSessionData(part.name, part.data, context) : null}</MessagePrimitive.Parts>
+      <div className={styles.identity} role="img" aria-label="Talent Signal"><span className={styles.mark} aria-hidden="true"/></div>
+      <div className={styles.answerBody}>
+        {/* Empty assistant content stays valid: silence needs no placeholder. */}
+        <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <ConversationResponse>{part.text}</ConversationResponse>
+          : part.type === "data" ? renderSessionData(part.name, part.data, context) : null}</MessagePrimitive.Parts>
+      </div>
     </div>
   </MessagePrimitive.Root>;
 }

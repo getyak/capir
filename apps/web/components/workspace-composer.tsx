@@ -55,6 +55,8 @@ export type WorkspaceComposerProps = {
   placeholder: string;
   /** `home` bounds at the send limit; `session` keeps the larger draft limit. */
   variant: "home" | "session";
+  /** Inline controls for the IM canvas; draft limits stay owned by `variant`. */
+  layout?: "stacked" | "inline";
   /** Submission is actually possible right now. */
   canSubmit: boolean;
   /** Suggestions are offered only while the surface can still act. */
@@ -95,6 +97,7 @@ export function WorkspaceComposer({
   maxLength,
   placeholder,
   variant,
+  layout = "stacked",
   canSubmit,
   suggestionsEnabled = true,
   disabled = false,
@@ -190,9 +193,9 @@ export function WorkspaceComposer({
     function resize() {
       if (!element) return;
       const height = window.visualViewport?.height ?? window.innerHeight;
-      const minimum = variant === "session" ? 64 : 82;
-      const limit = Math.max(minimum, Math.min(variant === "session" ? 240 : 320,
-        Math.floor(height * (variant === "session" ? 0.3 : 0.4))));
+      const minimum = layout === "inline" ? 22 : variant === "session" ? 64 : 82;
+      const limit = Math.max(minimum, Math.min(layout === "inline" ? 176 : variant === "session" ? 240 : 320,
+        Math.floor(height * (layout === "inline" ? 0.25 : variant === "session" ? 0.3 : 0.4))));
       element.style.height = "auto";
       element.style.height = `${Math.max(minimum, Math.min(element.scrollHeight, limit))}px`;
       element.style.overflowY = element.scrollHeight > limit ? "auto" : "hidden";
@@ -204,7 +207,7 @@ export function WorkspaceComposer({
       window.removeEventListener("resize", resize);
       window.visualViewport?.removeEventListener("resize", resize);
     };
-  }, [value, variant]);
+  }, [value, variant, layout]);
 
   // Fit the popup into the visible area, away from the sticky header and dock.
   useLayoutEffect(() => {
@@ -447,7 +450,7 @@ export function WorkspaceComposer({
   ]);
 
   return (
-    <div className={styles.composer} data-dragging={dragging ? "true" : undefined} data-variant={variant}
+    <div className={styles.composer} data-dragging={dragging ? "true" : undefined} data-variant={variant} data-layout={layout}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) close();
       }}
@@ -511,6 +514,7 @@ export function WorkspaceComposer({
       <label className="sr-only" htmlFor={id}>
         {label}
       </label>
+      {layout === "inline" ? <div className={styles.inlineLeading}>{footerStart}</div> : null}
       <textarea
         aria-activedescendant={
           menuOpen && items.length ? `${menuId}-option-${highlighted}` : undefined
@@ -558,16 +562,17 @@ export function WorkspaceComposer({
         placeholder={placeholder}
         readOnly={readOnly}
         ref={textarea}
-        rows={rows}
+        rows={layout === "inline" ? 1 : rows}
         value={value}
       />
+      {layout === "inline" ? <div className={styles.inlineTrailing}>{footerEnd}</div> : null}
 
       {pasteError ? <p className={styles.overflow} role="alert">{pasteError}</p> : null}
       {fileError ? <p className={styles.overflow} role="alert">{fileError}</p> : null}
-      <div className={styles.footer}>
+      <div className={styles.footer} data-inline={layout === "inline" ? "true" : undefined}>
         <div className={styles.footerStart}>
-          {footerStart}
-          <span className={styles.hint} id={hintId}>
+          {layout === "stacked" ? footerStart : null}
+          <span className={layout === "inline" ? "sr-only" : styles.hint} id={hintId}>
             {COMPOSER_DISCOVERY_HINT}
           </span>
           {lengthState.message ? (
@@ -585,7 +590,7 @@ export function WorkspaceComposer({
             </span>
           )}
         </div>
-        <div className={styles.footerEnd}>{footerEnd}</div>
+        {layout === "stacked" ? <div className={styles.footerEnd}>{footerEnd}</div> : null}
       </div>
     </div>
   );

@@ -26,6 +26,10 @@ function turn(): SessionDetail["turns"][number] {
   } as SessionDetail["turns"][number];
 }
 
+function partsOf(message: { content: Array<{ type: string; name?: string; data?: unknown }> }) {
+  return message.content.filter((part) => part.type === "data").map((part) => part.name);
+}
+
 describe("Session message projection", () => {
   it("keeps canonical message identity and puts governed card references after the answer", () => {
     const messages = sessionMessages({ turns: [turn()], active: null, preview: null });
@@ -34,13 +38,50 @@ describe("Session message projection", () => {
     const userParts = messages[0]!.content as Array<{ type: string; name?: string; data?: unknown }>;
     expect(userParts.some((part) => part.name === "talent-signal.user-images")).toBe(true);
     const parts = messages[1]!.content as Array<{ type: string; name?: string; data?: unknown }>;
+    // The execution record sits above the standalone result; pending memory
+    // and calendar decisions stay distinct blocks after it.
     expect(parts.map((part) => part.name)).toEqual([
-      "talent-signal.answer-block", "talent-signal.memory", "talent-signal.calendar",
+      "talent-signal.execution", "talent-signal.answer-block", "talent-signal.memory", "talent-signal.calendar",
     ]);
-    const memory = parts[1]!.data as Record<string, unknown>;
+    const execution = parts[0]!.data as Record<string, unknown>;
+    expect(execution).toMatchObject({ phase: "waiting-review", startedAt: "2026-09-29T01:00:00.000Z", endedAt: "2026-09-29T01:00:01.000Z" });
+    const memory = parts[2]!.data as Record<string, unknown>;
     expect(memory).toMatchObject({ version: 1, messageId: MESSAGE, proposalId: PROPOSAL, revision: 3 });
     expect(JSON.stringify(memory)).not.toContain("source.png");
     expect(JSON.stringify(memory)).not.toContain("credential");
+  });
+
+  it("keeps a clean completed result standalone with only its collapsed execution record", () => {
+    const clean = turn();
+    delete (clean.response as Record<string, unknown>).memoryProposal;
+    delete (clean.response as Record<string, unknown>).meetingDraft;
+    const messages = sessionMessages({ turns: [clean], active: null, preview: null });
+    expect(partsOf(messages[1]!)).toEqual(["talent-signal.execution", "talent-signal.answer-block"]);
+    const execution = (messages[1]!.content as Array<{ name?: string; data?: unknown }>).find((part) => part.name === "talent-signal.execution")!.data as Record<string, unknown>;
+    expect(execution.phase).toBe("completed");
+    // The result body is a separate part: the record never wraps or restates it.
+    expect(JSON.stringify(execution)).not.toContain("陈宇负责设计协作");
+  });
+
+  it("records a stopped run as interrupted from its persisted cancelled identity", () => {
+    const stopped = turn();
+    delete (stopped.response as Record<string, unknown>).memoryProposal;
+    delete (stopped.response as Record<string, unknown>).meetingDraft;
+    (stopped.response as Record<string, unknown>).taskID = `cancelled-${MESSAGE}`;
+    const messages = sessionMessages({ turns: [stopped], active: null, preview: null });
+    const execution = (messages[1]!.content as Array<{ name?: string; data?: unknown }>).find((part) => part.name === "talent-signal.execution")!.data as Record<string, unknown>;
+    expect(execution.phase).toBe("interrupted");
+  });
+
+  it("keeps an empty assistant response valid with no fabricated placeholder", () => {
+    const silent = turn();
+    delete (silent.response as Record<string, unknown>).memoryProposal;
+    delete (silent.response as Record<string, unknown>).meetingDraft;
+    (silent.response as Record<string, unknown>).unboundConversationBlocks = [];
+    (silent.response as Record<string, unknown>).savedBlocks = [];
+    const messages = sessionMessages({ turns: [silent], active: null, preview: null });
+    expect(partsOf(messages[1]!)).toEqual(["talent-signal.execution"]);
+    expect(JSON.stringify(messages[1]!.content)).not.toContain("这项结果暂时无法显示");
   });
 
   it("projects an in-flight response as incomplete without duplicating a committed turn", () => {
@@ -61,8 +102,35 @@ describe("Session message projection", () => {
     };
     const preview = { run_id: active.run_id!, message_id: MESSAGE, text: "正在整理", stage: "answer", revision: 1 } as ConversationQueuePreview;
     expect(sessionMessages({ turns: [turn()], active, preview })).toHaveLength(2);
-    const pending = sessionMessages({ turns: [], active, preview });
+    const pending = sessionMessages({ turns: [], active, preview, milestones: [{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-09-29T01:00:00.500Z" }] });
     expect(pending.map((message) => message.id)).toEqual([`${MESSAGE}:user`, `${MESSAGE}:assistant`]);
-    expect((pending[1]!.content as Array<{ name?: string }>)[0]!.name).toBe("talent-signal.progress");
+    expect(partsOf(pending[1]!)).toEqual(["talent-signal.run-update", "talent-signal.execution"]);
+    const update = (pending[1]!.content as Array<{ name?: string; data?: unknown }>)[0]!.data as Record<string, unknown>;
+    expect(update).toMatchObject({ updates: ["正在整理"], stage: "answer" });
+    const execution = (pending[1]!.content as Array<{ name?: string; data?: unknown }>)[1]!.data as Record<string, unknown>;
+    expect(execution).toMatchObject({ phase: "running", stage: "answer", endedAt: null });
+    expect(execution.milestones).toEqual([{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-09-29T01:00:00.500Z" }]);
+    // The ephemeral run update never becomes semantic result content.
+    expect(partsOf(pending[1]!)).not.toContain("talent-signal.answer-block");
+  });
+
+  it("keeps a paused or stopping run's partial truth on the observed entry", () => {
+    const base: ConversationQueueEntry = {
+      queue_entry_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      message_id: MESSAGE,
+      sequence: 1,
+      status: "running",
+      objective: "请继续",
+      created_at: "2026-09-29T01:00:00.000Z",
+      updated_at: "2026-09-29T01:00:01.000Z",
+      revision: 1,
+      run_id: "99999999-9999-4999-8999-999999999999",
+      stage: "answer",
+      cancel_requested: true,
+      failure_code: null,
+    };
+    const pending = sessionMessages({ turns: [], active: base, preview: null });
+    const execution = (pending[1]!.content as Array<{ name?: string; data?: unknown }>).find((part) => part.name === "talent-signal.execution")!.data as Record<string, unknown>;
+    expect(execution.phase).toBe("stopping");
   });
 });

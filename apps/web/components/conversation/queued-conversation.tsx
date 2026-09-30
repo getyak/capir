@@ -1,10 +1,14 @@
 "use client";
 
-import { ArrowDown, ArrowUp, PencilSimple, Stop, Trash, X } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Stop, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { conversationHome } from "@/lib/conversation-local";
+import {
+  conversationRunKeyAction,
+  conversationStageLabel,
+} from "@/lib/conversation-execution";
 import type { LegacyConversationRecovery } from "@/lib/conversation-legacy";
 import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
 import type { ConversationImageManifest, MemoryProposalItem } from "@talent-signal/contracts";
@@ -14,12 +18,13 @@ import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { conversationNearBottom } from "../session-workbench/session-presentation";
 import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
 import { ConversationImageStrip } from "./conversation-images";
+import { SessionSendTime } from "./session-execution-card";
 import { useConversation } from "./use-conversation";
+import { usePreviewPacing } from "./use-preview-pacing";
+import { useRunMilestones } from "./use-run-milestones";
 import { sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
 import { SessionRuntime } from "./session-runtime";
 import styles from "./queued-conversation.module.css";
-
-const stages: Record<string, string> = { queued: "等待开始", preparing: "正在准备回复", thinking: "正在处理", contact_lookup: "正在查找相关人物", contact_read: "正在阅读相关记录", calendar_draft: "正在整理日程草稿", answer: "正在回复", responding: "正在回复", persisting: "正在保存回复", running: "正在处理" };
 // Admission may rewrite the draft URL only when the query is empty or holds
 // exactly one draft_session parameter for this session. A duplicated key or
 // any extra parameter is a separate navigation intent whose contents
@@ -118,19 +123,25 @@ export function QueuedConversation(props: Props) {
   const active = chat.snapshot?.active;
   const queued = chat.snapshot?.queued ?? [];
   const turns = useMemo(() => chat.detail?.turns ?? [], [chat.detail?.turns]);
+  // Presentation pacing: forming text paints at most once per interval while
+  // terminal states and errors stay prompt.
+  const pacedPreview = usePreviewPacing(chat.preview);
+  // Observed milestones are recorded per run identity only when a real stage
+  // transition arrives; a new run starts an empty record.
+  const milestones = useRunMilestones(active?.run_id ?? null, pacedPreview?.stage ?? active?.stage ?? null);
   const imageCount = chat.attachments.length;
   const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && queued.length + chat.messages.length + (active ? 1 : 0) < 50;
   const activeVisible = active && !turns.some(turn => turn.id === active.message_id);
-  const forming = chat.preview?.run_id === active?.run_id ? chat.preview : null;
+  const forming = pacedPreview?.run_id === active?.run_id ? pacedPreview : null;
   const paused = chat.snapshot?.paused ?? false;
   const hasContent = Boolean(turns.length || chat.messages.length || active || queued.length);
   const personLabel = chat.detail?.person_label ?? props.initialDetail?.person_label ?? "";
   const contextLabel = chat.detail?.context_label ?? props.initialDetail?.context_label ?? "";
   const scopeLabel = personLabel && contextLabel ? `${personLabel} · ${contextLabel}` : personLabel || contextLabel || "未绑定联系人或关系情境";
-  const status = chat.unavailable ? "这段对话已不可用" : chat.connection === "reconnecting" && hasContent ? "连接恢复中，消息已保留" : active?.cancel_requested ? "正在停止…" : active ? (stages[forming?.stage ?? active.stage ?? ""] ?? "正在处理") : paused ? "已暂停，可继续发送到队列" : queued.length ? `${queued.length} 条消息等待处理` : "";
+  const status = chat.unavailable ? "这段对话已不可用" : chat.connection === "reconnecting" && hasContent ? "连接恢复中，消息已保留" : active?.cancel_requested ? "正在停止…" : active ? (conversationStageLabel(forming?.stage ?? active.stage) ?? "正在处理") : paused ? "已暂停，可继续发送到队列" : queued.length ? `${queued.length} 条消息等待处理` : "";
   const projectedMessages = useMemo(() => sessionMessages({
-    turns, active: activeVisible ? active : null, preview: forming,
-  }), [turns, activeVisible, active, forming]);
+    turns, active: activeVisible ? active : null, preview: forming, milestones,
+  }), [turns, activeVisible, active, forming, milestones]);
   const sourceImagesByMessageId = useMemo(() => Object.fromEntries(
     turns.map((turn) => [turn.id, turn.images ?? []]),
   ), [turns]);
@@ -176,14 +187,28 @@ export function QueuedConversation(props: Props) {
     }
   }
   async function applyEdit(entry: string) { if (await chat.mutate({ kind: "edit", queue_entry_id: entry, objective: editValue.trim() })) setEditing(null); }
+  // Escape pauses the queue while a run is live. IME composition owns Enter
+  // and Escape: a composing key event is never an action.
+  function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('[role="dialog"]')) return;
+    const run = active && !active.cancel_requested && active.run_id ? active : null;
+    if (conversationRunKeyAction({ key: event.key, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode, hasActiveRun: Boolean(run) }) === "pause-run" && run?.run_id) {
+      event.preventDefault();
+      void chat.mutate({ kind: "stop", run_id: run.run_id });
+    }
+  }
   async function prioritize(queueEntryId: string, position: number) {
     if (active && !window.confirm(`停止当前回复，优先处理第 ${position} 条？其他待处理消息顺序保留。`)) return;
     if (!active && paused && !window.confirm(`优先处理第 ${position} 条并继续队列？`)) return;
     await chat.mutate({ kind: "prioritize", queue_entry_id: queueEntryId });
   }
 
-  return <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label="对话" data-conversation-canvas data-empty={!hasContent}>
-    {admitted && <header className={styles.header}><div className={styles.headingText}><h1>{chat.detail?.title || "新对话"}</h1><p className={styles.subtitle}>{scopeLabel}</p></div><details className={styles.details}><summary>对话详情</summary><div className={styles.detailPanel}>
+  return <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label="对话" data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
+    {admitted && <header className={styles.header}>
+      <div className={styles.headingText}><h1 title={chat.detail?.title || "新对话"}>{chat.detail?.title || "新对话"}</h1></div>
+      <details className={styles.details}><summary aria-label="对话详情"><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>对话详情</span></summary><div className={styles.detailPanel}>
+      <p className={styles.detailScope}>{scopeLabel}</p>
       <p>历史回复保留当时的判断，执行前请核对当前信息。</p>
       {chat.detail && <p>保留至 {new Date(chat.detail.expires_at).toLocaleDateString("zh-CN")}</p>}
       {props.meetingLinks?.map(meeting => <a key={meeting.id} href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>{meeting.title}</a>)}
@@ -196,10 +221,10 @@ export function QueuedConversation(props: Props) {
       <div className={styles.content} ref={content}>
         {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><h2>今天想推进什么？</h2></div>}
         <ThreadPrimitive.Messages>{({ message }) => message.role === "user"
-          ? <SessionUserMessage context={renderContext}/>
-          : <SessionAssistantMessage context={renderContext}/>}</ThreadPrimitive.Messages>
+          ? <Fragment key={message.id}><SessionSendTime at={(message as { createdAt?: unknown }).createdAt}/><SessionUserMessage context={renderContext}/></Fragment>
+          : <SessionAssistantMessage key={message.id} context={renderContext}/>}</ThreadPrimitive.Messages>
         {props.meetingLinks?.filter(meeting=>!turns.some(turn=>turn.response.meetingDraft?.id===meeting.id)).map(meeting=><section key={meeting.id} className="context-calendar-draft-handoff" aria-label="日历草稿核对入口"><strong>{meeting.title}</strong><a href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>核对日历草稿 →</a></section>)}
-        {chat.messages.map(message => <article className={styles.localTurn} key={message.id} data-delivery={message.delivery}><div className={styles.userRow}><div className={styles.userMessage}>{displayText(message.objective, message.images)}{message.images?.length ? <ConversationImageStrip binding={props.chatBinding} images={message.images} local messageId={message.id} scope={props.scope} sessionId={id ?? ""}/> : null}</div></div>{message.delivery === "accepted" ? null : <div className={styles.delivery}>{message.delivery === "unknown" || message.delivery === "rejected" ? <>{message.error || "送达结果尚未确认，请核对后重试。"}<button onClick={() => void chat.retryDelivery(message)}>核对并重试</button>{message.delivery === "rejected" && <button onClick={() => chat.discardRejectedDelivery(message.id)}>移除</button>}</> : message.delivery === "pending" ? "等待送达" : "正在送达…"}</div>}</article>)}
+        {chat.messages.map(message => <Fragment key={message.id}><SessionSendTime at={message.createdAt}/><article className={styles.localTurn} data-delivery={message.delivery}><div className={styles.userRow}><div className={styles.userMessage}>{displayText(message.objective, message.images)}{message.images?.length ? <ConversationImageStrip binding={props.chatBinding} images={message.images} local messageId={message.id} scope={props.scope} sessionId={id ?? ""}/> : null}</div></div>{message.delivery === "accepted" ? null : <div className={styles.delivery}>{message.delivery === "unknown" || message.delivery === "rejected" ? <>{message.error || "送达结果尚未确认，请核对后重试。"}<button onClick={() => void chat.retryDelivery(message)}>核对并重试</button>{message.delivery === "rejected" && <button onClick={() => chat.discardRejectedDelivery(message.id)}>移除</button>}</> : message.delivery === "pending" ? "等待送达" : "正在送达…"}</div>}</article></Fragment>)}
       </div>
     </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>

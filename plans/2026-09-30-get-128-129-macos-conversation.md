@@ -18,6 +18,19 @@ GET-128: immediate acknowledgement; separate execution from dialogue; coalesced 
 4. [ ] PR, current-head CI gates, merge/readback, issue acceptance/readback.
 ## Verification
 Focused queue/render/projection lifecycle tests; Web lint/typecheck/build and docs checks; real rendered empty/populated/streaming/stopped/review states at 1280x820, collapsed, dark, narrow and reduced motion; preserve scroll and IME. Synthetic fixtures only. Verify macOS resident surface wiring separately from pure browser proof.
+## Acceptance checkpoints
+- GET-128 must be checked against the original issue, including delivering queued interruption context after the current tool completes and merging rapid fragments before processing. A next-turn-only implementation is not automatically equivalent; trace the actual provider dispatch and record/fix any gap before closure.
+- An entry marked completed is not by itself enough to claim canonical answer readback. Pending decisions must reflect current proposal/draft review status rather than mere presence of an object.
+- Forming output and interrupted output remain bounded, ephemeral drafts unless existing governed retention establishes the canonical record. Do not invent evidence or tool success in execution cards.
+## Integration ownership
+- Pi owns the conversation projection, queue presentation and sidebar implementation in its separate checkout.
+- Integration owner adds an opt-in inline layout to `workspace-composer.tsx` and its CSS in the integration checkout (outside Pi's file ownership). Connect it after importing the reviewed Pi patch. It keeps send limits, intake and suggestion behavior while lowering the initial field to 62px.
+- Integration owner also adjusts the authenticated Web theme adapter: white light canvas, explicit warm user/Agent bubble variables, and actual 64px rail token. Existing shared token fallback remained 56px, so changing only its fallback in shell CSS would not satisfy the Figma rail.
+- Inline composer implementation typecheck passed before integration; repeat integrated verification after wiring.
+## Runtime proof setup
+- Installed `/Users/cubxxw/Applications/Talent Signal.app` opens the authenticated resident Web origin on Tailscale port 10443; native toolbar and companion remain native. Actual current home verified without sending or exporting customer data.
+- Disposable local Postgres/backend/Next environment uses synthetic seed accounts and a deterministic no-network model. Baseline empty/home and completed-conversation screenshots captured; intended render comparison at 1280x820.
+- Implementation task: Pi `20260930-234844-771978b9` on separate frozen branch. Integration owner retains PR, independent review, rendered acceptance and issue verification.
 ## Risks and decisions
 Existing durable queue and SSE remain authority; stage transitions must never imply a tool succeeded. Progress preview is ephemeral, not source evidence. Do not introduce a new Agent SDK or AG-UI transport just to restyle proven execution. Native and production effects remain outside scope.
 
