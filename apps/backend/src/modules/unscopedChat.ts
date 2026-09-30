@@ -80,6 +80,8 @@ export interface UnscopedChatExecution {
     inputTokens: number;
     outputTokens: number;
     prompt?: import("@talent-signal/agent").PromptReference;
+    /** Genuine tool completions (name/time only) for execution readback. */
+    toolCompletions?: import("@talent-signal/agent").HarnessToolCompletion[];
   } | null;
 }
 
@@ -141,6 +143,9 @@ export async function executeUnscopedChatTask(input: {
   images?: readonly UnscopedChatImage[];
   /** Honest host note about images omitted by the bounded image budget. */
   imageContextNote?: string;
+  /** GET-128 steering: dynamic input for messages accepted while this task runs. */
+  steering?: import("@talent-signal/agent").HarnessSteeringFeed;
+  onToolCompletion?: (receipt: import("@talent-signal/agent").HarnessToolCompletion) => void;
 }): Promise<UnscopedChatExecution> {
   const taskID = input.taskID ?? randomUUID();
   const calendarContext = calendarDraftContextForRequest(taskID, input.request.time_zone, input.referenceTime ?? input.createdAt ?? new Date());
@@ -246,6 +251,8 @@ export async function executeUnscopedChatTask(input: {
           ...(input.onVisibleText ? { onVisibleText: input.onVisibleText } : {}),
           ...(input.onProgress ? { onProgress: input.onProgress } : {}),
           ...(input.signal ? { signal: input.signal } : {}),
+          ...(input.steering ? { steering: input.steering } : {}),
+        ...(input.onToolCompletion ? { onToolCompletion: input.onToolCompletion } : {}),
           ...(agentInputParts.length > 0 ? { inputParts: agentInputParts } : {}),
           recordSourcePerson: personID => { sourcePeople.add(personID); },
           ...(observation ? { observation: { ...observation, authorization_scope: "workspace_conversation" } } : {}),
@@ -261,6 +268,9 @@ export async function executeUnscopedChatTask(input: {
           inputTokens: execution.providerResult.inputTokens,
           outputTokens: execution.providerResult.outputTokens,
           ...(execution.providerResult.prompt ? { prompt: execution.providerResult.prompt } : {}),
+          ...(execution.providerResult.toolCompletions
+            ? { toolCompletions: execution.providerResult.toolCompletions }
+            : {}),
         };
         proposedSessionTitle = execution.providerResult.sessionTitle ?? null;
         remoteStatus = "agent_completed";

@@ -1,6 +1,8 @@
-.response { color: var(--ink); font-size: 0.9375rem; line-height: 1.533; min-width: 0; overflow-wrap: anywhere; }
-.response[data-lead="true"] > p:first-child { font-size: 1.125rem; font-weight: 600; line-height: 1.555; }
-.provenance { color: var(--muted); font-size: 0.8125rem; line-height: 1.538; margin: 16px 0 0; }
+.response { color: var(--ink); font-size: 0.9375rem; line-height: 1.667; min-width: 0; overflow-wrap: anywhere; }
+.response[data-lead="true"] > p:first-child { font-size: 0.9375rem; font-weight: 500; line-height: 1.533; }
+.provenance { color: var(--muted); font-size: 0.75rem; line-height: 1.583; margin: 16px 0 0; }
+/* Milestone dialogue updates stay short and quiet beside the semantic result. */
+[data-run-update] .response { font-size: 0.875rem; line-height: 1.571; }
 .response > :first-child { margin-top: 0; }
 .response > :last-child { margin-bottom: 0; }
 .response p { margin: 0 0 16px; white-space: pre-wrap; }
@@ -28,3 +30,6 @@
 .response hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
 .destination { color: var(--muted-strong); font-size: 0.875em; overflow-wrap: anywhere; }
 .response :is(pre, [tabindex]):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+[data-conversation-canvas] .response { font-size:14px; line-height:22px; }
+[data-conversation-canvas] .response ol > li { font-size:14px; line-height:22px; font-weight:400; margin:8px 0; }

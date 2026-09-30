@@ -88,11 +88,21 @@ export const ConversationQueueEntrySchema = Type.Object(
     ),
     created_at: stamp,
     updated_at: stamp,
+    started_at: Type.Optional(Type.Union([stamp, Type.Null()])),
     revision: Type.Integer({ minimum: 1 }),
     run_id: Type.Union([id, Type.Null()]),
     stage: Type.Union([bounded(40), Type.Null()]),
     cancel_requested: Type.Boolean(),
     failure_code: Type.Union([bounded(80), Type.Null()]),
+    // GET-128 steering metadata for projection only: this message steers the
+    // run identified here instead of waiting as a separate future task.
+    // Absent means the message is ordinary queued or active work.
+    steers_run_id: Type.Optional(id),
+    accepts_steering: Type.Optional(Type.Boolean()),
+    steer_state: Type.Optional(Type.Union([Type.Literal("awaiting"), Type.Literal("dispatching"), Type.Literal("delivered"), Type.Literal("unsupported")])),
+    // True once this message was actually delivered into that run; the run's
+    // one standalone final answer folds exactly the delivered messages.
+    steer_delivered: Type.Optional(Type.Boolean()),
   },
   obj,
 );
@@ -106,6 +116,7 @@ export const ConversationQueuePreviewSchema = Type.Object(
     run_id: id,
     message_id: id,
     text: Type.String({ maxLength: 12_000 }),
+    completed_tools: Type.Optional(Type.Array(Type.Object({ name: bounded(80), completed_at: stamp }, obj), { maxItems: 16 })),
     stage: Type.Union([bounded(40), Type.Null()]),
     revision: Type.Integer({ minimum: 1 }),
   },
@@ -164,6 +175,12 @@ export const ConversationQueueAdmitResponseSchema = Type.Object(
     revision: Type.Integer({ minimum: 1 }),
     snapshot_revision: Type.Integer({ minimum: 0 }),
     accepted_at: stamp,
+    // Present when this message steers the currently running task instead of
+    // queueing as a separate future task. Backward compatible: older clients
+    // ignore it and still render the message as accepted work.
+    steers_run_id: Type.Optional(id),
+    accepts_steering: Type.Optional(Type.Boolean()),
+    steer_state: Type.Optional(Type.Union([Type.Literal("awaiting"), Type.Literal("dispatching"), Type.Literal("delivered"), Type.Literal("unsupported")])),
   },
   obj,
 );

@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import {
   recentSessionRows,
 } from "@/lib/workspace-recent-sessions";
+import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-shell.module.css";
 
@@ -41,12 +42,13 @@ export function WorkspaceRecentSessions({ binding }: { binding: string }) {
                   href={`/workspace/sessions/${row.id}`}
                   title={row.title}
                 >
-                  <span
-                    aria-hidden="true"
-                    className={styles.sessionDot}
-                    data-unread={row.unread ? "true" : "false"}
-                  />
-                  <span>{row.title}</span>
+                  {row.personId ? (
+                    <PersonDirectoryAvatar className={styles.avatar} dataSize="small" id={row.personId} label={row.personLabel || row.title} />
+                  ) : (
+                    /* Sessions without a person reuse the brand mark; no fixture faces. */
+                    <span aria-hidden="true" className={styles.sessionMark} />
+                  )}
+                  <span className={styles.sessionTitle}>{row.title}</span>
                   {row.unread ? <small>未读</small> : null}
                 </Link>
               </li>

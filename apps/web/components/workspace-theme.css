@@ -1,6 +1,6 @@
 /* Authenticated host adapter: shared palette, no changes to public surfaces. */
 .quiet-workspace {
-  --background: var(--ts-content-surface);
+  --background: var(--ts-panel-surface);
   --surface: var(--ts-panel-surface);
   --surface-muted: var(--ts-chrome-surface);
   --surface-selected: var(--ts-selected-surface);
@@ -25,10 +25,24 @@
   --card-radius: 12px;
   --object-radius: 8px;
   --focus-radius: 12px;
+  --ts-sidebar-width: 248px;
+  --ts-rail-width: 64px;
+  --workspace-agent-bubble: var(--ts-chrome-surface);
+  --workspace-user-bubble: #eceae4;
   --shadow-object: none;
   --shadow-accent: none;
   background: var(--background);
   color: var(--ink);
+}
+:root[data-theme="dark"] .quiet-workspace {
+  --background: var(--ts-content-surface);
+  --workspace-user-bubble: var(--ts-selected-surface);
+}
+@media (prefers-color-scheme: dark) {
+  .quiet-workspace:not(:where([data-theme="light"] *)) {
+    --background: var(--ts-content-surface);
+    --workspace-user-bubble: var(--ts-selected-surface);
+  }
 }
 .quiet-workspace :is(h1, h2, h3) { letter-spacing: 0; }
 .quiet-workspace .context-contact-header__avatar {

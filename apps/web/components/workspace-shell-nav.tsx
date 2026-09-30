@@ -13,7 +13,7 @@ import {
 } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useSyncExternalStore, type MouseEvent } from "react";
 
 import {
@@ -96,6 +96,7 @@ function NavLink({
   nested?: boolean;
   route: WorkspaceNavRoute;
 }) {
+  const router = useRouter();
   const NavigationIcon = NAV_ICONS[route.id];
   return (
     <Link
@@ -110,9 +111,13 @@ function NavLink({
       onClick={
         route.id === "home"
           ? (event) => {
-              if (event.defaultPrevented) return;
+              if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
               const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }));
-              if (!unhandled) event.preventDefault();
+              event.preventDefault();
+              // A Session route may have no mounted Home reset listener. New
+              // must bypass retained draft locators using a fresh server id.
+              // https://nextjs.org/docs/app/api-reference/functions/use-router
+              if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}`);
             }
           : undefined
       }
@@ -160,7 +165,7 @@ export function WorkspaceShellNav({
           <span className={styles.brandName}>Talent Signal</span>
         </Link>
         <div className={styles.brandActions}>
-          <WorkspaceGlobalSearchDialog binding={binding} />
+          {collapsed && <WorkspaceGlobalSearchDialog binding={binding} />}
           <button
             aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"}
             aria-pressed={collapsed}
@@ -174,6 +179,7 @@ export function WorkspaceShellNav({
         </div>
       </div>
 
+      {!collapsed && <WorkspaceGlobalSearchDialog binding={binding} presentation="field"/>}
       <nav aria-label="工作台导航" className={styles.nav}>
         <div className={styles.navGroup}>
           {primary.map((route) => (

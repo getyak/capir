@@ -30,6 +30,7 @@ import {
   lockConversationQueueSession,
   readConversationQueueSnapshot,
   readConversationQueueState,
+  readConversationQueueSteeringLeader,
 } from "./conversationQueueState.js";
 import { publishConversationQueueChanged, publishConversationQueueStop } from "./conversationQueueLive.js";
 
@@ -45,6 +46,7 @@ const ACTIVE_STATUSES: ConversationQueueEntryStatus[] = [
 function admitReceipt(
   row: ConversationQueueEntryRow,
   state: { revision: number },
+  steerRunId?: string | null,
 ): ConversationQueueAdmitResponse {
   return {
     contract_version: CONTRACT_VERSION,
@@ -57,6 +59,7 @@ function admitReceipt(
     revision: row.revision,
     snapshot_revision: state.revision,
     accepted_at: row.created_at.toISOString(),
+    ...(row.steer_group_entry_id && steerRunId ? { steers_run_id: steerRunId } : {}),
   };
 }
 
@@ -128,6 +131,9 @@ export async function admitConversationQueueEntry(
       const response = admitReceipt(
         existing,
         await readConversationQueueState(client, auth.accountId, request.session_id),
+        existing.steer_group_entry_id
+          ? (await readConversationQueueSteeringLeader(client, auth.accountId, request.session_id))?.runId ?? null
+          : null,
       );
       await completeIdempotency(client, idempotency, 202, response);
       return { response, replayed: true };
@@ -151,12 +157,22 @@ export async function admitConversationQueueEntry(
       auth.accountId,
       request.session_id,
     );
+    // GET-128 steering: while a live run still accepts input, this message
+    // joins that run's steering group instead of queueing as unrelated future
+    // work. The lookup runs under the same session advisory lock as the run's
+    // intake closure, so a message is either processed by the live run or
+    // truthfully the next task — never silently dropped in between.
+    const leader = await readConversationQueueSteeringLeader(
+      client,
+      auth.accountId,
+      request.session_id,
+    );
     const entry = (
       await client.query<ConversationQueueEntryRow>(
         `INSERT INTO conversation_queue_entries(
            account_id,session_id,id,message_id,created_by_user_id,auth_session_id,sequence,status,content_state,
-           objective,time_zone,idempotency_key,revision,expires_at,images_hash
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,'queued','retained',$8,$9,$10,1,$11,$12)
+           objective,time_zone,idempotency_key,revision,expires_at,images_hash,steer_group_entry_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,'queued','retained',$8,$9,$10,1,$11,$12,$13)
          RETURNING *`,
         [
           auth.accountId,
@@ -171,6 +187,7 @@ export async function admitConversationQueueEntry(
           request.idempotency_key,
           expiresAt,
           imagesHash,
+          leader?.entryId ?? null,
         ],
       )
     ).rows[0]!;
@@ -183,7 +200,7 @@ export async function admitConversationQueueEntry(
         uploads,
       });
     }
-    const response = admitReceipt(entry, { revision });
+    const response = admitReceipt(entry, { revision }, leader?.runId ?? null);
     await completeIdempotency(client, idempotency, 202, response);
     return { response, replayed: false };
   });
@@ -323,12 +340,31 @@ async function applyMutation(
         "This message has already started and can no longer be edited.",
       );
     }
+    if ((row.steer_state === "delivered" || row.steer_state === "dispatching")) {
+      // The run already consumed this message; its exact accepted text is the
+      // provenance of the folded turn and can never be rewritten after the
+      // fact.
+      throw new ApiError(
+        409,
+        "CONVERSATION_QUEUE_ENTRY_STEERED",
+        "This message already steered the running task and can no longer be edited.",
+      );
+    }
     await client.query(
       "UPDATE conversation_queue_entries SET objective=$3, updated_at=now(), revision=revision+1 WHERE account_id=$1 AND id=$2",
       [auth.accountId, row.id, request.objective],
     );
     await bumpConversationQueueState(client, auth.accountId, sessionId);
     return { kind: "edit", queue_entry_id: row.id, run_id: row.run_id, status: "queued" };
+  }
+  if (request.kind === "prioritize" && row.steer_group_entry_id) {
+    // A steering message is already processed inside the live run (or its
+    // group); reordering it as future work would misrepresent what happens.
+    throw new ApiError(
+      409,
+      "CONVERSATION_QUEUE_ENTRY_NOT_PRIORITIZABLE",
+      "A message that steers the running task cannot be queued for later work.",
+    );
   }
   if (request.kind === "prioritize") {
     // GET-49 controllable supplement: stop a live run when needed, move this
@@ -402,8 +438,21 @@ async function applyMutation(
         "This message has already started and cannot be withdrawn.",
       );
     }
+    if ((row.steer_state === "delivered" || row.steer_state === "dispatching")) {
+      // A delivered steering message keeps its immutable identity in the
+      // folded turn's history; deleting the row would erase the provenance of
+      // work the run already did. Discard the whole group instead.
+      throw new ApiError(
+        409,
+        "CONVERSATION_QUEUE_ENTRY_STEERED",
+        "This message already steered the running task. Withdraw the task message to discard the whole group.",
+      );
+    }
+    // Withdrawing a task message removes its remaining steering messages
+    // together (they are one unprocessed intention). Terminal folded work is
+    // never reachable here: completed and cancelled rows are not withdrawable.
     await client.query(
-      "DELETE FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+      "DELETE FROM conversation_queue_entries WHERE account_id=$1 AND (id=$2 OR steer_group_entry_id=$2)",
       [auth.accountId, row.id],
     );
     await bumpConversationQueueState(client, auth.accountId, sessionId);
@@ -411,7 +460,9 @@ async function applyMutation(
   }
   // retry: an explicit action that re-queues one entry. Only an explicit
   // Continue clears the pause, so a failed old message can never move silently
-  // ahead of later ones.
+  // ahead of later ones. A steering group retries as one intention: its task
+  // message and the messages that steer it re-queue together, and a fresh
+  // model run re-delivers them in accepted order.
   if (!["failed", "interrupted"].includes(row.status)) {
     throw new ApiError(
       409,
@@ -419,12 +470,24 @@ async function applyMutation(
       "Only a failed or interrupted message can be retried explicitly.",
     );
   }
+  const leaderId = row.steer_group_entry_id ?? row.id;
+  const leaderRow = (
+    await client.query<{ result: unknown }>(
+      "SELECT result FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+      [auth.accountId, leaderId],
+    )
+  ).rows[0];
+  const replaysStoredResult = Boolean(leaderRow && leaderRow.result !== null);
   await client.query(
     `UPDATE conversation_queue_entries
      SET status='queued', failure_code=NULL, stage=NULL, lease_owner=NULL, lease_expires_at=NULL,
-         cancel_requested=false, updated_at=now(), revision=revision+1
-     WHERE account_id=$1 AND id=$2`,
-    [auth.accountId, row.id],
+         cancel_requested=false, cancel_auto_continue=false,
+         steer_state=CASE WHEN $3::boolean THEN steer_state ELSE 'awaiting' END,
+         steer_delivered_at=CASE WHEN $3::boolean THEN steer_delivered_at ELSE NULL END,
+         steer_closed_at=CASE WHEN $3::boolean THEN steer_closed_at ELSE NULL END,
+         updated_at=now(), revision=revision+1
+     WHERE account_id=$1 AND (id=$2 OR steer_group_entry_id=$2) AND status IN ('failed','interrupted','queued')`,
+    [auth.accountId, leaderId, replaysStoredResult],
   );
   await bumpConversationQueueState(client, auth.accountId, sessionId);
   return { kind: "retry", queue_entry_id: row.id, run_id: row.run_id, status: "queued" };

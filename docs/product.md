@@ -120,6 +120,8 @@ The source name is visible in the conversation and opens an inspectable evidence
 readback; a generic person page or an opaque evidence count is not a citation.
 Mobile Sessions and their conversation drafts resume within the same signed-in account across devices. Follow-ups, screenshot results, contact drafts, and saving receipts remain in the originating Session. Prior dialogue provides conversational context without becoming evidence. Restored answers are visibly stale, hide their citations, and require a new Ask before source authority is claimed again. A submitted question remains recoverable until validated recording succeeds, and retry reuses the same task intent instead of creating duplicate work. A Session can be shared only after an explicit preview: the default is a compact static context card, while a readable conversation copy requires a separate scope choice. Both omit sources, pending decisions, action targets, and execution authority; that export classification survives persistence and legacy restored answers without a classification remain unavailable. The readable copy is bounded, and every exported message is fully visible in the scrollable review surface. Identity-review Sessions use generic context and cannot export a full conversation. System sharing sends a copy and never claims that access or permissions changed. A Session may also be forked into a separate conversation; a fork carries readable context without inheriting pending decisions or execution authority. Feedback is reversible message metadata. Web also offers a separate [private conversation](reference/private-conversation.md) with no saved history or Memory.
 
+Conversation and execution remain separate: accepted input gets immediate feedback, one folded record reports actual state and elapsed time, and the standalone final answer follows the latest processed input. Rapid text fragments adjust the current task after its tools finish; original identities remain distinct. Stop preserves completed work and requires explicit continuation. Unsupported input stays whole as named later work. Silence is legal, structured Markdown stays whole, and notifications serve final results or required human decisions.
+
 On mobile, voice is a direct path to an editable Agent-input draft. The global composer accepts a normal tap for text and touch-and-hold for voice; the Session composer shows best-effort on-device provisional words inside the same ribbon.
 Releasing stops capture and requests one provider-final transcript, but never submits it: the exact final words remain editable until the user taps `Send`. Sliding up keeps capture hands-free and sliding left cancels.
 First use explains the temporary audio processor and deletion boundary, and existing typed text is never replaced by a voice gesture. Voice input does not make a user recollection source evidence or grant downstream confirmation or action authority.
@@ -298,7 +300,6 @@ must earn their own evidence and interaction; broader positioning does not
 claim that every industry workflow or integration is already implemented.
 
 ## Non-goals
-
 - a general autonomous user;
 - a generic conversation summarizer;
 - automatic candidate ranking or rejection;
@@ -309,7 +310,6 @@ claim that every industry workflow or integration is already implemented.
 - a generated wiki that becomes the system of record.
 
 ## Product success
-
 Success means a relationship owner can act with less reconstruction and greater
 confidence while the people involved experience more relevant, timely, and
 human communication. The same standard applies to clients, partners,
