@@ -52,3 +52,9 @@ it("adds no milestone when no stage is observed", async () => {
   await render("cccccccc-cccc-4ccc-8ccc-cccccccccccc", null);
   expect(observed).toEqual([]);
 });
+
+it("continues publishing stage observations after the 12-entry cap", async () => {
+  for (let index = 0; index < 15; index++) await render("run-long", index % 2 ? "answer" : "contact_read");
+  expect(observed).toHaveLength(12);
+  expect(observed.at(-1)?.stage).toBe("contact_read");
+});

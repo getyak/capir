@@ -123,15 +123,18 @@ describe("Session calendar draft card", () => {
   });
 
   it("records Not now on this card and removes export actions", async () => {
+    const onDecisionState = vi.fn();
     const dismissed: MeetingDraftRecord = { ...available, status: "dismissed", dismissed_at: "2026-09-29T01:00:00.000Z", revision: 3 };
     fetcher.mockImplementation((url: string) => Promise.resolve(Response.json({
       draft: String(url).endsWith("/dismiss") ? dismissed : available,
       session_version: "binding-1",
     })));
-    await act(async () => root.render(createElement(SessionCalendarDraftCard, { draftId: ID, binding: "binding-1", sessionId: available.origin_session_id })));
+    await act(async () => root.render(createElement(SessionCalendarDraftCard, { draftId: ID, binding: "binding-1", sessionId: available.origin_session_id, onDecisionState })));
     await flush();
+    expect(onDecisionState).toHaveBeenLastCalledWith("pending");
     await act(async () => button("暂不安排")!.click());
     await flush();
+    expect(onDecisionState).toHaveBeenLastCalledWith("resolved");
     expect(mount.textContent).toContain("本次不安排");
     expect(button("下载日历草稿")).toBeUndefined();
     const call = fetcher.mock.calls.find(([url]) => String(url).endsWith("/dismiss")) as [string, RequestInit];

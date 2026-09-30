@@ -30,3 +30,6 @@
 .response hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
 .destination { color: var(--muted-strong); font-size: 0.875em; overflow-wrap: anywhere; }
 .response :is(pre, [tabindex]):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+[data-conversation-canvas] .response { font-size:14px; line-height:22px; }
+[data-conversation-canvas] .response ol > li { font-size:14px; line-height:22px; font-weight:400; margin:8px 0; }

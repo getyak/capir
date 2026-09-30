@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ConversationQueueEntry } from "@talent-signal/contracts";
 import {
   CONVERSATION_PRESENTATION_INTERVAL_MS,
-  conversationAwaitingDecision,
   conversationElapsedLabel,
   conversationElapsedMs,
   conversationExecutionPhase,
@@ -49,17 +48,11 @@ describe("conversation execution phase projection", () => {
 
   it("claims completion only after history readback and keeps pending decisions in review", () => {
     // A completed entry without readback must never surface as completed.
+    expect(conversationExecutionPhase({ entry: entry({ status: "completed" }), readbackComplete: false, awaitingDecision: false })).toBe("running");
     expect(conversationExecutionPhase({ entry: entry({ status: "completed" }), readbackComplete: true, awaitingDecision: false })).toBe("completed");
     expect(conversationExecutionPhase({ entry: entry({ status: "completed" }), readbackComplete: true, awaitingDecision: true })).toBe("waiting-review");
     expect(conversationExecutionPhase({ entry: null, readbackComplete: true, awaitingDecision: true })).toBe("waiting-review");
     expect(conversationExecutionPhase({ entry: null, readbackComplete: true, awaitingDecision: false })).toBe("completed");
-  });
-
-  it("reads a pending memory or calendar decision from the readback response", () => {
-    expect(conversationAwaitingDecision({ memoryProposal: { proposal_id: "p", revision: 1 } })).toBe(true);
-    expect(conversationAwaitingDecision({ meetingDraft: { id: "m", title: "回访" } })).toBe(true);
-    expect(conversationAwaitingDecision({ memoryProposal: null, meetingDraft: null })).toBe(false);
-    expect(conversationAwaitingDecision(undefined)).toBe(false);
   });
 
   it("keeps every explicit state named for the surface", () => {
@@ -76,20 +69,11 @@ describe("conversation execution phase projection", () => {
 });
 
 describe("observed milestones and elapsed time", () => {
-  it("shortens forming output into milestone-only dialogue updates", () => {
+  it("preserves whole Markdown drafts without inventing milestones", () => {
     expect(conversationMilestoneUpdates("")).toEqual([]);
-    expect(conversationMilestoneUpdates("先核对两人的沟通记录。再看下一步。\n然后给出建议。"))
-      .toEqual(["先核对两人的沟通记录。", "再看下一步。", "然后给出建议。"]);
-    // A long unit is capped with an ellipsis instead of becoming the result.
-    const long = conversationMilestoneUpdates(`${"很长的进展".repeat(80)}。`, 20);
-    expect(long).toHaveLength(1);
-    expect(long[0]!.endsWith("…")).toBe(true);
-    expect(long[0]!.length).toBeLessThanOrEqual(21);
-    // Only the most recent updates stay on screen.
-    expect(conversationMilestoneUpdates("一。二。三。四。五。六。七。", 200, 3)).toEqual(["五。", "六。", "七。"]);
-    // Latin decimals are not split mid-number.
-    expect(conversationMilestoneUpdates("增长 3.5% 的部分。下一步。"))
-      .toEqual(["增长 3.5% 的部分。", "下一步。"]);
+    for (const text of ["```ts\nconst x = 1;\n```", "1. First\n2. Second", "| A | B |\n| --- | --- |\n| 1 | 2 |", "long paragraph ".repeat(100)]) {
+      expect(conversationMilestoneUpdates(text)).toEqual([text]);
+    }
   });
 
   it("identifies a stopped run only from its persisted cancelled identity", () => {

@@ -34,3 +34,30 @@ Focused queue/render/projection lifecycle tests; Web lint/typecheck/build and do
 ## Risks and decisions
 Existing durable queue and SSE remain authority; stage transitions must never imply a tool succeeded. Progress preview is ephemeral, not source evidence. Do not introduce a new Agent SDK or AG-UI transport just to restyle proven execution. Native and production effects remain outside scope.
 
+
+## Integration acceptance corrections (2026-10-01)
+
+- Independent review of e506810 identified a blocking GET-128 backend steering
+  gap. New Pi task 20261001-012056-f7347ec9 owns Agent/queue/backend/contracts;
+  integration owner retains Web and any necessary producer adapter outside
+  that frozen task scope. No issue closure or PR delivery before the gap closes.
+- Integrated inline composer, actual white/warm theme tokens, 20px Agent mark,
+  semantic final bubbles and the full expanded search trigger. Real synthetic
+  browser measured 248/64px sidebar, 68px title and 880x62px composer.
+- Removed arbitrary text splitting/truncation from live reply presentation.
+  Whole forming Markdown stays inside folded draft detail; only a short neutral
+  acknowledgement is dialogue. Stage observations are not tool successes.
+- Queued and failure entries now project a transcript execution record with
+  stable message identity. Retain session-local observations after completion;
+  durable actual tool completion metadata remains backend acceptance.
+- Governed memory/calendar cards report current pending/resolved/unknown
+  readback. Verified calendar dismissal clears waiting-review on the same
+  execution surface; historical references do not assert pending status.
+- Browser proof found a retained draft locator sending New back to old history.
+  Guard admitted bootstrap reinitialization and give a listener-free New click
+  a fresh server draft id. A real second click opened an empty new conversation;
+  the old conversation and its failed entry remained preserved.
+- Synthetic failure retained the human message and failure record; Escape
+  preserved canonical partial output, paused later input, and Continue resumed.
+  390px dark and 1280x480 screens retain the composer without horizontal
+  overflow. A mobile search trigger collision was found and corrected.

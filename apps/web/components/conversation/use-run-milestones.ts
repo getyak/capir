@@ -20,20 +20,20 @@ export function useRunMilestones(
 ): readonly ConversationExecutionMilestone[] {
   const runRef = useRef<string | null>(null);
   const listRef = useRef<ConversationExecutionMilestone[]>([]);
-  const publishedRef = useRef(-1);
+  const publishedRef = useRef<ConversationExecutionMilestone[] | null>(null);
   const [milestones, setMilestones] = useState<ConversationExecutionMilestone[]>([]);
   useEffect(() => {
     if (runRef.current !== runId) {
       runRef.current = runId;
       listRef.current = [];
-      publishedRef.current = -1;
+      publishedRef.current = null;
     }
     const next = runId
       ? conversationObservedMilestone(listRef.current, stage ?? null, new Date().toISOString())
       : [];
     listRef.current = next;
-    if (next.length === publishedRef.current) return;
-    publishedRef.current = next.length;
+    if (next === publishedRef.current) return;
+    publishedRef.current = next;
     queueMicrotask(() => setMilestones(next));
   }, [runId, stage]);
   return milestones;

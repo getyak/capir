@@ -83,7 +83,7 @@ export function QueuedConversation(props: Props) {
   useEffect(() => {
     let current = true;
     queueMicrotask(() => {
-      if (!current || props.initialDetail) return;
+      if (!current || props.initialDetail || handedOff.current) return;
       const previous = conversationHome(props.scope);
       const explicit = new URL(window.location.href).searchParams.get("draft_session");
       if (props.bootstrap && previous && previous !== props.bootstrap.sessionId && !explicit) {
@@ -121,7 +121,7 @@ export function QueuedConversation(props: Props) {
   const [away, setAway] = useState(false);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
   const active = chat.snapshot?.active;
-  const queued = chat.snapshot?.queued ?? [];
+  const queued = useMemo(() => chat.snapshot?.queued ?? [], [chat.snapshot?.queued]);
   const turns = useMemo(() => chat.detail?.turns ?? [], [chat.detail?.turns]);
   // Presentation pacing: forming text paints at most once per interval while
   // terminal states and errors stay prompt.
@@ -129,6 +129,14 @@ export function QueuedConversation(props: Props) {
   // Observed milestones are recorded per run identity only when a real stage
   // transition arrives; a new run starts an empty record.
   const milestones = useRunMilestones(active?.run_id ?? null, pacedPreview?.stage ?? active?.stage ?? null);
+  const [milestoneRecords, setMilestoneRecords] = useState<Record<string, typeof milestones>>({});
+  useEffect(() => {
+    const messageId = active?.message_id;
+    if (!messageId || !milestones.length) return;
+    let current = true;
+    queueMicrotask(() => { if (current) setMilestoneRecords(records => records[messageId] === milestones ? records : { ...records, [messageId]: milestones }); });
+    return () => { current = false; };
+  }, [active?.message_id, milestones]);
   const imageCount = chat.attachments.length;
   const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && queued.length + chat.messages.length + (active ? 1 : 0) < 50;
   const activeVisible = active && !turns.some(turn => turn.id === active.message_id);
@@ -140,8 +148,8 @@ export function QueuedConversation(props: Props) {
   const scopeLabel = personLabel && contextLabel ? `${personLabel} · ${contextLabel}` : personLabel || contextLabel || "未绑定联系人或关系情境";
   const status = chat.unavailable ? "这段对话已不可用" : chat.connection === "reconnecting" && hasContent ? "连接恢复中，消息已保留" : active?.cancel_requested ? "正在停止…" : active ? (conversationStageLabel(forming?.stage ?? active.stage) ?? "正在处理") : paused ? "已暂停，可继续发送到队列" : queued.length ? `${queued.length} 条消息等待处理` : "";
   const projectedMessages = useMemo(() => sessionMessages({
-    turns, active: activeVisible ? active : null, preview: forming, milestones,
-  }), [turns, activeVisible, active, forming, milestones]);
+    turns, active: activeVisible ? active : null, preview: forming, milestones, queued, milestonesByMessage: milestoneRecords,
+  }), [turns, activeVisible, active, forming, milestones, queued, milestoneRecords]);
   const sourceImagesByMessageId = useMemo(() => Object.fromEntries(
     turns.map((turn) => [turn.id, turn.images ?? []]),
   ), [turns]);
@@ -248,9 +256,9 @@ export function QueuedConversation(props: Props) {
       {chat.submitting && <p className={styles.composerImageHint} role="status">正在发送…</p>}
       <div className={styles.composer}>
         <input accept="image/png,image/jpeg,image/webp" aria-hidden="true" hidden multiple onChange={event => { onPicked(event.target.files); event.target.value = ""; }} ref={filePicker} tabIndex={-1} type="file" />
-        <WorkspaceComposer id="queued-conversation-composer" label="消息" value={chat.draft} maxLength={1000} variant="home" rows={2} placeholder={active ? "继续补充，会按顺序处理…" : paused ? "继续输入，消息会加入暂停的队列…" : imageCount ? "可加一句话说明，或直接发送图片…" : "有什么想一起理清的？"} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
-          footerStart={<><ComposerAddMenu binding={props.detailBinding} onAttachImages={pickFiles} onNavigate={navigate}/><span className={styles.contextChip}>{scopeLabel}</span></>}
-          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} aria-label={active || queued.length || paused ? "加入队列" : "发送消息"} title={active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}>{active || queued.length || paused ? "加入队列" : "发送"}</button></div>}/>
+        <WorkspaceComposer id="queued-conversation-composer" label="消息" value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? "继续补充，会按顺序处理…" : paused ? "继续输入，消息会加入暂停的队列…" : imageCount ? "可加一句话说明，或直接发送图片…" : "有什么想一起理清的？"} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
+          footerStart={<ComposerAddMenu binding={props.detailBinding} onAttachImages={pickFiles} onNavigate={navigate}/>}
+          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} aria-label={active || queued.length || paused ? "加入队列" : "发送消息"} title={active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}><ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
       {!hasContent && <div className={styles.starters} aria-label="开始一个话题">{["你可以帮我做什么？", "梳理今天需要跟进的人"].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
       <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>Enter 发送 · Shift+Enter 换行</span></div>

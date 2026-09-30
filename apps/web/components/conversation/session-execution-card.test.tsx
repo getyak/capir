@@ -86,3 +86,15 @@ describe("milestone update and per-send time", () => {
     expect(renderToStaticMarkup(createElement(SessionSendTime, { at: undefined }))).toBe("");
   });
 });
+
+it("renders a whole forming Markdown draft only inside execution details", () => {
+  const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
+    phase: "running", stage: "answer", startedAt: "2026-10-01T01:00:00Z", milestones: [],
+    draft: "```ts\nconst x = 1;\n```\n\n1. First\n2. Second\n\n| A | B |\n| --- | --- |\n| 1 | 2 |",
+  }));
+  expect(html).toContain("回复草稿，尚未完成");
+  expect(html).toContain("<pre");
+  expect(html).toContain("<ol");
+  expect(html).toContain("<table");
+  expect(html).not.toContain("data-run-update");
+});

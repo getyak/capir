@@ -89,7 +89,7 @@ export function conversationExecutionPhase(input: {
       case "running":
         return entry.cancel_requested ? "stopping" : "running";
       case "completed":
-        return input.awaitingDecision ? "waiting-review" : "completed";
+        return input.readbackComplete ? (input.awaitingDecision ? "waiting-review" : "completed") : "running";
       case "failed":
         return "failed";
       case "cancelled":
@@ -177,13 +177,6 @@ export function conversationElapsedLabel(ms: number): string {
   return `${seconds} 秒`;
 }
 
-/** Pending memory or calendar decisions stay distinct from execution state. */
-export function conversationAwaitingDecision(response: unknown): boolean {
-  if (!response || typeof response !== "object") return false;
-  const record = response as { memoryProposal?: unknown; meetingDraft?: unknown };
-  return Boolean(record.memoryProposal ?? record.meetingDraft);
-}
-
 /**
  * Presentation pacing for forming text.
  *
@@ -257,48 +250,9 @@ export function conversationPresentationDelay(
 }
 
 export type ConversationKeyAction = "none" | "pause-run";
-/**
- * Short-form forming output into milestone-only dialogue updates.
- *
- * Live updates are milestones, not the result: each unit keeps its sentence or
- * line boundary, is capped at `limit`, and only the most recent `maxUpdates`
- * stay on screen. Complete semantic content is only ever shown from the
- * persisted terminal result.
- */
-export function conversationMilestoneUpdates(
-  text: string,
-  limit = 200,
-  maxUpdates = 6,
-): string[] {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-  const units = trimmed.split(/\n+/u).flatMap(splitSentences);
-  const bounded = units.map((unit) =>
-    unit.length <= limit ? unit : `${unit.slice(0, limit).trimEnd()}…`);
-  return bounded.slice(-maxUpdates);
-}
-
-/** Sentence-shaped units that keep their terminators and never split decimals. */
-function splitSentences(line: string): string[] {
-  const out: string[] = [];
-  let start = 0;
-  let index = 0;
-  while (index < line.length) {
-    const char = line[index]!;
-    const next = line[index + 1];
-    const boundary = "。！？".includes(char)
-      || ((".!?".includes(char)) && (next === undefined || /\s/u.test(next)));
-    if (!boundary) { index += 1; continue; }
-    let end = index + 1;
-    while (end < line.length && "。！？.!?”\"』」'".includes(line[end]!)) end += 1;
-    const unit = line.slice(start, end).trim();
-    if (unit) out.push(unit);
-    start = end;
-    index = end;
-  }
-  const rest = line.slice(start).trim();
-  if (rest) out.push(rest);
-  return out;
+/** Preserve forming Markdown as one draft; it is never a milestone or final result. */
+export function conversationMilestoneUpdates(text: string): string[] {
+  return text.trim() ? [text] : [];
 }
 
 /**

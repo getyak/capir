@@ -207,9 +207,11 @@ export function useWorkspaceSearchSources(binding: string | null, enabled: boole
 export function WorkspaceGlobalSearchDialog({
   binding,
   label = "搜索",
+  presentation = "icon",
 }: {
   binding: string | null;
   label?: string;
+  presentation?: "icon" | "field";
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -263,13 +265,14 @@ export function WorkspaceGlobalSearchDialog({
     <>
       <button
         aria-label={label}
-        className={styles.iconButton}
+        className={presentation === "field" ? styles.searchTrigger : styles.iconButton}
         onClick={show}
         ref={trigger}
         title={`${label} · ⌘K / Ctrl+K`}
         type="button"
       >
         <MagnifyingGlass aria-hidden="true" size={17} />
+        {presentation === "field" && <><span>搜索人物或对话</span><kbd>⌘K</kbd></>}
       </button>
       <dialog
         aria-label="搜索人物与对话"

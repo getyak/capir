@@ -44,7 +44,7 @@ describe("Session message projection", () => {
       "talent-signal.execution", "talent-signal.answer-block", "talent-signal.memory", "talent-signal.calendar",
     ]);
     const execution = parts[0]!.data as Record<string, unknown>;
-    expect(execution).toMatchObject({ phase: "waiting-review", startedAt: "2026-09-29T01:00:00.000Z", endedAt: "2026-09-29T01:00:01.000Z" });
+    expect(execution).toMatchObject({ phase: "completed", startedAt: "2026-09-29T01:00:00.000Z", endedAt: "2026-09-29T01:00:01.000Z" });
     const memory = parts[2]!.data as Record<string, unknown>;
     expect(memory).toMatchObject({ version: 1, messageId: MESSAGE, proposalId: PROPOSAL, revision: 3 });
     expect(JSON.stringify(memory)).not.toContain("source.png");
@@ -106,9 +106,9 @@ describe("Session message projection", () => {
     expect(pending.map((message) => message.id)).toEqual([`${MESSAGE}:user`, `${MESSAGE}:assistant`]);
     expect(partsOf(pending[1]!)).toEqual(["talent-signal.run-update", "talent-signal.execution"]);
     const update = (pending[1]!.content as Array<{ name?: string; data?: unknown }>)[0]!.data as Record<string, unknown>;
-    expect(update).toMatchObject({ updates: ["正在整理"], stage: "answer" });
+    expect(update).toMatchObject({ updates: ["收到，我先理清这件事。"], stage: "answer" });
     const execution = (pending[1]!.content as Array<{ name?: string; data?: unknown }>)[1]!.data as Record<string, unknown>;
-    expect(execution).toMatchObject({ phase: "running", stage: "answer", endedAt: null });
+    expect(execution).toMatchObject({ phase: "running", stage: "answer", endedAt: null, draft: "正在整理" });
     expect(execution.milestones).toEqual([{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-09-29T01:00:00.500Z" }]);
     // The ephemeral run update never becomes semantic result content.
     expect(partsOf(pending[1]!)).not.toContain("talent-signal.answer-block");
@@ -133,4 +133,14 @@ describe("Session message projection", () => {
     const execution = (pending[1]!.content as Array<{ name?: string; data?: unknown }>).find((part) => part.name === "talent-signal.execution")!.data as Record<string, unknown>;
     expect(execution.phase).toBe("stopping");
   });
+});
+
+it("keeps one execution identity when a queued message fails without producing an answer", () => {
+  const base: ConversationQueueEntry = { queue_entry_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", message_id: MESSAGE, sequence: 1, status: "queued", objective: "Synthetic request", created_at: "2026-10-01T01:00:00Z", updated_at: "2026-10-01T01:00:00Z", revision: 1, run_id: null, stage: null, cancel_requested: false, failure_code: null };
+  const project = (entry: ConversationQueueEntry) => sessionMessages({ turns: [], active: null, preview: null, queued: [entry] });
+  const queued = project(base);
+  const failed = project({ ...base, status: "failed", failure_code: "RUN_FAILED", updated_at: "2026-10-01T01:00:05Z", revision: 2 });
+  expect(queued.map(message => message.id)).toEqual(failed.map(message => message.id));
+  expect(partsOf(failed[1]!)).toEqual(["talent-signal.execution"]);
+  expect(failed[1]!.content[0]).toMatchObject({ data: { phase: "failed", endedAt: "2026-10-01T01:00:05Z", failureCode: "RUN_FAILED" } });
 });
