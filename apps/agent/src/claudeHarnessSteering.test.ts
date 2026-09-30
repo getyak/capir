@@ -4,7 +4,7 @@ import { runClaudeHarness, type ClaudeHarnessRequest, type HarnessSteeringFeed }
 import { claudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
 
 const config = claudeHarnessConfiguration({ ANTHROPIC_API_KEY: "synthetic-secret", TALENT_SIGNAL_AGENT_MODEL: "synthetic-model" });
-const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
+const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"] as const;
 const request = (overrides: Partial<ClaudeHarnessRequest> = {}): ClaudeHarnessRequest => ({ objective: "Synthetic task", systemPrompt: "Synthetic instructions", tools: [],
   budget: { maxTurns: 8, maxToolCalls: 10, maxDurationMs: 30000, maxTaskTokens: 4000, maxEstimatedUsd: 1 }, assertCurrent: vi.fn(async () => {}), ...overrides });
 const result = (overrides: object = {}) => ({ type: "result", subtype: "success", result: "Final including both fragments", is_error: false,
