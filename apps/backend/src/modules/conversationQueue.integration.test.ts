@@ -27,6 +27,9 @@ import { readConversationMessageImage } from "./conversationMessageImages.js";
 import { registerConversationQueueRoutes } from "./conversationQueueRoutes.js";
 import { ApiError } from "../lib/apiError.js";
 import { subscribeConversationQueueLive, type ConversationQueueLivePreview } from "./conversationQueueLive.js";
+import { closeConversationQueueSteeringIntake } from "./conversationQueueState.js";
+import { persistConversationQueueCompletion } from "./conversationQueueCompletion.js";
+import { executeUnscopedChatTask } from "./unscopedChat.js";
 import { getAgentSession, readAgentSessionConversation } from "./agentSessions.js";
 import { mutateAgentSession } from "./agentSessions.js";
 import { resolveSessionSourceAuthority } from "./memoryReviewStore.js";
@@ -156,6 +159,7 @@ class ScriptedConversationProvider implements RemoteChatAnswerProviding {
   /** Emits no preview or progress callbacks, so a racing stop stays unobserved
    * until the failure/shutdown finalization path re-checks it. */
   silent = false;
+  completedToolBeforeReturn: {name:string;completedAt:string} | null = null;
 
   async answer(_request: RemoteChatAnswerRequest): Promise<RemoteChatAnswerResult> {
     throw new Error("The governed agent path is required for this synthetic provider.");
@@ -197,6 +201,7 @@ class ScriptedConversationProvider implements RemoteChatAnswerProviding {
         if (!ignoreAbort) signal.throwIfAborted();
         if (!this.silent) request.onVisibleText?.(delta);
       }
+      if (this.completedToolBeforeReturn) request.onToolCompletion?.(this.completedToolBeforeReturn);
       await this.onBeforeReturn?.();
       if (this.failWith) throw this.failWith;
       const body = [...this.preGateDeltas, ...this.postGateDeltas].join("") || "回答正文";
@@ -644,6 +649,9 @@ suite("durable conversation queue", () => {
     const provider = new ScriptedConversationProvider();
     const held = gate();
     provider.gateForObjective = (objective) => (objective === "正在处理的补充来源" ? held.promise : null);
+    // Hold the provider until the committed ordering is inspected; otherwise
+    // fast cancellation can settle before the test reads transient flags.
+    provider.ignoreAbortForObjective = objective => objective === "正在处理的补充来源";
     const runner = await startRunner(provider);
     try {
       await admitConversationQueueEntry(pool!, seeded.auth, {
@@ -1594,6 +1602,8 @@ suite("durable conversation queue", () => {
     const provider = new ScriptedConversationProvider();
     provider.silent = true;
     provider.failWith = new Error("synthetic provider failure");
+    const completed = {name:"fixture_completed_tool",completedAt:new Date().toISOString()};
+    provider.completedToolBeforeReturn = completed;
     provider.onBeforeReturn = () => commitUnpublishedStop(seeded.sessionId, seeded.accountId);
     const messageId = randomUUID();
     const objective = "失败与停止竞争时必须保留原消息";
@@ -1614,6 +1624,7 @@ suite("durable conversation queue", () => {
       expect(rows[0]?.status).toBe("cancelled");
       expect(rows[0]?.content_state).toBe("scrubbed");
       const session = await getAgentSession(pool!, seeded.auth, seeded.sessionId);
+      expect(session.payload!.turns[0]!.response.execution!.tools).toEqual([{name:completed.name,completed_at:completed.completedAt}]);
       expect(session.payload?.turns).toEqual([
         expect.objectContaining({
           id: messageId, objective,
@@ -1700,6 +1711,8 @@ suite("durable conversation queue", () => {
     const provider = new ScriptedConversationProvider();
     provider.silent = true;
     provider.failWith = new Error("synthetic provider failure");
+    const completed = {name:"fixture_completed_tool",completedAt:new Date().toISOString()};
+    provider.completedToolBeforeReturn = completed;
     provider.onBeforeReturn = () => commitUnpublishedStop(seeded.sessionId, seeded.accountId);
     const cancellationWarnings: Record<string, unknown>[] = [];
     const runner = new ConversationQueueRunner({
@@ -2556,5 +2569,46 @@ suite("provider-selection steering boundary", () => {
         expect(saved.turns[0]!.steeredMessages).toBeUndefined();
       }
     } finally { selected.release(); drain.release(); await runner.close(); await removeProofAccount(seeded.accountId); }
+  });
+});
+
+
+suite("steering ownership and legacy recovery", () => {
+  it.each(["generation", "expiry", "cancel"])("rejects force-close after %s without changing any member", async (loss) => {
+    const seeded = await seedSession();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, { idempotency_key: randomUUID(), session_id: seeded.sessionId, message_id: randomUUID(), objective: "Claim" });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "old", acceptsSteering: true}))!;
+      await admitConversationQueueEntry(pool!, seeded.auth, { idempotency_key: randomUUID(), session_id: seeded.sessionId, message_id: randomUUID(), objective: "Pending" });
+      const select = () => pool!.query("SELECT id,steer_group_entry_id,steer_state,failure_code,revision FROM conversation_queue_entries WHERE account_id=$1 ORDER BY sequence", [seeded.accountId]);
+      const invalidation = loss === "generation" ? "lease_generation=lease_generation+1" : loss === "expiry" ? "lease_expires_at=now()-interval '1 second'" : "cancel_requested=true";
+      await pool!.query(`UPDATE conversation_queue_entries SET ${invalidation} WHERE account_id=$1 AND id=$2`, [seeded.accountId,claimed.entryId]);
+      const before = (await select()).rows; const state = await queueState(seeded.sessionId,seeded.accountId);
+      await expect(closeConversationQueueSteeringIntake(pool!, claimed, {force:true})).rejects.toBeInstanceOf(ConversationQueueLeaseLostError);
+      expect((await select()).rows).toEqual(before);
+      expect(await queueState(seeded.sessionId,seeded.accountId)).toEqual(state);
+    } finally {await removeProofAccount(seeded.accountId);}
+  });
+
+  it.each([false,true])("recovers an old persisted answer only when its body matches (tampered=%s)", async (tampered) => {
+    const seeded = await seedSession(); const provider = new ScriptedConversationProvider();
+    const runner = new ConversationQueueRunner({ pool: pool!, provider, logger: silentLogger });
+    try {
+      const messageID = randomUUID(); const objective = "Legacy answer recovery";
+      await admitConversationQueueEntry(pool!, seeded.auth, { idempotency_key: randomUUID(), session_id: seeded.sessionId, message_id: messageID, objective });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {accountId:seeded.accountId,sessionId:seeded.sessionId,workerId:"legacy"}))!;
+      const execution = await executeUnscopedChatTask({request:{idempotency_key:`conversation-queue:${claimed.entryId}`,session_id:seeded.sessionId,message_id:messageID,objective}, provider, database:pool!,auth:seeded.auth,images:[]});
+      const result = {body:execution.body, conversationMessageIDs:execution.conversationMessageIDs, previousTaskIDs:execution.previousTaskIDs, conversationSources:execution.conversationSources ?? [], remoteStatus:execution.remoteStatus, images:[],audit:{providerID:null,model:null,providerRequestID:null,prompt:null,contactAgentEventKind:null}};
+      await recordConversationQueueResult(pool!,claimed,result);
+      await persistConversationQueueCompletion(pool!,seeded.auth,{fence:claimed,sessionId:seeded.sessionId,messageId:messageID,objective,acceptedAt:claimed.acceptedAt,images:[],result});
+      if(tampered) await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns,0,response,unboundConversationBlocks,0,body}',to_jsonb('Forged answer'::text)) WHERE account_id=$1 AND id=$2",[seeded.accountId,seeded.sessionId]);
+      await pool!.query("UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2",[seeded.accountId,claimed.entryId]);
+      const calls = provider.calls.length; await runner.recover();
+      const row = (await entryRow(seeded.sessionId,seeded.accountId))[0]!;
+      expect(provider.calls).toHaveLength(calls);
+      expect(row.status).toBe(tampered ? "failed" : "completed");
+      if(tampered) expect(row.result).not.toBeNull();
+      expect((await getAgentSession(pool!,seeded.auth,seeded.sessionId)).payload!.turns).toHaveLength(1);
+    } finally {await runner.close();await removeProofAccount(seeded.accountId);}
   });
 });

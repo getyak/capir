@@ -421,7 +421,12 @@ async function saveConversationQueueTurn(
     }
     const existing = payload.turns.find(entry => entry.id.toLowerCase() === identity.messageId.toLowerCase());
     if (existing) {
-      if (!existing.response.execution || existing.objective !== turn.objective
+      // Older deployments persisted no execution record. Only an exact match
+      // to the owned retained result proves that legacy canonical write; an ID
+      // or client placeholder alone cannot consume it.
+      const legacyCanonical = !turn.response.execution && !existing.response.execution
+        && digestValue(existing.response) === digestValue(turn.response);
+      if ((!existing.response.execution && !legacyCanonical) || existing.objective !== turn.objective
         || Date.parse(existing.createdAt) !== Date.parse(turn.createdAt)
         || digestValue(existing.steeredMessages ?? []) !== digestValue(turn.steeredMessages ?? [])
         || (existing.response.taskID !== turn.response.taskID

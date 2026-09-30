@@ -645,7 +645,7 @@ export class ConversationQueueRunner {
           if (reason === "USER_CANCELLED") {
             await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages.map((image) => image.manifest), completedTools);
           } else {
-            await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : reason === "LEASE_LOST" ? "LEASE_LOST" : "SOURCE_REVOKED", { auth, claimed, partialText: previewText });
+            await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : reason === "LEASE_LOST" ? "LEASE_LOST" : "SOURCE_REVOKED", { auth, claimed, partialText: previewText, completedTools });
           }
           return;
         }
@@ -655,7 +655,7 @@ export class ConversationQueueRunner {
             { ...queueRunCorrelation(claimed), ...execution.remoteDiagnostics, failure_code: failureCode },
             "conversation queue model run did not complete",
           );
-          await this.finalizeRetained(fence, failureCode, { auth, claimed, partialText: previewText });
+          await this.finalizeRetained(fence, failureCode, { auth, claimed, partialText: previewText, completedTools });
           return;
         }
         const result = serializedResult(
@@ -684,9 +684,9 @@ export class ConversationQueueRunner {
         if (reason === "USER_CANCELLED") {
           await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages.map((image) => image.manifest), completedTools).catch(() => undefined);
         } else if (revocationCode === "SOURCE_REVOKED" || reason === "SOURCE_REVOKED") {
-          await this.finalizeRetained(fence, "SOURCE_REVOKED", { auth, claimed, partialText: previewText }).catch(() => undefined);
+          await this.finalizeRetained(fence, "SOURCE_REVOKED", { auth, claimed, partialText: previewText, completedTools }).catch(() => undefined);
         } else {
-          await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : "RUN_FAILED", { auth, claimed, partialText: previewText }).catch(() => undefined);
+          await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : "RUN_FAILED", { auth, claimed, partialText: previewText, completedTools }).catch(() => undefined);
         }
       } finally {
         previewClosed = true;
@@ -749,6 +749,7 @@ export class ConversationQueueRunner {
       auth: AuthContext;
       claimed: ClaimedConversationQueueEntry;
       partialText: string;
+      completedTools?: Array<{ name: string; completed_at: string }>;
     },
   ): Promise<void> {
     const outcome = await finalizeConversationQueueEntry(this.options.pool, {
@@ -778,7 +779,7 @@ export class ConversationQueueRunner {
         images,
         partialText: stop.partialText,
         stoppedAt: new Date().toISOString(),
-        execution: { started_at: stop.claimed.claimedAt, completed_at: new Date().toISOString(), tools: [] },
+        execution: { started_at: stop.claimed.claimedAt, completed_at: new Date().toISOString(), tools: stop.completedTools ?? [] },
       });
     } catch (error) {
       if (!(error instanceof ConversationQueueLeaseLostError)) {

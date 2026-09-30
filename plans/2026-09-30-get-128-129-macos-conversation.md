@@ -93,3 +93,13 @@ Existing durable queue and SSE remain authority; stage transitions must never im
   and independent corrections. No paid retry or provider switch was performed.
 - Remaining: independent review, latest-head gates, merge, actual resident Web
   and backend update/readback, Linear Done readback, precise task cleanup.
+
+## Frozen-review corrections
+
+- Review of 35096742 found one P1 and two P2: force-close mutation after lost
+  ownership, pre-execution-record canonical recovery, and observed tool receipts
+  lost in a Stop/failure race. All are corrected; 56 queue DB tests and backend
+  typecheck pass. Three stale ownership cases change no member or queue revision;
+  legacy recovery compares the exact owned response and rejects body tampering.
+- Full Memory DB regression: 86 passed. Backend unit regression: 825 passed,
+  393 optional fixture skips. No provisional failure was counted as success.

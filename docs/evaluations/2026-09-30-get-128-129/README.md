@@ -48,6 +48,10 @@ Owned forks inherit exact provenance; legacy omission restores server fields.
   source checkpoints, default contact review and meeting-draft tests. Includes
   selection-window admission, unsupported-provider detachment, Stop races,
   source revocation, canonical answer tampering, legacy saves and owned forks.
+- Further regression: all 86 Memory integration tests pass; backend without
+  optional database fixtures passes 825 tests (393 fixture skips). Review fixes
+  pass all 56 queue integration tests, including three stale force-close fences,
+  exact old-format recovery/rejection and preserved Stop-race tool receipts.
 - Production harness tests use the pinned SDK hook shape and the actual MCP tool
   invocation pipeline. They verify eager input, parallel tool boundaries,
   primary-run scoping, acknowledgment timing and cumulative budget failures.

@@ -668,6 +668,9 @@ export async function closeConversationQueueSteeringIntake(
 ): Promise<boolean> {
   return inTransaction(pool, async (client) => {
     await lockConversationQueueSession(client, fence.sessionId);
+    // Already-closed intake still needs a live owned claim. In particular,
+    // force-close must not detach a successor worker's members after selection.
+    await assertConversationQueueOwnedClaim(client, fence);
     const updated = await client.query(
       `UPDATE conversation_queue_entries
        SET steer_closed_at=now(), updated_at=now(), revision=revision+1
