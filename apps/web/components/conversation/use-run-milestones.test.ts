@@ -9,9 +9,10 @@ import type { ConversationExecutionMilestone } from "@/lib/conversation-executio
 import { useRunMilestones } from "./use-run-milestones";
 
 let observed: readonly ConversationExecutionMilestone[] = [];
+let paints: Array<{ runId: string | null; stages: string[] }> = [];
 function Probe({ runId, stage }: { runId: string | null; stage: string | null }) {
   const milestones = useRunMilestones(runId, stage);
-  useLayoutEffect(() => { observed = milestones; });
+  useLayoutEffect(() => { observed = milestones; paints.push({ runId, stages: milestones.map(item => item.stage) }); });
   return null;
 }
 let root: Root;
@@ -26,6 +27,7 @@ beforeEach(() => {
   document.body.append(mount);
   root = createRoot(mount);
   observed = [];
+  paints = [];
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -57,4 +59,16 @@ it("continues publishing stage observations after the 12-entry cap", async () =>
   for (let index = 0; index < 15; index++) await render("run-long", index % 2 ? "answer" : "contact_read");
   expect(observed).toHaveLength(12);
   expect(observed.at(-1)?.stage).toBe("contact_read");
+});
+
+it("never paints the previous run observations while a new run has no stage", async () => {
+  await render("run-A", "contact_read");
+  paints = [];
+  await render("run-B", null);
+  expect(paints.filter(paint => paint.runId === "run-B").every(paint => paint.stages.length === 0)).toBe(true);
+  await render("run-B", "answer");
+  expect(observed.map(item => item.stage)).toEqual(["answer"]);
+  paints = [];
+  await render("retry-run-C", null);
+  expect(paints.every(paint => paint.stages.length === 0)).toBe(true);
 });

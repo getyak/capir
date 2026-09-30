@@ -158,7 +158,7 @@ it("composes the transcript: send time, user objective, milestone updates, execu
   // The in-place execution record reports observed state and elapsed time.
   const phases = [...document.querySelectorAll("[data-phase]")].map((node) => node.getAttribute("data-phase"));
   expect(phases).toContain("running");
-  expect(phases).toContain("completed"); // Pending status requires the governed card readback, not a reference.
+  expect(phases).toContain("review-unknown"); // Unread references do not assert pending or resolved status.
   const running = document.querySelector('[data-phase="running"]');
   expect(running?.querySelector("[data-elapsed-ms]")).not.toBeNull();
   expect(text).not.toContain("%");
@@ -196,4 +196,50 @@ it("clears waiting-review on this execution card after canonical calendar dismis
   expect(document.body.textContent).toContain("本次不安排");
   expect(document.querySelector('[data-phase="waiting-review"]')).toBeNull();
   expect(document.querySelector('[data-phase="completed"]')).not.toBeNull();
+});
+
+it.each(["response-lost", "wrong-binding", "wrong-origin"])("keeps %s calendar dismissal unresolved until canonical recovery readback", async (mode) => {
+  const draftId = "88888888-8888-4888-8888-888888888888";
+  const record = { id: draftId, external_effect: "none", revision: 2, source_task_id: "77777777-7777-4777-8777-777777777777", origin_session_id: SESSION, created_at: "2026-09-24T00:00:00Z", updated_at: "2026-09-24T00:00:00Z", expires_at: "2026-10-12T00:00:00Z", content_available: true, status: "needs_review", dismissed_at: null, redacted_at: null, title: "Synthetic follow-up", starts_at: "2026-10-06T06:00:00Z", ends_at: "2026-10-06T06:30:00Z", time_zone: "Asia/Shanghai", source_excerpt: "Synthetic authorized source", reference_time: "2026-09-24T00:00:00Z" };
+  let resolved = false;
+  fetcher.mockImplementation((url: string) => {
+    if (String(url).endsWith(`/meeting-drafts/${draftId}/dismiss`)) {
+      resolved = true;
+      if (mode === "response-lost") return Promise.reject(new Error("response lost"));
+      return Promise.resolve(Response.json({ session_version: mode === "wrong-binding" ? "old-binding" : "detail-binding", draft: { ...record, status: "dismissed", revision: 3, origin_session_id: mode === "wrong-origin" ? "another-session" : SESSION, dismissed_at: "2026-10-01T01:00:00Z" } }));
+    }
+    if (String(url).includes(`/meeting-drafts/${draftId}`)) return Promise.resolve(Response.json({ session_version: "detail-binding", draft: resolved ? { ...record, status: "dismissed", revision: 3, dismissed_at: "2026-10-01T01:00:00Z" } : record }));
+    if (String(url).endsWith("/stream")) return Promise.resolve(new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`)); } })));
+    if (String(url).endsWith("/conversation-queue")) return Promise.resolve(Response.json(snapshot));
+    return Promise.resolve(Response.json({ detail: initialDetail }));
+  });
+  await act(async () => root?.render(createElement(QueuedConversation, { chatBinding: "chat-binding", detailBinding: "detail-binding", scope: SCOPE, initialDetail })));
+  await flush();
+  const find = (text: string) => [...document.querySelectorAll("button")].find(button => button.textContent?.includes(text))!;
+  await act(async () => find("暂不安排").click());
+  await flush();
+  expect(document.body.textContent).toContain("结果待核对");
+  expect(document.querySelector('[data-phase="review-unknown"]')).not.toBeNull();
+  expect(document.querySelector('[data-phase="completed"]')).toBeNull();
+  await act(async () => find("核对结果").click());
+  await flush();
+  expect(document.querySelector('[data-phase="review-unknown"]')).toBeNull();
+  expect(document.querySelector('[data-phase="completed"]')).not.toBeNull();
+});
+
+it("respects upward reader intent before the native scroll event and next resize", async () => {
+  const observers: Array<{ callback: ResizeObserverCallback; targets: Element[] }> = [];
+  vi.stubGlobal("ResizeObserver", class { record: { callback: ResizeObserverCallback; targets: Element[] }; constructor(callback: ResizeObserverCallback) { this.record = { callback, targets: [] }; observers.push(this.record); } observe(node: Element) { this.record.targets.push(node); } disconnect() {} });
+  await act(async () => root?.render(createElement(QueuedConversation, { chatBinding: "chat-binding", detailBinding: "detail-binding", scope: SCOPE, initialDetail })));
+  await flush();
+  const viewport = document.querySelector<HTMLElement>('[role="region"][aria-label="对话记录"]')!;
+  Object.defineProperties(viewport, { scrollHeight: { value: 1000, configurable: true }, clientHeight: { value: 300, configurable: true }, scrollTop: { value: 50, writable: true, configurable: true } });
+  const observer = observers.find(entry => entry.targets.includes(viewport) && entry.targets.includes(viewport.firstElementChild!));
+  expect(observer).toBeDefined();
+  await act(async () => {
+    viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+    observer!.callback([], {} as ResizeObserver);
+  });
+  expect(viewport.scrollTop).toBe(50);
+  expect([...document.querySelectorAll("button")].some(button => button.textContent?.includes("回到最新"))).toBe(true);
 });

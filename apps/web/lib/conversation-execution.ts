@@ -47,6 +47,7 @@ export type ConversationExecutionPhase =
   | "running"
   | "stopping"
   | "waiting-review"
+  | "review-unknown"
   | "completed"
   | "failed"
   | "interrupted";
@@ -56,6 +57,7 @@ export const CONVERSATION_PHASE_LABELS: Readonly<Record<ConversationExecutionPha
   running: "执行中",
   stopping: "正在停止",
   "waiting-review": "执行完成，待你确认",
+  "review-unknown": "执行完成，确认状态待核对",
   completed: "执行完成",
   failed: "执行未完成",
   interrupted: "执行已中断",

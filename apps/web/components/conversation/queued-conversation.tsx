@@ -128,7 +128,8 @@ export function QueuedConversation(props: Props) {
   const pacedPreview = usePreviewPacing(chat.preview);
   // Observed milestones are recorded per run identity only when a real stage
   // transition arrives; a new run starts an empty record.
-  const milestones = useRunMilestones(active?.run_id ?? null, pacedPreview?.stage ?? active?.stage ?? null);
+  const forming = pacedPreview?.run_id === active?.run_id ? pacedPreview : null;
+  const milestones = useRunMilestones(active?.run_id ?? null, forming?.stage ?? active?.stage ?? null);
   const [milestoneRecords, setMilestoneRecords] = useState<Record<string, typeof milestones>>({});
   useEffect(() => {
     const messageId = active?.message_id;
@@ -140,7 +141,6 @@ export function QueuedConversation(props: Props) {
   const imageCount = chat.attachments.length;
   const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && queued.length + chat.messages.length + (active ? 1 : 0) < 50;
   const activeVisible = active && !turns.some(turn => turn.id === active.message_id);
-  const forming = pacedPreview?.run_id === active?.run_id ? pacedPreview : null;
   const paused = chat.snapshot?.paused ?? false;
   const hasContent = Boolean(turns.length || chat.messages.length || active || queued.length);
   const personLabel = chat.detail?.person_label ?? props.initialDetail?.person_label ?? "";
@@ -225,7 +225,7 @@ export function QueuedConversation(props: Props) {
     </div></details></header>}
     <SessionRuntime key={`${props.chatBinding}:${id ?? "draft"}`} messages={projectedMessages} running={Boolean(activeVisible)}>
     <ThreadPrimitive.Root className={styles.runtimeRoot} data-session-runtime>
-    <ThreadPrimitive.Viewport autoScroll={false} className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onWheel={() => { userScroll.current = true; }} onTouchStart={() => { userScroll.current = true; }} onPointerDown={() => { userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) userScroll.current = true; }} onScroll={() => { if (viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); } }}>
+    <ThreadPrimitive.Viewport autoScroll={false} className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onWheel={event => { userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { userScroll.current = true; }} onPointerDown={() => { userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) userScroll.current = true; if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); } }}>
       <div className={styles.content} ref={content}>
         {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><h2>今天想推进什么？</h2></div>}
         <ThreadPrimitive.Messages>{({ message }) => message.role === "user"

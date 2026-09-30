@@ -14,6 +14,8 @@ import {
  * queue stream, and the record resets with the run identity. The list is an
  * observation log: it never implies that an unobserved stage succeeded.
  */
+const NO_MILESTONES: readonly ConversationExecutionMilestone[] = [];
+
 export function useRunMilestones(
   runId: string | null,
   stage: string | null | undefined,
@@ -21,7 +23,7 @@ export function useRunMilestones(
   const runRef = useRef<string | null>(null);
   const listRef = useRef<ConversationExecutionMilestone[]>([]);
   const publishedRef = useRef<ConversationExecutionMilestone[] | null>(null);
-  const [milestones, setMilestones] = useState<ConversationExecutionMilestone[]>([]);
+  const [record, setRecord] = useState<{ runId: string | null; milestones: ConversationExecutionMilestone[] }>({ runId: null, milestones: [] });
   useEffect(() => {
     if (runRef.current !== runId) {
       runRef.current = runId;
@@ -34,7 +36,9 @@ export function useRunMilestones(
     listRef.current = next;
     if (next === publishedRef.current) return;
     publishedRef.current = next;
-    queueMicrotask(() => setMilestones(next));
+    let current = true;
+    queueMicrotask(() => { if (current) setRecord({ runId, milestones: next }); });
+    return () => { current = false; };
   }, [runId, stage]);
-  return milestones;
+  return record.runId === runId ? record.milestones : NO_MILESTONES;
 }

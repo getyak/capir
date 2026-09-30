@@ -93,13 +93,11 @@ export function SessionExecutionCard({
  * terminal readback. With no visible output yet the observed stage stands in;
  * silence is valid and never filled with invented content.
  */
-export function SessionRunUpdate({ updates, stage, status }: { updates: readonly string[]; stage: string | null; status: string }) {
-  if (!updates.length) {
-    return <div className={styles.waiting}><span className={styles.pulse} aria-hidden="true"/>{conversationStageLabel(stage) ?? (status || "正在处理")}</div>;
-  }
+export function SessionRunUpdate({ updates }: { updates: readonly string[]; stage: string | null; status: string }) {
+  if (!updates.length) return null;
   return <>{updates.map((line, index) => (
     <div className={styles.milestone} data-run-update key={`${index}:${line.slice(0, 24)}`}>
-      {/* Markdown keeps code, lists and tables intact while output forms. */}
+      {/* Host dialogue updates contain one complete semantic unit. */}
       <ConversationResponse>{line}</ConversationResponse>
       {index === updates.length - 1 ? <span className={styles.cursor} aria-hidden="true"/> : null}
     </div>

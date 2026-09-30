@@ -18,9 +18,9 @@ rule is kept and noted.
 | --- | --- | --- |
 | Sidebar width | 248px | `--workspace-sidebar-width: 248px` |
 | Collapsed rail | 64px | `var(--ts-rail-width, 64px)` |
-| Sidebar fill | `#F4F3EF` | `var(--background)` chrome surface kept as-is |
+| Sidebar fill | `#F4F3EF` | `var(--workspace-chrome-surface)` |
 | Workspace header | 224×44 at 12px inset | 12px sidebar padding |
-| Search field | 224×36, radius 8, `#FCFBF7` | existing search control kept |
+| Search field | 224×36, radius 8, `#FCFBF7` | full field trigger opens the existing scoped search modal |
 | Primary destination row | 40px tall, radius 10 | `navLink` min-height 40px |
 | Section labels (置顶 / 最近会话 / 联系人) | 12px Regular, 19px line, `#6A675F` | `groupTitle` 0.75rem |
 | Session row | 224×40, radius 8, one line | `sessionRow` 40px, `sessionTitle` ellipsis |
@@ -39,12 +39,12 @@ rule is kept and noted.
 | Shared reading axis | 880px centered in the canvas | `content` and `dock` max-width 880px |
 | Centered send time | 12px Regular, 19px line, `#6A675F` | `sendTime` 12px muted |
 | User bubble | ≤540px, radius 16, `#ECEAE4`, 14px/22px, 12/16px padding | `userMessage` |
-| Agent identity | 24px brand mark, content offset 38px | `answer` grid `24px / 14px gap` |
+| Agent identity | 20px brand mark, content offset 34px | `answer` grid `20px / 14px gap` |
 | Agent lead | 15px Medium, 23px line | `answer h3`, response `lead` |
-| Agent body | 15px Regular, 25px line | `.response` line-height 1.667 |
+| Agent body | visible IM style 14px Regular, 22px line | conversation-scoped `.response` 14px/22px |
 | Milestone bubble | radius 14, `#F4F3EF` fill, 12px padding, 14px/22px | `milestone` + `[data-run-update]` response sizing |
 | Folded execution detail | 28px row, 12px/18px, muted `#73736C` | `executionSummary` 28px, 12px |
-| Composer | 880×62, radius 16, 1px `#E2E0D8`, 44px icon targets | shared axis; existing composer controls kept |
+| Composer | 880×62, radius 16, 1px `#E2E0D8`, 44px icon targets | opt-in inline layout; functional attachment and send controls; no unimplemented voice glyph |
 | Source excerpt / pending line | 14px excerpt, 13px `#BC3827` pending | existing provenance and decision blocks |
 
 ## Deliberate deviations

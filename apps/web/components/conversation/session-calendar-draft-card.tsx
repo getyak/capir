@@ -136,7 +136,7 @@ function SessionCalendarDraftCardContent({ draftId, binding, sessionId, onDecisi
         return;
       }
       const payload = (await response.json()) as { draft?: MeetingDraftRecord; session_version?: string };
-      if (payload.session_version !== binding || payload.draft?.id !== draftId || payload.draft.status !== "dismissed") {
+      if (payload.session_version !== binding || payload.draft?.id !== draftId || payload.draft.status !== "dismissed" || payload.draft.origin_session_id !== sessionId) {
         setDismissPhase("unknown");
         return;
       }

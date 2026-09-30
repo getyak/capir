@@ -39,7 +39,7 @@ export type SessionProjectedMessage = {
 };
 
 const EXECUTION_PHASES = new Set<ConversationExecutionPhase>([
-  "queued", "running", "stopping", "waiting-review", "completed", "failed", "interrupted",
+  "queued", "running", "stopping", "waiting-review", "review-unknown", "completed", "failed", "interrupted",
 ]);
 
 function executionData(data: Record<string, unknown>) {
@@ -201,8 +201,10 @@ function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
   const execution = executionData(data);
   if (!execution) return <span>这项执行记录暂时无法显示。</span>;
   const keys = Array.isArray(data.decisionKeys) ? data.decisionKeys.filter((key): key is string => typeof key === "string") : [];
+  const unknown = keys.some(key => !decisions.states[key] || decisions.states[key] === "unknown");
   const pending = keys.some(key => decisions.states[key] === "pending");
-  return <SessionExecutionCard {...execution} phase={execution.phase === "completed" && pending ? "waiting-review" : execution.phase}/>;
+  const phase = execution.phase === "completed" ? (unknown ? "review-unknown" : pending ? "waiting-review" : "completed") : execution.phase;
+  return <SessionExecutionCard {...execution} phase={phase}/>;
 }
 
 function renderSessionData(name: string, raw: unknown, context: RenderContext) {

@@ -67,12 +67,12 @@ describe("milestone update and per-send time", () => {
     expect(html).toContain("data-run-update");
   });
 
-  it("keeps silence valid and fills it only with the observed stage", () => {
+  it("keeps silence valid without filling dialogue with tool reads", () => {
     const silent = renderToStaticMarkup(createElement(SessionRunUpdate, { updates: [], stage: "contact_lookup", status: "" }));
-    expect(silent).toContain("正在查找相关人物");
+    expect(silent).toBe("");
     expect(silent).not.toContain("data-run-update");
     const unknown = renderToStaticMarkup(createElement(SessionRunUpdate, { updates: [], stage: null, status: "正在处理" }));
-    expect(unknown).toContain("正在处理");
+    expect(unknown).toBe("");
   });
 
   it("formats the centered per-send timestamp from real message time", () => {
