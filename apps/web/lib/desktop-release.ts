@@ -24,6 +24,8 @@ export type DesktopChromeState = {
   offerID?: string | null;
   /** Installed app version reported by the signed host; absent means unknown. */
   appVersion?: string | null;
+  /** Exact support mail draft handoff capability; absent hosts use copy. */
+  supportMailHandoff?: boolean;
   /** Structured update state; top-level `phase`/`availableVersion` remain valid. */
   update?: {
     phase?: UpdatePhase;

@@ -13,6 +13,7 @@ import { ConversationQueueRunner, type ConversationQueueProviderSelector } from 
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
 import { registerAgentPreferenceRoutes } from "./modules/agentPreferenceRoutes.js";
+import { registerWeeklyUsageRoutes } from "./modules/weeklyUsage.js";
 import { registerMcpExtensionRoutes } from "./modules/mcpRoutes.js";
 import { registerScreenshotContactRoutes } from "./modules/screenshotContactRoutes.js";
 import { registerMemoryReviewRoutes } from "./modules/memoryReviewRoutes.js";
@@ -770,6 +771,7 @@ export async function buildApp(
   registerFeedbackRoutes(app, pool, authenticate);
   const security = [{ bearerSession: [] }];
   registerAgentPreferenceRoutes(app, pool, authenticate, remoteChatProvider?.providerId === "claude-agent-sdk");
+  registerWeeklyUsageRoutes(app, pool, authenticate);
   registerPrivateConversationRoutes(app, authenticate, privateConversationProvider);
   registerMcpExtensionRoutes(app, pool, authenticate, {
     allowedOrigins: [],

@@ -44,14 +44,18 @@ function AccountControls({
   accountName,
   workspaceName,
   fixtureWorkspace,
+  usageBinding,
 }: {
   accountName: string;
   workspaceName: string | null;
   fixtureWorkspace: boolean;
+  usageBinding: string | null;
 }) {
   return (
     <WorkspaceAccountMenu
       accountName={accountName}
+      key={usageBinding}
+      usageBinding={usageBinding}
       fixtureWorkspace={fixtureWorkspace}
       signOutAction={signOutOfWorkspace}
       workspaceName={workspaceName}
@@ -171,6 +175,7 @@ export default async function WorkspaceLayout({
             <AccountControls
               accountName={accountName}
               fixtureWorkspace={fixtureWorkspace}
+              usageBinding={pendingBinding}
               workspaceName={workspaceName}
             />
           </div>
@@ -193,6 +198,7 @@ export default async function WorkspaceLayout({
               <AccountControls
                 accountName={accountName}
                 fixtureWorkspace={fixtureWorkspace}
+                usageBinding={pendingBinding}
                 workspaceName={workspaceName}
               />
             </div>

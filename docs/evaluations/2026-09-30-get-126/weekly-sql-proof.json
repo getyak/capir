@@ -1,0 +1,22 @@
+{
+  "kind": "real PostgreSQL 18, synthetic metadata only",
+  "passed": true,
+  "checks": [
+    "inclusive Shanghai Monday start",
+    "exclusive next Monday end",
+    "future records excluded",
+    "exact account and member isolation",
+    "retained failed runs count",
+    "retry same ID counted once",
+    "deleted records removed from retained count"
+  ],
+  "countBeforeDeletion": 3,
+  "countAfterDeletion": 2,
+  "window": {
+    "start": "2026-09-27T16:00:00.000Z",
+    "end": "2026-10-04T16:00:00.000Z",
+    "timezone": "Asia/Shanghai"
+  },
+  "observedAt": "2026-09-30T06:42:28.000Z",
+  "moduleSHA256": "386fbd118418fdb076b42d973075c86199824eb2fc612c812efa016b306b5436"
+}

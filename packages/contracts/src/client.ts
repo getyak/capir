@@ -25,6 +25,7 @@ import type {
 import type { AgentPreferenceMutation, AgentPreferenceResponse } from "./agentPreferenceSchemas.js";
 import type { MeetingDraftDismissRequest, MeetingDraftListResponse, MeetingDraftListScope, MeetingDraftResponse, MeetingDraftUpdateRequest } from "./meetingDraftSchemas.js";
 import type { SystemHealthResponse } from "./systemHealthSchemas.js";
+import type { WeeklyUsageResponse } from "./weeklyUsageSchemas.js";
 import type {
   MemoryCommitRequest,
   MemoryCommitResponse,
@@ -1202,6 +1203,11 @@ export class TalentSignalClient {
 
   getAgentPreference(): Promise<AgentPreferenceResponse> {
     return this.request("/v1/agent/preferences", { method: "GET" });
+  }
+
+  /** Read-only weekly usage metadata for the signed-in account member. */
+  getWeeklyUsage(signal?: AbortSignal): Promise<WeeklyUsageResponse> {
+    return this.request("/v1/workspace/usage/weekly", { method: "GET", signal });
   }
 
   listMcpConnections(signal?: AbortSignal): Promise<McpConnectionListResponse> {
