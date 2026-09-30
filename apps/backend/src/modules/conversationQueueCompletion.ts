@@ -11,6 +11,7 @@ import type { Pool } from "pg";
 
 import { inTransaction } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
+import { digestValue } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
 import { assertSessionChatSourcesAvailable, type AgentSessionChatSource } from "./agentSessionSources.js";
 import { getAgentSession, mutateAgentSession } from "./agentSessions.js";
@@ -18,8 +19,11 @@ import {
   assertConversationQueueContextCurrent,
   assertConversationQueueLiveClaim,
   assertConversationQueueOwnedClaim,
+  readConversationQueueSteeringMembers,
   type ConversationQueueRunFence,
+  type ConversationQueueSteeringMember,
 } from "./conversationQueueState.js";
+import { readConversationMessageImageManifests } from "./conversationMessageImages.js";
 import {
   recordUnscopedChatCompletionEvidence,
   type UnscopedChatExecution,
@@ -33,6 +37,25 @@ export interface ConversationQueueAuditMetadata {
   contactAgentEventKind: string | null;
 }
 
+/**
+ * Authentic execution readback for the folded card: canonical run bounds and
+ * genuine tool-completion receipts. Name and time only; never arguments,
+ * results, provider text or other private data.
+ */
+export interface ConversationQueueExecutionRecord {
+  started_at: string | null;
+  completed_at: string | null;
+  tools: Array<{ name: string; completed_at: string }>;
+}
+
+/** One human message folded into the run's single canonical turn. */
+export interface ConversationQueueSteeredMessage {
+  id: string;
+  objective: string;
+  images?: ConversationImageManifest[];
+  createdAt: string;
+}
+
 /** Serializable execution truth needed to replay Session persistence once. */
 export interface ConversationQueueExecutionResult {
   body: UnscopedChatTaskResponse;
@@ -43,6 +66,8 @@ export interface ConversationQueueExecutionResult {
   audit: ConversationQueueAuditMetadata;
   /** Ordered metadata-only attachment manifest; never raw bytes. */
   images: ConversationImageManifest[];
+  /** Canonical run start/end and real tool completions, when available. */
+  execution?: ConversationQueueExecutionRecord;
 }
 
 function executionFromResult(
@@ -86,6 +111,8 @@ type QueueTurn = {
   id: string;
   objective: string;
   images?: ConversationImageManifest[];
+  /** Delivered steering messages folded before this turn's one response. */
+  steeredMessages?: ConversationQueueSteeredMessage[];
   createdAt: string;
   response: {
     contractVersion: string;
@@ -97,6 +124,7 @@ type QueueTurn = {
     unboundConversationBlocks: ReturnType<typeof displayBlocks>;
     memoryProposal?: { proposal_id: string; revision: number };
     meetingDraft?: {id:string;title:string};
+    execution?: ConversationQueueExecutionRecord;
   };
 };
 
@@ -106,11 +134,16 @@ function queueTurn(
   acceptedAt: string,
   response: { taskID: string; disposition: string; blocks: ChatResponseBlock[]; createdAt: string; memoryProposal?: { proposal_id: string; revision: number } },
   images: readonly ConversationImageManifest[] = [],
+  fold: {
+    steered?: readonly ConversationQueueSteeredMessage[];
+    execution?: ConversationQueueExecutionRecord;
+  } = {},
 ): QueueTurn {
   return {
     id: messageId,
     objective,
     ...(images.length > 0 ? { images: [...images] } : {}),
+    ...(fold.steered && fold.steered.length > 0 ? { steeredMessages: [...fold.steered] } : {}),
     createdAt: acceptedAt,
     response: {
       contractVersion: CONTRACT_VERSION,
@@ -123,7 +156,57 @@ function queueTurn(
       ...(response.blocks.find(block=>block.calendar_draft)?.calendar_draft
         ? {meetingDraft:{id:response.blocks.find(block=>block.calendar_draft)!.calendar_draft!.id,title:response.blocks.find(block=>block.calendar_draft)!.calendar_draft!.title}} : {}),
       ...(response.memoryProposal ? { memoryProposal: response.memoryProposal } : {}),
+      ...(fold.execution ? { execution: fold.execution } : {}),
     },
+  };
+}
+
+/**
+ * The steering fold truth: exactly the messages the model actually received,
+ * with their grouped images, plus the messages whose image batch could not
+ * join this run and re-queue as the next task.
+ */
+async function readConversationQueueSteeringFold(
+  pool: Pool,
+  fence: ConversationQueueRunFence,
+): Promise<{ delivered: ConversationQueueSteeredMessage[]; unsupportedCount: number }> {
+  const [deliveredMembers, unsupportedMembers] = await Promise.all([
+    readConversationQueueSteeringMembers(pool, fence, { state: "delivered" }),
+    readConversationQueueSteeringMembers(pool, fence, { state: "unsupported" }),
+  ]);
+  const manifests = await readConversationMessageImageManifests(
+    pool,
+    fence.accountId,
+    deliveredMembers.map((member) => member.entryId),
+  );
+  return {
+    delivered: deliveredMembers.map((member) => {
+      const images = manifests.get(member.entryId) ?? [];
+      return {
+        id: member.messageId,
+        objective: member.objective,
+        ...(images.length > 0 ? { images } : {}),
+        createdAt: member.acceptedAt,
+      };
+    }),
+    unsupportedCount: unsupportedMembers.length,
+  };
+}
+
+/** Host-authored, explicit: never a model answer and never silent loss. */
+function unsupportedSteeringNote(unsupportedCount: number, chinese: boolean): ChatResponseBlock {
+  return {
+    id: randomUUID(),
+    kind: "answer",
+    title: chinese ? "补充消息将单独处理" : "Supplement queued separately",
+    body: unsupportedCount > 0
+      ? chinese
+        ? "部分补充因图片或数量边界未能并入本次任务；消息与附件完整保留，将在后续任务中处理。"
+        : "Some supplements exceeded this task’s image or message boundary. Each original message and attachment is preserved for a later task."
+      : "",
+    status: "informational",
+    citation_dependency_ids: [],
+    requires_user_decision: false,
   };
 }
 
@@ -205,6 +288,13 @@ export async function persistConversationQueueCompletion(
   await assertSessionChatSourcesAvailable(pool, auth, input.result.body.task_id);
   await assertConversationQueueLiveClaim(pool, input.fence);
   const { body } = input.result;
+  // The fold is read under the live fence: exactly the messages this run
+  // actually delivered, never the ones still waiting or unsupported.
+  const fold = await readConversationQueueSteeringFold(pool, input.fence);
+  const chinese = /\p{Script=Han}/u.test(input.objective);
+  const blocks = fold.unsupportedCount > 0
+    ? [...body.blocks, unsupportedSteeringNote(fold.unsupportedCount, chinese)]
+    : body.blocks;
   await saveConversationQueueTurn(
     pool,
     auth,
@@ -217,12 +307,15 @@ export async function persistConversationQueueCompletion(
     queueTurn(input.messageId, input.objective, input.acceptedAt, {
       taskID: body.task_id,
       disposition: body.disposition,
-      blocks: body.blocks,
+      blocks,
       createdAt: body.created_at,
       ...(body.memory_proposal
         ? { memoryProposal: { proposal_id: body.memory_proposal.proposal_id, revision: body.memory_proposal.revision } }
         : {}),
-    }, input.images),
+    }, input.images, {
+      steered: fold.delivered,
+      ...(input.result.execution ? { execution: input.result.execution } : {}),
+    }),
     { title: body.session_title ?? null, updatedAt: body.created_at },
   );
 }
@@ -251,6 +344,7 @@ export async function persistConversationQueueCancellation(
     images: ConversationImageManifest[];
     partialText: string;
     stoppedAt: string;
+    execution?: ConversationQueueExecutionRecord;
   },
 ): Promise<void> {
   const partial = input.partialText.trim();
@@ -266,6 +360,10 @@ export async function persistConversationQueueCancellation(
     );
   }
   await assertConversationQueueContextCurrent(pool, auth, input.sessionId);
+  // A stop preserves completed work: the human messages this run actually
+  // received stay in the transcript with their identities and times, followed
+  // by the truthful stopped marker — never a fabricated answer.
+  const fold = await readConversationQueueSteeringFold(pool, input.fence);
   const block: ChatResponseBlock = {
     id: randomUUID(),
     kind: "answer",
@@ -291,7 +389,7 @@ export async function persistConversationQueueCancellation(
       disposition: "answer",
       blocks: [block],
       createdAt: input.stoppedAt,
-    }, input.images),
+    }, input.images, { steered: fold.delivered, ...(input.execution ? { execution: input.execution } : {}) }),
     { title: null, updatedAt: input.stoppedAt },
   );
 }
@@ -321,12 +419,17 @@ async function saveConversationQueueTurn(
         "This Session was deleted or expired and cannot receive the reply.",
       );
     }
-    if (
-      payload.turns.some(
-        (existing) => existing.id.toLowerCase() === identity.messageId.toLowerCase(),
-      )
-    ) {
-      return; // already persisted; the model must not run again
+    const existing = payload.turns.find(entry => entry.id.toLowerCase() === identity.messageId.toLowerCase());
+    if (existing) {
+      if (!existing.response.execution || existing.objective !== turn.objective
+        || Date.parse(existing.createdAt) !== Date.parse(turn.createdAt)
+        || digestValue(existing.steeredMessages ?? []) !== digestValue(turn.steeredMessages ?? [])
+        || (existing.response.taskID !== turn.response.taskID
+          && !(identity.allowCancelRequested && existing.response.taskID === identity.fence.runId))) {
+        throw new ApiError(409, "CONVERSATION_QUEUE_CANONICAL_TURN_CONFLICT",
+          "A matching message ID without the canonical execution cannot consume this queue result.");
+      }
+      return; // proved canonical persistence; never invoke the model again
     }
     const next: AgentSessionPayload = {
       ...payload,
@@ -340,7 +443,7 @@ async function saveConversationQueueTurn(
         expected_revision: session.revision,
         idempotency_key: identity.messageId,
         payload: next,
-      });
+      }, false, { fence: identity.fence, messageId: identity.messageId, allowCancelRequested: identity.allowCancelRequested });
       return;
     } catch (error) {
       if (

@@ -173,6 +173,8 @@ Chat citation readback binds account, task, manifest, snapshot, person, context,
 attribution-confirmed, inspectable, and authorized in that exact scope. The client rechecks before recording, when Ask opens, on foreground return,
 and each minute while visible; failure makes the local turn stale. Readback grants no write authority. Chat media is a separate account-, person-, relationship-, uploader-, and lifecycle-bound task input, never evidence by upload alone: only fully stored assets bind once and in order to one manifest; authorized local or S3 storage owns content; unsubmitted removal deletes the object; submitted media remains with its receipt and cannot be silently detached or promoted into a source.
 Agent Sessions preserve readable conversation history in an account- and owner-scoped canonical store with a protected, backup-excluded device cache. Revision checks and immutable message identity protect concurrent updates; deletion tombstones prevent an offline device from restoring removed Sessions. Conversation history is an input for continuity, never a new source of evidence, identity confirmation, or execution authority. The first answer may carry an optional, same-call `session_title` display label; the server canonicalizes it to one line and 32 Unicode characters, and clients persist it only while the Session has no recorded turns. It never grants evidence, identity, state, or execution authority, and later turns or retries cannot rename the Session. Synchronized and restored answer bodies are display-only, stale, and stripped of live citations and action targets. Source invalidation removes dependent saved answer content, while current canonical readback controls whether prior answers may enter model context. Bounded canonical screenshot summaries may continue the same conversation as unconfirmed context; their downstream answers retain exact source dependencies and lose availability with the original source. Contact drafts keep their source message and field excerpts; pending consequential commands do not become executable merely by syncing. Drafts expire at seven days and Sessions at thirty. Session-bound canonical chat tasks retain an owner, originating Session, and fixed deadline; replies and forks cannot renew inherited context deadlines. Deletion or expiry removes unreferenced reply bodies and saved display content, and original request replay rechecks the originating Session before returning a receipt. Edits and forks cannot extend the original source authority. See [ADR 0014](decisions/0014-continuous-governed-sessions.md).
+Live input reaches its current task at tool-safe checkpoints. Dispatch does not prove consumption; only acknowledged input enters canonical history. Original IDs and accepted times survive batching, Stop and retry. Queue-owned receipts and answer bodies are immutable across client saves; legacy saves restore omitted fields and owned forks inherit exact provenance. They supply bounded continuity, never evidence or action authority. Tool grounding uses original messages separately, and each proposal retains one exact source under the existing human decision boundary.
+
 In-flight Ask retains its draft and idempotency key; restored answers hide citations until a fresh scoped Ask.
 Before source review, the same container stores fragment, expected state, exact prior review ID, decision, reason, task, and an authority-bound idempotency key, never the excerpt; failed persistence blocks the request. The server locks current authority before accepting or replaying the operation and persists every decision as a same-fragment predecessor link with a monotonic revision; replay succeeds only when its resulting review is still current, and the client validates both review IDs before marking it applied.
 Pending, failed, outcome-unknown, and applied states survive relaunch and reuse that key. A live request cannot also reconcile; a new authority cycle gets a new key, and reinstatement appends a reviewed decision against rejected state.
@@ -299,7 +301,6 @@ The dated diagram reviews are stored in:
 - [Visual acceptance review](evaluations/architecture-diagrams-visual-review-2026-08-04.md)
 
 ## Reconsider when
-
 Revisit this architecture when:
 
 - one source of truth cannot meet observed reliability or scale needs;
@@ -311,7 +312,6 @@ Revisit this architecture when:
   effect boundary.
 
 ## Related documents
-
 - [Agent system](agent-system.md)
 - [ADR 0004: Agent Wiki knowledge layer](decisions/0004-agent-wiki-knowledge-layer.md)
 - [Capture to action](capture-to-action.md)

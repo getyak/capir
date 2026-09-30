@@ -252,6 +252,18 @@ export async function recordMeetingDraftsForTask(
         "The draft does not match the safe calendar proposal produced by this task.",
       );
     }
+    if (draft.source_message_id && draft.source_message_id !== input.messageID) {
+      const source = (await client.query<{ objective: string | null }>(
+        `SELECT m.objective FROM conversation_queue_entries m
+         JOIN conversation_queue_entries l ON l.account_id=m.account_id AND l.id=m.steer_group_entry_id
+         WHERE m.account_id=$1 AND m.session_id=$2 AND m.created_by_user_id=$3 AND m.message_id=$4
+           AND m.steer_state='delivered' AND l.run_id=$5 AND l.status='running'
+           AND l.lease_expires_at>now() AND l.cancel_requested=false`,
+        [auth.accountId, input.sessionID, auth.userId, draft.source_message_id, input.taskID],
+      )).rows[0];
+      if (!source?.objective?.includes(draft.source_excerpt)) throw new ApiError(409,
+        "MEETING_DRAFT_SOURCE_MISMATCH", "The supplementary draft must quote its owned delivered message.");
+    }
     await client.query(
       `SELECT record_meeting_draft_with_image($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)`,
       [
@@ -260,7 +272,7 @@ export async function recordMeetingDraftsForTask(
         auth.userId,
         input.taskID,
         input.sessionID,
-        input.messageID ?? null,
+        draft.source_message_id ?? input.messageID ?? null,
         draft.title,
         draft.starts_at,
         draft.ends_at,

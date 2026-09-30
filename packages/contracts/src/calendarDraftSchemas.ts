@@ -8,6 +8,7 @@ export const CalendarDraftSchema = Type.Object({
   ends_at: Type.String({ format: "date-time" }),
   time_zone: Type.String({ minLength: 1, maxLength: 100, pattern: "\\S" }),
   source_request_id: Type.String({ format: "uuid" }),
+  source_message_id: Type.Optional(Type.String({ format: "uuid" })),
   source_excerpt: Type.String({ minLength: 1, maxLength: 1000, pattern: "\\S" }),
   source_image: Type.Optional(Type.Object({
     artifact_id: Type.String({minLength:1,maxLength:300}),

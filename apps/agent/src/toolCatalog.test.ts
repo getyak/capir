@@ -164,6 +164,6 @@ for (const outcome of ["reply", "clarification"] as const) {
       const result = WorkspaceConversationFinalOutputSchema.parse({ ...reply, session_title: invalid });
       expect(result).toMatchObject({ ...reply, session_title: undefined });
     }
-    expect(WorkspaceConversationFinalOutputSchema.safeParse({ ...reply, body: "", session_title: "ok" }).success).toBe(false);
+    expect(WorkspaceConversationFinalOutputSchema.safeParse({ ...reply, body: "", session_title: "ok" }).success).toBe(outcome === "reply");
   });
 }

@@ -204,7 +204,7 @@ describe("Claude SDK frozen trials", () => {
   const config = claudeHarnessConfiguration({ HAO_ANTHROPIC_API_KEY: "synthetic-only",
     ANTHROPIC_BASE_URL: "https://api.hao.ai/anthropic", TALENT_SIGNAL_AGENT_MODEL: "anthropic/claude-sonnet-5" });
   const receipt = { text: "可以，慢慢聊。", structuredOutput: null, sessionID: "synthetic-sdk-session",
-    inputTokens: 50, outputTokens: 20, estimatedUsd: 0.01, turns: 2, toolCalls: 1,
+    inputTokens: 50, outputTokens: 20, estimatedUsd: 0.01, turns: 2, toolCalls: 1, toolCompletions: [],
     terminalReason: "completed", permissionDenials: [], reportedModels: ["claude-sonnet-5"], modelResponses: 2 };
   it("uses identical effective natural prompts and records the reported model without inventing request counts", async () => {
     const execute = vi.fn(async (_config, request) => {

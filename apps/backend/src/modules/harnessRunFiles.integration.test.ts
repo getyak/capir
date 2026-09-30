@@ -27,7 +27,7 @@ const provider=new ClaudeChatProvider(claudeHarnessConfiguration({ANTHROPIC_API_
   await request.tools.find(t=>t.name==="cite_evidence")!.execute({source_ids:JSON.parse(request.context!).allowed_citation_ids.slice(0,1)},new AbortController().signal);
   await afterTool?.();
   return {text:"已根据当前资料生成文件。",structuredOutput:null,sessionID:randomUUID(),inputTokens:10,outputTokens:20,
-    estimatedUsd:0.01,turns:1,toolCalls:2,terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
+    estimatedUsd:0.01,turns:1,toolCalls: 2, toolCompletions: [], terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
 });
 beforeAll(async()=>{
   if(!pool||!database)return;

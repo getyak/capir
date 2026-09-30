@@ -10,6 +10,7 @@ import type {
   ConversationQueueSnapshot,
 } from "@talent-signal/contracts";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
+import { sessionHumanMessages } from "@/lib/session-human-messages";
 import { workspaceSessionFetch } from "../workspace-session-request";
 import { validateAttachmentBatch } from "../contact-agent/capture-intake";
 import { acceptConversationPreview, acceptConversationSnapshot, ConversationFrames } from "@/lib/conversation-stream";
@@ -88,7 +89,7 @@ export function useConversation(options: Options) {
   const storeMessages = useCallback((next: LocalMessage[]) => { local.current = next; setMessages(next); }, []);
   const reconcile = useCallback((server: ConversationQueueSnapshot | null, history: SessionDetail | null) => {
     if (!id) return;
-    const known = new Set([...(server?.queued ?? []).map(item => item.message_id), ...(server?.active ? [server.active.message_id] : []), ...(history?.turns ?? []).map(turn => turn.id)]);
+    const known = new Set([...(server?.queued ?? []).map(item => item.message_id), ...(server?.active ? [server.active.message_id] : []), ...(history?.turns ?? []).flatMap(sessionHumanMessages).map(turn => turn.id)]);
     const remaining = local.current.filter(message => { if (!known.has(message.id)) return true; removeConversationMessage(scope, id, message.id); void removeConversationImages(scope, id, message.id); return false; });
     if (remaining.length !== local.current.length) storeMessages(remaining);
   }, [id, scope, storeMessages]);

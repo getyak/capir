@@ -12,6 +12,7 @@ export interface ConversationQueueLivePreview {
   runId: string;
   messageId: string;
   text: string;
+  completedTools?: Array<{ name: string; completed_at: string }>;
   stage: string | null;
   sequence: number;
   leaseGeneration: number;

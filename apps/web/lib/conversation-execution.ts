@@ -225,7 +225,7 @@ export function conversationPresentationStep(
   // A non-null run identity that differs from the painted one is a new run;
   // its revision sequence starts over. An idle frame is never a fresh run.
   const freshRun = update.runId !== null && update.runId !== state.runId;
-  const changed = update.text !== state.text || update.stage !== state.stage;
+  const changed = update.text !== state.text || update.stage !== state.stage || update.revision > state.revision;
   if (!freshRun && !changed && !update.terminal) return { state, commit: false };
   const base: ConversationPresentationState = {
     runId: update.runId,

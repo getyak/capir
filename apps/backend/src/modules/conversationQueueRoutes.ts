@@ -283,7 +283,7 @@ export function registerConversationQueueRoutes(
                     ? {
                         run_id: preview.runId,
                         message_id: preview.messageId,
-                        text: preview.text,
+                        text: preview.text, completed_tools: preview.completedTools ?? [],
                         stage: preview.stage,
                         revision: preview.sequence,
                       }
@@ -294,7 +294,7 @@ export function registerConversationQueueRoutes(
             const previewKey = preview ? `${preview.runId}:${preview.sequence}` : "";
             if (preview && previewKey !== lastPreview) {
               lastPreview = previewKey;
-              write(`event: preview\ndata: ${JSON.stringify({ run_id: preview.runId, message_id: preview.messageId, text: preview.text, stage: preview.stage, revision: preview.sequence })}\n\n`);
+              write(`event: preview\ndata: ${JSON.stringify({ run_id: preview.runId, message_id: preview.messageId, text: preview.text, completed_tools: preview.completedTools ?? [], stage: preview.stage, revision: preview.sequence })}\n\n`);
             }
           }
         } catch {

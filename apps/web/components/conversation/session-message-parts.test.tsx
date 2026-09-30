@@ -144,3 +144,16 @@ it("keeps one execution identity when a queued message fails without producing a
   expect(partsOf(failed[1]!)).toEqual(["talent-signal.execution"]);
   expect(failed[1]!.content[0]).toMatchObject({ data: { phase: "failed", endedAt: "2026-10-01T01:00:05Z", failureCode: "RUN_FAILED" } });
 });
+
+it("restores every steered original before one final result and uses actual run bounds rather than queue wait", () => {
+  const first = turn();
+  first.steeredMessages = [{ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", objective: "补充交付边界", createdAt: "2026-09-29T01:00:05Z", images: first.images }];
+  first.response.execution = { started_at: "2026-09-29T01:00:03Z", completed_at: "2026-09-29T01:00:11Z", tools: [{ name: "contact_read", completed_at: "2026-09-29T01:00:04Z" }] };
+  const duplicate = { queue_entry_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", message_id: first.steeredMessages[0]!.id, sequence: 2, status: "queued" as const, objective: "补充交付边界", created_at: "2026-09-29T01:00:05Z", updated_at: "2026-09-29T01:00:05Z", revision: 1, run_id: null, stage: null, cancel_requested: false, failure_code: null };
+  const messages = sessionMessages({ turns: [first], active: null, preview: null, queued: [duplicate] });
+  expect(messages.map(message => message.id)).toEqual([`${MESSAGE}:user`, `${duplicate.message_id}:user`, `${MESSAGE}:assistant`]);
+  expect(messages[1]?.content).toContainEqual({ type: "text", text: "补充交付边界" });
+  expect(messages[1]?.createdAt.toISOString()).toBe("2026-09-29T01:00:05.000Z");
+  expect(messages[1]?.content[1]).toMatchObject({ data: { messageId: duplicate.message_id, images: first.images } });
+  expect(messages[2]?.content[0]).toMatchObject({ data: { startedAt: "2026-09-29T01:00:03Z", endedAt: "2026-09-29T01:00:11Z", timingBasis: "run", completedTools: first.response.execution.tools } });
+});

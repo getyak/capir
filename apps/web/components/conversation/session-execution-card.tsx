@@ -36,6 +36,8 @@ export function SessionExecutionCard({
   failureCode,
   defaultOpen = false,
   draft,
+  completedTools = [],
+  timingBasis = "run",
 }: {
   phase: ConversationExecutionPhase;
   stage: string | null;
@@ -45,6 +47,8 @@ export function SessionExecutionCard({
   failureCode?: string | null;
   defaultOpen?: boolean;
   draft?: string;
+  completedTools?: readonly { name: string; completed_at: string }[];
+  timingBasis?: "run" | "receipt";
 }) {
   const live = !endedAt && (phase === "queued" || phase === "running" || phase === "stopping");
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -61,10 +65,16 @@ export function SessionExecutionCard({
       <summary className={styles.executionSummary}>
         <span className={styles.executionState}>{conversationExecutionPhaseLabel(phase)}</span>
         {stageLabel && live ? <span className={styles.executionStage}>{stageLabel}</span> : null}
-        <span className={styles.executionElapsed} data-elapsed-ms={elapsedMs}>{phase === "queued" ? "已等待" : "用时"} {conversationElapsedLabel(elapsedMs)}</span>
+        {completedTools.length > 0 ? <span className={styles.executionStage}>已记录 {completedTools.length} 次工具完成</span> : null}
+        <span className={styles.executionElapsed} data-elapsed-ms={elapsedMs}>{phase === "queued" ? "已等待" : timingBasis === "receipt" ? "记录跨度" : "用时"} {conversationElapsedLabel(elapsedMs)}</span>
       </summary>
       <div className={styles.executionDetail}>
         {failureCode ? <p className={styles.executionFailure}>失败代码：{failureCode}</p> : null}
+        {completedTools.length > 0 ? <ol className={styles.executionMilestones} aria-label="工具完成记录">
+          {completedTools.map((tool, index) => <li key={`${index}:${tool.completed_at}`}>
+            <span>{tool.name}</span><time dateTime={tool.completed_at}>{clock(tool.completed_at)}</time>
+          </li>)}
+        </ol> : null}
         {milestones.length > 0 ? (
           <ol className={styles.executionMilestones}>
             {milestones.map((milestone) => (
@@ -77,8 +87,8 @@ export function SessionExecutionCard({
         ) : null}
         {draft && <div className={styles.executionDraft} aria-label="回复草稿，尚未完成"><ConversationResponse>{draft}</ConversationResponse></div>}
         <p className={styles.executionTimes}>
-          开始 {clock(startedAt) || "未记录"}
-          {endedAt ? ` · 结束 ${clock(endedAt) || "未记录"}` : live ? " · 仍在进行" : ""}
+          {timingBasis === "receipt" ? "消息接收" : "开始"} {clock(startedAt) || "未记录"}
+          {endedAt ? ` · ${timingBasis === "receipt" ? "结果记录" : "结束"} ${clock(endedAt) || "未记录"}` : live ? " · 仍在进行" : ""}
         </p>
       </div>
     </details>

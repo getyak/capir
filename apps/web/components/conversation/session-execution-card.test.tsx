@@ -4,6 +4,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SessionExecutionCard, SessionRunUpdate, SessionSendTime } from "./session-execution-card";
 
 describe("in-place execution card", () => {
+  it("counts only recorded tool completions and keeps stage observations separate", () => {
+    const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
+      phase: "completed", stage: null,
+      startedAt: "2026-10-01T01:00:00Z", endedAt: "2026-10-01T01:00:08Z",
+      milestones: [{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-10-01T01:00:01Z" }],
+      completedTools: [{ name: "contact_read", completed_at: "2026-10-01T01:00:03Z" }],
+    }));
+    expect(html).toContain("已记录 1 次工具完成");
+    expect(html).toContain('aria-label="工具完成记录"');
+    expect(html).toContain("contact_read");
+    expect(html).not.toContain("已记录 2 次");
+    expect(html).not.toMatch(/%/u);
+  });
   it("shows observed state and elapsed time without any fabricated percentage", () => {
     const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
       phase: "running",

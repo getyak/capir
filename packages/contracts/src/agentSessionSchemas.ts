@@ -96,6 +96,24 @@ const response = Type.Object(
     ),
     media: optional(Type.Array(media, { maxItems: 10 })),
     createdAt: stamp,
+    // GET-128 authentic execution readback for the folded execution card:
+    // canonical run start/end when available, plus real tool-completion
+    // receipts (name and completion time only; never arguments, results,
+    // provider text or other private data). Empty is legal: a run with no
+    // completed tool and no prose still has its own truthful receipt.
+    execution: Type.Optional(
+      Type.Object(
+        {
+          started_at: optional(stamp),
+          completed_at: optional(stamp),
+          tools: Type.Array(
+            Type.Object({ name: text(80), completed_at: stamp }, obj),
+            { maxItems: 16 },
+          ),
+        },
+        obj,
+      ),
+    ),
     labFeatureReceipt: optional(labReceipt),
     // GET-40 independent review: keep only the proposal id/revision in history
     // so a restored completed turn can re-open the same authorized review
@@ -213,6 +231,32 @@ export const AgentSessionPayloadSchema = Type.Object(
           response,
           images: Type.Optional(
             Type.Array(ConversationImageManifestSchema, { maxItems: 10 }),
+          ),
+          // GET-128 steering fold: later human messages that were actually
+          // delivered into this turn's single run keep their own immutable
+          // identity, text, accepted time and images here. The turn's own
+          // id/objective/createdAt stay the first accepted message so older
+          // clients keep rendering the human side; exactly one combined final
+          // answer follows these messages and is never split into fabricated
+          // milestones. Messages that never reached the model are not listed
+          // here; they keep their own later turns.
+          steeredMessages: Type.Optional(
+            Type.Array(
+              Type.Object(
+                {
+                  id,
+                  objective: text(12000),
+                  images: Type.Optional(
+                    Type.Array(ConversationImageManifestSchema, {
+                      maxItems: 10,
+                    }),
+                  ),
+                  createdAt: stamp,
+                },
+                obj,
+              ),
+              { maxItems: 20 },
+            ),
           ),
           createdAt: stamp,
           feedback: Type.Optional(

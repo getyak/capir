@@ -26,6 +26,7 @@ import {
 } from "./agentSessionSources.js";
 import { sweepHarnessSessions } from "./harnessSessions.js";
 import { sweepConversationQueue } from "./conversationQueueSweep.js";
+import { assertConversationQueueOwnedClaim, type ConversationQueueRunFence } from "./conversationQueueState.js";
 import { invalidateMemoriesForSessionIds } from "./memoryReviewRecall.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -118,6 +119,7 @@ function normalizeSessionIdentifiers(
       payload.inheritedScreenshotTaskIDs.map(canonicalID);
   for (const turn of payload.turns) {
     turn.id = canonicalID(turn.id);
+    for (const message of turn.steeredMessages ?? []) message.id = canonicalID(message.id);
     for (const key of [
       "taskID",
       "contextManifestID",
@@ -180,6 +182,53 @@ function sameImmutableTurn(
       turn.response.contextManifestID,
     )
   );
+}
+
+/** Only the fenced queue writer can create execution receipts or folded input.
+ * Legacy saves restore omitted server fields; changed identity or content fails
+ * closed. A deleted whole turn remains deletable, but JSON cannot forge a fold.
+ */
+function preserveExecutionProvenance(
+  payload: AgentSessionPayload,
+  previous: AgentSessionPayload | null,
+  queueMessageID?: string,
+): void {
+  for (const turn of payload.turns) {
+    const before = previous?.turns.find((candidate) => sameID(candidate.id, turn.id));
+    if (!before && queueMessageID && sameID(turn.id, queueMessageID)) continue;
+    if (before && (before.steeredMessages !== undefined || before.response.execution !== undefined)
+      && !sameImmutableTurn(before, turn)) {
+      throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
+        "A stored execution's message identity cannot be rewritten.");
+    }
+    if (before?.response.execution !== undefined) {
+      // The queue's canonical answer is already retained in this Session. Keep
+      // it immutable instead of duplicating private prose into another store.
+      for (const collection of displayBlockCollections) {
+        const stored = before.response[collection];
+        const current = turn.response[collection];
+        if (current != null && digestValue(current.map(shareClassificationComparable))
+          !== digestValue((stored ?? []).map(shareClassificationComparable))) {
+          throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
+            "A stored execution's canonical answer cannot be rewritten.");
+        }
+        if (stored != null && current == null)
+          turn.response[collection] = structuredClone(stored);
+      }
+    }
+    for (const field of ["steeredMessages", "execution"] as const) {
+      const current = field === "execution" ? turn.response.execution : turn.steeredMessages;
+      const stored = field === "execution" ? before?.response.execution : before?.steeredMessages;
+      if (current !== undefined && digestValue(current) !== digestValue(stored ?? null)) {
+        throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
+          "Only the owned queue can create or change execution provenance.");
+      }
+      if (stored !== undefined && current === undefined) {
+        if (field === "execution") turn.response.execution = structuredClone(before!.response.execution!);
+        else turn.steeredMessages = structuredClone(before!.steeredMessages!);
+      }
+    }
+  }
 }
 
 /**
@@ -655,10 +704,10 @@ async function validatePayload(
       );
     }
   }
-  if (
-    new Set(payload.turns.map((turn) => turn.id.toLowerCase())).size !==
-    payload.turns.length
-  )
+  const humanMessageIDs = payload.turns.flatMap((turn) =>
+    [turn.id, ...(turn.steeredMessages ?? []).map((message) => message.id)].map(canonicalID),
+  );
+  if (new Set(humanMessageIDs).size !== humanMessageIDs.length)
     invalid("Message IDs must be unique within a Session.");
   if (payload.scopeKind === "relationship") {
     if (
@@ -885,6 +934,9 @@ export async function mutateAgentSession(
   id: string,
   request: AgentSessionMutationRequest | AgentSessionDeleteRequest,
   deleted = false,
+  /** Host-only authority. HTTP routes never populate this argument. The owned
+   * queue fence is rechecked and locked in the Session write transaction. */
+  queueWrite?: { fence: ConversationQueueRunFence; messageId: string; allowCancelRequested: boolean },
 ): Promise<AgentSessionRecord> {
   if (
     !Value.Check(
@@ -963,6 +1015,39 @@ export async function mutateAgentSession(
         payload = structuredClone(
           (request as AgentSessionMutationRequest).payload,
         );
+        if (queueWrite) {
+          if (!sameID(queueWrite.fence.accountId, auth.accountId) || !sameID(queueWrite.fence.sessionId, id))
+            throw missing();
+          await assertConversationQueueOwnedClaim(client, queueWrite.fence,
+            { allowCancelRequested: queueWrite.allowCancelRequested });
+          const ownedMessage = (await client.query<{ message_id: string; created_by_user_id: string }>(
+            "SELECT message_id,created_by_user_id FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+            [auth.accountId, queueWrite.fence.entryId],
+          )).rows[0];
+          if (!ownedMessage || !sameID(ownedMessage.message_id, queueWrite.messageId)
+            || !sameID(ownedMessage.created_by_user_id, auth.userId)) throw missing();
+        }
+        let provenanceSource = existing?.payload ?? null;
+        if (!provenanceSource && payload.originSessionID) {
+          const origin = await rowFor(client, auth, payload.originSessionID);
+          if (origin?.payload && !origin.deleted_at && origin.expires_at > new Date()) {
+            const through = origin.payload.turns.findIndex(turn => sameID(turn.id, payload!.originTurnID));
+            if (through >= 0) provenanceSource = { ...origin.payload, turns: origin.payload.turns.slice(0, through + 1) };
+          }
+        }
+        preserveExecutionProvenance(payload, provenanceSource, queueWrite?.messageId);
+        const newIDs = payload.turns.flatMap(turn => [turn, ...(turn.steeredMessages ?? [])])
+          .filter(message => !existing?.payload?.turns.some(turn =>
+            [turn, ...(turn.steeredMessages ?? [])].some(before => sameID(before.id, message.id))))
+          .map(message => message.id);
+        if (!queueWrite && newIDs.length) {
+          const reserved = await client.query(
+            `SELECT 1 FROM conversation_queue_entries WHERE account_id=$1 AND session_id=$2
+             AND message_id=ANY($3::uuid[]) LIMIT 1`, [auth.accountId, id, newIDs],
+          );
+          if (reserved.rowCount) throw new ApiError(409, "AGENT_SESSION_QUEUE_MESSAGE_RESERVED",
+            "An admitted queue message can only be saved by its owned execution.");
+        }
         preserveExistingShareClassifications(
           payload,
           existing?.payload ?? null,
@@ -1252,13 +1337,20 @@ export async function readAgentSessionConversation(
       ).rows[0]?.available;
       if (!available) continue;
     }
-    messages.push({
-      message_id: turn.id,
-      role: "user",
-      text: turn.objective.slice(0, 2000),
-    });
+    for (const message of [turn, ...(turn.steeredMessages ?? [])]) {
+      messages.push({
+        message_id: message.id,
+        role: "user",
+        text: message.objective.slice(0, 2000),
+      });
+    }
     const canonical = canonicalResult?.response_body;
-    const text = (canonical?.blocks ?? [])
+    // New queue turns carry server-owned execution provenance and immutable
+    // canonical display blocks. Old endpoint turns still use their governed
+    // idempotency result. No extra prose store or retention scope is created.
+    const retained = turn.response.execution !== undefined
+      ? turn.response.unboundConversationBlocks ?? turn.response.savedBlocks ?? [] : [];
+    const text = (canonical?.blocks ?? retained)
       .filter((block) =>
         ["answer", "clarification", "question_set"].includes(block.kind),
       )

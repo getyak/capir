@@ -13,7 +13,7 @@ GET-129: refine home, sidebar, row/avatar density, title, borders, spacing and l
 GET-128: immediate acknowledgement; separate execution from dialogue; coalesced in-place updates (>=500ms); real observed milestones; explicit queued/running/waiting-review/failed/completed/interrupted states; elapsed time without fabricated percentage; semantic message units without splitting code/lists/tables; standalone final result; usable input while running; meaningful supplement/fragment handling; Stop/Escape retaining completed work and explicit continuation; notifications only for final results or human decisions.
 ## Milestones
 1. [x] Inspect issue requirements, canonical design, real Figma tree and current runtime.
-2. [ ] Implement and locally verify one integrated slice with Pi + MiMo.
+2. [x] Implement and locally verify one integrated slice with Pi + MiMo.
 3. [ ] Independent subagent review, fix confirmed findings, rendered comparison and behavioral acceptance.
 4. [ ] PR, current-head CI gates, merge/readback, issue acceptance/readback.
 ## Verification
@@ -61,3 +61,35 @@ Existing durable queue and SSE remain authority; stage transitions must never im
   preserved canonical partial output, paused later input, and Continue resumed.
   390px dark and 1280x480 screens retain the composer without horizontal
   overflow. A mobile search trigger collision was found and corrected.
+
+## Backend checkpoint correction ownership
+
+- A frozen provisional snapshot of Pi's backend candidate is integrated for
+  review; the private manifest records exact source hashes. Pi continues its
+  own first tests in its separate checkout. Integration owns subsequent
+  corrections; never overwrite them with a later full Pi patch.
+- Read-only independent pre-review found early intake closure before the first
+  tool, delivery before SDK consumption, non-accumulating image batch bounds
+  and unsupported-only closure loops. These are blocking and remain open.
+- The pinned SDK supports PostToolBatch before the next model call and Stop
+  context feedback. Use those primary-run checkpoints, preserve intake on an
+  empty tool checkpoint, and close only at a final checkpoint. A staged batch
+  needs a later model-consumption acknowledgment before canonical folding.
+
+## Final integration checkpoint
+
+- Parent corrected the provisional implementation: primary PostToolBatch/Stop
+  context, later consumption acknowledgment, capability selection window, whole
+  unsupported-image detachment and bounded fragment intake. Original backend P1
+  requires frozen-SHA re-review before delivery.
+- Dynamic grounding keeps each source separate. Queue-owned metadata and answer
+  blocks are immutable to public Session writes; only the fenced internal writer
+  can add them. Stop/result races recheck owned cancellation before terminal save.
+- Local proof: Agent 332 pass/1 existing skip, Web 1616 pass/1 existing skip,
+  isolated PostgreSQL 188 pass, all relevant typechecks and docs checks pass.
+  Synthetic screenshots now live in the evaluation directory.
+- Pi's second attempt failed its frozen file-scope audit; its result was never
+  treated as verified delivery. Integration retains ownership of accepted bridges
+  and independent corrections. No paid retry or provider switch was performed.
+- Remaining: independent review, latest-head gates, merge, actual resident Web
+  and backend update/readback, Linear Done readback, precise task cleanup.

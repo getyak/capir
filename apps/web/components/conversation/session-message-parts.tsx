@@ -23,6 +23,8 @@ import { MemoryReviewCard } from "../memory-review/memory-review-card";
 import { sessionBlockTitle } from "../session-workbench/session-presentation";
 import { ConversationImageStrip } from "./conversation-images";
 import { SessionCalendarDraftCard } from "./session-calendar-draft-card";
+import { sessionHumanMessages } from "@/lib/session-human-messages";
+export { sessionHumanMessages } from "@/lib/session-human-messages";
 import styles from "./queued-conversation.module.css";
 
 export type SessionDataPart = {
@@ -42,6 +44,24 @@ const EXECUTION_PHASES = new Set<ConversationExecutionPhase>([
   "queued", "running", "stopping", "waiting-review", "review-unknown", "completed", "failed", "interrupted",
 ]);
 
+type ExecutionReceipt = {
+  started_at: string | null;
+  completed_at: string | null;
+  tools: Array<{ name: string; completed_at: string }>;
+};
+
+function canonicalExecution(response: unknown): ExecutionReceipt | null {
+  const data = dataRecord(dataRecord(response)?.execution);
+  if (!data || !Array.isArray(data.tools)) return null;
+  const tools = data.tools.flatMap(value => {
+    const item = dataRecord(value);
+    return item && typeof item.name === "string" && typeof item.completed_at === "string"
+      ? [{ name: item.name, completed_at: item.completed_at }] : [];
+  });
+  return { started_at: typeof data.started_at === "string" ? data.started_at : null,
+    completed_at: typeof data.completed_at === "string" ? data.completed_at : null, tools };
+}
+
 function executionData(data: Record<string, unknown>) {
   const phase = typeof data.phase === "string" && EXECUTION_PHASES.has(data.phase as ConversationExecutionPhase)
     ? data.phase as ConversationExecutionPhase : null;
@@ -54,6 +74,8 @@ function executionData(data: Record<string, unknown>) {
     draft: typeof data.draft === "string" ? data.draft : undefined,
     failureCode: typeof data.failureCode === "string" ? data.failureCode : null,
     milestones: Array.isArray(data.milestones) ? data.milestones as ConversationExecutionMilestone[] : [],
+    completedTools: Array.isArray(data.completedTools) ? data.completedTools as ExecutionReceipt["tools"] : [],
+    timingBasis: data.timingBasis === "receipt" ? "receipt" as const : "run" as const,
   };
 }
 
@@ -77,14 +99,17 @@ export function sessionMessages(input: {
   queued?: readonly ConversationQueueEntry[];
 }): SessionProjectedMessage[] {
   const messages: SessionProjectedMessage[] = [];
+  const committed = new Set(input.turns.flatMap(turn => sessionHumanMessages(turn).map(message => message.id)));
   for (const turn of input.turns) {
+    for (const human of sessionHumanMessages(turn)) {
     const userContent: SessionProjectedMessage["content"] = [];
-    if (turn.objective) userContent.push({ type: "text", text: turn.objective });
-    if (turn.images?.length) userContent.push({
+    if (human.objective) userContent.push({ type: "text", text: human.objective });
+    if (human.images?.length) userContent.push({
       type: "data", name: "talent-signal.user-images",
-      data: { messageId: turn.id, images: turn.images, local: false },
+      data: { messageId: human.id, images: human.images, local: false },
     });
-    messages.push({ id: `${turn.id}:user`, role: "user", content: userContent, createdAt: new Date(turn.createdAt) });
+    messages.push({ id: `${human.id}:user`, role: "user", content: userContent, createdAt: new Date(human.createdAt) });
+    }
     const content: SessionProjectedMessage["content"] = sessionTurnBlocks(turn.response).map((block) => ({
       type: "data", name: "talent-signal.answer-block", data: { block },
     }));
@@ -110,6 +135,7 @@ export function sessionMessages(input: {
     });
     const awaiting = false; // Current decision state is read by the governed cards.
     const interrupted = conversationTurnInterrupted(turn.response, turn.id);
+    const execution = canonicalExecution(turn.response);
     // The folded execution record sits above the result and never wraps it:
     // the final result is standalone and pending memory or calendar decisions
     // stay distinct blocks. Completed turns keep the record collapsed so the
@@ -119,8 +145,10 @@ export function sessionMessages(input: {
       data: {
         phase: conversationExecutionPhase({ entry: null, readbackComplete: true, awaitingDecision: awaiting, interrupted }),
         stage: null,
-        startedAt: turn.createdAt,
-        endedAt: turn.response.createdAt,
+        startedAt: execution?.started_at ?? turn.createdAt,
+        endedAt: execution?.completed_at ?? turn.response.createdAt,
+        timingBasis: execution?.started_at ? "run" : "receipt",
+        completedTools: execution?.tools ?? [],
         failureCode: null,
         milestones: input.milestonesByMessage?.[turn.id] ?? [],
         decisionKeys: [turn.response.memoryProposal ? `memory:${turn.response.memoryProposal.proposal_id}` : null, turn.response.meetingDraft ? `calendar:${turn.response.meetingDraft.id}` : null].filter(Boolean),
@@ -129,7 +157,7 @@ export function sessionMessages(input: {
     messages.push({ id: `${turn.id}:assistant`, role: "assistant", content, createdAt: new Date(turn.response.createdAt) });
   }
   const active = input.active;
-  if (active && !input.turns.some((turn) => turn.id === active.message_id)) {
+  if (active && !committed.has(active.message_id)) {
     const userContent: SessionProjectedMessage["content"] = [];
     if (active.objective) userContent.push({ type: "text", text: active.objective });
     if (active.images?.length) userContent.push({
@@ -150,10 +178,12 @@ export function sessionMessages(input: {
         { type: "data", name: "talent-signal.execution", data: {
           phase: conversationExecutionPhase({ entry: active, readbackComplete: false, awaitingDecision: false }),
           stage: preview?.stage ?? active.stage ?? null,
-          startedAt: active.created_at,
+          startedAt: active.started_at ?? active.created_at,
+          timingBasis: active.started_at ? "run" : "receipt",
           endedAt: null,
           failureCode: active.failure_code,
           milestones: input.milestones ?? [],
+          completedTools: preview?.completed_tools ?? [],
           draft: preview?.text ?? "",
         } },
       ],
@@ -161,14 +191,16 @@ export function sessionMessages(input: {
     });
   }
   for (const entry of input.queued ?? []) {
-    if (input.turns.some(turn => turn.id === entry.message_id) || entry.message_id === active?.message_id) continue;
+    if (committed.has(entry.message_id) || entry.message_id === active?.message_id) continue;
     const content: SessionProjectedMessage["content"] = [];
     if (entry.objective) content.push({ type: "text", text: entry.objective });
     if (entry.images?.length) content.push({ type: "data", name: "talent-signal.user-images", data: { messageId: entry.message_id, images: entry.images, local: false } });
     messages.push({ id: `${entry.message_id}:user`, role: "user", content, createdAt: new Date(entry.created_at) });
+    if (active?.run_id && entry.steers_run_id === active.run_id && entry.steer_state !== "unsupported") continue;
     messages.push({ id: `${entry.message_id}:assistant`, role: "assistant", content: [{ type: "data", name: "talent-signal.execution", data: {
       phase: conversationExecutionPhase({ entry, readbackComplete: false, awaitingDecision: false }),
-      stage: entry.stage, startedAt: entry.created_at,
+      stage: entry.stage, startedAt: entry.started_at ?? entry.created_at,
+      timingBasis: entry.started_at ? "run" : "receipt",
       endedAt: entry.status === "queued" || entry.status === "running" ? null : entry.updated_at,
       failureCode: entry.failure_code, milestones: input.milestonesByMessage?.[entry.message_id] ?? [],
     } }], createdAt: new Date(entry.updated_at) });
@@ -217,6 +249,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
   if (name === "talent-signal.answer-block") {
     const block = dataRecord(data.block);
     if (!block || typeof block.body !== "string") return <span>这段回复暂时无法显示。</span>;
+    if (!block.body.trim()) return null; // Silence retains execution, without a fabricated dialogue bubble.
     const title = typeof block.title === "string" ? sessionBlockTitle(block.title) : null;
     return <div><div className={styles.semanticBubble}>{title && <h3>{title}</h3>}<ConversationResponse lead={!title}>{block.body}</ConversationResponse></div>
       <ConversationProvenance sources={Array.isArray(block.public_source_refs) ? block.public_source_refs as never : undefined}/></div>;
