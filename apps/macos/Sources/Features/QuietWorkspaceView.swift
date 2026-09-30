@@ -272,6 +272,14 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { decisionHandler(.cancel); return }
+        if WorkspaceSupportHandoff.allows(url,
+            sourceIsTrusted: action.sourceFrame.request.url.map(origin.contains) == true,
+            mainFrame: action.sourceFrame.isMainFrame && action.targetFrame?.isMainFrame != false,
+            userActivated: action.navigationType == .linkActivated) {
+            externalURL = url
+            decisionHandler(.cancel)
+            return
+        }
         if url.scheme == "talentsignal-desktop" {
             if let command = DesktopChromeAction.resolve(url, source: action.sourceFrame.request.url,
                                                         origin: origin, mainFrame: action.sourceFrame.isMainFrame,
@@ -595,7 +603,7 @@ private struct ConnectedQuietWorkspace: View {
                 }.help("工作区操作")
             }
         }
-        .alert("在浏览器中打开？", isPresented: Binding(
+        .alert(browser.externalURL?.scheme == "mailto" ? "在邮件应用中准备草稿？" : "在浏览器中打开？", isPresented: Binding(
             get: { browser.externalURL != nil }, set: { if !$0 { browser.externalURL = nil } }
         )) {
             Button("打开") {
@@ -604,7 +612,9 @@ private struct ConnectedQuietWorkspace: View {
             }
             Button("取消", role: .cancel) { browser.externalURL = nil }
         } message: {
-            Text(browser.externalURL?.host ?? "此链接位于工作区之外。")
+            Text(browser.externalURL?.scheme == "mailto"
+                ? "收件人：hello@talentsignal.ai。打开后由你编辑和发送；不会自动发送邮件。"
+                : browser.externalURL?.host ?? "此链接位于工作区之外。")
         }
     }
 }

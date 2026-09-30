@@ -88,6 +88,7 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertEqual(payload["protocolVersion"] as? Int, 1)
         XCTAssertEqual(payload["surface"] as? String, "workspace")
         XCTAssertEqual(payload["appVersion"] as? String, "0.1.0 (29)")
+        XCTAssertEqual(payload["supportMailHandoff"] as? Bool, true)
         XCTAssertEqual(payload["availableVersion"] as? String, "0.2.0")
         XCTAssertEqual(payload["phase"] as? String, "available")
         XCTAssertEqual(payload["progress"] as? Int, 42)
