@@ -14,7 +14,7 @@ collaboration, and recruiting. The downloadable client is `apps/macos`.
    `shasum -a 256 <downloaded-file>`. Drag **Talent Signal** to Applications.
 3. Open the app and enter the HTTPS workspace origin supplied by the workspace
    owner, or paste a full `/workspace/...` link. The app shows the normalized origin.
-   Sign in with your own account.
+   Choose **Sign in in your browser**, authenticate or confirm your own account in the system browser, and return to the Mac workspace. The Mac window never asks for your username or password.
 
 For an owner-operated private workspace, authorize the second Mac in the same
 Tailscale network and connect Tailscale before opening the app. The package

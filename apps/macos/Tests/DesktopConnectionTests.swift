@@ -35,6 +35,7 @@ final class DesktopConnectionTests: XCTestCase {
         XCTAssertFalse(restored.allowsLocalDevelopment)
     }
 
+    @MainActor
     func testSessionStoresPartitionPortsAndCanonicalizeEquivalentOrigins() throws {
         let a = try XCTUnwrap(WorkspaceOrigin("https://work.example"))
         let b = try XCTUnwrap(WorkspaceOrigin("https://WORK.example:443/"))

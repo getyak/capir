@@ -370,6 +370,7 @@ export const EMPTY_DUPLICATE_USER_BOUND_TABLES: ReadonlySet<string> = new Set([
   "account_email_reservations",
   "account_reconciliation_requests",
   "credential_change_attempts",
+  "desktop_browser_login_attempts",
   "retired_login_aliases",
   "sessions",
 ]);
@@ -445,6 +446,7 @@ const USER_COLUMNS: Record<string, string> = {
   account_email_reservations: "user_id",
   credential_change_attempts: "user_id",
   account_reconciliation_requests: "actor_user_id",
+  desktop_browser_login_attempts: "user_id",
   retired_login_aliases: "user_id",
   sessions: "user_id",
 };

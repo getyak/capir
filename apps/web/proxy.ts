@@ -10,6 +10,10 @@ export function proxy(request: NextRequest) {
     // The published MCP endpoint uses its own scoped bearer token and never a
     // browser login cookie, so it is deliberately outside the workspace guard.
     || path === "/api/mcp"
+    // Browser-owned macOS login (ADR 0022) runs before any workspace session
+    // exists: anonymous grant preparation and proof-bound exchange/cancel
+    // carry their own bounded authentication and never an account header.
+    || path === "/api/desktop-auth" || path.startsWith("/api/desktop-auth/")
     || ["/api/auth", "/api/browser-extension", "/api/dev"].some(
       prefix => path === prefix || path.startsWith(`${prefix}/`),
     );

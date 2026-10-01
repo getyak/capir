@@ -90,6 +90,7 @@
     "082_conversation_queue_prioritize",
     "083_account_identity_ownership",
     "084_secondary_email_ownership",
-    "085_conversation_queue_steering"
+    "085_conversation_queue_steering",
+    "086_desktop_browser_login"
   ]
 }
