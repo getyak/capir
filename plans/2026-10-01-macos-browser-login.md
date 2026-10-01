@@ -34,3 +34,11 @@ Storage audit initially reports 76 GiB free against the 80 GiB heavyweight-build
 ## Open uncertainties
 
 Actual provider/password interaction may require the human's credentials or OS confirmation; do not fake it. Controlled account/browser/WebKit proof can establish protocol mechanics separately. Installed-app and production-release changes need an independently verified source/binary boundary; do not claim the user's installed app changed after only building test source. Source implementation and deployed acceptance are separate.
+
+## Implementation batch
+
+Pi task `20261001-143724-30881287`, frozen base `72381674`, provider `xiaomi-token-plan-cn`, model `mimo-v2.6-pro`, one implementation owner. Contract lives in the private Pi state directory; worker owns source only, parent owns this plan and ADR/operations. Offline dependency setup completed and implementation is running. No provider credentials, real account mutations, installed-app changes or production release are delegated.
+
+## Environment checkpoint
+
+`dev-storage-guard prune-pnpm` removed unused package-cache metadata/files without deleting repositories or test evidence. Parent offline install then required refreshed package-manager metadata; online frozen-lockfile install restores exactly the reviewed dependency graph, with no package upgrade. Disk remains below the heavyweight-build threshold, so native heavyweight work is deferred. Existing updater/app caches and active services remain intact. Capture transport currently constructs a second WK host at `apps/macos/Sources/Capture/CaptureTransport.swift`; parent will own that path if it falls outside the frozen Pi scope.

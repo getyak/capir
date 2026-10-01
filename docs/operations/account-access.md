@@ -9,6 +9,14 @@ Settings manages sign-in methods: connecting Apple/Google, setting or changing a
 password, and removing a method. Every change first proves the current identity,
 and at least one usable login method always remains.
 
+## macOS browser sign-in
+
+The Mac primary-login surface offers **Sign in in your browser**; it never collects account passwords, registration fields or provider credentials. The system authentication browser reuses a valid Web session where supported, then asks the user to confirm the displayed account for this Mac request. Otherwise the ordinary Web login and onboarding flow returns to that confirmation. A matching request hint helps identify the operation being approved. Cancelling keeps a usable retry surface.
+
+Browser approval creates a separate, revocable Mac backend session through a short-lived, one-use grant. It does not copy the browser cookie, attach a credential, change the account or grant local capture permission. Browser and Mac sign-outs remain independent. The Mac opens the workspace only after live backend identity readback in its selected WebKit store; seeing a callback or a browser success page alone is insufficient.
+
+Existing healthy Mac sessions reopen directly. An expired session returns to the same browser-only entry. An uncertain exchange offers **Check sign-in result** and deliberate **Sign in again**; recovery does not replay a potentially consumed grant or report cancellation as rollback. A new primary login isolates old late cookie responses in a separate persistent store and preserves quarantined local drafts. [ADR 0022](../decisions/0022-browser-owned-macos-login.md) owns the design and [the active plan](../../plans/2026-10-01-macos-browser-login.md) distinguishes implementation proof, live-provider verification and installed-release acceptance.
+
 ## One account, normalized email ownership
 
 One Talent Signal account is recognized by its primary email; Apple, Google and
