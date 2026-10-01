@@ -64,3 +64,9 @@ After safe unused package/Docker-cache cleanup, bounded native incremental build
 Independent review `/root/independent_login_review` closed all three confirmed P1 findings and found no P0/P1 remaining. Parent independently reran 32 backend tests including four real PostgreSQL tests, 52 Web tests and native full XCTest (260 executed, 9 explicitly skipped, zero failures). Backend and Web typechecks pass. Actual retained-cookie/backend-revocation browser recovery returns through normal reauthentication to the exact original Mac confirmation, observed and captured. Formal sanitized evidence is in `docs/evaluations/2026-10-01-macos-browser-login/`.
 
 The OS blocker is now specifically identified: the configured default Chrome process has both headless and no-startup-window flags. Do not stop or change another task's browser. Explicit user approval to temporarily select Safari and restore Chrome is pending. The complete OS user chain and signed installed-release gate remain pending; no claim of either is permitted.
+
+## Delivery checkpoint
+
+Draft PR https://github.com/getyak/talent-signal/pull/268 is attached to this task. Its first repository-policy run rejected a redundant HTTP probe's unmanaged credential-shaped environment variable. The duplicate probe is removed; actual backend/PostgreSQL and production WebKit tests are the maintained acceptance entry points. The Infisical manifest regression is rerun instead of adding a new production secret or hiding the variable from scanning.
+
+The required local backend deploy initially failed before building because worktree-local ignored Opik ClickHouse config had not been bootstrapped. Existing canonical config files are copied into the task worktree without touching data volumes; retry remains within the authorized deployment. Preserve the original resident service's mount ownership after acceptance. Full OS callback and installed-release gates are still pending.
