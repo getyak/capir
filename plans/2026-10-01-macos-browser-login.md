@@ -16,8 +16,8 @@ In scope: browser-owned primary login, durable one-use backend grant, first-part
 
 ## Milestones
 
-1. Active: implement backend grant, Web confirmation/exchange/status, and native user flow on the frozen baseline with Pi.
-2. Pending: independently inspect diff and run backend/PostgreSQL, Web, real WebKit and native acceptance; close confirmed P0/P1 findings with independent reviewer.
+1. Complete: implement backend grant, Web confirmation/exchange/status, and native user flow on the frozen baseline with Pi.
+2. Source accepted: independently inspect diff and run backend/PostgreSQL, Web, real WebKit and native acceptance; close confirmed P0/P1 findings with independent reviewer. Full system-browser user acceptance remains pending below.
 3. Pending: run current-head required checks; create reviewable PR; rebuild/redeploy local backend as required by apps/backend/AGENTS.md and verify affected Web/native surfaces without claiming a production release or modifying provider accounts.
 4. Pending: route final decisions/operations evidence, preserve formal receipts and clean only task-owned temporary artifacts.
 
@@ -69,4 +69,8 @@ The OS blocker is now specifically identified: the configured default Chrome pro
 
 Draft PR https://github.com/getyak/talent-signal/pull/268 is attached to this task. Its first repository-policy run rejected a redundant HTTP probe's unmanaged credential-shaped environment variable. The duplicate probe is removed; actual backend/PostgreSQL and production WebKit tests are the maintained acceptance entry points. The Infisical manifest regression is rerun instead of adding a new production secret or hiding the variable from scanning.
 
-The required local backend deploy initially failed before building because worktree-local ignored Opik ClickHouse config had not been bootstrapped. Existing canonical config files are copied into the task worktree without touching data volumes; retry remains within the authorized deployment. Preserve the original resident service's mount ownership after acceptance. Full OS callback and installed-release gates are still pending.
+The required local backend deploy failed before building. The initial missing-config diagnosis was incomplete: Colima cannot read the managed `.codex` worktree's bind mounts. Existing operational documentation already requires a clean detached deployment checkout under the Colima-shared `~/data` path and in-VM bind-file verification. Re-running the canonical checkout's Opik launcher restored ClickHouse, backend and frontend to healthy state; the version probe passes and mounts again belong to the canonical checkout. No database volumes were removed. Future deployment must follow that documented path and coordinate the keeper; do not retry from this managed worktree.
+
+The latest storage audit reports 64 GiB free, below the mandatory 80 GiB heavyweight-build threshold. Only task-owned build products and safe unused cache cleanup are authorized; these cannot supply the missing space. Backend rebuild/redeployment and signed release remain pending until the threshold is met. Do not delete unrelated artifacts, repositories, app data or active Docker volumes to satisfy it.
+
+Current-head quality checks at `2cc6d07c` pass for Web, backend, native, repository policy and security workflows. The separate CodeQL aggregate correctly rejects biased hint generation (three annotations) and incomplete notice-attribute escaping. Parent repairs use `crypto.randomInt`, attribute-context escaping and script-data escaping, with a malicious-input Web regression. Narrow backend 26/26 and Web 17/17 tests pass. Independent re-review passed with no remaining P0/P1/P2; new-head CodeQL is required. A final opt-in real WK test against the restarted current source backend also passes; it still does not establish browser intention or the OS callback.

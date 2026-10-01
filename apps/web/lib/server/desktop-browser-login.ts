@@ -665,7 +665,7 @@ export function renderDesktopAuthNoticeDocument(input: {
     "<body><main>",
     `<h1>${escape(input.title)}</h1>`,
     `<p>${escape(input.message)}</p>`,
-    `<p data-request-id="${escape(input.requestId)}"></p>`,
+    `<p data-request-id="${escapeAttribute(input.requestId)}"></p>`,
     "</main></body></html>",
   ].join("\n");
 }
@@ -694,7 +694,7 @@ export function renderDesktopAuthApprovedDocument(input: {
     "<p>正在返回 Talent Signal。如果应用没有自动回到前台，请点击下面的链接。</p>",
     `<p><a id="complete" href="${escapedCallback}">返回 Talent Signal</a></p>`,
     `<p data-request-id="${escapeAttribute(input.requestId)}"></p>`,
-    `<script>window.location.replace(${JSON.stringify(input.callbackUrl)});</script>`,
+    `<script>window.location.replace(${JSON.stringify(input.callbackUrl).replace(/</gu, "\\u003c")});</script>`,
     "</main></body></html>",
   ].join("\n");
 }

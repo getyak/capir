@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 
 import {
   CONTRACT_VERSION,
@@ -178,12 +178,11 @@ export function requireAllowedWebOrigin(
 /** Human-readable pairing hint shown on Mac and in the browser; never a proof. */
 export function newMatchingHint(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(6);
   let hint = "";
   for (let index = 0; index < 4; index += 1) {
-    hint += alphabet[(bytes[index] ?? 0) % alphabet.length];
+    hint += alphabet[randomInt(alphabet.length)];
   }
-  return `${hint}-${String((bytes[4] ?? 0) % 10)}${String((bytes[5] ?? 0) % 10)}`;
+  return `${hint}-${randomInt(10)}${randomInt(10)}`;
 }
 
 function hashHex(secret: string): string {

@@ -72,6 +72,8 @@ import {
   desktopBrowserLoginPrepareRoute,
   desktopBrowserLoginStatusRoute,
   renderDesktopAuthCompletionDocument,
+  renderDesktopAuthNoticeDocument,
+  renderDesktopAuthApprovedDocument,
   sealDesktopAuthCsrf,
   verifyDesktopAuthCsrf,
 } from "./desktop-browser-login";
@@ -80,6 +82,16 @@ const SECRET = "p".repeat(43);
 const SECRET2 = "q".repeat(43);
 const SECRET3 = "r".repeat(43);
 const ATTEMPT = "11111111-2222-3333-4444-555555555555";
+
+it("escapes request identifiers as attributes and callbacks as script data", () => {
+  const requestId = 'request\" onmouseover=\"alert(1)';
+  const notice = renderDesktopAuthNoticeDocument({ title: "Notice", message: "Safe", requestId });
+  expect(notice).toContain('data-request-id="request&quot; onmouseover=&quot;alert(1)"');
+  expect(notice).not.toContain('data-request-id="request" onmouseover=');
+  const approved = renderDesktopAuthApprovedDocument({ callbackUrl: "</script><script>alert(1)</script>", requestId });
+  expect(approved).not.toContain("</script><script>alert(1)");
+  expect(approved).toContain('window.location.replace("\\u003c/script>');
+});
 
 const claims = {
   backendAccountId: "account-one",

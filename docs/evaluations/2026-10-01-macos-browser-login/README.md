@@ -12,9 +12,13 @@ Decision: [ADR 0022](../../decisions/0022-browser-owned-macos-login.md). Active 
 | Actual first-party browser confirmation and cancel | Observed | Live backend-owned disposable identity, request hint, intentional cancellation |
 | Actual revoked-browser-session recovery | Observed | Retained browser cookie with backend session revoked; exact Mac request redirected to normal browser reauthentication, then returned to the same confirmation request and identity |
 | Independent sub-agent review | No unresolved P0/P1 | URL-proof logging, stale lock-wait expiry and revoked-cookie recovery findings repaired and independently rechecked |
+| CodeQL follow-up regressions | Backend 26 passed, Web 17 passed | Unbiased hint generation, quoted request-identifier escaping and closing-script input protection; independent re-review passed with no remaining P0/P1/P2; new-head scanning tracked in the plan |
 | Full native → system browser → callback → workspace | Pending | The actual default Chrome process runs headless with no startup window. ASWebAuthenticationSession starts, but no visible browser is available for the intentional approval. Temporary Safari selection needs explicit user permission; no system preference was changed |
 | Live Google/Apple provider and installed signed release | Pending | Disposable WebKit/HTTP proof is not provider proof or an installed-app update |
+| Local backend deployment | Pending | Opik mount failure recovered without data deletion; next deployment requires Colima-shared clean detached checkout. Storage audit reports 64 GiB against the required 80 GiB build minimum |
 
 The WebKit test calls the production transport and exchanger. Its direct backend approval is a controlled fixture, not evidence of browser intention or OS callback delivery. The XCTest clock-wait regression uses real PostgreSQL locks with a deterministic clock advanced after observing the lock barrier. Helpers cannot establish the missing full user chain. Source hashes identify the verified implementation snapshot; later changes require relevant revalidation.
 
 ![Disposable browser confirmation](browser-confirmation.jpg)
+
+![Observed native expiry and browser-only retry](native-expiry.png)
