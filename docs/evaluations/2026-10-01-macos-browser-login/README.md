@@ -15,9 +15,9 @@ Decision: [ADR 0022](../../decisions/0022-browser-owned-macos-login.md). Active 
 | CodeQL follow-up regressions | Backend 26 passed, Web 17 passed | Unbiased hint generation, quoted request-identifier escaping and closing-script input protection; independent re-review passed with no remaining P0/P1/P2; new-head scanning tracked in the plan |
 | Native default-browser delivery regression | 58 passed, zero failures/skips | Actual Debug application build; opener/delegate, exact callback lease, duplicate/stale/cold-start rejection, fixed workspace presenter and store ownership |
 | Authorization form-origin regressions | 54 Web tests passed; typecheck passed | strict-origin page policy, exact Origin/CSRF checks retained; null and foreign Origins refused |
-| Full native → system browser → callback → workspace | Pending | Safari is the authorized default and must not be restored to Chrome in the short term. Native NSWorkspace delivery now opens actual Safari confirmation. The owned proof bundle is registered; direct form approval exposed Origin:null under no-referrer, repaired in source with strict-origin. Complete OS/WK acceptance awaits the rebuilt Web fixture |
+| Full native → Safari → OS callback → workspace and restart | Passed with owned disposable identity | Actual native action opened Safari; matching code and account confirmed; Mac window closed before approval; Safari Allow delivered the OS callback; grant consumed before further native inspection; selected WK workspace showed exact identity; quit/relaunch restored it without browser login. Distinct ad-hoc proof app installed in a normal app location; signed installed release remains a separate gate |
 | Live Google/Apple provider and installed signed release | Pending | Disposable WebKit/HTTP proof is not provider proof or an installed-app update |
-| Local backend and resident Web deployment | Passed at `9f5c27e8` | Clean detached source, VM-readable Opik mounts, migrations, readiness, synthetic Opik checks and tailnet HTTPS probes; paired image/revision and current-release pointers read back. Resident-origin anonymous grant prepare/cancel succeeds; foreign origin is refused. This is not authenticated workspace admission |
+| Local backend and resident Web deployment | Backend `9f5c27e8`; Web `1b82a562` passed | Clean detached source, VM-readable Opik mounts, migrations, readiness, synthetic Opik checks and tailnet HTTPS probes; paired image/revision and current-release pointers read back. Resident-origin anonymous grant prepare/cancel succeeds; foreign origin is refused. This is not authenticated workspace admission |
 
 The user authorized disk recovery. Online Colima trimming and verified idle,
 reinstallable caches raised free space from approximately 60 GiB to 81 GiB
@@ -29,8 +29,14 @@ storage audit still warns about unrelated historical artifacts; those warnings
 do not authorize cross-task deletion. Private cleanup/deployment receipts are
 retained in the task state directory.
 
-The WebKit test calls the production transport and exchanger. Its direct backend approval is a controlled fixture, not evidence of browser intention or OS callback delivery. The XCTest clock-wait regression uses real PostgreSQL locks with a deterministic clock advanced after observing the lock barrier. Helpers cannot establish the missing full user chain. Source hashes identify the verified implementation snapshot; later changes require relevant revalidation.
+The WebKit test calls the production transport and exchanger. Its direct backend approval is a controlled fixture, not evidence of browser intention or OS callback delivery. The XCTest clock-wait regression uses real PostgreSQL locks with a deterministic clock advanced after observing the lock barrier. Helpers alone cannot establish the full user chain; the separate OS receipt records the actual Safari approval and AppDelegate consumption. Source hashes identify the verified implementation snapshot; later changes require relevant revalidation.
 
 ![Disposable browser confirmation](browser-confirmation.jpg)
 
 ![Observed native expiry and browser-only retry](native-expiry.png)
+
+The repaired production build serves exactly one `strict-origin` authorization-page header. Actual Safari POST metadata has the exact loopback Origin and an origin-only Referer, with no path/query proof. Null/foreign Origin admission remains forbidden. LaunchServices does not select a temporary-directory proof bundle as the URL handler merely because it is registered; the distinct test application was installed outside the temporary directory before the fresh successful operation. No old approved callback was replayed.
+
+The proof app, all owned Safari auth tabs, fixture servers and disposable database/volume were removed after evidence preservation. The original Safari Start Page and authorized Safari HTTP/HTTPS defaults remain. The existing signed Talent Signal application was not updated. Release credentials are configured; actual signing, notarization, publication and installed-release acceptance remain pending.
+
+![Actual Mac workspace after Safari approval](native-workspace.png)
