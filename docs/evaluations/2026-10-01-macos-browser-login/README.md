@@ -16,7 +16,8 @@ Decision: [ADR 0022](../../decisions/0022-browser-owned-macos-login.md). Active 
 | Native default-browser delivery regression | 58 passed, zero failures/skips | Actual Debug application build; opener/delegate, exact callback lease, duplicate/stale/cold-start rejection, fixed workspace presenter and store ownership |
 | Authorization form-origin regressions | 54 Web tests passed; typecheck passed | strict-origin page policy, exact Origin/CSRF checks retained; null and foreign Origins refused |
 | Full native → Safari → OS callback → workspace and restart | Passed with owned disposable identity | Actual native action opened Safari; matching code and account confirmed; Mac window closed before approval; Safari Allow delivered the OS callback; grant consumed before further native inspection; selected WK workspace showed exact identity; quit/relaunch restored it without browser login. Distinct ad-hoc proof app installed in a normal app location; signed installed release remains a separate gate |
-| Live Google/Apple provider and installed signed release | Pending | Disposable WebKit/HTTP proof is not provider proof or an installed-app update |
+| Signed/notarized release and installed client | Passed: 0.1.95 (41) | Exact merged source d8320ce1; published ZIP hash verified; Developer ID signature, staple, Gatekeeper, both CPU architectures and existing Sparkle key verified; application updater installed/restarted; installed executable matches the published archive; existing live workspace restored without credential entry |
+| Fresh live Google/Apple provider authentication | Not repeated | Existing Web methods remain authoritative. The installed real account session stayed healthy; it was preserved instead of forcing logout to repeat provider authentication |
 | Local backend and resident Web deployment | Backend `9f5c27e8`; Web `1b82a562` passed | Clean detached source, VM-readable Opik mounts, migrations, readiness, synthetic Opik checks and tailnet HTTPS probes; paired image/revision and current-release pointers read back. Resident-origin anonymous grant prepare/cancel succeeds; foreign origin is refused. This is not authenticated workspace admission |
 
 The user authorized disk recovery. Online Colima trimming and verified idle,
@@ -37,6 +38,16 @@ The WebKit test calls the production transport and exchanger. Its direct backend
 
 The repaired production build serves exactly one `strict-origin` authorization-page header. Actual Safari POST metadata has the exact loopback Origin and an origin-only Referer, with no path/query proof. Null/foreign Origin admission remains forbidden. LaunchServices does not select a temporary-directory proof bundle as the URL handler merely because it is registered; the distinct test application was installed outside the temporary directory before the fresh successful operation. No old approved callback was replayed.
 
-The proof app, all owned Safari auth tabs, fixture servers and disposable database/volume were removed after evidence preservation. The original Safari Start Page and authorized Safari HTTP/HTTPS defaults remain. The existing signed Talent Signal application was not updated. Release credentials are configured; actual signing, notarization, publication and installed-release acceptance remain pending.
+The proof app, all owned Safari auth tabs, fixture servers and disposable database/volume were removed after evidence preservation. The original Safari Start Page and authorized Safari HTTP/HTTPS defaults remain. At the October 1 fixture checkpoint the existing signed application had not yet been updated. The subsequent October 2 release/installation receipt below supersedes that pending release state.
 
 ![Actual Mac workspace after Safari approval](native-workspace.png)
+
+## Signed release and installed-client acceptance, October 2
+
+PR #268 was merged at `d8320ce1504cc43740088dff65f24d672639e38f`. Exact-main CI, Security and native checks passed. [Signed release v0.1.95](https://github.com/getyak/talent-signal/releases/tag/v0.1.95), native build 41, was published through the existing scoped workflow; both the app and DMG notarization were accepted, stapled and validated. The stable update feed was cryptographically verified and freshly read back by the publisher.
+
+The parent downloaded the ZIP and matched its published SHA-256 manifest, then independently checked signature, staple, Gatekeeper, Universal architectures, callback registration and the unchanged updater trust anchor. A truncated initial download was not installed; official-origin continuation completed and passed the full archive hash. The user-authorized in-app Update and Restart installed build 41. Settings showed the exact version and current feed status; the installed executable matched the verified archive. The real existing workspace restored without another credential entry. No real account identifiers or conversation material are included in this receipt or screenshot.
+
+Safari remains the HTTP/HTTPS default; `com.talentsignal.macos.auth` now resolves to the actual installed `com.talentsignal.macos` application. The old signed build is retained privately as an operator rollback package. Fresh public-provider authentication was not repeated, and the earlier owned full-callback fixture remains separately scoped; existing-session restoration is the signed installed-app user-surface proof.
+
+![Installed signed client version and update status](installed-software-update.png)
