@@ -1,5 +1,4 @@
 import AppKit
-import AuthenticationServices
 import CryptoKit
 import Foundation
 import WebKit
@@ -31,11 +30,16 @@ struct DesktopBrowserLoginOperation: Equatable {
 enum DesktopBrowserLoginCallback {
     static let scheme = "com.talentsignal.macos.auth"
     static let host = "complete"
+    /// Global incoming URL events are unsolicited. The raw event is strictly
+    /// bounded before any parsing work; the largest valid callback is 608
+    /// characters, so anything longer is refused outright.
+    static let maximumCallbackLength = 768
     static func isBoundedSecret(_ value: String) -> Bool {
         (32...256).contains(value.count) && value.range(of: #"^[A-Za-z0-9_-]+$"#, options: .regularExpression) != nil
     }
     static func parse(_ url: URL) -> (attempt: String, code: String, state: String)? {
-        guard url.scheme == scheme, url.host == host, url.path.isEmpty,
+        guard url.absoluteString.count <= maximumCallbackLength,
+              url.scheme == scheme, url.host == host, url.path.isEmpty,
               url.user == nil, url.password == nil, url.port == nil, url.fragment == nil,
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               items.count == 3, items.map(\.name).sorted() == ["attempt", "code", "state"],
@@ -135,7 +139,7 @@ protocol DesktopLoginExchanging: AnyObject {
 /// the user's gesture through live readback. No callback, DOM receipt, timeout
 /// or cancellation alone can admit the workspace.
 @MainActor
-final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject, ASWebAuthenticationPresentationContextProviding {
+final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
     static let shared = DesktopBrowserLoginCoordinator()
     @Published private(set) var phase: DesktopBrowserLoginPhase = .idle
     @Published private(set) var matchingHint: String?
@@ -145,8 +149,11 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject, ASWebAut
     private let originProvider: () -> WorkspaceOrigin?
     private let transportFactory: (WorkspaceOrigin) -> DesktopLoginTransporting
     private let exchangerFactory: () -> DesktopLoginExchanging
-    private let launchOverride: ((URL, @escaping (URL?, Error?) -> Void) -> Bool)?
-    private var authSession: ASWebAuthenticationSession?
+    /// Opens the already validated first-party authorization URL in the
+    /// default browser. The Bool only reports that the OS accepted the launch;
+    /// it is never a login outcome.
+    private let browserOpener: (URL) -> Bool
+    private var workspacePresenter: (() -> Void)?
     private var exchanger: DesktopLoginExchanging?
     private var work: Task<Void, Never>?
     private var expiryTask: Task<Void, Never>?
@@ -158,15 +165,18 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject, ASWebAut
     init(registry: LoginStoreRegistry? = nil, originProvider: (() -> WorkspaceOrigin?)? = nil,
          transportFactory: ((WorkspaceOrigin) -> DesktopLoginTransporting)? = nil,
          exchangerFactory: (() -> DesktopLoginExchanging)? = nil,
-         launchOverride: ((URL, @escaping (URL?, Error?) -> Void) -> Bool)? = nil) {
+         browserOpener: ((URL) -> Bool)? = nil) {
         self.registry = registry ?? .shared
         self.originProvider = originProvider ?? { WorkspaceConnection.shared.origin }
         self.transportFactory = transportFactory ?? { DesktopBrowserLoginTransport(origin: $0) }
         self.exchangerFactory = exchangerFactory ?? { DesktopBrowserLoginWKExchanger() }
-        self.launchOverride = launchOverride
+        self.browserOpener = browserOpener ?? { NSWorkspace.shared.open($0) }
     }
 
     enum SecretGenerationError: Error { case randomSourceUnavailable }
+    func setWorkspacePresenter(_ presenter: @escaping () -> Void) {
+        workspacePresenter = presenter
+    }
     static func newSecrets() throws -> (verifier: String, challenge: String, state: String, cancelSecret: String) {
         func secret() throws -> String {
             var bytes = [UInt8](repeating: 0, count: 32)
@@ -180,9 +190,6 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject, ASWebAut
         return (verifier, challenge, try secret(), try secret())
     }
 
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        NSApp.keyWindow ?? NSApp.mainWindow ?? ASPresentationAnchor()
-    }
     private func current(_ ticket: UUID, _ selection: LoginStoreSelection, _ origin: WorkspaceOrigin) -> Bool {
         ticket == generation && originProvider() == origin && activeOrigin == origin && registry.isCurrent(selection)
     }
@@ -198,7 +205,7 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject, ASWebAut
     func start(in origin: WorkspaceOrigin, returningTo target: URL?) {
         switch phase { case .preparing, .waiting, .exchanging: return; default: break }
         guard originProvider() == origin else { return }
-        work?.cancel(); expiryTask?.cancel(); authSession?.cancel(); exchanger?.cancel()
+        work?.cancel(); expiryTask?.cancel(); exchanger?.cancel()
         generation = UUID(); let ticket = generation
         operation = nil; matchingHint = nil; exchangeDispatched = false; activeOrigin = origin
         returnTarget = target.flatMap { origin.contains($0) && (($0.path == "/workspace" || $0.path.hasPrefix("/workspace/")) || $0.path == "/onboarding") && !WorkspaceSurfacePolicy.isSettingsOwned($0) ? $0 : nil }
@@ -224,17 +231,10 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject, ASWebAut
                         guard !Task.isCancelled, let self, self.current(ticket, selection, origin), self.phase == .waiting else { return }
                         self.cancel(); self.phase = .failed("登录请求已过期，请重新登录。")
                     }
-                    let callback: (URL?, Error?) -> Void = { [weak self] url, error in
-                        Task { @MainActor in self?.receive(url, error: error, operation: operation, ticket: ticket, origin: origin) }
-                    }
-                    let started: Bool
-                    if let launchOverride = self.launchOverride { started = launchOverride(entry, callback) }
-                    else {
-                        let session = ASWebAuthenticationSession(url: entry, callbackURLScheme: DesktopBrowserLoginCallback.scheme, completionHandler: callback)
-                        session.prefersEphemeralWebBrowserSession = false; session.presentationContextProvider = self
-                        self.authSession = session; NSApp.activate(ignoringOtherApps: true); started = session.start()
-                    }
-                    if !started { self.cancel(); self.phase = .failed("无法打开系统浏览器，请检查默认浏览器后重试。") }
+                    // The system browser owns the authorization surface and the
+                    // callback returns through application(_:open:). Launch
+                    // acceptance is not a login outcome.
+                    if !self.browserOpener(entry) { self.cancel(); self.phase = .failed("无法打开系统浏览器，请检查默认浏览器后重试。") }
                 } catch {
                     guard self.current(ticket, selection, origin), !Task.isCancelled else { return }
                     self.phase = .failed("暂时无法连接登录服务，请重试或检查工作区地址。")
@@ -247,14 +247,26 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject, ASWebAut
         }
     }
 
-    private func receive(_ callback: URL?, error: Error?, operation: DesktopBrowserLoginOperation, ticket: UUID, origin: WorkspaceOrigin) {
-        guard current(ticket, operation.selection, origin), self.operation == operation, phase == .waiting else { return }
-        authSession = nil; expiryTask?.cancel(); expiryTask = nil
-        guard let callback, let parsed = DesktopBrowserLoginCallback.parse(callback), parsed.attempt == operation.attemptID,
-              parsed.state == operation.state, operation.expiresAt > Date() else {
-            cancel(); phase = error == nil ? .failed("登录请求无效或已过期，请重新登录。") : .cancelled; return
-        }
+    /// Entry point for unsolicited OS-delivered callback URLs. A global URL
+    /// event carries no authority: unless it is strictly bounded, exactly
+    /// shaped, and matches the live nonexpired waiting operation, the current
+    /// configured origin and the current generation and registry epoch, it is
+    /// ignored without cancelling the legitimate pending login. The verifier
+    /// and lease always come from the in-memory operation, never the URL, and
+    /// raw callbacks are never persisted or logged.
+    func handleIncomingURL(_ url: URL) {
+        guard let parsed = DesktopBrowserLoginCallback.parse(url) else { return }
+        let ticket = generation
+        guard case .waiting = phase, let operation, let origin = activeOrigin,
+              parsed.attempt == operation.attemptID, parsed.state == operation.state,
+              operation.expiresAt > Date(),
+              current(ticket, operation.selection, origin) else { return }
+        expiryTask?.cancel(); expiryTask = nil
+        // Enter exchanging before scheduling any work so duplicate or batched
+        // events can dispatch exactly one exchange.
         phase = .exchanging
+        workspacePresenter?()
+        guard current(ticket, operation.selection, origin), phase == .exchanging else { return }
         let transport = transportFactory(origin)
         let exchange = exchangerFactory(); exchanger = exchange
         work = Task { [weak self] in
@@ -279,7 +291,7 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject, ASWebAut
     func cancel() {
         let uncertain = exchangeDispatched
         generation = UUID(); work?.cancel(); work = nil; expiryTask?.cancel(); expiryTask = nil
-        authSession?.cancel(); authSession = nil; exchanger?.cancel()
+        exchanger?.cancel()
         if let operation, let origin = activeOrigin {
             let transport = transportFactory(origin)
             if !uncertain {

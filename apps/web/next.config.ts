@@ -48,7 +48,11 @@ const nextConfig: NextConfig = {
       },
       {
         source: "/desktop-auth/:path*",
-        headers: [{ key: "Referrer-Policy", value: "no-referrer" }, { key: "Cache-Control", value: "private, no-store" }],
+        // Origin-only referrers hide attempt/state while preserving the exact
+        // Origin on form POSTs. Fetch maps no-referrer navigation POSTs to
+        // Origin:null, which our CSRF admission correctly refuses.
+        // https://fetch.spec.whatwg.org/#append-a-request-origin-header
+        headers: [{ key: "Referrer-Policy", value: "strict-origin" }, { key: "Cache-Control", value: "private, no-store" }],
       },
       {
         source: "/api/desktop-auth/:path*",

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -48,6 +49,7 @@ struct TalentSignalMacApp: App {
                     }
                     .background(SelectedTextServiceBridge().environmentObject(model))
                     .background(DesktopPetWorkspaceLink())
+                    .background(DesktopBrowserLoginWorkspaceLink())
             }
             .frame(
                 minWidth: isQuickPanelPreview ? 520 : 760,
@@ -103,6 +105,23 @@ struct TalentSignalMacApp: App {
                 .accessibilityLabel("Talent Signal")
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Retain only the fixed scene action so a browser approval can restore a
+/// closed workspace window. The login coordinator validates the callback
+/// before invoking this action; this view adds no URL or credential authority.
+private struct DesktopBrowserLoginWorkspaceLink: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onAppear {
+                DesktopBrowserLoginCoordinator.shared.setWorkspacePresenter {
+                    openWindow(id: "workspace")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
     }
 }
 

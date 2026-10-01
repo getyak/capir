@@ -11,7 +11,7 @@ and at least one usable login method always remains.
 
 ## macOS browser sign-in
 
-The Mac primary-login surface offers **Sign in in your browser**; it never collects account passwords, registration fields or provider credentials. The system authentication browser reuses a valid Web session where supported, then asks the user to confirm the displayed account for this Mac request. Otherwise the ordinary Web login and onboarding flow returns to that confirmation. A matching request hint helps identify the operation being approved. Cancelling keeps a usable retry surface.
+The Mac primary-login surface offers **Sign in in your browser**; it never collects account passwords, registration fields or provider credentials. The default browser can reuse its valid Web session, then asks the user to confirm the displayed account for this Mac request. Otherwise the ordinary Web login and onboarding flow returns to that confirmation. A matching request hint helps identify the operation being approved. Use the Mac cancel action to stop waiting; closing the browser tab does not notify the app, and pending requests expire after five minutes. Cancelling keeps a usable retry surface.
 
 Browser approval creates a separate, revocable Mac backend session through a short-lived, one-use grant. It does not copy the browser cookie, attach a credential, change the account or grant local capture permission. Browser and Mac sign-outs remain independent. The Mac opens the workspace only after live backend identity readback in its selected WebKit store; seeing a callback or a browser success page alone is insufficient.
 

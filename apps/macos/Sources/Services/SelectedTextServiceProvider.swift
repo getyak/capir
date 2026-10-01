@@ -44,4 +44,11 @@ final class TalentSignalMacAppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.servicesProvider = SelectedTextServiceProvider.shared
         Task { @MainActor in DesktopPetController.shared.start() }
     }
+
+    /// Global incoming URL events are unsolicited. Every URL goes to the same
+    /// singleton coordinator that owns the pending operation; that coordinator
+    /// ignores anything that is not exactly its live nonexpired login callback.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { DesktopBrowserLoginCoordinator.shared.handleIncomingURL(url) }
+    }
 }

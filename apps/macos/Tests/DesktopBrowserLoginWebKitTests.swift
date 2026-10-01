@@ -5,7 +5,7 @@ import WebKit
 /// Exercises the production anonymous transport, Web Credentials consume, real
 /// persistent WK cookie store, navigation delegate and correlated live status.
 /// The browser approval below is a disposable backend fixture; this does not
-/// replace separate ASWebAuthenticationSession/user-surface acceptance.
+/// replace separate default-browser/OS-callback/user-surface acceptance.
 @MainActor
 final class DesktopBrowserLoginWebKitTests: XCTestCase {
     private struct Fixture: Decodable {

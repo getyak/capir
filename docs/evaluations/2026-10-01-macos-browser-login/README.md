@@ -13,9 +13,21 @@ Decision: [ADR 0022](../../decisions/0022-browser-owned-macos-login.md). Active 
 | Actual revoked-browser-session recovery | Observed | Retained browser cookie with backend session revoked; exact Mac request redirected to normal browser reauthentication, then returned to the same confirmation request and identity |
 | Independent sub-agent review | No unresolved P0/P1 | URL-proof logging, stale lock-wait expiry and revoked-cookie recovery findings repaired and independently rechecked |
 | CodeQL follow-up regressions | Backend 26 passed, Web 17 passed | Unbiased hint generation, quoted request-identifier escaping and closing-script input protection; independent re-review passed with no remaining P0/P1/P2; new-head scanning tracked in the plan |
-| Full native → system browser → callback → workspace | Pending | The actual default Chrome process runs headless with no startup window. ASWebAuthenticationSession starts, but no visible browser is available for the intentional approval. Temporary Safari selection needs explicit user permission; no system preference was changed |
+| Native default-browser delivery regression | 58 passed, zero failures/skips | Actual Debug application build; opener/delegate, exact callback lease, duplicate/stale/cold-start rejection, fixed workspace presenter and store ownership |
+| Authorization form-origin regressions | 54 Web tests passed; typecheck passed | strict-origin page policy, exact Origin/CSRF checks retained; null and foreign Origins refused |
+| Full native → system browser → callback → workspace | Pending | Safari is the authorized default and must not be restored to Chrome in the short term. Native NSWorkspace delivery now opens actual Safari confirmation. The owned proof bundle is registered; direct form approval exposed Origin:null under no-referrer, repaired in source with strict-origin. Complete OS/WK acceptance awaits the rebuilt Web fixture |
 | Live Google/Apple provider and installed signed release | Pending | Disposable WebKit/HTTP proof is not provider proof or an installed-app update |
-| Local backend deployment | Pending | Opik mount failure recovered without data deletion; next deployment requires Colima-shared clean detached checkout. Storage audit reports 64 GiB against the required 80 GiB build minimum |
+| Local backend and resident Web deployment | Passed at `9f5c27e8` | Clean detached source, VM-readable Opik mounts, migrations, readiness, synthetic Opik checks and tailnet HTTPS probes; paired image/revision and current-release pointers read back. Resident-origin anonymous grant prepare/cancel succeeds; foreign origin is refused. This is not authenticated workspace admission |
+
+The user authorized disk recovery. Online Colima trimming and verified idle,
+reinstallable caches raised free space from approximately 60 GiB to 81 GiB
+before deployment. Subsequent builds consumed part of that space; further idle
+cache recovery restored approximately 80.2 GiB before native repair verification.
+Repositories, application data, pending update packages, rollback images,
+volumes, formal receipts and unrelated test artifacts were preserved. The
+storage audit still warns about unrelated historical artifacts; those warnings
+do not authorize cross-task deletion. Private cleanup/deployment receipts are
+retained in the task state directory.
 
 The WebKit test calls the production transport and exchanger. Its direct backend approval is a controlled fixture, not evidence of browser intention or OS callback delivery. The XCTest clock-wait regression uses real PostgreSQL locks with a deterministic clock advanced after observing the lock barrier. Helpers cannot establish the missing full user chain. Source hashes identify the verified implementation snapshot; later changes require relevant revalidation.
 

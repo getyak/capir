@@ -71,6 +71,7 @@ import {
   desktopBrowserLoginGrantResultRoute,
   desktopBrowserLoginPrepareRoute,
   desktopBrowserLoginStatusRoute,
+  desktopAuthFormOriginAllowed,
   renderDesktopAuthCompletionDocument,
   renderDesktopAuthNoticeDocument,
   renderDesktopAuthApprovedDocument,
@@ -161,6 +162,21 @@ const jsonPost = (url: string, body: unknown) =>
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+
+it("requires exact form origin even when fetch metadata or Referer looks trusted", () => {
+  for (const origin of ["null", "https://foreign.test", "http://web.test"]) {
+    expect(desktopAuthFormOriginAllowed(request("/api/desktop-auth/approve", {
+      method: "POST",
+      headers: { origin, referer: "https://web.test/", "sec-fetch-site": "same-origin" },
+    }))).toBe(false);
+  }
+  expect(desktopAuthFormOriginAllowed(request("/api/desktop-auth/approve", {
+    method: "POST", headers: { origin: "https://web.test", referer: "https://web.test/" },
+  }))).toBe(true);
+  expect(desktopAuthFormOriginAllowed(request("/api/desktop-auth/approve", {
+    method: "POST", headers: { "sec-fetch-site": "same-origin" },
+  }))).toBe(false);
+});
 
 beforeEach(() => {
   for (const key of ["claims", "prepare", "cancel", "grantResult", "consume", "approve", "decline", "currentSession", "status"] as const) {

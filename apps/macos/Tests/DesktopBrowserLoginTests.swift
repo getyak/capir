@@ -17,6 +17,13 @@ final class DesktopBrowserLoginTests: XCTestCase {
                          valid.replacingOccurrences(of: code, with: "short")] {
             XCTAssertNil(DesktopBrowserLoginCallback.parse(URL(string: rejected)!))
         }
+        // The strict size bound is the only failing rule here: every decoded
+        // field is individually valid and the shape is exact.
+        let wide = "com.talentsignal.macos.auth://complete?attempt=\(id)&code=\(String(repeating: "z", count: 256))&state=\(String(repeating: "y", count: 256))"
+        XCTAssertNotNil(DesktopBrowserLoginCallback.parse(URL(string: wide)!))
+        let inflated = wide.replacingOccurrences(of: "z", with: "%7A")
+        XCTAssertGreaterThan(URL(string: inflated)!.absoluteString.count, DesktopBrowserLoginCallback.maximumCallbackLength)
+        XCTAssertNil(DesktopBrowserLoginCallback.parse(URL(string: inflated)!))
     }
     func testSecretsUseIndependentRandomnessAndExactS256() throws {
         let first = try DesktopBrowserLoginCoordinator.newSecrets(), second = try DesktopBrowserLoginCoordinator.newSecrets()
@@ -31,6 +38,8 @@ final class DesktopBrowserLoginTests: XCTestCase {
         let target = harness.origin.url.appendingPathComponent("workspace/sessions/123")
         harness.coordinator.start(in: harness.origin, returningTo: target)
         try await wait { harness.coordinator.phase == .waiting }
+        // The default-browser seam receives the validated authorization URL.
+        XCTAssertEqual(harness.openedURLs, [harness.authorization(for: harness.coordinator.operation!)])
         XCTAssertTrue(harness.registry.hasUnresolvedLogin(for: harness.origin.url.absoluteString))
         harness.confirm()
         try await wait { harness.exchanger.exchangeCount == 1 }
@@ -45,10 +54,10 @@ final class DesktopBrowserLoginTests: XCTestCase {
         let harness = Harness()
         harness.coordinator.start(in: harness.origin, returningTo: nil)
         try await wait { harness.coordinator.phase == .waiting }
-        let oldCallback = harness.callback!, oldOperation = harness.coordinator.operation!
+        let oldOperation = harness.coordinator.operation!
         harness.coordinator.cancel()
         XCTAssertEqual(harness.coordinator.phase, .cancelled)
-        oldCallback(harness.url(for: oldOperation), nil)
+        harness.coordinator.handleIncomingURL(harness.url(for: oldOperation))
         await Task.yield()
         XCTAssertEqual(harness.exchanger.exchangeCount, 0)
         harness.coordinator.start(in: harness.origin, returningTo: nil)
@@ -80,14 +89,19 @@ final class DesktopBrowserLoginTests: XCTestCase {
         harness.coordinator.start(in: harness.origin, returningTo: nil)
         try await wait { harness.coordinator.phase == .waiting }
         let operation = harness.coordinator.operation!
-        harness.callback?(URL(string: harness.url(for: operation).absoluteString.replacingOccurrences(of: operation.state, with: String(repeating: "x", count: 43)))!, nil)
-        try await wait { harness.coordinator.phase != .waiting }
+        harness.coordinator.handleIncomingURL(harness.callback(attempt: operation.attemptID, state: String(repeating: "x", count: 43)))
+        try await Task.sleep(for: .milliseconds(20))
+        // A wrong-state event is ignored; the pending login stays untouched.
+        XCTAssertEqual(harness.coordinator.phase, .waiting)
+        XCTAssertEqual(harness.coordinator.operation, operation)
         XCTAssertEqual(harness.exchanger.exchangeCount, 0)
-        harness.coordinator.start(in: harness.origin, returningTo: nil)
-        try await wait { harness.coordinator.phase == .waiting }
         harness.currentOrigin = WorkspaceOrigin("https://elsewhere.test")!
         harness.confirm(); await Task.yield()
+        // A foreign configured origin refuses the exact callback untouched.
         XCTAssertEqual(harness.exchanger.exchangeCount, 0)
+        XCTAssertEqual(harness.coordinator.phase, .waiting)
+        XCTAssertEqual(harness.coordinator.operation, operation)
+        XCTAssertEqual(harness.transport.resultCount, 0)
     }
     private func wait(_ condition: @escaping () -> Bool) async throws {
         for _ in 0..<200 { if condition() { return }; try await Task.sleep(for: .milliseconds(10)) }
@@ -96,37 +110,50 @@ final class DesktopBrowserLoginTests: XCTestCase {
 }
 
 @MainActor
-private final class Harness {
+final class Harness {
     let origin = WorkspaceOrigin("https://web.test")!
     var currentOrigin: WorkspaceOrigin
     let registry = LoginStoreRegistry(persistence: MemoryRegistryPersistence(), lockURL: testLock())
     let transport = FakeLoginTransport()
     let exchanger = FakeExchanger()
-    var callback: ((URL?, Error?) -> Void)?
+    var openedURLs: [URL] = []
+    var browserAccepted = true
     lazy var coordinator = DesktopBrowserLoginCoordinator(registry: registry, originProvider: { [unowned self] in currentOrigin },
         transportFactory: { [unowned self] _ in transport }, exchangerFactory: { [unowned self] in exchanger },
-        launchOverride: { [unowned self] _, completion in callback = completion; return true })
+        browserOpener: { [unowned self] url in openedURLs.append(url); return browserAccepted })
     init() { currentOrigin = origin }
-    func url(for operation: DesktopBrowserLoginOperation) -> URL {
-        URL(string: "com.talentsignal.macos.auth://complete?attempt=\(operation.attemptID)&code=\(String(repeating: "c", count: 43))&state=\(operation.state)")!
+    func callback(attempt: String, state: String, code: String = String(repeating: "c", count: 43)) -> URL {
+        URL(string: "com.talentsignal.macos.auth://complete?attempt=\(attempt)&code=\(code)&state=\(state)")!
     }
-    func confirm() { callback?(url(for: coordinator.operation!), nil) }
+    func url(for operation: DesktopBrowserLoginOperation) -> URL {
+        callback(attempt: operation.attemptID, state: operation.state)
+    }
+    func authorization(for operation: DesktopBrowserLoginOperation) -> URL {
+        URL(string: "https://web.test/desktop-auth/authorize?attempt=\(operation.attemptID)&state=\(operation.state)")!
+    }
+    /// Delivers through the same production URL-entry method the app delegate
+    /// uses; no completion callback is faked.
+    func confirm() { coordinator.handleIncomingURL(url(for: coordinator.operation!)) }
 }
-private final class FakeLoginTransport: DesktopLoginTransporting {
+final class FakeLoginTransport: DesktopLoginTransporting {
     var consumed = false
+    var grantLifetime: TimeInterval = 300
+    private(set) var resultCount = 0
+    private(set) var cancelCount = 0
     func prepare(challenge: String, state: String, cancelSecret: String) async throws -> DesktopPreparedGrant {
         let id = UUID().uuidString.lowercased()
         return .init(attempt_id: id, authorization_url: "https://web.test/desktop-auth/authorize?attempt=\(id)&state=\(state)",
-                     expires_at: ISO8601DateFormatter().string(from: Date().addingTimeInterval(300)), matching_hint: "ABCD-12")
+                     expires_at: ISO8601DateFormatter().string(from: Date().addingTimeInterval(grantLifetime)), matching_hint: "ABCD-12")
     }
     func result(operation: DesktopBrowserLoginOperation) async throws -> DesktopGrantResult {
-        .init(attempt_id: operation.attemptID, state: consumed ? "consumed" : "approved",
+        resultCount += 1
+        return .init(attempt_id: operation.attemptID, state: consumed ? "consumed" : "approved",
               account_id: "11111111-1111-4111-8111-111111111111", user_id: "22222222-2222-4222-8222-222222222222", committed: consumed)
     }
-    func cancel(operation: DesktopBrowserLoginOperation) async throws {}
+    func cancel(operation: DesktopBrowserLoginOperation) async throws { cancelCount += 1 }
 }
 @MainActor
-private final class FakeExchanger: DesktopLoginExchanging {
+final class FakeExchanger: DesktopLoginExchanging {
     var fail = false, exchangeCount = 0, readCount = 0
     var pending: CheckedContinuation<DesktopLoginIdentity, Error>?
     var identity: DesktopLoginIdentity?

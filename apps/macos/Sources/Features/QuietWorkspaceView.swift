@@ -211,6 +211,16 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         updateObservation = nil; webView.configuration.userContentController.removeAllScriptMessageHandlers()
     }
 
+    /// Window closure does not revoke ownership or destroy the live host. A
+    /// retained SwiftUI scene can reopen during browser login; endpoint/store
+    /// replacement still retires the old host permanently.
+    func retireIfOwnershipChanged(to configuredOrigin: WorkspaceOrigin?) {
+        guard configuredOrigin == origin, let storeSelection,
+              LoginStoreRegistry.shared.isCurrent(storeSelection) else {
+            retire(); return
+        }
+    }
+
     var loginReturnTarget: URL? { lastWorkbenchURL }
     func completeBrowserLogin(returnTarget: URL?) {
         guard !retired, let storeSelection, LoginStoreRegistry.shared.isCurrent(storeSelection),
@@ -645,10 +655,14 @@ private struct ConnectedQuietWorkspace: View {
             browser.openSettings = { openSettings() }
             CaptureRuntime.shared.start()
             CaptureRuntime.shared.setOpenWorkspace { openWindow(id: "workspace") }
-            if browser.signedOut { login.signedOut(in: browser.origin) }
+            if case .completed = login.phase {
+                // Exchange can finish before the reopened view's phase
+                // observer is attached. Consume the current result as well.
+                browser.completeBrowserLogin(returnTarget: login.returnTarget)
+            } else if browser.signedOut { login.signedOut(in: browser.origin) }
             consumeDestination()
         }
-        .onDisappear { browser.retire() }
+        .onDisappear { browser.retireIfOwnershipChanged(to: connection.origin) }
         .onChange(of: browser.signedOut) { _, signedOut in
             if signedOut { login.signedOut(in: browser.origin) }
         }
