@@ -42,3 +42,25 @@ Pi task `20261001-143724-30881287`, frozen base `72381674`, provider `xiaomi-tok
 ## Environment checkpoint
 
 `dev-storage-guard prune-pnpm` removed unused package-cache metadata/files without deleting repositories or test evidence. Parent offline install then required refreshed package-manager metadata; online frozen-lockfile install restores exactly the reviewed dependency graph, with no package upgrade. Disk remains below the heavyweight-build threshold, so native heavyweight work is deferred. Existing updater/app caches and active services remain intact. Capture transport currently constructs a second WK host at `apps/macos/Sources/Capture/CaptureTransport.swift`; parent will own that path if it falls outside the frozen Pi scope.
+
+## Acceptance environment
+
+Parent task artifact directory: `/private/tmp/ai-test-macos-browser-login-20261001.wcgXIc`. Disposable PostgreSQL18 Compose project `ts-desktop-browser-login`, loopback port55491, no permanent restart. It holds synthetic test identities only and will be stopped with `down --volumes --remove-orphans` after formal receipts are preserved. Canonical document updates pass `pnpm docs:check` at parent `c69aba80`.
+
+## Independent acceptance checkpoint
+
+Parent-owned `desktopBrowserLogin.postgres.test.ts` runs against the disposable migrated database. Concurrent consumption passes: exactly one session and exact grant/session/account/user correlation. The real PostgreSQL revoke/consume race fails: a revocation already holding the browser session write lock does not prevent candidate code from minting a device session. This is a confirmed blocker, not a flaky HTTP result. Preserve account-before-session row locking and independently rerun this regression after repair. The worker's nineteen mocked unit tests cannot establish this concurrency boundary. Exact Web-origin binding, idempotent approval identity checks, and bounded anonymous-grant cleanup remain review targets.
+
+## Native integration and review checkpoint (October 1)
+
+Parent owns all native source/tests and Capture integration after the candidate failed production-construction inspection. The login coordinator now survives WebKit-host recreation and is shared across workspace windows; actual WK navigation completion, isolated receipt parsing and nested live status parsing precede admission. Persistent process ownership, commit-before-publication epochs, restart unresolved markers, fresh-store corruption recovery, and old Capture host retirement are implemented. Xcode Debug build passes; eighteen targeted native state/store/connection tests pass. A separately opted-in real-WebKit fixture test passes against real backend/Web routes: anonymous prepare, synthetic backend approval, actual Auth.js cookie installation in the selected WK store, live correlated status, reopened-store readback and stale-store refusal. It explicitly does not substitute for OS browser approval.
+
+Independent sub-agent review confirmed URL query proof logging and expiry-after-row-lock waiting bugs. Automatic Fastify URL logging is now path-only with real injection regression; Next development request logs exclude first-party auth URLs. Corrupted-registry UI recovery now reaches the browser-owned action. Pi repair 3 owns only backend module/expiry regressions; native source and presentation remain parent-owned. The original revocation race now passes in real PostgreSQL. The current OS ASWebAuthenticationSession starts and displays matching codes, but the default Chrome window cannot be read by CUA (timeout); the full OS callback chain remains pending, and a user observation question is pending asynchronously. No installed-app or provider-account changes are claimed.
+
+After safe unused package/Docker-cache cleanup, bounded native incremental build/test uses the existing task artifact directory and no Simulator. Heavy release work remains deferred until the 80 GiB disk requirement can be met safely. Do not clean unrelated registered artifacts or live app caches.
+
+## Source acceptance checkpoint
+
+Independent review `/root/independent_login_review` closed all three confirmed P1 findings and found no P0/P1 remaining. Parent independently reran 32 backend tests including four real PostgreSQL tests, 52 Web tests and native full XCTest (260 executed, 9 explicitly skipped, zero failures). Backend and Web typechecks pass. Actual retained-cookie/backend-revocation browser recovery returns through normal reauthentication to the exact original Mac confirmation, observed and captured. Formal sanitized evidence is in `docs/evaluations/2026-10-01-macos-browser-login/`.
+
+The OS blocker is now specifically identified: the configured default Chrome process has both headless and no-startup-window flags. Do not stop or change another task's browser. Explicit user approval to temporarily select Safari and restore Chrome is pending. The complete OS user chain and signed installed-release gate remain pending; no claim of either is permitted.

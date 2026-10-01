@@ -9,6 +9,8 @@ import { registerAgentSessionRoutes } from "./modules/agentSessionRoutes.js";
 import { registerConversationQueueRoutes } from "./modules/conversationQueueRoutes.js";
 import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.js";
 import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.js";
+import { registerDesktopBrowserLogin } from "./routes/desktopBrowserLogin.js";
+import { postgresDesktopBrowserLoginDb, sweepDesktopBrowserLoginAttempts } from "./modules/desktopBrowserLogin.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
@@ -766,6 +768,7 @@ export async function buildApp(
   );
   registerConversationQueueRoutes(app, pool, authenticate);
   registerDesktopCaptureReceipt(app, pool, authenticate);
+  registerDesktopBrowserLogin(app, pool, config, authenticate);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);
   registerFeedbackRoutes(app, pool, authenticate);
@@ -3177,6 +3180,13 @@ export async function buildApp(
     intervalMs: config.retentionSweepIntervalMs,
     run: async () => {
       await runSourceLifecycleSweep(pool);
+    },
+  });
+  registerRecurringJob(app, {
+    name: "desktop-browser-login-sweep",
+    intervalMs: config.retentionSweepIntervalMs,
+    run: async () => {
+      await sweepDesktopBrowserLoginAttempts(postgresDesktopBrowserLoginDb(pool));
     },
   });
   app.addHook("preClose", async () => { await conversationQueueRunner.close(); });

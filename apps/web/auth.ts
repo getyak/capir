@@ -18,6 +18,10 @@ import {
 } from "@/lib/auth-config";
 import { backendSessionIsExpired } from "@/lib/backend-session";
 import {
+  DesktopAuthRequestError,
+  authorizeDesktopBrowserLogin,
+} from "@/lib/server/desktop-browser-login";
+import {
   AUTH_SESSION_COOKIE,
   authSecret,
   confirmBackendRegistration,
@@ -296,6 +300,35 @@ function buildProviders(appleCredentials: AppleCredentials): Provider[] {
     }),
   );
 
+  // One generic first-party browser exchange (ADR 0022): the selected
+  // WKWebView context posts its one-use code and PKCE verifier here, and the
+  // authorization runs the backend's atomic consume. The resulting claims are
+  // the ordinary backend session claims; nothing invents a token format.
+  providers.push(
+    Credentials({
+      id: "desktop-browser",
+      name: "Mac 浏览器登录",
+      credentials: {
+        attempt_id: { label: "Attempt", type: "text" },
+        code: { label: "Code", type: "text" },
+        verifier: { label: "Verifier", type: "text" },
+        state: { label: "State", type: "text" },
+      },
+      async authorize(credentials) {
+        try {
+          return await authorizeDesktopBrowserLogin(credentials ?? {});
+        } catch (error) {
+          if (error instanceof DesktopAuthRequestError && error.status >= 500) {
+            throw new AccountServiceCredentialsError();
+          }
+          // A malformed or refused exchange is a failed sign-in, never a
+          // partial session.
+          return null;
+        }
+      },
+    }),
+  );
+
   const googleCredentials = getGoogleOAuthCredentials();
 
   if (googleCredentials) {
@@ -534,6 +567,7 @@ export function buildAuthConfig(): NextAuthConfig {
           account &&
           (account.provider === "password-account" ||
             account.provider === "email-verification" ||
+            account.provider === "desktop-browser" ||
             account.provider === "google" ||
             account.provider === "apple")
         ) {

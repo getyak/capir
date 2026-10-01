@@ -1,0 +1,13 @@
+{
+  "apps/backend/src/modules/desktopBrowserLogin.ts": "d71b66902205e520d8bcc8ee5005b38d116e7e03e394536a6f14b3b09aa55c48",
+  "apps/backend/src/routes/desktopBrowserLogin.ts": "b4e1d3f7324b04bb354d471cd4cb7d7a193b6d4832e8518b35ad144fca5c233b",
+  "apps/backend/src/lib/requestLogger.ts": "80650f733cc22dd5ed5ce531b8897915d9257599ce6c5f98fda574df8accdf5e",
+  "apps/web/auth.ts": "c84d36f317f87be580ec5913fb52f8ff654ad7f9c1f120b3cb10b0993e3435dd",
+  "apps/web/lib/server/desktop-browser-login.ts": "d4ce0f7a89b1e5f9c8037e92dfccbcf4665012eb0cb66bd1b57843bfe1d91f8d",
+  "apps/web/app/desktop-auth/authorize/page.tsx": "a840f23bf86abaa01f044a339487fe41f234afbd4073a477e03c06097f3623c6",
+  "apps/macos/Sources/Services/DesktopBrowserLogin.swift": "4dae810205f99d7f915fe56610cdd12a56cbd5fb1169960971fcb60c19c37564",
+  "apps/macos/Sources/Services/LoginStoreRegistry.swift": "8dc007288e7fa9c25e87864d23786350b2965864d31a55421bb4c3ddf0a01d89",
+  "apps/macos/Sources/Features/QuietWorkspaceView.swift": "458b2037370d87370f40e0a11de62c9ffacbe913545cdd2f405f8a9be818d2f9",
+  "apps/macos/Sources/Capture/CaptureTransport.swift": "1191b44b8a370d7f694eeb5578845bd4fa3a7dd10eceac3b01a0fc24d12e59e4",
+  "apps/macos/Sources/Capture/CaptureRuntime.swift": "11455d1cc73893491d57978ba28def61f40aa456933d54e0625bd29c16252dc3"
+}

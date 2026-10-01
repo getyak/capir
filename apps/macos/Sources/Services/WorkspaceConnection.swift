@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Combine
 
 /// Connection preferences contain addresses and UI choices, never credentials.
 @MainActor
@@ -10,7 +11,11 @@ final class WorkspaceConnection: ObservableObject {
     @Published var inspectorEnabled: Bool {
         didSet { defaults.set(inspectorEnabled, forKey: "workspace.desktop.inspector") }
     }
+    /// Published store-epoch changes: every WebKit host retires surfaces built
+    /// for an older epoch when a deliberate new primary login selects a store.
+    @Published private(set) var storeEpoch: UInt64 = 0
     private let defaults: UserDefaults
+    private var storeObservation: AnyCancellable?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -18,6 +23,10 @@ final class WorkspaceConnection: ObservableObject {
         inspectorEnabled = defaults.bool(forKey: "workspace.desktop.inspector")
         origin = WorkspaceOrigin.configured(saved: defaults.string(forKey: "workspace.web.origin") ?? "",
                                             allowLocalDevelopment: allowsLocalDevelopment)
+        storeObservation = LoginStoreRegistry.shared.changes.sink { [weak self] selection in
+            guard self?.origin?.url.absoluteString == selection.origin else { return }
+            self?.storeEpoch = selection.epoch
+        }
     }
 
     func save(_ value: String, allowLocalDevelopment: Bool) -> Bool {
@@ -42,10 +51,12 @@ final class WorkspaceConnection: ObservableObject {
 
 extension WorkspaceOrigin {
     /// WebKit cookies ignore ports. Separate stores also isolate same-host test environments.
-    var dataStoreIdentifier: UUID {
-        let digest = Array(SHA256.hash(data: Data(url.absoluteString.utf8)).prefix(16))
-        return UUID(uuid: (digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
-                           digest[8], digest[9], digest[10], digest[11], digest[12], digest[13], digest[14], digest[15]))
+    /// The application-owned registry selects the persistent store for this
+    /// origin (ADR 0021/0022). Nil means the registry is corrupt or its write
+    /// failed: hosts must refuse to build a WebKit surface instead of silently
+    /// adopting legacy state.
+    @MainActor var dataStoreIdentifier: UUID? {
+        LoginStoreRegistry.shared.storeIdentifierIfHealthy(for: url.absoluteString)
     }
 }
 

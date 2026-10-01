@@ -43,6 +43,7 @@ final class CaptureRuntime: ObservableObject {
     private let hint = CaptureHintController()
     private var browser: CaptureWebSession?
     private var connectionObserver: AnyCancellable?
+    private var storeObserver: AnyCancellable?
     private var shortcutObserver: AnyCancellable?
     private var presentationObserver: AnyCancellable?
     private var openWorkspace: (() -> Void)?
@@ -71,6 +72,10 @@ final class CaptureRuntime: ObservableObject {
         connectionObserver = WorkspaceConnection.shared.$origin.sink { [weak self] origin in
             self?.configure(origin: origin)
         }
+        storeObserver = LoginStoreRegistry.shared.changes.sink { [weak self] selection in
+            guard let self, WorkspaceConnection.shared.origin?.url.absoluteString == selection.origin else { return }
+            self.configure(origin: WorkspaceConnection.shared.origin, rotate: true)
+        }
         shortcutObserver = preferences.$shortcut.sink { [weak self] choice in
             self?.register(choice)
         }
@@ -78,8 +83,10 @@ final class CaptureRuntime: ObservableObject {
 
     func setOpenWorkspace(_ open: @escaping () -> Void) { openWorkspace = open }
 
-    private func configure(origin: WorkspaceOrigin?) {
-        if browser?.origin != origin {
+    private func configure(origin: WorkspaceOrigin?, rotate: Bool = false) {
+        if browser?.origin != origin || rotate {
+            browser?.retire()
+            coordinator?.rebindOwner(to: nil)
             CaptureOverlayController.shared.cancel()
             previewWindow.dismiss()
             onboardingWindow.dismiss()
@@ -95,7 +102,7 @@ final class CaptureRuntime: ObservableObject {
             rescheduleLocalExpiry()
             return
         }
-        if browser?.origin == origin { return }
+        if browser?.origin == origin && !rotate { return }
         captureOwnerVerified = false
         recentRequestRevision += 1
         recentConversation = .checking

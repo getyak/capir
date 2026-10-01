@@ -22,6 +22,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { getAuthAvailability, safeRedirectTarget } from "@/lib/auth-config";
 import { getGoogleOAuthCredentials } from "@/lib/server/google-oauth";
 import { signInWithApple, signInWithDefaultAccount, signInWithGoogle } from "./actions";
+import { DesktopNativeLoginNotice, isNativeLoginUserAgent } from "./desktop-native-notice";
 import styles from "./login.module.css";
 import { AccountContinuity } from "./account-continuity";
 
@@ -43,6 +44,12 @@ export default async function LoginPage({ searchParams }: {
 }) {
   const [session, parameters] = await Promise.all([auth(), searchParams]);
   const requestHeaders = await headers();
+  // Display-only native defense (ADR 0022): the Mac app owns its signed-out
+  // browser-login surface and intercepts /login itself; a direct native load
+  // of this page must never show a password, registration or provider form.
+  if (isNativeLoginUserAgent(requestHeaders.get("user-agent"))) {
+    return <DesktopNativeLoginNotice />;
+  }
   const requestOrigin = `${requestHeaders.get("x-forwarded-proto") === "https" ? "https" : "http"}://${requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000"}`;
   const canonical = canonicalLoginTarget(requestOrigin, process.env.AUTH_URL, parameters, process.env.NODE_ENV === "production");
   if (canonical) redirect(canonical);

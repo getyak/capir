@@ -376,3 +376,5 @@ delivery and multi-client acceptance remain parent-owned checkpoints.
 
 Credentials for deployed services remain in [Infisical](secrets.md). The Notion
 home contains a short access reference; this document owns operational details.
+
+Mac login routes use aggregate upstream service budgets because the backend sees the first-party Web BFF, not individual browsers. Prepare/consume allow 120 requests per minute per upstream, and proof/result/approval routes allow 240. The current resident deployment is Tailscale-bound; these are availability caps, not per-user abuse protection. Before exposing a public multi-tenant Web ingress, add per-caller edge throttling with deployment-verified client identity. Never accept arbitrary forwarded-IP headers as identity. Auth route access logs must omit query strings; first-party handoff pages send `Referrer-Policy: no-referrer` and are not cached.

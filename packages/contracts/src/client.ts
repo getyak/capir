@@ -1306,6 +1306,103 @@ export class TalentSignalClient {
     return this.request(`/v1/desktop-capture/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}`, { method: "GET" });
   }
 
+  /** Anonymous, rate-limited preparation of one browser-owned macOS login grant. */
+  prepareDesktopBrowserLogin(
+    request: import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginPrepareRequest,
+    signal?: AbortSignal,
+  ): Promise<import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginPrepareResponse> {
+    return this.request("/v1/desktop-browser-login/prepare", {
+      method: "POST",
+      body: request,
+      authenticated: false,
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  /** Intentional approval from the authenticated first-party browser session. */
+  approveDesktopBrowserLogin(
+    attemptId: string,
+    request: import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginApproveRequest,
+    signal?: AbortSignal,
+  ): Promise<import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginApproveResponse> {
+    return this.request(`/v1/desktop-browser-login/${encodeURIComponent(attemptId)}/approve`, {
+      method: "POST",
+      body: request,
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  /** One-use code/verifier exchange; the only call that opens a device session. */
+  consumeDesktopBrowserLogin(
+    request: import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginConsumeRequest,
+    signal?: AbortSignal,
+  ): Promise<import("./schemas.js").SessionResponse> {
+    return this.request("/v1/desktop-browser-login/consume", {
+      method: "POST",
+      body: request,
+      authenticated: false,
+      ...(signal ? { signal } : {}),
+    });
+  }
+
+  /** Deliberate cancellation proved by the prepared cancellation secret. */
+  cancelDesktopBrowserLogin(
+    attemptId: string,
+    request: import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginCancelRequest,
+  ): Promise<import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginCancelResponse> {
+    return this.request(`/v1/desktop-browser-login/${encodeURIComponent(attemptId)}/cancel`, {
+      method: "POST",
+      body: request,
+      authenticated: false,
+    });
+  }
+
+  /** Authenticated, state-bound browser decline of one pending grant. */
+  declineDesktopBrowserLogin(
+    attemptId: string,
+    request: import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginDeclineRequest,
+  ): Promise<import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginCancelResponse> {
+    return this.request(`/v1/desktop-browser-login/${encodeURIComponent(attemptId)}/decline`, {
+      method: "POST",
+      body: request,
+    });
+  }
+
+  /** Secret-bound read-only outcome for an unknown exchange result. */
+  readDesktopBrowserLoginGrantResult(
+    attemptId: string,
+    request: import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginGrantResultRequest,
+  ): Promise<import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginGrantResultResponse> {
+    return this.request(`/v1/desktop-browser-login/${encodeURIComponent(attemptId)}/grant-result`, {
+      method: "POST",
+      body: request,
+      authenticated: false,
+    });
+  }
+
+  /** Read-only inspection of one pending grant for the confirmation page.
+   * The preview checks the exact prepared origin and operation state; a
+   * mismatch reveals no hint, lifecycle or identity authority. */
+  readDesktopBrowserLoginGrant(
+    attemptId: string,
+    state: string,
+    webOrigin: string,
+  ): Promise<import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginGrantView> {
+    const query = new URLSearchParams({ state, web_origin: webOrigin });
+    return this.request(`/v1/desktop-browser-login/${encodeURIComponent(attemptId)}/grant?${query}`, {
+      method: "GET",
+    });
+  }
+
+  /** Read-only correlation of the live session against one consumed grant. */
+  readDesktopBrowserLoginStatus(
+    attemptId: string,
+  ): Promise<import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginStatusResponse> {
+    return this.request(`/v1/desktop-browser-login/${encodeURIComponent(attemptId)}/status`, {
+      method: "GET",
+    });
+  }
+
   mutateConversationQueue(sessionId: string, request: ConversationQueueMutationRequest, signal?: AbortSignal): Promise<ConversationQueueMutationResponse> {
     return this.request(`/v1/agent-sessions/${encodeURIComponent(sessionId)}/conversation-queue/mutations`, { method: "POST", body: request, ...(signal ? { signal } : {}) });
   }
