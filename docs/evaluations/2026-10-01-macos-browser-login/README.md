@@ -29,7 +29,7 @@ storage audit still warns about unrelated historical artifacts; those warnings
 do not authorize cross-task deletion. Private cleanup/deployment receipts are
 retained in the task state directory.
 
-The WebKit test calls the production transport and exchanger. Its direct backend approval is a controlled fixture, not evidence of browser intention or OS callback delivery. The XCTest clock-wait regression uses real PostgreSQL locks with a deterministic clock advanced after observing the lock barrier. Helpers alone cannot establish the full user chain; the separate OS receipt records the actual Safari approval and AppDelegate consumption. Source hashes identify the verified implementation snapshot; later changes require relevant revalidation.
+The WebKit test calls the production transport and exchanger. Its direct backend approval is a controlled fixture, not evidence of browser intention or OS callback delivery. The backend PostgreSQL clock-wait regression uses real PostgreSQL locks with a deterministic clock advanced after observing the lock barrier. Helpers alone cannot establish the full user chain; the separate OS receipt records the actual Safari approval and AppDelegate consumption. Source hashes identify the verified implementation snapshot; later changes require relevant revalidation.
 
 ![Disposable browser confirmation](browser-confirmation.jpg)
 

@@ -17,9 +17,9 @@ In scope: browser-owned primary login, durable one-use backend grant, first-part
 ## Milestones
 
 1. Complete: implement backend grant, Web confirmation/exchange/status, and native user flow on the frozen baseline with Pi.
-2. Source accepted: independently inspect diff and run backend/PostgreSQL, Web, real WebKit and native acceptance; close confirmed P0/P1 findings with independent reviewer. Full system-browser user acceptance remains pending below.
-3. Pending: run current-head required checks; create reviewable PR; rebuild/redeploy local backend as required by apps/backend/AGENTS.md and verify affected Web/native surfaces without claiming a production release or modifying provider accounts.
-4. Pending: route final decisions/operations evidence, preserve formal receipts and clean only task-owned temporary artifacts.
+2. Complete for owned acceptance: independent source review closed confirmed P0/P1; backend/PostgreSQL, Web, real WebKit and native checks pass. Actual Safari approval/OS callback/workspace and restart passed with a distinct owned ad-hoc app and disposable identity.
+3. Implementation checks/deployment complete: PR #268 created, implementation-head CI passed, local backend and resident Web deployed/read back. Pending: latest evidence-only head checks, merge, signed/notarized publication and installed-client acceptance; live public providers remain unproven.
+4. Complete: decisions/operations evidence routed, formal receipts preserved outside temporary artifacts, owned proof app/tabs/servers/database and registered temporary artifact removed. Customer data, unrelated tasks and default Safari retained.
 
 ## Successful chain and failure evidence
 
