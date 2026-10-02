@@ -649,8 +649,7 @@ suite("durable conversation queue", () => {
     const provider = new ScriptedConversationProvider();
     const held = gate();
     provider.gateForObjective = (objective) => (objective === "正在处理的补充来源" ? held.promise : null);
-    // Hold the provider until the committed ordering is inspected; otherwise
-    // fast cancellation can settle before the test reads transient flags.
+    // Keep the first provider pending while the prioritize mutation commits.
     provider.ignoreAbortForObjective = objective => objective === "正在处理的补充来源";
     const runner = await startRunner(provider);
     try {
@@ -675,24 +674,24 @@ suite("durable conversation queue", () => {
       });
       await waitFor(async () => {
         const snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
-        return snapshot.active !== null && snapshot.queued.length === 2;
+        // Claim visibility precedes provider selection, which can still close
+        // unsupported steering intake and advance the optimistic revision.
+        // Read the mutation snapshot only after that held provider has started.
+        return provider.calls.length === 1 && snapshot.active !== null && snapshot.queued.length === 2;
       });
       let snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
       const prioritized = snapshot.queued.find((entry) => entry.message_id === prioritizedMessageId);
       expect(prioritized).toBeDefined();
-      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+      const mutation = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
         kind: "prioritize",
         queue_entry_id: prioritized!.queue_entry_id,
         expected_revision: snapshot.revision,
         idempotency_key: randomUUID(),
       });
-      // The live run is stop-requested for auto-continue; the chosen supplement
-      // is first among waiting work and the queue is ready to claim it next.
-      await waitFor(async () => {
-        const rows = await entryRow(seeded.sessionId, seeded.accountId);
-        return rows[0]?.cancel_requested === true && rows[0]?.cancel_auto_continue === true;
-      });
-      snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      // The returned snapshot was read under the mutation's session lock.
+      // A later DB read can already observe cancellation and auto-continuation.
+      snapshot = mutation.snapshot;
+      expect(snapshot.active?.cancel_requested).toBe(true);
       expect(snapshot.queued.map((entry) => entry.objective)).toEqual([
         "应优先处理的补充",
         "默认排队的补充",
@@ -706,11 +705,13 @@ suite("durable conversation queue", () => {
       });
       // Prioritize's stop must not re-pause; the chosen supplement runs next.
       expect((await queueState(seeded.sessionId, seeded.accountId))!.paused).toBe(false);
-      await waitFor(async () => {
-        const rows = await entryRow(seeded.sessionId, seeded.accountId);
-        return rows.some((row) => row.objective === "应优先处理的补充" && row.status === "running")
-          || rows.some((row) => row.objective === "应优先处理的补充" && row.status === "completed");
-      });
+      // Observe actual execution order, even if fast completion has already
+      // scrubbed the stored objective by the next polling tick.
+      await waitFor(() => provider.calls.length >= 2);
+      expect(provider.calls.slice(0, 2)).toEqual([
+        "正在处理的补充来源",
+        "应优先处理的补充",
+      ]);
     } finally {
       held.release();
       await runner.close();

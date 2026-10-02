@@ -37,3 +37,21 @@ No claim is made for the complete product, model quality, signed native login,
 universal zoom, all OS/browser scrollbars, or capir authorization acceptance.
 The source/account boundary removes closed panel content immediately; a cosmetic
 exit delay was not added at the cost of retaining private content.
+
+## CI repair re-review
+
+The first PR CI run passed Web, security and Vercel gates but exposed a
+pre-existing optimistic-revision race in the backend prioritize test. An initial
+provider-start wait closed that race; targeted repetition then caught a second
+transient cancellation-flag read. The final test uses the mutation's locked
+returned snapshot and actual provider invocation order, retaining durable
+cancelled/unpaused assertions and all production conflict checks. Independent
+code re-review found no P0/P1/P2 and confirmed stronger behavioral evidence.
+An isolated PostgreSQL run passed all 59 queue/stream checks, followed by five
+successful targeted repetitions. Backend typecheck passed.
+
+The supplemental MiMo advisory run for original head 8e160047 was stopped
+without a final validated review output. Its private event evidence is retained;
+it is not represented as a clean or completed review, and no duplicate paid run
+was started. Required independent code and visual reviews were completed by
+separate reviewers.

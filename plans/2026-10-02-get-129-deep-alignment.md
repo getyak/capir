@@ -52,3 +52,14 @@ P0/P1/P2; independent visual re-review is 98/100. See the
 [evaluation](../docs/evaluations/2026-10-02-get-129-deep-alignment/README.md).
 PR/latest-head gates, merge and resident Web activation are the remaining delivery
 steps; separate signed native acceptance keeps the issue In Progress.
+
+## CI repair
+
+Original PR head 8e160047 passed Web/security/Vercel but failed an existing
+backend prioritize integration test. The test now waits for provider selection,
+asserts the mutation's transaction-returned snapshot and actual invocation
+order, avoiding transient flags and scrubbed objective polling. Production
+logic is unchanged. Final isolated PostgreSQL checks: 59/59 plus five targeted
+repetitions; backend typecheck and independent test re-review passed. The
+supplemental MiMo run was stopped without a final validated output, with private
+evidence preserved and no paid restart. Latest-head CI must run again.
