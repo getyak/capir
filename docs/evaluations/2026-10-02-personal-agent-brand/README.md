@@ -41,8 +41,24 @@ runs are not added. CI and real deployment state are independently verified by
 the delivery owner; builds and source edits alone do not prove installed-client
 upgrades or public availability.
 
-Native and Docker builds have not been started locally: the storage guard
-reports 78 GiB free, below its 80 GiB heavy-build threshold. Other tasks' files,
-shared devices and running services were preserved. The published macOS package
-still uses the legacy name; download copy explicitly distinguishes it from this
-new website display brand.
+The initial host pass avoided native and Docker builds below the 80 GiB storage
+threshold. After storage reached that threshold, Docker deployment was attempted;
+an incomplete optional SDK download required restoring the previous healthy
+backend. See [runtime package regression evidence](runtime-guard.md). No local
+Simulator or native build was started. Other tasks' files and devices were
+preserved. The published macOS package still uses the legacy name; download copy
+explicitly distinguishes it from the new website display brand.
+
+## Merged source and public release
+
+[PR #276](https://github.com/getyak/talent-signal/pull/276) merged as
+`fc8495ba9c7173dc386e3bd1bf5c57e9b2dca189` after every applicable check passed on
+head `127a2e7694ccfc5dd8203ad1de1391cc4d45a97f`. The full Web CI reported 1,663
+passing tests and one skipped test. See [latest-head checks](latest-head-checks.json).
+
+The default-branch README and repository description were read back. Vercel
+production deployment `6813705324` succeeded for the merge commit. The actual
+[public homepage](https://gettalentsignal.com) returned HTTP 200, displayed the
+capri title and new hero/demo, and had no browser page errors; see
+[production browser receipt](web/production-browser.txt). The same source's
+preview passed the save, reviewed reply update, pause and source-removal flow.

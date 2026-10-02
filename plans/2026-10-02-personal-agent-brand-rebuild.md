@@ -124,12 +124,12 @@ references; preserve historical decisions, test evidence and still-valid guides.
 - [x] Independent review; resolve confirmed critical/high-priority defects.
 - [x] Relevant lint/typecheck/tests/build/docs/brand checks and real browser
   desktop/mobile/theme/reduced-motion/keyboard proof for the changed surface.
-- [ ] Push reviewable PR, satisfy applicable latest-head checks and repository
+- [x] Push reviewable PR, satisfy applicable latest-head checks and repository
   gates, merge when permitted, verify default-branch README.
 - [x] Update/read back GitHub description to `capri — a personal Agent for
   important people and unfinished work. Screenshot-first, source-linked, and
   human-reviewed.` Repository slug and actual homepage URL remain compatible.
-- [ ] Verify actual public website release if configured deployment performs one.
+- [x] Verify actual public website release if configured deployment performs one.
 - [ ] Save formal evidence, stop task-owned processes and remove only disposable
   task-owned local test artifacts after their evidence is preserved.
 
@@ -138,14 +138,20 @@ references; preserve historical decisions, test evidence and still-valid guides.
 - This task redesigns the public demonstration and product framing. It does not
   claim that all five proposed stories have been newly implemented end to end
   in the authenticated backend.
-- Browser opening of the existing public domain timed out; the web fetch also
-  failed. Local latest-main rendering is the baseline fallback, not production
-  availability evidence.
+- PR #276 merged after all latest-head checks passed. Vercel production deployed
+  merge `fc8495ba`; actual gettalentsignal.com returned 200 with the capri
+  title, hero and demo and no browser page errors.
 - Dependencies installed successfully offline from the existing pnpm store.
-- Storage preflight reported about 75 GiB free, below the 80 GiB heavy-build
-  threshold. Use Web/host/static checks; no Simulator/native heavy build or
-  cross-task cleanup.
-- Local Next preview is task-owned on port `3217`.
+- Initial storage preflight was below 80 GiB; later it reached the threshold.
+  No local Simulator/native build was run. Docker's first backend image silently
+  omitted the optional Claude native package. Official deployment failed its
+  synthetic Agent probe; the previous image, recovery pair, checkout pointer and
+  keeper were restored and all old-runtime probes passed. A narrowly reviewed
+  build guard now prevents this incomplete installation from being cached as
+  successful. Rebuild and backend deployment verification remain in progress.
+- Task-owned Next/prototype servers have stopped. Browser and deployment
+  receipts are preserved under the dated evaluation; disposable artifacts remain
+  until backend delivery evidence is preserved.
 - Product positioning and latest brand spelling are user-supplied direction.
   If the user corrects the optional typo check, reapply the narrow display
   change. No new domain or support address is assumed.
