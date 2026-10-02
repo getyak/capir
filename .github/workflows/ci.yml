@@ -299,7 +299,7 @@ jobs:
 
       - name: Verify AI entry and isolated default fixture
         env:
-          FIXTURE_PROOF_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
         run: |
           node --test scripts/ai-workspace-entry.test.mjs
           node apps/backend/scripts/verify-default-fixture.mjs

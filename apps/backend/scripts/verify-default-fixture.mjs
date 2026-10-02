@@ -8,7 +8,7 @@ import { createPasswordSession } from "../dist/modules/auth.js";
 
 // Creates and drops only its own disposable database, never seeds the supplied
 // admin database. Require an explicitly selected loopback test server.
-const adminUrl = new URL(process.env.FIXTURE_PROOF_DATABASE_URL || "");
+const adminUrl = new URL(process.env.DATABASE_URL || "");
 assert.ok(["127.0.0.1", "localhost", "[::1]"].includes(adminUrl.hostname));
 assert.notEqual(process.env.NODE_ENV, "production");
 const database = `ai_auth_entry_${randomUUID().replaceAll("-", "")}`;
