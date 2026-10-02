@@ -291,10 +291,15 @@ These privileges do not authorize candidate-data collection or external effects.
 
 Only an explicitly simulated, non-production seeded backend provides:
 
+Apply migration `088_username_email_alias` before seeding. Existing handles
+remain valid; an email-shaped username is valid only when it exactly matches
+that user's normalized primary email. Public signup continues to use its
+existing handle format. This does not rename any deployed account.
+
 | Field | Development fixture value |
 | --- | --- |
-| Username | `cubxxw` |
-| Email | `cubxxw@talentsignal.local` |
+| Username | `test@gmail.com` |
+| Email | `test@gmail.com` |
 | Password | `cubxxw` |
 | Workspace / role | `fixture-alpha` / admin |
 
@@ -306,6 +311,34 @@ providers are disabled in production, even if their flags are set.
 
 Other `simulated_human` fixture identities have no password. Use the explicit
 simulated API in local evaluations, or an isolated internal test workspace.
+
+## AI acceptance entry
+
+Prefer `capir auth` and command-line entry for AI acceptance. Reuse a valid
+origin-bound OS-keyring grant or an ephemeral, preprovisioned `CAPIR_TOKEN`
+instead of repeating interactive login. Select the test environment explicitly;
+the fixture identifier above applies only to an isolated seeded backend.
+
+With capir installed and the named environment configured:
+
+```bash
+capir auth status --env local-test
+node scripts/ai-workspace-entry.mjs --env local-test --check-only
+node scripts/ai-workspace-entry.mjs --env local-test
+node scripts/ai-workspace-entry.mjs --env local-test --sandbox <sandbox-uuid>
+```
+
+The entry helper validates the current grant before creating a `daily` replay
+sandbox or reopening the selected sandbox. It does not initiate OAuth, renew a
+grant, or replace credentials. Missing or expired authorization stops before
+sandbox allocation: provision a scoped test token through the approved test
+environment, or run `capir auth login --env local-test` once. Stop the owned
+sandbox with `capir sandbox stop <sandbox-uuid> --env local-test` after
+retaining evidence. `CAPIR_BIN` may select an explicitly installed executable.
+
+The capir backend, registered origins and server-only Web handoff configuration
+must be deployed for that exact environment. Stage A supports Web entry only;
+an authenticated Web proof does not establish native macOS login acceptance.
 
 ## Internal test workspaces
 
