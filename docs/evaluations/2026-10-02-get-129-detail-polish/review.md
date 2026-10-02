@@ -54,7 +54,7 @@ The local source/screenshot archive is linked and hash-bound by the evaluation.
 
 ## Merge-time test re-review
 
-The cancellation integration fixture follow-up has an independent code review:
-no unresolved P0/P1/P2, with stale-result assertions retained and five targeted
-repetitions confirmed. See [CI repair](ci-repair.md) for the cause and proof.
+The three cancellation/stop integration fixtures have an independent code review:
+no unresolved P0/P1/P2, with stale-result, partial ownership and no inherited auto-continue assertions
+retained and five targeted rounds of all three cases confirmed. See [CI repair](ci-repair.md) for the cause and proof.
 This test-only correction does not change the reviewed Web CSS or score.

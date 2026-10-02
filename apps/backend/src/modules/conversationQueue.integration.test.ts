@@ -602,10 +602,11 @@ suite("durable conversation queue", () => {
         const snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
         return snapshot.active !== null;
       });
-      const active = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
       // A running row precedes provider entry. This case asserts a preserved
-      // partial, so wait until the provider has actually emitted its prefix.
+      // partial and a current mutation revision, so read only after the
+      // provider has emitted its prefix and startup closed unsupported intake.
       await waitFor(() => provider.calls.length === 1);
+      const active = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
       await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
         kind: "stop",
         expected_revision: active.revision,
@@ -762,6 +763,9 @@ suite("durable conversation queue", () => {
     const provider = new ScriptedConversationProvider();
     const held = gate();
     provider.gateForObjective = (objective) => (objective === "会被再次停止" ? held.promise : null);
+    // Keep prioritize's cancellation pending until the later plain Stop has
+    // cleared auto-continue; the provider must not finalize between mutations.
+    provider.ignoreAbortForObjective = (objective) => objective === "会被再次停止";
     const runner = await startRunner(provider);
     try {
       await admitConversationQueueEntry(pool!, seeded.auth, {
@@ -779,18 +783,18 @@ suite("durable conversation queue", () => {
       });
       await waitFor(async () => {
         const snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
-        return snapshot.active !== null && snapshot.queued.length === 1;
+        return provider.calls.length === 1 && snapshot.active !== null && snapshot.queued.length === 1;
       });
       let snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
       // Prioritize first (sets auto-continue on the live run)…
-      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+      const prioritized = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
         kind: "prioritize",
         queue_entry_id: snapshot.queued[0]!.queue_entry_id,
         expected_revision: snapshot.revision,
         idempotency_key: randomUUID(),
       });
       // …then a plain Stop must win and keep the queue paused after cancel.
-      snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      snapshot = prioritized.snapshot;
       await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
         kind: "stop",
         run_id: snapshot.active!.run_id!,

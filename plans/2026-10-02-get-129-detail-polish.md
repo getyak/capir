@@ -42,7 +42,7 @@ Full measured reads and source screenshots are preserved at
    the first score of 97 is retained with its reason in the review record.
 4. UI PR #274 merged as `a911bfcf19bbe863c751e4764e441a59cccec824` after
    exact-head CI/Security/Vercel and independent reviews passed. Active:
-   repair the exposed main cancellation-proof startup/cleanup race and verify
+   repair the exposed cancellation/stop fixture startup and ordering races and verify
    its related follow-up gates. Keep GET-129 In Progress while its original
    resident/native/capir acceptance remains absent.
 
@@ -75,6 +75,6 @@ Missing/incorrect harness environment attempts were corrected before acceptance.
 
 Main run 37007639753 timed out in the abort-ignoring queue-provider proof.
 The owned `codex/get-129-main-ci-repair` branch starts from merged main a911bfcf.
-Only that integration test and related evidence/plan are owned by this repair;
+Only the queue integration test file and related evidence/plan are owned by this repair;
 UI source and its 98/100 assessment stay unchanged. See [the CI repair evaluation](../docs/evaluations/2026-10-02-get-129-detail-polish/ci-repair.md)
 for its authoritative cause, counterexample, verification and delivery record.

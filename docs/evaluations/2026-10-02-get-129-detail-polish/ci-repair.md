@@ -25,11 +25,21 @@ The timeout and stale-result assertions remain intact: cancellation is durable,
 no late answer is persisted, the stopped turn is truthful, and stored result
 remains null. No production code, retry policy or authority fence changes.
 
+The first repair PR run
+[37009504879](https://github.com/getyak/talent-signal/actions/runs/37009504879)
+passed this forced counterexample but exposed the same stale-startup snapshot
+in two neighboring stop cases. The owned-partial case now reads its revision
+after provider invocation. The prioritize-then-stop case holds only its first
+provider through cancellation and uses the locked snapshot returned by
+prioritize for the second stop. This makes the intended ordering deterministic
+while retaining paused-queue, partial ownership, continuation and no inherited
+auto-continue assertions.
+
 ## Verification
 
-- Both queue/stream host suites passed 59 tests with the selection/cleanup fix.
-- The final stale-revision rejection assertion passed five targeted repetitions
-  against the isolated local PostgreSQL database.
+- Both queue/stream host suites passed all 59 tests with the final three-case fix.
+- All three cancellation/stop cases passed five targeted repetitions (15 case
+  executions) against the isolated local PostgreSQL database.
 - Backend typecheck and diff validation passed.
 - Independent re-review found no P0/P1/P2 and confirmed the stale-result assertions remain intact.
 - Exact-head remote gates are recorded during delivery.
