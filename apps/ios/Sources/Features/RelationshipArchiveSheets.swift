@@ -12,7 +12,7 @@ struct RelationshipChangeReviewView: View {
         person: RelationshipArchivePerson,
         reviewSession: PursuitProposalReviewSession? = nil,
         service: PursuitProposalReviewServing? = nil,
-        actorDisplayName: String = "Current recruiter",
+        actorDisplayName: String = "Current user",
         sourceTimezone: String = TimeZone.current.identifier
     ) {
         self.person = person
@@ -608,7 +608,7 @@ struct RelationshipMenuView: View {
                         )
                     } label: {
                         RelationshipMenuAccountRow(
-                            accountName: accountName ?? "Talent Signal",
+                            accountName: accountName ?? "capri",
                             subtitle: accountSubtitle
                         )
                     }

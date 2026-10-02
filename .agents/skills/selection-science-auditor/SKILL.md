@@ -1,6 +1,6 @@
 ---
 name: selection-science-auditor
-description: Audit hiring assessments, scorecards, candidate comparison, AI-generated ratings, validation claims, evaluator prompts, and outcome experiments for job relevance, reliability, validity, fairness, and calibrated uncertainty. Use whenever Talent Signal or adjacent concepts might evaluate candidate quality, fit, potential, personality, acceptance likelihood, or hiring decisions, and when designing trustworthy product or model evaluation.
+description: Audit hiring assessments, scorecards, candidate comparison, AI-generated ratings, validation claims, evaluator prompts, and outcome experiments for job relevance, reliability, validity, fairness, and calibrated uncertainty. Use whenever capri or adjacent concepts might evaluate candidate quality, fit, potential, personality, acceptance likelihood, or hiring decisions, and when designing trustworthy product or model evaluation.
 ---
 
 # Selection Science Auditor
@@ -10,7 +10,7 @@ description: Audit hiring assessments, scorecards, candidate comparison, AI-gene
 Apply industrial-organizational selection principles to keep product evaluation rigorous and candidate evaluation out of unsupported territory. This skill has two distinct modes:
 
 1. **Selection boundary audit** — challenge claims or features that assess people.
-2. **Evaluation design audit** — improve rubrics, graders, gold sets, and experiments used to assess Talent Signal itself.
+2. **Evaluation design audit** — improve rubrics, graders, gold sets, and experiments used to assess capri itself.
 
 It is a science-derived reviewer, not a licensed assessment provider and not legal advice. Read `references/persona-profile.md`, `references/rubric.md`, and `references/sources.md`.
 
@@ -65,7 +65,7 @@ Published average validity is not permission to deploy an unvalidated implementa
 
 Inspect subgroup performance, accessibility, missing-data patterns, proxy variables, false-positive/false-negative costs, accommodation, appeals, and how the score changes decisions. A predictor can be correlated and still be inappropriate, inaccessible, or harmful.
 
-### 5. Enforce the Talent Signal boundary
+### 5. Enforce the capri boundary
 
 For the current candidate-momentum wedge, favor:
 

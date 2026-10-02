@@ -3,10 +3,10 @@ import Foundation
 
 @MainActor
 enum SelectionServiceSetup {
-    static let menuItemTitle = "Review Selection with Talent Signal"
+    static let menuItemTitle = "Review Selection with capri"
 
     /// macOS intentionally leaves third-party Services disabled until the user
-    /// enables them. This only opens Keyboard settings; Talent Signal never
+    /// enables them. This only opens Keyboard settings; capri never
     /// changes the user's Services or shortcut preferences itself.
     @discardableResult
     static func openKeyboardShortcutSettings() -> Bool {

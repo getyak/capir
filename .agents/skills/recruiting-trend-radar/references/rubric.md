@@ -5,7 +5,7 @@
 - **0:** Generic “what is trending?”
 - **1:** Topic without a product decision.
 - **2:** Decision exists but scope or horizon is vague.
-- **3:** Clear Talent Signal decision, audience, market, and horizon.
+- **3:** Clear capri decision, audience, market, and horizon.
 - **4:** Also defines what evidence would change the decision.
 
 ## Source quality

@@ -19,7 +19,7 @@ import { McpUrlRejectedError, type McpResolvedTarget } from "./mcpSecurity.js";
  *
  * Error text is owned locally. Remote JSON-RPC error messages and transport
  * exception messages are never returned or persisted, so a hostile server
- * cannot make Talent Signal store or echo its own request credential.
+ * cannot make capri store or echo its own request credential.
  */
 
 export const MCP_SUPPORTED_PROTOCOL_VERSIONS = [
@@ -51,7 +51,7 @@ export const MCP_ERROR_MESSAGES: Record<McpConnectionErrorCode, string> = {
   MCP_REDIRECT_REFUSED:
     "The server tried to redirect the request, which was refused.",
   MCP_REQUIRES_AUTH:
-    "This server requires an authorization flow Talent Signal does not implement; no login was started.",
+    "This server requires an authorization flow capri does not implement; no login was started.",
   MCP_RESPONSE_INVALID: "The server returned an unreadable MCP response.",
   MCP_RESPONSE_TOO_LARGE: "The server response exceeded the size limit.",
   MCP_TIMEOUT: "The server did not respond within the time limit.",

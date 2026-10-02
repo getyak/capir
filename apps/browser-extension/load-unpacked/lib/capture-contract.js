@@ -67,7 +67,7 @@ export function classifyCaptureError(error) {
     return {
       code: "permission_denied",
       message:
-        "Chrome did not grant access to this page. Return to the source tab, click the Talent Signal toolbar icon, and try again.",
+        "Chrome did not grant access to this page. Return to the source tab, click the capri toolbar icon, and try again.",
       detail,
     };
   }

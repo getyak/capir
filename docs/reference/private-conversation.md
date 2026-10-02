@@ -6,7 +6,7 @@ model through a stateless transport. They create no saved conversation, queue,
 Memory, content evaluation trace or browser draft; they cannot read directory
 records or execute tools. Exit, navigation, refresh, or a detected login change
 clears the room and cancels pending work, while ordinary drafts retain their
-account-bound lifecycle. This is a Talent Signal retention boundary, not a
+account-bound lifecycle. This is a capri retention boundary, not a
 promise about the model processor's retention or training policy.
 
 ## Transport and limits

@@ -43,7 +43,7 @@ function downloadTooltip(state: DesktopChromeSnapshot | null): {
   title: string;
   detail: string;
 } {
-  if (!state) return { title: "下载 Talent Signal", detail: "桌面与移动端安装与帮助" };
+  if (!state) return { title: "下载 capri", detail: "桌面与移动端安装与帮助" };
   if (state.phase === "downloading") {
     return {
       title: `正在下载更新${state.progress === null ? "" : ` ${state.progress}%`}`,
@@ -70,7 +70,7 @@ function downloadTooltip(state: DesktopChromeSnapshot | null): {
           detail: "点击下载、校验并重启更新。",
         };
   }
-  return { title: "下载 Talent Signal", detail: "桌面与移动端安装与帮助" };
+  return { title: "下载 capri", detail: "桌面与移动端安装与帮助" };
 }
 
 function entryLabel(state: DesktopChromeSnapshot | null): {
@@ -85,7 +85,7 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
     return {
       icon: <DownloadSimple aria-hidden="true" size={15} weight="bold" />,
       text: "下载",
-      ariaLabel: "下载 Talent Signal",
+      ariaLabel: "下载 capri",
       href: "/download",
       status: false,
     };
@@ -132,7 +132,7 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   return {
     icon: <DownloadSimple aria-hidden="true" size={15} weight="bold" />,
     text: "下载",
-    ariaLabel: "下载 Talent Signal",
+    ariaLabel: "下载 capri",
     href: "/download",
     status: false,
   };

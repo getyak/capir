@@ -6,8 +6,8 @@ function QuickPanel() {
   return (
     <main className="quick-panel">
       <p className="eyebrow">Local quick panel</p>
-      <h1>回到 Talent Signal 继续</h1>
-      <p>此面板不显示候选人、消息或证据内容，也不执行任何外部动作。</p>
+      <h1>回到 capri 继续</h1>
+      <p>此面板不显示人物、消息或证据内容，也不执行任何外部动作。</p>
       <small>此面板不声明 Session 仍有效；请回到主窗口查看最新核验状态。</small>
     </main>
   );

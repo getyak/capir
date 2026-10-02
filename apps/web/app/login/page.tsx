@@ -29,7 +29,7 @@ import { AccountContinuity } from "./account-continuity";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "登录与注册",
-  description: "从你开始，建立自己的 Talent Signal 关系工作台。",
+  description: "从你开始，建立自己的 capri 关系工作台。",
   robots: { follow: false, index: false },
 };
 const oauthErrors: Record<string, string> = {

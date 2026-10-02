@@ -17,4 +17,4 @@ Checked 2026-08-04.
 
 ## Interpretation limits
 
-These sources support audit questions and experimental controls. They do not validate a Talent Signal feature. Any candidate-facing assessment requires a role-, population-, process-, and decision-specific validation program plus applicable professional and legal review.
+These sources support audit questions and experimental controls. They do not validate a capri feature. Any candidate-facing assessment requires a role-, population-, process-, and decision-specific validation program plus applicable professional and legal review.

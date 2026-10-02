@@ -592,7 +592,7 @@ private struct AgentProfileReferenceEditorView: View {
                 } footer: {
                     Text(
                         appLanguage.text(
-                            "This is an identity reference only. Talent Signal will not sign in, sync, or publish through it."
+                            "This is an identity reference only. capri will not sign in, sync, or publish through it."
                         )
                     )
                 }
@@ -675,7 +675,7 @@ private struct ContactImportReviewView: View {
                 } footer: {
                     Text(
                         appLanguage.text(
-                            "Only mapped fields are held in this review. The selected raw file is not stored by Talent Signal."
+                            "Only mapped fields are held in this review. The selected raw file is not stored by capri."
                         )
                     )
                 }

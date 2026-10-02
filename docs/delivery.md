@@ -2,163 +2,118 @@
 
 ## Delivery principle
 
-Ship complete evidence-to-outcome slices, not horizontal layers of
-infrastructure or isolated AI features.
+Ship a complete, observable user outcome rather than disconnected AI features
+or an entire horizontal layer. The [Product](product.md) decision defines the
+outcome; current code and dated surface evidence establish its availability.
 
-Every slice should be usable by a user, observable across the system, and
-safe under ambiguity, failure, and correction.
+For the personal-Agent direction, prove screenshot handoff, useful understanding,
+selective review, retained context or unfinished work, and a later return or update.
+A display-brand change or a synthetic animation alone does not close that loop.
 
 ## Current foundation
 
-The repository demonstrates the product language, evidence review, action-card
-states, candidate continuity, and initial model boundaries.
+The repository contains governed evidence, identity, temporal context, Sessions,
+work proposals, action receipts, and recovery. Local and synthetic evaluations
+support these boundaries; they do not establish field value or production rollout.
+Live identity-provider configuration, model processing scope, storage region,
+real-device privacy behavior, release distribution, and user outcomes require
+their own evidence.
 
-This foundation is a synthetic, local V1 acceptance system. It is not a
-production rollout: live identity-provider configuration, storage region,
-provider credentials, real-device privacy behavior, and design-partner outcomes
-remain separate release decisions.
+Lab supports separate evaluation paths: deterministic replay and baseline
+comparison, admitted real-model experiments, recoverable frozen-case batches,
+reviewed regression cases, and internal device diagnostics. Execution success
+is not a quality verdict or product-adoption decision. These paths have no
+authority over relationship truth or external effects. Current native coverage,
+hosted execution gaps, and operational detail belong in:
 
-Stateful evaluators must use a disposable workspace or retire only their own
-explicitly classified active fixtures before recreating them. Product
-projections may bound evaluator noise, but must not relabel it as user
-state or conceal its synthetic origin.
+- [Lab decision](decisions/0012-useful-device-lab-and-real-experiments.md);
+- [Hosted verification](operations/lab-ci-verification.md);
+- [Appearance](evaluations/2026-09-04-lab-appearance/README.md),
+  [diagnostics](evaluations/2026-09-04-lab-diagnostics/README.md),
+  [faults](evaluations/2026-09-04-lab-faults/README.md),
+  [stage correlation](evaluations/2026-09-04-lab-stages/README.md), and
+  [MetricKit](evaluations/2026-09-04-lab-metrickit/README.md) evaluations.
 
-Internal iOS Lab now joins device inspection and recovery tools with a real
-model experiment loop. Testers compare two server-approved configurations on
-the same registered synthetic input, inspect actual output and execution
-evidence, and save a review. Successful execution carries no quality verdict
-and reviews do not change the product model or release gates. Device tools are
-available offline in internal builds; remote experiments still require the
-authenticated backend capability. The build gate and current scope are recorded
-in [ADR 0012](decisions/0012-useful-device-lab-and-real-experiments.md).
-The runtime extension adds approved backend selection, deployment preflight,
-separate environment/account/user recovery, active-work blockers, and native
-switch/relaunch/return evidence. Session model trials now apply an admitted
-configuration to ordinary product tasks, preserve governed tools, distinguish
-provider execution from product adoption, and expire or roll back explicitly.
-Durable text batches now freeze case sets and repeated A/B attempts, enforce
-call reservations, recover after relaunch, and preserve results through
-cancellation or worker loss. Selected failures now become immutable regression
-cases with frozen-input reruns, scoped recovery, reviewed exports and derivative
-deletion. The shared evaluation runner checks recorded rerun integrity without
-turning preferences into quality verdicts. CI exercises this lifecycle with a
-synthetic provider. Case-specific consumption now has a configured workflow
-and backend verification path, with native readback and explicit quality and
-release-enforcement boundaries. Actual hosted execution remains required;
-see the [operator workflow](operations/lab-ci-verification.md).
-Device appearance now adds a compiled page-state catalog, named local presets,
-and expiring app-wide display trials with an explicit restore action. System
-accessibility protections remain authoritative. Native apply/navigation/restore,
-relaunch and AX5 evidence lives in the
-[appearance evaluation](evaluations/2026-09-04-lab-appearance/README.md).
-Guided diagnostics now records an explicit task session with typed request
-phases, bounded device samples, manual observations, background/context stop,
-interrupted checkpoints, reviewed export and verified local deletion. Real
-loopback timing, redirect rejection and native record/relaunch/file-export
-evidence are recorded in the
-[diagnostics evaluation](evaluations/2026-09-04-lab-diagnostics/README.md).
-Isolated fault presets now exercise real workspace reads and product pages,
-with retry, cancellation, expiry and background recovery. The unavailable-source
-fixture exposed and corrected Today hiding lost evidence authority behind a
-freshness label; see the [fault evaluation](evaluations/2026-09-04-lab-faults/README.md).
-Automatic client operations now correlate with typed, request-local backend
-stages. Reports preserve separate clocks, partial outcomes and synthetic origin;
-see the [stage evaluation](evaluations/2026-09-04-lab-stages/README.md).
-MetricKit history adds explicit reception, bounded typed summaries, reviewed
-exports and deletion-aware recovery. Simulator UI and lifecycle checks are
-separate from the outstanding physical-device callback proof; see the
-[MetricKit evaluation](evaluations/2026-09-04-lab-metrickit/README.md).
-The broader Lab roadmap remains in the
-[complete implementation plan](../plans/2026-09-04-lab-complete-runtime.md).
+Stateful evaluators use disposable workspaces or retire only their own classified
+fixtures. Evaluation data remains visibly synthetic and cannot be relabeled as
+user state or silently hidden inside product projections.
 
-The earlier five-scenario deterministic Lab remains a named secondary task on
-iOS and the existing Web experience. It binds replay and baseline comparison
-to frozen synthetic evidence, records a redacted Reality Receipt, and permits
-explicit promotion into an Eval Case. Both quality paths have zero authority
-over canonical relationship state or external effects. Real-model experiment
-UI is currently native iOS only.
+## Evidence-gated sequence
 
-## Delivery sequence
+### 1. Useful capture and selective continuity
 
-### 1. Pursuit contract and governed evidence
+Show what one authorized source means before imposing organization work. Resolve
+identity and scope only where material. Separate Person, time-bound Memory, and
+continuing work; no next step is a valid result. Preserve the admitted source's
+retention boundary separately from confirmed long-lived context.
 
-One concrete Pursuit provides the target outcome, contextual roles, criteria,
-gaps, actions, and revisions. One real source becomes inspectable evidence,
-correctly bound Pursuit and person context, and reviewed temporal state across
-mobile and web.
+Complete the slice when the user can inspect and correct it, then reload the
+correct destination in the same authenticated account. Include ambiguity,
+no-history, account switching, unknown save results, retry, and source deletion.
+Source loss degrades current authority without rewriting historical decisions
+or exposing deleted content.
 
-The slice is complete when the user can correct it and deletion reaches every
-derived representation.
+### 2. One unfinished thing that can change
 
-The current governed slice computes evidence authority at read time for roles,
-gaps, Proposals, and Today; source deletion supersedes open dependent review
-work, redacts source-derived Proposal and operation narratives, degrades applied
-milestone authority without rewriting its value, and preserves non-content
-confirmer, time, Receipt, and deletion lineage. iOS
-typed-signal recovery is isolated by an authenticated workspace readback before
-payload display, and same-name selection binds a visible stable Person clue.
+Reuse a concrete outcome and existing owned work rather than creating a task
+for every import. Show owner, dependency, timing when known, and close condition.
+A new reply can propose waiting, completion, a changed plan, or stop while keeping
+history. Do not infer a deadline or interest level from silence.
 
-### 2. One safe action
+An internal action closes only after its owner records an observed outcome.
+Persist operation identity before submission; reconcile unknown results before
+retry and verify the exact canonical Receipt. Internal completion never claims
+that an email, calendar, CRM, ATS, or message write occurred.
 
-V1 closes one owned internal action only after the owner records an observed
-outcome. The client persists its operation ID before submission; response loss
-locks until exact-ID canonical readback, including after relaunch, without a
-second POST. Completion is revisioned and idempotent, returns a matching Receipt
-and readback, and has no external effects. Any consequential destination write
-still requires separate approval, execution, observation, and recovery.
+### 3. Return before the next exchange
 
-### 3. Pursuit and relationship continuity
+Retrieve current supported background and unfinished work through Sessions,
+People, Meetings, and Today. Test that a later exchange updates the same governed
+context, that superseded plans do not drive advice, and that cross-surface return
+preserves account scope. Measure reduced reconstruction and purposeful return
+with authorized studies; import or Memory counts alone cannot prove value.
 
-Today, Pursuits, People, timeline, and living pages use confirmed state and
-observed outcomes to reduce context reconstruction and surface one current
-dependency against the target outcome.
+### 4. Publish the visible promise
 
-### 4. Reviewable learning
+Align the public website, client display names, and current capability labels
+with the proven loop. Separate working functionality, configured or restricted
+access, synthetic demonstration, and planning. Validate mobile readability,
+reduced motion, and first-use understanding as well as rendered visual quality.
 
-Repeated corrections and outcomes may produce a tentative playbook with
-evidence, exceptions, and a next validation window.
+Persistent identifiers, existing data, update channels, and links remain stable
+unless a separately verified migration justifies changing them. Do not make
+internal package renaming a prerequisite for usable value.
 
-### 5. Bounded Agent access
+### 5. Governed continuation and learning
 
-The V1 provider-neutral runner and Claude Agent SDK adapter can read one frozen
-Pursuit/evidence scope and form one review-only Proposal or `no_action`. It has
-no shell, Web, browser, identity, confirmation, or external-effect authority.
-The deterministic control-plane evaluation runs six cases five times; live
-Claude evidence remains explicitly missing until credentials and a model are
-authorized.
+Add reminders only when admitted triggers, pause, stop, cancellation, and recovery
+are observable. Keep quiet when there is no change or actionable result. Repeated
+corrections may produce tentative playbooks with evidence, exceptions, and a next
+validation window; they cannot confirm themselves.
 
-### 6. Evidence-gated expansion
+### 6. Bounded Agent access and expansion
 
-Add new channels, connectors, parallel research, or specialized infrastructure
-only after the earlier loop demonstrates recurring value and acceptable trust.
+The provider-neutral runner and admitted adapter paths may read frozen authorized
+scope and produce review-only Proposals or `no_action`. Their capabilities,
+budgets, live credentials, and release evidence must be verified independently.
+A generic open-ended runtime or production external-Agent protocol is not implied
+by a local worker, control-plane evaluation, or proposed design.
 
-## Prioritization
-
-Prefer work that improves:
-
-- evidence correctness;
-- time to useful review;
-- user correction and control;
-- resolution of a real dependency;
-- external-effect verification;
-- deletion and recovery;
-- reuse across surfaces without widening scope.
-
-Deprioritize work that mainly increases feature count, generated prose,
-automation theater, or speculative infrastructure.
+Add channels, connectors, or infrastructure only after continuity earns recurring
+value and acceptable trust. Consequential external effects require exact approval,
+controlled execution, readback, and recovery regardless of channel.
 
 ## Definition of done
 
 A delivery is done when:
 
-- the user outcome is directly observable;
-- consequential state is evidence-backed and auditable;
-- ambiguity, no-action, failure, stale state, and retry are safe;
-- the relevant surface has been tested;
-- the next Agent can recover intent from repository state;
-- durable learning has been consolidated without bloating always-on context.
+- the requested user outcome is directly observable on every in-scope surface;
+- consequential claims remain evidence-backed, attributable, and auditable;
+- relevant ambiguity, no-action, failure, stale state, retry, stop, and deletion are safe;
+- current-head checks and required runtime acceptance have passed;
+- capability and release claims match actual proof;
+- resumable state and durable learning are in their authoritative homes.
 
-## Planning
-
-Use [`PLANS.md`](../PLANS.md) for active multi-step work. Delivery phases
-describe direction; plans describe the current execution.
+Use [PLANS.md](../PLANS.md) for active state and [REVIEW.md](../REVIEW.md) for
+independent outcome review. These milestones express direction; plans own the
+current implementation sequence and remaining requirements.

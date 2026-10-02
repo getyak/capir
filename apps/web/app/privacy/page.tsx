@@ -6,7 +6,7 @@ import { SiteHeader } from "@/components/site-header";
 export const metadata: Metadata = {
   title: "隐私原则",
   description:
-    "了解 Talent Signal 如何处理主动导入的证据、用户确认、来源追溯与删除。",
+    "了解 capri 如何处理主动导入的证据、用户确认、来源追溯与删除。",
   alternates: {
     canonical: "/privacy",
   },
@@ -22,7 +22,7 @@ export default function PrivacyPage() {
             <p className="eyebrow">隐私原则</p>
             <h1>关系背景值得被审慎处理。</h1>
             <p>
-              Talent Signal 围绕主动导入、明确确认和始终可查验的证据而设计。
+              capri 围绕主动导入、明确确认和始终可查验的证据而设计。
             </p>
           </header>
 
@@ -64,7 +64,7 @@ export default function PrivacyPage() {
           <aside>
             <h2>关于在线演示</h2>
             <p>
-              本地模式使用浏览器端的确定性规则，不会传输对话文本。可选的私密 AI 路径只有在用户主动选择后才会运行；笔记会在请求零留存与不收集数据的前提下发送给已配置的模型服务商。Talent Signal 不会持久化该笔记，也不会把它写入应用日志。
+              本地模式使用浏览器端的确定性规则，不会传输对话文本。可选的私密 AI 路径只有在用户主动选择后才会运行；笔记会在请求零留存与不收集数据的前提下发送给已配置的模型服务商。capri 不会持久化该笔记，也不会把它写入应用日志。
             </p>
             <Link className="text-link" href="/demo">
               打开在线演示

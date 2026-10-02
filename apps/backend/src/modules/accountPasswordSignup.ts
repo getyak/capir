@@ -87,9 +87,9 @@ function verificationMessage(
 ): { subject: string; text: string } {
   const link = verificationLink(config, secret);
   return {
-    subject: "Confirm your Talent Signal email",
+    subject: "Confirm your capri email",
     text: [
-      "Confirm this email address to finish creating your Talent Signal account.",
+      "Confirm this email address to finish creating your capri account.",
       "",
       link,
       "",
@@ -102,9 +102,9 @@ function verificationMessage(
 
 function existingOwnerNotice(): { subject: string; text: string } {
   return {
-    subject: "Your Talent Signal sign-in",
+    subject: "Your capri sign-in",
     text: [
-      "Someone asked to create a Talent Signal account with this email,",
+      "Someone asked to create a capri account with this email,",
       "but it already has one. Sign in with the method you already use;",
       "you can connect additional sign-in methods in Settings.",
       "",

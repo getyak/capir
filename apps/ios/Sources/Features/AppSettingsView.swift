@@ -192,7 +192,7 @@ struct AppSettingsView: View {
                     systemImage: "text.bubble",
                     title: interfaceLanguage.text("Interface language only"),
                     detail: interfaceLanguage.text(
-                        "Candidate names, quoted evidence, and source-authored content stay in their original language."
+                        "Person names, quoted evidence, and source-authored content stay in their original language."
                     )
                 )
             } header: {
@@ -451,7 +451,7 @@ struct ActionButtonSetupView: View {
                     number: 2,
                     systemImage: "text.viewfinder",
                     title: appLanguage.text("Review screenshot"),
-                    owner: appLanguage.text("Talent Signal action")
+                    owner: appLanguage.text("capri action")
                 )
 
                 SettingsExplanationRow(
@@ -522,7 +522,7 @@ struct ActionButtonSetupView: View {
             } footer: {
                 Text(
                     appLanguage.text(
-                        "Only you can assign it in Settings. Talent Signal cannot read or change the Action Button binding."
+                        "Only you can assign it in Settings. capri cannot read or change the Action Button binding."
                     )
                 )
             }
@@ -575,7 +575,7 @@ struct ActionButtonSetupView: View {
             } footer: {
                 Text(
                     appLanguage.text(
-                        "Shortcuts opens your existing shortcuts and Talent Signal app actions."
+                        "Shortcuts opens your existing shortcuts and capri app actions."
                     )
                 )
             }
@@ -585,7 +585,7 @@ struct ActionButtonSetupView: View {
                     systemImage: "lock.shield",
                     title: appLanguage.text("Safety boundary"),
                     detail: appLanguage.text(
-                        "The button saves locally. Reviewed text is sent only after you tap Save and check identity; no candidate fact or external action is confirmed automatically."
+                        "The button saves locally. Reviewed text is sent only after you tap Save and check identity; no person fact or external action is confirmed automatically."
                     )
                 )
             }
@@ -654,12 +654,12 @@ private struct ScreenshotShortcutVerificationRow: View {
     private var detail: String {
         if isVerified {
             return appLanguage.text(
-                "Talent Signal received a screenshot through Shortcuts. It stays in the local review queue until you review or delete it."
+                "capri received a screenshot through Shortcuts. It stays in the local review queue until you review or delete it."
             )
         }
         if isAssignmentConfirmed {
             return appLanguage.text(
-                "Your assignment is noted. Talent Signal will verify its own capture path when the first screenshot arrives."
+                "Your assignment is noted. capri will verify its own capture path when the first screenshot arrives."
             )
         }
         return appLanguage.text(
@@ -808,7 +808,7 @@ struct AccountSettingsView: View {
     }
 
     private var displayName: String {
-        accountName ?? "Talent Signal"
+        accountName ?? "capri"
     }
 
     private var boundaryCopy: String {
@@ -818,7 +818,7 @@ struct AccountSettingsView: View {
             )
         }
         return appLanguage.text(
-            "No candidate data is stored in this synthetic preview. Nothing shown here has execution authority."
+            "No personal data is stored in this synthetic preview. Nothing shown here has execution authority."
         )
     }
 }
@@ -891,7 +891,7 @@ struct CalendarSyncSettingsView: View {
                 Text(appLanguage.text("Calendar sync"))
             } footer: {
                 Text(
-                    appLanguage.text("New events sync outbound after confirmation. Talent Signal never imports or browses Apple Calendar; after you review an edit to a linked event, it reads only that saved identifier to update and verify that event.")
+                    appLanguage.text("New events sync outbound after confirmation. capri never imports or browses Apple Calendar; after you review an edit to a linked event, it reads only that saved identifier to update and verify that event.")
                 )
             }
 
@@ -899,7 +899,7 @@ struct CalendarSyncSettingsView: View {
                 SettingsExplanationRow(
                     systemImage: "arrow.up.forward.app",
                     title: appLanguage.text("Outbound only"),
-                    detail: appLanguage.text("Turning sync off keeps new events in Talent Signal. A reviewed edit to an already linked event still updates that event only.")
+                    detail: appLanguage.text("Turning sync off keeps new events in capri. A reviewed edit to an already linked event still updates that event only.")
                 )
             }
         }

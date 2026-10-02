@@ -1,165 +1,46 @@
 ---
 name: talent-signal-conventions
-description: Development conventions and patterns for talent-signal. TypeScript project with freeform commits.
+description: Follow capri repository conventions for implementation, testing, documentation, and review. Use when changing this repository; its existing directory and package identifiers remain compatibility contracts.
 ---
 
-# Talent Signal Conventions
+# capri development conventions
 
-> Generated from [getyak/talent-signal](https://github.com/getyak/talent-signal) on 2026-08-04
+## Load the relevant owners
 
-## Overview
+Start with `../../../AGENTS.md` and `../../../docs/README.md`, then read only the
+canonical branch needed by the task. Use `../../../PLANS.md` for substantial
+work and `../../../REVIEW.md` for outcome verification.
 
-This skill teaches Claude the development patterns and conventions used in talent-signal.
+Read the package manifest, adjacent implementation, and relevant tests before
+choosing commands or conventions. Root scripts and package configuration own
+current executable behavior; an old generated two-commit style sample does not.
 
-## Tech Stack
+## Product boundaries
 
-- **Primary Language**: TypeScript
-- **Architecture**: hybrid module organization
-- **Test Location**: mixed
-- **Test Framework**: vitest
+Read `../../../docs/product.md` for current personal-Agent scope. A screenshot
+is purpose-bound intake, not confirmation of every extracted field. Person,
+Memory, continuing work, and an Agent execution state have different owners.
+Use recruiting language only for actual recruiting work.
 
-## When to Use This Skill
+Preserve identity, evidence provenance, time, authorization, and recovery. A
+model answer or saved page cannot authorize an external effect. Do not log raw
+conversations, screenshots, credentials, or unbounded provider errors.
 
-Activate this skill when:
-- Making changes to this repository
-- Adding new features following established patterns
-- Writing tests that match project conventions
-- Creating commits with proper message format
+## Work and verification
 
-## Commit Conventions
+- Preserve unrelated changes and isolate concurrent write work.
+- Use patterns and commands from the affected package rather than imposing one
+  universal filename, alias, framework, or logging convention.
+- Run the narrowest relevant checks and the required repository gates.
+- Verify changed persistence through the destination and reload; a receipt or
+  helper test alone is insufficient.
+- Run `pnpm docs:check` for documentation; edit generated Wiki pages through
+  their `_index/` source.
+- Use the documented native test session and storage guard only when native
+  boundaries require testing.
+- Keep display branding separate from package, database, Bundle ID, keychain,
+  extension, and update-channel identities.
 
-Follow these commit message conventions based on 2 analyzed commits.
-
-### Commit Style: Free-form Messages
-
-### Message Guidelines
-
-- Average message length: ~36 characters
-- Keep first line concise and descriptive
-- Use imperative mood ("Add feature" not "Added feature")
-
-
-*Commit message example*
-
-```text
-Expand candidate evidence workspace
-```
-
-*Commit message example*
-
-```text
-Document shared product architecture
-```
-
-## Architecture
-
-### Project Structure: Monorepo
-
-This project uses **hybrid** module organization.
-
-### Configuration Files
-
-- `apps/web/package.json`
-
-### Guidelines
-
-- This project uses a hybrid organization
-- Follow existing patterns when adding new code
-
-## Code Style
-
-### Language: TypeScript
-
-### Naming Conventions
-
-| Element | Convention |
-|---------|------------|
-| Files | camelCase |
-| Functions | camelCase |
-| Classes | PascalCase |
-| Constants | SCREAMING_SNAKE_CASE |
-
-### Import Style: Path Aliases (@/, ~/)
-
-### Export Style: Named Exports
-
-
-*Preferred import style*
-
-```typescript
-// Use path aliases for imports
-import { Button } from '@/components/Button'
-import { useAuth } from '@/hooks/useAuth'
-import { api } from '@/lib/api'
-```
-
-*Preferred export style*
-
-```typescript
-// Use named exports
-export function calculateTotal() { ... }
-export const TAX_RATE = 0.1
-export interface Order { ... }
-```
-
-## Testing
-
-### Test Framework: vitest
-
-### File Pattern: `*.test.ts`
-
-### Test Types
-
-- **Unit tests**: Test individual functions and components in isolation
-
-
-*Test file structure*
-
-```typescript
-import { describe, it, expect } from 'vitest'
-
-describe('MyFunction', () => {
-  it('should return expected result', () => {
-    const result = myFunction(input)
-    expect(result).toBe(expected)
-  })
-})
-```
-
-## Error Handling
-
-### Error Handling Style: Try-Catch Blocks
-
-
-*Standard error handling pattern*
-
-```typescript
-try {
-  const result = await riskyOperation()
-  return result
-} catch (error) {
-  console.error('Operation failed:', error)
-  throw new Error('User-friendly message')
-}
-```
-
-## Best Practices
-
-Based on analysis of the codebase, follow these practices:
-
-### Do
-
-- Write tests using vitest
-- Follow *.test.ts naming pattern
-- Use camelCase for file names
-- Prefer named exports
-
-### Don't
-
-- Don't use long relative imports (use aliases)
-- Don't skip tests for new features
-- Don't deviate from established patterns without discussion
-
----
-
-*This skill was auto-generated by [ECC Tools](https://ecc.tools). Review and customize as needed for your team.*
+Commit descriptions explain the concrete user outcome and its verification.
+Durable learning belongs in its authoritative document or focused method rather
+than another copy of repository-wide instructions.

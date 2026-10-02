@@ -1,13 +1,13 @@
 import { normalizeLocalOrigin } from "./handoff-contract.js";
 
-// Runs only in a tab at the user's selected Talent Signal origin. The browser
+// Runs only in a tab at the user's selected capri origin. The browser
 // attaches HttpOnly cookies; credentials never enter extension state.
 export async function webRequest(originValue, path, options = {}) {
   const origin = normalizeLocalOrigin(originValue);
   if (!/^\/api\/browser-extension\/(session|captures(?:\/[a-zA-Z0-9-]{8,80})?)$/.test(path)) throw new Error("Unsupported capture endpoint.");
   const tabs = await chrome.tabs.query({ url: `${origin}/*` });
   const tab = tabs.find(item => item.id && item.url && new URL(item.url).origin === origin);
-  if (!tab) throw new Error("Open Talent Signal and sign in, then connect again.");
+  if (!tab) throw new Error("Open capri and sign in, then connect again.");
   const [{result}] = await chrome.scripting.executeScript({
     target: {tabId: tab.id},
     args: [origin, path, options],

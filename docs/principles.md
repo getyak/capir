@@ -1,12 +1,13 @@
 # Product principles
 
 > Status: durable product judgment
-> Scope: evidence-first relationships across client work, partnerships, and collaboration
+> Scope: a personal Agent preserving important people and unfinished things
 
 ## Why this product exists
 
-Meaningful relationships depend on remembered context, clear commitments,
-and the resolution of uncertainty before a consequential decision.
+Meaningful conversations leave background, promises, and unanswered questions
+that will matter again. The product helps the user keep those parts and recover
+them when the next exchange needs them.
 
 The work unfolds through private conversations, changing constraints, partial
 trust, and decisions that expire. Important truth is often known by the
@@ -52,7 +53,9 @@ choose one timely next step.
 - Preserve exact evidence and its scope.
 - Let the user correct identity, meaning, and current state.
 - Keep confirmation and action approval as separate decisions.
-- Show one current dependency or next action before broad analysis.
+- Explain useful understanding before requiring organization.
+- Preserve background without inventing a task, deadline, or urgency.
+- Show one supported dependency or next action when it actually matters.
 - Keep every consequential interpretation provisional and inspectable.
 - Learn from corrections and outcomes without turning people into scores.
 - Make generated views disposable and rebuildable from governed state.
@@ -78,6 +81,8 @@ Primary outcomes are:
 - fewer meaningful commitments and constraints lost between conversations;
 - faster resolution of the dependency that controls the next decision;
 - less time rebuilding context;
+- purposeful return before the next exchange;
+- fewer unwanted reminders and more control over waiting or stopping;
 - more actions completed at an appropriate moment;
 - fewer corrections caused by wrong identity, stale state, or unsupported
   interpretation;

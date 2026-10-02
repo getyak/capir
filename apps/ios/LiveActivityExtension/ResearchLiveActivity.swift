@@ -7,7 +7,7 @@ struct ResearchLiveActivity: Widget {
         ActivityConfiguration(for: ResearchActivityAttributes.self) { context in
             let view = presentation(context)
             ActivityHandoffLockScreen(
-                name: researchLocalized("Talent Signal Research"),
+                name: researchLocalized("capri Research"),
                 content: content(context, view: view)
             )
             .activityBackgroundTint(Color.signalActivityBackground)

@@ -96,7 +96,7 @@ final class VoiceInputStore: ObservableObject {
             self.sceneIsActive = sceneIsActive
             guard sceneIsActive else {
                 self.phase = .failed(
-                    "Keep Talent Signal in the foreground to use voice input."
+                    "Keep capri in the foreground to use voice input."
                 )
                 return .skipped
             }
@@ -243,7 +243,7 @@ final class VoiceInputStore: ObservableObject {
         phase = .failed(
             wasTranscribing
                 ? "Voice transcription was interrupted. The temporary recording was deleted; the provider result is unavailable."
-                : "Voice input stopped when Talent Signal left the foreground. No audio was sent."
+                : "Voice input stopped when capri left the foreground. No audio was sent."
         )
     }
 
@@ -943,7 +943,7 @@ struct RelationshipAskView: View {
         } message: {
             Text(
                 appLanguage.text(
-                    "When available, provisional words appear on device while you speak. After you stop, the temporary recording goes to Doubao to create an editable draft. Nothing is sent to Agent until you tap Send. Talent Signal deletes its temporary audio after transcription; provider handling follows your service agreement."
+                    "When available, provisional words appear on device while you speak. After you stop, the temporary recording goes to Doubao to create an editable draft. Nothing is sent to Agent until you tap Send. capri deletes its temporary audio after transcription; provider handling follows your service agreement."
                 )
             )
         }
@@ -4098,7 +4098,7 @@ struct RelationshipAskView: View {
         case .peopleCount:
             title = appLanguage.text("Current workspace")
             if appLanguage.usesSimplifiedChinese() {
-                body = "当前已同步的工作区中有 \(peopleCount) 位联系人，覆盖 \(relationshipCount) 段关系。这个结果由本机工作区索引直接计算；没有打开候选人对话，也没有调用远程模型。"
+                body = "当前已同步的工作区中有 \(peopleCount) 位联系人，覆盖 \(relationshipCount) 段关系。这个结果由本机工作区索引直接计算；没有打开聊天内容，也没有调用远程模型。"
             } else {
                 let contacts = peopleCount == 1
                     ? "1 contact"
@@ -4544,7 +4544,7 @@ struct RelationshipAskView: View {
             reviewRecoveryOwner = reviewOwner
             errorRecovery = .reviewSource(requirement)
             errorMessage = appLanguage.text(
-                "One exact source has not completed its current recruiter review. Your question is still in the composer. Review the source below; a new Ask will still require a separate tap."
+                "One exact source has not completed its current user review. Your question is still in the composer. Review the source below; a new Ask will still require a separate tap."
             )
             return
         }
@@ -8715,7 +8715,7 @@ private struct AskCitationDetailView: View {
         } message: {
             Text(
                 language.text(
-                    "This records a new recruiter review. It does not send the saved question or perform any external action."
+                    "This records a new user review. It does not send the saved question or perform any external action."
                 )
             )
         }

@@ -462,7 +462,7 @@ export function DemoWorkbench({
           <p id="conversation-evidence-help" className="field-helper">
             {mode === "local"
               ? "本地规则仅在浏览器中运行，文本不会被传输或保存。"
-              : `该笔记会发送给 ${aiProvider} 进行临时分析，Talent Signal 不会将其持久化。`}
+              : `该笔记会发送给 ${aiProvider} 进行临时分析，capri 不会将其持久化。`}
           </p>
           {phase === "error" && (
             <p id="conversation-evidence-error" className="field-error">

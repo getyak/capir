@@ -971,7 +971,7 @@ function LegacySessionWorkbench({
                   <p className={chatStyles.userMessage}>{turn.objective}</p>
                   {blocks.length ? (
                     <div className={chatStyles.assistantMessage}>
-                      <span className={chatStyles.assistantMark} role="img" aria-label="Talent Signal" />
+                      <span className={chatStyles.assistantMark} role="img" aria-label="capri" />
                       <div className={chatStyles.assistantBody}>
                       {blocks.map((block) => {
                         const title = sessionBlockTitle(block.title);

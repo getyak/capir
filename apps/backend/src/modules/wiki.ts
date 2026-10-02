@@ -274,10 +274,10 @@ function resourceBlock(
           ? "confirmed"
           : "proposed",
         content: {
-          headline: `Recruiter note · ${resource.displayName}`,
+          headline: `Personal note · ${resource.displayName}`,
           summary:
             excerpts[0] ??
-            "The recruiter saved a note without candidate attribution.",
+            "The user saved a personal note; it is not a statement attributed to the other person.",
           items: [
             `Recorded ${observedDate}`,
             ...(resource.fragments.some(
@@ -305,7 +305,7 @@ function resourceBlock(
             resource.kind === "resume" ? "Resume" : "Document"
           } · ${resource.displayName}`,
           summary:
-            "Extracted document evidence. Treat statements as source claims until the recruiter reviews and confirms the relevant facts.",
+            "Extracted document evidence. Treat statements as source claims until the user reviews and confirms the relevant facts.",
           items: excerpts,
         },
         valid_from: observedDate,
@@ -428,7 +428,7 @@ export function researchBlock(
     content: {
       headline: `Public research · ${new URL(research.canonical_url).hostname}`,
       summary:
-        "A bounded public-page snapshot. It is context for recruiter review, not a confirmed fact about the person.",
+        "A bounded public-page snapshot. It is context for human review, not a confirmed fact about the person.",
       items: [
         research.canonical_url,
         `Retrieved ${research.retrieved_at.toISOString()} · extraction ${research.review_status}`,
@@ -1101,7 +1101,7 @@ export async function compileRelationshipWiki(
               conflict.evidence_fragment_id,
               isConflict
                 ? "The conflicting source claim remains visible instead of silently overwriting confirmed state."
-                : "The unconfirmed source claim remains visible for recruiter review.",
+                : "The unconfirmed source claim remains visible for human review.",
               authorizationScope,
             ),
             ...(conflict.supersedes_state_id
@@ -1187,7 +1187,7 @@ export async function compileRelationshipWiki(
         dependency(
           "evidence_fragment",
           item.id,
-          "The recruiter-owned next move cites this reviewed source fragment.",
+          "The user-owned next move cites this reviewed source fragment.",
           authorizationScope,
         ),
       );

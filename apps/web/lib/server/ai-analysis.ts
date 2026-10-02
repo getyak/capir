@@ -84,7 +84,7 @@ export async function analyzeWithAi(
       "Content-Type": "application/json",
       "HTTP-Referer":
         process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
-      "X-Title": "Talent Signal evidence review",
+      "X-Title": "capri evidence review",
     },
     body: JSON.stringify({
       models: getModels(),

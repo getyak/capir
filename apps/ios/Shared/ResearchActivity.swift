@@ -71,7 +71,7 @@ enum ResearchActivityProjector {
         guard let view = try? project(state) else {
             return viewState(
                 eyebrow: researchLocalized("CHECK STATUS"),
-                title: researchLocalized("Open Talent Signal"),
+                title: researchLocalized("Open capri"),
                 supportingText: researchLocalized("This update needs review"),
                 boundaryText: researchLocalized("Nothing used automatically"),
                 action: nil,
@@ -149,7 +149,7 @@ enum ResearchActivityProjector {
             boundaryText: boundaryText,
             action: action,
             accessibilityLabel: [
-                researchLocalized("Talent Signal Research"),
+                researchLocalized("capri Research"),
                 title,
                 supportingText,
                 boundaryText,

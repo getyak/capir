@@ -45,7 +45,7 @@ export default async function DesktopAuthAuthorizePage({
     /^[A-Za-z0-9_-]{32,256}$/.test(state);
   if (!validShape) {
     return (
-      <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">Talent Signal</Link><span>Mac 登录</span></div><div className={styles.content}>
+      <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">capri</Link><span>Mac 登录</span></div><div className={styles.content}>
         <h1>登录请求无效</h1>
         <p>这个登录链接不完整。请回到 Mac，重新发起登录。</p>
       </div></main>
@@ -82,7 +82,7 @@ export default async function DesktopAuthAuthorizePage({
       error instanceof DesktopAuthRequestError ||
       (error instanceof Error && "code" in error);
     return (
-      <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">Talent Signal</Link><span>Mac 登录</span></div><div className={styles.content}>
+      <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">capri</Link><span>Mac 登录</span></div><div className={styles.content}>
         <h1>登录请求无法核对</h1>
         <p>
           {unknown
@@ -100,7 +100,7 @@ export default async function DesktopAuthAuthorizePage({
     identity.user.id !== claims.backendUserId
   ) {
     return (
-      <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">Talent Signal</Link><span>Mac 登录</span></div><div className={styles.content}>
+      <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">capri</Link><span>Mac 登录</span></div><div className={styles.content}>
         <h1>登录状态已变化</h1>
         <p>浏览器的登录身份与页面显示不一致。请回到 Mac，重新发起登录。</p>
         <Link href="/workspace">回到工作区</Link>
@@ -127,7 +127,7 @@ export default async function DesktopAuthAuthorizePage({
       },
     }[grant.state];
     return (
-      <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">Talent Signal</Link><span>Mac 登录</span></div><div className={styles.content}>
+      <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">capri</Link><span>Mac 登录</span></div><div className={styles.content}>
         <h1>{outcome.title}</h1>
         <p>{outcome.message}</p>
         <Link href="/workspace">回到工作区</Link>
@@ -142,7 +142,7 @@ export default async function DesktopAuthAuthorizePage({
     backendUserId: claims.backendUserId,
   });
   return (
-    <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">Talent Signal</Link><span>Mac 登录</span></div><div className={styles.content}>
+    <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">capri</Link><span>Mac 登录</span></div><div className={styles.content}>
       <h1>确认在这台 Mac 上登录</h1>
       <p className={styles.description}>确认账号与匹配码后，工作区将在 Mac 上打开。</p>
       <div className={styles.identity}>

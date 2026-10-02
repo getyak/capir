@@ -1,7 +1,7 @@
 # Architecture
 ## Purpose
 
-Talent Signal needs one trustworthy Pursuit and relationship state across
+capri needs one trustworthy Pursuit and relationship state across
 mobile capture, desktop review, future channels, and external agents.
 
 The architecture therefore separates:
@@ -17,7 +17,7 @@ No client, model, channel, connector, or generated document is the source of
 truth.
 ## System shape
 
-![Talent Signal system architecture](talent-signal-system-architecture.png)
+![capri system architecture](talent-signal-system-architecture.png)
 
 The system has five conceptual layers:
 
@@ -32,7 +32,7 @@ interaction modes while sharing identity, evidence, review, and action state thr
 
 The control plane governs intent, task lifecycle, authorization, context,
 review, approval, and audit. It decides what may proceed; it does not invent
-candidate truth.
+relationship truth.
 
 ### Truth, memory, and knowledge
 
@@ -286,7 +286,7 @@ Recovery is part of the ordinary product, not an operational exception.
 
 ## Product architecture
 
-![Talent Signal product architecture](talent-signal-product-architecture.png)
+![capri product architecture](talent-signal-product-architecture.png)
 
 The product view shows how capture, Agent drafting, user confirmation, and
 relationship continuity fit together. The editable source is

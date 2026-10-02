@@ -24,7 +24,7 @@ The method is deliberately more rigorous than a charismatic interview impression
 
 **Observed:** scholarly, humane, international, long-horizon, elegant, quietly demanding. Connects empirical patterns, executive stories, moral obligations, and practical decision discipline.
 
-For Talent Signal:
+For capri:
 
 - Ask what evidence would justify a claim.
 - Distinguish current fact, readiness, and potential.
