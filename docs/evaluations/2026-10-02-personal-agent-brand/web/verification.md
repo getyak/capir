@@ -29,3 +29,12 @@ The visible localized FAQ and FAQPage structured data share `lib/personal-agent-
 Static A desktop/mobile evidence and source prototypes are retained here. The parent independently rendered both A and B, selected A's source-to-result hero plus B's continuity section, and owns final real-browser verification at desktop/mobile, light/dark, keyboard, reduced motion, source removal, update, and pause. These visual results are reported in the parent's evidence, not inferred from build success.
 
 The prototype server on port 4913 was stopped. Isolated temporary Chrome profiles were removed. No simulator or native build was started by this Web task.
+
+## Full CI correction
+
+The first complete Web run passed 1,662 tests and found one stale marketing-locale
+assertion requiring the former demo anchor. The same test also held the legacy
+email-subject expectation, masked by its first failure. Both expectations now
+match the actual new homepage anchor and capri access subject. Four relevant
+files / 25 tests passed after correction; no production behavior changed.
+Latest-head CI is verified separately through the associated GitHub PR checks.

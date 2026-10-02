@@ -122,7 +122,7 @@ references; preserve historical decisions, test evidence and still-valid guides.
 - [x] Update Figma and read back text/naming counts and representative layout.
 - [x] Review documentation cleanup and all residual-name classifications.
 - [x] Independent review; resolve confirmed critical/high-priority defects.
-- [ ] Relevant lint/typecheck/tests/build/docs/brand checks and real browser
+- [x] Relevant lint/typecheck/tests/build/docs/brand checks and real browser
   desktop/mobile/theme/reduced-motion/keyboard proof for the changed surface.
 - [ ] Push reviewable PR, satisfy applicable latest-head checks and repository
   gates, merge when permitted, verify default-branch README.

@@ -37,9 +37,9 @@ describe("public website locale negotiation", () => {
         (href) => href.startsWith("/") && !href.includes("#"),
       ),
     ).toBe(true);
-    expect(relationshipDemoHref).toBe("/relationships#relationship-experience");
+    expect(relationshipDemoHref).toBe("/#personal-agent-demo");
     expect(marketingAccessHref("en")).toBe(
-      "mailto:hello@talentsignal.ai?subject=Request%20Talent%20Signal%20access",
+      "mailto:hello@talentsignal.ai?subject=Request%20capri%20access",
     );
   });
 });
