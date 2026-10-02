@@ -3,6 +3,8 @@
 import {
   Copy,
   ArrowUp,
+  DotsThree,
+  UserCircle,
   Trash,
   Warning,
 } from "@phosphor-icons/react";
@@ -11,6 +13,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { QueuedConversation } from "../conversation/queued-conversation";
+import { useConversationAxis } from "../conversation/use-conversation-axis";
+import { SessionSendTime } from "../conversation/session-execution-card";
 import { usePersonContextPanel } from "../person-context-panel";
 import { useWorkspaceChat } from "../relationship-workspace/use-workspace-chat";
 import { ConversationProvenance, ConversationResponse } from "../conversation-response";
@@ -171,6 +175,7 @@ function LegacySessionWorkbench({
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const detailsSummaryRef = useRef<HTMLElement>(null);
   const transcriptRef = useRef<HTMLElement>(null);
+  useConversationAxis(transcriptRef);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const deleteTriggerRef = useRef<HTMLButtonElement>(null);
   const wasConfirmingDelete = useRef(false);
@@ -797,14 +802,14 @@ function LegacySessionWorkbench({
           <h1 className={chatStyles.title} id="session-title" title={sessionDisplayTitle(detail.title)}>
             {sessionDisplayTitle(detail.title)}
           </h1>
-          <p className={chatStyles.subtitle}>{scope.label}</p>
         </div>
         <div className={chatStyles.headerActions}>
         {detail.person_id && detail.state === "active" && <button
           className={chatStyles.personContext}
           aria-label={`查看 ${detail.person_label || "联系人"} 的人物背景`}
+          title="人物背景"
           onClick={event => personContextPanel.open(detail.person_id!, event.currentTarget)}
-        >人物背景</button>}
+        ><UserCircle size={20} aria-hidden="true" /></button>}
         <details
           className={chatStyles.conversationDetails}
           onKeyDown={(event) => {
@@ -815,7 +820,7 @@ function LegacySessionWorkbench({
           }}
           ref={detailsRef}
         >
-          <summary ref={detailsSummaryRef}>对话详情</summary>
+          <summary ref={detailsSummaryRef} aria-label="对话详情" title="对话详情"><DotsThree size={20} aria-hidden="true" /></summary>
           <div className={chatStyles.detailsPanel}>
             <p className={styles.metaLine}>
               {scope.label} · {sessionStateLabel(detail.state)} ·{" "}
@@ -962,13 +967,12 @@ function LegacySessionWorkbench({
               const blocks = sessionTurnBlocks(turn.response);
               return (
                 <li className={chatStyles.turn} key={turn.id}>
+                  <SessionSendTime at={turn.createdAt} />
                   <p className={chatStyles.userMessage}>{turn.objective}</p>
-                  <p className={chatStyles.messageMeta}>
-                    {formatSessionTime(turn.createdAt)}
-                  </p>
                   {blocks.length ? (
                     <div className={chatStyles.assistantMessage}>
-                      <p className={chatStyles.assistantLabel}>Talent Signal</p>
+                      <span className={chatStyles.assistantMark} role="img" aria-label="Talent Signal" />
+                      <div className={chatStyles.assistantBody}>
                       {blocks.map((block) => {
                         const title = sessionBlockTitle(block.title);
                         return (
@@ -979,6 +983,7 @@ function LegacySessionWorkbench({
                           </article>
                         );
                       })}
+                      </div>
                     </div>
                   ) : null}
                 </li>

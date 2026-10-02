@@ -92,8 +92,13 @@ describe("milestone update and per-send time", () => {
     const now = new Date();
     const today = renderToStaticMarkup(createElement(SessionSendTime, { at: now.toISOString() }));
     expect(today).toContain(`今天 ${now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`);
+    expect(today).toContain(`dateTime="${now.toISOString()}"`);
     const past = renderToStaticMarkup(createElement(SessionSendTime, { at: "2026-09-24T09:46:00.000Z" }));
     expect(past).toMatch(/\d+月\d+日/u);
+    const previousYear = new Date(now.getFullYear() - 1, 0, 15, 9, 30);
+    const older = renderToStaticMarkup(createElement(SessionSendTime, { at: previousYear }));
+    expect(older).toContain(`${previousYear.getFullYear()}年1月15日`);
+    expect(older).toContain(`dateTime="${previousYear.toISOString()}"`);
     // No timestamp is invented when the message carries no observed time.
     expect(renderToStaticMarkup(createElement(SessionSendTime, { at: "not-a-date" }))).toBe("");
     expect(renderToStaticMarkup(createElement(SessionSendTime, { at: undefined }))).toBe("");

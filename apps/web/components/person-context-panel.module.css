@@ -1,7 +1,9 @@
 .overlay { background:color-mix(in srgb,var(--ts-ink) 16%,transparent); inset:0; position:fixed; z-index:80; }
-.panel { --panel-width:336px; background:var(--ts-content-surface,#fcfbf7); border-left:1px solid var(--ts-divider,#e2e0d8); color:var(--ts-ink,#171715); height:100dvh; inset:0 0 0 auto; overflow:auto; overscroll-behavior:contain; padding:80px 24px 24px; position:fixed; width:var(--panel-width); z-index:85; animation:enter 220ms var(--ease-out,ease); }
+/* The warm drawer chrome fills the edge; its content starts below the 68px
+   conversation header with the same 24px inset as Figma's drawer body. */
+.panel { --panel-width:336px; --panel-top-inset:92px; background:var(--ts-content-surface,#fcfbf7); border-left:1px solid var(--ts-divider,#e2e0d8); color:var(--ts-ink,#171715); height:100dvh; inset:0 0 0 auto; overflow:auto; overscroll-behavior:contain; padding:var(--panel-top-inset) 24px 24px; position:fixed; width:var(--panel-width); z-index:85; animation:enter 220ms var(--ease-out,ease); }
 .panel:focus { outline:none; }
-.top { align-items:center; color:var(--ts-chrome-muted,#6a675f); display:flex; justify-content:space-between; margin-bottom:14px; }
+.top { background:var(--ts-content-surface,#fcfbf7); position:sticky; top:calc(8px - var(--panel-top-inset)); z-index:1; align-items:center; color:var(--ts-chrome-muted,#6a675f); display:flex; justify-content:space-between; margin-bottom:14px; }
 .top h2 { font-size:13px; font-weight:400; line-height:20px; margin:0; }
 .close { align-items:center; background:transparent; border:0; border-radius:8px; color:inherit; cursor:pointer; display:flex; height:32px; justify-content:center; margin-right:-8px; width:32px; }
 .close:hover { background:var(--ts-selected-surface); color:var(--ts-ink); }
@@ -20,7 +22,7 @@
 .memory article p { font-size:14px; line-height:24px; margin:4px 0; overflow-wrap:anywhere; }
 .provenance { color:var(--ts-chrome-muted); display:grid; font-size:12px; line-height:20px; text-decoration:none; }
 .provenance:hover { color:var(--ts-ink); }
-.provenance span { font-size:11px; }
+.provenance span { font-size:12px; }
 .empty,.state { color:var(--ts-chrome-muted); font-size:13px; line-height:22px; }
 .state { padding-top:16px; }
 .state button { border:1px solid var(--ts-divider); border-radius:8px; background:var(--ts-selected-surface); color:var(--ts-ink); cursor:pointer; font:inherit; padding:8px 16px; }
@@ -33,5 +35,5 @@
 .panel :is(a,button):focus-visible { outline:2px solid var(--ts-accent); outline-offset:3px; }
 @keyframes enter { from { opacity:0; transform:translateX(12px); } to { opacity:1; transform:translateX(0); } }
 @media(min-width:1001px) { .overlay { display:none; } }
-@media(max-width:1000px) { .panel { padding-top:24px; width:min(100vw,384px); } .close { height:44px; width:44px; } .destination { min-height:44px; } }
+@media(max-width:1000px) { .panel { --panel-top-inset:24px; width:min(100vw,384px); } .close { height:44px; width:44px; } .destination { min-height:44px; } }
 @media(prefers-reduced-motion:reduce) { .panel { animation:none; } }

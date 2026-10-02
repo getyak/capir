@@ -331,8 +331,7 @@
 }
 
 .sessionRow[aria-current="page"] {
-  background: var(--surface);
-  box-shadow: inset 0 0 0 1px var(--line-soft);
+  background: var(--surface-selected);
 }
 
 .sessionRow .sessionTitle {
@@ -1522,8 +1521,8 @@
 .historyHeader { flex:1; font-size:11px; min-width:0; }
 .newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; font-size:11px; gap:4px; height:32px; padding:0 6px; }
 .newConversation:hover { background:var(--hover); color:var(--ink); }
-.personChips { display:flex; gap:14px; padding:0 8px; }
-.personChip { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--ink); cursor:pointer; display:flex; flex:0 1 86px; font:inherit; font-size:12px; gap:6px; height:32px; max-width:calc(50% - 7px); width:86px; min-width:0; padding:4px 0; text-align:left; }
+.personChips { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; padding:0 8px; }
+.personChip { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--ink); cursor:pointer; display:flex; font:inherit; font-size:12px; gap:6px; height:32px; width:100%; min-width:0; padding:4px 0; text-align:left; }
 .personChip > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .personChip:hover,.personChip[aria-pressed="true"] { background:var(--surface-selected); }
 .shell:has(.sidebarState[data-collapsed="true"]) .sidebarState { flex:1; min-height:0; }
