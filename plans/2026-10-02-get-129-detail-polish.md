@@ -40,8 +40,11 @@ Full measured reads and source screenshots are preserved at
 3. Complete: independent code review has no unresolved P0/P1/P2. Independent
    visual checkpoint is 98/100 after supplemental normal-motion frame evidence;
    the first score of 97 is retained with its reason in the review record.
-4. Active: create associated PR, pass applicable gates, merge and read back. Keep
-   GET-129 In Progress while its resident/native/capir acceptance remains absent.
+4. UI PR #274 merged as `a911bfcf19bbe863c751e4764e441a59cccec824` after
+   exact-head CI/Security/Vercel and independent reviews passed. Active:
+   repair the exposed cancellation/stop fixture startup and ordering races and verify
+   its related follow-up gates. Keep GET-129 In Progress while its original
+   resident/native/capir acceptance remains absent.
 
 ## Acceptance limits and resource ownership
 
@@ -67,3 +70,11 @@ Preserve formal proof, then remove only this task's disposable resources.
 
 Production builds need both the isolated AUTH_SECRET and NODE_ENV=production.
 Missing/incorrect harness environment attempts were corrected before acceptance.
+
+## Merge-time CI finding
+
+Main run 37007639753 timed out in the abort-ignoring queue-provider proof.
+The owned `codex/get-129-main-ci-repair` branch starts from merged main a911bfcf.
+Only the queue integration test file and related evidence/plan are owned by this repair;
+UI source and its 98/100 assessment stay unchanged. See [the CI repair evaluation](../docs/evaluations/2026-10-02-get-129-detail-polish/ci-repair.md)
+for its authoritative cause, counterexample, verification and delivery record.
