@@ -9,6 +9,11 @@ const { auth, loadLabManifest } = vi.hoisted(() => ({
   loadLabManifest: vi.fn(),
 }));
 vi.mock("next/headers", () => ({cookies:async()=>({has:()=>false})}));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/workspace",
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 vi.mock("@/lib/server/backendAuth",()=>({
  readPrimaryBackendSessionClaims:async()=>null,
  readBackendSessionClaims:async()=>({backendAccountId:"fixture",backendAccountName:"Fixture",backendAccountSlug:"fixture-alpha",backendExpiresAt:new Date(Date.now()+60000).toISOString()}),

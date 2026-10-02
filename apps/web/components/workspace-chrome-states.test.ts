@@ -54,9 +54,9 @@ describe("account menu utilities and footer geometry", () => {
 
   it("keeps footer geometry, custom tooltips and reduced motion in the stylesheet", () => {
     const css = readFileSync(new URL("./workspace-shell.module.css", import.meta.url), "utf8");
-    // Constant 216px strip: 40 avatar + 120 pill + 40 entry + two 8px gaps.
-    expect(css).toContain("width: 216px");
-    expect(css).toContain("width: 120px");
+    // The strip fills the sidebar; update entries use the real state.
+    expect(css).toContain("width:100%");
+    expect(css).toContain("width:128px");
     // Hover OR keyboard focus contracts the pill and widens the entry in place.
     expect(css).toContain(":has(.footerEntryWrap:hover) .connectPill");
     expect(css).toContain(":has(.footerEntryWrap:focus-visible) .connectPill");

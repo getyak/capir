@@ -24,6 +24,7 @@ import { usePreviewPacing } from "./use-preview-pacing";
 import { useRunMilestones } from "./use-run-milestones";
 import { sessionHumanMessages, sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
 import { SessionRuntime } from "./session-runtime";
+import { usePersonContextPanel } from "../person-context-panel";
 import styles from "./queued-conversation.module.css";
 // Admission may rewrite the draft URL only when the query is empty or holds
 // exactly one draft_session parameter for this session. A duplicated key or
@@ -145,6 +146,8 @@ export function QueuedConversation(props: Props) {
   const paused = chat.snapshot?.paused ?? false;
   const hasContent = Boolean(turns.length || chat.messages.length || active || queued.length);
   const personLabel = chat.detail?.person_label ?? props.initialDetail?.person_label ?? "";
+  const personId = (chat.detail ?? props.initialDetail)?.person_id ?? null;
+  const personContextPanel = usePersonContextPanel();
   const contextLabel = chat.detail?.context_label ?? props.initialDetail?.context_label ?? "";
   const scopeLabel = personLabel && contextLabel ? `${personLabel} · ${contextLabel}` : personLabel || contextLabel || "未绑定联系人或关系情境";
   const status = chat.unavailable ? "这段对话已不可用" : chat.connection === "reconnecting" && hasContent ? "连接恢复中，消息已保留" : active?.cancel_requested ? "正在停止…" : active ? (conversationStageLabel(forming?.stage ?? active.stage) ?? "正在处理") : paused ? "已暂停，可继续发送到队列" : queued.length ? `${queued.length} 条消息等待处理` : "";
@@ -216,6 +219,7 @@ export function QueuedConversation(props: Props) {
   return <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label="对话" data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
     {admitted && <header className={styles.header}>
       <div className={styles.headingText}><h1 title={chat.detail?.title || "新对话"}>{chat.detail?.title || "新对话"}</h1></div>
+      {personId && !chat.unavailable && <button className={styles.personContext} aria-label={`查看 ${personLabel || "联系人"} 的人物背景`} onClick={event => personContextPanel.open(personId,event.currentTarget)}>人物背景</button>}
       <details className={styles.details}><summary aria-label="对话详情"><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>对话详情</span></summary><div className={styles.detailPanel}>
       <p className={styles.detailScope}>{scopeLabel}</p>
       <p>历史回复保留当时的判断，执行前请核对当前信息。</p>
