@@ -29,14 +29,15 @@ describe("workspace navigation without a generic More disclosure", () => {
 
     expect(html).not.toContain("更多");
     expect(html).not.toContain("更多目的地");
+    const primary = html.match(/<nav\b[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
     const order = [
-      "/workspace",
       "/workspace/today",
+      "/workspace",
       "/workspace/people",
       "/workspace/meetings",
-      "/workspace/extensions",
     ];
-    const indices = order.map((href) => html.indexOf(`href="${href}"`));
+    const indices = order.map((href) => primary.indexOf(`href="${href}"`));
+    expect(primary).toContain('aria-label="搜索人物或对话"');
     for (const index of indices) expect(index).toBeGreaterThan(-1);
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
   });
@@ -47,7 +48,11 @@ describe("workspace navigation without a generic More disclosure", () => {
       createElement(shellNav.WorkspaceShellNav, { binding: null }),
     );
 
-    expect(html).not.toContain('href="/workspace/captures"');
-    expect(html).not.toContain('href="/workspace/sessions"');
+    const primary = html.match(/<nav\b[^>]*>[\s\S]*?<\/nav>/)?.[0];
+    expect(primary).toBeDefined();
+    expect(primary).not.toContain('href="/workspace/captures"');
+    expect(primary).not.toContain('href="/workspace/sessions"');
+    // The collapsed utility retains the full directory, including empty state.
+    expect(html).toContain('href="/workspace/sessions"');
   });
 });

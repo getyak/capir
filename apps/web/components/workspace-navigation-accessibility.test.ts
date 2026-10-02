@@ -48,13 +48,14 @@ describe("workspace navigation accessibility and reachability", () => {
     expect(html).toContain('href="/workspace/sessions"');
     expect(html).toContain('aria-label="打开对话记录"');
     expect(html).not.toContain('href="/workspace/plugs"');
+    const primary = html.match(/<nav\b[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
     const indices = [
-      "/workspace",
       "/workspace/today",
+      "/workspace",
       "/workspace/people",
       "/workspace/meetings",
-      "/workspace/extensions",
-    ].map((href) => html.indexOf(`href="${href}"`));
+    ].map((href) => primary.indexOf(`href="${href}"`));
+    expect(primary).toContain('aria-label="搜索人物或对话"');
     expect(indices.every((index) => index > -1)).toBe(true);
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
   });
