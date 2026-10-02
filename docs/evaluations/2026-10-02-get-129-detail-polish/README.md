@@ -74,3 +74,10 @@ signed native login acceptance remain outside this proof. Follow
 bypass. GET-129 remains In Progress until the original acceptance is complete;
 this follow-up uses a related PR without a closing keyword.
 
+
+## Merge-time proof repair
+
+The UI PR passed latest-head gates and merged. A main run exposed a separate
+queue test startup/teardown race. [CI repair](ci-repair.md) owns that dated
+finding, controlled counterexample and follow-up verification. UI source and
+its visual assessment remain unchanged.

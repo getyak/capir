@@ -874,10 +874,16 @@ suite("durable conversation queue", () => {
     provider.postGateDeltas = ["迟到的完整回答"];
     // Deliberately uncooperative: it ignores the abort signal and resolves only
     // when the test releases the gate after the stop was acknowledged.
-    let releaseLate: () => void = () => undefined;
-    provider.gateForObjective = () => new Promise<void>((resolve) => { releaseLate = resolve; });
+    const lateResult = gate();
+    const selection = gate();
+    provider.gateForObjective = () => lateResult.promise;
     provider.ignoreAbortForObjective = () => true;
-    const runner = await startRunner(provider);
+    const runner = new ConversationQueueRunner({
+      pool: pool!, provider, logger: silentLogger, workerId: `w-${randomUUID()}`,
+      pollIntervalMs: 10, heartbeatMs: 40, recoveryIntervalMs: 10_000,
+      selectProvider: async () => { await selection.promise; return { provider }; },
+    });
+    runner.start();
     try {
       await admitConversationQueueEntry(pool!, seeded.auth, {
         idempotency_key: randomUUID(),
@@ -889,8 +895,20 @@ suite("durable conversation queue", () => {
         const snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
         return snapshot.active !== null;
       });
-      const active = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      const claimed = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      selection.release();
       await waitFor(() => provider.calls.length === 1);
+      // Provider selection closes unsupported steering intake and advances the
+      // optimistic revision after claiming. Force that order, then read the
+      // revision a real stop request must use rather than a pre-selection one.
+      const active = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      expect(active.revision).toBeGreaterThan(claimed.revision);
+      await expect(mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+        kind: "stop",
+        expected_revision: claimed.revision,
+        idempotency_key: randomUUID(),
+        run_id: active.active!.run_id!,
+      })).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_REVISION_CONFLICT" });
       await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
         kind: "stop",
         expected_revision: active.revision,
@@ -902,7 +920,7 @@ suite("durable conversation queue", () => {
         const row = (await entryRow(seeded.sessionId, seeded.accountId))[0];
         return row?.cancel_requested === true && row.status === "running";
       });
-      releaseLate();
+      lateResult.release();
       await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "cancelled");
       const session = await getAgentSession(pool!, seeded.auth, seeded.sessionId);
       expect(session.payload?.turns).toHaveLength(1);
@@ -914,6 +932,10 @@ suite("durable conversation queue", () => {
       expect(rows[0]?.status).toBe("cancelled");
       expect(rows[0]?.result).toBeNull();
     } finally {
+      // A failed assertion must not deadlock shutdown on this deliberately
+      // abort-ignoring provider, masking its real error as a test timeout.
+      selection.release();
+      lateResult.release();
       await runner.close();
       await removeProofAccount(seeded.accountId);
     }
