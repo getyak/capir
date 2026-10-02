@@ -2,6 +2,9 @@
 .conversation { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; min-width: 0; position: relative; width: 100%; }
 .header { align-items: flex-start; border-bottom: 0; display: flex; gap: 24px; justify-content: space-between; padding: 40px 40px 24px; position: relative; z-index: 35; }
 .headingText { min-width: 0; }
+.headerActions { align-items: center; display:flex; flex:none; gap:4px; }
+.personContext { background:transparent; border:0; border-radius:8px; color:var(--muted); cursor:pointer; font:inherit; font-size:13px; min-height:44px; padding:8px 10px; white-space:nowrap; }
+.personContext:hover { background:var(--surface-muted); color:var(--ink); }
 .title { color: var(--ink); font-size: 24px; font-weight: 600; letter-spacing: 0; line-height: 34px; margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .subtitle { color: var(--muted); font-size: 13px; line-height: 20px; margin: 8px 0 0; overflow-wrap: anywhere; }
 .conversationDetails { flex: 0 0 auto; }
@@ -38,6 +41,7 @@
 .conversation :is(a, button, summary, [tabindex]):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .transcript:focus-visible { outline-offset: -4px; }
 @media (max-width: 760px) {
+  .headerActions { align-items:stretch; flex-direction:column; }
   .header { gap: 12px; padding: 20px 20px 16px; }
   .title { font-size: 20px; line-height: 30px; }
   .conversationDetails > summary { padding: 8px; }
@@ -54,4 +58,33 @@
   .transcript { padding-top: 20px; padding-bottom: 20px; }
   .composerDock { padding-top: 6px; padding-bottom: 8px; }
   .keyboardHint { display: none; }
+}
+
+/* The restored Session keeps its draft/retry semantics on the shared canvas. */
+.header { align-items:center; justify-content:center; min-height:68px; padding:12px 24px; }
+.headingText { max-width:calc(100% - 230px); text-align:center; }
+.title { font-size:15px; font-weight:500; line-height:23px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.subtitle { font-size:12px; line-height:18px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.headerActions { position:absolute; right:14px; top:12px; }
+.transcript { padding:16px 24px 24px; }
+.turnList { max-width:880px; gap:28px; }
+.userMessage { align-self:flex-end; background:var(--workspace-user-bubble); border-radius:16px; font-size:14px; line-height:22px; max-width:min(540px,85%); padding:12px 16px; width:fit-content; }
+.messageMeta { font-size:12px; line-height:19px; margin:8px 2px 20px; }
+.assistantMessage { font-size:14px; line-height:22px; }
+.assistantMessage article { background:var(--workspace-agent-bubble); border-radius:14px; max-width:620px; padding:12px 16px; width:fit-content; }
+.assistantMessage h3 { font-size:14px; font-weight:500; line-height:22px; margin-bottom:8px; }
+.composerDock { padding:0 24px 24px; width:min(100%,928px); }
+.composerDock > :is(p,[role="status"]) { font-size:12px; line-height:19px; margin:8px 0 0; }
+.composerDock > [role="status"]:empty { display:none; }
+.composerDock :global([data-layout="inline"]):has(> div:first-of-type:empty) { grid-template-columns:minmax(0,1fr) auto; }
+.composerDock :global([data-layout="inline"]) > div:first-of-type:empty { display:none; }
+.composerDock button[title="发送 · Enter"] { align-items:center; background:var(--surface-muted); border:0; border-radius:12px; box-shadow:none; color:var(--ink); display:flex; height:44px; justify-content:center; padding:0; width:44px; }
+@media(max-width:760px) {
+  .header { justify-content:flex-start; min-height:68px; padding:12px 16px; }
+  .headingText { flex:1; max-width:calc(100% - 88px); text-align:left; }
+  .headerActions { gap:0; position:static; }
+  .conversationDetails > summary { font-size:12px; }
+  .subtitle { max-width:100%; }
+  .transcript { padding:20px 16px; }
+  .composerDock { padding:0 16px max(24px,env(safe-area-inset-bottom)); }
 }

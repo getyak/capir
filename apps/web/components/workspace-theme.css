@@ -26,7 +26,7 @@
   --object-radius: 8px;
   --focus-radius: 12px;
   --ts-sidebar-width: 248px;
-  --ts-rail-width: 64px;
+  --ts-rail-width: 72px;
   --workspace-agent-bubble: var(--ts-chrome-surface);
   --workspace-user-bubble: #eceae4;
   --shadow-object: none;

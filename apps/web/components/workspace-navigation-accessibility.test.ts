@@ -35,18 +35,18 @@ describe("workspace navigation accessibility and reachability", () => {
   it("names the navigation landmark and every primary destination", () => {
     const html = render();
     expect(html).toContain('aria-label="工作台导航"');
-    for (const route of WORKSPACE_NAV_ROUTES.filter(
-      (item) => item.section === "primary",
-    )) {
-      expect(html).toContain(`href="${route.href}"`);
-      expect(html).toContain(`>${route.label}<`);
+    for (const [label, href] of [["今日","/workspace/today"],["对话","/workspace"],["人物","/workspace/people"],["时间","/workspace/meetings"]]) {
+      expect(html).toContain(`href="${href}"`);
+      expect(html).toContain(`aria-label="${label}"`);
     }
+    expect(html).toContain('aria-label="搜索人物或对话"');
   });
 
-  it("renders the direct desktop order with no duplicate Sessions or More row", () => {
+  it("renders the compact desktop order and preserves the collapsed history destination", () => {
     const html = render();
     expect(html).not.toContain("更多");
-    expect(html).not.toContain('href="/workspace/sessions"');
+    expect(html).toContain('href="/workspace/sessions"');
+    expect(html).toContain('aria-label="打开对话记录"');
     expect(html).not.toContain('href="/workspace/plugs"');
     const indices = [
       "/workspace",
@@ -67,7 +67,7 @@ describe("workspace navigation accessibility and reachability", () => {
       "meetings",
     ]);
     const html = render();
-    for (const route of WORKSPACE_NAV_ROUTES) {
+    for (const route of WORKSPACE_NAV_ROUTES.filter(item => item.mobile)) {
       expect(html).toContain(
         `data-mobile="${route.mobile ? "true" : "false"}"`,
       );
@@ -92,7 +92,7 @@ describe("workspace navigation accessibility and reachability", () => {
     // Sessions: recent-Sessions header when expanded, one named icon link when
     // the rail is collapsed.
     expect(recentSessions).toContain('href="/workspace/sessions"');
-    expect(nav).toContain("collapsedUtility");
+    expect(nav).toContain("RailSessionShortcuts");
     expect(nav).toContain("data-collapsed-only");
     expect(nav).not.toContain("WorkspaceMoreDestinations");
     expect(render()).toContain('href="/workspace/extensions"');

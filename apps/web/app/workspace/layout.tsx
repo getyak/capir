@@ -35,6 +35,7 @@ import { WorkspaceAccountMenu } from "@/components/workspace-account-menu";
 import { MeetingDraftSessionBoundary } from "@/components/meeting-draft-session-boundary";
 import { WorkspaceDirectoryScope } from "@/components/workspace-directory-cache";
 import { SessionDraftSessionBoundary } from "@/components/session-draft-session-boundary";
+import { PersonContextPanelProvider } from "@/components/person-context-panel";
 import {
   workspaceSessionDraftStorageScope,
   workspaceSessionsBinding,
@@ -154,6 +155,7 @@ export default async function WorkspaceLayout({
   return (
     <WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
+      <PersonContextPanelProvider binding={pendingBinding}>
       <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
         {pendingBinding ? (
           <MeetingDraftSessionBoundary sessionVersion={pendingBinding} />
@@ -227,6 +229,7 @@ export default async function WorkspaceLayout({
           </TalentSignalLabShell>
         </div>
       </div>
+      </PersonContextPanelProvider>
       </AvatarPreferencesProvider>
     </WorkspacePrivacyBoundary>
   );

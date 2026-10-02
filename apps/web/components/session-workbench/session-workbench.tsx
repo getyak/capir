@@ -2,6 +2,7 @@
 
 import {
   Copy,
+  ArrowUp,
   Trash,
   Warning,
 } from "@phosphor-icons/react";
@@ -10,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { QueuedConversation } from "../conversation/queued-conversation";
+import { usePersonContextPanel } from "../person-context-panel";
 import { useWorkspaceChat } from "../relationship-workspace/use-workspace-chat";
 import { ConversationProvenance, ConversationResponse } from "../conversation-response";
 import { WorkspaceComposer } from "../workspace-composer";
@@ -300,6 +302,7 @@ function LegacySessionWorkbench({
   }, [turnCount]);
 
   const detail = state.detail;
+  const personContextPanel = usePersonContextPanel();
   const scope = sessionScopeView({
     contextLabel: detail.context_label,
     personId: detail.person_id,
@@ -791,11 +794,17 @@ function LegacySessionWorkbench({
     >
       <header className={chatStyles.header}>
         <div className={chatStyles.headingText}>
-          <h1 className={chatStyles.title} id="session-title">
+          <h1 className={chatStyles.title} id="session-title" title={sessionDisplayTitle(detail.title)}>
             {sessionDisplayTitle(detail.title)}
           </h1>
           <p className={chatStyles.subtitle}>{scope.label}</p>
         </div>
+        <div className={chatStyles.headerActions}>
+        {detail.person_id && detail.state === "active" && <button
+          className={chatStyles.personContext}
+          aria-label={`查看 ${detail.person_label || "联系人"} 的人物背景`}
+          onClick={event => personContextPanel.open(detail.person_id!, event.currentTarget)}
+        >人物背景</button>}
         <details
           className={chatStyles.conversationDetails}
           onKeyDown={(event) => {
@@ -876,6 +885,7 @@ function LegacySessionWorkbench({
             </div>
           </div>
         </details>
+        </div>
       </header>
 
       <div className={chatStyles.feedback}>
@@ -999,11 +1009,26 @@ function LegacySessionWorkbench({
               {sendPending && !sending ? <button className={styles.secondary} type="button" onClick={endSendRetry}>保留草稿，结束重试</button> : null}
               {accountId && chatSessionVersion && canAsk ? <button className={`${styles.primary} ${styles.send}`} aria-label={sending ? "发送中" : sendPending ? "重试同一条消息" : "发送"} title="发送 · Enter" type="button"
                 disabled={!canSend}
-                onClick={() => void sendMessage()}><span>{sending ? "发送中" : sendPending ? "重试" : "发送"}</span></button> : null}
+                onClick={() => void sendMessage()}><ArrowUp size={20} aria-hidden="true" /></button> : null}
             </div>
           }
-          footerStart={
-            <p
+          id="session-composer-draft"
+          label="继续这条对话"
+          maxLength={12_000}
+          onNavigate={(href) => router.push(href)}
+          onSubmit={() => void sendMessage()}
+          onValueChange={updateDraft}
+          placeholder={detail.state === "active" ? "输入消息，或粘贴一段内容…" : "对话不可用，无法编辑草稿。"}
+          readOnly={sending || sendPending}
+          rows={1}
+          layout="inline"
+          suggestionsEnabled={
+            detail.state === "active" && !sending && !sendPending && !state.conflict
+          }
+          value={state.draft}
+          variant="session"
+        />
+        <p
               className={
                 state.status === "error" || state.conflict
                   ? styles.error
@@ -1015,22 +1040,6 @@ function LegacySessionWorkbench({
               {sending ? "正在回复…" : statusLabel}
               {state.error ? ` ${state.error}` : ""}
             </p>
-          }
-          id="session-composer-draft"
-          label="继续这条对话"
-          maxLength={12_000}
-          onNavigate={(href) => router.push(href)}
-          onSubmit={() => void sendMessage()}
-          onValueChange={updateDraft}
-          placeholder={detail.state === "active" ? "输入消息，或粘贴一段内容…" : "对话不可用，无法编辑草稿。"}
-          readOnly={sending || sendPending}
-          rows={3}
-          suggestionsEnabled={
-            detail.state === "active" && !sending && !sendPending && !state.conflict
-          }
-          value={state.draft}
-          variant="session"
-        />
         {detail.state === "active" ? (
           <p className={canAsk ? chatStyles.keyboardHint : styles.hint}>
             {canAsk

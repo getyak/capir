@@ -112,3 +112,8 @@
 .footer span:last-child { opacity:0; }
 .dock:has(textarea:focus) .footer span:last-child { opacity:1; }
 @media(max-width:640px) { .dock { padding-bottom:max(38px,env(safe-area-inset-bottom)); } .footer { left:22px; right:22px; } }
+
+.personContext { background:transparent; border:1px solid var(--line-soft); border-radius:8px; color:var(--muted-strong); cursor:pointer; flex:none; font:inherit; font-size:12px; line-height:20px; min-height:32px; padding:4px 10px; }
+.personContext:hover { background:var(--surface-muted); color:var(--ink); }
+.personContext:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+@media(max-width:760px) { .personContext { min-height:44px; } }

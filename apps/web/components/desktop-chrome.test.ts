@@ -168,12 +168,12 @@ describe("native desktop chrome", () => {
 });
 
 describe("workspace footer strip", () => {
-  it("shows the compact strip only in the hosted workspace", async () => {
+  it("keeps Connect apps on both hosts and exposes only real update state", async () => {
     const host = await render(createElement(WorkspaceFooterStrip, null,
       createElement("span", { "data-probe": "menu" }),
     ));
     expect(host.querySelector("[data-hosted='false']")).not.toBeNull();
-    expect(host.querySelector("a[href='/workspace/extensions']")).toBeNull();
+    expect(host.querySelector("a[href='/workspace/extensions']")).not.toBeNull();
     await showDesktop({ protocolVersion: 1, availableVersion: null });
     expect(host.querySelector("[data-hosted='true']")).not.toBeNull();
     const pill = host.querySelector("a[href='/workspace/extensions']");

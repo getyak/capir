@@ -4,7 +4,7 @@ import {
   ArrowClockwise,
   ArrowDown,
   DownloadSimple,
-  Plugs,
+  LinkSimple,
 } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -21,7 +21,7 @@ import styles from "./workspace-shell.module.css";
  * Connect apps pill and a circular download/update entry.
  *
  * Geometry is CSS-only. Hovering or focusing the download entry contracts the
- * Connect apps pill to its icon while the entry widens in place (constant 216px
+ * Connect apps pill to its icon while the entry widens in place (constant 224px
  * strip, 220ms easing, immediate under reduced motion). Hover never executes an
  * effect; only an explicit activation opens the entry's link.
  */
@@ -33,8 +33,8 @@ export function ConnectAppsPill() {
       className={styles.connectPill}
       href="/workspace/extensions"
     >
-      <Plugs aria-hidden="true" size={16} />
       <span className={styles.connectPillLabel}>连接应用</span>
+      <LinkSimple aria-hidden="true" size={18} />
     </Link>
   );
 }
@@ -197,21 +197,18 @@ export function WorkspaceDownloadEntry() {
 }
 
 /**
- * The bottom-left strip. The Connect apps pill and the download/update entry
- * belong to the hosted macOS workspace; an ordinary browser keeps its usual
- * account row and reaches the same destinations from its own routes.
+ * The bottom-left strip shares account and connections across Web and macOS.
+ * A download/update entry appears only for a real native update state.
  */
 export function WorkspaceFooterStrip({ children }: { children: ReactNode }) {
-  const hosted = useDesktopChrome() !== null;
+  const state = useDesktopChrome();
+  const hosted = state !== null;
+  const showUpdate = Boolean(state && state.phase !== "idle");
   return (
     <div className={styles.accountStrip} data-hosted={hosted ? "true" : "false"}>
       {children}
-      {hosted ? (
-        <>
-          <ConnectAppsPill />
-          <WorkspaceDownloadEntry />
-        </>
-      ) : null}
+      <ConnectAppsPill />
+      {showUpdate ? <WorkspaceDownloadEntry /> : null}
     </div>
   );
 }

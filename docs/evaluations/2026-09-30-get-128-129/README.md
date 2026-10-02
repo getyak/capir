@@ -3,6 +3,10 @@
 Date: 2026-10-01
 Plan: [`GET-128 / GET-129 plan`](../../../plans/2026-09-30-get-128-129-macos-conversation.md)
 
+GET-129 compact navigation and person-preview follow-up measurements and
+acceptance live in the [2026-10-02 evaluation](../2026-10-02-get-129/README.md).
+This dated report retains the prior conversation-runtime evidence.
+
 ## Design and authority
 
 The authenticated Web surface supplies the resident macOS workspace. Figma

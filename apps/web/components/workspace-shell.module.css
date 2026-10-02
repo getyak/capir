@@ -1,7 +1,7 @@
 /*
  * Quiet Workspace shell.
  *
- * 248 px expanded sidebar / 64 px rail, 58 px route header, near-white canvas
+ * 248 px expanded sidebar / 72 px rail, 58 px route header, near-white canvas
  * with a warm-neutral chrome sidebar. Structure comes from page grouping and
  * typography; borders stay hairline and material stays flat. Session rows are
  * one line at 40px with a 24px identity avatar and a full accessible title.
@@ -20,7 +20,7 @@
 }
 
 .shell:has(.sidebarState[data-collapsed="true"]) {
-  --workspace-sidebar-width: var(--ts-rail-width, 64px);
+  --workspace-sidebar-width: var(--ts-rail-width, 72px);
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
@@ -1193,29 +1193,21 @@
 /* Web keeps the ordinary account row; the hosted workspace shows the compact
    avatar / Connect apps / download strip at a constant 216px (40+120+40+two
    8px gaps). */
-.accountStrip { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.accountStrip > .accountMenu { flex: 1; min-width: 0; }
-.accountStrip[data-hosted="true"] { gap: 8px; width: 216px; }
-.accountStrip[data-hosted="true"] > .accountMenu { flex: 0 0 40px; }
-.accountStrip[data-hosted="true"] .accountTrigger {
-  border-radius: 50%; height: 40px; justify-content: center;
-  min-height: 40px; padding: 0; width: 40px;
-}
-.accountStrip[data-hosted="true"] .accountTrigger .avatar[data-size="account"] {
-  font-size: 15px; height: 40px; width: 40px;
-}
-.accountStrip[data-hosted="true"] .accountName,
-.accountStrip[data-hosted="true"] .accountChevron { display: none; }
-
+ .accountStrip { display:flex; align-items:center; gap:8px; min-width:0; width:100%; }
+.accountStrip > .accountMenu { flex:0 0 40px; min-width:0; }
+.accountStrip .accountTrigger { border-radius:50%; height:40px; justify-content:center; min-height:40px; padding:0; width:40px; }
+.accountStrip .accountTrigger .avatar[data-size="account"] { font-size:11px; height:28px; width:28px; }
+.accountStrip .accountName,.accountStrip .accountChevron { display:none; }
+.accountStrip:has(.footerEntryWrap) .connectPill { width:128px; }
 .connectPill {
   align-items: center;
   background: color-mix(in srgb, var(--ink) 5%, transparent);
   border-radius: 999px;
   color: var(--muted-strong);
   display: inline-flex;
-  flex: 0 0 auto;
-  font-size: 13px;
-  font-weight: 550;
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 500;
   gap: 8px;
   height: 40px;
   justify-content: center;
@@ -1227,7 +1219,8 @@
     padding 220ms var(--ease-out, ease),
     background 180ms ease,
     color 180ms ease;
-  width: 120px;
+  min-width: 40px;
+  width: 180px;
 }
 .connectPill:hover {
   background: color-mix(in srgb, var(--ink) 10%, transparent);
@@ -1284,12 +1277,12 @@
 .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:hover) .footerEntry,
 .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-visible) .footerEntry,
 .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-within) .footerEntry {
-  width: 120px;
+  width: 128px;
   gap: 8px;
 }
 .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .connectPillLabel { max-width: 0; opacity: 0; }
 .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .footerEntryLabel { max-width: 80px; opacity: 1; }
-.accountStrip[data-hosted="true"] .accountPopover { width: 316px; max-height: min(680px, calc(100dvh - 84px)); }
+.accountStrip .accountPopover { width: 316px; max-height: min(680px, calc(100dvh - 84px)); }
 
 /* Custom tooltip above the entry; no native title tooltip duplicates it. */
 .footerTooltip {
@@ -1509,3 +1502,54 @@
 .searchTrigger:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 
 @media(max-width:760px) { .sidebar .searchTrigger { display:none; } }
+
+/* GET-129 compact composition: measured row/pill geometry, not a second route tree. */
+.brandRow { min-height:36px; margin-bottom:12px; }
+.brand { font-size:18px; line-height:20px; gap:8px; padding:6px 0; }
+.brandMark { height:20px; width:20px; }
+.brandActions .iconButton { height:36px; width:36px; }
+.railRow { align-items:center; display:flex; gap:1.5px; }
+.railControl { align-items:center; background:transparent; border:0; border-radius:18px; color:var(--muted-strong); cursor:pointer; display:inline-flex; flex:0 0 36px; font:inherit; font-size:13px; gap:6px; height:36px; justify-content:center; padding:0; text-decoration:none; transition:background 180ms var(--ease-out),color 180ms var(--ease-out); }
+.railControl:hover { background:var(--hover); color:var(--ink); }
+.railControl[data-selected="true"] { background:var(--surface-selected); color:var(--ink); flex-basis:74px; font-weight:500; }
+.railControlLabel { display:none; line-height:20px; }
+.railControl[data-selected="true"] .railControlLabel { display:inline; }
+.railControl:focus-visible,.newConversation:focus-visible,.personChip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.railCollapsed { display:none; }
+.sidebarScroll { margin-top:20px; }
+.groupTitle { font-size:11px; line-height:18px; padding:0 10px; }
+.historyBar { align-items:center; display:flex; gap:2px; margin-bottom:4px; }
+.historyHeader { flex:1; font-size:11px; min-width:0; }
+.newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; font-size:11px; gap:4px; height:32px; padding:0 6px; }
+.newConversation:hover { background:var(--hover); color:var(--ink); }
+.personChips { display:flex; gap:14px; padding:0 8px; }
+.personChip { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--ink); cursor:pointer; display:flex; flex:0 1 86px; font:inherit; font-size:12px; gap:6px; height:32px; max-width:calc(50% - 7px); width:86px; min-width:0; padding:4px 0; text-align:left; }
+.personChip > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.personChip:hover,.personChip[aria-pressed="true"] { background:var(--surface-selected); }
+.shell:has(.sidebarState[data-collapsed="true"]) .sidebarState { flex:1; min-height:0; }
+.shell:has(.sidebarState[data-collapsed="true"]) :is(.brandRow,.railRow) { display:none; }
+.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { align-items:center; display:flex; flex:1; flex-direction:column; min-height:0; }
+.railCollapsedTop { flex:none; }
+.railSessions { display:flex; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; overflow:auto; scrollbar-width:none; }
+.railSessionAvatar,.railIconLink { align-items:center; border-radius:12px; color:var(--muted-strong); display:flex; flex:none; height:44px; justify-content:center; text-decoration:none; width:44px; }
+.railSessionAvatar[aria-current="page"],.railSessionAvatar:hover,.railIconLink:hover { background:var(--surface-selected); color:var(--ink); }
+.railSessionAvatar .avatar { flex:none; height:28px; width:28px; }
+.railUtility { align-items:center; display:flex; flex-direction:column; gap:8px; margin-top:auto; padding-top:16px; }
+.railUtility .iconButton,.railUtility .railControl { height:44px; width:44px; }
+.shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .connectPill { display:none; }
+.shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .accountTrigger { width:44px; }
+@media(min-width:1001px) { :global(body:has([data-person-context-panel])) .shell { margin-right:336px; } }
+@media(max-width:760px) {
+  .shell:has(.sidebarState[data-collapsed="true"]) { grid-template-columns:minmax(0,1fr); }
+  .shell:has(.sidebarState[data-collapsed="true"]) .sidebar { padding:7px; }
+  .shell .sidebarState { display:block; }
+  .shell .railRow,.shell:has(.sidebarState[data-collapsed="true"]) .railRow { display:grid; gap:5px; grid-template-columns:repeat(4,minmax(44px,1fr)); }
+  .shell .railCollapsed,.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { display:none; }
+  .railRow > button { display:none; }
+  .railControl,.railControl[data-selected="true"] { border-radius:10px; flex-direction:column; font-size:12px; gap:2px; height:44px; min-width:44px; width:100%; }
+  .railControl .railControlLabel { display:inline; }
+  .mobileHeader .accountStrip :is(.connectPill,.footerEntryWrap) { display:none; }
+  .mobileHeader .accountStrip > .accountMenu { flex:none; }
+  .mobileHeader .accountTrigger { width:44px; }
+}
+@media(prefers-reduced-motion:reduce) { .railControl { transition:none; } }

@@ -211,7 +211,7 @@ export function WorkspaceGlobalSearchDialog({
 }: {
   binding: string | null;
   label?: string;
-  presentation?: "icon" | "field";
+  presentation?: "icon" | "field" | "rail";
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -265,7 +265,13 @@ export function WorkspaceGlobalSearchDialog({
     <>
       <button
         aria-label={label}
-        className={presentation === "field" ? styles.searchTrigger : styles.iconButton}
+        className={
+          presentation === "field"
+            ? styles.searchTrigger
+            : presentation === "rail"
+              ? styles.railControl
+              : styles.iconButton
+        }
         onClick={show}
         ref={trigger}
         title={`${label} · ⌘K / Ctrl+K`}

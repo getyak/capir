@@ -53,9 +53,9 @@ describe("persistent workspace shell", () => {
     expect(navigation).not.toContain("WorkspaceMoreDestinations");
     expect(navigation).not.toContain("更多目的地");
     // Sessions keeps one collapsed-rail icon link, never a duplicate expanded row.
-    expect(navigation).toContain("collapsedUtility");
+    expect(navigation).toContain("RailSessionShortcuts");
     expect(navigation).toContain('data-collapsed-only="true"');
-    expect(navigation).toContain("aria-label={collapsed ? route.label : undefined}");
+    expect(navigation).toContain("aria-label={label}");
     // Account utilities align language with the shared icon column.
     expect(accountMenu).toContain("Globe");
     expect(accountMenu).not.toContain("/workspace/plugs");
@@ -64,9 +64,9 @@ describe("persistent workspace shell", () => {
     // A successfully empty people projection hides the auxiliary group without
     // suppressing actionable read errors or a populated projection.
     expect(sidebarPeople).toContain(
-      'if (state === "ready" && people.length === 0) return null;',
+      'if (!loading && !failed && people.length === 0) return null;',
     );
-    expect(sidebarPeople).toContain("人物目录暂时无法读取");
+    expect(sidebarPeople).toContain("人物暂时无法读取");
     expect(layout).toContain("<WorkspaceMobileSourcesLink />");
     const shellStyles = read("components/workspace-shell.module.css");
     expect(shellStyles).toContain(".mobileSources");
