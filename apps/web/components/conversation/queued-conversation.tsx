@@ -20,6 +20,7 @@ import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
 import { ConversationImageStrip } from "./conversation-images";
 import { SessionSendTime } from "./session-execution-card";
 import { useConversation } from "./use-conversation";
+import { useConversationAxis } from "./use-conversation-axis";
 import { usePreviewPacing } from "./use-preview-pacing";
 import { useRunMilestones } from "./use-run-milestones";
 import { sessionHumanMessages, sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
@@ -121,6 +122,7 @@ export function QueuedConversation(props: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [away, setAway] = useState(false);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
+  useConversationAxis(viewport);
   const active = chat.snapshot?.active;
   const queued = useMemo(() => chat.snapshot?.queued ?? [], [chat.snapshot?.queued]);
   const turns = useMemo(() => chat.detail?.turns ?? [], [chat.detail?.turns]);

@@ -91,7 +91,8 @@ Remaining minor differences are timestamp placement, selected-row material,
 No visual P0/P1 remains. This is an independent aesthetic judgment on the
 recorded fixtures, not an objective quality certification.
 
-Production build passes with the required isolated test AUTH_SECRET configured.
-Current-head CI, merge and
-resident macOS readback remain pending. This document does not yet establish
-successful external delivery.
+Production build passed with the required isolated test AUTH_SECRET. This slice
+was delivered in [PR 270](https://github.com/getyak/talent-signal/pull/270),
+merged at 964eb29e after its applicable checks. The resident Web activation
+was separately read back. The [deep alignment follow-up](../2026-10-02-get-129-deep-alignment/README.md)
+records subsequent refinement; signed native login acceptance remains pending.

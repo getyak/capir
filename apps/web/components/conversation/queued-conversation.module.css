@@ -12,12 +12,12 @@
 .detailPanel { position:absolute; right:0; top:48px; width:min(300px,80vw); padding:18px; background:var(--surface); border:1px solid var(--line-soft); border-radius:14px; z-index:20; box-shadow:0 12px 40px #0000000d; line-height:1.65; }
 .detailPanel p { margin:0 0 12px; }.detailPanel a { display:block; }.textButton,.confirm button { border:0; background:none; color:inherit; cursor:pointer; padding:8px 0; display:flex; gap:8px; align-items:center; }.confirm { display:flex; flex-wrap:wrap; gap:12px; }.confirm p { width:100%; }
 .detailScope { color:var(--ink); font-weight:500; }
-.transcript { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:0 24px 24px; scrollbar-gutter:stable; }
+.transcript { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:0 24px 24px; scrollbar-gutter:stable both-edges; }
 /* 880px readable axis shared by transcript and composer. */
 .content { max-width:880px; margin:0 auto; min-width:0; }
 .turn { margin-bottom:36px; }.localTurn { margin:0 0 26px; }
 /* Trailing user bubbles; one centered timestamp per send above them. */
-.sendTime { color:var(--muted); font-size:12px; line-height:19px; margin:0 0 12px; text-align:center; }
+.sendTime { color:var(--muted); display:block; font-size:12px; line-height:19px; margin:0 0 12px; text-align:center; }
 .userRow { display:flex; justify-content:flex-end; margin-bottom:20px; }
 .userMessage { max-width:min(540px,82%); width:fit-content; background:var(--workspace-user-bubble); padding:12px 16px; border-radius:16px; font-size:14px; line-height:22px; white-space:pre-wrap; overflow-wrap:anywhere; box-sizing:border-box; }
 /* Leading Agent identity: the brand mark owns the 24px avatar column. */
@@ -58,7 +58,7 @@
 .starters button:hover { color:var(--ink); }
 .starters svg { opacity:.6; transform:rotate(45deg); }
 
-.dock { width:100%; max-width:928px; margin:0 auto; padding:0 24px 34px; position:relative; box-sizing:border-box; flex:none; }.latest { position:absolute; bottom:calc(100% + 4px); right:12px; display:flex; gap:6px; align-items:center; white-space:nowrap; padding:9px 13px; border-radius:24px; border:1px solid var(--line-soft); background:var(--surface); color:var(--muted); font-size:13px; box-shadow:0 3px 10px #00000008; cursor:pointer; z-index:5; }
+.dock { width:calc(100% - var(--conversation-scrollbar-inset, 0px)); max-width:928px; margin:0 auto; padding:0 24px 34px; position:relative; box-sizing:border-box; flex:none; }.latest { position:absolute; bottom:calc(100% + 4px); right:12px; display:flex; gap:6px; align-items:center; white-space:nowrap; padding:9px 13px; border-radius:24px; border:1px solid var(--line-soft); background:var(--surface); color:var(--muted); font-size:13px; box-shadow:0 3px 10px #00000008; cursor:pointer; z-index:5; }
 .composer { min-width:0; } .composer > div[data-variant]:not([data-layout="inline"]) { border-radius:12px; padding:20px 20px 16px; }
 .composer > div[data-variant]:not([data-layout="inline"]) textarea { font-size:15px; line-height:23px; }
 .contextChip { color:var(--muted); font-size:13px; line-height:20px; overflow-wrap:anywhere; }
