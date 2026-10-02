@@ -52,7 +52,7 @@ export async function GET() {
       components: [
         {
           id: "web",
-          label: "Talent Signal Web",
+          label: "capri Web",
           kind: "service",
           required: true,
           status: "healthy",

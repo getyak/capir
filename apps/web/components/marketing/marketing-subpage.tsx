@@ -13,46 +13,46 @@ export type MarketingPageKind =
 export const subpageCopy = {
   "zh-CN": {
     product: {
-      title: "以人为中心，关系才接得起来。",
+      title: "重要的人和未完的事，放回同一段来往。",
       description:
-        "一个联系人，不止一张名片。把对话、共同目标与下一步放在一起，让每次交谈都带着背景。",
+        "截图是入口。你想留下的是这次认识的背景、答应的事情，以及下一次还用得上的话。",
       rows: [
         [
-          "联系人，是起点。",
-          "同一个人，可以是候选人、客户，也可以是引荐人。",
-          "身份保持连贯，背景按具体关系与目标区分。你不用为每次新的合作重新认识一个人。",
+          "先理解，再决定留下什么。",
+          "不必先建联系人，或选一个文件夹。",
+          "先看到一段有来源的理解，再审阅人物、背景或未完事项。同名时先确认身份；还没有下一步，留作认识背景也有价值。",
         ],
         [
-          "对话，让背景生长。",
-          "留住发生过什么，也保留还有什么不确定。",
-          "你选择的文字与截图成为可审阅来源。Agent 帮你整理变化；你可以查看原话、纠正理解或暂不确认。",
+          "人、背景和事情，分别生长。",
+          "临时计划保留当时的时间，不变成永久标签。",
+          "人物资料保留核对过的身份线索；记忆保留带时间的背景；事项保留承诺和等待条件。重要内容能回到原话，也能纠正或删除。",
         ],
         [
-          "日程，接回这段关系。",
-          "见面之前带上背景，见面之后继续积累。",
-          "准备对话与记录后续回到同一位联系人。创建或修改外部日程，仍需你审阅具体对象、时间与效果。",
+          "下一次，从上一次接着聊。",
+          "新回复更新同一件事，而不是再建一张孤立笔记。",
+          "会面前回顾共同背景，会面后审阅变化。事情可以等待、完成、停止；主动提醒需要明确触发条件，暂停不代表不感兴趣。",
         ],
       ],
     },
     "how-it-works": {
       title: "少重建一次背景，多认真交谈一次。",
       description:
-        "从你主动提供的一段对话开始。一个案例，走完留住背景、审阅变化和准备下一步的过程。",
+        "从一张你主动分享的聊天截图开始。先看理解，再确认值得留下的内容，下一次继续同一件事。",
       rows: [
         [
           "选择一段对话",
           "只带入当前关系需要的内容。",
-          "在合成案例中，林澄说新加坡远程安排还没有确认。演示将这句话关联到产品负责人寻访情境。实际使用中，身份不确定时需要先核实。",
+          "在首页合成案例中，陈夏请你先发产品介绍，你回复“好，我整理一下”。Agent 的理解保留说话人和时间；没有约定截止日期，就不补一个。",
         ],
         [
           "审阅发生的变化",
           "区分对方说了什么，与已经确认了什么。",
-          "“周三”缺少年份、完整日期与时区，不能直接变成日程。确认候选人的表述，也不能替客户确认远程政策。",
+          "你选择是否留作背景或记下承诺。人物身份有歧义时先确认，不读取另一位同名人物的私有背景。待确认内容不会提前声称已经保存。",
         ],
         [
           "决定下一步",
           "先提出一件有依据、可以审阅的事。",
-          "此刻的建议是核实远程政策和具体日期。没有新的授权，不会自动发消息；移除支持原话后，这条建议立即失效。",
+          "用新截图提出“介绍已发，等对方看完”的更新，审阅后改变同一事项。没有新进展可以等待，也可以暂停。发送外部消息仍需要单独的人类决定。",
         ],
       ],
     },
@@ -91,46 +91,46 @@ export const subpageCopy = {
   },
   en: {
     product: {
-      title: "Start with a person. Continue a relationship.",
+      title: "Keep the people and unfinished things that matter.",
       description:
-        "A contact is more than a business card. Bring conversations, shared goals, and next steps together so every meeting starts with context.",
+        "A screenshot is the entrance. The useful result is a remembered introduction, a promise, or words that will matter again.",
       rows: [
         [
-          "A person is the starting point.",
-          "One person can be a candidate, a client, or an introducer.",
-          "Keep identity continuous while separating context by relationship and goal. You do not have to start from zero for each new collaboration.",
+          "Understand first. Choose what to keep.",
+          "No contact form or folder required first.",
+          "See a sourced understanding before reviewing a person, context, or unfinished thing. Resolve same-name ambiguity first. An introduction with no next step can be useful on its own.",
         ],
         [
-          "Conversations grow the context.",
-          "Remember what happened and what is still uncertain.",
-          "The text and screenshots you choose become reviewable sources. The Agent helps organize changes; you can inspect the words, correct an interpretation, or leave it unconfirmed.",
+          "People, context, and work grow separately.",
+          "A temporary plan keeps its original time and uncertainty.",
+          "People retain reviewed identity clues; memories retain dated context; work retains commitments and waiting conditions. Important context returns to the source and can be corrected or deleted.",
         ],
         [
-          "Meetings return to the relationship.",
-          "Arrive with context. Keep learning after the conversation.",
-          "Preparation and follow-up belong with the same person. Creating or changing an external calendar event still needs your review of the people, time, and effect.",
+          "Pick up the next conversation where you left off.",
+          "A new reply updates the same thing instead of creating another isolated note.",
+          "Review shared context before meeting and changes afterward. Work can wait, complete, or stop. Reminders need explicit triggers; a pause does not imply disinterest.",
         ],
       ],
     },
     "how-it-works": {
       title: "Less reconstructing. More real conversation.",
       description:
-        "Start with a conversation you choose to provide. Follow one case from remembered context to a reviewed change and a possible next step.",
+        "Share a screenshot intentionally. See what was understood, review what deserves to stay, then return to the same unfinished thing.",
       rows: [
         [
           "Choose a conversation",
           "Bring only what this relationship needs.",
-          "In the synthetic case, Lin Cheng says the Singapore remote arrangement is unresolved. The demo links those words to a product leadership search. In real use, uncertain identity must be resolved first.",
+          "In the synthetic home demo, Chen Xia asks you to send a product overview and you agree to prepare it. The understanding retains speaker and time. No deadline was agreed, so none is invented.",
         ],
         [
           "Review what changed",
           "Separate what someone said from what is confirmed.",
-          "“Wednesday” lacks a year, complete date, and time zone. It cannot become a calendar event. Confirming the candidate's statement also cannot confirm the client's remote policy.",
+          "Choose whether to keep context or record a commitment. Resolve identity ambiguity before reading another same-name person's private evidence. A pending review is never described as a completed save.",
         ],
         [
           "Decide the next step",
           "Prepare one supported, reviewable suggestion.",
-          "Here, the suggestion is to clarify the remote policy and the exact date. No message is sent without separate authorization. Remove the supporting words and the suggestion loses its support.",
+          "A later screenshot proposes “overview sent; waiting for their review.” Your review changes the same item. Waiting and pausing are valid outcomes. External messages still require a separate human decision.",
         ],
       ],
     },
@@ -205,12 +205,12 @@ export function MarketingSubpage({
               <ul>
                 {(en
                   ? [
-                      "Synthetic relationship brief",
+                      "Synthetic screenshot continuity demo",
                       "Inspect, review, and remove evidence",
                       "No login or card required",
                     ]
                   : [
-                      "合成关系简报",
+                      "合成截图接续体验",
                       "查看、审阅和移除证据",
                       "无需登录或绑定支付方式",
                     ]
@@ -283,35 +283,35 @@ export function MarketingSubpage({
         <section className={styles.callout}>
           <h2>
             {en
-              ? "Connections can reveal a possibility."
-              : "关系之间，也可能出现新的可能。"}
+              ? "The same thing can continue next time."
+              : "这件事，下次还接得起来。"}
           </h2>
           <div className={styles.path}>
             <div>
               {en ? "You" : "你"}
               <small>
-                {en ? "Product leadership search" : "产品负责人寻访"}
+                {en ? "Promise to send an overview" : "你答应先发介绍"}
               </small>
             </div>
             <span aria-hidden="true">→</span>
             <div>
-              {en ? "Lin Cheng" : "林澄"}
+              {en ? "Chen Xia" : "陈夏"}
               <small>
-                {en ? "Remote policy unresolved" : "远程政策待明确"}
+                {en ? "Overview sent" : "产品介绍已发出"}
               </small>
             </div>
             <span aria-hidden="true">→</span>
             <div>
-              {en ? "Client stakeholder" : "客户负责人"}
+              {en ? "Next conversation" : "下一次交流"}
               <small>
-                {en ? "Possible clarification path" : "可能的政策核实路径"}
+                {en ? "Review shared context" : "回顾共同背景"}
               </small>
             </div>
           </div>
           <p>
             {en
-              ? "An illustrative, synthetic path. Surfacing possible introductions from authorized context is an exploration, not a claim of verified acquaintance or autonomous action."
-              : "这是一条合成的情境路径。基于授权背景发现可能的引荐是探索方向，不代表已核实相识，更不代表自动采取行动。"}
+              ? "A synthetic path through the same person and item. Changes keep their sources and review; pausing affects reminders alone. The full screenshot continuity loop is a product direction. Confirm available capabilities when requesting access."
+              : "同一人物、同一件事的合成路径。每次变化都保留来源和审阅；暂停只改变提醒，不推测对方态度。完整截图接续是产品方向，具体开放能力需在申请时核对。"}
           </p>
         </section>
       )}

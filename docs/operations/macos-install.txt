@@ -1,8 +1,8 @@
-Talent Signal — relationship workspace
+capri — personal Agent workspace
 
 macOS 14 or later · Apple silicon and Intel
 
-1. Drag Talent Signal to Applications, then open it.
+1. Drag the bundled app to Applications, then open it.
 2. Paste the HTTPS workspace address from your workspace owner. Use the origin
    only (scheme, hostname and optional port), without /workspace or other paths.
 3. Sign in with your own account.
@@ -12,7 +12,7 @@ address. Installing it does not grant access to anyone else's data. A private
 workspace requires an authorized Mac on the same Tailnet with Tailscale connected.
 
 Use the network button in the workspace toolbar to change the server. Settings >
-Talent Signal links to release downloads and installation help.
+capri links to release downloads and installation help.
 
 Signed releases check at launch and periodically while running. A verified update
 appears beside the account avatar. Click Update and Restart once to download,

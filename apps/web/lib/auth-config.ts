@@ -76,7 +76,7 @@ export function deriveRegistrationDisplayName(
   const localPart = email.trim().toLowerCase().split("@")[0] ?? "";
   const cleaned = localPart.replace(/[^\p{L}\p{N}._-]+/gu, " ").trim();
   if (cleaned) return cleaned.slice(0, 100);
-  return "Talent Signal Recruiter";
+  return "capri user";
 }
 
 export function normalizeEmail(value: string) {

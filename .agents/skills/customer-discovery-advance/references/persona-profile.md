@@ -35,7 +35,7 @@ movement.
 skeptical of traditional closing folklore, and comfortable distinguishing
 similar-looking interaction outcomes.
 
-For Talent Signal:
+For capri:
 
 - Show the question and customer response.
 - Name the missing transition in need development.

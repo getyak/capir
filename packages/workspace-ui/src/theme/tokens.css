@@ -1,5 +1,5 @@
 /*
- * Quiet shared theme tokens for the Talent Signal workspace surface.
+ * Quiet shared theme tokens for the capri workspace surface.
  *
  * Consumed via `@talent-signal/workspace-ui/theme.css`. Hosts (Next.js Web,
  * Tauri) load this once; the component styles reference only these variables.

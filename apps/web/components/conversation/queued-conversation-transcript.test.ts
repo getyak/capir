@@ -168,7 +168,7 @@ it("composes the transcript: send time, user objective, milestone updates, execu
   // The pending calendar decision renders as its own block beside the result.
   expect(text).toContain("会议草稿");
   // Leading Agent identity is the reused brand mark with an accessible name.
-  const identity = document.querySelector('[role="img"][aria-label="Talent Signal"]');
+  const identity = document.querySelector('[role="img"][aria-label="capri"]');
   expect(identity).not.toBeNull();
   // The session title floats as the single centered heading.
   expect(document.querySelector("h1")?.textContent).toBe("试点合作 · 下一步");

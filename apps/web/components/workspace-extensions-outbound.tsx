@@ -312,7 +312,7 @@ export function RevealTokenDialog({
   return (
     <ExtensionDialog
       dismissible={false}
-      description="关闭后无法再次查看。请立即复制到客户端；Talent Signal 只保存令牌哈希。"
+      description="关闭后无法再次查看。请立即复制到客户端；capri 只保存令牌哈希。"
       footer={
         <button className={styles.primary} onClick={onClose} type="button">
           我已保存，关闭

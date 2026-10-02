@@ -1,6 +1,6 @@
 interface:
-  display_name: "Talent Signal"
-  short_description: "Repo-specific patterns and workflows for talent-signal"
-  default_prompt: "Use the talent-signal repo skill to follow existing architecture, testing, and workflow conventions."
+  display_name: "capri"
+  short_description: "Repository-specific patterns and workflows for capri"
+  default_prompt: "Use $talent-signal-conventions to follow existing architecture, testing, and workflow conventions."
 policy:
   allow_implicit_invocation: true

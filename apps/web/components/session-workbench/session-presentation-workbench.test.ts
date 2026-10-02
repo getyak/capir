@@ -97,7 +97,7 @@ describe("Session workbench conversation canvas", () => {
     const html = render({ person_id: "10000000-0000-4000-8000-000000000002", person_label: "陈曦", relationship_context_id: "10000000-0000-4000-8000-000000000003" });
     expect(html).toContain('aria-label="查看 陈曦 的人物背景"');
     expect(html).toContain('aria-label="对话详情"');
-    expect(html).toContain('role="img" aria-label="Talent Signal"');
+    expect(html).toContain('role="img" aria-label="capri"');
     expect(html).toContain("产品负责人寻访");
   });
 
@@ -113,7 +113,7 @@ describe("Session workbench conversation canvas", () => {
 
   it("shows the assistant identity once and hides a generic reply heading", () => {
     const html = render();
-    expect(html).toContain("Talent Signal");
+    expect(html).toContain("capri");
     expect(html).toContain("帮我准备与陈曦的沟通");
     // The generic "回复" heading is hidden; the body is not.
     expect(html).not.toContain("<h3>回复</h3>");

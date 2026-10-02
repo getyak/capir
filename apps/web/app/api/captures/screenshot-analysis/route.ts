@@ -316,7 +316,7 @@ export async function POST(request: NextRequest) {
             ? "云端截图分析在 45 秒内未完成。未保存来源；请检查所选 Provider 的网络或专用代理配置后重试。"
             : failureCode === "provider_network_failed"
               ? "无法连接所选截图分析 Provider。未保存来源；请检查网络或专用代理配置后重试。"
-              : "私密截图分析未能完成。Talent Signal 没有保存该来源。",
+              : "私密截图分析未能完成。capri 没有保存该来源。",
         code: failureCode,
         request_id: requestId,
       },

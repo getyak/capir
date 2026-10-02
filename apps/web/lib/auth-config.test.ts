@@ -123,7 +123,7 @@ describe("registration display name", () => {
       "ada.lovelace",
     );
     expect(deriveRegistrationDisplayName("@example.test", undefined)).toBe(
-      "Talent Signal Recruiter",
+      "capri user",
     );
     expect(
       deriveRegistrationDisplayName(`${'a'.repeat(150)}@example.test`, undefined),

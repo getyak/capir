@@ -294,7 +294,7 @@ export function SessionAssistantMessage({ context }: { context: RenderContext })
   const renderContext = { ...context, onDecisionState: update };
   return <DecisionContext.Provider value={{ states, update }}><MessagePrimitive.Root className={styles.turn} role="article">
     <div className={styles.answer}>
-      <div className={styles.identity} role="img" aria-label="Talent Signal"><span className={styles.mark} aria-hidden="true"/></div>
+      <div className={styles.identity} role="img" aria-label="capri"><span className={styles.mark} aria-hidden="true"/></div>
       <div className={styles.answerBody}>
         {/* Empty assistant content stays valid: silence needs no placeholder. */}
         <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <ConversationResponse>{part.text}</ConversationResponse>

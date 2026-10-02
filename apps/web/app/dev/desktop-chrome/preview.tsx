@@ -104,8 +104,8 @@ export function DesktopChromeFixture() {
       <aside className={styles.sidebar}>
         <div className={styles.sidebarState} data-collapsed={collapsed}>
           <div className={styles.brandRow}>
-            <button aria-label="Talent Signal" className={styles.brand} onClick={() => setCollapsed(!collapsed)}>
-              <span className={styles.brandMark} /><span className={styles.brandName}>Talent Signal</span>
+            <button aria-label="capri" className={styles.brand} onClick={() => setCollapsed(!collapsed)}>
+              <span className={styles.brandMark} /><span className={styles.brandName}>capri</span>
             </button>
           </div>
         </div>

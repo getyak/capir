@@ -1,5 +1,9 @@
 # Review contracts
 
+The recruitment examples illustrate the shared packet schema; they are not
+the default capri scenario or mandatory reviewer panel. Use the current Product
+contract and actual user context when choosing a panel.
+
 Use JSON for validation and durable comparison. YAML shown by individual skills should be converted without changing fields.
 
 ## Specialist review

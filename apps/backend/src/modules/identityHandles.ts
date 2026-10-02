@@ -142,7 +142,7 @@ function validityFor(
     throw new ApiError(
       422,
       "IDENTITY_HANDLE_VALIDITY_OVERRIDE_REASON_REQUIRED",
-      "A custom identity review deadline requires a visible recruiter reason.",
+      "A custom identity review deadline requires a visible human review reason.",
     );
   }
   if (!handle.valid_until && overrideReason) {
@@ -523,8 +523,8 @@ export async function confirmIdentityHandles(
       priorStatus,
       reason:
         eventType === "confirmed"
-          ? "The recruiter confirmed a source-linked identity clue."
-          : "The recruiter supplied a fresh governed source and reconfirmed this identity clue.",
+          ? "The user confirmed a source-linked identity clue."
+          : "The user supplied a fresh governed source and reconfirmed this identity clue.",
       sourceResourceId: input.sourceResourceId,
       status: "confirmed",
       validFrom: confirmedAt,

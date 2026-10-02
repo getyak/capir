@@ -114,7 +114,7 @@ struct DeviceContactHandoffView: View {
             }
 
             Text(
-                "Only the fields above open in Apple's contact editor. Relationship context and screenshot evidence stay in Talent Signal."
+                "Only the fields above open in Apple's contact editor. Relationship context and screenshot evidence stay in capri."
             )
             .font(.caption)
             .foregroundStyle(Color.tsMutedInk)

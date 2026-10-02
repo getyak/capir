@@ -42,7 +42,7 @@ describe("account menu utilities and footer geometry", () => {
     const html = renderToStaticMarkup(createElement(WorkspaceAccountMenu, { accountName: "Synthetic User", workspaceName: "Test", signOutAction: () => {} }));
     expect(html).toContain("本周已记录运行");
     expect(html).toContain("读取中");
-    expect(html).toContain("移动端 Talent Signal");
+    expect(html).toContain("移动端 capri");
     expect(html).toContain("帮助与支持");
     expect(html).toContain("/workspace/settings/diagnostics");
     expect(html).toContain("mailto:hello@talentsignal.ai");

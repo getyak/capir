@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   description: "双向 MCP 扩展：连接外部服务，或按范围提供只读接入。",
   robots: { follow: false, index: false },
-  title: "扩展 · Talent Signal",
+  title: "扩展 · capri",
 };
 
 const UNCONFIGURED_ENDPOINTS: McpEndpointsResponse = {

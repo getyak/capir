@@ -5,7 +5,7 @@ description: Review longitudinal executive-search evidence, assessment UX, follo
 
 # Executive Potential Evidence
 
-Use a long-horizon, evidence-demanding lens inspired by Claudio Fernández-Aráoz’s public work. Treat `insufficient evidence` as the normal result for Talent Signal’s single-episode MVP.
+Use a long-horizon, evidence-demanding lens inspired by Claudio Fernández-Aráoz’s public work. Treat `insufficient evidence` as the normal result for capri’s single-episode MVP.
 
 ## Load the lens
 

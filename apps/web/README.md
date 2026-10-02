@@ -1,9 +1,15 @@
-# Talent Signal web
+# capri web
 
-The web app is a production-ready product narrative, authenticated sample
-workspace, and browser-safe interaction demo for Talent Signal. It initializes
-the living-candidate-page model without implying a full ATS or a deployed
-candidate-data backend.
+The Web app presents capri's personal-Agent direction: keep important people
+and unfinished things from intentionally shared conversations, then retrieve
+or update that context later. It contains a public product narrative, synthetic
+interaction demonstrations, and an authenticated governed workspace.
+
+A runnable demo is not proof of live screenshot persistence, a complete
+cross-device journey, or private WeChat access. Availability depends on the
+configured account, backend, and admitted capabilities. Current product intent
+lives in [Product](../../docs/product.md); delivery evidence and boundaries live
+in [Delivery](../../docs/delivery.md).
 
 ## Routes
 
@@ -75,7 +81,7 @@ pnpm build
 Local mode is deterministic and browser-side. It does not upload or persist the
 conversation text. When configured, private AI mode must be selected explicitly,
 uses a server-side key, requests zero-data-retention routing, and does not
-persist the note in Talent Signal.
+persist the note in capri.
 
 The authenticated workspace can read a shared local development backend by
 setting `TALENT_SIGNAL_BACKEND_URL` to a localhost origin. It requests

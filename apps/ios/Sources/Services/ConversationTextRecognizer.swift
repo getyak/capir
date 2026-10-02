@@ -17,7 +17,7 @@ enum ConversationRecognitionError: LocalizedError, Equatable {
         case .noConversationEvidence:
             return "This image contains profile details but no conversation messages, so it cannot be saved as conversation evidence."
         case .sharedPreprocessingUnavailable:
-            return "Shared screenshot preprocessing is unavailable. Reconnect to Talent Signal and retry."
+            return "Shared screenshot preprocessing is unavailable. Reconnect to capri and retry."
         case .sharedPreprocessingFailed:
             return "Shared screenshot preprocessing did not produce reviewable evidence. Retry with the original screenshot."
         case .preprocessingCleanupReceiptUnavailable:

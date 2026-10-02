@@ -12,9 +12,9 @@ import {
 } from "./release";
 
 export const metadata: Metadata = {
-  title: "下载 Talent Signal",
+  title: "下载 capri",
   description:
-    "下载 Talent Signal 桌面与移动端：macOS 公开下载，iOS 通过受邀预览提供，可申请使用。",
+    "下载 capri 桌面与移动端：macOS 公开下载，iOS 通过受邀预览提供，可申请使用。",
   alternates: {
     canonical: "/download",
   },
@@ -29,9 +29,9 @@ export default function DownloadPage() {
         <article className="shell prose-page__inner">
           <header>
             <p className="eyebrow">下载</p>
-            <h1>在你的设备上使用 Talent Signal。</h1>
+            <h1>在你的设备上使用 capri。</h1>
             <p>
-              各端独立发布。只有取得可靠更新结果时，应用才会提示可更新；下面的安装入口都指向真实的发布位置。
+              各端独立发布。安装入口指向现有发布位置；已有版本可能仍显示 Talent Signal，官网更名不代表新品牌安装包已经发布。只有取得可靠更新结果时，应用才会提示可更新。
             </p>
           </header>
 
@@ -48,7 +48,7 @@ export default function DownloadPage() {
                     {surface.title} 公开下载（GitHub Releases）↗
                   </a>
                 ) : (
-                  <SupportEmailEntry subject="申请使用 Talent Signal">
+                  <SupportEmailEntry subject="申请使用 capri">
                     申请使用 {surface.title} 版（邮件）↗
                   </SupportEmailEntry>
                 )}

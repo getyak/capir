@@ -360,7 +360,7 @@ export function WorkspaceApp({
       <aside className="review-sidebar">
         <div className="review-sidebar__brand">
           <BrandMark compact />
-          <span>Talent Signal</span>
+          <span>capri</span>
         </div>
 
         <div className="review-sidebar__scope">

@@ -241,7 +241,7 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
                 }
             }
         } catch LoginStoreRegistryError.anotherInstance {
-            phase = .failed("另一个 Talent Signal 实例正在使用登录状态。请关闭该实例后重试。")
+            phase = .failed("另一个 capri 实例正在使用登录状态。请关闭该实例后重试。")
         } catch {
             phase = .failed("无法保存本地登录状态。请检查磁盘与应用权限后重试。")
         }

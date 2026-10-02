@@ -74,7 +74,7 @@ export function resolveIdentityCandidates(input: {
         ...(reasonsByPerson.get(candidatePersonId) ?? new Set<string>()),
       ],
       reason:
-        "One existing person matches confirmed identity handles; recruiter confirmation is still required.",
+        "One existing person matches confirmed identity handles; human confirmation is still required.",
     };
   }
 

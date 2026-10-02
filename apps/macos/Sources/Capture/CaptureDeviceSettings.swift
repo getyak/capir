@@ -12,7 +12,7 @@ struct CaptureDeviceSettings: View {
             Text("从正在使用的屏幕选择一块内容，直接交给当前工作区的 Agent。")
                 .font(.callout).foregroundStyle(.secondary)
 
-            Toggle("在菜单栏显示 Talent Signal", isOn: $preferences.showMenuBar)
+            Toggle("在菜单栏显示 capri", isOn: $preferences.showMenuBar)
                 .accessibilityIdentifier("capture.settings.menuBar")
             HStack {
                 Text("截图快捷键")

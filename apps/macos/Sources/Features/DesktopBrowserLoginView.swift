@@ -9,7 +9,7 @@ struct DesktopBrowserLoginView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Image(systemName: "person.crop.circle").font(.system(size: 28)).foregroundStyle(.secondary)
-            Text("登录 Talent Signal").font(.system(size: 26, weight: .medium))
+            Text("登录 capri").font(.system(size: 26, weight: .medium))
             switch coordinator.phase {
             case .preparing:
                 progress("正在准备登录…")

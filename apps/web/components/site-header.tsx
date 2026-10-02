@@ -2,6 +2,7 @@
 
 import { List, X } from "@phosphor-icons/react";
 import Link from "next/link";
+import { siteConfig } from "@/lib/site";
 import { usePathname } from "next/navigation";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import {
@@ -84,7 +85,7 @@ export function SiteHeader() {
     >
       <div className="site-header__inner">
         <BrandMark
-          label={locale === "en" ? "Talent Signal home" : "Talent Signal 首页"}
+          label={locale === "en" ? `${siteConfig.name} home` : `${siteConfig.name} 首页`}
         />
         <nav className="desktop-nav" aria-label={c.navigation}>
           {links.map(({ href, label }) => (

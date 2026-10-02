@@ -12,4 +12,4 @@ Checked 2026-08-04. Recheck platform guidance when deployment targets change.
 - [WCAG 2.2](https://www.w3.org/TR/WCAG22/) — cross-platform accessibility success criteria.
 - [WCAG 2.2 Understanding Target Size (Minimum)](https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html) — minimum target-size criterion and exceptions for web content.
 
-Apple's platform conventions and WCAG are baselines, not substitutes for assistive-technology and recruiter testing.
+Apple's platform conventions and WCAG are baselines, not substitutes for assistive-technology and actual-user testing.

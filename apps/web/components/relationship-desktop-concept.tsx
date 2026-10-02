@@ -519,7 +519,7 @@ export function RelationshipDesktopConcept() {
 
       <aside className={styles.contextRail}>
         <div className={styles.contextHeader}>
-          <span className={styles.productName}>Talent Signal</span>
+          <span className={styles.productName}>capri</span>
           <strong>{surface === "today" ? "今天" : surface === "people" ? "人才" : "寻访"}</strong>
         </div>
 

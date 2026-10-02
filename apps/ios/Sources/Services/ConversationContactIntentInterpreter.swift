@@ -74,7 +74,7 @@ struct AdaptiveConversationContactIntentInterpreter: ConversationContactIntentIn
 @available(iOS 26.0, *)
 @Generable(description: "A bounded proposal for whether one message is contact intake.")
 private struct GeneratedConversationContactIntent {
-    @Guide(description: "True only for one recruiter-authored person introduction with a stable identity clue, or a direct contact request. Ordinary questions, third-party reported or quoted messages, and name-only mentions are false.")
+    @Guide(description: "True only for one user-authored person introduction with a stable identity clue, or a direct contact request. Ordinary questions, third-party reported or quoted messages, and name-only mentions are false.")
     var isContactIntent: Bool
     @Guide(description: "The person's name copied exactly from the source, or an empty string.")
     var name: String
@@ -92,14 +92,14 @@ private struct FoundationModelConversationContactIntentModel:
     func generate(from source: String) async throws -> ConversationContactModelOutput {
         let session = LanguageModelSession(
             instructions: """
-            Classify one recruiter-authored message for a contact-intake proposal.
-            A contact intent means the recruiter wants Talent Signal to remember or
+            Classify one user-authored message for a contact-intake proposal.
+            A contact intent means the user wants capri to remember or
             add one person for relationship work, even when they do not use a command.
             A question asking about an existing person is not contact intake.
             A name alone is not enough. Require one name and a verifiable email,
             phone, or LinkedIn profile clue belonging to the same person. Missing
-            relationship purpose stays empty for the recruiter to complete.
-            Third-party quoted or reported speech is evidence, not the recruiter's
+            relationship purpose stays empty for the user to complete.
+            Third-party quoted or reported speech is evidence, not the user's
             intent to create a contact. Never blend names or fields from multiple
             people. When the active person is ambiguous, leave the name empty.
 
@@ -108,9 +108,9 @@ private struct FoundationModelConversationContactIntentModel:
             phone, linkedin_url, or none. Leave missing fields empty. Never infer
             a generic relationship purpose such as "General relationship".
             Never infer
-            identity, candidate quality, personality, protected traits, culture fit,
+            identity, a person's worth, personality, protected traits, culture fit,
             acceptance probability, or authority to create, attach, or merge records.
-            This output is only a proposal that a recruiter must review.
+            This output is only a proposal that the user must review.
             """
         )
         let response = try await session.respond(

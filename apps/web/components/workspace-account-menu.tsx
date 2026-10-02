@@ -277,9 +277,9 @@ export function WorkspaceAccountMenu({
         <DesktopUpdateBanner onNavigate={() => close()} />
         <hr />
         <WeeklyUsageRow store={usageStore} />
-        <a aria-label="在手机上使用 Talent Signal" href="/download" onClick={() => close()}>
+        <a aria-label="在手机上使用 capri" href="/download" onClick={() => close()}>
           <DeviceMobile aria-hidden="true" size={16} />
-          <span>移动端 Talent Signal</span>
+          <span>移动端 capri</span>
         </a>
         <details className={styles.accountSubmenu}>
           <summary aria-label="帮助与支持">
@@ -294,7 +294,7 @@ export function WorkspaceAccountMenu({
             <a href="/workspace/settings" onClick={() => close()}>
               <span>工作区设置</span>
             </a>
-            <SupportEmailEntry subject="Talent Signal 支持" onNavigate={() => close()}>
+            <SupportEmailEntry subject="capri 支持" onNavigate={() => close()}>
               <span>邮件联系支持 ↗</span>
             </SupportEmailEntry>
           </div>

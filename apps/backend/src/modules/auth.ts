@@ -117,7 +117,7 @@ function boundedName(request: AppleLoginRequest): string {
     .filter((value): value is string => Boolean(value))
     .join(" ")
     .trim();
-  return name || "Talent Signal Recruiter";
+  return name || "capri User";
 }
 
 export async function insertSession(

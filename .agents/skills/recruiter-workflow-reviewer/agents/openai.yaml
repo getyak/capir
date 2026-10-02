@@ -1,4 +1,4 @@
 interface:
   display_name: "Recruiter Workflow Reviewer"
   short_description: "Audit real recruiter workflows and operational friction."
-  default_prompt: "Use $recruiter-workflow-reviewer to audit this Talent Signal workflow from a recruiter operator perspective."
+  default_prompt: "Use $recruiter-workflow-reviewer to audit this capri workflow from a recruiter operator perspective."

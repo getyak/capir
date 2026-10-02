@@ -20,7 +20,7 @@ final class AudioSignalCaptureStore: ObservableObject {
         case deleted
     }
 
-    @Published var purpose = "Preserve an authorized conversation moment for recruiter review"
+    @Published var purpose = "Preserve an authorized conversation moment for your review"
     @Published var authorizationBasis = ""
     @Published var authorizingParty = ""
     @Published var authorizationConfirmed = false
@@ -116,7 +116,7 @@ final class AudioSignalCaptureStore: ObservableObject {
             return .skipped
         }
         guard sceneIsActive else {
-            phase = .failed("Open Talent Signal in the foreground before recording. No recording started.")
+            phase = .failed("Open capri in the foreground before recording. No recording started.")
             return .skipped
         }
         notice = nil
@@ -139,7 +139,7 @@ final class AudioSignalCaptureStore: ObservableObject {
                 authorization: .init(
                     basis: authorizationBasis.trimmingCharacters(in: .whitespacesAndNewlines),
                     authorizingParty: authorizingParty.trimmingCharacters(in: .whitespacesAndNewlines),
-                    attestedBy: "Current local recruiter",
+                    attestedBy: "Current local user",
                     scope: purpose.trimmingCharacters(in: .whitespacesAndNewlines),
                     recordedAt: Date()
                 )
@@ -172,7 +172,7 @@ final class AudioSignalCaptureStore: ObservableObject {
         LabClientDiagnostics.observeSync(.audioPayloadFinalization) {
             do {
                 let receipt = try recorder.stop()
-                notice = "Recording stopped because Talent Signal left the foreground. The completed local payload is recoverable."
+                notice = "Recording stopped because capri left the foreground. The completed local payload is recoverable."
                 phase = .saved(receipt)
                 return .completed
             } catch {
@@ -188,7 +188,7 @@ final class AudioSignalCaptureStore: ObservableObject {
         phase = .deleting
         do {
             try recorder.delete(receipt)
-            purpose = "Preserve an authorized conversation moment for recruiter review"
+            purpose = "Preserve an authorized conversation moment for your review"
             authorizationBasis = ""
             authorizingParty = ""
             authorizationConfirmed = false

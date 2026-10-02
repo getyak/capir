@@ -36,7 +36,7 @@ export type BlogPost = {
 };
 
 export const editorialAuthor = {
-  name: "Talent Signal 编辑团队",
+  name: "capri 编辑团队",
   url: "/blog/about",
   description:
     "面向证据优先、关系驱动型寻访的产品研究与实践方法。",

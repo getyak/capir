@@ -9,17 +9,17 @@ import { blogPosts, editorialAuthor } from "@/lib/blog";
 import { siteConfig } from "@/lib/site";
 
 export const metadata: Metadata = {
-  title: "招聘研究与实践方法",
+  title: "关系记忆与个人 Agent 研究",
   description:
-    "围绕候选人进展、人工监督、持续更新的候选人简报与关系驱动型寻访工作流展开的证据优先研究。",
+    "围绕有来源的关系背景、人工决定和持续接续展开的研究。历史招聘文章保留其当时的场景与证据。",
   alternates: {
     canonical: "/blog",
   },
   openGraph: {
     type: "website",
-    title: "Talent Signal 研究与实践方法",
+    title: "capri 研究与实践方法",
     description:
-      "面向候选人进展与关系驱动型寻访的证据优先方法。",
+      "面向客户、伙伴与协作来往的证据优先方法，保留历史招聘研究。",
     url: "/blog",
     images: [
       {
@@ -32,9 +32,9 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Talent Signal 研究与实践方法",
+    title: "capri 研究与实践方法",
     description:
-      "面向候选人进展与关系驱动型寻访的证据优先方法。",
+      "面向客户、伙伴与协作来往的证据优先方法，保留历史招聘研究。",
     images: [blogPosts[0].heroImage],
   },
 };
@@ -43,7 +43,7 @@ const blogSchema = {
   "@context": "https://schema.org",
   "@type": "Blog",
   "@id": `${siteConfig.url}/blog#blog`,
-  name: "Talent Signal 研究与实践方法",
+  name: "capri 研究与实践方法",
   description: metadata.description,
   url: `${siteConfig.url}/blog`,
   inLanguage: "zh-CN",
@@ -78,10 +78,10 @@ export default function BlogPage() {
         <header className="blog-index__hero shell">
           <div>
             <p className="eyebrow">研究与实践方法</p>
-            <h1>为关系驱动型寻访保留更好的背景。</h1>
+            <h1>让下一次交流，拥有更好的背景。</h1>
           </div>
           <p>
-            在候选人对话之间，保留证据、招聘顾问判断与下一个有用行动的方法。
+            研究怎样从对话留下有出处的背景，尊重人的决定，并接续尚未结束的事情。早期招聘研究仍保留原场景。
           </p>
         </header>
 
@@ -102,7 +102,7 @@ export default function BlogPage() {
           <header>
             <h2 id="latest-articles-title">最新文章</h2>
             <p>
-              一组围绕证据、时间与招聘顾问自主决定展开的连贯研究。
+              围绕证据、时间与人类自主决定展开的研究，区分历史场景与当前产品方向。
             </p>
           </header>
           <div className="blog-index__grid">

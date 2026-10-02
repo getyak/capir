@@ -108,7 +108,7 @@ final class AuthenticationWelcomeUITests: XCTestCase {
         let email = app.buttons["sign-in-with-email"]
         for _ in 0..<6 where !email.isHittable { app.swipeUp() }
         XCTAssertTrue(email.isHittable)
-        XCTAssertFalse(app.staticTexts["让每一段关系，\n都有新的可能。"].exists)
+        XCTAssertFalse(app.staticTexts["接住重要的人，\n接着未完的事。"].exists)
         save(app, "08-offline-accessibility-recovery")
     }
 

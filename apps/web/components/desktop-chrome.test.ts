@@ -148,7 +148,7 @@ describe("native desktop chrome", () => {
       accountName: "Synthetic User", workspaceName: null, signOutAction: () => {},
     }));
     const mobile = host.querySelector("a[href='/download']");
-    expect(mobile?.textContent).toContain("移动端 Talent Signal");
+    expect(mobile?.textContent).toContain("移动端 capri");
     expect(mobile?.getAttribute("aria-label")).toContain("手机");
     const support = host.querySelector("summary[aria-label='帮助与支持']");
     const supportLinks = Array.from(
@@ -190,7 +190,7 @@ describe("workspace footer strip", () => {
     await showDesktop({ protocolVersion: 1, availableVersion: null });
     const entry = host.querySelector("a");
     expect(entry?.getAttribute("href")).toBe("/download");
-    expect(entry?.getAttribute("aria-label")).toBe("下载 Talent Signal");
+    expect(entry?.getAttribute("aria-label")).toBe("下载 capri");
     expect(host.textContent).not.toContain("0.2.0");
     expect(host.textContent).not.toContain("可用");
     const tooltip = host.querySelector("[role='tooltip']");

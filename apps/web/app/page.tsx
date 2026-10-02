@@ -3,13 +3,13 @@ import { MarketingHome } from "@/components/marketing/marketing-home";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import { StructuredData } from "@/components/structured-data";
-import { relationshipVisionCopy } from "@/lib/relationship-vision-copy";
+import { personalAgentHomeFaqs } from "@/lib/personal-agent-copy";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
 import { siteConfig } from "@/lib/site";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getMarketingLocale();
-  const c = relationshipVisionCopy(locale);
+  const c = { title: locale === "en" ? `${siteConfig.name} | Keep important people and unfinished things close` : siteConfig.title, promise: locale === "en" ? "Keep the context, promises, and changes in a chat. Your personal Agent helps you continue the next conversation." : siteConfig.description, faqs: personalAgentHomeFaqs(locale) };
   const title = c.title;
   return {
     title: { absolute: title },
@@ -25,7 +25,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function HomePage() {
   const locale = await getMarketingLocale();
-  const c = relationshipVisionCopy(locale);
+  const c = { title: locale === "en" ? `${siteConfig.name} | Keep important people and unfinished things close` : siteConfig.title, promise: locale === "en" ? "Keep the context, promises, and changes in a chat. Your personal Agent helps you continue the next conversation." : siteConfig.description, faqs: personalAgentHomeFaqs(locale) };
   return (
     <>
       <StructuredData
@@ -41,7 +41,7 @@ export default async function HomePage() {
         value={{
           "@context": "https://schema.org",
           "@type": "FAQPage",
-          mainEntity: c.faqs.map(({ question, answer }) => ({
+          mainEntity: c.faqs.map(([question, answer]) => ({
             "@type": "Question",
             name: question,
             acceptedAnswer: { "@type": "Answer", text: answer },

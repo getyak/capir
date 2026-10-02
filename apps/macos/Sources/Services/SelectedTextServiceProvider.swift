@@ -27,7 +27,7 @@ final class SelectedTextServiceProvider: NSObject {
         guard let selectedText = pasteboard.string(forType: .string)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !selectedText.isEmpty else {
-            errorPointer.pointee = "Select text before choosing Review Selection with Talent Signal." as NSString
+            errorPointer.pointee = "Select text before choosing Review Selection with capri." as NSString
             return
         }
         let request = SelectedTextServiceRequest(id: UUID(), text: selectedText)
