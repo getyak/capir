@@ -59,8 +59,8 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   min-height: 62px;
-  gap: 10px;
-  padding: 8px;
+  gap: 8px;
+  padding: 8px 10px;
   border-radius: 16px;
   box-shadow: none;
 }
@@ -144,11 +144,9 @@
   animation: composer-menu-enter 150ms var(--ease-out);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 13px;
+  border-radius: 18px;
   bottom: calc(100% + 8px);
-  box-shadow:
-    0 18px 48px color-mix(in srgb, var(--ink) 16%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--surface) 85%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 10%, transparent);
   display: flex;
   flex-direction: column;
   left: 0;
@@ -184,7 +182,7 @@
 
 .item[data-selected="true"],
 .item:hover {
-  background: color-mix(in srgb, var(--ink) 6%, var(--surface));
+  background: var(--surface-selected);
   color: var(--ink);
 }
 
@@ -203,6 +201,7 @@
   display: block;
   font-size: 0.875rem;
   font-weight: 540;
+  line-height: 22px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -212,7 +211,7 @@
   color: var(--muted);
   display: block;
   font-size: 0.75rem;
-  line-height: 1.5;
+  line-height: 20px;
   margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;

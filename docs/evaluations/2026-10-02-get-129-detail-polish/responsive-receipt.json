@@ -1,0 +1,272 @@
+{
+  "checks": [
+    "short desktop close fully visible after bottom scroll",
+    "close keyboard ring inside reachable target",
+    "close top hit area unobscured after scroll",
+    "640×220 details wholly in viewport",
+    "short details delete target corners unobscured by bottom navigation",
+    "short details scroll reaches delete without executing it",
+    "320x321 details delete above navigation",
+    "320x321 delete corners hit actual button",
+    "640x400 details delete above navigation",
+    "640x400 delete corners hit actual button",
+    "390px drawer actually scrolled",
+    "390px mobile close44 within viewport after scroll",
+    "390px drawer Escape removes content",
+    "320px drawer actually scrolled",
+    "320px mobile close44 within viewport after scroll",
+    "320px drawer Escape removes content",
+    "mobile image close44",
+    "image Escape removes viewing dialog",
+    "desktop image close40",
+    "drawer reduced motion removes entry animation"
+  ],
+  "measurements": {
+    "desktopScrollClose": {
+      "rect": {
+        "x": 1388,
+        "y": 2,
+        "width": 40,
+        "height": 40,
+        "top": 2,
+        "right": 1428,
+        "bottom": 42,
+        "left": 1388
+      },
+      "overflowY": "visible",
+      "maxHeight": "none",
+      "outlineWidth": "2px",
+      "outlineOffset": "-3px",
+      "animation": "none"
+    },
+    "shortDetails": {
+      "rect": {
+        "x": 246,
+        "y": 56,
+        "width": 330,
+        "height": 88,
+        "top": 56,
+        "right": 576,
+        "bottom": 144,
+        "left": 246
+      },
+      "overflowY": "auto",
+      "maxHeight": "88px",
+      "outlineWidth": "3px",
+      "outlineOffset": "0px",
+      "animation": "none"
+    },
+    "shortDelete": {
+      "rect": {
+        "x": 265,
+        "y": 80.75,
+        "width": 76,
+        "height": 44,
+        "top": 80.75,
+        "right": 341,
+        "bottom": 124.75,
+        "left": 265
+      },
+      "overflowY": "visible",
+      "maxHeight": "none",
+      "outlineWidth": "3px",
+      "outlineOffset": "0px",
+      "animation": "none"
+    },
+    "detailBoundary320x321": {
+      "panel": {
+        "rect": {
+          "x": 24,
+          "y": 101,
+          "width": 288,
+          "height": 137,
+          "top": 101,
+          "right": 312,
+          "bottom": 238,
+          "left": 24
+        },
+        "overflowY": "auto",
+        "maxHeight": "137px",
+        "outlineWidth": "3px",
+        "outlineOffset": "0px",
+        "animation": "none"
+      },
+      "delete": {
+        "rect": {
+          "x": 43,
+          "y": 174.75,
+          "width": 76,
+          "height": 44,
+          "top": 174.75,
+          "right": 119,
+          "bottom": 218.75,
+          "left": 43
+        },
+        "overflowY": "visible",
+        "maxHeight": "none",
+        "outlineWidth": "3px",
+        "outlineOffset": "0px",
+        "animation": "none"
+      },
+      "nav": {
+        "x": 20,
+        "y": 260,
+        "width": 280,
+        "height": 44,
+        "top": 260,
+        "right": 300,
+        "bottom": 304,
+        "left": 20
+      }
+    },
+    "detailBoundary640x400": {
+      "panel": {
+        "rect": {
+          "x": 302,
+          "y": 101,
+          "width": 330,
+          "height": 203.75,
+          "top": 101,
+          "right": 632,
+          "bottom": 304.75,
+          "left": 302
+        },
+        "overflowY": "auto",
+        "maxHeight": "216px",
+        "outlineWidth": "3px",
+        "outlineOffset": "0px",
+        "animation": "none"
+      },
+      "delete": {
+        "rect": {
+          "x": 321,
+          "y": 241.75,
+          "width": 76,
+          "height": 44,
+          "top": 241.75,
+          "right": 397,
+          "bottom": 285.75,
+          "left": 321
+        },
+        "overflowY": "visible",
+        "maxHeight": "none",
+        "outlineWidth": "3px",
+        "outlineOffset": "0px",
+        "animation": "none"
+      },
+      "nav": {
+        "x": 20,
+        "y": 339,
+        "width": 600,
+        "height": 44,
+        "top": 339,
+        "right": 620,
+        "bottom": 383,
+        "left": 20
+      }
+    },
+    "mobileClose390": {
+      "rect": {
+        "x": 334,
+        "y": 2,
+        "width": 44,
+        "height": 44,
+        "top": 2,
+        "right": 378,
+        "bottom": 46,
+        "left": 334
+      },
+      "overflowY": "visible",
+      "maxHeight": "none",
+      "outlineWidth": "3px",
+      "outlineOffset": "0px",
+      "animation": "none",
+      "scroll": {
+        "top": 231,
+        "height": 631,
+        "client": 400
+      }
+    },
+    "mobileClose320": {
+      "rect": {
+        "x": 264,
+        "y": 2,
+        "width": 44,
+        "height": 44,
+        "top": 2,
+        "right": 308,
+        "bottom": 46,
+        "left": 264
+      },
+      "overflowY": "visible",
+      "maxHeight": "none",
+      "outlineWidth": "2px",
+      "outlineOffset": "-3px",
+      "animation": "none",
+      "scroll": {
+        "top": 231,
+        "height": 631,
+        "client": 400
+      }
+    },
+    "imageCloseMobile": {
+      "rect": {
+        "x": 332,
+        "y": 12,
+        "width": 44,
+        "height": 44,
+        "top": 12,
+        "right": 376,
+        "bottom": 56,
+        "left": 332
+      },
+      "overflowY": "visible",
+      "maxHeight": "none",
+      "outlineWidth": "3px",
+      "outlineOffset": "0px",
+      "animation": "none"
+    },
+    "imageCloseDesktop": {
+      "rect": {
+        "x": 1386,
+        "y": 12,
+        "width": 40,
+        "height": 40,
+        "top": 12,
+        "right": 1426,
+        "bottom": 52,
+        "left": 1386
+      },
+      "overflowY": "visible",
+      "maxHeight": "none",
+      "outlineWidth": "3px",
+      "outlineOffset": "0px",
+      "animation": "none"
+    },
+    "reducedMotion": {
+      "rect": {
+        "x": 1104,
+        "y": 0,
+        "width": 336,
+        "height": 900,
+        "top": 0,
+        "right": 1440,
+        "bottom": 900,
+        "left": 1104
+      },
+      "overflowY": "auto",
+      "maxHeight": "none",
+      "outlineWidth": "3px",
+      "outlineOffset": "0px",
+      "animation": "none"
+    }
+  },
+  "verifiedAt": "2026-10-02T12:02:48.596254+00:00",
+  "scope": "isolated synthetic production Web",
+  "sourceModules": {
+    "apps/web/components/workspace-composer.module.css": "19f1e46155d7161a196708f85623a22de1dd476f4b5babc88bb083b71aa8fd3b",
+    "apps/web/components/new-conversation.module.css": "81a5d8694dc1737d5b9d60978a769ff6e1668c7917d23caf0bdaea860477049b",
+    "apps/web/components/person-context-panel.module.css": "d4603a41c36a03a32e8c3c3a421d5ac345f399f085f0ff561885a0e9e0053af7",
+    "apps/web/components/conversation/queued-conversation.module.css": "51cd6585a69b5249d73d709d4d3f375fb5f7ce41f8caad0233b0f68ba25d9c6b"
+  }
+}
