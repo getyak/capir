@@ -91,6 +91,7 @@
     "083_account_identity_ownership",
     "084_secondary_email_ownership",
     "085_conversation_queue_steering",
-    "086_desktop_browser_login"
+    "086_desktop_browser_login",
+    "088_username_email_alias"
   ]
 }
