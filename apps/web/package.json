@@ -24,7 +24,7 @@
     "@talent-signal/workspace-ui": "workspace:*",
     "mammoth": "^1.12.3",
     "motion": "13.2.0",
-    "next": "16.3.4",
+    "next": "16.3.6",
     "next-auth": "5.0.0-beta.32",
     "pdf-parse": "^2.4.5",
     "react": "19.2.8",
