@@ -52,7 +52,7 @@ Desktop knowledge workspace for users deciding which external capability to gran
 
 ## Active state
 
-Implementation is in progress in Pi task 20261004-020353-5e29b5f6, branch codex/pi-20261004-020353-5e29b5f6, with frozen xiaomi-token-plan-cn/mimo-v2.6-pro. Parent owns this plan, independent verification/review, resident services, delivery and Notion. The task was paused at 185 turns to deliver grounded corrections, then resumed with the same history and one repair; no source changes were discarded.
+Implementation is in progress in Pi task 20261004-020353-5e29b5f6, branch codex/pi-20261004-020353-5e29b5f6, with frozen xiaomi-token-plan-cn/mimo-v2.6-pro. Parent owns this plan, independent verification/review, resident services, delivery and Notion. The task was paused at 185 and 211 turns to deliver grounded corrections, then resumed with the same history and two feedback repairs; no source changes were discarded.
 
 Confirmed pre-review gaps require correction before frontend acceptance: full endpoint paths were reduced to origin; adding only saved a disconnected record without handshake/tools discovery; submitted state preceded actual creation; secret-shaped arguments were silently altered; Nango proxy response limits were applied after full buffering; OAuth expiry ignored the actual session expiry. Verify an actual choice producer and the complete no-existing-connection queued-chat scenario. Preserve all unrelated work and other Pi tasks.
 
@@ -63,3 +63,5 @@ Nango uses upstream source153f8c5450e7dd7049504df4a323e25499369002/application0.
 The user corrected the global storage floor to 30 GiB; both the guard and global instruction now match. Removed approximately 1.058 GB of confirmed disposable Docker build cache. Latest disk audit reported 63 GiB. Other tasks' aged/unregistered/unsafe Git-root evidence remains preserved; the full audit is not represented as clean. No iOS simulator was started by this task.
 
 Redacted preflight proof is preserved in ignored output/evaluation/user-mcp-interactions-20261004/preflight. Working temporary artifacts remain registered at /private/tmp/ai-test-user-mcp-interactions.r3u7UF until final proof is preserved and task cleanup is safe. No product rollout, merged PR or Notion address update has yet been claimed.
+
+Parent real-service readback confirmed GET /connections uses a connections array, not data. This newly confirmed OAuth polling blocker plus choice/rejection continuation bypass and bearer rename-mode consistency were sent as the second grounded feedback batch. Parent owns compose.nango.yaml, deploy/nango/Dockerfile.arm64 and docs/operations/nango-local.md; Pi owns product configuration and remaining implementation. The native service source is now reviewable; no final rollout has been claimed.

@@ -1,0 +1,83 @@
+name: talent-signal-nango
+services:
+  db:
+    image: ${NANGO_POSTGRES_IMAGE:-postgres@sha256:2c942175a1255a9abe0366e48c1b401d9f50f835b04dfea13f111609b5530df7}
+    pull_policy: missing
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${NANGO_DB_USER:?required}
+      POSTGRES_PASSWORD: ${NANGO_DB_PASSWORD:?required}
+      POSTGRES_DB: ${NANGO_DB_NAME:?required}
+    volumes:
+      - nango-db:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 512m
+    logging: &bounded-logs
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+  redis:
+    image: redis@sha256:3b73847e72874be07e6657b129a94761662b79bc0f679273757d4218573b2a98
+    pull_policy: missing
+    restart: unless-stopped
+    command: [redis-server, --save, '', --appendonly, 'no']
+    mem_limit: 128m
+    logging: *bounded-logs
+  server:
+    image: talent-signal-nango:153f8c54-node22-arm64
+    pull_policy: never
+    restart: unless-stopped
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: deploy/nango/Dockerfile.arm64
+      args:
+        UPSTREAM_IMAGE: ${NANGO_UPSTREAM_IMAGE:-nangohq/nango-server@sha256:e4208c41c8cc7cdc2562327552842c42e87bf667798534ccce7ad92b74c11e13}
+        NODE_IMAGE: ${NANGO_NODE_IMAGE:-node@sha256:fafa2e47e02abfbc93b0a071b6c409da8568f5cfed66aef54fb7e11c3fb0d921}
+    ports:
+      - 127.0.0.1:4303:3003
+      - 127.0.0.1:4309:3009
+    environment:
+      NODE_ENV: production
+      DD_TRACE_ENABLED: 'false'
+      DD_INSTRUMENTATION_TELEMETRY_ENABLED: 'false'
+      SERVER_PORT: '3003'
+      NANGO_CONNECT_UI_PORT: '3009'
+      NANGO_ENCRYPTION_KEY: ${NANGO_ENCRYPTION_KEY:?required}
+      NANGO_DB_USER: ${NANGO_DB_USER:?required}
+      NANGO_DB_PASSWORD: ${NANGO_DB_PASSWORD:?required}
+      NANGO_DB_NAME: ${NANGO_DB_NAME:?required}
+      NANGO_DB_HOST: db
+      NANGO_DB_PORT: '5432'
+      NANGO_DB_SSL: 'false'
+      RECORDS_DATABASE_URL: postgresql://${NANGO_DB_USER}:${NANGO_DB_PASSWORD}@db:5432/${NANGO_DB_NAME}
+      NANGO_REDIS_URL: redis://redis:6379
+      NANGO_SECRET_KEY_DEV: ${NANGO_SECRET_KEY_DEV:?required}
+      NANGO_SERVER_URL: https://smile-m4-minimac-mini.tail25e61f.ts.net:15443
+      NANGO_PUBLIC_SERVER_URL: https://smile-m4-minimac-mini.tail25e61f.ts.net:15443
+      NANGO_PUBLIC_CONNECT_URL: https://smile-m4-minimac-mini.tail25e61f.ts.net:16443
+      FLAG_SERVE_CONNECT_UI: 'true'
+      FLAG_AUTH_ENABLED: 'false'
+      AUTH_ALLOW_SIGNUP: 'false'
+      NANGO_DASHBOARD_USERNAME: ${NANGO_DASHBOARD_USERNAME:?required}
+      NANGO_DASHBOARD_PASSWORD: ${NANGO_DASHBOARD_PASSWORD:?required}
+      NANGO_ADMIN_KEY: ${NANGO_ADMIN_KEY:?required}
+      NANGO_CLOUD: 'false'
+      NANGO_LOGS_ENABLED: 'false'
+      LOG_LEVEL: warn
+      NANGO_OUTBOUND_URL_POLICY: '{"blockPrivateIps":true,"blockLinkLocal":true,"maxRedirects":3}'
+      NANGO_OUTBOUND_URL_POLICY_OAUTH: '{"blockPrivateIps":true,"blockLinkLocal":true,"maxRedirects":3}'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    mem_limit: 2g
+    logging: *bounded-logs
+volumes:
+  nango-db:
