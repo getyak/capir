@@ -1,9 +1,0 @@
-{
-  "at": "2026-09-24T10:47:30.980Z",
-  "scenario": "close and reopen the search in one event turn; await native close delivery; then type known synthetic Person",
-  "open": true,
-  "query": "闻溪",
-  "resultCount": 1,
-  "status": [],
-  "errors": []
-}

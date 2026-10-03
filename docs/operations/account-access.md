@@ -404,7 +404,8 @@ multiplicity, ambiguous legacy password login, dual-proof freshness, admitted
 late-write retirement fencing, and provider-only first-password/other-provider
 flows. Provider proofs in tests are injected verifier fixtures; they are never
 live Apple or Google evidence. The legacy backfill is separately applied over
-pre-migration fixtures (see `docs/evaluations/account-sync/`), and live provider,
+pre-migration fixtures (see the
+[account-sync evidence](https://github.com/getyak/capir-evals/tree/main/evidence/account-sync)), and live provider,
 delivery and multi-client acceptance remain parent-owned checkpoints.
 
 Credentials for deployed services remain in [Infisical](secrets.md). The Notion

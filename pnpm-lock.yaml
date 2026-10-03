@@ -120,37 +120,6 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0(@opentelemetry/api@1.9.1)(@types/node@26.5.0)(happy-dom@20.14.5)(vite@8.3.0(@types/node@26.5.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
 
-  apps/eval-runner:
-    dependencies:
-      '@sinclair/typebox':
-        specifier: ^0.34.41
-        version: 0.34.52
-      '@talent-signal/agent':
-        specifier: workspace:*
-        version: link:../agent
-      '@talent-signal/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
-      '@talent-signal/evaluation':
-        specifier: workspace:*
-        version: link:../../packages/evaluation
-      opik:
-        specifier: 2.2.45
-        version: 2.2.45(supports-color@7.2.0)(zod@4.5.4)
-    devDependencies:
-      '@types/node':
-        specifier: ^26.5.0
-        version: 26.5.0
-      tsx:
-        specifier: ^4.23.13
-        version: 4.23.13
-      typescript:
-        specifier: npm:@typescript/typescript6@6.0.2
-        version: '@typescript/typescript6@6.0.2'
-      vitest:
-        specifier: ^5.0.0
-        version: 5.0.0(@opentelemetry/api@1.9.1)(@types/node@26.5.0)(happy-dom@20.14.5)(vite@8.3.0(@types/node@26.5.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
-
   apps/macos-hybrid:
     dependencies:
       '@talent-signal/workspace-ui':

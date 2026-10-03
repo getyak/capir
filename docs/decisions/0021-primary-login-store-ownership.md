@@ -302,5 +302,5 @@ unaccepted instead of treating response cancellation as cookie rollback.
 - [WKWebsiteDataStore](https://developer.apple.com/documentation/webkit/wkwebsitedatastore)
 - [ADR0019 system authentication handoff](0019-macos-system-authentication-handoff.md)
 - [ADR0020 credential proof rounds](0020-macos-credential-proof-rounds.md)
-- [Independent store-ownership review](../evaluations/account-sync/login-store-ownership-review.md)
-- [r32 WebKit probe review](../evaluations/account-sync/login-store-boundary-r32-review.md)
+- [Independent store-ownership review](https://github.com/getyak/capir-evals/blob/main/evidence/account-sync/login-store-ownership-review.md)
+- [r32 WebKit probe review](https://github.com/getyak/capir-evals/blob/main/evidence/account-sync/login-store-boundary-r32-review.md)

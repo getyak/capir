@@ -1,7 +1,7 @@
 export const FROZEN_SYNTHETIC_SOURCE =
-  "I have another offer and need to decide Wednesday. I can speak Tuesday afternoon, but remote matters a lot.";
+  "Could you send the project details before we arrange a conversation?";
 
-const SYNTHETIC_HANDOFF_IDEMPOTENCY_KEY = "web-local-ts-core-01";
+const SYNTHETIC_HANDOFF_IDEMPOTENCY_KEY = "web-local-synthetic-capture-v1";
 
 type SyntheticBrowserHandoffInput = {
   approvedAt: string;
@@ -30,7 +30,7 @@ export function createSyntheticBrowserHandoff({
       },
       source: {
         capture_kind: "selected_text",
-        title: "Synthetic TS-CORE-01",
+        title: "Synthetic browser handoff",
         url: `${normalizedOrigin}/`,
         captured_at: "2026-08-03T02:00:00.000Z",
       },

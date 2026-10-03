@@ -80,7 +80,7 @@ contracts; avoid exchanging fewer characters for ambiguous authority.
 
 ## Completion
 
-- [Evaluation](../docs/evaluations/2026-09-06-prompt-simplification/README.md)
+- [Evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-prompt-simplification/README.md)
   records the primary sources, all three paired trials, size measurements,
   deterministic/native results, and deployed prompt fingerprints.
 - 235 relevant tests passed across Agent (55), backend (58), Web (36), isolated

@@ -40,15 +40,15 @@ Do not force quit or weaken maintenance/credential checks.
 ## Completion evidence
 
 - Native command: `IOS_ONLY_TESTING=TalentSignalTests/LabWorkspaceTests,TalentSignalUITests/LabWorkspaceUITests bash scripts/ios/check.sh` with owned DerivedData and result-bundle paths.
-- [Result summary](../docs/evaluations/2026-09-10-lab-workspace-switch/test-summary.json):
+- [Result summary](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-10-lab-workspace-switch/test-summary.json):
   11 passed, 0 failed, 0 skipped; iPhone 17 Pro, iOS 26.5 Simulator.
-- [Test workspace](../docs/evaluations/2026-09-10-lab-workspace-switch/test-workspace.png)
-  and [returned workspace](../docs/evaluations/2026-09-10-lab-workspace-switch/returned-workspace.png)
+- [Test workspace](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-10-lab-workspace-switch/test-workspace.png)
+  and [returned workspace](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-10-lab-workspace-switch/returned-workspace.png)
   were visually inspected at the full viewport. The marker occupies its own row;
   all four navigation destinations are visible, and native hit-target/frame and
   page-selection assertions passed.
-- [Native readback](../docs/evaluations/2026-09-10-lab-workspace-switch/native-readback.json)
-  and [cleanup receipt](../docs/evaluations/2026-09-10-lab-workspace-switch/deletion-receipt.png)
+- [Native readback](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-10-lab-workspace-switch/native-readback.json)
+  and [cleanup receipt](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-10-lab-workspace-switch/deletion-receipt.png)
   confirm zero test rows/sessions after deletion and unchanged original people.
 - `pnpm docs:check`, localization checks and `git diff --check` passed.
 - No TestFlight release was performed. Real-device accessibility and the

@@ -71,7 +71,7 @@ synthetic demo, or a configured provider is not proof of a complete live journey
 | Personal Agent continuity | Governed context, work proposals, and bounded research primitives | The complete screenshot-to-return experience remains evidence-gated. Reminders and open-ended autonomy are not implied. |
 
 [Delivery](docs/delivery.md) owns the release sequence and remaining proof.
-[Evaluations](docs/evaluations/) contain dated evidence, including local and
+[Evaluations](https://github.com/getyak/capir-evals/tree/main/evidence/) contain dated evidence, including local and
 synthetic results. Do not read those results as field-value or production claims.
 
 ## Trust is product behavior
@@ -148,7 +148,7 @@ when native boundaries are affected. Documentation changes require `pnpm docs:ch
 | [brand](brand/README.md) | Brand assets and their usage |
 | [docs](docs/README.md) | Canonical product decisions, operations, and evidence |
 | [.agents/skills](.agents/skills/) | Reusable design, safety, review, and knowledge methods |
-| [evals](evals/) | Synthetic behavior and safety cases |
+| [evals (private corpus)](https://github.com/getyak/capir-evals/tree/main/evals/) | Synthetic behavior and safety cases |
 | [_index](_index/README.md) | Raw sources and editable compiled-Wiki inputs |
 
 Canonical documentation is English. Historical research, release evidence, and

@@ -30848,6 +30848,26 @@
           }
         }
       }
+    },
+    "Evaluation cases are unavailable in this build. Device-owned capture and live review remain available.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本暂无评估案例。仍可使用本机采集和实时审核。"
+          }
+        }
+      }
+    },
+    "The synthetic evaluation corpus is not bundled in this build.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本未包含合成评估案例。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

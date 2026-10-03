@@ -16,7 +16,7 @@ the separately authorized Pi coding worker performs implementation only.
 
 ## Decisions and evidence
 
-The [dated parameter receipt](../docs/evaluations/2026-09-21-get-12/README.md)
+The [dated parameter receipt](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-21-get-12/README.md)
 owns the owner's CNY/unlimited response, production-inclusive scope, DeepSeek
 Flash choice, endpoint/credential observations and downstream responsibilities.
 No budget response remains outstanding. The receipt is not an active permit.

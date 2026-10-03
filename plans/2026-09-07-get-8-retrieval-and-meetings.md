@@ -59,7 +59,7 @@ with their environment; do not claim device frame-rate proof from Simulator.
 
 ## Progress evidence
 
-The [evaluation](../docs/evaluations/2026-09-07-get-8/README.md) records the
+The [evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-8/README.md) records the
 accepted baseline, two rendered directions, official references and verification
 failures. The existing native pager is retained; an ObservableObject held by
 State publishes only to the header, avoiding a new paging framework. The

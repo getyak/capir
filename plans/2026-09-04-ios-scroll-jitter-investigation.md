@@ -33,7 +33,7 @@ Use synthetic preview data; no contact/calendar writes or data resets.
 
 ## Findings
 
-The [evaluation](../docs/evaluations/2026-09-04-ios-scroll-jitter.md) owns the
+The [evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-ios-scroll-jitter.md) owns the
 measurements, correction candidates, exact reproduction limitations, and
 verification path. No production source was changed. A definitive cause for
 sustained interior-scroll hitches still requires successful gesture capture

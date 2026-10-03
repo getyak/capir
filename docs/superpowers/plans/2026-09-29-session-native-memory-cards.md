@@ -10,7 +10,7 @@
 
 **Spec:** [Session-native result cards with assistant-ui](../specs/2026-09-28-session-native-agent-cards-design.md). The [Figma Session review](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=274-2737) fixes the visible card grammar; canonical domain and evidence rules still govern actions.
 
-**Implementation status (2026-09-29):** Tasks 1–6 are implemented on the isolated `codex/session-agent-cards` branch. Task 7's backend, Web, documentation, and macOS build checks are recorded in the [evaluation](../../evaluations/2026-09-29-session-native-agent-cards/README.md). Actual WKWebView card interaction and calendar save-panel verification remain open because the Mac was locked during inspection.
+**Implementation status (2026-09-29):** Tasks 1–6 are implemented on the isolated `codex/session-agent-cards` branch. Task 7's backend, Web, documentation, and macOS build checks are recorded in the [evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-29-session-native-agent-cards/README.md). Actual WKWebView card interaction and calendar save-panel verification remain open because the Mac was locked during inspection.
 
 ## Global constraints
 
@@ -140,7 +140,7 @@
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-28-session-native-agent-cards-design.md` only if implementation evidence forces a corrected claim
-- Create: a dated evaluation record under `docs/evaluations/` with synthetic or expressly authorized data
+- Create: a dated evaluation record under `output/evaluation/` (ignored) or the private `capir-evals` evidence archive, with synthetic or expressly authorized data
 - Test: Web browser, backend integration, and actual macOS WKWebView
 
 - [ ] **Step 1: Run focused backend, Web, contract, and documentation checks.** Include old batch Memory flows, active queue/draft/attachment cases, unknown response, source revocation, stale revision, and account switch.

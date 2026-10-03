@@ -97,7 +97,7 @@ Milestones:
 ### 2026-08-29 independent audit checkpoint
 
 The current-worktree audit at
-[`docs/evaluations/2026-08-29-eval-agent-lab/audit-current/`](../docs/evaluations/2026-08-29-eval-agent-lab/audit-current/)
+[`docs/evaluations/2026-08-29-eval-agent-lab/audit-current/`](https://github.com/getyak/capir-evals/tree/main/evidence/2026-08-29-eval-agent-lab/audit-current)
 adds genuine 390×844 and 320×800 browser evidence and reruns all four built-in
 scenarios. Mechanical terminal, tool-order, lineage, and zero-effect gates pass,
 but the adjudication blocks a responsive or semantic-quality claim: one
@@ -114,7 +114,7 @@ The audit blockers are implemented as a versioned Eval Case contract and a
 non-average completion gate. Five atomic criteria contribute 20 points each,
 but `100/100` and a product verdict of `pass` require every criterion to pass;
 one failure or review gap vetoes completion. The standard is frozen in
-[`completion-standard.md`](../docs/evaluations/2026-08-29-eval-agent-lab/completion-standard.md).
+[`completion-standard.md`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-29-eval-agent-lab/completion-standard.md).
 
 The real Agent no-action tool now records a bounded semantic reason code. The
 built-in baseline, prompt-injection, ambiguous-time, and ranking-red-team cases

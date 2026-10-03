@@ -37,13 +37,13 @@ from that merged main. GET-9 remains In Progress.
 3. **Implemented; Web acceptance passed, native/extension pending:** durable Memory-to-original-image
    traversal passes a real fresh-session HTTP/SDK/PG scenario and revoked-source
    denial. Independent quality 4/4/4; recovery not exercised. See the
-   [Memory-image review](../docs/evaluations/get9-harness/completeness-memory-image-review.md).
+   [Memory-image review](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/completeness-memory-image-review.md).
 4. **Pending:** independent review, new-head CI, merge, deployment and exact
    VALID TestFlight release/readback. Preserve the pending installed-Chrome
    permission boundary and previously reviewed README correction.
 
 Apply the original-requirement completeness check in [REVIEW.md](../REVIEW.md).
-The dated [image capability evidence](../docs/evaluations/get9-harness/completeness-image-review.md)
+The dated [image capability evidence](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/completeness-image-review.md)
 retains failed attempts and the distinction between unit, real SDK and full
 product acceptance. Prior failures remain evidence; no threshold relaxation or
 guessed completion is permitted.
@@ -151,8 +151,8 @@ gateway probe and real-surface evidence. Additional checks follow changed paths.
   records may be evicted for capacity. Unknown writes remain protected.
 - Agent 158 plus one explicit skip, PostgreSQL screenshot/recovery tests 18/18,
   and extension contracts 41/41 pass. Independent review closes all four findings;
-  final delta has no remaining confirmed P0/P1. Latest-head CI is still required. See [PR review verification](../docs/evaluations/get9-harness/pr-review-verification.json)
-  and [independent review](../docs/evaluations/get9-harness/pr-blocking-review.md).
+  final delta has no remaining confirmed P0/P1. Latest-head CI is still required. See [PR review verification](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/pr-review-verification.json)
+  and [independent review](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/pr-blocking-review.md).
 - Earlier E01/E02/E04/E05/E07/E10 rubric batches remain historical checkpoints,
   not new scores for this delta. The real clock probe and native tests establish
   their stated paths only; earlier failures are preserved.
@@ -410,7 +410,7 @@ checks the frozen inputs, tool receipts, responses and scoring rationale.
   but its original generic error does not prove the cause. All three fail the
   frozen quality gate: independent completion/grounding/naturalness scores were
   3/2/3, 0/0/0 and 2/2/2. Recovery was not exercised, not awarded a fictitious
-  score. Preserve [the complete first attempt](../docs/evaluations/get9-harness/e01-first-attempt.json).
+  score. Preserve [the complete first attempt](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/e01-first-attempt.json).
 - Revised the shared conversation/workspace prompts to honor a request for
   company, acknowledge only stated experience, avoid diagnosing motives/body,
   and ask at most one easy question. The budget remains unchanged. A separate
@@ -1255,7 +1255,7 @@ checks, PR/CI/merge, required TestFlight-local deploy and Linear acceptance.
   No confirmed P0/P1/P2 remains after independent review. Agent-host57/57 passed
   before the final health-race correction; the correction's focused3/3 and
   typecheck pass. `pnpm docs:check` passes. See
-  [executor evidence](../docs/evaluations/get9-harness/completeness-executor-review.md).
+  [executor evidence](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/completeness-executor-review.md).
 - Existing TestFlight sidecar transport reached real Chromium through the
   private host route in5.150seconds;401/ready200 verified. Live cancellation and
   deduplication10/10 included an observed running worker, one worker for duplicate
@@ -1283,7 +1283,7 @@ checks, PR/CI/merge, required TestFlight-local deploy and Linear acceptance.
   AX5 completion. Trial12 is running with source/heading/name/message/action
   viewports preserved; the seventh remaining acceptance failures still need
   diagnosis and verification. Failed artifacts and summaries remain in
-  [actual AX5 trials](../docs/evaluations/get9-harness/completeness-ios-actual-ax5-trials.json).
+  [actual AX5 trials](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/completeness-ios-actual-ax5-trials.json).
 - No merge, new production backend release, TestFlight release or Linear closure
   has occurred; these partial proofs do not satisfy the remaining gates. Continue all original GET-9 acceptance,
   including deployed RPC revocation/recovery, installed Chrome, native recovery,

@@ -65,17 +65,17 @@ simulated, or local-only at the point where it could be mistaken for live state.
 - base commit:
   `f66581cbf8a1b1154156fc25231a6ff82f11c61f`;
 - core fixture:
-  [`evals/candidate-momentum-v1.json`](../evals/candidate-momentum-v1.json);
+  [`evals/candidate-momentum-v1.json`](https://github.com/getyak/capir-evals/blob/main/evals/candidate-momentum-v1.json);
 - cross-surface contract:
-  [`evals/overnight-cross-surface-v1.json`](../evals/overnight-cross-surface-v1.json);
+  [`evals/overnight-cross-surface-v1.json`](https://github.com/getyak/capir-evals/blob/main/evals/overnight-cross-surface-v1.json);
 - Web/browser craft rubric:
-  [`evals/web-browser-craft-v1.json`](../evals/web-browser-craft-v1.json);
+  [`evals/web-browser-craft-v1.json`](https://github.com/getyak/capir-evals/blob/main/evals/web-browser-craft-v1.json);
 - release standard:
-  [`docs/evaluations/overnight-cross-surface-standard-2026-08-05.md`](../docs/evaluations/overnight-cross-surface-standard-2026-08-05.md);
+  [`docs/evaluations/overnight-cross-surface-standard-2026-08-05.md`](https://github.com/getyak/capir-evals/blob/main/evidence/overnight-cross-surface-standard-2026-08-05.md);
 - manifest schema:
-  [`evals/schemas/overnight-run-manifest.schema.json`](../evals/schemas/overnight-run-manifest.schema.json);
+  [`evals/schemas/overnight-run-manifest.schema.json`](https://github.com/getyak/capir-evals/blob/main/evals/schemas/overnight-run-manifest.schema.json);
 - craft-review schema:
-  [`evals/schemas/web-browser-craft-review.schema.json`](../evals/schemas/web-browser-craft-review.schema.json).
+  [`evals/schemas/web-browser-craft-review.schema.json`](https://github.com/getyak/capir-evals/blob/main/evals/schemas/web-browser-craft-review.schema.json).
 
 The eight core case IDs and `TS-CORE-01` source sentence, assertion fields,
 action target, and `must_not` boundaries are frozen. New cross-surface behavior
@@ -137,7 +137,7 @@ Pass condition:
 
 Each owner runs only its declared commands from the cross-surface contract and
 produces one manifest matching
-[`overnight-run-manifest.schema.json`](../evals/schemas/overnight-run-manifest.schema.json).
+[`overnight-run-manifest.schema.json`](https://github.com/getyak/capir-evals/blob/main/evals/schemas/overnight-run-manifest.schema.json).
 
 Pass condition:
 
@@ -380,7 +380,7 @@ integration.
 ## Final artifact index
 
 The final directory follows
-[`docs/evaluations/overnight/final/README.md`](../docs/evaluations/overnight/final/README.md).
+[`docs/evaluations/overnight/final/README.md`](https://github.com/getyak/capir-evals/blob/main/evidence/overnight/final/README.md).
 It must contain:
 
 - accepted commit set and environment;

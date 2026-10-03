@@ -8,7 +8,7 @@ the complete design direction in `_index/inbox/2026-09-04-lab-v2-product-design.
 and keep remaining work explicit until verified.
 
 Status: source and Simulator implementation complete. The 2026-09-05
-[complete delivery record](../docs/evaluations/2026-09-05-lab-complete/README.md)
+[complete delivery record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-complete/README.md)
 consolidates the final gates. Image/Agent batch parity and automatic capture,
 audio, and presentation diagnostic stages are implemented and verified. Online
 assignment remains a separate product extension because the implemented
@@ -36,11 +36,11 @@ current-session observation has no rollout or causal authority.
 1. Complete for source/Simulator delivery: runtime manifest, trusted target
    registry, secure session partitioning, generation-safe switch, native selector,
    recovery ownership, and deletion-aware legacy migration. Evidence:
-   [runtime evaluation](../docs/evaluations/2026-09-04-lab-runtime/README.md).
+   [runtime evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-runtime/README.md).
    Native endpoints are synthetic fixtures; this is not live Apple sign-in or
    a production/TestFlight rollout.
 2. Complete for source/Simulator delivery: task configuration catalog and scoped
-   real-product model/prompt trial. Evidence: [session trials](../docs/evaluations/2026-09-04-lab-task-trials/README.md).
+   real-product model/prompt trial. Evidence: [session trials](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-task-trials/README.md).
 3. Complete for source/Simulator delivery: text, image and Workspace Agent use
    the same durable batch, review, regression and CI-consumption contracts.
    Hosted CI remains a release verification step.
@@ -50,18 +50,18 @@ current-session observation has no rollout or causal authority.
    behavior remain explicit release checks; previews do not fulfill them.
 5. Complete for source/Simulator delivery: local reset, session ending,
    independent Demo reset, server-created empty accounts, and protected native
-   entry/relaunch/return/deletion. Evidence: [native test workspace](../docs/evaluations/2026-09-05-lab-workspace-native/README.md).
+   entry/relaunch/return/deletion. Evidence: [native test workspace](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-workspace-native/README.md).
 6. Complete for source/Simulator delivery: bounded current-session observation
    over normal product tasks, including a frozen plan, unique samples,
    descriptive summaries, guardrail stop, expiry/manual rollback and explicit
-   non-causal language. Evidence: [controlled observation](../docs/evaluations/2026-09-05-lab-controlled-observation/README.md).
+   non-causal language. Evidence: [controlled observation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-controlled-observation/README.md).
 7. Complete: authenticated Web batch comparison, hard-failure review,
    cancellation, immutable regression save and rerun over the durable backend.
-   Evidence: [Web batch review](../docs/evaluations/2026-09-05-lab-web-batch/README.md).
+   Evidence: [Web batch review](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-web-batch/README.md).
 8. Complete: implement the first controlled, reversible feature override with a
    closed catalog, exact session scope, expiry/rollback, configuration-drift
    stop, lost-response recovery, and frozen relationship-answer adoption receipt.
-   Evidence: [feature overrides](../docs/evaluations/2026-09-05-lab-feature-overrides/README.md).
+   Evidence: [feature overrides](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-feature-overrides/README.md).
 9. Complete: image/Agent batch parity and diagnostic stage coverage are
    implemented and verified. Keep online assignment unavailable until a
    separate experiment authority and rollout design are authorized.
@@ -87,28 +87,28 @@ and cannot be inferred from this work.
 
 | Milestone | Authoritative evidence |
 | --- | --- |
-| First useful Lab and real single-case execution, migration 040 | [First delivery](../docs/evaluations/2026-09-04-lab-v2/README.md) |
-| Approved runtime switching and scoped recovery | [Runtime](../docs/evaluations/2026-09-04-lab-runtime/README.md) |
-| Task model/prompt selection and real native adoption/rollback, 041 | [Session trials](../docs/evaluations/2026-09-04-lab-task-trials/README.md) |
-| Durable text suites, budgets, leases and unknown outcomes, 042 | [Batches](../docs/evaluations/2026-09-04-lab-batches/README.md) |
-| Immutable regression cases, rerun, deletion and shared consumption, 043 | [Regressions](../docs/evaluations/2026-09-04-lab-regressions/README.md) |
-| Case-specific read-only CI provenance, 044 | [CI](../docs/evaluations/2026-09-04-lab-ci/README.md) |
-| Compiled pages, appearance presets and temporary overrides | [Appearance](../docs/evaluations/2026-09-04-lab-appearance/README.md) |
-| Guided task diagnostics and reviewed Files export | [Diagnostics](../docs/evaluations/2026-09-04-lab-diagnostics/README.md) |
-| Seven isolated faults and current evidence-authority correction | [Faults](../docs/evaluations/2026-09-04-lab-faults/README.md) |
-| Automatic client/server stages and bounded archive capacity | [Stages](../docs/evaluations/2026-09-04-lab-stages/README.md) |
-| Explicit MetricKit subscription, history and deletion watermark | [MetricKit](../docs/evaluations/2026-09-04-lab-metrickit/README.md) |
-| Reviewed local reset and protected exact-session ending | [Reset](../docs/evaluations/2026-09-05-lab-reset/README.md) |
-| Scoped synthetic Demo reset, retained ownership and same-ID recovery | [Demo reset](../docs/evaluations/2026-09-05-lab-demo-reset/README.md) |
-| Server-created empty workspace, delegated session and verified cleanup | [Test workspace backend](../docs/evaluations/2026-09-05-lab-workspaces/README.md) |
-| Protected native entry, process recovery, original return and deletion receipt | [Native test workspace](../docs/evaluations/2026-09-05-lab-workspace-native/README.md) |
-| Frozen current-session observation, unique sampling, guardrail stop and default rollback | [Controlled observation](../docs/evaluations/2026-09-05-lab-controlled-observation/README.md) |
-| Requirement-by-requirement source, UI and release-boundary audit | [Final audit](../docs/evaluations/2026-09-05-lab-final-audit/README.md) |
-| Authenticated Web batch comparison, regression review and mobile layout | [Web batch review](../docs/evaluations/2026-09-05-lab-web-batch/README.md) |
-| Closed, session-scoped feature override and frozen product adoption receipt, 046 | [Feature overrides](../docs/evaluations/2026-09-05-lab-feature-overrides/README.md) |
-| Durable image and Workspace Agent batches, regressions and CI consumption | [Batch task parity](../docs/evaluations/2026-09-05-lab-batch-task-parity/README.md) |
-| Automatic image, capture, audio and truthful presentation diagnostics | [Automatic stages](../docs/evaluations/2026-09-05-lab-automatic-stages/README.md) |
-| Consolidated source, Simulator and Release-build verification | [Complete delivery](../docs/evaluations/2026-09-05-lab-complete/README.md) |
+| First useful Lab and real single-case execution, migration 040 | [First delivery](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-v2/README.md) |
+| Approved runtime switching and scoped recovery | [Runtime](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-runtime/README.md) |
+| Task model/prompt selection and real native adoption/rollback, 041 | [Session trials](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-task-trials/README.md) |
+| Durable text suites, budgets, leases and unknown outcomes, 042 | [Batches](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-batches/README.md) |
+| Immutable regression cases, rerun, deletion and shared consumption, 043 | [Regressions](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-regressions/README.md) |
+| Case-specific read-only CI provenance, 044 | [CI](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-ci/README.md) |
+| Compiled pages, appearance presets and temporary overrides | [Appearance](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-appearance/README.md) |
+| Guided task diagnostics and reviewed Files export | [Diagnostics](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-diagnostics/README.md) |
+| Seven isolated faults and current evidence-authority correction | [Faults](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-faults/README.md) |
+| Automatic client/server stages and bounded archive capacity | [Stages](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-stages/README.md) |
+| Explicit MetricKit subscription, history and deletion watermark | [MetricKit](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-metrickit/README.md) |
+| Reviewed local reset and protected exact-session ending | [Reset](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-reset/README.md) |
+| Scoped synthetic Demo reset, retained ownership and same-ID recovery | [Demo reset](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-demo-reset/README.md) |
+| Server-created empty workspace, delegated session and verified cleanup | [Test workspace backend](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-workspaces/README.md) |
+| Protected native entry, process recovery, original return and deletion receipt | [Native test workspace](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-workspace-native/README.md) |
+| Frozen current-session observation, unique sampling, guardrail stop and default rollback | [Controlled observation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-controlled-observation/README.md) |
+| Requirement-by-requirement source, UI and release-boundary audit | [Final audit](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-final-audit/README.md) |
+| Authenticated Web batch comparison, regression review and mobile layout | [Web batch review](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-web-batch/README.md) |
+| Closed, session-scoped feature override and frozen product adoption receipt, 046 | [Feature overrides](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-feature-overrides/README.md) |
+| Durable image and Workspace Agent batches, regressions and CI consumption | [Batch task parity](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-batch-task-parity/README.md) |
+| Automatic image, capture, audio and truthful presentation diagnostics | [Automatic stages](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-automatic-stages/README.md) |
+| Consolidated source, Simulator and Release-build verification | [Complete delivery](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-complete/README.md) |
 
 The reset milestone passed 35 distinct signed checks and three native journeys.
 The final 198-file snapshot in `/tmp/talent-signal-lab-v2/reset-source-final`
@@ -149,7 +149,7 @@ Stored observation data is configuration and execution metadata only. Summary
 states expose accepted, fallback, failed and unverified counts and always set
 `causal_claim_allowed` to false. Assignment is explicitly limited to the current
 authenticated session; `online_assignment` remains false. See the
-[controlled-observation evaluation](../docs/evaluations/2026-09-05-lab-controlled-observation/README.md).
+[controlled-observation evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-controlled-observation/README.md).
 
 ## Prior independently verified slice — native test workspace
 
@@ -159,7 +159,7 @@ used a disposable PostgreSQL backend and verified create, empty readback,
 generation-safe child adoption, a persistent isolation banner, process death,
 online Keychain recovery, original-account restoration, entry revocation,
 deletion, zero remaining rows/sessions, and a byte-identical original people
-response. See the [native workspace evaluation](../docs/evaluations/2026-09-05-lab-workspace-native/README.md).
+response. See the [native workspace evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-workspace-native/README.md).
 
 The protected journal persists client-only credentials and operation IDs before
 mutation. Its storage verifies exact bytes; the application compares the whole
@@ -178,7 +178,7 @@ calendar choices/queued capture, and rejects mixed or edited content. Standalone
 Settings and Welcome retain independent recovery. Lost receipt reconciliation
 uses replacement identity without clearing subsequently created work. The broad
 recording-directory and global activity-request cleanup paths were removed.
-See the [Demo reset evaluation](../docs/evaluations/2026-09-05-lab-demo-reset/README.md).
+See the [Demo reset evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-demo-reset/README.md).
 
 The 201-file `demo-reset-source-delivery` snapshot passed Release with the public
 Lab flag NO. All 12 owned source/test/catalog hashes match it. Six unrelated
@@ -198,7 +198,7 @@ server value, temporary session override, and frozen product adoption receipt.
 Another session cannot observe the override; stop, expiry, catalog drift, or
 backend revision drift restores the server value for new tasks. The override
 record stores no objective, evidence, citation, or answer. See the
-[feature-override evaluation](../docs/evaluations/2026-09-05-lab-feature-overrides/README.md).
+[feature-override evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-feature-overrides/README.md).
 
 ## Next independently verifiable slice
 

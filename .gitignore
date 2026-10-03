@@ -38,29 +38,10 @@ fastlane/screenshots/
 _index/private/*
 !_index/private/README.md
 
-# Local evaluation runs can contain large native result bundles, release
-# archives, host paths, and repeated intermediate review candidates. Keep the
-# curated synthetic manifests and screenshots, but do not make raw runner
-# output part of repository history.
-docs/evaluations/**/*.log
-docs/evaluations/**/*.zip
-docs/evaluations/**/*.tar.gz
-docs/evaluations/2026-08-31-macos-relationship-workbench/reviews/rc*/
-docs/evaluations/2026-08-31-macos-relationship-workbench/system/frozen-rc*/
-docs/evaluations/2026-08-31-macos-relationship-workbench/system/live-e2e*/
-docs/evaluations/2026-08-31-macos-relationship-workbench/system/rc*/
-docs/evaluations/2026-08-31-macos-relationship-workbench/validation-result.rc*.json
-docs/evaluations/2026-08-31-macos-relationship-workbench/visual/frozen*/
-docs/evaluations/2026-08-31-macos-relationship-workbench/visual/rc*-staging/
-docs/evaluations/2026-08-31-macos-relationship-workbench/visual/rc*-*.mov
-docs/evaluations/2026-09-02-ios-today-inline-decisions/implementation-v[0-9].png
-docs/evaluations/2026-09-02-ios-today-inline-decisions/xcresult-attachments*/
-
-# These frozen records are inputs to historical verification, not runner noise.
-!docs/evaluations/overnight/final/verifier.log
-!docs/evaluations/2026-08-31-macos-relationship-workbench/system/frozen-rc9/
-docs/evaluations/2026-08-31-macos-relationship-workbench/system/frozen-rc9/*
-!docs/evaluations/2026-08-31-macos-relationship-workbench/system/frozen-rc9/TalentSignalMac-source-0.1.0-build7.tar.gz
+# Evaluation corpus, historical evidence, and the evaluation harness were
+# extracted to the private getyak/capir-evals repository (GET-134). New run
+# outputs are written by the private executor to its ignored runs/ directory;
+# product-side evaluator output defaults to the ignored output/evaluation.
 
 # XcodeGen can accidentally emit a project inside the checked-in project
 # bundle when invoked with that bundle as its output directory.

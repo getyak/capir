@@ -47,7 +47,7 @@ Do not interrupt that task or bypass its build lock.
 
 ## Final verification
 
-- Captured and inspected nine native screenshots; [review and artifacts](../docs/evaluations/2026-09-06-ios-retrieval-design/README.md).
+- Captured and inspected nine native screenshots; [review and artifacts](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-ios-retrieval-design/README.md).
 - Eight distinct focused tests passed across initial and corrective runs. The
   initial run exposed reset hit-area and accessibility-identifier problems;
   both were fixed and both affected interaction tests passed on rerun.

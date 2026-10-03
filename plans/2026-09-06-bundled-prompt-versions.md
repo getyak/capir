@@ -39,7 +39,7 @@ provider probes. Record results in the existing Opik evaluation evidence folder.
 
 ## Completion evidence
 
-[Verification](../docs/evaluations/2026-09-06-opik-prompts/bundled-runtime.md)
+[Verification](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-opik-prompts/bundled-runtime.md)
 contains version mirrors, exact import/restore receipts, 335 matching deployed
 source/compiled files and an isolated runtime loading all prompts with zero
 network calls. The original TestFlight deployment passed real model, voice,

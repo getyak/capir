@@ -49,7 +49,7 @@ Chromium custom scrollbars reserve 32px symmetrically and both renderers align a
 50/50 across nine files; typecheck, production build and lint (zero errors,
 six pre-existing warnings) passed. Independent code re-review has no unresolved
 P0/P1/P2; independent visual re-review is 98/100. See the
-[evaluation](../docs/evaluations/2026-10-02-get-129-deep-alignment/README.md).
+[evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-10-02-get-129-deep-alignment/README.md).
 PR/latest-head gates, merge and resident Web activation are the remaining delivery
 steps; separate signed native acceptance keeps the issue In Progress.
 
