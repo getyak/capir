@@ -147,7 +147,7 @@ struct ContextCapsuleDraft: Equatable, Codable, Sendable {
         items.append(
             ContextCapsuleItem(
                 kind: .selectedText,
-                displayName: "Recruiter-selected text",
+                displayName: "User-selected text",
                 preview: normalized,
                 acquisition: "Explicit text entry",
                 capturedAt: now

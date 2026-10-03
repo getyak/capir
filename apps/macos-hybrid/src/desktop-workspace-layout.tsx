@@ -11,10 +11,10 @@ export function DesktopWorkspaceLayout({ accountName, title, status, children }:
   return (
     <div className="ts-workspace-theme app-shell" data-collapsed={collapsed}>
       <a className="skip-link" href="#workspace">跳到工作区</a>
-      <aside className="sidebar" aria-label="Talent Signal 工作区">
+      <aside className="sidebar" aria-label="capri 工作区">
         <div className="brand">
           <span aria-hidden="true" className="brand-mark">TS</span>
-          <strong>Talent Signal</strong>
+          <strong>capri</strong>
           <button className="collapse-control" type="button" onClick={() => setCollapsed(!collapsed)}
             aria-label={collapsed ? "展开侧栏" : "收起侧栏"} aria-expanded={!collapsed}
             title={collapsed ? "展开侧栏" : "收起侧栏"}>

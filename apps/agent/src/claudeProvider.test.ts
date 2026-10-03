@@ -93,7 +93,7 @@ describe("ClaudeAgentSDKProvider", () => {
       const tool=input.tools.find(entry=>entry.name==="create_person_research_artifact")!;
       await tool.execute({},signal);
       return {text:"",structuredOutput:{outcome:"no_action"},sessionID:"synthetic",inputTokens:10,outputTokens:3,
-        estimatedUsd:0,turns:1,toolCalls:1,terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
+        estimatedUsd:0,turns:1,toolCalls:1,toolCompletions:[],terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
     });
     const provider=new ClaudeAgentSDKProvider("claude-synthetic-pinned",execute);
     const result=await provider.run({...request,scopeSummary:{kind:"person_public_profile_research",providerID:"synthetic",

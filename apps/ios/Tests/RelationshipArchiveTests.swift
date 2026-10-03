@@ -829,7 +829,7 @@ final class RelationshipArchiveTests: XCTestCase {
             startDate: activity.startDate,
             endDate: activity.endDate,
             timeZoneIdentifier: activity.timeZoneIdentifier,
-            evidenceQuote: "User-confirmed Talent Signal calendar event",
+            evidenceQuote: "User-confirmed capri calendar event",
             detectedDateText: activity.startDate.ISO8601Format(),
             durationWasExplicit: true
         )

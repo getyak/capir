@@ -61,7 +61,7 @@ private struct WorkspaceSidebar: View {
             HStack(spacing: 10) {
                 TSBrandMark(size: 23)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Talent Signal")
+                    Text("capri")
                         .font(.headline)
                         .foregroundStyle(TSBrand.ink)
                     Text("Workspace")
@@ -882,7 +882,7 @@ private struct StateContentView: View {
                     CalmStateView(
                         icon: "hand.raised",
                         title: "Connected, with no submitted context",
-                        body: "The relationship scope is ready. Add one explicit source below; opening Talent Signal did not capture another app."
+                        body: "The relationship scope is ready. Add one explicit source below; opening capri did not capture another app."
                     )
                 } else {
                     ReadyStateView()
@@ -996,7 +996,7 @@ private struct NoActionResultView: View {
             }
 
             Label(
-                "No message, calendar event, or duplicate recruiter task was created.",
+                "No message, calendar event, or duplicate task was created.",
                 systemImage: "hand.raised"
             )
             .font(.callout.weight(.medium))
@@ -1638,11 +1638,11 @@ private struct ReadyStateView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("Capsule ready for recruiter review", systemImage: "checkmark.circle")
+            Label("Capsule ready for your review", systemImage: "checkmark.circle")
                 .font(.title3.weight(.semibold))
             Text("\(model.capsule.sharedItems.count) item(s) may enter this bounded Task. Local-only items remain on this Mac and are excluded from the immutable manifest.")
                 .foregroundStyle(.secondary)
-            Button("Review with Talent Signal", systemImage: "arrow.right") {
+            Button("Review with capri", systemImage: "arrow.right") {
                 Task { await model.submitCapsule() }
             }
             .buttonStyle(TSPrimaryButtonStyle())
@@ -1766,11 +1766,11 @@ struct RelationshipScopeReviewView: View {
                 .foregroundStyle(TSBrand.secondaryInk)
 
             if preflight.openActions.isEmpty {
-                Text("No open recruiter-owned action in the current Pursuit readback.")
+                Text("No open user-owned action in the current Pursuit readback.")
                     .font(.caption)
                     .foregroundStyle(TSBrand.evidence)
             } else {
-                Text("Open recruiter-owned actions")
+                Text("Open user-owned actions")
                     .font(.caption.weight(.semibold))
                 ForEach(preflight.openActions) { action in
                     Text("• \(action.title) · \(action.owner)\(action.dueAt.map { " · \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "")")

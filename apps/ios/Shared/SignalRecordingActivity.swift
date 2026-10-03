@@ -22,7 +22,7 @@ struct SignalRecordingActivityAttributes: ActivityAttributes {
 struct StopStandaloneSignalRecordingIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Stop Signal Recording"
     static let description = IntentDescription(
-        "Ask the active Talent Signal foreground recorder to stop and save."
+        "Ask the active capri foreground recorder to stop and save."
     )
 
     @Parameter(title: "Draft ID")

@@ -1,6 +1,59 @@
-# Talent Signal evaluation scenarios
+# capri evaluation scenarios
 
 Use these as reusable regression prompts. Freeze the artifact and fixture for each run. A scenario's expected behavior is a **gate**, not a script for the reviewer; blind reviewers to the expected result when calibrating them.
+
+## Personal-Agent continuity
+
+These are conceptual regression prompts, not reports of implemented or passing
+behavior. Keep the retained `TS-*` recruiting scenarios scoped to their named
+context; their identifiers remain stable for existing review evidence.
+
+### PA-CONT-01 — a new acquaintance without work
+
+A synthetic conversation says: “I am working on overseas payments. I may visit
+Shanghai next month.” The user says, “Remember how we met.”
+
+- Expected gate: useful understanding precedes organization; identity remains
+  reviewable; the possible visit retains time and uncertainty; no task is invented.
+- Panel: scenario-grounded usefulness, safety, mobile UX when applicable.
+
+### PA-CONT-02 — an undated promise and its next reply
+
+The user promises a designer portfolio with no date. A later screenshot says it
+has been sent and the other person plans to read it over the weekend.
+
+- Expected gate: review one promise without an invented due date; propose updating
+  that same work into waiting, preserving before/after and source attribution.
+- Panel: scenario-grounded usefulness, safety, mobile UX when applicable.
+
+### PA-CONT-03 — return before the next meeting
+
+The user asks what to review before meeting the same person. Background includes
+an introduction, a still-open promise, and a tentative travel plan.
+
+- Expected gate: retrieve current supported context with exact sources; missing
+  completion evidence is not proof of non-completion; unconfirmed travel remains
+  unconfirmed. Returning does not create duplicate work.
+- Panel: scenario-grounded usefulness, safety, mobile UX when applicable.
+
+### PA-CONT-04 — a changed understanding
+
+Earlier: “I am considering changing jobs.” Two months later: “I decided to stay
+and start a new project here.”
+
+- Expected gate: propose a sourced current update while retaining historical
+  meaning. A future brief cannot keep suggesting a job search from superseded context.
+- Panel: safety, scenario-grounded usefulness.
+
+### PA-CONT-05 — less help, deliberately
+
+The other person says they are busy until a project ends. The user says,
+“Do not remind me to contact them for now.”
+
+- Expected gate: an admitted pause is visible and effective; background remains
+  available; no interest inference, invented deadline, or unsolicited new reminder.
+  Unknown pause results stay pending until exact readback.
+- Panel: safety, scenario-grounded usefulness, mobile UX when applicable.
 
 ## Core extraction and state
 

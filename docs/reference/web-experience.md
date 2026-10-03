@@ -1,70 +1,76 @@
 # Web experience reference
 
-## Purpose
+## Purpose and authority
 
-Make Talent Signal legible to people maintaining relationships with clients,
-partners, collaborators, and candidates. The web surface should feel more specific, calm, and
-trustworthy than broad productivity software.
+Translate the current [Product](../product.md) decision into an understandable
+public experience. The website explains what is useful now, which examples are
+synthetic, and where the user can begin. It must not upgrade a design direction
+into a released capability.
 
-## Positioning
+## Narrative
 
-Demonstrate one defensible loop:
+Lead with keeping the important people and unfinished things in a conversation.
+Show one ordinary screenshot, a useful account of what it means, a reviewable
+choice, and the value of returning later. Profile creation and Memory generation
+are intermediate operations rather than the reason to use the product.
 
-1. capture one meaningful conversation intentionally;
-2. separate evidence from interpretation;
-3. review what changed;
-4. decide independently whether to act;
-5. carry verified context forward.
+The primary scenario is a new acquaintance offering to look at a product next
+week while the user promises an introduction. Keep meeting time unresolved.
+Follow with an updated reply that changes that same promise into waiting. A
+meeting preparation view retrieves the background without treating a historical
+plan as a current fact.
 
-Do not sell feature volume or autonomous outreach.
+Use client and collaboration language. Recruiting may appear as a clearly named
+use case, not the default identity of every visitor or Person.
 
-## Information architecture
+## Composition
 
-- a concise promise and visual explanation of the evidence-to-action loop;
-- the guarantees around evidence, correction, approval, and deletion;
-- an interactive relationship brief that changes when evidence changes;
-- the method: capture, confirm, advance, and observe;
-- product principles and privacy boundaries;
-- a live path through loading, success, empty, ambiguity, failure, edit,
-  dismiss, and recovery.
+- one concise promise and one visible screenshot-to-continuation demonstration;
+- supported benefits: find it later, continue existing work, refresh stale context;
+- the Person page's relationship background, recent change, and unfinished work;
+- evidence, correction, waiting, stop, and deletion expressed as ordinary controls;
+- download or access calls to action matching actual availability;
+- developer access and detailed trust guidance available without dominating first use.
 
-## Visual direction
+The [Design system](../design-system.md) owns visual judgment. Exact tokens,
+components, responsive behavior, and performance evidence belong to code and tests.
 
-- editorial, quiet, and evidence-led;
-- warm neutral foundation with one restrained vermilion accent;
-- typography and composition before decoration;
-- generated imagery without readable personal data, logos, identifiable faces,
-  or simulated private product records;
-- motion only when it explains convergence or state change;
-- a complete reduced-motion and mobile experience.
+## Conversation and processing demonstrations
 
-The visual reference is [Design system](../design-system.md). Exact tokens,
-components, assets, responsive behavior, and performance evidence belong to the
-implementation and its tests.
+A WeChat-style conversation can preserve familiar mobile rhythm, speaker sides,
+timestamps, and readable messages. It must use synthetic content, avoid real
+accounts or private screenshots, and visibly disclose that it is a demonstration.
+A visual reconstruction does not claim WeChat partnership or private-account access.
 
-## Interactive proof
+Show the assistant's observable stages: received, reviewing evidence, identity
+needs review when applicable, useful understanding, and proposed continuation.
+Use source fragments rather than invented hidden reasoning or meaningless progress
+percentages. “Saved” requires an actual confirmed demonstration state; animations
+cannot substitute for persistence or a live capability.
 
-The strongest demonstration is not a feature list. It is a brief where the
-user can inspect evidence, change an interpretation, and see the next action
-respond without hiding provenance.
+A chain diagram should connect source → understanding → human review → Person,
+Memory, or continuing work → later retrieval. Branch when the source is ambiguous
+or contains no useful change. Keep evidence, confirmation, and action effects
+visually separate. A new reply updates the same item with a visible before/after;
+it must not suggest every import creates new work or automatically sends a reply.
 
-The page should make clear that:
+## Motion contract
 
-- the source is intentionally provided;
-- the user can correct the system;
-- no consequential action happens silently;
-- a recommendation may correctly become `no_action`;
-- the living page is a governed view, not an AI-authored truth store.
+Motion explains a state transition and leaves a readable result. Flow particles,
+source highlights, and connectors can show where a record came from; they do not
+imply speed, certainty, or continuous execution. Stop movement after convergence.
+Provide a replay or scenario choice when useful without requiring animation to
+read or operate the content.
 
-For the authenticated workspace, the strongest identity proof is an inline
-two-owner case: Chat and Agent controls remain beside the living person page;
-the current source-linked owner is actionable; the expired owner remains
-visible but disabled; no person is preselected; and the user can preserve
-the new source for later identity review without creating a duplicate.
+Respect reduced motion with an equivalent static chain and final states. Keep
+manual scrolling and keyboard focus stable, preserve mobile readability, and
+avoid overlapping autoplay, flashing urgency, or decorative text reveals that
+delay understanding.
 
 ## Quality boundary
 
-The experience is ready when it remains coherent across desktop and mobile,
-supports keyboard and assistive technology, respects reduced motion, has no
-horizontal overflow or unexplained interaction, and makes the product's trust
-boundary understandable without requiring documentation.
+Verify desktop and mobile layouts, long text, keyboard access, focus, accessible
+names, reduced motion, and absence of horizontal overflow. First-time readers
+should be able to explain what capri keeps, what it can do now, and how to start.
+Visual fidelity, runnable synthetic interaction, backend persistence, and user
+comprehension are separate evidence. Record each at its actual level.

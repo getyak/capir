@@ -1,0 +1,21 @@
+{
+  "fileKey": "7Z8yHplvwjVhpq8IuKv87f",
+  "pageId": "0:1",
+  "nodes": {
+    "section": "220:1991",
+    "menu": "220:1997",
+    "selection": "220:2080",
+    "processing": "220:2146",
+    "result": "220:2207",
+    "settings": "220:2270",
+    "dark": "220:2328",
+    "onboarding": "220:2411",
+    "recovery": "220:2443",
+    "comparison": "220:2470",
+    "source": "220:2550",
+    "settingsOff": "220:2602",
+    "menuComponent": "220:2570",
+    "darkMenuComponent": "220:2571",
+    "directoryLink": "220:2526"
+  }
+}

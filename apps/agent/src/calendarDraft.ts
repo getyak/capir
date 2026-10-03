@@ -7,6 +7,8 @@ export interface CalendarDraftContext {
   sourceRequestID: string;
   referenceTime: string;
   timeZone: string;
+  /** Host-only exact original message lookup for accepted task updates. */
+  resolveMessageExcerpt?: (excerpt: string) => { messageID: string; text: string } | false;
   /** Host-only validator backed by same-Run current image observations. */
   validateImageExcerpt?: (artifactID: string, excerpt: string) => Promise<false | NonNullable<CalendarDraft["source_image"]>>;
 }
@@ -43,9 +45,10 @@ export function calendarDraftCapability(context: CalendarDraftContext | undefine
     execute: async raw => {
       const input = schema.parse(raw);
       if (draft) return content({ error: "CALENDAR_DRAFT_ALREADY_STAGED" }, true);
+      const messageSource = !input.source_image_artifact_id ? context.resolveMessageExcerpt?.(input.source_excerpt) : undefined;
       const grounded = input.source_image_artifact_id
         ? await context.validateImageExcerpt?.(input.source_image_artifact_id,input.source_excerpt)
-        : objective.includes(input.source_excerpt);
+        : context.resolveMessageExcerpt ? Boolean(messageSource && messageSource.text.includes(input.source_excerpt)) : objective.includes(input.source_excerpt);
       if (!grounded) return content({ error: "CALENDAR_DRAFT_SOURCE_MISMATCH", instruction: "Use the current host inspection or inspect_current_image if absent. Quote an exact continuous span of visible_text and supply source_image_artifact_id. Preserve line order and intervening text; whitespace may join consecutive lines. Never substitute generated descriptions for a quote." }, true);
       if (draft) return content({ error: "CALENDAR_DRAFT_ALREADY_STAGED" }, true);
       if (input.time_zone !== context.timeZone || !wallTimeMatches(input.starts_at, context.timeZone) || !wallTimeMatches(input.ends_at, context.timeZone)) {
@@ -55,6 +58,7 @@ export function calendarDraftCapability(context: CalendarDraftContext | undefine
       if (end <= start || end - start > 7 * 24 * 3_600_000) return content({ error: "CALENDAR_DRAFT_INTERVAL_INVALID" }, true);
       draft = { id: randomUUID(), title: input.title, starts_at: new Date(start).toISOString(), ends_at: new Date(end).toISOString(),
         time_zone: context.timeZone, source_request_id: context.sourceRequestID, source_excerpt: input.source_excerpt,
+        ...(messageSource ? { source_message_id: messageSource.messageID } : {}),
         reference_time: new Date(context.referenceTime).toISOString(), status: "needs_review", external_effect: "none" };
       if (typeof grounded === "object") draft.source_image = grounded;
       return content({ calendar_draft: draft, instruction: "Present the draft for human review in the attached calendar card. No calendar event has been created and nobody has been invited. The user must use that card's calendar action; a conversational reply is not approval and cannot save an event. Keep the reply brief because the card already shows the exact title and time." });

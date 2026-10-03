@@ -1024,7 +1024,7 @@ export async function createChatTask(
           auth.accountId,
           manifestId,
           item.id,
-          `Included ${item.type} for the recruiter-stated task objective.`,
+          `Included ${item.type} for the user-stated task objective.`,
         ],
       );
     }
@@ -1261,7 +1261,7 @@ export async function createChatTask(
         blocks,
         remoteFailureBlock(
           "Attachments were not sent to remote AI",
-          "This turn uses the governed relationship summary only. Talent Signal did not send the attached images to the AI service, and no action was taken.",
+          "This turn uses the governed relationship summary only. capri did not send the attached images to the AI service, and no action was taken.",
         ),
       );
     }

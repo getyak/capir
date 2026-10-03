@@ -1,6 +1,6 @@
 ---
 name: candidate-signal-analysis
-description: Extract recruiter-controlled candidate facts from a conversation screenshot or transcript, propose reviewable contact and meeting action cards, and produce evidence-backed candidate-momentum insights. Use when building, testing, or reviewing Talent Signal’s screenshot-to-action-to-insight flow.
+description: Extract recruiter-controlled candidate facts from a conversation screenshot or transcript, propose reviewable contact and meeting action cards, and produce evidence-backed candidate-momentum insights. Use when building, testing, or reviewing a specifically recruiting-scoped screenshot-to-action-to-insight flow in capri.
 ---
 
 # Candidate Signal Analysis

@@ -1,0 +1,63 @@
+{
+  "archive": "/Users/cubxxw/.codex/visualizations/2026/10/02/get-129-deep-alignment",
+  "mode": "production for enhanced captures",
+  "scope": "synthetic Web only",
+  "captures": [
+    {
+      "file": "baseline-session.png",
+      "sha256": "a650d66b46a53e4453fe5f5957770978020196514656703e95f7887d82ce67db"
+    },
+    {
+      "file": "enhanced-session.png",
+      "sha256": "28d38ba203e9740bada290cae90677eed0a33b358d18502ce5880920a10f95a0"
+    },
+    {
+      "file": "enhanced-queued.png",
+      "sha256": "a3a126ad614011a5e9fa0188eaef4c52bbb97f77f38df2fd7df905a59cedf61c"
+    },
+    {
+      "file": "enhanced-drawer.png",
+      "sha256": "3327d13d241a274b1dcd1a11b00faf9d9231470a5370b4d46985b7b7beba2718"
+    },
+    {
+      "file": "enhanced-details.png",
+      "sha256": "75b5bf35705612a13976f5968ca37086d63f249db5f3e2a24c3d5d03aa2941f6"
+    },
+    {
+      "file": "enhanced-rail.png",
+      "sha256": "d7e8ef5bb005875797b0b9d1411aba62cbbb318800e72a448fb334e3fc894761"
+    },
+    {
+      "file": "enhanced-dark.png",
+      "sha256": "f1883a9a17514245baf764fc0454a861786ddf7bc4cee4631ae54d81fbabd0ce"
+    },
+    {
+      "file": "enhanced-width-640.png",
+      "sha256": "15fceb4711af892ac3219082f3e6e0e3ac463a86beaf26d843b8b9aad0d6aa57"
+    },
+    {
+      "file": "enhanced-width-390.png",
+      "sha256": "5a08f7023e618d026e7826c4e7860a07731adb5017433c3fc3520f5591a3014d"
+    },
+    {
+      "file": "enhanced-width-320.png",
+      "sha256": "2c785db71ec7ff01b3c77fb46c8bcf2a5d680cd9a0fd0a5d232a5bed74205e64"
+    },
+    {
+      "file": "enhanced-mobile-details.png",
+      "sha256": "bc8dc53918dd9d8a862af36cdb6fbde81c3c7b51c04d31481761ef9d3bd73de9"
+    },
+    {
+      "file": "enhanced-mobile-drawer.png",
+      "sha256": "7b9028c2df0674313995e0f9b398816aa71537a14d28359e35393bff48f430e9"
+    },
+    {
+      "file": "enhanced-short-window.png",
+      "sha256": "78d5f941d699f50798799e89383ab96cc074b2d67ebe8a45bef2eb1f14df465d"
+    },
+    {
+      "file": "classic-scrollbar-menu.png",
+      "sha256": "7c48e2fa49f8741016828a07b00f12750a2def613297aac51a22881a879e76bd"
+    }
+  ]
+}

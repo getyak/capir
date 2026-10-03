@@ -43,7 +43,7 @@ export async function verifyGoogleIdentity(token: string, audiences: string[], k
     throw new ApiError(401, "GOOGLE_TOKEN_INVALID", "The Google identity could not be verified.");
   }
   return { subject: payload.sub, email: payload.email.trim().toLowerCase(),
-    name: typeof payload.name === "string" ? payload.name.slice(0, 100) : "Talent Signal",
+    name: typeof payload.name === "string" ? payload.name.slice(0, 100) : "capri User",
     nonce: payload.nonce, expiresAt: new Date(payload.exp * 1_000) };
 }
 

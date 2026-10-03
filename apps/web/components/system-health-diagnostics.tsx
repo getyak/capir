@@ -19,7 +19,7 @@ import { useSystemHealth } from "./system-health-provider";
 import styles from "./system-health.module.css";
 
 const names: Record<SystemHealthComponent["id"], string> = {
-  web: "Talent Signal Web",
+  web: "capri Web",
   backend: "后端服务",
   database: "PostgreSQL 数据库",
   migrations: "数据库结构",

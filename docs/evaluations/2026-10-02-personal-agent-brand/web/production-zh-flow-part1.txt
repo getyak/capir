@@ -1,0 +1,6 @@
+### Result
+{"saved":"事项 01 已在本页演示中记下，可加入新截图继续。","buttons":["","查看原话与时间","确认更新同一事项"," 重播理解过程","加入下一张截图","先别提醒我","移除来源","新演示"],"status":"事项 01 已在本页演示中记下，可加入新截图继续。"}
+### Ran Playwright code
+```js
+await (async (page) => { await page.getByRole("button", {name:"记下这件事 · 仅演示",exact:true}).click(); await page.getByRole("status").filter({hasText:"事项 01 已在本页演示中记下"}).waitFor(); const saved=await page.getByRole("status").innerText(); await page.getByRole("button", {name:"加入下一张截图",exact:true}).click(); return {saved,buttons:await page.getByRole("button").allTextContents(),status:await page.getByRole("status").innerText()}; })(page);
+```

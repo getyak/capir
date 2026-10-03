@@ -4,7 +4,7 @@ import { promises as dns } from "node:dns";
 /**
  * MCP inbound connection safety.
  *
- * A user supplies an HTTPS Streamable HTTP server URL. Before Talent Signal
+ * A user supplies an HTTPS Streamable HTTP server URL. Before capri
  * sends anything, the URL is constrained and its public DNS address is pinned
  * so a later resolution cannot rebind the request into a private network.
  *

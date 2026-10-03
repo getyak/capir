@@ -22,8 +22,17 @@ it.each(["/api/telemetry/traces", "/api/local-integration/voice-transcriptions",
   expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
 });
 
-it.each(["/api/auth/callback/google", "/api/auth/signout", "/api/analyze", "/api/browser-extension/captures", "/api/dev/agent-stream"])("preserves the existing separate admission boundary for %s", path => {
+it.each(["/api/auth/callback/google", "/api/auth/signout", "/api/analyze", "/api/browser-extension/captures", "/api/dev/agent-stream", "/api/desktop-auth/prepare", "/api/desktop-auth/consume", "/api/desktop-auth/cancel", "/api/desktop-auth/grant-result", "/api/desktop-auth/approve", "/api/desktop-auth/decline"])("preserves the existing separate admission boundary for %s", path => {
   expect(proxy(new NextRequest(`https://example.test${path}`, { method: "POST" })).headers.get("x-middleware-next")).toBe("1");
+});
+
+it("keeps the browser-owned macOS login flow outside the workspace header guard", () => {
+  // The Mac session does not exist yet during grant preparation and exchange;
+  // these routes carry their own bounded proof and never an account header.
+  expect(proxy(new NextRequest("https://example.test/api/desktop-auth/status?attempt=11111111-2222-3333-4444-555555555555", { method: "GET" })).headers.get("x-middleware-next")).toBe("1");
+  expect(proxy(new NextRequest("https://example.test/api/desktop-auth", { method: "POST" })).headers.get("x-middleware-next")).toBe("1");
+  // Neighbouring APIs keep the ordinary workspace guard.
+  expect(proxy(new NextRequest("https://example.test/api/desktop-authorizations", { method: "POST" })).status).toBe(401);
 });
 
 it.each(["GET", "HEAD"])("rejects old unbound private %s requests before current-account reads", method => {

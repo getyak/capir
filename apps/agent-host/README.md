@@ -1,4 +1,4 @@
-# Talent Signal local Agent host
+# capri local Agent host
 
 This executable runs public company/market research and separately authorized
 screenshot-driven public-profile research on the user's machine. It owns
@@ -29,14 +29,14 @@ open-web access and person, candidate, contact-detail, and profile queries.
 
 `fetch_web` sends only an exact same-Run `search_web` result to Firecrawl v2.
 Configure `FIRECRAWL_API_KEY` in `/agent-host`; the standalone command still
-requires no Talent Signal product runtime, while unreliable anonymous access is
+requires no capri product runtime, while unreliable anonymous access is
 rejected at startup. No backend, Web, iOS, prompt, or standalone Run output
 receives the credential. The adapter requests main-content
 Markdown with PDF parsing, disables provider caching, requests zero data
 retention only when the provider account has been enabled for it and
 `TALENT_SIGNAL_FIRECRAWL_ZERO_DATA_RETENTION=true`, checks both the provider
 response and target-page status, and rejects source substitution. The standalone
-`pnpm agent:research` command still runs without a Talent Signal product runtime.
+`pnpm agent:research` command still runs without a capri product runtime.
 
 Person research is a different definition; it does not weaken that
 company/market rule. With the Exa and TikHub values in `/agent-host`, a pinned vision

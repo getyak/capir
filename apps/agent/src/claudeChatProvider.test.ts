@@ -12,7 +12,7 @@ import { createHash, randomUUID } from "node:crypto";
 const configuration = claudeHarnessConfiguration({ ANTHROPIC_API_KEY: "synthetic", TALENT_SIGNAL_AGENT_MODEL: "synthetic-model" });
 const outcome = { text: "听起来今天很累。想说说发生了什么，还是聊点轻松的？", structuredOutput: null,
   sessionID: "synthetic-session", inputTokens: 10, outputTokens: 20, estimatedUsd: 0.01,
-  turns: 1, toolCalls: 0, terminalReason: "completed", permissionDenials: [], reportedModels: ["synthetic-model"] };
+  turns: 1, toolCalls: 0, toolCompletions: [], terminalReason: "completed", permissionDenials: [], reportedModels: ["synthetic-model"] };
 
 describe("Claude natural chat product adapter", () => {
   it("injects verified service settings and self context before any workspace tool call", async () => {
@@ -304,7 +304,7 @@ describe("Claude natural chat product adapter", () => {
 
   it("keeps incomplete token lower bounds out of Lab total-usage columns", async () => {
     const failure = new ClaudeHarnessInterruption({ sessionID: "partial-session", inputTokens: 12, outputTokens: 4,
-      estimatedUsd: null, turns: null, toolCalls: 1, reportedModels: ["synthetic-model"], modelResponses: 1,
+      estimatedUsd: null, turns: null, toolCalls: 1, toolCompletions: [], reportedModels: ["synthetic-model"], modelResponses: 1,
       terminalReason: "CLAUDE_HARNESS_TIMEOUT", permissionDenials: [], usageComplete: false }, "CLAUDE_HARNESS_TIMEOUT");
     const provider = new ClaudeChatProvider(configuration, async () => { throw failure; });
     const observed = vi.fn();

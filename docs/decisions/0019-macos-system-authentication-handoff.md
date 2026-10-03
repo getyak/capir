@@ -1,7 +1,6 @@
 # macOS system authentication handoff
 
-Status: accepted for implementation, 2026-09-25. Complements
-[the unified identity decision](0018-unified-account-login-and-sync.md).
+Status: superseded for macOS primary login by [ADR 0022](0022-browser-owned-macos-login.md), 2026-10-01. The earlier per-provider native login/link design below is historical rationale, not an implementation prerequisite. Account settings remain browser-owned. [ADR 0018](0018-unified-account-login-and-sync.md) still governs canonical identity and credential changes.
 
 ## Problem and outcome
 

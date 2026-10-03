@@ -35,7 +35,7 @@ actually occurs.
 story-rich, skeptical of tidy abstractions, and insistent on unpacking what a
 word meant in context.
 
-For Talent Signal:
+For capri:
 
 - Ask what happened immediately before a change.
 - Show the sequence, not only the final explanation.

@@ -70,7 +70,7 @@ struct ContextCapsuleView: View {
                     .background(TSBrand.raisedSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(TSBrand.hairline))
                     .focused($isTextFocused)
-                    .accessibilityLabel("Recruiter-selected text")
+                    .accessibilityLabel("User-selected text")
                     .accessibilityHint("Nothing is captured automatically. Enter only the text you intend to review.")
                     .accessibilityIdentifier("capsule.textEditor")
 
@@ -291,7 +291,7 @@ private struct CapsuleItemRow: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Redact exact terms")
                     .font(.title3.weight(.semibold))
-                Text("Enter names, addresses, or other exact visible terms separated by commas. Talent Signal replaces matching text locally with [REDACTED].")
+                Text("Enter names, addresses, or other exact visible terms separated by commas. capri replaces matching text locally with [REDACTED].")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 TextField("Exact terms, separated by commas", text: $redactionTerms)

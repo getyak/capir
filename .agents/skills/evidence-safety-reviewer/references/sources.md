@@ -1,6 +1,6 @@
 # Source map
 
-Checked 2026-08-04. Links support principles; they do not certify Talent Signal or provide legal advice.
+Checked 2026-08-04. Links support principles; they do not certify capri or provide legal advice.
 
 ## Professional standards
 

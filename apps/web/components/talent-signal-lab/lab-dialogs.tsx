@@ -22,7 +22,7 @@ export function LabPanel({
         <Dialog.Content className={styles.dialog}>
           <header className={styles.dialogHeader}>
             <div>
-              <p className={styles.eyebrow}>Talent Signal Lab</p>
+              <p className={styles.eyebrow}>capri Lab</p>
               <Dialog.Title>当前测试世界</Dialog.Title>
               <Dialog.Description>
                 先理解产品状态，再进入版本、Trace 与评测依据。

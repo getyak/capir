@@ -29,7 +29,7 @@ function backendUrl(): URL {
     return parsed;
   }
   throw new Error(
-    "Talent Signal Lab must use HTTPS, except for an explicit loopback integration.",
+    "capri Lab must use HTTPS, except for an explicit loopback integration.",
   );
 }
 

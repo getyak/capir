@@ -67,6 +67,30 @@ function backendFailure(error: unknown): NextResponse {
   );
 }
 
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const claims = await readBackendSessionClaims();
+  if (!claims || backendSessionIsExpired(claims.backendExpiresAt)) {
+    return reply({ code: "backend_session_expired", message: "请先登录。" }, 401);
+  }
+  const binding = workspaceSessionsBinding(claims);
+  if (request.headers.get("x-workspace-session") !== binding) {
+    return reply({ code: "session_stale", message: "登录已变化，请刷新后重试。" }, 409);
+  }
+  const { id } = await context.params;
+  if (!isWorkspaceSessionId(id)) {
+    return reply({ code: "meeting_draft_invalid", message: "会议草稿标识无效。" }, 400);
+  }
+  try {
+    const draft = await readMeetingDraft(id);
+    return reply({ draft, session_version: binding });
+  } catch (error) {
+    return backendFailure(error);
+  }
+}
+
 export async function PUT(
   request: Request,
   context: { params: Promise<{ id: string }> },

@@ -119,7 +119,7 @@ export default async function BlogArticlePage({ params }: BlogArticlePageProps) 
     isPartOf: {
       "@type": "Blog",
       "@id": `${siteConfig.url}/blog#blog`,
-      name: "Talent Signal 研究与实践方法",
+      name: "capri 研究与实践方法",
     },
     articleSection: post.category,
     keywords: [

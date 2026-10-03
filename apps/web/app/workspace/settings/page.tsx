@@ -2,12 +2,13 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
-import { isSettingsSection } from "@/lib/settings-sections";
+import { settingsReturnPath, settingsSectionFrom } from "@/lib/settings-return-path";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { readBackendSessionClaims } from "@/lib/server/backendAuth";
 import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
 import { backendSessionIsExpired } from "@/lib/backend-session";
 import { loadAccountSettings } from "@/lib/server/accountBackend";
+import { readWebReleaseIdentity } from "@/lib/web-release";
 
 export const dynamic = "force-dynamic";
 
@@ -20,14 +21,18 @@ export const metadata: Metadata = {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ section?: string }>;
+  searchParams: Promise<{ section?: string | string[] }>;
 }) {
+  const requested = (await searchParams).section;
   const session = await auth();
   if (!session?.user) {
-    redirect("/login?callbackUrl=%2Fworkspace%2Fsettings");
+    // Preserve only a schema-validated section so returning from login opens
+    // the requested pane. The helper is the single place that builds this path,
+    // and it can only ever return a fixed same-origin settings route, so an
+    // unknown, repeated or malformed value cannot become a redirect target.
+    redirect(`/login?callbackUrl=${encodeURIComponent(settingsReturnPath(requested))}`);
   }
 
-  const requested = (await searchParams).section;
   let data: Awaited<ReturnType<typeof loadAccountSettings>> | null = null;
   try {
     data = await loadAccountSettings();
@@ -98,7 +103,7 @@ export default async function SettingsPage({
   }
 
   const labEnabled = data?.lab_enabled === true;
-  let section = isSettingsSection(requested) ? requested : "overview";
+  let section = settingsSectionFrom(requested);
   if (section === "testing" && !labEnabled) section = "overview";
 
   let sessionVersion: string | null = null;
@@ -118,6 +123,8 @@ export default async function SettingsPage({
       labEnabled={labEnabled}
       section={section}
       sessionVersion={sessionVersion}
+      webRelease={readWebReleaseIdentity()}
+      webReleaseObservedAt={new Date().toISOString()}
     />
   );
 }

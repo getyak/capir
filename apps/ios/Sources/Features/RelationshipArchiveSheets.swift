@@ -12,7 +12,7 @@ struct RelationshipChangeReviewView: View {
         person: RelationshipArchivePerson,
         reviewSession: PursuitProposalReviewSession? = nil,
         service: PursuitProposalReviewServing? = nil,
-        actorDisplayName: String = "Current recruiter",
+        actorDisplayName: String = "Current user",
         sourceTimezone: String = TimeZone.current.identifier
     ) {
         self.person = person
@@ -608,7 +608,7 @@ struct RelationshipMenuView: View {
                         )
                     } label: {
                         RelationshipMenuAccountRow(
-                            accountName: accountName ?? "Talent Signal",
+                            accountName: accountName ?? "capri",
                             subtitle: accountSubtitle
                         )
                     }
@@ -655,6 +655,24 @@ struct RelationshipMenuView: View {
                     .accessibilityIdentifier("open-settings")
                 } header: {
                     Text(appLanguage.text("Appearance"))
+                }
+
+                Section {
+                    NavigationLink {
+                        expandedDestination(AppVersionStatusView())
+                    } label: {
+                        RelationshipMenuUtilityRow(
+                            systemImage: "info.circle",
+                            title: appLanguage.text("Version & status"),
+                            detail: appLanguage.text(
+                                "Installed build on this device and update-check source."
+                            ),
+                            value: InstalledAppVersion.label()
+                        )
+                    }
+                    .accessibilityIdentifier("open-version-status")
+                } header: {
+                    Text(appLanguage.text("About this app"))
                 }
 
                 Section {

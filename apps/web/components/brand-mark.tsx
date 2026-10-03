@@ -1,11 +1,12 @@
 import Link from "next/link";
+import { siteConfig } from "@/lib/site";
 
 type BrandMarkProps = {
   compact?: boolean;
   label?: string;
 };
 
-export function BrandMark({ compact = false, label = "Talent Signal 首页" }: BrandMarkProps) {
+export function BrandMark({ compact = false, label = `${siteConfig.name} 首页` }: BrandMarkProps) {
   return (
     <Link className="brand" href="/" aria-label={label}>
       <svg
@@ -29,7 +30,7 @@ export function BrandMark({ compact = false, label = "Talent Signal 首页" }: B
           strokeWidth="5.5"
         />
       </svg>
-      {!compact && <span className="brand__name">Talent Signal</span>}
+      {!compact && <span className="brand__name">{siteConfig.name}</span>}
     </Link>
   );
 }

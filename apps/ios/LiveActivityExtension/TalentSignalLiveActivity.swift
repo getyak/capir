@@ -18,7 +18,7 @@ struct SignalRecordingLiveActivity: Widget {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     mark(context)
-                    Text("Talent Signal")
+                    Text("capri")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.white.opacity(0.72))
                     Spacer(minLength: 8)

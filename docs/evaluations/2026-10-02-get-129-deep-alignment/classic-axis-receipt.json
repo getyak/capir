@@ -1,0 +1,166 @@
+[
+  {
+    "kind": "legacy",
+    "width": 1280,
+    "inset": 32,
+    "composer": {
+      "x": 324,
+      "width": 880
+    },
+    "transcript": {
+      "x": 324,
+      "width": 880
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "legacy",
+    "width": 1024,
+    "inset": 32,
+    "composer": {
+      "x": 288,
+      "width": 696
+    },
+    "transcript": {
+      "x": 288,
+      "width": 696
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "legacy",
+    "width": 820,
+    "inset": 32,
+    "composer": {
+      "x": 288,
+      "width": 492
+    },
+    "transcript": {
+      "x": 288,
+      "width": 492
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "legacy",
+    "width": 640,
+    "inset": 32,
+    "composer": {
+      "x": 40,
+      "width": 560
+    },
+    "transcript": {
+      "x": 40,
+      "width": 560
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "legacy",
+    "width": 390,
+    "inset": 32,
+    "composer": {
+      "x": 40,
+      "width": 310
+    },
+    "transcript": {
+      "x": 40,
+      "width": 310
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "queued",
+    "width": 1280,
+    "inset": 32,
+    "composer": {
+      "x": 324,
+      "width": 880
+    },
+    "transcript": {
+      "x": 324,
+      "width": 880
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "queued",
+    "width": 1024,
+    "inset": 32,
+    "composer": {
+      "x": 288,
+      "width": 696
+    },
+    "transcript": {
+      "x": 288,
+      "width": 696
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "queued",
+    "width": 820,
+    "inset": 32,
+    "composer": {
+      "x": 288,
+      "width": 492
+    },
+    "transcript": {
+      "x": 288,
+      "width": 492
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "queued",
+    "width": 640,
+    "inset": 32,
+    "composer": {
+      "x": 40,
+      "width": 560
+    },
+    "transcript": {
+      "x": 40,
+      "width": 560
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "queued",
+    "width": 390,
+    "inset": 32,
+    "composer": {
+      "x": 40,
+      "width": 310
+    },
+    "transcript": {
+      "x": 40,
+      "width": 310
+    },
+    "aligned": true,
+    "overflow": false
+  },
+  {
+    "kind": "composer-menu",
+    "rect": {
+      "x": 291,
+      "y": 317.4375,
+      "width": 252,
+      "height": 407.5625,
+      "top": 317.4375,
+      "right": 543,
+      "bottom": 725,
+      "left": 291
+    },
+    "unclipped": true
+  }
+]

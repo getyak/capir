@@ -335,7 +335,7 @@ struct StandaloneOnboardingState: Codable, Equatable {
         begin(
             account: StandaloneAccount(
                 id: UUID(),
-                displayName: name.isEmpty ? "Recruiter" : name,
+                displayName: name.isEmpty ? "You" : name,
                 isDemo: demoAccount
             )
         )
@@ -545,7 +545,7 @@ struct StandaloneOnboardingState: Codable, Equatable {
         guard var draft = captureDraft,
               !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               pursuit?.id == draft.pursuitID else {
-            lastRecoverableError = "Add a Signal before asking Talent Signal to organize it."
+            lastRecoverableError = "Add a Signal before asking capri to organize it."
             return nil
         }
         draft.processingGeneration += 1
@@ -773,7 +773,7 @@ enum StandaloneDemoProposalCatalog {
                 id: UUID(), field: "Conversation update", proposedValue: text,
                 evidenceExcerpt: text,
                 confidenceBand: draft.sharedSourceText == nil
-                    ? "Recruiter-authored Signal"
+                    ? "User-authored Signal"
                     : "Shared source text"
             ))
         }

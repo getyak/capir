@@ -7,10 +7,15 @@ import type { MailDelivery } from "./lib/mail.js";
 import { registerAccountOnboarding } from "./modules/accountOnboardingRoutes.js";
 import { registerAgentSessionRoutes } from "./modules/agentSessionRoutes.js";
 import { registerConversationQueueRoutes } from "./modules/conversationQueueRoutes.js";
+import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.js";
+import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.js";
+import { registerDesktopBrowserLogin } from "./routes/desktopBrowserLogin.js";
+import { postgresDesktopBrowserLoginDb, sweepDesktopBrowserLoginAttempts } from "./modules/desktopBrowserLogin.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
 import { registerAgentPreferenceRoutes } from "./modules/agentPreferenceRoutes.js";
+import { registerWeeklyUsageRoutes } from "./modules/weeklyUsage.js";
 import { registerMcpExtensionRoutes } from "./modules/mcpRoutes.js";
 import { registerScreenshotContactRoutes } from "./modules/screenshotContactRoutes.js";
 import { registerMemoryReviewRoutes } from "./modules/memoryReviewRoutes.js";
@@ -762,11 +767,14 @@ export async function buildApp(
     createMemoryRegenerationImageLoader(pool),
   );
   registerConversationQueueRoutes(app, pool, authenticate);
+  registerDesktopCaptureReceipt(app, pool, authenticate);
+  registerDesktopBrowserLogin(app, pool, config, authenticate);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);
   registerFeedbackRoutes(app, pool, authenticate);
   const security = [{ bearerSession: [] }];
   registerAgentPreferenceRoutes(app, pool, authenticate, remoteChatProvider?.providerId === "claude-agent-sdk");
+  registerWeeklyUsageRoutes(app, pool, authenticate);
   registerPrivateConversationRoutes(app, authenticate, privateConversationProvider);
   registerMcpExtensionRoutes(app, pool, authenticate, {
     allowedOrigins: [],
@@ -778,6 +786,7 @@ export async function buildApp(
   registerLabWorkspaceRoutes(app,new LabWorkspaceService(pool,chatMediaStorage,config.sessionTtlSeconds),authenticate,config.internalLabEnabled===true);
 
   const labProviders = dependencies.labProviders ?? labModelProviders(remoteChatProvider);
+  registerDesktopCaptureContext(app, authenticate, remoteChatProvider, labProviders, config.internalLabEnabled === true);
   const labTrials = new LabTaskTrialService(pool, labProviders, remoteChatProvider,
     process.env.TALENT_SIGNAL_BACKEND_REVISION?.trim() || null);
   registerLabTaskTrialRoutes(app, labTrials, authenticate, config.internalLabEnabled === true);
@@ -3171,6 +3180,13 @@ export async function buildApp(
     intervalMs: config.retentionSweepIntervalMs,
     run: async () => {
       await runSourceLifecycleSweep(pool);
+    },
+  });
+  registerRecurringJob(app, {
+    name: "desktop-browser-login-sweep",
+    intervalMs: config.retentionSweepIntervalMs,
+    run: async () => {
+      await sweepDesktopBrowserLoginAttempts(postgresDesktopBrowserLoginDb(pool));
     },
   });
   app.addHook("preClose", async () => { await conversationQueueRunner.close(); });

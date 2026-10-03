@@ -35,6 +35,7 @@ import { WorkspaceAccountMenu } from "@/components/workspace-account-menu";
 import { MeetingDraftSessionBoundary } from "@/components/meeting-draft-session-boundary";
 import { WorkspaceDirectoryScope } from "@/components/workspace-directory-cache";
 import { SessionDraftSessionBoundary } from "@/components/session-draft-session-boundary";
+import { PersonContextPanelProvider } from "@/components/person-context-panel";
 import {
   workspaceSessionDraftStorageScope,
   workspaceSessionsBinding,
@@ -44,14 +45,18 @@ function AccountControls({
   accountName,
   workspaceName,
   fixtureWorkspace,
+  usageBinding,
 }: {
   accountName: string;
   workspaceName: string | null;
   fixtureWorkspace: boolean;
+  usageBinding: string | null;
 }) {
   return (
     <WorkspaceAccountMenu
       accountName={accountName}
+      key={usageBinding}
+      usageBinding={usageBinding}
       fixtureWorkspace={fixtureWorkspace}
       signOutAction={signOutOfWorkspace}
       workspaceName={workspaceName}
@@ -150,13 +155,14 @@ export default async function WorkspaceLayout({
   return (
     <WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
+      <PersonContextPanelProvider binding={pendingBinding}>
       <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
         {pendingBinding ? (
           <MeetingDraftSessionBoundary sessionVersion={pendingBinding} />
         ) : null}
         <SessionDraftSessionBoundary storageScope={pendingSessionDraftScope} />
         <WorkspaceDirectoryScope binding={pendingBinding} />
-        <aside aria-label="Talent Signal 工作台" className={styles.sidebar}>
+        <aside aria-label="capri 工作台" className={styles.sidebar}>
           <WorkspaceShellNav binding={pendingBinding} />
           <div className={styles.sidebarScroll}>
             {pendingBinding ? (
@@ -171,6 +177,7 @@ export default async function WorkspaceLayout({
             <AccountControls
               accountName={accountName}
               fixtureWorkspace={fixtureWorkspace}
+              usageBinding={pendingBinding}
               workspaceName={workspaceName}
             />
           </div>
@@ -179,12 +186,12 @@ export default async function WorkspaceLayout({
         <div className={styles.workspace}>
           <header className={styles.mobileHeader}>
             <Link
-              aria-label="Talent Signal 工作台"
+              aria-label="capri 工作台"
               className={styles.brand}
               href="/workspace"
             >
               <span aria-hidden="true" className={styles.brandMark} />
-              <span className={styles.brandName}>Talent Signal</span>
+              <span className={styles.brandName}>capri</span>
             </Link>
             <div className={styles.mobileAccount}>
               <WorkspaceGlobalSearchDialog binding={pendingBinding} />
@@ -193,6 +200,7 @@ export default async function WorkspaceLayout({
               <AccountControls
                 accountName={accountName}
                 fixtureWorkspace={fixtureWorkspace}
+                usageBinding={pendingBinding}
                 workspaceName={workspaceName}
               />
             </div>
@@ -221,6 +229,7 @@ export default async function WorkspaceLayout({
           </TalentSignalLabShell>
         </div>
       </div>
+      </PersonContextPanelProvider>
       </AvatarPreferencesProvider>
     </WorkspacePrivacyBoundary>
   );

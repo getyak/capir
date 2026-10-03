@@ -11,12 +11,14 @@ COPY apps/agent-host/package.json apps/agent-host/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/evaluation/package.json packages/evaluation/package.json
+COPY apps/agent/scripts/verify-native-runtime.cjs apps/agent/scripts/verify-native-runtime.cjs
 
 ARG PNPM_REGISTRY=https://registry.npmjs.org
 RUN pnpm config set registry "$PNPM_REGISTRY" \
     && pnpm install --frozen-lockfile --ignore-scripts \
       --filter @talent-signal/backend... \
-      --filter @talent-signal/agent-host...
+      --filter @talent-signal/agent-host... \
+    && node apps/agent/scripts/verify-native-runtime.cjs
 
 COPY packages/contracts packages/contracts
 COPY packages/evaluation packages/evaluation

@@ -278,7 +278,7 @@ async function analyzeWithOpenRouter(input: {
       "Content-Type": "application/json",
       "HTTP-Referer":
         process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000",
-      "X-Title": "Talent Signal screenshot evidence review",
+      "X-Title": "capri screenshot evidence review",
     },
     body: JSON.stringify({
       model: availability.screenshot_model,

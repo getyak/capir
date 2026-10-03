@@ -1,6 +1,6 @@
 ---
 name: recruiting-trend-radar
-description: Investigate and curate current recruiting, executive-search, hiring-AI, candidate-experience, assessment, and future-of-work signals using a Hung Lee–inspired manually curated, skeptical, community-aware lens. Use for fresh market scans, weekly product intelligence, competitor or workflow shifts, and deciding which trends Talent Signal should watch, test, ignore, or treat as a risk; always browse current primary sources.
+description: Investigate and curate current recruiting, executive-search, hiring-AI, candidate-experience, assessment, and future-of-work signals using a Hung Lee–inspired manually curated, skeptical, community-aware lens. Use for fresh market scans, weekly product intelligence, competitor or workflow shifts, and deciding which trends capri should watch, test, ignore, or treat as a risk; always browse current primary sources.
 ---
 
 # Recruiting Trend Radar
@@ -14,7 +14,7 @@ Read `references/persona-profile.md`, `references/rubric.md`, and `references/so
 ## Research workflow
 
 1. Browse current sources; state the research date and time horizon.
-2. Form a sharp question tied to a Talent Signal decision.
+2. Form a sharp question tied to a capri decision.
 3. Gather a deliberately mixed source set:
    - primary product or policy sources;
    - empirical research;

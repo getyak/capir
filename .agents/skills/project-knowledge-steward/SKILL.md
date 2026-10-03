@@ -1,6 +1,6 @@
 ---
 name: project-knowledge-steward
-description: Maintain Talent Signal's project knowledge system by routing durable learning to AGENTS.md, canonical docs, ADRs, Skills, plans, research, tests, or code while removing duplication and stale implementation detail. Use when updating or reorganizing repository documentation, capturing a retrospective or repeated correction, deciding where new project knowledge belongs, pruning agent context, or improving long-running Codex workflows.
+description: Maintain capri's project knowledge system by routing durable learning to AGENTS.md, canonical docs, ADRs, Skills, plans, research, tests, or code while removing duplication and stale implementation detail. Use when updating or reorganizing repository documentation, capturing a retrospective or repeated correction, deciding where new project knowledge belongs, pruning agent context, or improving long-running Codex workflows.
 ---
 
 # Project Knowledge Steward

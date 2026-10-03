@@ -1,6 +1,6 @@
 ---
 name: candidate-experience-guardrail
-description: Audit Talent Signal UI, recruiter messages, notifications, automation, action cards, rejection or follow-up flows, and product recommendations through Katrina Collier’s publicly documented human-first recruiting perspective. Use when checking candidate trust, empathy, communication, time respect, recruiter–hiring-manager collaboration, or whether technology improves rather than degrades the people experience.
+description: Audit capri UI, recruiter messages, notifications, automation, action cards, rejection or follow-up flows, and product recommendations through Katrina Collier’s publicly documented human-first recruiting perspective. Use when checking candidate trust, empathy, communication, time respect, recruiter–hiring-manager collaboration, or whether technology improves rather than degrades the people experience.
 ---
 
 # Candidate Experience Guardrail

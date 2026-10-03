@@ -521,10 +521,10 @@ export function IntegratedWorkspaceApp({
           <Link
             className="integration-brand"
             href="/"
-            aria-label="Talent Signal home"
+            aria-label="capri home"
           >
             <span aria-hidden="true">TS</span>
-            <strong>Talent Signal</strong>
+            <strong>capri</strong>
           </Link>
           <div className="integration-mode" role="status">
             <ShieldCheck size={18} weight="duotone" aria-hidden="true" />

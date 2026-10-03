@@ -11,7 +11,7 @@ import styles from "./project-health.module.css";
 
 export const metadata: Metadata = {
   title: "工程决策简报",
-  description: "Talent Signal 当前项目健康度、工程风险与下一步决策的分层证据简报。",
+  description: "capri 当前项目健康度、工程风险与下一步决策的分层证据简报。",
   robots: {
     index: false,
     follow: false,
@@ -163,7 +163,7 @@ export default function ProjectHealthBriefPage() {
       <aside className={styles.rail} aria-label="简报层级导航">
         <Link className={styles.brand} href="/">
           <span aria-hidden="true">TS</span>
-          <strong>Talent Signal</strong>
+          <strong>capri</strong>
         </Link>
         <nav>
           <a href="#brief">
@@ -192,7 +192,7 @@ export default function ProjectHealthBriefPage() {
           <header className={styles.hero}>
             <p className={styles.kicker}>{projectHealthBrief.question}</p>
             <h1>
-              <span>Talent Signal</span>
+              <span>capri</span>
               <span>工程决策简报</span>
             </h1>
             <p className={styles.conclusion}>{projectHealthBrief.conclusion}</p>

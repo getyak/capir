@@ -517,7 +517,7 @@ struct DeviceCalendarHandoffView: View {
     private var savedInAppContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(
-                appLanguage.text("Saved in Talent Signal"),
+                appLanguage.text("Saved in capri"),
                 systemImage: "checkmark.circle.fill"
             )
                 .font(.headline)
@@ -537,7 +537,7 @@ struct DeviceCalendarHandoffView: View {
         VStack(alignment: .leading, spacing: 10) {
             Label(
                 appLanguage.text(canonicalSaved
-                    ? "Saved in Talent Signal · Calendar sync failed" : "Calendar sync failed"),
+                    ? "Saved in capri · Calendar sync failed" : "Calendar sync failed"),
                 systemImage: "exclamationmark.shield"
             )
                 .font(.headline)
@@ -657,7 +657,7 @@ struct DeviceCalendarHandoffView: View {
             } catch {
                 result = .failed(
                     appLanguage.text(
-                        "The event could not be saved in Talent Signal. Nothing was added to Apple Calendar."
+                        "The event could not be saved in capri. Nothing was added to Apple Calendar."
                     )
                 )
                 return
@@ -732,7 +732,7 @@ struct DeviceCalendarHandoffView: View {
 
     private func failureMessage(_ failure: DeviceCalendarSyncFailure) -> String {
         let appState = canonicalSaved
-            ? appLanguage.text("The event is saved in Talent Signal.") + " "
+            ? appLanguage.text("The event is saved in capri.") + " "
             : ""
         switch failure {
         case .permissionDenied:
@@ -758,7 +758,7 @@ struct DeviceCalendarHandoffView: View {
 
     private func uncertainResultMessage(providerMessage _: String) -> String {
         let appState = canonicalSaved
-            ? appLanguage.text("The event is saved in Talent Signal.") + " "
+            ? appLanguage.text("The event is saved in capri.") + " "
             : ""
         return appState + appLanguage.text(
             "Apple Calendar returned an uncertain result. Check Apple Calendar before taking any further action."

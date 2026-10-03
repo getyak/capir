@@ -172,3 +172,12 @@ export function useSystemHealth(): SystemHealthContextValue {
   if (!value) throw new Error("System health requires the workspace provider.");
   return value;
 }
+
+/**
+ * Context-optional read for surfaces that render outside the workspace health
+ * provider (for example a static server render). Production always has the
+ * provider; a missing one must degrade to unknown, never throw or fabricate.
+ */
+export function useOptionalSystemHealth(): SystemHealthContextValue | null {
+  return useContext(SystemHealthContext);
+}

@@ -142,7 +142,7 @@ struct WorkspaceConnectionForm: View {
                 HStack(alignment: .center, spacing: 12) {
                     TSBrandMark(size: 28)
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel("Talent Signal")
+                        .accessibilityLabel("capri")
                     Text("连接你的工作区")
                         .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(TSBrand.ink)
@@ -210,7 +210,7 @@ struct WorkspaceConnectionForm: View {
                         .foregroundStyle(TSBrand.secondaryInk)
                     Spacer()
                     Button("复制诊断摘要") {
-                        let summary = "Talent Signal \(DesktopUpdater.shared.appVersion)\nmacOS \(ProcessInfo.processInfo.operatingSystemVersionString)\nConnection: \(result?.summary ?? "Not checked")\n\(result?.detail ?? "")\nLocal development: \(localDevelopment)\nInspector: \(connection.inspectorEnabled)\nWorkspace address, cookies and content omitted."
+                        let summary = "capri \(DesktopUpdater.shared.appVersion)\nmacOS \(ProcessInfo.processInfo.operatingSystemVersionString)\nConnection: \(result?.summary ?? "Not checked")\n\(result?.detail ?? "")\nLocal development: \(localDevelopment)\nInspector: \(connection.inspectorEnabled)\nWorkspace address, cookies and content omitted."
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(summary, forType: .string)
                         copied = true

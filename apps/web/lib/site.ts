@@ -1,39 +1,19 @@
 export const siteConfig = {
-  name: "Talent Signal",
-  title: "Talent Signal｜以联系人为中心的关系 CRM",
+  name: "capri",
+  title: "capri｜接住重要的人和未完的事",
   description:
-    "保留联系人的背景，发现对话里的变化，准备恰当的下一步。面向客户、伙伴、协作者与候选人的关系工作区。",
+    "分享一张聊天截图，留下认识的背景、答应的事情和后来的变化。你的个人 Agent，让下一次交流接得上。",
   url: process.env.NEXT_PUBLIC_SITE_URL ?? "https://gettalentsignal.com",
   email: "hello@talentsignal.ai",
 } as const;
 
 export const accessRequestHref =
-  `mailto:${siteConfig.email}?subject=${encodeURIComponent("申请使用 Talent Signal")}`;
+  `mailto:${siteConfig.email}?subject=${encodeURIComponent(`申请使用 ${siteConfig.name}`)}`;
 
 export const faqs = [
-  {
-    question: "Talent Signal 用来做什么？",
-    answer:
-      "它把人物、对话、承诺与日程放回持续的关系背景中，帮助你推进客户合作、伙伴关系、共同项目与招聘。",
-  },
-  {
-    question: "它会自动发消息或修改记录吗？",
-    answer:
-      "不会。每一项联系人或日历变更都先以提案呈现；只有你确认、编辑或驳回后，系统才可能进入下一步。",
-  },
-  {
-    question: "导入的证据会如何处理？",
-    answer:
-      "产品只处理你主动导入的内容，让事实始终关联来源，并把原始证据及其衍生数据纳入同一删除范围。",
-  },
-  {
-    question: "这款产品适合谁？",
-    answer:
-      "适合需要长期维护关系、跟进承诺与推进合作的人，包括独立顾问、客户负责人、创业者、合作伙伴和招聘顾问。",
-  },
-  {
-    question: "Talent Signal 会给人评分或排名吗？",
-    answer:
-      "不会。系统只会围绕当前依赖项排列你的工作注意力，不会把一个人简化为匹配度、质量、性格、潜力或接受概率分数。",
-  },
+  { question: `${siteConfig.name} 用来做什么？`, answer: "先理解你分享的聊天截图，再由你选择值得留下的认识背景和未完事项。下一次回顾或收到新回复时，继续同一个人和同一件事。完整接续是产品方向，开放范围在申请时核对。" },
+  { question: "截图会自动成为永久记忆吗？", answer: "不会把提取内容当作已确认事实。先看到有来源的理解，再选择值得留下的内容；身份歧义先确认，也可以暂不保存。" },
+  { question: "它会自动发送消息吗？", answer: "外部发送需要独立的人类决定。公开合成演示只改变本页状态，不连接微信，不保存真实资料，也不发送消息。" },
+  { question: "没有下一步，也能保存吗？", answer: "认识背景本身就有价值。没有截止日期就不补一个；等待、暂停和停止是正常结果，不意味着对方不感兴趣。" },
+  { question: "删除来源之后会怎样？", answer: "依赖它的背景和建议失去来源支持。演示重播不会恢复已移除来源；只有明确开始新合成演示才会重新加载样例。" },
 ] as const;

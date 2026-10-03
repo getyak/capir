@@ -52,7 +52,7 @@ export async function seed(): Promise<void> {
       // any real account; seeding remains explicit development-fixture data.
       await client.query(
         `INSERT INTO account_email_reservations(normalized_email, state, account_id, user_id)
-         VALUES ('cubxxw@talentsignal.local', 'owned', $1, $2)
+         VALUES ('test@gmail.com', 'owned', $1, $2)
          ON CONFLICT (normalized_email) DO UPDATE SET
            state = 'owned', account_id = EXCLUDED.account_id, user_id = EXCLUDED.user_id,
            revision = account_email_reservations.revision + 1, updated_at = now()`,
@@ -64,7 +64,7 @@ export async function seed(): Promise<void> {
            ($1, $2, 'recruiter@alpha.local', 'Alpha Recruiter', 'simulated_human', 'active'),
            ($3, $2, 'reviewer@alpha.local', 'Alpha Reviewer', 'simulated_human', 'active'),
            ($4, $5, 'recruiter@beta.local', 'Beta Recruiter', 'simulated_human', 'active'),
-           ($6, $2, 'cubxxw@talentsignal.local', 'Cubxxw', 'password_human', 'active')
+           ($6, $2, 'test@gmail.com', 'Test User', 'password_human', 'active')
          ON CONFLICT (id) DO UPDATE SET
            email = EXCLUDED.email,
            display_name = EXCLUDED.display_name,
@@ -81,7 +81,7 @@ export async function seed(): Promise<void> {
       );
       await client.query(
         `UPDATE users
-         SET username = 'cubxxw', account_role = 'admin'
+         SET username = 'test@gmail.com', account_role = 'admin'
          WHERE id = $1 AND account_id = $2`,
         [IDS.alphaAdmin, IDS.alphaAccount],
       );

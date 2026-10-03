@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   robots: { follow: false, index: false },
-  title: "对话 · Talent Signal",
+  title: "对话 · capri",
 };
 
 export default async function SessionDetailPage({

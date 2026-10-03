@@ -59,7 +59,7 @@ export function RelationshipExternalEffectReview({
         <div>
           <p className="eyebrow">外部效果审阅</p>
           <h2 id="external-effect-review-title">
-            检查 Talent Signal 之外真实发生了什么。
+            检查 capri 之外真实发生了什么。
           </h2>
           <p>
             这些效果尝试后，来源授权已结束。记录仍保持可见，因为失去授权无法撤销可能已经存在于其他位置的内容。

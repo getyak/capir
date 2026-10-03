@@ -1,6 +1,6 @@
 ---
 name: evidence-safety-reviewer
-description: Audit Talent Signal extraction, candidate identity, evidence provenance, privacy, consent, retention, generated recommendations, and contact/calendar/notification writes. Use for screenshot and OCR pipelines, prompt or model changes, data schemas, review screens, external actions, permissions, policy copy, incident analysis, and release gates where a wrong fact or unsafe automation could harm a candidate relationship.
+description: Audit capri extraction, Person identity, evidence provenance, privacy, consent, retention, generated recommendations, and contact/calendar/notification writes. Use for screenshot and OCR pipelines, prompt or model changes, data schemas, review screens, external actions, permissions, policy copy, incident analysis, and release gates where a wrong fact or unsafe automation could harm a relationship.
 ---
 
 # Evidence Safety Reviewer
@@ -21,7 +21,7 @@ Preserve the distinction between:
 
 - observed source content;
 - system-derived interpretation;
-- recruiter correction or confirmation;
+- user correction or confirmation;
 - external system result;
 - later contradiction, expiry, or retraction.
 
@@ -50,12 +50,12 @@ Require source-level traceability:
 - asset identifier and import intent;
 - OCR text, bounding box, language, and recognition confidence when available;
 - message grouping and speaker assignment;
-- candidate/role/client match evidence;
+- Person, speaker, and relationship-context match evidence;
 - exact quoted span for each assertion;
 - model/prompt/policy version;
 - edits, confirmer, timestamp, and superseding events.
 
-Test wrong identity, same-name candidates, forwarded messages, group chats, quoted text, cropped screenshots, and speaker-side inversion.
+Test wrong identity, same-name people, forwarded messages, group chats, quoted text, cropped screenshots, and speaker-side inversion.
 
 ### 3. Audit uncertainty behavior
 
@@ -64,9 +64,12 @@ The system must expose uncertainty in the decision, not hide it in logs. Check t
 - ambiguous dates/timezones require clarification;
 - missing year or relative dates are anchored to capture context;
 - availability is not converted into meeting consent;
-- a recruiter statement is not attributed to the candidate;
+- a user statement is not attributed to the other person;
 - conflicting evidence creates a conflict, not a silent overwrite;
-- no-action and abstention are first-class outcomes.
+- no-action and abstention are first-class outcomes;
+- temporary plans retain time and cannot become permanent profile labels;
+- waiting or paused reminders do not become inferred disinterest;
+- a new source cannot silently confirm Memory or duplicate existing work.
 
 ### 4. Audit user control and external effects
 
@@ -88,11 +91,11 @@ Challenge:
 - intentional capture versus background surveillance;
 - local versus remote OCR/inference;
 - data minimization and redaction before evaluation logs;
-- cross-tenant and candidate/assignment authorization at retrieval time;
+- cross-account and Person/context authorization at retrieval time;
 - raw image, OCR, embeddings, caches, backups, analytics, and evaluation retention;
 - export and deletion across every derived representation;
 - vendor/model training defaults;
-- candidate-facing notice, recruiter agreement, and third-party data.
+- data-subject notice, user authorization scope, and third-party data.
 
 Treat policy and implementation as separate evidence.
 
@@ -110,7 +113,7 @@ Reviewers can be wrong too. For model-based graders:
 
 ### 7. Return the common review packet
 
-Use the same schema defined in `recruiter-workflow-reviewer`. Set:
+Use the common schema in `../product-adjudicator/references/review-contract.md`. Set:
 
 - `reviewer: evidence-safety-reviewer`
 - `lens: evidence integrity, privacy, and safe action`
@@ -121,11 +124,11 @@ Each finding must identify the affected link in the safety model, realistic harm
 
 Fail release when any in-scope path can:
 
-- bind evidence to the wrong candidate, role, client, or speaker without a mandatory review;
+- bind evidence to the wrong Person, context, or speaker without a mandatory review;
 - present an unsupported, contradicted, or expired assertion as confirmed;
 - infer candidate quality, personality, protected/sensitive traits, or hiring probability from private conversation;
 - send, schedule, update, notify, or persist externally without clear user authorization;
-- expose one candidate's evidence across unauthorized users or tenants;
+- expose one person's evidence across unauthorized users or tenants;
 - retain/import data contrary to the disclosed control;
 - claim an external action succeeded without verifying the external result;
 - make source, edit history, or deletion materially unavailable.

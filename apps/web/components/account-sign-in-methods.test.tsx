@@ -1,4 +1,7 @@
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, type ReactElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 
 const actions = vi.hoisted(() => ({
@@ -158,5 +161,96 @@ describe("settings sign-in methods", () => {
     const html = renderToString(<AccountDataSync />);
     expect(html).toContain("联系人与对话会自动同步到你的设备");
     expect(html).not.toContain("同步完成");
+  });
+});
+
+describe("sign-in disclosure (dom)", () => {
+  let root: Root | undefined;
+  let host: HTMLDivElement;
+  afterEach(async () => {
+    await act(async () => root?.unmount());
+    root = undefined;
+    host?.remove();
+  });
+
+  async function mount(element: ReactElement) {
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => root!.render(element));
+  }
+
+  it("keeps connected and legacy methods visible and discloses only optional providers", async () => {
+    await mount(
+      <AccountSignInMethods
+        initial={settings({
+          sign_in_methods: [
+            { provider: "apple", state: "unconnected", hint: null, can_unlink: false },
+            { provider: "google", state: "connected", hint: "owner@example.test", can_unlink: true },
+            { provider: "password", state: "legacy_unverified", hint: null, can_unlink: false },
+          ],
+        })}
+      />,
+    );
+    const visible = host.querySelector("[data-sign-in-visible]")!;
+    expect(visible.textContent).toContain("Google");
+    expect(visible.textContent).toContain("密码");
+    expect(visible.textContent).not.toContain("Apple");
+
+    const addMethods = host.querySelector<HTMLDetailsElement>("[data-add-login-methods]")!;
+    expect(addMethods).toBeTruthy();
+    expect(addMethods.open).toBe(false);
+    const summary = addMethods.querySelector("summary")!;
+    expect(summary.textContent).toBe("添加登录方式（1）");
+    expect(addMethods.textContent).toContain("Apple");
+    expect(addMethods.textContent).toContain("未绑定");
+    expect(addMethods.textContent).toContain("绑定");
+  });
+
+  it("makes the disclosure keyboard-operable and reveals the hidden provider", async () => {
+    await mount(
+      <AccountSignInMethods
+        initial={settings({
+          sign_in_methods: [
+            { provider: "apple", state: "unconnected", hint: null, can_unlink: false },
+            { provider: "google", state: "connected", hint: null, can_unlink: true },
+            { provider: "password", state: "unconnected", hint: null, can_unlink: false },
+          ],
+        })}
+      />,
+    );
+    const addMethods = host.querySelector<HTMLDetailsElement>("[data-add-login-methods]")!;
+    const summary = addMethods.querySelector("summary")!;
+    // Native summary is focusable and toggles the disclosure with a click/keyboard activation.
+    summary.focus();
+    expect(document.activeElement).toBe(summary);
+    await act(async () => summary.click());
+    expect(addMethods.open).toBe(true);
+    expect(addMethods.textContent).toContain("Apple");
+  });
+
+  it("does not render the disclosure when every optional provider is already connected", async () => {
+    await mount(
+      <AccountSignInMethods
+        initial={settings({
+          sign_in_methods: [
+            { provider: "apple", state: "connected", hint: null, can_unlink: true },
+            { provider: "google", state: "connected", hint: null, can_unlink: true },
+            { provider: "password", state: "connected", hint: null, can_unlink: true },
+          ],
+        })}
+      />,
+    );
+    expect(host.querySelector("[data-add-login-methods]")).toBeNull();
+    expect(host.textContent).toContain("Apple");
+    expect(host.textContent).toContain("Google");
+  });
+
+  it("puts the data-sync explanation behind a named disclosure", async () => {
+    await mount(<AccountDataSync lastObservedAt="2026-09-24T00:00:00.000Z" />);
+    const details = host.querySelector<HTMLDetailsElement>("[data-data-sync]")!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")!.textContent).toBe("数据同步说明");
+    expect(details.textContent).toContain("联系人与对话会自动同步到你的设备");
   });
 });

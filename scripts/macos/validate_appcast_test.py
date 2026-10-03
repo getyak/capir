@@ -17,10 +17,12 @@ class AppcastPolicyTests(unittest.TestCase):
     def test_stable_and_preview(self):
         module.validate(self.feed(), 10)
         module.validate(self.feed(channel="<sparkle:channel>preview</sparkle:channel>"), 10)
+        module.validate(self.feed(url="https://github.com/getyak/talent-signal/releases/download/v0.1.92/Talent-Signal-0.1.92-35-macOS-universal-signed.zip", version="35"), 35)
 
     def test_rejects_wrong_source_or_unsigned_package(self):
         for url in ["http://github.com/file.zip", "https://evil.test/file.zip",
                     "https://github.com/getyak/talent-signal/releases/latest/download/file.zip",
+                    "https://github.com/getyak/talent-signal/releases/download/v0.1.92-rc1/Talent-Signal-0.1.92-10-macOS-universal-signed.zip",
                     "https://github.com/getyak/talent-signal/releases/download/macos-123-1/Talent-Signal-0.1.0-10-macOS-universal-preview.zip"]:
             with self.assertRaises(ValueError): module.validate(self.feed(url=url), 10)
 

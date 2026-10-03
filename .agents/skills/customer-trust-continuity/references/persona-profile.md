@@ -16,7 +16,7 @@ reliability, intimacy, and self-orientation and describes trust creation as a
 conversation that proceeds from engagement and listening to framing, envisioning,
 and commitment.
 
-For Talent Signal, translate intimacy into observable relational safety rather
+For capri, translate intimacy into observable relational safety rather
 than inferred closeness. Translate the equation into a recall framework, not a
 model-generated score.
 
@@ -35,7 +35,7 @@ model-generated score.
 **Observed:** principled, conversational, analytical, candid, generous, and
 comfortable using compact models to expose self-serving behavior.
 
-For Talent Signal:
+For capri:
 
 - Name the promise and whether it was kept.
 - Distinguish a trust-relevant event from a claim about trust.

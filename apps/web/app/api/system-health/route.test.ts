@@ -74,6 +74,37 @@ describe("system health workspace proxy", () => {
     ]);
   });
 
+  it("forwards a validated backend revision and omits an absent one", async () => {
+    backendHealth.mockResolvedValueOnce({
+      contract_version: CONTRACT_VERSION,
+      schema_version: "system-health.v1",
+      status: "healthy",
+      observed_at: "2026-09-14T09:00:00.000Z",
+      backend_revision: "26a664bb",
+      components: [
+        { id: "backend", label: "Backend API", kind: "service", required: true, status: "healthy", duration_ms: 2, detail_code: "request_completed" },
+        { id: "database", label: "PostgreSQL", kind: "database", required: true, status: "healthy", duration_ms: 3, detail_code: "query_completed" },
+        { id: "migrations", label: "Database schema", kind: "schema", required: true, status: "healthy", duration_ms: 1, detail_code: "required_migrations_applied" },
+      ],
+    });
+    const withRevision = await GET();
+    expect((await withRevision.json()).backend_revision).toBe("26a664bb");
+
+    backendHealth.mockResolvedValueOnce({
+      contract_version: CONTRACT_VERSION,
+      schema_version: "system-health.v1",
+      status: "healthy",
+      observed_at: "2026-09-14T09:00:00.000Z",
+      components: [
+        { id: "backend", label: "Backend API", kind: "service", required: true, status: "healthy", duration_ms: 2, detail_code: "request_completed" },
+        { id: "database", label: "PostgreSQL", kind: "database", required: true, status: "healthy", duration_ms: 3, detail_code: "query_completed" },
+        { id: "migrations", label: "Database schema", kind: "schema", required: true, status: "healthy", duration_ms: 1, detail_code: "required_migrations_applied" },
+      ],
+    });
+    const withoutRevision = await GET();
+    expect("backend_revision" in (await withoutRevision.json())).toBe(false);
+  });
+
   it("keeps downstream state unknown when the backend cannot answer", async () => {
     backendHealth.mockRejectedValue(new Error("synthetic secret-bearing error"));
     const result = await GET();

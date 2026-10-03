@@ -3,38 +3,38 @@
   "strings" : {
     "NSCalendarsFullAccessUsageDescription" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal uses full Calendar access only to find and update the exact linked event after you review and confirm its changes." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal 仅在你审阅并确认修改后，使用完整日历访问权限查找并更新那一条已关联日程。" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "capri uses full Calendar access only to find and update the exact linked event after you review and confirm its changes." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "capri 仅在你审阅并确认修改后，使用完整日历访问权限查找并更新那一条已关联日程。" } }
       }
     },
     "NSCalendarsWriteOnlyAccessUsageDescription" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal adds an event to your default calendar only after you confirm its title and time in the app." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "只有在你于应用内确认日程标题和时间后，Talent Signal 才会将它添加到默认日历。" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "capri adds an event to your default calendar only after you confirm its title and time in the app." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "只有在你于应用内确认日程标题和时间后，capri 才会将它添加到默认日历。" } }
       }
     },
     "NSContactsUsageDescription" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal opens Apple's contact editor only after you review the exact fields you want to add." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal 只会在你审阅要添加的确切字段后，打开 Apple 通讯录编辑器。" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "capri opens Apple's contact editor only after you review the exact fields you want to add." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "capri 只会在你审阅要添加的确切字段后，打开 Apple 通讯录编辑器。" } }
       }
     },
     "NSMicrophoneUsageDescription" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal records audio only after you confirm authorization and tap Start while the app is in the foreground." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "只有在你确认授权并于应用前台点按开始后，Talent Signal 才会录制音频。" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "capri records audio only after you confirm authorization and tap Start while the app is in the foreground." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "只有在你确认授权并于应用前台点按开始后，capri 才会录制音频。" } }
       }
     },
     "NSPhotoLibraryUsageDescription" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal imports only the conversation image you choose." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal 只会导入你主动选择的对话图片。" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "capri imports only the conversation image you choose." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "capri 只会导入你主动选择的对话图片。" } }
       }
     },
     "NSSpeechRecognitionUsageDescription" : {
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal transcribes only the foreground recording you explicitly start, using on-device speech when available." } },
-        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Talent Signal 只转写你明确在前台启动的录音，并在可用时使用设备端语音识别。" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "capri transcribes only the foreground recording you explicitly start, using on-device speech when available." } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "capri 只转写你明确在前台启动的录音，并在可用时使用设备端语音识别。" } }
       }
     }
   },

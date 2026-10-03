@@ -52,7 +52,7 @@ struct MenuBarPresenceView: View {
 
         Divider()
 
-        Button("Quit Talent Signal") {
+        Button("Quit capri") {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")

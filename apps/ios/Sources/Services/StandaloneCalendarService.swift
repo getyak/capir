@@ -27,7 +27,7 @@ enum StandaloneCalendarFixture {
             title: "Candidate catch-up with Mina",
             startsAt: start,
             endsAt: start.addingTimeInterval(30 * 60),
-            calendarTitle: "Talent Signal Demo",
+            calendarTitle: "capri Demo",
             isDemo: true
         )
     }

@@ -53,9 +53,9 @@ describe("persistent workspace shell", () => {
     expect(navigation).not.toContain("WorkspaceMoreDestinations");
     expect(navigation).not.toContain("更多目的地");
     // Sessions keeps one collapsed-rail icon link, never a duplicate expanded row.
-    expect(navigation).toContain("collapsedUtility");
+    expect(navigation).toContain("RailSessionShortcuts");
     expect(navigation).toContain('data-collapsed-only="true"');
-    expect(navigation).toContain("aria-label={collapsed ? route.label : undefined}");
+    expect(navigation).toContain("aria-label={label}");
     // Account utilities align language with the shared icon column.
     expect(accountMenu).toContain("Globe");
     expect(accountMenu).not.toContain("/workspace/plugs");
@@ -64,9 +64,9 @@ describe("persistent workspace shell", () => {
     // A successfully empty people projection hides the auxiliary group without
     // suppressing actionable read errors or a populated projection.
     expect(sidebarPeople).toContain(
-      'if (state === "ready" && people.length === 0) return null;',
+      'if (!loading && !failed && people.length === 0) return null;',
     );
-    expect(sidebarPeople).toContain("人物目录暂时无法读取");
+    expect(sidebarPeople).toContain("人物暂时无法读取");
     expect(layout).toContain("<WorkspaceMobileSourcesLink />");
     const shellStyles = read("components/workspace-shell.module.css");
     expect(shellStyles).toContain(".mobileSources");
@@ -227,12 +227,19 @@ describe("settings composition", () => {
     expect(settings).toContain('href="/workspace/extensions"');
     expect(settings).toContain('href="/workspace/captures"');
     expect(settings).toContain('href="/workspace/settings/diagnostics"');
-    expect(settings).toContain("<AgentResponsePreference");
+    // Reply preference has one edit owner: the settings surface links to the
+    // existing page instead of mounting a second editor.
+    expect(settings).toContain('href="/workspace/preferences"');
+    expect(settings).not.toContain("<AgentResponsePreference");
     expect(settings).not.toContain("localStorage.setItem(\"talent-signal-account");
     expect(panel).toContain("embedded");
     expect(panel).toContain("saveAccountSettings");
     expect(page).toContain("loadAccountSettings");
-    expect(page).toContain("isSettingsSection(requested)");
+    // The login callback and the rendered pane resolve the section through the
+    // single tested helper, never by reflecting the raw query value.
+    expect(page).toContain("settingsReturnPath(requested)");
+    expect(page).toContain("settingsSectionFrom(requested)");
+    expect(page).not.toContain("?section=${requested}");
   });
 });
 

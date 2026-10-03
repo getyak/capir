@@ -1,7 +1,8 @@
 import { ImageResponse } from "next/og";
+import { siteConfig } from "@/lib/site";
 
 export const alt =
-  "Talent Signal，为关系驱动型寻访保留候选人进展。";
+  `${siteConfig.name}，接住聊天里重要的人和未完的事。`;
 export const size = {
   width: 1200,
   height: 630,
@@ -70,7 +71,7 @@ export default function OpenGraphImage() {
               }}
             />
           </div>
-          Talent Signal
+          {siteConfig.name}
         </div>
 
         <div
@@ -86,13 +87,14 @@ export default function OpenGraphImage() {
               fontSize: 82,
               fontWeight: 650,
               letterSpacing: "-4px",
-              lineHeight: 0.98,
+              lineHeight: 1.12,
             }}
           >
-            知道此刻谁需要你的关注。
+            这段话，
+以后还用得上。
           </div>
           <div style={{ color: "#585650", fontSize: 28, lineHeight: 1.4 }}>
-            为关系驱动型寻访保留有证据支撑的候选人进展。
+            留下认识的背景、答应的事情和后来的变化。
           </div>
         </div>
 

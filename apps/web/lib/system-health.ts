@@ -1,5 +1,6 @@
 import {
   CONTRACT_VERSION,
+  isGitRevision,
   type SystemHealthComponent,
   type SystemHealthResponse,
   type SystemHealthStatus,
@@ -72,11 +73,15 @@ export function parseSystemHealth(value: unknown): SystemHealthResponse | null {
   }
   const components = payload.components as SystemHealthComponent[];
   if (new Set(components.map((item) => item.id)).size !== 4) return null;
+  const backendRevision = isGitRevision(payload.backend_revision)
+    ? payload.backend_revision.toLowerCase()
+    : undefined;
   return {
     contract_version: CONTRACT_VERSION,
     schema_version: "system-health.v1",
     status: summarizeSystemHealth(components),
     observed_at: payload.observed_at,
+    ...(backendRevision ? { backend_revision: backendRevision } : {}),
     components,
   };
 }
@@ -90,7 +95,7 @@ export function unavailableSystemHealth(
     status: "unavailable",
     observed_at: observedAt.toISOString(),
     components: [
-      { id: "web", label: "Talent Signal Web", kind: "service", required: true, status: "healthy", duration_ms: null, detail_code: "request_completed" },
+      { id: "web", label: "capri Web", kind: "service", required: true, status: "healthy", duration_ms: null, detail_code: "request_completed" },
       { id: "backend", label: "Backend API", kind: "service", required: true, status: "unavailable", duration_ms: null, detail_code: "dependency_unreachable" },
       { id: "database", label: "PostgreSQL", kind: "database", required: true, status: "unknown", duration_ms: null, detail_code: "not_observed" },
       { id: "migrations", label: "Database schema", kind: "schema", required: true, status: "unknown", duration_ms: null, detail_code: "not_observed" },

@@ -1,9 +1,9 @@
 ---
 name: design-talent-signal
-description: Design, implement, or review Talent Signal product and marketing surfaces using its quiet relational-intelligence system. Use for candidate cards and lists, living candidate pages, evidence review, audit timelines, relationship graphs, Today briefs, iOS capture, visual tokens, interaction states, or any UI change that must preserve evidence provenance and recruiter control.
+description: Design, implement, or review capri product and marketing surfaces using its quiet relational-intelligence system. Use for Person cards and lists, living Person pages, evidence review, audit timelines, relationship graphs, Today briefs, iOS capture, visual tokens, interaction states, or any UI change that must preserve evidence provenance and user control.
 ---
 
-# Design Talent Signal
+# Design capri
 
 ## Load the product context
 
@@ -18,8 +18,8 @@ For marketing-site work, also read `../../../design.md` and
 `../../../docs/reference/web-experience.md`.
 
 For evidence, action, timeline, graph, or audit work, read the relevant sections
-of `../../../docs/research/candidate-momentum-loop.md` before designing the
-data presentation.
+of `../../../docs/capture-to-action.md`. Recruiting research is supplementary
+only when the actual task concerns recruiting.
 
 ## Classify the surface
 
@@ -27,15 +27,20 @@ Choose one primary surface:
 
 - Marketing narrative
 - Desktop knowledge workspace
-- Candidate library
-- Living candidate page
+- People library
+- Living Person page
 - Evidence review
 - Timeline and audit history
 - Relationship graph
 - iOS capture or Today
 
-State the user question the surface answers. Do not begin with components or a
-visual trend.
+State the user question the surface answers. For screenshot handoff, show useful
+understanding before requiring contact or folder setup. A Person page starts
+with acquaintance background, recent change, and unfinished work. Keep waiting,
+stop, and no-action visible rather than inventing urgency. Read current product
+scope before using an inherited recruiting example.
+
+Do not begin with components or a visual trend.
 
 ## Map meaning before layout
 
@@ -48,7 +53,7 @@ Identify:
 - the mutation, approval, and failure states;
 - the one item that deserves visual attention.
 
-Treat governed relationship state as canonical. Build Candidate Page, Card,
+Treat governed relationship state as canonical. Build Person Page, Card,
 List, Timeline, and Graph as consistent views of that state.
 
 ## Declare the design read
@@ -73,7 +78,7 @@ Apply these rules:
 7. Use Graph only to answer a relationship question. Make every edge typed,
    time-bounded, and traceable.
 8. Use trends only for a real historical series tied to a decision.
-9. Use visual weight for work attention, never candidate worth.
+9. Use visual weight for work attention, never human worth.
 
 ## Apply the visual system
 

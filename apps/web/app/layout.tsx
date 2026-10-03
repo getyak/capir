@@ -17,12 +17,12 @@ export const metadata: Metadata = {
   creator: siteConfig.name,
   publisher: siteConfig.name,
   keywords: [
-    "关系 CRM",
-    "联系人管理",
+    "个人 Agent",
+    "聊天截图",
     "关系上下文",
     "客户与伙伴协作",
     "承诺与跟进",
-    "关系智能",
+    "关系记忆",
   ],
   alternates: {
     canonical: "/",

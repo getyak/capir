@@ -1,4 +1,5 @@
 import { webRequest, connectWebOrigin } from "./lib/web-transport.js";
+import { extensionVersion, installedExtensionVersion } from "./lib/version-status.js";
 import {
   makeCaptureDraft,
   normalizeUploadedImageSource,
@@ -263,7 +264,7 @@ function renderMode() {
     : "Bring only what matters into review.";
   elements.captureLede.textContent = fixtureMode
     ? "Open a bundled synthetic case and inspect its evidence, proposed meaning, action boundary, and truthful receipt state."
-    : "Choose the visible page or text you selected. Talent Signal will show the exact payload before anything leaves this panel.";
+    : "Choose the visible page or text you selected. capri will show the exact payload before anything leaves this panel.";
 }
 
 async function loadFixtureSuite() {
@@ -1426,6 +1427,23 @@ async function renderHandoffRecovery() {
 }
 
 async function initialize() {
+  const runtime = globalThis.chrome?.runtime;
+  const installedVersion = installedExtensionVersion(runtime);
+  byId("extension-version-short").textContent = installedVersion
+    ? ` · v${installedVersion}`
+    : " · version unavailable";
+  byId("extension-version").textContent = installedVersion
+    ? `Installed extension ${installedVersion} · update status not checked`
+    : "Extension version unavailable";
+  runtime?.onUpdateAvailable?.addListener?.((offer) => {
+    const next = extensionVersion(offer?.version);
+    byId("extension-version-short").textContent = installedVersion
+      ? ` · v${installedVersion} · update available`
+      : " · update available";
+    byId("extension-version").textContent = next
+      ? `Update ${next} is available. Finish this review before updating in Chrome extensions.`
+      : "An extension update is available. Finish this review before updating in Chrome extensions.";
+  });
   elements.localOrigin.value = DEFAULT_LOCAL_ORIGIN;
   renderMode();
   await renderHandoffRecovery();

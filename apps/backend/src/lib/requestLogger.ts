@@ -1,7 +1,24 @@
+import type { FastifyRequest } from "fastify";
+
+/** URL query parameters may contain one-use auth proofs. Keep paths only. */
+export function requestLogUrl(value: string): string {
+  const query = value.indexOf("?");
+  const fragment = value.indexOf("#");
+  const end = Math.min(query < 0 ? value.length : query, fragment < 0 ? value.length : fragment);
+  return value.slice(0, end);
+}
+
 /** Central request/content redaction policy, including ephemeral conversations. */
 export function requestLoggerOptions(level = process.env.LOG_LEVEL ?? "info") {
   return {
     level,
+    serializers: {
+      req(request: FastifyRequest) {
+        return { id: request.id, method: request.method, url: requestLogUrl(request.url ?? ""),
+          hostname: request.hostname, remoteAddress: request.ip,
+          ...(request.socket.remotePort === undefined ? {} : { remotePort: request.socket.remotePort }) };
+      },
+    },
     redact: {
       paths: [
         "req.headers.authorization",
@@ -15,6 +32,10 @@ export function requestLoggerOptions(level = process.env.LOG_LEVEL ?? "info") {
         "req.body.step_up.password",
         "req.body.step_up.identity_token",
         "req.body.attempt_secret",
+        "req.body.code",
+        "req.body.verifier",
+        "req.body.state",
+        "req.body.cancel_secret",
         "req.body.verification_secret",
         "req.body.identity_token",
         "req.body.proof.password",
@@ -31,6 +52,10 @@ export function requestLoggerOptions(level = process.env.LOG_LEVEL ?? "info") {
         "body.step_up.password",
         "body.step_up.identity_token",
         "body.attempt_secret",
+        "body.code",
+        "body.verifier",
+        "body.state",
+        "body.cancel_secret",
         "body.verification_secret",
         "body.identity_token",
         "body.proof.password",

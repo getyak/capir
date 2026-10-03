@@ -1,4 +1,4 @@
 interface:
-  display_name: "Talent Signal Product Adjudicator"
+  display_name: "capri Product Adjudicator"
   short_description: "Combine specialist reviews into one prioritized verdict."
-  default_prompt: "Use $product-adjudicator to run or adjudicate a Talent Signal review panel."
+  default_prompt: "Use $product-adjudicator to run or adjudicate a capri review panel."

@@ -10,7 +10,7 @@ import { readMeetingDraft } from "@/lib/server/meetingDrafts";
 import { isWorkspaceSessionId, workspaceSessionsBinding } from "@/lib/server/workspaceSessions";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { description: "回看联系与对话，为下一次沟通留出时间。", robots: { follow: false, index: false }, title: "时间 · Talent Signal" };
+export const metadata: Metadata = { description: "回看联系与对话，为下一次沟通留出时间。", robots: { follow: false, index: false }, title: "时间 · capri" };
 export default async function MeetingsPage({ searchParams }: { searchParams: Promise<{ draft?: string }> }) {
   if (!(await auth())?.user) redirect("/login?callbackUrl=%2Fworkspace%2Fmeetings");
   const claims = await readBackendSessionClaims();

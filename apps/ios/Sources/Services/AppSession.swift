@@ -227,7 +227,7 @@ actor AppAuthenticationClient: AppAuthenticationServing {
         let normalized = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let body = registering
             ? ["username": "u" + UUID().uuidString.replacingOccurrences(of: "-", with: ""),
-               "email": normalized, "display_name": String(normalized.split(separator: "@").first ?? "Talent Signal"),
+               "email": normalized, "display_name": String(normalized.split(separator: "@").first ?? "capri"),
                "password": password, "client_label": "ios"]
             : ["identifier": normalized, "password": password, "client_label": "ios"]
         let envelope: AppSessionEnvelope = try await request(path: registering ? "v1/auth/password/register" : "v1/auth/password/login",
@@ -249,7 +249,7 @@ actor AppAuthenticationClient: AppAuthenticationServing {
             body: [
                 "username": "u" + UUID().uuidString.replacingOccurrences(of: "-", with: ""),
                 "email": normalized,
-                "display_name": String(normalized.split(separator: "@").first ?? "Talent Signal"),
+                "display_name": String(normalized.split(separator: "@").first ?? "capri"),
                 "password": password,
                 "client_label": "ios",
             ]
@@ -422,7 +422,7 @@ enum AppSessionError: LocalizedError {
         case let .backend(_, code, message):
             return "\(message) (\(code))"
         case .contractMismatch:
-            return "The service contract changed. Update Talent Signal and try again."
+            return "The service contract changed. Update capri and try again."
         case .invalidIdentityToken:
             return "Apple did not return a readable identity token."
         case .invalidResponse:

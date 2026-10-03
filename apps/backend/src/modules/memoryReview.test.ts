@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { singleItemRecord, skippedVisibleItemIds } from "./memoryReviewCommit.js";
 
 import {
   checkMemoryDependence,
@@ -44,6 +45,15 @@ function item(overrides: Partial<SelectionCandidate>): SelectionCandidate {
 }
 
 describe("Memory review policy", () => {
+  it("does not let a supplied item id change the prototype of a decision record", () => {
+    for (const key of ["__proto__", "constructor", "prototype"]) {
+      const record = singleItemRecord(key, "accept");
+      expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
+      expect(Object.hasOwn(record, key)).toBe(true);
+      expect(record[key]).toBe("accept");
+    }
+    expect(singleItemRecord("__proto__", undefined)).toEqual({});
+  });
   it("preserves a self sentence's contact dependence instead of stripping it", () => {
     const escape = checkMemoryDependence({
       scope: "self",
@@ -292,5 +302,14 @@ describe("Memory review policy", () => {
     expect(contactReclaimIsSafe({ laterSourceCount: 0, laterMemoryItemCount: 0, laterAssignmentCount: 1 })).toBe(false);
     expect(evidenceIsAvailable({ itemStatus: "active", evidenceStatus: "active", sourceDeleted: false, authorizationRevoked: false })).toBe(true);
     expect(evidenceIsAvailable({ itemStatus: "active", evidenceStatus: "active", sourceDeleted: false, authorizationRevoked: true })).toBe(false);
+  });
+});
+
+
+describe("item-scoped Memory decisions", () => {
+  it("keeps untouched siblings pending while an older batch commit still skips them", () => {
+    const visible = [{ id: "first" }, { id: "second" }, { id: "third" }];
+    expect(skippedVisibleItemIds(visible, ["first"], "item")).toEqual([]);
+    expect(skippedVisibleItemIds(visible, ["first"], "batch")).toEqual(["second", "third"]);
   });
 });

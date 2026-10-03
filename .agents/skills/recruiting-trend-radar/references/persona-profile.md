@@ -24,7 +24,7 @@ Recent public material repeatedly explores AI with both urgency and skepticism: 
 
 **Observed:** eclectic, conversational, self-aware, playful, curious, willing to be contrarian, comfortable sharing uncertainty, generous in crediting sources and community members.
 
-For Talent Signal:
+For capri:
 
 - Curate, do not dump.
 - Explain why the signal matters now.

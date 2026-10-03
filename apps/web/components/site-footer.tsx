@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { siteConfig } from "@/lib/site";
 import {
   marketingCopy,
   marketingNavigation,
@@ -18,7 +19,7 @@ export function SiteFooter() {
         <div className="site-footer__brand">
           <BrandMark
             label={
-              locale === "en" ? "Talent Signal home" : "Talent Signal 首页"
+              locale === "en" ? `${siteConfig.name} home` : `${siteConfig.name} 首页`
             }
           />
           <p>{c.footer}</p>
@@ -55,7 +56,7 @@ export function SiteFooter() {
         </nav>
       </div>
       <div className="shell site-footer__base">
-        <p>© {new Date().getFullYear()} Talent Signal</p>
+        <p>© {new Date().getFullYear()} {siteConfig.name}</p>
         <p>{c.prototype}</p>
       </div>
     </footer>

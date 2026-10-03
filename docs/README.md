@@ -14,7 +14,7 @@ stable, and free of implementation-level detail.
 | Who is it for and what does it do? | [Product](product.md) |
 | What owns truth and where are the boundaries? | [Architecture](architecture.md) |
 | How do agents participate safely? | [Agent system](agent-system.md) |
-| How does one capture become one safe action? | [Capture to action](capture-to-action.md) |
+| How does a screenshot become useful context and continuation? | [Capture to action](capture-to-action.md) |
 | What should the product feel like? | [Design system](design-system.md) |
 | What should be built next? | [Delivery](delivery.md) |
 | Which integrations are allowed? | [Integrations](integrations.md) |
@@ -46,6 +46,9 @@ signals. They should not become parallel architecture specifications.
 
 ## Research
 
+Recruiting-specific studies remain evidence for their named context. They are
+not the default audience or promise of the current personal-Agent direction.
+
 [`research/`](research/) contains evidence, market scans, and external-system
 comparisons. Research may be detailed because it is loaded selectively. It
 does not override canonical project decisions until those decisions are
@@ -57,7 +60,7 @@ updated.
 - [Recruiter discovery and relationship-continuity wedge validation](research/recruiter-discovery-and-wedge-validation.md):
   separates concept feedback from field evidence and defines the bilateral
   recruiter interview and concierge-test protocol.
-- [Talent Signal Agent module blueprint](research/talent-signal-agent-module-blueprint.md):
+- [Agent module blueprint](research/talent-signal-agent-module-blueprint.md):
   maps the current executable control plane to the smallest durable Agent
   runtime proposal without granting models domain or effect authority.
 - [Agent public-web tooling](research/agent-public-web-tooling.md): separates

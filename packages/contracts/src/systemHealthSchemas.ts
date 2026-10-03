@@ -38,6 +38,23 @@ export const SystemHealthComponentSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * Deployment and receipt revisions are Git SHAs, so they are validated as
+ * bounded hex rather than accepting arbitrary labels or dotted identifiers.
+ */
+export const GIT_REVISION_MIN_LENGTH = 7;
+export const GIT_REVISION_MAX_LENGTH = 40;
+export const GIT_REVISION_PATTERN = "^[0-9a-fA-F]{7,40}$";
+
+export function isGitRevision(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= GIT_REVISION_MIN_LENGTH &&
+    value.length <= GIT_REVISION_MAX_LENGTH &&
+    new RegExp(GIT_REVISION_PATTERN).test(value)
+  );
+}
+
 export const SystemHealthResponseSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
@@ -48,6 +65,15 @@ export const SystemHealthResponseSchema = Type.Object(
       Type.Literal("unavailable"),
     ]),
     observed_at: Type.String({ format: "date-time" }),
+    // Optional: an older backend simply omits it, and the UI must say unknown
+    // rather than invent a release identity.
+    backend_revision: Type.Optional(
+      Type.String({
+        minLength: GIT_REVISION_MIN_LENGTH,
+        maxLength: GIT_REVISION_MAX_LENGTH,
+        pattern: GIT_REVISION_PATTERN,
+      }),
+    ),
     components: Type.Array(SystemHealthComponentSchema, {
       minItems: 1,
       maxItems: 4,

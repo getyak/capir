@@ -57,7 +57,7 @@ describe("quiet workspace shell render", () => {
       await WorkspaceLayout({ children: createElement("main", null, "child") }),
     );
 
-    expect(html).toContain("Talent Signal");
+    expect(html).toContain("capri");
     expect(html).toContain("工作台导航");
     // Direct primary desktop order: new conversation, Today, People, Meetings,
     // Extensions — with no generic "More" disclosure.

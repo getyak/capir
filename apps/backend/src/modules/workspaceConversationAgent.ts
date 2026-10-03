@@ -119,6 +119,8 @@ export interface WorkspaceMemoryLookup {
       source_locator: MemorySourceLocator | null;
     } | null;
     sourceMessageID: string;
+    /** Exact host-admitted text for this one source, never combined fragments. */
+    sourceText?: string;
     items: readonly WorkspaceMemoryProposalCandidate[];
   }): Promise<WorkspaceMemoryStagedProposal | null>;
 }
@@ -340,6 +342,11 @@ export async function executeWorkspaceConversationAgentCore(input: {
   onVisibleText?: (text: string) => void;
   onProgress?: (stage: AgentVisibleProgressStage) => void;
   signal?: AbortSignal;
+  /** Host-only per-message evidence, shared with the governed Memory adapter. */
+  messageSources?: Map<string, string>;
+  /** GET-128 steering: dynamic input for messages accepted while this Run is live. */
+  steering?: import("@talent-signal/agent").HarnessSteeringFeed;
+  onToolCompletion?: (receipt: import("@talent-signal/agent").HarnessToolCompletion) => void;
 }): Promise<WorkspaceConversationAgentExecution> {
   const searchResults = new Map<string, WorkspaceContactSearchResult>();
   const readableScopes = new Set<string>();
@@ -347,6 +354,28 @@ export async function executeWorkspaceConversationAgentCore(input: {
   const confirmedHandlePeople = new Set<string>();
   const confirmedHandleClues = new Map<string, { type: "email" | "phone" | "wechat" | "linkedin_url" | "public_profile_url" | "source_native_id"; value: string }>();
   const sourceMessageID = input.messageID ?? randomUUID();
+  const messageSources = input.messageSources ?? new Map<string, string>();
+  messageSources.set(sourceMessageID, input.sourceText ?? input.objective);
+  const sourceTexts = () => [...messageSources.values()];
+  // Original task instructions remain valid lookup clues even when sourceText
+  // carries a separate screenshot transcript. Memory still uses exact sources.
+  const lookupTexts = () => [input.objective, ...sourceTexts()];
+  const steering = input.steering ? {
+    nextBatchAtSafePoint: async (checkpoint?: { final?: boolean }) => {
+      const batch = await input.steering!.nextBatchAtSafePoint(checkpoint);
+      await input.assertCurrent?.();
+      input.signal?.throwIfAborted();
+      // Only the fenced host feed supplies these identities. Registration
+      // permits grounding current tools; it grants no new tool or write power.
+      for (const message of batch?.messages ?? []) {
+        if (message.images?.length) throw new Error("STEER_IMAGE_NOT_ADMITTED");
+        const existing = messageSources.get(message.messageID);
+        if (existing !== undefined && existing !== message.text) throw new Error("STEER_MESSAGE_ID_CONFLICT");
+        messageSources.set(message.messageID, message.text);
+      }
+      return batch;
+    },
+  } : undefined;
   const runState: {
     readScope: { personID: string; contextID: string } | null;
     proposal: WorkspaceConversationAgentEvent | null;
@@ -390,7 +419,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
     searchResults.set(personID, current[0]!);
     return true;
   };
-const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保存).{0,8}(?:联系人|人物)|(?:do not|don't|no need to).{0,12}(?:add|create|save).{0,12}contact/iu.test(input.sourceText ?? input.objective);
+  const declinedContact = () => lookupTexts().some(text => /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保存).{0,8}(?:联系人|人物)|(?:do not|don't|no need to).{0,12}(?:add|create|save).{0,12}contact/iu.test(text));
   let memoryStagePending = false;
   let toolCallCount = 0;
   // Inspection, startup and all tool turns share one absolute deadline.
@@ -398,7 +427,11 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
   const durationMs = workspaceConversationTimeoutMs(input.provider.id);
   const abort = new AbortController();
   const research = input.researchClient ? createWorkspacePublicResearch({
-    client: input.researchClient, taskID: randomUUID(), authorizedSubjects: subjects.subjects, signal: abort.signal,
+    client: input.researchClient, taskID: randomUUID(), authorizedSubjects: () => {
+      if (sourceTexts().some(text => /(?:不要|不许|别|禁止)[^，。！？;；\n]{0,12}(?:搜|查|检索|研究)|(?:do not|don['’]t|never)\s+(?:search|research|look up)/iu.test(text))) return [];
+      return [...new Map([subjects.subjects(), ...sourceTexts().slice(1).map(text => publicSubjectRegistry(text).subjects())]
+        .flat().map(subject => [subject.id, subject])).values()];
+    }, signal: abort.signal,
   }) : null;
   const researchTools = research?.tools.map(tool => ({...tool,
     schema: tool.name === "search_public_subject" ? WorkspacePublicSubjectSearchSchema : WorkspacePublicSourceFetchSchema,
@@ -506,14 +539,14 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
       // Contact defaults and refusal apply equally to model and host paths.
       // Merge a self-only suggestion into the same review card so it cannot
       // accidentally consume the only slot for the direct-chat counterparty.
-      if (!declinedContact && !input.humanIdentityBinding && !confirmedHandlePeople.size
+      if (!declinedContact() && !input.humanIdentityBinding && !confirmedHandlePeople.size
         && currentCounterparty && request.contact_decision === "none"
         && !request.person_id && request.items.every(item => item.scope === "self")) {
         request.contact_decision = "new";
         request.person_display_label = currentCounterparty.name;
         request.new_contact_source_locator = currentCounterparty.source_locator;
       }
-      if (request.contact_decision === "new" && declinedContact) return toolFailure(name,
+      if (request.contact_decision === "new" && declinedContact()) return toolFailure(name,
         "CONTACT_ADD_DECLINED", "The current user declined adding contacts. Answer without a contact proposal.");
       if (request.contact_decision === "new" && input.imageInspector && admittedImages.size > 0
         && (!currentCounterparty || request.person_display_label?.trim() !== currentCounterparty.name)) {
@@ -588,6 +621,26 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
           );
         }
       }
+      let memorySourceID = sourceMessageID;
+      const itemSources = new Set<string>();
+      for (const item of request.items) {
+        if (item.source_locator.kind !== "message") continue;
+        const locator = item.source_locator;
+        if (locator.session_id && locator.session_id !== input.sessionID)
+          return toolFailure(name, "MEMORY_SOURCE_NOT_ADMITTED", "A message locator must name this Session.");
+        const matches = [...messageSources].filter(([id, text]) =>
+          (!locator.message_id || id === locator.message_id) && isGroundedExcerpt(item.source_excerpt, text));
+        // Preserve the root when an old client omits IDs and it matches. New
+        // supplemental excerpts need one unambiguous original message source.
+        const match = matches.find(([id]) => id === sourceMessageID) ?? (matches.length === 1 ? matches[0] : undefined);
+        if (!match) return toolFailure(name, "MEMORY_SOURCE_UNGROUNDED", "Use an exact excerpt and its current original message ID.");
+        itemSources.add(match[0]);
+        item.source_locator = { ...locator, message_id: match[0], ...(input.sessionID ? { session_id: input.sessionID } : {}) };
+      }
+      if (itemSources.size > 1) return toolFailure(name, "MEMORY_SOURCE_REVIEW_SPLIT", "Review messages separately; one proposal cannot merge their provenance.");
+      if (itemSources.size) memorySourceID = [...itemSources][0]!;
+      if (memorySourceID !== sourceMessageID && (imageRegions.length > 0))
+        return toolFailure(name, "MEMORY_SOURCE_REVIEW_SPLIT", "Review the image and supplemental message separately.");
       for (const item of request.items) {
         if (input.imageInspector && item.source_locator.kind === "image_region"
           && !await imageInspection.supportsExcerpt(item.source_locator.artifact_id, item.source_excerpt)) {
@@ -595,7 +648,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
         }
         if (
           item.source_locator.kind === "message"
-          && !isGroundedExcerpt(item.source_excerpt, input.sourceText ?? input.objective)
+          && !isGroundedExcerpt(item.source_excerpt, messageSources.get(memorySourceID) ?? "")
         ) {
           return toolFailure(
             name,
@@ -692,7 +745,8 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
           identityAuthority,
           identityClue,
           newContact,
-          sourceMessageID,
+          sourceMessageID: memorySourceID,
+          sourceText: messageSources.get(memorySourceID) ?? "",
           items: request.items,
         });
       } catch {
@@ -750,7 +804,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
     const request = parsed.data;
     if (request.operation === "search") {
       const query = normalized(request.query);
-      const groundedInMessage = Boolean(query) && normalized(input.objective).includes(query);
+      const groundedInMessage = Boolean(query) && lookupTexts().some(text => normalized(text).includes(query));
       // An image observation authorizes only a minimal candidate lookup: the
       // locator must name a source admitted to this Run, the clue must equal
       // the query and stay bounded, and it grants no identity confirmation.
@@ -830,7 +884,8 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
       ) {
         updateablePeople.add(uniqueCandidateMatches[0]!.personID);
       }
-      const readableScope = uniquelyGroundedScope(matches, input.objective);
+      const scopeMatches = new Set(lookupTexts().map(text => uniquelyGroundedScope(matches, text)).filter(Boolean));
+      const readableScope = scopeMatches.size === 1 ? [...scopeMatches][0] : null;
       if (readableScope) readableScopes.add(readableScope);
       return {
         ok: true,
@@ -898,11 +953,11 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
       };
     }
 
-    if (
-      request.source_excerpts.some(
-        (excerpt) => !isGroundedExcerpt(excerpt, input.objective),
-      )
-    ) {
+    // Proposal fields and intent must belong to one original authored
+    // message; fragments never become a fabricated combined source.
+    const proposalSource = [...messageSources].reverse().find(([, text]) =>
+      request.source_excerpts.every(excerpt => isGroundedExcerpt(excerpt, text)));
+    if (!proposalSource) {
       return toolFailure(
         name,
         "CONTACT_PROPOSAL_SOURCE_UNGROUNDED",
@@ -943,7 +998,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
       const relationshipContextAllowed = existingContext
         ? normalized(request.relationship_context) ===
           normalized(existingContext.displayLabel)
-        : !request.relationship_context || isGroundedExcerpt(request.relationship_context, input.objective);
+        : !request.relationship_context || isGroundedExcerpt(request.relationship_context, proposalSource[1]);
       if (!displayNameAllowed || !relationshipContextAllowed) {
         return toolFailure(
           name,
@@ -952,8 +1007,8 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
         );
       }
     } else if (
-      !isGroundedExcerpt(request.display_name, input.objective) ||
-      (request.relationship_context !== "" && !isGroundedExcerpt(request.relationship_context, input.objective))
+      !isGroundedExcerpt(request.display_name, proposalSource[1]) ||
+      (request.relationship_context !== "" && !isGroundedExcerpt(request.relationship_context, proposalSource[1]))
     ) {
       return toolFailure(
         name,
@@ -964,7 +1019,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
 
     if (
       request.identity_clue &&
-      (!isGroundedExcerpt(request.identity_clue.value, input.objective) || !validStableClue(request.identity_clue))
+      (!isGroundedExcerpt(request.identity_clue.value, proposalSource[1]) || !validStableClue(request.identity_clue))
     ) {
       return toolFailure(
         name,
@@ -973,7 +1028,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
       );
     }
 
-    if (!permitsContactDraft(input.objective, request.display_name, request.identity_clue)) {
+    if (!permitsContactDraft(proposalSource[1], request.display_name, request.identity_clue)) {
       return toolFailure(name, "CONTACT_PROPOSAL_INTENT_UNGROUNDED",
         "Prepare a draft only for an authored person note with a name and stable clue, or an explicit contact-change request.");
     }
@@ -1001,7 +1056,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
       operation: request.operation,
       payload: request,
       accountID: input.workspaceID,
-      sourceMessageID,
+      sourceMessageID: proposalSource[0],
     });
     runState.proposal = {
       kind: "contact_change_proposal",
@@ -1012,7 +1067,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
       relationship_context: request.relationship_context,
       identity_clue: request.identity_clue,
       source_excerpts: request.source_excerpts,
-      source_message_id: sourceMessageID,
+      source_message_id: proposalSource[0],
       reason: request.reason,
       target_person_id:
         request.operation === "propose_update" ? request.person_id : null,
@@ -1065,12 +1120,21 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
     const providerResult = await measureLabServerStage("model_adapter", () => input.provider.run(
       {
         runID: input.runID ?? randomUUID(),
+        ...(input.messageID ? { messageID: input.messageID } : {}),
+        ...(steering ? { steering } : {}),
+        ...(input.onToolCompletion ? { onToolCompletion: input.onToolCompletion } : {}),
         ...(input.observation ? { observation: input.observation } : {}),
         ...(input.continuation ? { continuation: input.continuation } : {}),
         ...(input.assertCurrent ? { assertCurrent: input.assertCurrent } : {}),
         ...(input.responsePreference ? { responsePreference: input.responsePreference } : {}),
         ...(input.memory ? { selfMemoryContext: compileSelfMemoryContext(selfMemoryPage) } : {}),
-        ...(input.calendarContext ? { calendarContext: {...input.calendarContext, validateImageExcerpt:imageInspection.supportsExcerpt} } : {}),
+        ...(input.calendarContext ? { calendarContext: {...input.calendarContext, validateImageExcerpt:imageInspection.supportsExcerpt,
+          resolveMessageExcerpt: excerpt => {
+            const matches = [...messageSources].filter(([, text]) => text.includes(excerpt));
+            const match = matches.find(([id]) => id === sourceMessageID) ?? (matches.length === 1 ? matches[0] : undefined);
+            return match ? { messageID: match[0], text: match[1] } : false;
+          },
+        } } : {}),
         supplementalTools: [...imageInspection.tools, ...researchTools],
         ...(input.onVisibleText ? { onVisibleText: input.onVisibleText } : {}),
         ...(input.onProgress ? { onProgress: input.onProgress } : {}),
@@ -1115,7 +1179,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
     // identity authority. The staging service still detects namesakes and
     // checks the live source before any later human commit.
     if (!runState.memoryProposal && !runState.proposal && !input.humanIdentityBinding
-      && !confirmedHandlePeople.size && input.memory && !declinedContact) {
+      && !confirmedHandlePeople.size && input.memory && !declinedContact()) {
       const counterparty = await imageInspection.counterparty();
       if (counterparty) {
         abort.signal.throwIfAborted();
@@ -1158,7 +1222,7 @@ const declinedContact = /(?:不要|不用|别|不需要).{0,12}(?:添加|建|保
       const resolvedContext = resolvedPerson?.contexts.find(
         (context) => context.id === runState.readScope!.contextID,
       );
-      const markupOnly = isToolMarkupOnly(output.body);
+      const markupOnly = Boolean(output.body.trim()) && isToolMarkupOnly(output.body);
       return {
         block: markupOnly
           ? block(
@@ -1302,9 +1366,14 @@ export async function executeWorkspaceConversationAgent(input: {
   onProgress?: (stage: AgentVisibleProgressStage) => void;
   signal?: AbortSignal;
   recordSourcePerson?: (personID: string) => void;
+  /** GET-128 steering: dynamic input for messages accepted while this Run is live. */
+  steering?: import("@talent-signal/agent").HarnessSteeringFeed;
+  onToolCompletion?: (receipt: import("@talent-signal/agent").HarnessToolCompletion) => void;
   /** Authenticated entry binding; the only non-handle Memory authority. */
   humanIdentityBinding?: { personID: string; contextID: string | null } | null;
 }): Promise<WorkspaceConversationAgentExecution> {
+  const rootMessageID = input.messageID ?? randomUUID();
+  const messageSources = new Map([[rootMessageID, input.sourceText ?? input.objective]]);
   const refs = input.observation?.source_refs;
   const recordScope = (personID: string, contextIDs: string[]) => {
     input.recordSourcePerson?.(personID);
@@ -1402,12 +1471,16 @@ export async function executeWorkspaceConversationAgent(input: {
       identityClue,
       newContact,
       sourceMessageID,
+      sourceText,
       items,
     }) => withDatabaseTransaction(async (client) => {
+      const admittedText = messageSources.get(sourceMessageID);
+      if (admittedText === undefined || (sourceText !== undefined && sourceText !== admittedText)) return null;
+      const sourceParts = sourceMessageID === rootMessageID ? input.inputParts ?? [] : [];
       const authority: MemorySourceAuthority = {
-        text: input.sourceText ?? input.objective,
+        text: admittedText,
         artifacts: [
-          ...(input.inputParts ?? []).map((part) => ({
+          ...sourceParts.map((part) => ({
             artifactId: part.artifactID,
             kind: part.kind,
             sessionId: input.sessionID ?? null,
@@ -1434,8 +1507,8 @@ export async function executeWorkspaceConversationAgent(input: {
         messageId: sourceMessageID,
         sourceTaskId: input.runID ?? null,
         captureIds: [],
-        messageTextHash: sha256(input.sourceText ?? input.objective),
-        imageManifest: workspaceImageManifest(input.inputParts ?? []),
+        messageTextHash: sha256(admittedText),
+        imageManifest: workspaceImageManifest(sourceParts),
         captureVersion: null,
         captureSubjectId: null,
         captureContextId: null,
@@ -1490,6 +1563,7 @@ export async function executeWorkspaceConversationAgent(input: {
     }),
   };
   return executeWorkspaceConversationAgentCore({
+    messageSources,
     objective: input.objective,
     ...(input.sourceText === undefined ? {} : { sourceText: input.sourceText }),
     provider: input.provider,
@@ -1511,10 +1585,12 @@ export async function executeWorkspaceConversationAgent(input: {
     ...(input.onVisibleText ? { onVisibleText: input.onVisibleText } : {}),
     ...(input.onProgress ? { onProgress: input.onProgress } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
+    ...(input.steering ? { steering: input.steering } : {}),
+        ...(input.onToolCompletion ? { onToolCompletion: input.onToolCompletion } : {}),
     ...(input.inputParts && input.inputParts.length > 0
       ? { inputParts: input.inputParts }
       : {}),
-    ...(input.messageID === undefined ? {} : { messageID: input.messageID }),
+    messageID: rootMessageID,
     ...(input.sessionTitleRequested === undefined ? {} : { sessionTitleRequested: input.sessionTitleRequested }),
     ...(input.conversationHistory === undefined ? {} : { conversationHistory: input.conversationHistory }),
     ...(input.sessionID === undefined ? {} : { sessionID: input.sessionID }),

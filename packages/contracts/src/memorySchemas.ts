@@ -455,6 +455,23 @@ export const MemoryCommitRequestSchema = Type.Object(
   obj,
 );
 
+/** One explicit Session card decision; a new contact has its own operation. */
+export const MemoryItemDecisionRequestSchema = Type.Object(
+  {
+    idempotency_key: id,
+    expected_proposal_revision: Type.Integer({ minimum: 1 }),
+    expected_review_revision: Type.Integer({ minimum: 0 }),
+    item_id: id,
+    expected_item_added_revision: Type.Integer({ minimum: 1 }),
+    expected_item_version: Type.Optional(Type.Integer({ minimum: 1 })),
+    contact_decision: Type.Union([Type.Literal("existing"), Type.Literal("none")]),
+    decision: MemoryDecisionSchema,
+    edited_text: Type.Optional(Type.String({ maxLength: 1_000 })),
+    reason: text(500),
+  },
+  obj,
+);
+
 export const MemoryReceiptSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
@@ -614,6 +631,49 @@ export const MemoryCommitResponseSchema = Type.Object(
   obj,
 );
 
+export const MemoryContactOnlyDecisionRequestSchema = Type.Object(
+  {
+    idempotency_key: id,
+    expected_proposal_revision: Type.Integer({ minimum: 1 }),
+    display_label: Type.String({ minLength: 1, maxLength: 200 }),
+    identity_clue: optional(Type.Object({
+      type: Type.Union([
+        Type.Literal("email"), Type.Literal("phone"), Type.Literal("wechat"),
+        Type.Literal("linkedin_url"), Type.Literal("public_profile_url"), Type.Literal("source_native_id"),
+      ]),
+      value: Type.String({ minLength: 1, maxLength: 500 }),
+    }, obj)),
+    relationship_context: Type.String({ maxLength: 200 }),
+    reason: text(500),
+  },
+  obj,
+);
+
+export const MemoryContactOnlyDecisionResponseSchema = Type.Object(
+  {
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    replayed: Type.Boolean(),
+    receipt: MemoryReceiptSchema,
+    proposal_revision: Type.Integer({ minimum: 1 }),
+    remaining_pending_item_count: Type.Integer({ minimum: 0 }),
+  },
+  obj,
+);
+
+export const MemoryItemDecisionResponseSchema = Type.Object(
+  {
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    kind: Type.Union([Type.Literal("committed"), Type.Literal("skipped")]),
+    item_id: id,
+    replayed: Type.Boolean(),
+    receipt: Type.Union([MemoryReceiptSchema, Type.Null()]),
+    applied_display_text: optional(text(1_000)),
+    proposal_revision: Type.Integer({ minimum: 1 }),
+    remaining_pending_item_count: Type.Integer({ minimum: 0 }),
+  },
+  obj,
+);
+
 export const MemoryUndoResponseSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
@@ -724,11 +784,16 @@ export const MemoryScopedOperationViewSchema = Type.Object(
     contract_version: Type.Literal(CONTRACT_VERSION),
     operation_key: id,
     commit_id: optional(id),
+    dismissed_item_id: optional(id),
+    applied_display_text: optional(text(1_000)),
+    item_snapshot: Type.Optional(MemoryProposalItemSchema),
+    person_display_label: optional(text(200)),
     commit_revision: optional(Type.Integer({ minimum: 1 })),
     state: Type.Union([
       Type.Literal("applied"),
       Type.Literal("undone"),
       Type.Literal("pending"),
+      Type.Literal("skipped"),
       Type.Literal("unavailable"),
       Type.Literal("source_revoked"),
       Type.Literal("scope_mismatch"),
@@ -841,6 +906,10 @@ export type MemoryOpenReviewRequest = Static<
 >;
 export type MemoryReviewResponse = Static<typeof MemoryReviewResponseSchema>;
 export type MemoryCommitRequest = Static<typeof MemoryCommitRequestSchema>;
+export type MemoryItemDecisionRequest = Static<typeof MemoryItemDecisionRequestSchema>;
+export type MemoryContactOnlyDecisionRequest = Static<typeof MemoryContactOnlyDecisionRequestSchema>;
+export type MemoryContactOnlyDecisionResponse = Static<typeof MemoryContactOnlyDecisionResponseSchema>;
+export type MemoryItemDecisionResponse = Static<typeof MemoryItemDecisionResponseSchema>;
 export type MemoryReceipt = Static<typeof MemoryReceiptSchema>;
 export type MemoryOperationReadback = Static<
   typeof MemoryOperationReadbackSchema

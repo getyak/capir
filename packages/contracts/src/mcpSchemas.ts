@@ -6,8 +6,8 @@ import { CONTRACT_VERSION } from "./constants.js";
  * MCP Extensions contracts.
  *
  * Two directions share one page:
- * - inbound: Talent Signal connects to an external MCP server as a client.
- * - outbound: Talent Signal publishes a scoped, read-only MCP server.
+ * - inbound: capri connects to an external MCP server as a client.
+ * - outbound: capri publishes a scoped, read-only MCP server.
  *
  * Credentials are never part of a read contract. A connection only exposes
  * whether a credential is configured; a client grant only reveals a one-time

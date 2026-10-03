@@ -1,4 +1,4 @@
 interface:
   display_name: "Mobile UX Reviewer"
   short_description: "Audit calm, evidence-first mobile workflows and UI craft."
-  default_prompt: "Use $mobile-ux-reviewer to review this Talent Signal mobile flow, UI, or screenshot."
+  default_prompt: "Use $mobile-ux-reviewer to review this capri mobile flow, UI, or screenshot."

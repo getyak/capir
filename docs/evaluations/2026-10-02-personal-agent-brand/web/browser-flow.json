@@ -1,0 +1,30 @@
+[
+  {
+    "label": "keyboard-save",
+    "status": "事项 01 已在本页演示中记下，可加入新截图继续。"
+  },
+  {
+    "label": "same-item-update",
+    "status": "事项 01 已更新为等待对方，未创建重复事项、日程或发送消息。"
+  },
+  {
+    "label": "pause-retains-context",
+    "status": "提醒已暂停，背景保留。这不表示对方不感兴趣。"
+  },
+  {
+    "label": "source-withdrawal",
+    "status": "来源已移除。依赖答案不再可用，重播不会恢复来源。"
+  },
+  {
+    "label": "replay-disabled-after-removal",
+    "disabled": true
+  },
+  {
+    "label": "ambiguity",
+    "saveOffered": 0
+  },
+  {
+    "label": "unbound-clue",
+    "visible": true
+  }
+]

@@ -1,0 +1,484 @@
+[
+  {
+    "id": "220:2055",
+    "name": "Capture trigger / 10",
+    "readback": {
+      "nodeId": "220:2055",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2080",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2062",
+    "name": "Menu row / 继续上次会话11",
+    "readback": {
+      "nodeId": "220:2062",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2207",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2066",
+    "name": "Menu row / 打开工作区12",
+    "readback": {
+      "nodeId": "220:2066",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2207",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2071",
+    "name": "Menu settings / 13",
+    "readback": {
+      "nodeId": "220:2071",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2270",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2136",
+    "name": "Selected area / synthetic input",
+    "readback": {
+      "nodeId": "220:2136",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2146",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2548",
+    "name": "Optional preview mode / P",
+    "readback": {
+      "nodeId": "220:2548",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2443",
+              "navigation": "NAVIGATE",
+              "transition": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2198",
+    "name": "Transient / processing",
+    "readback": {
+      "nodeId": "220:2198",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2207",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2247",
+    "name": "Submitted selection / inspect original",
+    "readback": {
+      "nodeId": "220:2247",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2550",
+              "navigation": "NAVIGATE",
+              "transition": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2257",
+    "name": "Source / submitted screenshot",
+    "readback": {
+      "nodeId": "220:2257",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2550",
+              "navigation": "NAVIGATE",
+              "transition": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2310",
+    "name": "Shape",
+    "readback": {
+      "nodeId": "220:2310",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2602",
+              "navigation": "NAVIGATE",
+              "transition": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2386",
+    "name": "Capture trigger / 53",
+    "readback": {
+      "nodeId": "220:2386",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2080",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2393",
+    "name": "Menu row / 继续上次会话54",
+    "readback": {
+      "nodeId": "220:2393",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2207",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2397",
+    "name": "Menu row / 打开工作区55",
+    "readback": {
+      "nodeId": "220:2397",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2207",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2402",
+    "name": "Menu settings / 56",
+    "readback": {
+      "nodeId": "220:2402",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2270",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "I220:2572;220:2055",
+    "name": "Capture trigger / 10",
+    "readback": {
+      "nodeId": "I220:2572;220:2055",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2080",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "I220:2572;220:2062",
+    "name": "Menu row / 继续上次会话11",
+    "readback": {
+      "nodeId": "I220:2572;220:2062",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2207",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "I220:2572;220:2066",
+    "name": "Menu row / 打开工作区12",
+    "readback": {
+      "nodeId": "I220:2572;220:2066",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2207",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "I220:2572;220:2071",
+    "name": "Menu settings / 13",
+    "readback": {
+      "nodeId": "I220:2572;220:2071",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2270",
+              "navigation": "NAVIGATE",
+              "transition": {
+                "type": "DISSOLVE",
+                "duration": 0.18000000715255737
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2639",
+    "name": "Shape",
+    "readback": {
+      "nodeId": "220:2639",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:2270",
+              "navigation": "NAVIGATE",
+              "transition": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "220:2526",
+    "name": "directory",
+    "readback": {
+      "nodeId": "220:2526",
+      "reactions": [
+        {
+          "trigger": {
+            "type": "ON_CLICK"
+          },
+          "actions": [
+            {
+              "type": "NODE",
+              "destinationId": "220:1997",
+              "navigation": "NAVIGATE",
+              "transition": null
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

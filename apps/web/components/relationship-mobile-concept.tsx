@@ -349,7 +349,7 @@ function BrandOrb({
     <button
       aria-expanded={expanded}
       aria-haspopup="menu"
-      aria-label="打开 Talent Signal 菜单"
+      aria-label="打开 capri 菜单"
       className={styles.brandOrb}
       onClick={onClick}
       type="button"
@@ -376,14 +376,14 @@ function BrandMenu({ onClose }: { onClose: () => void }) {
   return (
     <>
       <button
-        aria-label="关闭 Talent Signal 菜单"
+        aria-label="关闭 capri 菜单"
         className={styles.menuScrim}
         onClick={onClose}
         tabIndex={-1}
         type="button"
       />
       <section
-        aria-label="Talent Signal 菜单"
+        aria-label="capri 菜单"
         className={`${styles.contextMenu} ${styles.brandMenu}`}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
@@ -399,7 +399,7 @@ function BrandMenu({ onClose }: { onClose: () => void }) {
             <span />
           </span>
           <span>
-            <strong>Talent Signal</strong>
+            <strong>capri</strong>
             <small>私密关系工作区</small>
           </span>
         </div>
@@ -2182,7 +2182,7 @@ function ConciergeScreen({
   return (
     <div className={`${styles.phoneScreen} ${styles.conciergeScreen}`}>
       <header className={styles.conciergeHeader}>
-        <span>Talent Signal</span>
+        <span>capri</span>
         <span>安静助理 / 05 段关系</span>
       </header>
 
@@ -2345,7 +2345,7 @@ export function RelationshipMobileConcept({
       {!isProduct ? (
         <section className={styles.studyHeader} aria-labelledby="study-title">
         <div>
-          <span>Talent Signal 移动端探索 / 第 04 版</span>
+          <span>capri 移动端探索 / 第 04 版</span>
           <h1 id="study-title">先看依据，再做判断。</h1>
           <p>
             应用让招聘顾问回到一个明确的关系决定。人物始终是关系，而不是库存。

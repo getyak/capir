@@ -121,7 +121,7 @@ describe("relationship Agent history", () => {
         status: "superseded",
         title: "Identity left unresolved",
         detail:
-          "Recruiter note: A confirmed handle is still missing.",
+          "Review note: A confirmed handle is still missing.",
       }),
     ]);
     expect(JSON.stringify(response)).not.toContain("private source text");
@@ -349,7 +349,7 @@ describe("relationship Agent history", () => {
       }),
     ]);
     expect(response.operations[0]?.detail).toContain(
-      "Policy identity-freshness-2026-08-07.v1; recruiter override: The issuer rotates this address every six months.",
+      "Policy identity-freshness-2026-08-07.v1; human override: The issuer rotates this address every six months.",
     );
     expect(JSON.stringify(response)).not.toContain(
       "candidate@example.com",

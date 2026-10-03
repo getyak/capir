@@ -37,7 +37,7 @@ enum FixtureValidationError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .unexpectedSuite:
-            return "The response is not the Talent Signal candidate-momentum fixture suite."
+            return "The response is not the capri candidate-momentum fixture suite."
         case .incompleteSuite:
             return "The response does not contain all eight iOS fixture cases."
         case .duplicateCase:

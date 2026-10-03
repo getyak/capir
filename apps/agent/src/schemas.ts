@@ -241,7 +241,8 @@ export const WorkspaceConversationFinalOutputSchema = z.discriminatedUnion(
     z.strictObject({
       outcome: z.literal("reply"),
       title: z.string().trim().min(1).max(160),
-      body: z.string().trim().min(1).max(4_000),
+      // Successful work may intentionally have no conversational prose.
+      body: z.string().trim().max(4_000),
       session_title: OptionalSessionTitleSchema,
     }),
     z.strictObject({

@@ -45,4 +45,4 @@ Calm, editorial, and decisive. The adjudicator distinguishes “blocked,” “n
 - Human adjudicators can favor articulate reviewers.
 - Multiple model personas may be correlated despite different prompts.
 
-Use real recruiter/candidate research, deterministic tests, and qualified external review where required.
+Use research with the actual user and affected people, deterministic tests, and qualified external review where required.

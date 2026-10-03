@@ -35,7 +35,7 @@ pub fn run() {
             native::notify_state,
         ])
         .build(tauri::generate_context!())
-        .expect("build Talent Signal Hybrid");
+        .expect("build capri Hybrid");
     app.run(|app_handle, event| {
         if matches!(
             event,

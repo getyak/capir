@@ -1,4 +1,4 @@
 interface:
   display_name: "Recruiting Trend Radar"
   short_description: "Curate frontier recruiting signals without trend chasing."
-  default_prompt: "Use $recruiting-trend-radar to investigate current recruiting signals and implications for Talent Signal."
+  default_prompt: "Use $recruiting-trend-radar to investigate current recruiting signals and implications for capri."

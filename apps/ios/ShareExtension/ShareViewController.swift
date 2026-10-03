@@ -9,7 +9,7 @@ final class ShareViewController: SLComposeServiceViewController {
             : "Standalone capture unavailable"
         placeholder = StandaloneSharedCaptureConfiguration.isEnabled
             ? "Optional note about what changed"
-            : "Use the signed-in Talent Signal app."
+            : "Use the signed-in capri app."
     }
 
     override func isContentValid() -> Bool {

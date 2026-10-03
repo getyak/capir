@@ -9,6 +9,11 @@ const { auth, loadLabManifest } = vi.hoisted(() => ({
   loadLabManifest: vi.fn(),
 }));
 vi.mock("next/headers", () => ({cookies:async()=>({has:()=>false})}));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/workspace",
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 vi.mock("@/lib/server/backendAuth",()=>({
  readPrimaryBackendSessionClaims:async()=>null,
  readBackendSessionClaims:async()=>({backendAccountId:"fixture",backendAccountName:"Fixture",backendAccountSlug:"fixture-alpha",backendExpiresAt:new Date(Date.now()+60000).toISOString()}),
@@ -51,7 +56,7 @@ describe("workspace critical loading path", () => {
       await WorkspaceLayout({ children: child }),
     );
     expect(html).toContain("Authentication boundary");
-    expect(html).not.toContain("Talent Signal 工作台");
+    expect(html).not.toContain("capri 工作台");
     expect(loadLabManifest).not.toHaveBeenCalled();
   });
 });

@@ -96,7 +96,7 @@ final class AppModelSafetyTests: XCTestCase {
         let review = try XCTUnwrap(model.pendingDecision)
         XCTAssertEqual(model.mode, .needsDecision)
         XCTAssertEqual(review.evidence.map(\.text), [submittedEvidence])
-        XCTAssertTrue(review.evidence[0].source.contains("Recruiter-selected text"))
+        XCTAssertTrue(review.evidence[0].source.contains("User-selected text"))
         XCTAssertEqual(review.items[0].evidenceRefs, review.evidence.map(\.id))
         let expiry = try XCTUnwrap(ISO8601DateFormatter().date(from: review.expiresAt))
         XCTAssertGreaterThan(expiry, Date())

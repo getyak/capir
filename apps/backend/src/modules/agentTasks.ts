@@ -916,12 +916,12 @@ async function buildBriefing(
     ? "The exact calendar date, timezone, duration, and meeting consent remain unresolved."
     : openGap
       ? openAction
-        ? `${openGap.title} The existing recruiter-owned action “${openAction.title}” remains open; the selected evidence does not justify a duplicate.`
+        ? `${openGap.title} The existing user-owned action “${openAction.title}” remains open; the selected evidence does not justify a duplicate.`
         : openGap.title
       : proposal
         ? "A review-only Pursuit change is waiting for a human decision."
         : openAction
-          ? `The existing recruiter-owned action “${openAction.title}” remains open; the selected evidence does not justify a duplicate.`
+          ? `The existing user-owned action “${openAction.title}” remains open; the selected evidence does not justify a duplicate.`
           : "No unresolved dependency is supported by the selected evidence.";
   const dependencyRefs = isAmbiguousTime
     ? task.evidence_refs
@@ -953,7 +953,7 @@ async function buildBriefing(
         : proposal?.summary ??
           (openAction
             ? `Continue the existing action owned by ${openAction.owner_display_name}; do not create another action for the same work.`
-            : "No new milestone, commitment, or recruiter-owned action is justified by this snapshot."),
+            : "No new milestone, commitment, or user-owned action is justified by this snapshot."),
       authority: !isAmbiguousTime && openGap ? "canonical_pursuit" : "agent_interpretation",
       evidence_refs: dependencyRefs,
     },

@@ -23,7 +23,7 @@ The decision side recognizes that candidates value different combinations of Fit
 
 **Observed:** executive, crisp, quantitative, high-accountability, framework-heavy, decisive. Uses memorable systems, scorecards, and compact formulas to make high-stakes people decisions manageable.
 
-For Talent Signal:
+For capri:
 
 - State the decision criterion first.
 - Show the evidence pattern and gap.

@@ -20,7 +20,7 @@ describe("multimodal contact SDK adapter", () => {
       expect(request.tools.map(t=>t.name)).not.toContain("record_screenshot_understanding");
       expect(request.tools.map(t=>t.name)).not.toContain("inspect_screenshot_region");
       expect(request.subagents).toEqual([]);
-      return {text:"Synthetic",structuredOutput:null,sessionID:"synthetic-text",inputTokens:1,outputTokens:1,estimatedUsd:0,turns:1,toolCalls:0,terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
+      return {text:"Synthetic",structuredOutput:null,sessionID:"synthetic-text",inputTokens:1,outputTokens:1,estimatedUsd:0,turns:1,toolCalls:0,toolCompletions:[],terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
     });
     const model=new ClaudeContactAgentModel(claudeHarnessConfiguration({ANTHROPIC_API_KEY:"synthetic",TALENT_SIGNAL_AGENT_MODEL:"synthetic"}),execute);
     await model.run({objective:"Read source",text,images:[],systemPrompt:"Synthetic",state:{},assertCurrent:async()=>{},readImage,recordUnderstanding:vi.fn(),invoke:vi.fn()},new AbortController().signal);
@@ -48,7 +48,7 @@ describe("multimodal contact SDK adapter", () => {
       expect(schema.properties.findings.items.properties.message_refs.description).toContain("All actual message_id");
       expect(schema.properties.findings.items.properties.source_excerpt.description).toContain("One contiguous exact substring");
       return { text: "Synthetic", structuredOutput: null, sessionID: "synthetic-run", inputTokens: 10, outputTokens: 10,
-        estimatedUsd: 0, turns: 1, toolCalls: 0, terminalReason: "completed", permissionDenials: [], reportedModels: ["synthetic"] };
+        estimatedUsd: 0, turns: 1, toolCalls: 0, toolCompletions: [], terminalReason: "completed", permissionDenials: [], reportedModels: ["synthetic"] };
     });
     const model = new ClaudeContactAgentModel(config, execute);
     await model.run({ objective: "Read the profile", systemPrompt: "Synthetic", state: {}, assertCurrent: async () => {}, readImage: async operation => operation(),
@@ -73,7 +73,7 @@ describe("multimodal contact SDK adapter", () => {
       expect(request.tools.map(tool=>tool.name)).not.toContain("record_screenshot_understanding");
       expect(JSON.parse(request.context!).preprocessing).toEqual(preprocessing);
       return {text:"Synthetic",structuredOutput:null,sessionID:"synthetic-preprocessed",inputTokens:1,outputTokens:1,
-        estimatedUsd:0,turns:1,toolCalls:0,terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
+        estimatedUsd:0,turns:1,toolCalls:0,toolCompletions:[],terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
     });
     const model=new ClaudeContactAgentModel(claudeHarnessConfiguration({ANTHROPIC_API_KEY:"synthetic",TALENT_SIGNAL_AGENT_MODEL:"synthetic"}),execute);
     await model.run({objective:"Continue",images:[],preprocessing,systemPrompt:"Synthetic",state:{},assertCurrent:async()=>{},
@@ -125,7 +125,7 @@ describe("multimodal contact SDK adapter", () => {
         expect.objectContaining({message_id:"m3",text:"Correct only my speaker",speaker_side:"left",speaker_label:"Synthetic"}),
       ],uncertainties:[]})],expect.any(AbortSignal));
       return {text:"Synthetic",structuredOutput:null,sessionID:"synthetic-follow-up",inputTokens:1,outputTokens:1,
-        estimatedUsd:0,turns:1,toolCalls:2,terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
+        estimatedUsd:0,turns:1,toolCalls:2,toolCompletions:[],terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
     });
     const model=new ClaudeContactAgentModel(claudeHarnessConfiguration({ANTHROPIC_API_KEY:"synthetic",TALENT_SIGNAL_AGENT_MODEL:"synthetic"}),execute);
     await model.run({objective:"Continue",images:[{media_type:"image/png",byte_size:selected.length,content_hash:hash,data_base64:selected.toString("base64")}],
@@ -154,7 +154,7 @@ describe("multimodal contact SDK adapter", () => {
       expect(await call()).toEqual({data:{current_state:changed,source_excerpt:"New exact evidence"},isError:false});
       expect(source.current_state).toBe(initial);
       return {text:"Synthetic",structuredOutput:null,sessionID:"synthetic",inputTokens:10,outputTokens:10,
-        estimatedUsd:0,turns:1,toolCalls:5,terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
+        estimatedUsd:0,turns:1,toolCalls:5,toolCompletions:[],terminalReason:"completed",permissionDenials:[],reportedModels:["synthetic"]};
     });
     const model = new ClaudeContactAgentModel(claudeHarnessConfiguration({ANTHROPIC_API_KEY:"synthetic",TALENT_SIGNAL_AGENT_MODEL:"synthetic"}),execute);
     for (let run=0;run<2;run++) await model.run({objective:"Synthetic",systemPrompt:"Synthetic",state:{},images:[],

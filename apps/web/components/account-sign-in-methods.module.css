@@ -135,3 +135,83 @@
 .error {
   color: #8a2f23;
 }
+
+/* Optional unconnected providers live behind one named, native disclosure. */
+.addMethods {
+  border-top: 1px solid var(--hairline, rgba(28, 26, 24, 0.08));
+}
+
+.addMethods > summary,
+.disclosure > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  min-height: 44px;
+  padding: 11px 0;
+  list-style: none;
+}
+
+.addMethods > summary::-webkit-details-marker,
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.addMethods > summary::after,
+.disclosure > summary::after {
+  color: var(--ink-secondary, rgba(28, 26, 24, 0.62));
+  content: "⌄";
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1;
+  margin-left: auto;
+  transition: transform 160ms ease;
+}
+
+.addMethods[open] > summary::after,
+.disclosure[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.addMethods > summary {
+  color: var(--ink, rgba(28, 26, 24, 0.9));
+  font-weight: 550;
+}
+
+.addMethods > summary:focus-visible,
+.disclosure > summary:focus-visible {
+  outline: 2px solid var(--ink, rgba(28, 26, 24, 0.9));
+  outline-offset: 3px;
+}
+
+.addMethods[open] > summary {
+  border-bottom: 1px solid var(--hairline, rgba(28, 26, 24, 0.08));
+}
+
+.addMethods .rows > .row:first-child {
+  border-top: 0;
+}
+
+.disclosure {
+  border-bottom: 1px solid var(--hairline, rgba(28, 26, 24, 0.1));
+  color: var(--ink-secondary, rgba(28, 26, 24, 0.62));
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.disclosure > summary {
+  color: var(--ink, rgba(28, 26, 24, 0.9));
+  font-weight: 550;
+}
+
+.disclosure > p {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .addMethods > summary::after,
+  .disclosure > summary::after { transition: none; }
+}

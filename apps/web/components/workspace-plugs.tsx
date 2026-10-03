@@ -79,7 +79,7 @@ export function WorkspacePlugs({
             <summary>连接方向与不可用能力</summary>
             <p>
               当前版本只实现读取方向：已授权的来源可以被读取，并在写入前始终询问。
-              把 Talent Signal 作为受控服务接入其他客户端（MCP 发布）尚未实现，
+              把 capri 作为受控服务接入其他客户端（MCP 发布）尚未实现，
               因此这里不提供方向切换、客户端列表或范围开关。
             </p>
           </details>
@@ -96,7 +96,7 @@ export function WorkspacePlugs({
       <aside className={styles.boundary}>
         <LockKey aria-hidden="true" size={18} />
         <p>
-          当前没有可用的日历授权入口。Talent Signal 不会把 Google 登录当成日历许可，也不会让远程 Web 内容获得原生采集能力。
+          当前没有可用的日历授权入口。capri 不会把 Google 登录当成日历许可，也不会让远程 Web 内容获得原生采集能力。
         </p>
       </aside>
 

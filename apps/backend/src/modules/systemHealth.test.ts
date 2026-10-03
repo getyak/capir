@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import type { Pool } from "pg";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   observeSystemHealth,
@@ -143,6 +143,69 @@ describe("system health observation", () => {
       ]),
     );
     expect(query).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("backend release revision", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  function healthyQuery() {
+    return vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ system_health_ready: 1 }] })
+      .mockResolvedValueOnce({
+        rows: REQUIRED_SYSTEM_MIGRATIONS.map((version) => ({ version })),
+      });
+  }
+
+  it("includes a sanitized deployed revision when configured", async () => {
+    vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "  26a664bb  ");
+    const result = await observeSystemHealth(
+      { query: healthyQuery() } as unknown as Pick<Pool, "query">,
+      () => observedAt,
+    );
+    expect(result.backend_revision).toBe("26a664bb");
+  });
+
+  it("omits the revision when the environment is absent or empty", async () => {
+    vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "");
+    const result = await observeSystemHealth(
+      { query: healthyQuery() } as unknown as Pick<Pool, "query">,
+      () => observedAt,
+    );
+    expect("backend_revision" in result).toBe(false);
+  });
+
+  it("refuses a malformed revision instead of echoing it", async () => {
+    vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "bad value!; rm -rf /");
+    const result = await observeSystemHealth(
+      { query: healthyQuery() } as unknown as Pick<Pool, "query">,
+      () => observedAt,
+    );
+    expect(result.backend_revision).toBeUndefined();
+  });
+
+  it("still reports the revision when a dependency is unavailable", async () => {
+    vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", "deadbeef");
+    const result = await observeSystemHealth(
+      {
+        query: vi.fn().mockRejectedValue(new Error("synthetic outage")),
+      } as unknown as Pick<Pool, "query">,
+      () => observedAt,
+    );
+    expect(result.status).toBe("unavailable");
+    expect(result.backend_revision).toBe("deadbeef");
+  });
+
+  it("refuses a dotted or label revision, not just an unsafe one", async () => {
+    for (const value of ["26a664bb.dirty", "answer-feedback-native-proof-v1", "abc123"]) {
+      vi.stubEnv("TALENT_SIGNAL_BACKEND_REVISION", value);
+      const result = await observeSystemHealth(
+        { query: healthyQuery() } as unknown as Pick<Pool, "query">,
+        () => observedAt,
+      );
+      expect(result.backend_revision, value).toBeUndefined();
+    }
   });
 });
 

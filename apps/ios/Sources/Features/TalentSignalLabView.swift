@@ -112,7 +112,7 @@ struct TalentSignalLabView: View {
             .tracking(1.25)
             .foregroundStyle(Color.tsVermilion)
 
-            Text(appLanguage.text("Talent Signal Lab"))
+            Text(appLanguage.text("capri Lab"))
                 .font(.custom("Georgia", size: 38, relativeTo: .largeTitle))
                 .foregroundStyle(Color.tsInk)
                 .fixedSize(horizontal: false, vertical: true)

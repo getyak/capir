@@ -871,9 +871,12 @@ export async function resolveSessionSourceAuthority(
       "The referenced conversation Session no longer retains its source payload.",
     );
   }
+  const humanMessages = payload.turns.flatMap(turn => [turn,
+    ...(turn.steeredMessages ?? []).map(message => ({ ...message, response: turn.response })),
+  ]);
   const turn = messageId
-    ? payload.turns.find((candidate) => candidate.id === messageId)
-    : payload.turns[payload.turns.length - 1];
+    ? humanMessages.find((candidate) => candidate.id === messageId)
+    : humanMessages[humanMessages.length - 1];
   if (messageId && !turn) {
     throw new ApiError(
       404,

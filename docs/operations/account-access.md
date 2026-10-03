@@ -9,6 +9,14 @@ Settings manages sign-in methods: connecting Apple/Google, setting or changing a
 password, and removing a method. Every change first proves the current identity,
 and at least one usable login method always remains.
 
+## macOS browser sign-in
+
+The Mac primary-login surface offers **Sign in in your browser**; it never collects account passwords, registration fields or provider credentials. The default browser can reuse its valid Web session, then asks the user to confirm the displayed account for this Mac request. Otherwise the ordinary Web login and onboarding flow returns to that confirmation. A matching request hint helps identify the operation being approved. Use the Mac cancel action to stop waiting; closing the browser tab does not notify the app, and pending requests expire after five minutes. Cancelling keeps a usable retry surface.
+
+Browser approval creates a separate, revocable Mac backend session through a short-lived, one-use grant. It does not copy the browser cookie, attach a credential, change the account or grant local capture permission. Browser and Mac sign-outs remain independent. The Mac opens the workspace only after live backend identity readback in its selected WebKit store; seeing a callback or a browser success page alone is insufficient.
+
+Existing healthy Mac sessions reopen directly. An expired session returns to the same browser-only entry. An uncertain exchange offers **Check sign-in result** and deliberate **Sign in again**; recovery does not replay a potentially consumed grant or report cancellation as rollback. A new primary login isolates old late cookie responses in a separate persistent store and preserves quarantined local drafts. [ADR 0022](../decisions/0022-browser-owned-macos-login.md) owns the design and [the active plan](../../plans/2026-10-01-macos-browser-login.md) distinguishes implementation proof, live-provider verification and installed-release acceptance.
+
 ## One account, normalized email ownership
 
 One Talent Signal account is recognized by its primary email; Apple, Google and
@@ -246,10 +254,12 @@ and the [Auth.js Apple provider](https://authjs.dev/getting-started/providers/ap
 Real Apple secrets are not present in this repository. Missing or malformed
 config keeps the provider unavailable; nothing is faked as enabled.
 
-The avatar menu opens `/workspace/settings`, workspace management, and internal
-test workspaces. Settings require a backend session and never use the legacy
-fixture fallback. Profile names and workspace names are editable; email and
-provider identity remain unchanged.
+On Web, the avatar menu opens `/workspace/settings` inside the workspace. In the
+macOS client, its Settings entry and `⌘,` open the same independent native
+Settings window; Web-owned account panes remain bound to the backend session,
+while device controls remain local. Settings never use the legacy fixture
+fallback. Profile names and workspace names are editable; email and provider
+identity remain unchanged.
 
 ## Ownership and management
 
@@ -281,10 +291,15 @@ These privileges do not authorize candidate-data collection or external effects.
 
 Only an explicitly simulated, non-production seeded backend provides:
 
+Apply migration `088_username_email_alias` before seeding. Existing handles
+remain valid; an email-shaped username is valid only when it exactly matches
+that user's normalized primary email. Public signup continues to use its
+existing handle format. This does not rename any deployed account.
+
 | Field | Development fixture value |
 | --- | --- |
-| Username | `cubxxw` |
-| Email | `cubxxw@talentsignal.local` |
+| Username | `test@gmail.com` |
+| Email | `test@gmail.com` |
 | Password | `cubxxw` |
 | Workspace / role | `fixture-alpha` / admin |
 
@@ -296,6 +311,34 @@ providers are disabled in production, even if their flags are set.
 
 Other `simulated_human` fixture identities have no password. Use the explicit
 simulated API in local evaluations, or an isolated internal test workspace.
+
+## AI acceptance entry
+
+Prefer `capir auth` and command-line entry for AI acceptance. Reuse a valid
+origin-bound OS-keyring grant or an ephemeral, preprovisioned `CAPIR_TOKEN`
+instead of repeating interactive login. Select the test environment explicitly;
+the fixture identifier above applies only to an isolated seeded backend.
+
+With capir installed and the named environment configured:
+
+```bash
+capir auth status --env local-test
+node scripts/ai-workspace-entry.mjs --env local-test --check-only
+node scripts/ai-workspace-entry.mjs --env local-test
+node scripts/ai-workspace-entry.mjs --env local-test --sandbox <sandbox-uuid>
+```
+
+The entry helper validates the current grant before creating a `daily` replay
+sandbox or reopening the selected sandbox. It does not initiate OAuth, renew a
+grant, or replace credentials. Missing or expired authorization stops before
+sandbox allocation: provision a scoped test token through the approved test
+environment, or run `capir auth login --env local-test` once. Stop the owned
+sandbox with `capir sandbox stop <sandbox-uuid> --env local-test` after
+retaining evidence. `CAPIR_BIN` may select an explicitly installed executable.
+
+The capir backend, registered origins and server-only Web handoff configuration
+must be deployed for that exact environment. Stage A supports Web entry only;
+an authenticated Web proof does not establish native macOS login acceptance.
 
 ## Internal test workspaces
 
@@ -366,3 +409,5 @@ delivery and multi-client acceptance remain parent-owned checkpoints.
 
 Credentials for deployed services remain in [Infisical](secrets.md). The Notion
 home contains a short access reference; this document owns operational details.
+
+Mac login routes use aggregate upstream service budgets because the backend sees the first-party Web BFF, not individual browsers. Prepare/consume allow 120 requests per minute per upstream, and proof/result/approval routes allow 240. The current resident deployment is Tailscale-bound; these are availability caps, not per-user abuse protection. Before exposing a public multi-tenant Web ingress, add per-caller edge throttling with deployment-verified client identity. Never accept arbitrary forwarded-IP headers as identity. Auth route access logs must omit query strings; first-party handoff pages send `Referrer-Policy: no-referrer` and are not cached.

@@ -16,9 +16,11 @@ the backend cannot safely serve its required data path.
 versioned, sanitized result for the Backend API, PostgreSQL, and required
 migrations. The Web proxy adds its own successful request observation and exposes
 the result at `GET /api/system-health` with `private, no-store` caching semantics.
-The response carries only bounded status codes, observation time, and duration;
-it never returns connection strings, hosts, raw exceptions, account content, or
-candidate evidence.
+The response carries bounded status codes, observation time, duration, and an
+optional sanitized backend Git revision when the deployment supplies one. A
+successful health request does not prove that revision is the newest release or
+compatible with every client. It never returns connection strings, hosts, raw
+exceptions, account content, or candidate evidence.
 
 The server-to-backend request settles after four seconds and the browser request
 after six seconds, so a stalled dependency cannot leave the health surface

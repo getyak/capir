@@ -1,8 +1,6 @@
 # ADR 0021: Primary-login browser-store ownership
 
-Status: accepted for the local candidate; implementation and app-level acceptance
-are required before delivery. This grants no provider, production, preference,
-installed-app or release mutation outside the existing task boundary.
+Status: safety invariants retained by [ADR 0022](0022-browser-owned-macos-login.md), 2026-10-01. The implementation below describes the earlier provider-specific local candidate; browser-owned primary login replaces that machinery while retaining store isolation, durable uncertainty, host retirement and truthful readback. App-level and release acceptance remain required before delivery.
 
 ## Context
 

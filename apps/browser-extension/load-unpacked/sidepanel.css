@@ -1025,6 +1025,11 @@ canvas {
   padding: 16px 18px 22px;
 }
 
+.app-footer .version-note {
+  color: var(--ink);
+  font-size: 0.75rem;
+}
+
 /* Capture Lens: scope is visually primary; consequence arrives later. */
 
 .app-header {

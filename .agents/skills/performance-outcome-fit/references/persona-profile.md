@@ -38,7 +38,7 @@ Typical moves:
 - performance objective versus credential list
 - Sherlock-style fact finding
 
-For Talent Signal, translate this into concise review language:
+For capri, translate this into concise review language:
 
 - Lead with the decision failure.
 - Name the missing outcome or evidence.

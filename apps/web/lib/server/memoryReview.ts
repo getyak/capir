@@ -32,7 +32,7 @@ function backendPath(segments: string[]): string | null {
   if (segments.length === 2 && first === "reviews" && uuid.test(second!)) {
     return `/v1/memory/reviews/${second}`;
   }
-  if (segments.length === 3 && first === "reviews" && uuid.test(second!) && ["draft", "commits", "dismissals"].includes(third!)) {
+  if (segments.length === 3 && first === "reviews" && uuid.test(second!) && ["draft", "commits", "dismissals", "item-decisions", "contact-decisions"].includes(third!)) {
     return `/v1/memory/reviews/${second}/${third}`;
   }
   if (segments.length === 1 && first === "items") return "/v1/memory/items";

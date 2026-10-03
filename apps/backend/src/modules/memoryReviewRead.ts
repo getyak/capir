@@ -688,6 +688,7 @@ export async function dismissMemoryReview(
   reviewScopeId: string,
   credential: string | null,
   request: MemoryDismissRequest,
+  itemExpectation?: { proposalRevision: number; itemId: string; addedRevision: number },
 ): Promise<MemoryDismissResponse & { replayed: boolean }> {
   return inTransaction(pool, async (client) => {
     const idempotency = await claimIdempotency(
@@ -720,6 +721,16 @@ export async function dismissMemoryReview(
     }
     const items = await loadProposalItems(client, auth.accountId, proposal.id);
     const visible = await visibleReviewItems(client, auth, scope, proposal, items);
+    if (itemExpectation) {
+      const target = visible.find((item) => item.id === itemExpectation.itemId);
+      if (scope.proposal_revision !== itemExpectation.proposalRevision
+        || proposal.revision !== itemExpectation.proposalRevision
+        || !target || target.status !== "pending"
+        || target.added_revision !== itemExpectation.addedRevision
+        || request.item_ids.length !== 1 || request.item_ids[0] !== target.id) {
+        throw new ApiError(409, "MEMORY_ITEM_STALE", "This Memory item changed; reopen the review.");
+      }
+    }
     const visibleIds = new Set(visible.map((item) => item.id));
     const targetIds = request.item_ids.length === 0
       ? [...visibleIds]

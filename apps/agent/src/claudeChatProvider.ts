@@ -110,7 +110,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
   ) {
     this.model = configuration.model;
     this.supportsImageInput = imageInputEnabled;
-    this.inputCapabilities = { text: true, image: imageInputEnabled, imageUnderstanding: imageInputEnabled };
+    this.inputCapabilities = { text: true, image: imageInputEnabled, imageUnderstanding: imageInputEnabled, steering: true };
   }
 
   async answer(request: RemoteChatAnswerRequest): Promise<RemoteChatAnswerResult> {
@@ -329,6 +329,9 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
     const trusted = supplied?.run_id === request.runID && supplied.workspace_id === request.scopeSummary.workspaceID
       && supplied.authorization_scope === "workspace_conversation" ? supplied : undefined;
     const outcome = await this.execute(this.configuration, { ...((request.continuation && userImages.length === 0) ? { continuation: request.continuation } : {}), ...(trusted ? { observation: trusted } : {}), objective: request.objective,
+      ...(request.messageID ? { messageID: request.messageID } : {}),
+      ...(request.steering ? { steering: request.steering } : {}),
+      ...(request.onToolCompletion ? { onToolCompletion: request.onToolCompletion } : {}),
       ...(onText ? { onText } : {}),
       ...(userImages.length > 0 ? { images: userImages } : {}),
       systemPrompt: [request.outputMode === "json" ? applyChatPreset(request.systemPrompt, preset).text
@@ -356,17 +359,21 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
       }
       return { structuredOutput, inputTokens: outcome.inputTokens, outputTokens: outcome.outputTokens,
         estimatedUsd: outcome.estimatedUsd, turns: outcome.turns, permissionDenials: outcome.permissionDenials,
-        sessionID: outcome.sessionID, terminalReason: outcome.terminalReason };
+        toolCompletions: outcome.toolCompletions, sessionID: outcome.sessionID, terminalReason: outcome.terminalReason };
     }
     const parsedOutput = splitFirstTurnSessionTitle(outcome.text, request.objective);
     const body = parsedOutput.body;
-    if (!receipt && !body) throw new Error("CLAUDE_CHAT_ANSWER_INVALID");
+    // Empty assistant text is legal when real work completed: genuine tool
+    // receipts carry the execution record and nothing is fabricated to fill
+    // the answer.
+    // Empty prose is valid; execution truth remains in the run receipt.
     return { ...(calendar.draft() ? { calendarDraft: calendar.draft()! } : {}),
       ...(sessionTitleRequested ? { sessionTitle: parsedOutput.title } : {}),
-      structuredOutput: receipt ?? { outcome: searched ? "clarification" : "reply",
+      structuredOutput: receipt ?? { outcome: searched && body.trim() ? "clarification" : "reply",
       title: /\p{Script=Han}/u.test(request.objective) ? "回复" : "Reply", body },
       inputTokens: outcome.inputTokens, outputTokens: outcome.outputTokens, estimatedUsd: outcome.estimatedUsd,
-      turns: outcome.turns, permissionDenials: outcome.permissionDenials, sessionID: outcome.sessionID, terminalReason: outcome.terminalReason };
+      turns: outcome.turns, permissionDenials: outcome.permissionDenials, toolCompletions: outcome.toolCompletions,
+      sessionID: outcome.sessionID, terminalReason: outcome.terminalReason };
   }
 }
 

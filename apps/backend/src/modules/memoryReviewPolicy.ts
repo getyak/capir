@@ -644,11 +644,13 @@ export function contactReclaimIsSafe(input: {
   laterHandleCount?: number;
   laterProfileCount?: number;
   laterManifestCount?: number;
+  pendingProposalCount?: number;
 }): boolean {
   return input.laterSourceCount === 0
     && input.laterMemoryItemCount === 0
     && input.laterAssignmentCount === 0
     && (input.laterHandleCount ?? 0) === 0
     && (input.laterProfileCount ?? 0) === 0
-    && (input.laterManifestCount ?? 0) === 0;
+    && (input.laterManifestCount ?? 0) === 0
+    && (input.pendingProposalCount ?? 0) === 0;
 }

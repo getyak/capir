@@ -1,118 +1,24 @@
 "use client";
-
-import { ArrowSquareOut, CaretRight, ChatCircle } from "@phosphor-icons/react";
+import { ArrowSquareOut } from "@phosphor-icons/react";
 import Link from "next/link";
-import { useState } from "react";
-
-import {
-  relatedSessionsForPerson,
-  sidebarPeopleFromDirectory,
-  sidebarPersonHref,
-  sidebarSessionRows,
-} from "@/lib/workspace-sidebar";
+import { sidebarPeopleFromDirectory } from "@/lib/workspace-sidebar";
 import { useWorkspaceDirectory } from "./workspace-search";
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
+import { usePersonContextPanel } from "./person-context-panel";
 import styles from "./workspace-shell.module.css";
 
-/**
- * Real people hierarchy: the authorized directory projection, plus the
- * sessions the canonical record already bound to each person. Names alone
- * never create a relationship row.
- */
-export function WorkspaceSidebarPeople({ binding }: { binding: string | null }) {
-  const { data, loading, failed } = useWorkspaceDirectory(binding, true);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const people = sidebarPeopleFromDirectory(data?.people);
-  const sessions = sidebarSessionRows(data?.sessions);
-  const state = loading ? "loading" : failed ? "error" : "ready";
-
-  // An authorized but empty directory adds no navigation value: hide the whole
-  // auxiliary group instead of reserving space for "no contacts". Loading,
-  // actionable read errors and nonempty projections stay visible.
-  if (state === "ready" && people.length === 0) return null;
-
-  return (
-    <section aria-label="常用人物" className={styles.group}>
-      <header className={styles.groupTitle}>
-        <span>常用人物</span>
-        <Link aria-label="查看全部人物" href="/workspace/people" title="查看全部人物">
-          <ArrowSquareOut aria-hidden="true" size={13} />
-        </Link>
-      </header>
-      {state === "loading" ? (
-        <p className={styles.groupEmpty}>正在读取…</p>
-      ) : state === "error" ? (
-        <p className={styles.groupEmpty}>
-          人物目录暂时无法读取；不会用缓存或示例补齐。
-        </p>
-      ) : (
-        <div className={styles.personList}>
-          {people.map((person) => {
-            const isExpanded = expanded === person.id;
-            const related = relatedSessionsForPerson(sessions, person.id);
-            return (
-              <div
-                className={styles.personRow}
-                data-expanded={isExpanded ? "true" : undefined}
-                key={person.id}
-              >
-                <div className={styles.personRowHead}>
-                  <button
-                    aria-expanded={isExpanded}
-                    className={styles.personDisclosure}
-                    onClick={() =>
-                      setExpanded(isExpanded ? null : person.id)
-                    }
-                    title={`展开 ${person.label} 的相关对话`}
-                    type="button"
-                  >
-                    <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} className={styles.avatar} dataSize="small" />
-                    <span className={styles.personSummary}>
-                      <strong>{person.label}</strong>
-                      <small>{person.detail}</small>
-                    </span>
-                    <CaretRight
-                      aria-hidden="true"
-                      className={styles.personCaret}
-                      size={11}
-                    />
-                  </button>
-                  <Link
-                    aria-label={`查看 ${person.label} 的人物资料`}
-                    className={styles.iconButton}
-                    href={sidebarPersonHref(person)}
-                    title={`查看 ${person.label} 的人物资料`}
-                  >
-                    <ArrowSquareOut aria-hidden="true" size={14} />
-                  </Link>
-                </div>
-                {isExpanded ? (
-                  <div
-                    aria-label={`${person.label} 的最近相关对话`}
-                    className={styles.personConversations}
-                  >
-                    {related.length ? (
-                      related.map((session) => (
-                        <Link
-                          className={styles.personConversation}
-                          href={`/workspace/sessions/${session.id}`}
-                          key={session.id}
-                          title={session.title}
-                        >
-                          <ChatCircle aria-hidden="true" size={12} />
-                          <span>{session.title}</span>
-                        </Link>
-                      ))
-                    ) : (
-                      <p>暂无相关对话</p>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
+/** Exact directory IDs open a read-only preview; no automatic context binding. */
+export function WorkspaceSidebarPeople({binding}: {binding: string | null}) {
+  const {data, loading, failed, retry} = useWorkspaceDirectory(binding, true);
+  const {open, selectedId} = usePersonContextPanel();
+  const people = sidebarPeopleFromDirectory(data?.people, 2);
+  if (!loading && !failed && people.length === 0) return null;
+  return <section aria-label="相关人物" className={styles.group}>
+    <header className={styles.groupTitle}><span>相关人物</span><Link aria-label="查看全部人物" href="/workspace/people"><ArrowSquareOut size={13} aria-hidden="true"/></Link></header>
+    {loading ? <p className={styles.groupEmpty}>正在读取…</p> : failed ? <p className={styles.historyRecovery}>人物暂时无法读取<button onClick={retry}>重试</button></p> :
+      <div className={styles.personChips}>{people.map(person => <button key={person.id} className={styles.personChip} aria-label={`查看 ${person.label} 的人物背景`} aria-pressed={selectedId === person.id}
+        onClick={event => open(person.id,event.currentTarget)} title={person.label}>
+        <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} size={22}/><span>{person.label}</span>
+      </button>)}</div>}
+  </section>;
 }

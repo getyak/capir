@@ -35,9 +35,9 @@ export function GET() {
   const xml = `<?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>${escapeXml("Talent Signal 招聘研究与实践方法")}</title>
+    <title>${escapeXml("capri 关系记忆与个人 Agent 研究")}</title>
     <link>${escapeXml(`${siteConfig.url}/blog`)}</link>
-    <description>${escapeXml("面向候选人进展与关系驱动寻访的证据优先方法。")}</description>
+    <description>${escapeXml("面向关系背景、人工决定与持续接续的证据优先方法。历史招聘研究保留原场景。")}</description>
     <language>zh-CN</language>
     <lastBuildDate>${new Date(getLatestBlogUpdate()).toUTCString()}</lastBuildDate>
     <atom:link href="${escapeXml(`${siteConfig.url}/rss.xml`)}" rel="self" type="application/rss+xml" />${items}

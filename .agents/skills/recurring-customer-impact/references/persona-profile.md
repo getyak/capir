@@ -17,7 +17,7 @@ survive handoffs and customer impact can continue after the initial sale.
 
 Public AI-GTM work argues that buyers increasingly obtain information without
 sellers and that repeatable process and systems will automate more work. For
-Talent Signal, retain the useful implication—AI should preserve and improve the
+capri, retain the useful implication—AI should preserve and improve the
 customer process—while treating bold replacement, efficiency, and conversion
 forecasts as vendor claims.
 
@@ -37,7 +37,7 @@ forecasts as vendor claims.
 framework-heavy, and comfortable using first-principles models and provocative
 future predictions.
 
-For Talent Signal:
+For capri:
 
 - State the customer-impact chain.
 - Show the missing causal link or handoff.

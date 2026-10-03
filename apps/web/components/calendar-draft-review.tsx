@@ -29,7 +29,7 @@ export type CalendarDraftPersistence = {
 
 type SaveState = "clean" | "dirty" | "saving" | "saved" | "error";
 type ReviewValues = { title: string; starts_at: string; ends_at: string };
-type DraftConflict = { draft: CalendarDraft; revision: number };
+type DraftConflict = { draft: CalendarDraft; revision: number; record: MeetingDraftRecord };
 
 class DraftRequestError extends Error {
   constructor(
@@ -68,6 +68,25 @@ function values(draft: CalendarDraft): ReviewValues {
   };
 }
 
+function sessionLocalInterval(start: string, end: string): string {
+  const day = (value: string): string | null => {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u.test(value)) return null;
+    const date = new Date(`${value.slice(0, 10)}T12:00:00Z`);
+    if (!Number.isFinite(date.getTime())) return null;
+    return new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric", month: "numeric", day: "numeric", weekday: "short", timeZone: "UTC",
+    }).format(date);
+  };
+  const startDay = day(start);
+  const endDay = day(end);
+  if (!startDay || !endDay) return "时间待核对";
+  const startTime = start.slice(11, 16);
+  const endTime = end.slice(11, 16);
+  return start.slice(0, 10) === end.slice(0, 10)
+    ? `${startDay} · ${startTime}–${endTime}`
+    : `${startDay} ${startTime} – ${endDay} ${endTime}`;
+}
+
 function sameValues(left: ReviewValues, right: ReviewValues): boolean {
   return left.title === right.title &&
     left.starts_at === right.starts_at &&
@@ -90,12 +109,19 @@ function downloadCalendarDraft(draft: CalendarDraft) {
 export function CalendarDraftReview({
   draft,
   persistence,
+  variant = "page",
+  onDismiss,
+  onDraftSaved,
 }: {
   draft: CalendarDraft;
   persistence: CalendarDraftPersistence;
+  variant?: "page" | "session";
+  onDismiss?: () => void;
+  onDraftSaved?: (draft: MeetingDraftRecord) => void;
 }) {
   const router = useRouter();
   const [generated, setGenerated] = useState(false);
+  const [sessionEditing, setSessionEditing] = useState(false);
   const [title, setTitle] = useState(draft.title);
   const [start, setStart] = useState(() =>
     calendarLocalTime(draft.starts_at, draft.time_zone));
@@ -240,6 +266,7 @@ export function CalendarDraftReview({
         title: current.title,
       };
       currentRevision.current = payload.draft.revision;
+      onDraftSaved?.(payload.draft);
       lastSaved.current = values(current);
       unknownServerOutcome.current = false;
       attempt.current = null;
@@ -275,7 +302,7 @@ export function CalendarDraftReview({
         const current = meetingDraftCalendarValue(caught.current);
         if (current) {
           blockedByConflict.current = true;
-          setConflict({ draft: current, revision: caught.current.revision });
+          setConflict({ draft: current, revision: caught.current.revision, record: caught.current });
         } else {
           clearPendingMeetingDraftEdit(persistence.draftId, persistence.sessionVersion);
           dirty.current = false;
@@ -527,6 +554,7 @@ export function CalendarDraftReview({
       title: conflict.draft.title,
     };
     currentRevision.current = conflict.revision;
+    onDraftSaved?.(conflict.record);
     lastSaved.current = values(conflict.draft);
     latest.current = local;
     attempt.current = null;
@@ -594,8 +622,12 @@ export function CalendarDraftReview({
       setSaveState("saved");
     } catch (caught) {
       setGenerated(false);
+      const validationError = caught instanceof Error && (
+        caught.message === "invalid_interval" || caught.message === "CALENDAR_DRAFT_INVALID"
+        || caught.message.startsWith("CALENDAR_LOCAL_TIME_")
+      );
       setError(
-        caught instanceof Error && caught.message !== "invalid_interval"
+        caught instanceof Error && !validationError
           ? caught.message
           : "请核对标题和起止时间；夏令时切换产生的重复或不存在时间不能直接导出。",
       );
@@ -615,6 +647,41 @@ export function CalendarDraftReview({
   }
 
   const busy = saveState === "saving";
+  if (variant === "session") {
+    return <section className={`${styles.review} ${styles.sessionCard}`} aria-label="日历草稿" data-testid="session-calendar-draft-card">
+      <div className={styles.sessionCardHead}><span>日历 · 待安排</span><span>日历文件</span></div>
+      <h3>{title}</h3>
+      <p className={styles.sessionCardTime}>{sessionLocalInterval(start, end)} · {draft.time_zone}</p>
+      <blockquote>{draft.source_excerpt}</blockquote>
+      {sessionEditing ? <div className={styles.sessionCardFields}>
+        <label className={styles.field}>标题<input value={title} maxLength={200} disabled={busy}
+          onBlur={() => void flushCurrent()}
+          onChange={(event) => {
+            if ((event.nativeEvent as InputEvent).isComposing || composing.current) {
+              setTitle(event.target.value);
+              latest.current.title = event.target.value;
+              return;
+            }
+            changed(setTitle, event.target.value);
+          }}
+          onCompositionStart={() => { composing.current = true; setIsComposing(true); }}
+          onCompositionEnd={(event) => { composing.current = false; setIsComposing(false); changed(setTitle, event.currentTarget.value); }}/></label>
+        <label className={styles.field}>开始时间<input type="datetime-local" value={start} disabled={busy} onChange={(event) => changed(setStart, event.target.value)} onBlur={() => void flushCurrent()}/></label>
+        <label className={styles.field}>结束时间<input type="datetime-local" value={end} disabled={busy} onChange={(event) => changed(setEnd, event.target.value)} onBlur={() => void flushCurrent()}/></label>
+        <button className={styles.secondary} type="button" onClick={() => { void flushCurrent(); setSessionEditing(false); }}>完成修改</button>
+      </div> : null}
+      {conflict ? <section className={styles.conflict} role="alert"><strong>这份草稿已在别处修改</strong><p>你的输入仍保留。请选择一个版本。</p>
+        <div className={styles.actions}><button className={styles.secondary} type="button" onClick={useServerVersion}>使用服务器版本</button><button className={styles.secondary} type="button" onClick={reapplyLocalVersion}>重新应用我的编辑</button></div>
+      </section> : null}
+      <div className={styles.sessionCardActions}>
+        <button className={styles.primary} type="button" disabled={busy || Boolean(conflict)} onClick={() => void exportDraft()}>下载日历草稿</button>
+        <button className={styles.secondary} type="button" disabled={busy} onClick={() => setSessionEditing(!sessionEditing)}>{sessionEditing ? "收起编辑" : "改时间"}</button>
+        <button className={styles.secondary} type="button" disabled={busy} onClick={onDismiss}>暂不安排</button>
+      </div>
+      {error ? <p role="alert">{error}</p> : null}
+      <p role="status">{generated ? "已生成日历草稿，请在日历应用中确认导入" : saveState === "saving" ? "正在保存修改…" : saveState === "error" ? "更改尚未保存" : "导入由日历应用确认"}</p>
+    </section>;
+  }
   return (
     <section className={styles.review} aria-label="日历草稿" data-testid="calendar-draft-review">
       <h3>核对日历草稿</h3>

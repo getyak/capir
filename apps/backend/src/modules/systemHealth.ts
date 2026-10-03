@@ -1,6 +1,7 @@
 import {
   CONTRACT_VERSION,
   ErrorResponseSchema,
+  isGitRevision,
   SystemHealthResponseSchema,
   type SystemHealthComponent,
   type SystemHealthResponse,
@@ -72,12 +73,40 @@ function component(
   return { ...value, required: true };
 }
 
+/**
+ * The deployed revision is optional. A missing or nonstandard value stays
+ * unknown instead of being echoed into an authenticated response.
+ */
+export function backendRevisionFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const value = environment.TALENT_SIGNAL_BACKEND_REVISION?.trim();
+  return isGitRevision(value) ? value.toLowerCase() : undefined;
+}
+
+function healthResponse(
+  status: SystemHealthResponse["status"],
+  components: SystemHealthComponent[],
+  observedAt: string,
+  backendRevision: string | undefined,
+): SystemHealthResponse {
+  return {
+    contract_version: CONTRACT_VERSION,
+    schema_version: "system-health.v1",
+    status,
+    observed_at: observedAt,
+    ...(backendRevision ? { backend_revision: backendRevision } : {}),
+    components,
+  };
+}
+
 export async function observeSystemHealth(
   pool: Pick<Pool, "query">,
   now: () => Date = () => new Date(),
   timeoutMs: number = SYSTEM_HEALTH_OBSERVATION_TIMEOUT_MS,
 ): Promise<SystemHealthResponse> {
   const deadlineAt = Date.now() + timeoutMs;
+  const backendRevision = backendRevisionFromEnvironment();
   const components: SystemHealthComponent[] = [
     component({
       id: "backend",
@@ -124,13 +153,7 @@ export async function observeSystemHealth(
         detail_code: "not_observed",
       }),
     );
-    return {
-      contract_version: CONTRACT_VERSION,
-      schema_version: "system-health.v1",
-      status: "unavailable",
-      observed_at: now().toISOString(),
-      components,
-    };
+    return healthResponse("unavailable", components, now().toISOString(), backendRevision);
   }
 
   const migrationsStartedAt = performance.now();
@@ -160,13 +183,12 @@ export async function observeSystemHealth(
           : "required_migrations_missing",
       }),
     );
-    return {
-      contract_version: CONTRACT_VERSION,
-      schema_version: "system-health.v1",
-      status: complete ? "healthy" : "degraded",
-      observed_at: now().toISOString(),
+    return healthResponse(
+      complete ? "healthy" : "degraded",
       components,
-    };
+      now().toISOString(),
+      backendRevision,
+    );
   } catch {
     components.push(
       component({
@@ -178,13 +200,7 @@ export async function observeSystemHealth(
         detail_code: "dependency_unreachable",
       }),
     );
-    return {
-      contract_version: CONTRACT_VERSION,
-      schema_version: "system-health.v1",
-      status: "unavailable",
-      observed_at: now().toISOString(),
-      components,
-    };
+    return healthResponse("unavailable", components, now().toISOString(), backendRevision);
   }
 }
 

@@ -319,7 +319,7 @@ private struct QuickConversationIntake: View {
                 .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(TSBrand.hairline))
                 .focused($isFocused)
                 .accessibilityLabel("Selected candidate conversation")
-                .accessibilityHint("Paste only text you deliberately chose. Talent Signal does not read the clipboard automatically.")
+                .accessibilityHint("Paste only text you deliberately chose. capri does not read the clipboard automatically.")
                 .accessibilityIdentifier("quick.selectedText")
 
             HStack {
@@ -507,7 +507,7 @@ private struct QuickEmptyState: View {
                         .font(.caption)
                         .foregroundStyle(TSBrand.secondaryInk)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Talent Signal can open the setting, but cannot enable it for you.")
+                    Text("capri can open the setting, but cannot enable it for you.")
                         .font(.caption2)
                         .foregroundStyle(TSBrand.secondaryInk)
                 }
@@ -1383,7 +1383,7 @@ private struct QuickRelationshipSaveFlow: View {
             Label("We couldn’t verify whether the relationship review was saved", systemImage: "questionmark.diamond")
                 .font(.headline)
                 .foregroundStyle(TSBrand.seam)
-            Text("Check the original operation before trying again. Talent Signal will not submit a second change blindly.")
+            Text("Check the original operation before trying again. capri will not submit a second change blindly.")
                 .font(.callout)
                 .foregroundStyle(TSBrand.secondaryInk)
             Button("Check what happened", systemImage: "arrow.triangle.2.circlepath") {
@@ -1657,7 +1657,7 @@ private struct QuickReminderReview: View {
                 removalCandidate = nil
             }
         } message: {
-            Text("Talent Signal will remove only the reminder proven by this receipt, then verify that it is absent.")
+            Text("capri will remove only the reminder proven by this receipt, then verify that it is absent.")
         }
     }
 
@@ -1671,7 +1671,7 @@ private struct QuickReminderReview: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("quick.reminderDuplicateUnavailable")
         case .notRequired:
-            Label("No open recruiter-owned action in the current canonical Pursuit readback.", systemImage: "checkmark.shield")
+            Label("No open user-owned action in the current canonical Pursuit readback.", systemImage: "checkmark.shield")
                 .font(.caption)
                 .foregroundStyle(TSBrand.evidence)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1679,7 +1679,7 @@ private struct QuickReminderReview: View {
         case .unreviewed:
             if let preflight = model.selectedRelationshipConsequencePreflight {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label("Review existing recruiter-owned work", systemImage: "arrow.triangle.branch")
+                    Label("Review existing user-owned work", systemImage: "arrow.triangle.branch")
                         .font(.callout.weight(.semibold))
                     Text("A new reminder may duplicate an open canonical action. Review the current readback before continuing.")
                         .font(.caption)
@@ -1711,7 +1711,7 @@ private struct QuickReminderReview: View {
             .accessibilityIdentifier("quick.reminderDuplicateSeparate")
         case .useExistingAction:
             VStack(alignment: .leading, spacing: 7) {
-                Label("Using the existing recruiter-owned action", systemImage: "arrow.uturn.backward.circle.fill")
+                Label("Using the existing user-owned action", systemImage: "arrow.uturn.backward.circle.fill")
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(TSBrand.evidence)
                 Text("No Apple Reminder was created. Any earlier destination preview was discarded.")

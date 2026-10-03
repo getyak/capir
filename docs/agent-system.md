@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Talent Signal uses agents to extend human judgment, not replace ownership of relationship truth or consequential action.
+capri uses agents to extend human judgment, not replace ownership of relationship truth or consequential action.
 
 ## Architecture
 
-![Talent Signal agent control plane](talent-signal-agent-control-plane.png)
+![capri agent control plane](talent-signal-agent-control-plane.png)
 
 The control plane separates four concerns:
 
@@ -68,7 +68,7 @@ readable nearby text cannot resolve uncertain speaker, time or identity fields.
 
 ## Governed loop
 
-![Talent Signal agent runtime flow](talent-signal-agent-runtime-flow.png)
+![capri agent runtime flow](talent-signal-agent-runtime-flow.png)
 
 1. authorize one immutable objective, Pursuit or subject scope, and budget;
 2. compile the smallest relevant context;
@@ -243,14 +243,14 @@ cannot preselect, collapse records, bind to history, or retry after failure.
 
 ## External agents and channels
 
-Codex, Claude, Cursor, Manus, OpenClaw, and future runtimes should connect through one provider-neutral Talent Signal boundary.
+Codex, Claude, Cursor, Manus, OpenClaw, and future runtimes should connect through one provider-neutral capri boundary.
 
 Initial external abilities are scoped reads, intentional capture, artifacts,
 fact/action proposals, internal attention, and signed review handoffs.
 
 External agents should not directly confirm facts, merge identities, send
 messages, change calendars or contacts, update an ATS, query the production
-database, or obtain a generic browser or shell over candidate data.
+database, or obtain a generic browser or shell over person and relationship data.
 
 Channels such as WeChat are capture and attention surfaces, not tenant
 boundaries or systems of record.

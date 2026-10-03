@@ -869,7 +869,7 @@ final class CandidateSignalUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(actionButtonSettings.exists)
-        XCTAssertFalse(app.staticTexts["Talent Signal"].exists)
+        XCTAssertFalse(app.staticTexts["capri"].exists)
         preserveScreenshot("Quiet workspace menu")
 
         if !actionButtonOnboarding.isHittable {
@@ -884,7 +884,7 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertEqual(systemStep.label, "1. Take Screenshot")
         XCTAssertEqual(systemStep.value as? String, "System action")
         XCTAssertEqual(talentSignalStep.label, "2. Review screenshot")
-        XCTAssertEqual(talentSignalStep.value as? String, "Talent Signal action")
+        XCTAssertEqual(talentSignalStep.value as? String, "capri action")
         XCTAssertTrue(element("shortcut-local-boundary").exists)
         let buildShortcut = element("build-screenshot-shortcut")
         XCTAssertTrue(buildShortcut.exists)
@@ -2990,7 +2990,7 @@ final class CandidateSignalUITests: XCTestCase {
         )
         XCTAssertTrue(primaryActions.firstMatch.waitForExistence(timeout: 10))
         XCTAssertEqual(primaryActions.count, 1)
-        XCTAssertTrue(app.staticTexts["Talent Signal"].exists)
+        XCTAssertTrue(app.staticTexts["capri"].exists)
         XCTAssertTrue(app.staticTexts["Relationships, in context."].exists)
         XCTAssertFalse(app.staticTexts["Create an account"].exists)
         preserveScreenshot("Sign in with Apple entry")
@@ -3606,7 +3606,7 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Revision 1 → 2 · 1 changed field"].exists)
         XCTAssertTrue(
             app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS %@", "Current recruiter · Recorded")
+                NSPredicate(format: "label CONTAINS %@", "Current user · Recorded")
             ).firstMatch.exists
         )
         XCTAssertTrue(
@@ -4457,7 +4457,7 @@ final class CandidateSignalUITests: XCTestCase {
         guard let (_, response) = try? await URLSession.shared.data(from: endpoint),
               let response = response as? HTTPURLResponse,
               response.statusCode == 200 else {
-            throw XCTSkip("Run with the authorized local Talent Signal backend.")
+            throw XCTSkip("Run with the authorized local capri backend.")
         }
         guard await canonicalBackendFixtureIsAvailable(at: backendURL) else {
             throw XCTSkip(
@@ -4575,7 +4575,7 @@ final class CandidateSignalUITests: XCTestCase {
         guard let (_, response) = try? await URLSession.shared.data(from: endpoint),
               let response = response as? HTTPURLResponse,
               response.statusCode == 200 else {
-            throw XCTSkip("Run with the authorized local Talent Signal backend.")
+            throw XCTSkip("Run with the authorized local capri backend.")
         }
 
         let captureSeed = UUID()
@@ -7017,7 +7017,7 @@ final class RelationshipCalendarWorkflowUITests: XCTestCase {
         for _ in 0..<5 where !overlap.isHittable { app.swipeUp() }
         overlap.tap()
         XCTAssertTrue(app.buttons["calendar-prepare-agent"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Overlaps another Talent Signal activity"].exists)
+        XCTAssertTrue(app.staticTexts["Overlaps another capri activity"].exists)
         XCTAssertTrue(app.buttons["calendar-details-disclosure"].exists)
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Event time zone")).firstMatch.exists)
         capture("16-overlap-detail")

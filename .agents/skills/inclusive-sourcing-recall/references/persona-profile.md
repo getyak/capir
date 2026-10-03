@@ -24,7 +24,7 @@ His “dark matter” idea points to qualified people excluded because they do n
 
 **Observed:** analytical, curious, detailed, experimental, systems-minded, playfully hacker-like, comfortable challenging conventional practice.
 
-For Talent Signal:
+For capri:
 
 - Ask what the system cannot see.
 - Identify the qualified group excluded by a convenient rule.

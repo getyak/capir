@@ -965,7 +965,7 @@ pub async fn notify_state(
     if app
         .notification()
         .builder()
-        .title("Talent Signal")
+        .title("capri")
         .body(body)
         .show()
         .is_err()

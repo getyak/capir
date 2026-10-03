@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Talent Signal Capture",
+  "name": "capri Capture",
   "version": "0.2.0",
-  "description": "Review visible evidence before a user-approved local Talent Signal handoff.",
+  "description": "Review visible evidence before a user-approved local capri handoff.",
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",
   "permissions": [
@@ -22,7 +22,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Review this page in Talent Signal"
+    "default_title": "Review this page in capri"
   },
   "commands": {
     "_execute_action": {
@@ -30,7 +30,7 @@
         "default": "Alt+Shift+Y",
         "mac": "MacCtrl+Shift+Y"
       },
-      "description": "Open the Talent Signal review panel"
+      "description": "Open the capri review panel"
     }
   },
   "side_panel": {

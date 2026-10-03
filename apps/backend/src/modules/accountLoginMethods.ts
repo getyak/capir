@@ -507,7 +507,7 @@ async function completeLink(
         throw new ApiError(
           409,
           "LOGIN_METHOD_EMAIL_CONFLICT",
-          "This provider email belongs to another Talent Signal account. Email equality grants no access; the credential is unchanged.",
+          "This provider email belongs to another capri account. Email equality grants no access; the credential is unchanged.",
         );
       }
       throw error;
@@ -529,7 +529,7 @@ async function completeLink(
       throw new ApiError(
         409,
         "LOGIN_METHOD_CONFLICT",
-        "This provider account is already connected to another Talent Signal account. Authenticated recovery explains the exact conflict; nothing was merged.",
+        "This provider account is already connected to another capri account. Authenticated recovery explains the exact conflict; nothing was merged.",
       );
     }
     // Reassertion with a newly verified address follows the same arbitration

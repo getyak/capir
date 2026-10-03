@@ -287,7 +287,7 @@ export function AgentVoiceInput({
               <div>
                 <strong>把语音转换为可编辑草稿？</strong>
                 <p>
-                  临时音频会发送给豆包进行转写，Talent Signal 不会保存。按下发送前，任何内容都不会进入智能助理。
+                  临时音频会发送给豆包进行转写，capri 不会保存。按下发送前，任何内容都不会进入智能助理。
                 </p>
               </div>
               <div className="context-chat__voice-actions">

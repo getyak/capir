@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "边界案例",
   description:
-    "用于 Talent Signal 证据审阅工作台的已认证合成边界案例。",
+    "用于 capri 证据审阅工作台的已认证合成边界案例。",
   robots: {
     follow: false,
     index: false,

@@ -104,7 +104,10 @@ jobs:
                   "Gemfile.lock",
                   ".github/workflows/release-ios.yml",
                   "scripts/ci/has-ios-changes.sh",
-                  "scripts/ci/next-ios-version.sh",
+                  "scripts/ci/product-release-version.sh",
+                  "scripts/ci/test-product-release-version.sh",
+                  "scripts/ci/ensure-release-assets.sh",
+                  "scripts/ci/test-ensure-release-assets.sh",
                   "scripts/ci/testflight-release-receipt.cjs",
                   "scripts/ci/wait-for-testflight-build.mjs",
                 ]);
@@ -237,7 +240,7 @@ jobs:
         id: version
         env:
           VERSION_OVERRIDE: ${{ inputs.version_override || '' }}
-        run: ./scripts/ci/next-ios-version.sh "$VERSION_OVERRIDE"
+        run: ./scripts/ci/product-release-version.sh "$VERSION_OVERRIDE"
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
@@ -540,7 +543,17 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
-            git push origin "$RELEASE_TAG"
+            if ! git push origin "$RELEASE_TAG"; then
+              # The Mac job may have created this tag after our initial fetch.
+              # A failed network push without a remote tag is still a failure.
+              git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null
+              git fetch --tags --force origin
+              existing_sha="$(git rev-list -n 1 "$RELEASE_TAG")"
+              [ "$existing_sha" = "$RELEASE_SHA" ] || {
+                echo "::error::Concurrent tag $RELEASE_TAG points to $existing_sha"
+                exit 1
+              }
+            fi
           fi
 
       - name: Create GitHub prerelease
@@ -553,18 +566,43 @@ jobs:
               echo "::error::Existing release $RELEASE_TAG is owned by $owner"
               exit 1
             fi
-            gh release upload "$RELEASE_TAG" \
-              build/ios/TalentSignal.ipa \
-              "${{ steps.receipt.outputs.path }}" \
-              --clobber
           else
             gh release create "$RELEASE_TAG" \
               build/ios/TalentSignal.ipa \
               "${{ steps.receipt.outputs.path }}" \
               --generate-notes \
               --prerelease \
+              --latest=false \
               --title "$RELEASE_TAG" \
-              --verify-tag
+              --verify-tag || {
+                # The macOS job may have created this same-commit release
+                # between our read and create. All other failures still fail.
+                owner="$(gh release view "$RELEASE_TAG" --json author --jq .author.login)"
+                [ "$owner" = "github-actions[bot]" ] || exit 1
+              }
+          fi
+          existing_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+          if grep -Fxq 'testflight-release-receipt.json' <<< "$existing_assets"; then
+            # A complete release is immutable; a rerun must match its bytes.
+            grep -Fxq 'TalentSignal.ipa' <<< "$existing_assets" || {
+              echo '::error::Receipt exists without its IPA; do not invent a replacement.'
+              exit 1
+            }
+            scripts/ci/ensure-release-assets.sh \
+              "${{ steps.receipt.outputs.path }}" \
+              build/ios/TalentSignal.ipa
+          else
+            # The previous iOS step may have uploaded only the IPA. No trusted
+            # TestFlight receipt exists yet, so the original retry path may
+            # replace that incomplete IPA with the newly processed exact build.
+            echo '::notice::Recovering an incomplete iOS release without a TestFlight receipt.'
+            gh release upload "$RELEASE_TAG" \
+              build/ios/TalentSignal.ipa \
+              "${{ steps.receipt.outputs.path }}" \
+              --clobber
+            scripts/ci/ensure-release-assets.sh \
+              build/ios/TalentSignal.ipa \
+              "${{ steps.receipt.outputs.path }}"
           fi
 
       - name: Summarize internal release

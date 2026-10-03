@@ -36,8 +36,7 @@ server fixes do not require distributing a second page implementation. The Mac
 product requires network reachability to the configured HTTPS service; offline
 mode is an honest retry surface. Password authentication, upload, IME, page
 navigation and recovery require rendered validation. System-browser OAuth does
-not transfer a cookie back to WebKit automatically, and is not claimed as a
-verified sign-in flow.
+not transfer a cookie back to WebKit automatically. [ADR 0022](0022-browser-owned-macos-login.md) introduces a browser-owned, one-use grant and independently verified WebKit session installation; it does not share or copy browser cookies.
 
 The isolated local-asset Tauri bridge remains useful for native capability work.
 We rejected attaching it to the remote page, copying prototype mock state into
@@ -47,3 +46,9 @@ capture becomes a supported product requirement with a typed authenticated
 transport contract.
 
 API basis: [Apple WKNavigationDelegate](https://developer.apple.com/documentation/webkit/wknavigationdelegate).
+
+## 2026-09-29: Intentional Mac screenshot submission
+
+The owner requested a menu-bar screenshot that enters the existing Agent Session without a second Send. The Mac app now owns an explicitly initiated capture surface. The Web product page still receives no general native bridge or screenshot authority. A separate content-free, same-origin WebKit document carries fixed native-initiated requests in an isolated content world; WebKit keeps its login cookies in the existing origin-partitioned store. The native code neither copies those cookies into URLSession nor accepts capture commands from page JavaScript. Submission is fenced by the current login, stable owner scope and reviewed processing policy, then uses the existing durable conversation queue.
+
+First-use disclosure and OS screen permission remain distinct. Selecting a region authorizes that one purpose-bound upload and Agent analysis, not a relationship fact, external effect or future ambient collection. The exception should be reconsidered if an implementation needs page-callable methods, persistent bearer credentials, cross-origin transfer or a second canonical task store.

@@ -40,6 +40,25 @@ describe("system health client boundary", () => {
     expect(parseSystemHealth({ ...base, components: components.map((item, index) => index ? item : { ...item, duration_ms: -1 }) })).toBeNull();
   });
 
+  it("preserves a sanitized backend revision and omits an invalid one", () => {
+    const base = {
+      contract_version: CONTRACT_VERSION,
+      schema_version: "system-health.v1",
+      status: "healthy",
+      observed_at: "2026-09-14T09:00:00.000Z",
+      components,
+    };
+    expect(parseSystemHealth({ ...base, backend_revision: "26a664bb" })?.backend_revision).toBe("26a664bb");
+    expect(parseSystemHealth({ ...base, backend_revision: "ABCDEF0" })?.backend_revision).toBe("abcdef0");
+    expect(parseSystemHealth(base)?.backend_revision).toBeUndefined();
+    for (const invalid of ["bad value!", "26a664bb.dirty", "not-a-sha", "abc123", "a".repeat(41)]) {
+      const parsed = parseSystemHealth({ ...base, backend_revision: invalid });
+      expect(parsed?.backend_revision, invalid).toBeUndefined();
+      // A malformed optional revision must not fail the whole observation.
+      expect(parsed?.status).toBe("healthy");
+    }
+  });
+
   it("keeps unknown and unavailable distinct and detects stale evidence", () => {
     expect(summarizeSystemHealth(components.map((item) => item.id === "database" ? { ...item, status: "unknown" } : item))).toBe("degraded");
     expect(summarizeSystemHealth(components.map((item) => item.id === "database" ? { ...item, status: "unavailable" } : item))).toBe("unavailable");

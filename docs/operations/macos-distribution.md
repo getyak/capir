@@ -6,14 +6,15 @@ collaboration, and recruiting. The downloadable client is `apps/macos`.
 
 ## Install on another Mac
 
-1. Open [macOS releases](https://github.com/getyak/talent-signal/releases?q=macos-)
-   and select a macOS release. Download its Universal `.dmg` (Apple silicon and
-   Intel, macOS 14 or later). Preview releases are explicitly labeled.
+1. Open [Talent Signal releases](https://github.com/getyak/talent-signal/releases)
+   and select the newest `vX.Y.Z` release containing a macOS Universal `.dmg`
+   (Apple silicon and Intel, macOS 14 or later). A release may contain only
+   the platform that changed. Preview releases are explicitly labeled.
 2. Compare the downloaded file with its `SHA256SUMS.txt` using
    `shasum -a 256 <downloaded-file>`. Drag **Talent Signal** to Applications.
 3. Open the app and enter the HTTPS workspace origin supplied by the workspace
    owner, or paste a full `/workspace/...` link. The app shows the normalized origin.
-   Sign in with your own account.
+   Choose **Sign in in your browser**, authenticate or confirm your own account in the system browser, and return to the Mac workspace. The Mac window never asks for your username or password.
 
 For an owner-operated private workspace, authorize the second Mac in the same
 Tailscale network and connect Tailscale before opening the app. The package
@@ -51,7 +52,22 @@ that signed updating is not configured and retain the release-download link. Kee
 the previous package for operator rollback; do not lower the feed's build number.
 Hosted workspace changes remain independent of the desktop binary.
 
+When a settings change spans the resident Web and macOS client, compare the
+active Web release revision with the approved source and read the installed
+client build before declaring the experience updated. Device settings are owned
+by the macOS client alone: `⌘,` raises one independent **此 Mac 设置** window that
+preserves the main workspace and stays usable while the Web server is unreachable
+or was never configured. In the running client the avatar menu's **此 Mac 设置…**
+entry must raise that same window, while its **账号与偏好 ↗** entry must open the
+account pages in the default browser instead of raising a native window. A
+shortcut-only check cannot verify the avatar path. The browser carries its own
+session, so the handoff names a destination only and never a credential, cookie,
+account identifier or email. If the resident Web is older, keep its release
+active until a clean replacement build and authenticated readback pass.
+
 ## Connection and diagnostics
+
+The optional menu-bar capture entry uses the same configured Web workspace login. On first use it discloses the current workspace and available image processors before an intentional selection can upload. The device-owned capture permission is separate from that login. The ordinary path is configurable shortcut, region selection and release; the Agent then processes an image-only Session message. Settings → This device controls the menu-bar icon, shortcut, default preview choice and optional top status hint. Hiding the icon leaves the main window and Settings reachable. An unadmitted screenshot is encrypted for bounded device recovery, while an admitted image follows the workspace Session/source lifecycle.
 
 **Settings (⌘ ,) → Connection**, the native toolbar and the Web account menu open
 the same native controls. Enter an HTTPS origin or a `/workspace/...` link without
@@ -72,10 +88,17 @@ Copyable diagnostics omit origins, accounts, cookies and conversation content.
 
 `.github/workflows/release-macos.yml` runs after successful trusted `main` CI.
 It compares macOS source, approved icon, packaging, and release policy with the
-last macOS tag and skips unrelated changes. It builds and tests the native app
-at the exact verified revision before publishing a unique `macos-<run>-<attempt>`
-release, Universal DMG/ZIP, and SHA-256 manifest. Preview releases never become
-GitHub's general latest release (which is also used by iOS).
+last published Mac asset and skips unrelated changes. It builds and tests the
+native app at the exact verified revision and uses the same `vX.Y.Z` product
+tag as iOS when both are built from that commit. The user-visible Mac version
+(`CFBundleShortVersionString`) matches the tag; its independent, increasing
+`CFBundleVersion` identifies the native build for Sparkle. The workflow adds
+Universal DMG/ZIP and a SHA-256 manifest to that one GitHub Release, or creates
+it for a Mac-only revision. It never silently replaces published bytes.
+Existing `macos-<run>-<attempt>` releases remain available as history and as
+the migration baseline. Previews never become GitHub's general latest release.
+The rationale and cross-platform boundary are in the
+[shared release identity decision](../decisions/2026-09-29-shared-product-release-identity.md).
 
 Default mode is `preview`. Set repository variable `MACOS_RELEASE_MODE=signed`
 only after provisioning Developer ID signing and notarization. Signed mode
@@ -168,7 +191,8 @@ Run `dev-storage-guard audit`, then obtain a task-owned directory with
 `dev-storage-guard new-artifact macos-distribution`. Pass that path explicitly:
 
 ```sh
-MACOS_OUTPUT_DIR=/absolute/task-artifact scripts/macos/package.sh
+MACOS_VERSION=<product-tag-version> MACOS_BUILD_NUMBER=<next-native-build> \
+  MACOS_OUTPUT_DIR=/absolute/task-artifact scripts/macos/package.sh
 ```
 
 The package script verifies both architectures, icon presence, absence of a

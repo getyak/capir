@@ -1,13 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const { auth, loadAccountSettings, claims } = vi.hoisted(() => ({
+const { auth, loadAccountSettings, claims, redirect, webRelease } = vi.hoisted(() => ({
   auth: vi.fn(),
   loadAccountSettings: vi.fn(),
   claims: vi.fn(),
+  redirect: vi.fn(),
+  webRelease: vi.fn(),
 }));
 
 vi.mock("@/auth", () => ({ auth }));
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  redirect,
+}));
 vi.mock("@/lib/server/accountBackend", () => ({ loadAccountSettings }));
 vi.mock("@/lib/server/backendAuth", () => ({
   readBackendSessionClaims: claims,
@@ -16,6 +22,7 @@ vi.mock("@/lib/server/backendAuth", () => ({
 vi.mock("@/lib/server/contact-handoff-session", () => ({
   contactHandoffSessionVersion: () => "session-version",
 }));
+vi.mock("@/lib/web-release", () => ({ readWebReleaseIdentity: webRelease }));
 
 import SettingsPage from "@/app/workspace/settings/page";
 
@@ -55,6 +62,17 @@ const account = {
 };
 
 describe("settings page server composition", () => {
+  beforeEach(() => {
+    // Next's redirect throws a control-flow error; mirror it so the page stops
+    // and the test can assert the exact callback target.
+    redirect.mockImplementation((url: string) => {
+      throw Object.assign(new Error("NEXT_REDIRECT"), {
+        digest: `NEXT_REDIRECT;replace;${url};307;`,
+      });
+    });
+    webRelease.mockReturnValue({ revision: "a12d51bc", source: "release_file" });
+  });
+
   afterEach(() => vi.clearAllMocks());
 
   it("renders every section from the server without calling a client predicate", async () => {
@@ -70,6 +88,7 @@ describe("settings page server composition", () => {
       "workspace",
       "appearance",
       "connections",
+      "versions",
       "advanced",
       "testing",
     ]) {
@@ -92,6 +111,97 @@ describe("settings page server composition", () => {
     );
     expect(html).toContain("账号与安全");
     expect(html).not.toContain("测试与诊断");
+  });
+
+  it("carries a validated section into the login callback", async () => {
+    auth.mockResolvedValue(null);
+    await expect(
+      SettingsPage({ searchParams: Promise.resolve({ section: "connections" }) }),
+    ).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirect).toHaveBeenCalledWith(
+      "/login?callbackUrl=%2Fworkspace%2Fsettings%3Fsection%3Dconnections",
+    );
+  });
+
+  it("preserves every schema section through login", async () => {
+    auth.mockResolvedValue(null);
+    for (const section of [
+      "overview",
+      "account",
+      "workspace",
+      "appearance",
+      "connections",
+      "versions",
+      "advanced",
+      "testing",
+    ]) {
+      redirect.mockClear();
+      await expect(
+        SettingsPage({ searchParams: Promise.resolve({ section }) }),
+      ).rejects.toThrow("NEXT_REDIRECT");
+      // The overview is the canonical bare route, exactly as its nav href is;
+      // every other section is preserved as an allowlisted query value.
+      const returnPath = section === "overview"
+        ? "/workspace/settings"
+        : `/workspace/settings?section=${section}`;
+      expect(redirect).toHaveBeenCalledWith(
+        `/login?callbackUrl=${encodeURIComponent(returnPath)}`,
+      );
+    }
+  });
+
+  it("drops unknown, malformed, and empty sections instead of reflecting them", async () => {
+    auth.mockResolvedValue(null);
+    for (const section of [
+      undefined,
+      "",
+      "billing",
+      "connections ",
+      "//evil.example",
+      "https://evil.example/login",
+      "/login?callbackUrl=https://evil.example",
+    ]) {
+      redirect.mockClear();
+      await expect(
+        SettingsPage({
+          searchParams: Promise.resolve(section === undefined ? {} : { section }),
+        }),
+      ).rejects.toThrow("NEXT_REDIRECT");
+      expect(redirect).toHaveBeenCalledWith("/login?callbackUrl=%2Fworkspace%2Fsettings");
+    }
+  });
+
+  it("passes only the validated Web release identity into the versions pane", async () => {
+    auth.mockResolvedValue({ user: { name: "林顾问" } });
+    loadAccountSettings.mockResolvedValue(account);
+    claims.mockResolvedValue(null);
+    const html = renderToStaticMarkup(
+      await SettingsPage({ searchParams: Promise.resolve({ section: "versions" }) }),
+    );
+    expect(html).toContain("版本与状态");
+    expect(html).toContain("a12d51bc");
+    expect(html).toContain("来源：");
+    expect(html).toContain("读取于");
+  });
+
+  it("renders unknown version states when no Web release identity is available", async () => {
+    auth.mockResolvedValue({ user: { name: "林顾问" } });
+    loadAccountSettings.mockResolvedValue(account);
+    claims.mockResolvedValue(null);
+    webRelease.mockReturnValue(null);
+    const html = renderToStaticMarkup(
+      await SettingsPage({ searchParams: Promise.resolve({ section: "versions" }) }),
+    );
+    expect(html).toContain("无法确认版本");
+    expect(html).not.toContain("最新");
+  });
+
+  it("does not read release metadata for an unauthenticated request", async () => {
+    auth.mockResolvedValue(null);
+    await expect(
+      SettingsPage({ searchParams: Promise.resolve({ section: "versions" }) }),
+    ).rejects.toThrow("NEXT_REDIRECT");
+    expect(webRelease).not.toHaveBeenCalled();
   });
 
   it("renders a truthful unavailable pane when settings cannot be read", async () => {

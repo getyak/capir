@@ -9,7 +9,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>$(DEVELOPMENT_LANGUAGE)</string>
     <key>CFBundleDisplayName</key>
-    <string>Talent Signal</string>
+    <string>capri</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -50,19 +50,19 @@
         <true/>
     </dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Talent Signal records audio only after you confirm authorization and tap Start while the app is in the foreground.</string>
+	<string>capri records audio only after you confirm authorization and tap Start while the app is in the foreground.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>Talent Signal opens Apple&apos;s contact editor only after you review the exact fields you want to add.</string>
+	<string>capri opens Apple&apos;s contact editor only after you review the exact fields you want to add.</string>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
-	<string>Talent Signal adds an event to your default calendar only after you confirm its title and time in the app.</string>
+	<string>capri adds an event to your default calendar only after you confirm its title and time in the app.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Talent Signal uses full Calendar access only to find and update the exact linked event after you review and confirm its changes.</string>
+	<string>capri uses full Calendar access only to find and update the exact linked event after you review and confirm its changes.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Talent Signal transcribes only the foreground recording you explicitly start, using on-device speech when available.</string>
+	<string>capri transcribes only the foreground recording you explicitly start, using on-device speech when available.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSPhotoLibraryUsageDescription</key>
-    <string>Talent Signal imports only the conversation screenshot you choose.</string>
+    <string>capri imports only the conversation screenshot you choose.</string>
     <key>TalentSignalEnvironmentProfilesBase64URL</key>
     <string>$(TALENT_SIGNAL_ENVIRONMENT_PROFILES_BASE64URL)</string>
     <key>TalentSignalAPIBaseURLBase64URL</key>

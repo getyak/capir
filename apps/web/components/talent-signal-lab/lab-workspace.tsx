@@ -64,7 +64,7 @@ export function TalentSignalLabWorkspace() {
           ) : (
             <SpinnerGap aria-hidden="true" className={styles.spin} size={26} />
           )}
-          <p className={styles.eyebrow}>Talent Signal Lab</p>
+          <p className={styles.eyebrow}>capri Lab</p>
           <h1>{error ? "Lab 控制面暂时不可用" : "正在连接 Lab 控制面"}</h1>
           <p>
             {error ??
@@ -90,7 +90,7 @@ export function TalentSignalLabWorkspace() {
       <main className={styles.page} id="main-content" tabIndex={-1}>
         <section className={styles.unavailable}>
           <LockKey aria-hidden="true" size={26} />
-          <p className={styles.eyebrow}>Talent Signal Lab</p>
+          <p className={styles.eyebrow}>capri Lab</p>
           <h1>这个构建没有 Lab 权限</h1>
           <p>
             Lab 只在服务端显式启用的内部构建中出现。普通构建不会返回场景、Trace 或版本信息。
@@ -106,7 +106,7 @@ export function TalentSignalLabWorkspace() {
       <header className={styles.pageHeader}>
         <div>
           <p className={styles.eyebrow}>内部产品实验系统</p>
-          <h1>Talent Signal Lab</h1>
+          <h1>capri Lab</h1>
           <p>
             进入一个隔离世界，理解结果来源，稳定复现差异，并把一次感受沉淀为可运行的质量证据。
           </p>

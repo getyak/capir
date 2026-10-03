@@ -3,7 +3,7 @@
 > Quiet relational intelligence for evidence-first relationships.
 ## Design thesis
 
-Talent Signal should feel like a well-edited professional notebook with the precision of an evidence instrument.
+capri should feel like a well-edited professional notebook with the precision of an evidence instrument.
 
 It is not an ATS dashboard, an AI command center, a sales CRM with candidate labels, or a collection of decorative cards.
 
@@ -71,11 +71,11 @@ change which records appear. Preserve that distinction, and keep conflicts,
 uncertain writes, and recovery visible when metadata is collapsed.
 
 Web and desktop conversations use one readable transcript and a stable reply composer. Text, images, or both form one message: choosing, dropping, or pasting images previews them in the composer, and Send places them in the conversation for the Agent to analyze and answer inline. Attachment processing must not redirect ordinary chat through a source-intake modal or require a separate save-and-organize action. An explicit thumbnail action may open the original for inspection. Message images remain untrusted conversation input; consequential writes still require their own review. Sending releases the input immediately; durable admission, forming output, and completion remain distinct. Later messages enter a visible, editable queue; Stop pauses it until explicit continuation. Growing a draft follows the latest reply only when the reader was already there. Keep title, content, and input primary; technical scope and draft utilities belong in named details. Unresolved errors, conflicts, and deletion consequences remain visible. Primary work destinations stay direct; hide successfully empty auxiliary groups, place account utilities with the account, and preserve explicit narrow-screen entries for hidden rail destinations.
+Desktop composition is fixed and quiet: a 68px centered lightweight Session title with details in a named disclosure, one 880px reading and composer axis, centered per-send timestamps, trailing user bubbles, and leading Agent semantic blocks. Live runs show only short milestone updates beside a collapsible execution record of observed states and elapsed time — never a percentage of unknown total work — and the final semantic result stands alone after persisted readback, with pending memory or calendar decisions kept distinct from completed execution. Reopened history keeps that order; a preview never becomes the result.
 
 ### Space is part of the hierarchy
 
-Breathing room gives each mobile viewport one visual resting point and open
-space before the next decision. Avoid feed frames, generic search, repeated
+Breathing room gives each mobile viewport one visual resting point and open space before the next decision. Avoid feed frames, generic search, repeated
 boundary prose, or decorative cards; prefer interaction when copy adds no decision.
 
 ## Information model
@@ -283,7 +283,7 @@ action belongs after the information it commits.
 Desktop starts with the conversation canvas; Today stays directly reachable. Optimize for comparison, provenance, conflict resolution, research, and longitudinal editing.
 Source intake gives material and its next action the main canvas; an empty history does not reserve a second navigation column. Populated records earn an inbox and detail composition.
 Optional intent stays secondary; permission, uncertain saves, and recovery remain visible where they affect a decision.
-Verify rendered structure and interaction in both empty and populated full viewports; a CSS reskin alone is not fidelity. Settings uses stable named sections, a readable edit pane and explicit Edit, Save and Cancel actions. Failures retain drafts. Optional explanations and diagnostics sit behind named disclosures; unresolved failures remain visible. Web settings stays inside the workspace; macOS uses one independent settings window that preserves the main conversation and keeps device controls available offline.
+Verify rendered structure and interaction in both empty and populated full viewports; a CSS reskin alone is not fidelity. Settings uses stable named sections, a readable edit pane and explicit Edit, Save and Cancel actions. Failures retain drafts. Optional explanations and diagnostics sit behind named disclosures; unresolved failures remain visible. Web settings stays inside the workspace; macOS uses one independent settings window that preserves the main conversation and keeps device controls available offline. That window has one navigation owner and holds device controls only; account, appearance and account-connection management open in the default browser, which keeps the client independent of the Web release. A Web surface never redirects into the native window, the embedded workbench never paints the Web settings routes while the browser opens, and an ordinary route change or a refused history call stays visible instead of blanking the workbench. Version status distinguishes installed apps, running services and published releases, with source and check time; independently released components never become "current" merely because their numbers match or a health request succeeded.
 
 ### Channel
 

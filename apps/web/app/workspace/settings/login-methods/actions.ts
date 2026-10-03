@@ -82,7 +82,7 @@ const failure = (error: unknown): LoginMethodActionState => {
     if (error.status === 401) return { error: "登录已过期，请重新登录后继续。" };
     if (error.code === "STEP_UP_FAILED") return { error: "当前身份验证失败，请重试。" };
     if (error.code === "LAST_LOGIN_METHOD") return { error: "请先设置另一种登录方式，再解除这一个。" };
-    if (error.code === "LOGIN_METHOD_CONFLICT") return { error: "这个提供方账号已连接到另一个 Talent Signal 账号，未做任何合并。" };
+    if (error.code === "LOGIN_METHOD_CONFLICT") return { error: "这个提供方账号已连接到另一个 capri 账号，未做任何合并。" };
     if (error.code === "LOGIN_METHOD_EMAIL_CONFLICT") return { error: "这个提供方邮箱属于另一个账号，邮箱相同不会获得访问权限。" };
     if (error.code === "EMAIL_OWNERSHIP_UNRESOLVED") return { error: "这个邮箱存在历史冲突，请先通过核对流程解决，再设置密码。" };
     if (error.code === "CREDENTIAL_ATTEMPT_INVALID" || error.code === "CREDENTIAL_ATTEMPT_STALE") {

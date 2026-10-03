@@ -26,7 +26,7 @@ export const LabContext = createContext<LabContextValue | null>(null);
 export function useTalentSignalLab(): LabContextValue {
   const value = useContext(LabContext);
   if (!value) {
-    throw new Error("Talent Signal Lab must be rendered inside its workspace shell.");
+    throw new Error("capri Lab must be rendered inside its workspace shell.");
   }
   return value;
 }
