@@ -190,3 +190,19 @@ Repair6 also completes the outstanding single-page inbound catalog composition,
 canonical light/dark tokens, readiness gating and accurate secret contracts.
 Batch5's claim that tokens were corrected was contradicted by source readback;
 its tests do not prove visual acceptance. No final product rollout or PR exists.
+
+Batch6 added the shared locked settlement guard, legitimate null-session result
+retention and atomic OAuth publication. Pi reports 26 integration cases passing,
+including SQL barriers; final independent closure is still required. Parent
+paused at turn436 after that checkpoint because a separate narrow review
+confirmed missing OAuth broker credential cleanup on disconnect/replacement and
+Lab stop. Ordinary disconnect retains secondary recovery identity, but Lab bulk
+deletion removes it. No account-retirement defect was confirmed. Scope and
+synthetic-proof limits are recorded in `independent-review-checkpoint-4.md`.
+
+Repair7 resumes the same history and accounting to add durable exact broker
+cleanup, honest local/Nango/provider status, late-grant handling, and the pending
+single-page/theme/readiness work. The page must expose schema-driven parameter
+controls for ordinary tools, such as DeepWiki repoName, before exact approval.
+Parent owns the live service key's necessary delete-scope configuration; it has
+not yet been broadened. No provider credential was read or deleted in this review.
