@@ -64,7 +64,9 @@ is `talent-signal-nango:153f8c54-node22-arm64`.
 `staging:/nango` is separate from product workloads. It supplies encryption,
 PostgreSQL, dashboard and administrative session secrets through transient
 Infisical injection. Never regenerate the encryption key on restart: persisted
-credentials would become unreadable. Back up the encrypted database and its
+credentials would become unreadable. Leave `RECORDS_DATABASE_URL` unset: the
+pinned upstream defaults URL-encode the username/password and use the same
+configured database, preserving passwords with URL-reserved characters. Back up the encrypted database and its
 separately protected key under the owner's recovery policy before upgrades.
 
 `staging:/backend` receives a dedicated environment service key with exactly
@@ -85,8 +87,8 @@ Run from a reviewed checkout after validating the local pinned images:
 ./scripts/infisical/run.sh staging /nango -- node scripts/infisical/verify-contract.mjs localNango
 ./scripts/infisical/run.sh staging /nango -- docker compose -f compose.nango.yaml build server
 ./scripts/infisical/run.sh staging /nango -- docker compose -f compose.nango.yaml up --detach --wait
-curl --fail http://127.0.0.1:4303/health
-curl --fail http://127.0.0.1:4309/health
+curl --fail http://127.0.0.1:4303/ready
+curl --fail http://127.0.0.1:4309/
 ```
 
 Configure only the two service ports while preserving every other Serve mapping:
@@ -96,8 +98,11 @@ tailscale serve --bg --yes --https=15443 http://127.0.0.1:4303
 tailscale serve --bg --yes --https=16443 http://127.0.0.1:4309
 ```
 
-Read back the two HTTPS health endpoints and an actual backend-created Connect
-session. Health alone is not authorization proof. A successful Connect session
+Read back the HTTPS API `/ready`, the Connect UI static page and an actual
+backend-created Connect session. `/ready` checks the initial database connection
+and shutdown state, then caches success; it is not ongoing database monitoring.
+The Connect UI `/health` route returns the SPA HTML, not a database probe.
+Health alone is not authorization proof. A successful Connect session
 is not a completed provider grant or MCP tool execution. Authoritative polling
 must bind the server-generated request tag, account, user, provider and approved
 endpoint before recording an OAuth connection. The observed session expiry is

@@ -55,7 +55,6 @@ services:
       NANGO_DB_HOST: db
       NANGO_DB_PORT: '5432'
       NANGO_DB_SSL: 'false'
-      RECORDS_DATABASE_URL: postgresql://${NANGO_DB_USER}:${NANGO_DB_PASSWORD}@db:5432/${NANGO_DB_NAME}
       NANGO_REDIS_URL: redis://redis:6379
       NANGO_SECRET_KEY_DEV: ${NANGO_SECRET_KEY_DEV:?required}
       NANGO_SERVER_URL: https://smile-m4-minimac-mini.tail25e61f.ts.net:15443
@@ -77,6 +76,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3003/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
     mem_limit: 2g
     logging: *bounded-logs
 volumes:
