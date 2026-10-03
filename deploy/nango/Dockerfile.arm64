@@ -8,7 +8,11 @@ FROM --platform=linux/amd64 ${UPSTREAM_IMAGE} AS upstream
 FROM --platform=linux/arm64 ${NODE_IMAGE}
 WORKDIR /app/nango
 COPY --from=upstream /app/nango /app/nango
+ARG CONNECT_API_ORIGIN=https://smile-m4-minimac-mini.tail25e61f.ts.net:15443
+COPY deploy/nango/configure-connect-ui.mjs /usr/local/lib/talent-signal-nango/configure-connect-ui.mjs
+RUN node /usr/local/lib/talent-signal-nango/configure-connect-ui.mjs /app/nango/packages/connect-ui/dist "$CONNECT_API_ORIGIN"
 ENV NODE_ENV=production PORT=8080 SERVER_RUN_MODE=DOCKERIZED GIT_HASH=153f8c5450e7dd7049504df4a323e25499369002
 LABEL org.opencontainers.image.source=https://github.com/NangoHQ/nango org.opencontainers.image.revision=153f8c5450e7dd7049504df4a323e25499369002
+LABEL io.talentsignal.nango.connect-api-origin=${CONNECT_API_ORIGIN}
 EXPOSE 3003 3009
 CMD ["packages/server/entrypoint.sh"]

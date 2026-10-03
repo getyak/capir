@@ -29,7 +29,7 @@ services:
     mem_limit: 128m
     logging: *bounded-logs
   server:
-    image: talent-signal-nango:153f8c54-node22-arm64
+    image: talent-signal-nango:153f8c54-node22-arm64-connect1
     pull_policy: never
     restart: unless-stopped
     platform: linux/arm64
@@ -39,6 +39,7 @@ services:
       args:
         UPSTREAM_IMAGE: ${NANGO_UPSTREAM_IMAGE:-nangohq/nango-server@sha256:e4208c41c8cc7cdc2562327552842c42e87bf667798534ccce7ad92b74c11e13}
         NODE_IMAGE: ${NANGO_NODE_IMAGE:-node@sha256:fafa2e47e02abfbc93b0a071b6c409da8568f5cfed66aef54fb7e11c3fb0d921}
+        CONNECT_API_ORIGIN: ${NANGO_CONNECT_API_ORIGIN:-https://smile-m4-minimac-mini.tail25e61f.ts.net:15443}
     ports:
       - 127.0.0.1:4303:3003
       - 127.0.0.1:4309:3009

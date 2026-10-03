@@ -82,3 +82,19 @@ Independent product review also confirmed OAuth terminal-state/concurrency viola
 The final review addendum confirmed additional source boundaries: session deletion/retention must revoke pending MCP authority and clear private derived content; legacy client saves must preserve server-issued card references; asynchronous human results must carry host-only typed provenance rather than become invented human-authored messages. Remote schema regex and unimplemented validation constraints must fail closed. Consolidated feedback4 resumed the same Pi task at282 cumulative turns, with all earlier repairs retained. Origin/main was fetched again and remains3d35363a; no upstream merge change is pending. Notion readback now uses the actual Nango `/ready` startup check and distinguishes Connect UI static access from an OAuth grant. Task-owned image transfer archives were removed after verified imported images/source and redacted receipts were retained;386321920 bytes released. The latest audit reports62GiB free against30GiB; unrelated artifact/simulator tasks remain preserved.
 
 Independent live transport preflight succeeded through the new MCP client: DeepWiki negotiated2025-11-25, exposed three original input schemas, and `read_wiki_structure` for public `facebook/react` returned a genuine2967-character success result. This is transport proof only, not the UI/approval/Agent chain. The configured staging chat-provider synthetic probe also passed through claude-agent-sdk/anthropic/claude-sonnet-5 (9331 input/303 output tokens). Redacted proof is retained in the same ignored preflight directory; no provider credentials or private candidate data were retained.
+
+
+### Connect UI origin repair (2026-10-04)
+
+A fresh, unexpired self-hosted Connect session rendered an expiry error in the
+real browser. Static HTML was 200, but the pinned SPA requested `api.nango.dev`
+and received 401. Source inspection confirmed the store initializer is hardcoded
+and the server removes base URL query parameters when constructing session links.
+Runtime origin configuration and a query suffix are insufficient.
+
+The native wrapper now applies one guarded initializer replacement at image build
+time and gives the modified entry asset a new content hash. The image
+`talent-signal-nango:153f8c54-node22-arm64-connect1` built successfully; independent
+review and a real pre-grant browser readback are pending. No provider grant or
+product acceptance is inferred from this build. The prior compatible image and
+resident encrypted database are preserved.

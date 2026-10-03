@@ -32,8 +32,15 @@ policy blocks private and link-local IPs with at most three redirects.
 Application source is `153f8c5450e7dd7049504df4a323e25499369002` (0.71.12).
 `deploy/nango/Dockerfile.arm64` pins the official hosted AMD64 application and
 native ARM64 Node 22.22.2 images by manifest digest. The upstream application's
-compiled JS/static files are copied without modification and the dependency
-tree contains no `.node` native modules. The native wrapper is needed because
+compiled server JS and dependencies are copied unchanged; the dependency tree
+contains no `.node` native modules. The pinned Connect UI store defaults to
+`https://api.nango.dev`, even when runtime `NANGO_SERVER_URL` points elsewhere.
+`configure-connect-ui.mjs` replaces exactly that store initializer with the
+bare HTTPS `NANGO_CONNECT_API_ORIGIN` (the API address above by default). It
+fails if the pinned signature or entry references change, leaves SDK defaults
+untouched, and renames the patched asset using its content hash to avoid stale
+browser caches. This is a bounded patch to the pinned prebuilt UI, not an
+upstream server change. The native wrapper is needed because
 the official image failed to initialize its HTTP parser under this host's AMD64
 emulator; disabling V8 JIT also disables the WebAssembly parser and is not a
 working workaround.
@@ -57,7 +64,7 @@ nonsecret `NANGO_UPSTREAM_IMAGE` and `NANGO_NODE_IMAGE` build inputs with these
 verified aliases when using the offline import path; defaults remain immutable
 registry digests. Set `NANGO_POSTGRES_IMAGE=postgres:talent-signal-nango-16`
 when using the verified offline PostgreSQL alias. Do not retag an unrelated shared image. The resulting image
-is `talent-signal-nango:153f8c54-node22-arm64`.
+is `talent-signal-nango:153f8c54-node22-arm64-connect1`.
 
 ## Secret delivery
 
@@ -99,7 +106,9 @@ tailscale serve --bg --yes --https=16443 http://127.0.0.1:4309
 ```
 
 Read back the HTTPS API `/ready`, the Connect UI static page and an actual
-backend-created Connect session. `/ready` checks the initial database connection
+backend-created Connect session in a browser. Confirm the session/configuration
+requests reach the owning API on port 15443 and the provider selection appears;
+a static HTTP 200 alone can hide a cloud-API 401 displayed as session expiry. `/ready` checks the initial database connection
 and shutdown state, then caches success; it is not ongoing database monitoring.
 The Connect UI `/health` route returns the SPA HTML, not a database probe.
 Health alone is not authorization proof. A successful Connect session
@@ -116,6 +125,6 @@ an ambiguous post-dispatch timeout remains unknown until reconciled.
 
 For updates preserve the database and encryption key, build the reviewed image,
 apply upstream migrations through the server's entrypoint, and repeat readiness,
-protected API, scoped service-key and Connect-session checks. Roll back the
+protected API, scoped service-key and browser Connect-session checks. Roll back the
 application image only when compatible with the migrated database; database
 rollback requires the owner's protected backup, never an empty replacement.
