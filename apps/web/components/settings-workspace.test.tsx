@@ -28,6 +28,22 @@ async function click(text: string) {
   const button = [...host.querySelectorAll("button")].find(el => el.textContent === text || el.getAttribute("aria-label") === text)!;
   expect(button).toBeTruthy(); await act(() => button.click());
 }
+/**
+ * Submit through the real save submit button, the user path for this form.
+ * A bare `requestSubmit()` is not equivalent here: happy-dom then reports the
+ * form itself as `event.submitter`, which react-dom 19.3 forwards into
+ * `new FormData(form, submitter)` and happy-dom rejects as unowned. Browsers
+ * report a null submitter in that case (the spec maps a form submitter to
+ * null on the event), so this is a test-environment artifact, not the product
+ * submission path.
+ */
+async function submit() {
+  const button = host.querySelector<HTMLButtonElement>('form button[type="submit"]')!;
+  expect(button).toBeTruthy(); await act(async () => button.click());
+}
+function submittedForm(call: number): FormData {
+  return save.mock.calls[call]![1] as FormData;
+}
 it("makes editing explicit and discards a cancelled name draft", async () => {
   expect(host.querySelector('input[name="name"]')).toBeNull();
   expect(host.textContent).toContain("更换头像");
@@ -45,17 +61,28 @@ it("opens the profile editor as a document navigation for the macOS window hando
   expect(edit?.textContent).toContain("编辑资料");
   expect(edit?.hasAttribute("data-next-link")).toBe(false);
 });
-it("keeps the editable name and recovery message after a failed save", async () => {
-  save.mockResolvedValue({ error: "资料已更新，请重新载入后重试。" });
+it("keeps the editable name and recovery message after a failed save, then retries the same operation", async () => {
+  save.mockResolvedValueOnce({ error: "资料已更新，请重新载入后重试。" });
   await click("编辑显示名称");
   const input = host.querySelector<HTMLInputElement>('input[name="name"]')!;
   await act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "新名字");
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await act(() => host.querySelector('form')!.requestSubmit());
+  await submit();
+  expect(save).toHaveBeenCalledTimes(1);
+  expect(submittedForm(0).get("name")).toBe("新名字");
   expect(host.textContent).toContain("资料已更新");
   expect(host.querySelector<HTMLInputElement>('input[name="name"]')?.value).toBe("新名字");
+  save.mockResolvedValueOnce({ saved: true, data: { ...settingsAccount,
+    user: { ...settingsAccount.user, display_name: "新名字" } } });
+  await submit();
+  expect(save).toHaveBeenCalledTimes(2);
+  expect(submittedForm(1).get("name")).toBe("新名字");
+  expect(submittedForm(1).get("operationId")).toBeTruthy();
+  expect(submittedForm(1).get("operationId")).toBe(submittedForm(0).get("operationId"));
+  expect(host.querySelector('input[name="name"]')).toBeNull();
+  expect(host.textContent).toContain("新名字");
 });
 
 it("saves the profile avatar through the shared editor and restores its labelled trigger", async () => {
