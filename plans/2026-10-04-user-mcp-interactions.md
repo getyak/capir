@@ -98,3 +98,16 @@ time and gives the modified entry asset a new content hash. The image
 review and a real pre-grant browser readback are pending. No provider grant or
 product acceptance is inferred from this build. The prior compatible image and
 resident encrypted database are preserved.
+
+The bounded Connect UI patch passed independent review with no confirmed
+P0/P1/P2 and all five targeted signature/origin/cache guard checks. Reviewed
+revision `73ae00a2` was applied to the same resident database. A fresh real
+Notion MCP session now renders “Link Notion (MCP) Account”; API requests hit the
+self-hosted port 15443 with HTTP 200, no cloud API request and zero page errors.
+Evidence: `output/evaluation/user-mcp-interactions-20261004/preflight/`
+`nango-connect-ui-fixed-proof.json` and `nango-connect-ui-fixed.png`. This closes
+the pre-grant UI routing defect only. No provider grant was executed.
+
+Storage audit now reports 70 GiB free against the user-authorized 30 GiB
+minimum. Other tasks' registered artifacts remain untouched. Audit exit 2
+reflects their lifecycle inventory, not inadequate free space.
