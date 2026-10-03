@@ -76,7 +76,7 @@ node "$repo_root/apps/backend/dist/evaluation/runEvidenceReviewAuthorityEvaluati
 
 API_BASE_URL="http://127.0.0.1:$BACKEND_PORT" \
 EVALUATION_ARTIFACT_DIR="$artifact_dir" \
-node "$repo_root/apps/backend/dist/evaluation/runEvaluation.js"
+node "$repo_root/scripts/evaluation/run-private.mjs" eval:backend
 
 API_BASE_URL="http://127.0.0.1:$BACKEND_PORT" \
 EVALUATION_ARTIFACT_DIR="$pursuit_domain_artifact_dir" \

@@ -27,6 +27,10 @@ byte-preserved with unchanged relative fixture identities:
 | `docs/evaluations/` | `evidence/` |
 | `apps/eval-runner/` | `harness/apps/eval-runner/` |
 | `scripts/evals/` | `harness/scripts/evals/` |
+| Embedded Web/iOS eight-case corpus | Optional private development loader/resources |
+| Extension bundled corpus | Private snapshot injection from the canonical case bank |
+| Screenshot gold/live evaluator | Private `evals/` and `harness/apps/web/` |
+| Backend eight-case evaluator | Private `harness/apps/eval-runner/src/legacyBackendEvaluation.ts` |
 
 Historical evidence bytes, case fixture paths, and fixture digests never
 change. Removed evidence is never replaced by fabricated stub receipts.
@@ -34,7 +38,12 @@ change. Removed evidence is never replaced by fabricated stub receipts.
 The product keeps the runtime evaluation package (`packages/evaluation`, used
 by `labCIVerifier` and `runtimeManifest`), the backend Lab storage and feedback
 SQL, and a minimal authenticated Lab regression consumer
-(`apps/backend/src/evaluation`). Main keeps the `eval:*` alias commands through
+(`apps/backend/src/evaluation`). Self-contained backend integration checks for
+authorization, retention, recovery, identity and database state also stay with
+the implementation they verify; they do not import the private case bank.
+Product image assets and isolated synthetic unit fixtures remain product
+source. A filename containing `evaluation` alone is not a reason to delete a
+runtime contract or its tests. Main keeps the `eval:*` alias commands through
 `scripts/evaluation/run-private.mjs`, which requires an absolute external
 `CAPIR_EVAL_REPO` with the `.capir-evaluation.json` marker, pins the committed
 product revision, and forwards to the private runner. A missing or
@@ -51,15 +60,18 @@ harness files, and generated bundle/media/database artifacts by inspecting
 `git ls-files`, so `git add -f` cannot bypass it.
 
 Product runtime source identity (`phaseOneImplementationSourceDigest`) freezes
-product source, manifests, lockfile, and CI workflow only — not the private
-harness — so a harness-only change cannot re-sign a product proof and an old
-signed proof cannot claim validity for changed product source.
+product source, manifests, lockfile and CI workflow. The private executor
+compares every resolved product dependency node before installing harness-only
+additions, then restores the canonical product lock. Private signed Phase One
+proofs separately bind the private revision and actual harness/case bytes; a
+changed product graph or evaluator invalidates old proof.
 
 ## Consequences
 
 - Evaluation commands in the product fail clearly without a configured private
-  checkout; `apps/backend/src/evaluation/runEvaluation.ts` resolves its corpus
-  fixture from `CAPIR_EVAL_REPO` only.
+  checkout. The legacy backend corpus evaluator and screenshot gold/live
+  evaluator also live in private harness paths; their public aliases forward
+  through the same bridge.
 - Documentation links to extracted artifacts point at
   `github.com/getyak/capir-evals` (blob/tree), and new run output goes to the
   private ignored `runs/` or the product's ignored `output/evaluation/`.

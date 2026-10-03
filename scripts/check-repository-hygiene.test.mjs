@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { checkHygiene, trackedFiles } from "./check-repository-hygiene.mjs";
+import { checkHygiene, checkCorpusContent, trackedFiles } from "./check-repository-hygiene.mjs";
 
 describe("repository hygiene", () => {
   it("rejects extracted evaluation payload and harness paths but keeps the index", () => {
@@ -74,4 +75,15 @@ describe("repository hygiene", () => {
   it("passes for the real tracked repository tree", () => {
     assert.deepEqual(checkHygiene(trackedFiles()), []);
   });
+});
+
+// A renamed source file must not bypass the corpus boundary; isolated product
+// examples do not become a versioned benchmark simply by sharing one phrase.
+it("detects embedded corpus copies while allowing isolated unit data", () => {
+  const messages = ["Synthetic benchmark one", "Synthetic benchmark two", "Synthetic benchmark three"];
+  const hashes = new Set(messages.map(text => createHash("sha256").update(text).digest("hex")));
+  assert.equal(checkCorpusContent(messages.map(text => `text: ${JSON.stringify(text)}`).join(";"), hashes), true);
+  assert.equal(checkCorpusContent(`text: ${JSON.stringify(messages[0])}`, hashes), false);
+  assert.equal(checkCorpusContent(JSON.stringify({artifact:"screenshot-analysis-gold.v1",cases:[{expected:"oracle"}]})), true);
+  assert.equal(checkCorpusContent(JSON.stringify({artifact:"unit-fixture",cases:[{expected:"shape"}]})), false);
 });

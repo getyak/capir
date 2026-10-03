@@ -20,7 +20,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { signOutOfWorkspace } from "@/app/login/actions";
 import { clearAllPendingMeetingDraftIntents } from "@/lib/meeting-draft-pending";
 import { clearAllPendingSessionDrafts } from "./session-workbench/session-draft-pending";
@@ -63,9 +63,9 @@ function initialsForUser(name?: string | null, email?: string | null) {
     .toUpperCase();
 }
 
-function getInitialReviews(dataset: CandidateMomentumDataset) {
+function getInitialReviews(dataset: CandidateMomentumDataset | null) {
   return Object.fromEntries(
-    dataset.cases.map((fixtureCase) => [
+    (dataset?.cases ?? []).map((fixtureCase) => [
       fixtureCase.id,
       createCaseReview(fixtureCase),
     ]),
@@ -83,7 +83,7 @@ function getSourceState(source: WorkspaceDataSource) {
   if (source.kind === "fixture-local") {
     return "本地测试数据";
   }
-  return "仅示例";
+  return "不可用";
 }
 
 function getAttentionCopy(
@@ -95,7 +95,7 @@ function getAttentionCopy(
       label: "解决身份问题",
       title: "审阅任何事实前，请先选择项目背景。",
       detail:
-        "来源中提到 Alex Chen，但不足以将其绑定到任何一条记录。",
+        "来源提到的同名身份不足以绑定到任何一条记录。",
     };
   }
   if (hasUnresolvedTime(fixtureCase, review)) {
@@ -103,7 +103,7 @@ function getAttentionCopy(
       label: "解决来源时间",
       title: "时区明确前，将相对日期保持为未解决。",
       detail:
-        "采集发生在两天后，且来源时区缺失。",
+        "采集时间晚于消息时间，且来源时区缺失。",
     };
   }
   if (fixtureCase.expected.disposition === "block") {
@@ -194,6 +194,112 @@ function outcomeCopy(status: OutcomeStatus) {
   return copy[status];
 }
 
+function ReviewMain({ children }: { children: ReactNode }) {
+  return (
+    <main id="main-content" className="review-main" tabIndex={-1}>
+      {children}
+    </main>
+  );
+}
+
+function WorkspaceCorpusUnavailable({
+  source,
+  user,
+}: {
+  source: WorkspaceDataSource;
+  user: { email?: string | null; name?: string | null };
+}) {
+  return (
+    <div className="review-workspace">
+      <aside className="review-sidebar">
+        <div className="review-sidebar__brand">
+          <BrandMark compact />
+          <span>capri</span>
+        </div>
+
+        <div className="review-sidebar__scope">
+          <p>依据审阅</p>
+          <span>语料不可用</span>
+        </div>
+
+        <nav aria-label="候选人进展测试案例">
+          <p className="review-sidebar__empty">当前没有可展示的案例。</p>
+        </nav>
+
+        <div className="review-sidebar__foot">
+          <Link href="/workspace">
+            <ArrowLeft aria-hidden="true" size={16} />
+            规范流程
+          </Link>
+          <Link href="/">
+            <ArrowSquareOut aria-hidden="true" size={16} />
+            产品网站
+          </Link>
+          <form
+            action={signOutOfWorkspace}
+            onSubmit={() => {
+              clearTimeWorkspaceStorage();
+              clearAllPendingMeetingDraftIntents();
+              clearAllPendingSessionDrafts();
+            }}
+          >
+            <button type="submit">
+              <SignOut aria-hidden="true" size={16} />
+              退出登录
+            </button>
+          </form>
+        </div>
+      </aside>
+
+      <div className="review-stage">
+        <header className="review-topbar">
+          <div className="review-topbar__source" data-source={source.kind}>
+            <Database aria-hidden="true" size={16} />
+            <span>
+              <strong>{source.label}</strong>
+              <small>{getSourceState(source)}</small>
+            </span>
+          </div>
+          <div className="review-user">
+            <ThemeToggle />
+            <span>{initialsForUser(user.name, user.email)}</span>
+            <div>
+              <strong>{user.name ?? "招聘顾问"}</strong>
+              <small>{user.email ?? "已登录"}</small>
+            </div>
+          </div>
+        </header>
+
+        <ReviewMain>
+          <section
+            className="review-source-note"
+            aria-label="工作区数据来源"
+          >
+            <strong>{source.label}</strong>
+            <p>{source.detail}</p>
+            <button type="button" onClick={() => window.location.reload()}>
+              <ArrowCounterClockwise aria-hidden="true" size={15} />
+              刷新来源
+            </button>
+          </section>
+
+          <section
+            className="review-attention"
+            aria-labelledby="corpus-unavailable-title"
+            data-corpus-unavailable="true"
+          >
+            <p>评测语料不可用</p>
+            <h2 id="corpus-unavailable-title">这里不会展示任何示例案例。</h2>
+            <span>
+              当前未提供评测案例。请返回主工作区继续使用正常业务流程。
+            </span>
+          </section>
+        </ReviewMain>
+      </div>
+    </div>
+  );
+}
+
 function CaseRailItem({
   fixtureCase,
   onSelect,
@@ -235,12 +341,13 @@ export function WorkspaceApp({
   source,
   user,
 }: {
-  dataset: CandidateMomentumDataset;
+  dataset: CandidateMomentumDataset | null;
   source: WorkspaceDataSource;
   user: { email?: string | null; name?: string | null };
 }) {
-  const [selectedId, setSelectedId] =
-    useState<CandidateMomentumCase["id"]>("TS-CORE-01");
+  const [selectedId, setSelectedId] = useState<CandidateMomentumCase["id"]>(
+    dataset?.cases[0]?.id ?? "TS-CORE-01",
+  );
   const [reviews, setReviews] = useState(() => getInitialReviews(dataset));
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
@@ -261,20 +368,30 @@ export function WorkspaceApp({
   }
 
   const fixtureCase =
-    dataset.cases.find((item) => item.id === selectedId) ?? dataset.cases[0];
-  const review = reviews[fixtureCase.id];
+    dataset?.cases.find((item) => item.id === selectedId) ?? dataset?.cases[0];
+
+  const selectedIndex = fixtureCase && dataset
+    ? dataset.cases.findIndex((item) => item.id === fixtureCase.id)
+    : -1;
+
+  if (!dataset || !fixtureCase) {
+    return (
+      <WorkspaceCorpusUnavailable
+        source={source}
+        user={user}
+      />
+    );
+  }
+
+  const review = reviews[fixtureCase.id] ?? createCaseReview(fixtureCase);
   const attention = getAttentionCopy(fixtureCase, review);
   const progress = getCaseProgress(fixtureCase, review);
-
-  const selectedIndex = useMemo(
-    () => dataset.cases.findIndex((item) => item.id === fixtureCase.id),
-    [dataset.cases, fixtureCase.id],
-  );
+  const activeCase: CandidateMomentumCase = fixtureCase;
 
   function updateReview(transform: (current: CaseReview) => CaseReview) {
     setReviews((current) => ({
       ...current,
-      [fixtureCase.id]: transform(current[fixtureCase.id]),
+      [activeCase.id]: transform(current[activeCase.id]),
     }));
   }
 
@@ -342,7 +459,7 @@ export function WorkspaceApp({
   function resetSelectedCase() {
     setReviews((current) => ({
       ...current,
-      [fixtureCase.id]: createCaseReview(fixtureCase),
+      [activeCase.id]: createCaseReview(activeCase),
     }));
     setEditingField(null);
     setEditDraft("");
@@ -365,7 +482,7 @@ export function WorkspaceApp({
 
         <div className="review-sidebar__scope">
           <p>依据审阅</p>
-          <span>八个合成案例</span>
+          <span>{dataset.cases.length} 个合成案例</span>
         </div>
 
         <nav aria-label="候选人进展测试案例">
@@ -419,7 +536,7 @@ export function WorkspaceApp({
           </div>
         </header>
 
-        <main id="main-content" className="review-main" tabIndex={-1}>
+        <ReviewMain>
           <section
             className="review-source-note"
             aria-label="工作区数据来源"
@@ -550,7 +667,7 @@ export function WorkspaceApp({
                     <div>
                       <p>身份歧义</p>
                       <h2 id="identity-resolution-title">
-                        此来源属于哪位 Alex Chen？
+                        此来源属于哪位候选人？
                       </h2>
                     </div>
                     <LockKey aria-hidden="true" size={20} />
@@ -1165,7 +1282,7 @@ export function WorkspaceApp({
               </details>
             </div>
           </div>
-        </main>
+        </ReviewMain>
       </div>
     </div>
   );

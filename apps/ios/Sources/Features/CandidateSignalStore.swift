@@ -53,14 +53,15 @@ enum SignalFlowStage: Equatable {
 @MainActor
 final class CandidateSignalStore: ObservableObject {
     @Published private(set) var stage: SignalFlowStage = .idle
-    @Published private(set) var suite = FixtureCatalog.bundled
+    @Published private(set) var suite: FixtureSuite?
     @Published private(set) var session: ReviewSession?
     @Published var selectedFixtureID = "TS-CORE-01"
     @Published var localhostAddress = "http://127.0.0.1:8787/candidate-momentum-v1.json"
     @Published var backendAddress = "http://127.0.0.1:4317"
-    @Published private(set) var sourceNotice = "Bundled synthetic suite · 8 cases · \(FixtureCatalog.version)"
+    @Published private(set) var sourceNotice: String
     @Published private(set) var backendSnapshot: BackendWorkspaceSnapshot?
 
+    private let resourceSuite: FixtureSuite?
     private let loader: FixtureLoading
     private let backendLoader: BackendWorkspaceLoading
     private let importDelayNanoseconds: UInt64
@@ -70,13 +71,32 @@ final class CandidateSignalStore: ObservableObject {
         loader: FixtureLoading = URLFixtureLoader(),
         backendLoader: BackendWorkspaceLoading = URLBackendWorkspaceLoader(),
         importDelayNanoseconds: UInt64? = nil,
+        fixtureSuite: FixtureSuite? = FixtureCatalog.loadResourceSuite(),
         launchConfiguration: AppLaunchConfiguration = .current
     ) {
         self.loader = loader
         self.backendLoader = backendLoader
         self.importDelayNanoseconds = importDelayNanoseconds
             ?? Self.configuredImportDelayNanoseconds()
+        // Explicit injection supports isolated unit cases; an empty injected
+        // suite still means unavailable. Production resources are validated.
+        let availableSuite: FixtureSuite? = fixtureSuite.flatMap { $0.cases.isEmpty ? nil : $0 }
+        resourceSuite = availableSuite
+        suite = availableSuite
+        sourceNotice = Self.resourceNotice(for: availableSuite)
         apply(launchConfiguration)
+    }
+
+    static func resourceNotice(for fixtureSuite: FixtureSuite?) -> String {
+        guard let fixtureSuite else {
+            return "Evaluation corpus unavailable · no synthetic fixture cases in this build"
+        }
+        return "Bundled synthetic suite · \(fixtureSuite.cases.count) cases · \(fixtureSuite.version)"
+    }
+
+    /// False when the optional evaluation corpus is not part of this build.
+    var fixtureCorpusAvailable: Bool {
+        suite != nil
     }
 
     deinit {
@@ -85,6 +105,15 @@ final class CandidateSignalStore: ObservableObject {
 
     func beginFixtureImport() {
         let fixtureID = selectedFixtureID
+        guard let suite else {
+            stage = .importFailed(
+                ImportFailure(
+                    kind: .fixture(fixtureID),
+                    message: StoreError.fixtureCorpusUnavailable.localizedDescription
+                )
+            )
+            return
+        }
         start(kind: .fixture(fixtureID)) { [weak self] in
             guard let self else { return }
             try await Task.sleep(nanoseconds: importDelayNanoseconds)
@@ -302,9 +331,9 @@ final class CandidateSignalStore: ObservableObject {
     func reset() {
         cancelCurrentTask()
         session = nil
-        suite = FixtureCatalog.bundled
+        suite = resourceSuite
         backendSnapshot = nil
-        sourceNotice = "Bundled synthetic suite · 8 cases · \(FixtureCatalog.version)"
+        sourceNotice = Self.resourceNotice(for: resourceSuite)
         stage = .idle
     }
 
@@ -382,8 +411,15 @@ final class CandidateSignalStore: ObservableObject {
         switch configuration.scenario {
         case let .fixture(id):
             selectedFixtureID = id
-            if let fixture = FixtureCatalog.fixture(id: id) {
+            if let fixture = suite.flatMap({ FixtureCatalog.fixture(id: id, in: $0) }) {
                 open(fixture)
+            } else {
+                stage = .importFailed(
+                    ImportFailure(
+                        kind: .fixture(id),
+                        message: (suite == nil ? StoreError.fixtureCorpusUnavailable : StoreError.fixtureMissing).localizedDescription
+                    )
+                )
             }
         case .unrelatedImage:
             session = nil
@@ -399,7 +435,15 @@ final class CandidateSignalStore: ObservableObject {
                 )
             )
         case .stalePreview:
-            guard let fixture = FixtureCatalog.fixture(id: "TS-CORE-01") else { return }
+            guard let fixture = suite.flatMap({ FixtureCatalog.fixture(id: "TS-CORE-01", in: $0) }) else {
+                stage = .importFailed(
+                    ImportFailure(
+                        kind: .fixture("TS-CORE-01"),
+                        message: (suite == nil ? StoreError.fixtureCorpusUnavailable : StoreError.fixtureMissing).localizedDescription
+                    )
+                )
+                return
+            }
             var staleSession = ReviewSession(fixture: fixture)
             for fact in staleSession.facts {
                 _ = staleSession.confirm(factID: fact.id)
@@ -433,9 +477,15 @@ final class CandidateSignalStore: ObservableObject {
 
 enum StoreError: LocalizedError {
     case fixtureMissing
+    case fixtureCorpusUnavailable
 
     var errorDescription: String? {
-        "The selected synthetic fixture is not present in this suite."
+        switch self {
+        case .fixtureMissing:
+            return "The selected synthetic fixture is not present in this suite."
+        case .fixtureCorpusUnavailable:
+            return "Evaluation cases are unavailable in this build. Nothing was changed."
+        }
     }
 }
 

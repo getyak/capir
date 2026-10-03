@@ -61,8 +61,9 @@ Contract:
 
 ## Precise main-branch limitations
 
-- This repository tracks no evaluation corpus, fixtures, historical evidence,
-  or evaluation harness. `evals/` holds only this index file.
+- This repository tracks no versioned Eval corpus, historical evaluation evidence,
+  or dedicated corpus evaluation harness. Product unit fixtures and runtime
+  integrity checks remain self-contained. `evals/` holds only this index file.
 - Public CI runs only credential-free product verification: runtime and
   control-plane package tests, backend Lab regression consumer tests, and
   repository policy. Private case, semantic, and release evaluations are
@@ -71,9 +72,9 @@ Contract:
 - `pnpm eval:*` commands fail with an actionable error unless a private
   `capir-evals` checkout is configured. This is intentional: missing
   evaluation is never a passing result.
-- The legacy corpus-backed evaluator
-  (`apps/backend/src/evaluation/runEvaluation.ts`) resolves its fixture from
-  `CAPIR_EVAL_REPO` and fails clearly when it is not configured.
+- `pnpm eval:backend` invokes the legacy corpus-backed evaluator in private
+  `harness/apps/eval-runner/src/legacyBackendEvaluation.ts`;
+  `pnpm eval:screenshot:live` requires explicit live-provider opt-in.
 - Signed proofs recorded before GET-134 are historical evidence for the
   sources they name. Product source identity is frozen independently of the
   removed harness, so old signed proofs are not valid for changed source.

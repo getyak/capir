@@ -84,6 +84,8 @@
     "prompts:status": "pnpm --filter @talent-signal/agent build && node scripts/prompts/opik.mjs status",
     "prompts:import": "pnpm --filter @talent-signal/agent build && node scripts/prompts/opik.mjs import",
     "eval:relationships:check": "node scripts/evaluation/run-private.mjs eval:relationships:check",
-    "eval:relationships:live": "node scripts/evaluation/run-private.mjs eval:relationships:live"
+    "eval:relationships:live": "node scripts/evaluation/run-private.mjs eval:relationships:live",
+    "eval:backend": "node scripts/evaluation/run-private.mjs eval:backend",
+    "eval:screenshot:live": "node scripts/evaluation/run-private.mjs eval:screenshot:live"
   }
 }

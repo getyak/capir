@@ -15,6 +15,8 @@
  *    fixtures, and release source are never rejected.
  */
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +27,14 @@ export const FORBIDDEN_EVAL_PREFIXES = [
   "scripts/evals/",
 ];
 export const FORBIDDEN_EVAL_EXACT = new Set([
+  "apps/browser-extension/load-unpacked/fixtures/candidate-momentum-v1.json",
+  "apps/ios/Resources/candidate-momentum-v1.json",
+  "apps/backend/src/evaluation/runEvaluation.ts",
+  "apps/web/test/fixtures/screenshot-analysis-gold.v1.json",
+  "apps/web/lib/server/screenshot-analysis.live.test.ts",
+  "apps/web/lib/test/screenshot-analysis-gold.ts",
+  "apps/web/lib/test/screenshot-analysis-gold.test.ts",
+  "apps/web/lib/test/private-candidate-momentum.test.ts",
   "apps/browser-extension/tests/fixture-contract.test.mjs",
   "apps/browser-extension/scripts/capture-round-2-evidence.mjs",
   "apps/browser-extension/scripts/compose-round-2-panel.mjs",
@@ -117,8 +127,49 @@ export function trackedFiles(root = process.cwd()) {
   return result.stdout.split("\0").filter(Boolean);
 }
 
+
+// Fingerprints identify complete duplicated benchmark messages without
+// embedding private case text in this public policy file.
+const CASE_MESSAGE_SHA256 = new Set([
+  "49a658c5b833ee74c7acf17c752bf8b58e0c9999244a611b9d43666050ffa30c",
+  "581aae78e948bc40b6652d94dbf5e26a3b48c814aad19361bc03444e58731408",
+  "640bb02fc4eb107cdbaf7661056f3ac99ff0c7c42298fe2378eb0abe36f4afa8",
+  "65d40a310c5f3e5d35accac93f2f1a8736dde9df58df322f5c916b589b718a07",
+  "6e0e7fb0ffb72551d7e8d94db688517cf3df68e5dc4df887a6d9e1c10992e691",
+  "79795d71d309adf3db2bf719b9344a95bd503dfab37741546141faef4d2ad546",
+  "d9d5ab354020477b7306d558a9f508261c33dbbef1d278aa2dd770df52fae17a",
+  "eb0ebcd39c8f212a9f109243aad6e15b06018130ffff986f711393fd3a2a180b",
+  "f06e68c2bbc75148419d25e2d9ef4f57f8cee5a4248af552e06dccf0058064f1"
+]);
+export function checkCorpusContent(content, fingerprints = CASE_MESSAGE_SHA256) {
+  try {
+    const json = JSON.parse(content);
+    if (json?.artifact === "screenshot-analysis-gold.v1" && Array.isArray(json.cases)) return true;
+    if (json?.suite_id === "talent-signal-candidate-momentum-v1" && Array.isArray(json.cases)
+      && json.cases.length === 8 && json.cases.every(item => item?.expected && Array.isArray(item.messages))) return true;
+  } catch { /* Code and prose are checked by literal fingerprints below. */ }
+  const matched = new Set();
+  for (const [literal] of content.matchAll(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g)) {
+    let value;
+    try { value = literal.startsWith('"') ? JSON.parse(literal) : literal.slice(1, -1); } catch { continue; }
+    const digest = createHash("sha256").update(value).digest("hex");
+    if (fingerprints.has(digest)) matched.add(digest);
+  }
+  return matched.size >= 3;
+}
+export function checkTrackedCorpus(root = process.cwd(), paths = trackedFiles(root)) {
+  const errors = [];
+  for (const path of paths) {
+    if (!/\.(json|[cm]?js|tsx?|swift)$/.test(path)) continue;
+    const content = readFileSync(resolve(root, path), "utf8");
+    if (checkCorpusContent(content)) errors.push(`${path}: duplicated evaluation corpus belongs in the private repository`);
+  }
+  return errors;
+}
+
 function main() {
-  const errors = checkHygiene(trackedFiles());
+  const paths = trackedFiles();
+  const errors = [...checkHygiene(paths), ...checkTrackedCorpus(process.cwd(), paths)];
   if (errors.length > 0) {
     for (const error of errors) console.error(`ERROR ${error}`);
     console.error(`Repository hygiene check failed with ${errors.length} error(s).`);

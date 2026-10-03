@@ -37,10 +37,21 @@ original image stays on-device in this slice; the local backend receives
 recruiter-reviewed text and governed source metadata.
 
 The app also retains the synthetic candidate-momentum fixture loop for bounded
-review and action testing. It keeps provider keys out of the app bundle and
-never performs a candidate-facing or external-system write from screenshot
-capture. Deterministic launch routing and localhost sessions are compiled out
-of Release; a Release-specific test verifies those arguments are inert.
+review and action testing. The eight-case evaluation corpus itself is not
+bundled in the app (GET-134); its only authoritative home is the private
+[getyak/capir-evals](https://github.com/getyak/capir-evals) repository. Private,
+disposable evaluation runs may inject the canonical
+`evals/candidate-momentum-v1.json` as `Resources/candidate-momentum-v1.json`,
+and the localhost fixture sync reads the same file served directly from a
+loopback root (default `http://127.0.0.1:8787/candidate-momentum-v1.json`,
+configurable via `--endpoint` or `TS_IOS_FIXTURE_URL` in UI tests). Without that
+optional resource the fixture picker shows a clear corpus-unavailable state,
+fixture imports fail truthfully without creating review state, and dedicated
+fixture UI tests skip explicitly instead of claiming unavailable coverage. It
+keeps provider keys out of the app bundle and never performs a candidate-facing
+or external-system write from screenshot capture. Deterministic launch routing
+and localhost sessions are compiled out of Release; a Release-specific test
+verifies those arguments are inert.
 
 ## Talent Signal Lab
 

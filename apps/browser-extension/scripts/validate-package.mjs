@@ -11,7 +11,8 @@ const requiredFiles = [
   "sidepanel.html",
   "sidepanel.css",
   "sidepanel.js",
-  "fixtures/candidate-momentum-v1.json",
+  // The evaluation corpus fixtures/candidate-momentum-v1.json is optional and
+  // private (GET-134); it is injected only by the private harness.
   "icons/icon-16.png",
   "icons/icon-32.png",
   "icons/icon-48.png",

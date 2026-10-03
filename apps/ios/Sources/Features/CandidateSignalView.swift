@@ -444,29 +444,38 @@ struct CandidateSignalView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     SectionLabel(text: "Deterministic review fixtures")
 
-                    Picker("Fixture case", selection: $store.selectedFixtureID) {
-                        ForEach(store.suite.cases) { fixture in
-                            Text("\(fixture.id) · \(fixture.title)")
-                                .tag(fixture.id)
+                    if let fixtureSuite = store.suite {
+                        Picker("Fixture case", selection: $store.selectedFixtureID) {
+                            ForEach(fixtureSuite.cases) { fixture in
+                                Text("\(fixture.id) · \(fixture.title)")
+                                    .tag(fixture.id)
+                            }
                         }
-                    }
-                    .pickerStyle(.menu)
-                    .accessibilityIdentifier("fixture-picker")
+                        .pickerStyle(.menu)
+                        .accessibilityIdentifier("fixture-picker")
 
-                    Text("Fixture data is synthetic and intentionally selected. It is never inferred from the image above.")
-                        .font(.subheadline)
-                        .foregroundStyle(Color.tsMutedInk)
-                        .fixedSize(horizontal: false, vertical: true)
+                        Text("Fixture data is synthetic and intentionally selected. It is never inferred from the image above.")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.tsMutedInk)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    Button {
-                        store.beginFixtureImport()
-                    } label: {
-                        Label("Open selected synthetic case", systemImage: "doc.text.magnifyingglass")
+                        Button {
+                            store.beginFixtureImport()
+                        } label: {
+                            Label("Open selected synthetic case", systemImage: "doc.text.magnifyingglass")
+                        }
+                        .buttonStyle(TSPrimaryButtonStyle())
+                        .accessibilityIdentifier("open-fixture")
+                    } else {
+                        Text("Evaluation cases are unavailable in this build. Device-owned capture and live review remain available.")
+                            .font(.subheadline)
+                            .foregroundStyle(Color.tsMutedInk)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("fixture-corpus-unavailable")
                     }
-                    .buttonStyle(TSPrimaryButtonStyle())
-                    .accessibilityIdentifier("open-fixture")
                 }
                 .tsCard()
+                .accessibilityIdentifier("fixture-review-tools")
 
                 DisclosureGroup(isExpanded: $localhostExpanded) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -548,6 +557,13 @@ struct CandidateSignalView: View {
             detail: failure.message
         ) {
             VStack(alignment: .leading, spacing: 12) {
+                if store.suite == nil {
+                    Text("The synthetic evaluation corpus is not bundled in this build.")
+                        .font(.caption)
+                        .foregroundStyle(Color.tsMutedInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("fixture-corpus-unavailable")
+                }
                 if failure.kind == .localhost || failure.kind == .backend {
                     Button(
                         failure.kind == .backend
