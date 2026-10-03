@@ -170,3 +170,23 @@ Notion login page after clicking Connect. Self-hosted API returned successful
 responses including the OAuth redirect; browser page errors were zero. Evidence:
 `preflight/nango-generic-dcr-redirect-proof.json`. No provider login or grant was
 performed, and this proves the pre-grant flow only, not Proxy/tool-call completion.
+
+### Third intermediate review and repair scope
+
+Pi batch5 finished at 408 turns. Its wrapper rejected a mechanical migration
+freeze update outside the original allowlist. Parent inspected the exact count
+92→94 and digest change and allowed that single checker path; no checks were
+weakened. The same task resumed as repair6 with unchanged provider/model/limits.
+
+Independent production-function VM probes with synthetic database returns
+confirmed late private result/outbox restoration after deletion and lost results
+for legitimate sessionless directory calls. Source review also confirmed a
+non-atomic OAuth revocation/publication window. These three P1 require actual
+PostgreSQL barrier regressions, not only sequential lifecycle assertions. The
+report with source hashes and precise validation limits is preserved in
+`output/evaluation/user-mcp-interactions-20261004/independent-review-checkpoint-3.md`.
+
+Repair6 also completes the outstanding single-page inbound catalog composition,
+canonical light/dark tokens, readiness gating and accurate secret contracts.
+Batch5's claim that tokens were corrected was contradicted by source readback;
+its tests do not prove visual acceptance. No final product rollout or PR exists.
