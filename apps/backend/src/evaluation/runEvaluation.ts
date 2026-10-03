@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -88,16 +89,23 @@ interface PreparedFixture {
 }
 
 const baseUrl = process.env.API_BASE_URL ?? "http://127.0.0.1:4317";
+/** The legacy corpus lives in the private capir-evals repository (GET-134). */
+function privateEvaluationPath(relative: string): string {
+  const root = process.env.CAPIR_EVAL_REPO;
+  if (!root || !isAbsolute(root)) {
+    throw new Error(
+      `CAPIR_EVAL_REPO must point at an absolute capir-evals checkout to run the corpus-backed legacy evaluator (needed for ${relative}); set FIXTURE_PATH explicitly or configure CAPIR_EVAL_REPO`,
+    );
+  }
+  return resolve(root, relative);
+}
 const fixturePath =
-  process.env.FIXTURE_PATH ??
-  fileURLToPath(
-    new URL("../../../../evals/candidate-momentum-v1.json", import.meta.url),
-  );
+  process.env.FIXTURE_PATH ?? privateEvaluationPath("evals/candidate-momentum-v1.json");
 const artifactDir =
   process.env.EVALUATION_ARTIFACT_DIR ??
   fileURLToPath(
     new URL(
-      "../../../../docs/evaluations/overnight/backend",
+      "../../../../output/evaluation/overnight/backend",
       import.meta.url,
     ),
   );

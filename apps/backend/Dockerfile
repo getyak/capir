@@ -25,7 +25,6 @@ COPY packages/evaluation packages/evaluation
 COPY apps/agent apps/agent
 COPY apps/agent-host apps/agent-host
 COPY apps/backend apps/backend
-COPY evals/candidate-momentum-v1.json evals/candidate-momentum-v1.json
 
 RUN pnpm --filter @talent-signal/backend build \
     && pnpm --filter @talent-signal/agent-host build

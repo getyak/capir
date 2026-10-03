@@ -3,11 +3,11 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 check_project="${BACKEND_CHECK_PROJECT:-talent-signal-backend-check-$$}"
-artifact_dir="${BACKEND_CHECK_ARTIFACT_DIR:-$repo_root/docs/evaluations/overnight/backend}"
-pursuit_domain_artifact_dir="${PURSUIT_DOMAIN_ARTIFACT_DIR:-$repo_root/docs/evaluations/2026-08-24-v1-prd-01}"
-pursuit_proposal_artifact_dir="${PURSUIT_PROPOSAL_ARTIFACT_DIR:-$repo_root/docs/evaluations/2026-08-24-v1-prd-04}"
-pursuit_evidence_artifact_dir="${PURSUIT_EVIDENCE_ARTIFACT_DIR:-$repo_root/docs/evaluations/2026-08-24-v1-prd-07}"
-agent_artifact_dir="${AGENT_CONTROL_PLANE_ARTIFACT_DIR:-$repo_root/docs/evaluations/2026-08-24-v1-prd-03}"
+artifact_dir="${BACKEND_CHECK_ARTIFACT_DIR:-$repo_root/output/evaluation/overnight/backend}"
+pursuit_domain_artifact_dir="${PURSUIT_DOMAIN_ARTIFACT_DIR:-$repo_root/output/evaluation/2026-08-24-v1-prd-01}"
+pursuit_proposal_artifact_dir="${PURSUIT_PROPOSAL_ARTIFACT_DIR:-$repo_root/output/evaluation/2026-08-24-v1-prd-04}"
+pursuit_evidence_artifact_dir="${PURSUIT_EVIDENCE_ARTIFACT_DIR:-$repo_root/output/evaluation/2026-08-24-v1-prd-07}"
+agent_artifact_dir="${AGENT_CONTROL_PLANE_ARTIFACT_DIR:-$repo_root/output/evaluation/2026-08-24-v1-prd-03}"
 
 mkdir -p \
   "$artifact_dir" \

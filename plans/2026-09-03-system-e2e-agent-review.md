@@ -83,9 +83,9 @@ either boundary.
 
 ## Final handoff
 
-- System result: [`system-summary.md`](../docs/evaluations/2026-09-03-system-e2e-agent-review/system-summary.md)
-- Final panel: [`panel.json`](../docs/evaluations/2026-09-03-system-e2e-agent-review/panel.json)
-- Post-change source identity: [`post-change-manifest.json`](../docs/evaluations/2026-09-03-system-e2e-agent-review/post-change-manifest.json)
+- System result: [`system-summary.md`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-03-system-e2e-agent-review/system-summary.md)
+- Final panel: [`panel.json`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-03-system-e2e-agent-review/panel.json)
+- Post-change source identity: [`post-change-manifest.json`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-03-system-e2e-agent-review/post-change-manifest.json)
 - Task-owned isolated Docker resources were verified empty after interrupted
   backend attempts. No shared or user-owned project was changed.
 

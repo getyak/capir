@@ -275,7 +275,7 @@ Delivered evidence:
   all reject before EventKit. A native Quick Panel pass reached the final
   destination gate and showed `Synthetic preview never writes to Apple
   Reminders` without a permission prompt or system write. Artifact:
-  [`preview-only reminder`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/reminder-fixture-preview-only.png).
+  [`preview-only reminder`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/reminder-fixture-preview-only.png).
 
 Remaining: observe and record one authorized write, denial, and uncertain
 recovery against a real Apple Reminders account rather than a stub service.
@@ -306,7 +306,7 @@ Delivered evidence:
   when present, otherwise the highest-ranked canonical item. Remaining work
   stays semantically complete in one neutral continuation list. The same order
   remained legible in dark appearance, Reduced Motion, and 200 percent text.
-  Evidence: [`native product audit R2`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-product-audit-r2/audit.md).
+  Evidence: [`native product audit R2`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-product-audit-r2/audit.md).
 - A second native flow audit found that opening Alex Chen from Today discarded
   the selected dependency and landed on a generic local-deletion, scope, and
   empty-intake workbench. Today now opens the exact current projection as a
@@ -314,7 +314,7 @@ Delivered evidence:
   owner, due, evidence availability, and one next move. The projection cannot
   select or confirm relationship scope, and stale item identifiers fail closed.
   Dark appearance, Reduced Motion, and 200 percent text remain vertically
-  reachable without horizontal clipping. Evidence: [`native product audit R3`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-product-audit-r3/audit.md).
+  reachable without horizontal clipping. Evidence: [`native product audit R3`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-product-audit-r3/audit.md).
 - Proposal-led Today detail now shows the exact cited candidate evidence only
   after deliberate navigation. The live adapter admits a fragment only when a
   Proposal item cites it, its attribution is confirmed, its review status is
@@ -350,14 +350,14 @@ Delivered evidence:
   only to inspect the three-card layout, not as usefulness proof.
 - The screenshot-first R4 native audit exercised the whole Today Proposal
   route through an explicit decision and human-language saved result. Evidence:
-  [`native product audit R4`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-product-audit-r4/audit.md).
+  [`native product audit R4`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-product-audit-r4/audit.md).
 - The same route is now operable through app-owned keyboard commands without
   requiring macOS Full Keyboard Access. A native accessibility pass verified
   one-window navigation, unselected/selected decision values, disabled/enabled
   save state, a current `Saved` status, and return-to-Today continuity. The
   completed Proposal leaves the pending queue, increases the no-action count,
   and remains available only as a reversible result in Needs your review.
-  Evidence: [`native keyboard and accessibility audit R1`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-keyboard-accessibility-r1/audit.md).
+  Evidence: [`native keyboard and accessibility audit R1`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-keyboard-accessibility-r1/audit.md).
 - After a relationship review is saved, Today now transitions the active
   conversation from `Review in progress` to `Next move ready` and
   `Relationship saved`. Its action prepares the evidence-bound client question,
@@ -438,7 +438,7 @@ Verification on 2026-09-01:
   rejects unknown fields and duplicate sessions, and emits aggregate timings,
   judgments, action adoption/editing, completion, and scope-review outcomes
   without reproducing session IDs. The focused
-  [field-trial guide](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/field-trial-guide.md)
+  [field-trial guide](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/field-trial-guide.md)
   keeps raw conversation content on the recruiter's Mac.
 - A conservative local Person/Pursuit suggestion appears only when a visible
   candidate-name term uniquely distinguishes one connected scope. Same-name
@@ -544,15 +544,15 @@ Verification on 2026-09-01:
   keeps change, exact evidence, the primary unresolved dependency, next step,
   and three actions in the first viewport. Its restrained vermilion mark is a
   causal redline rather than a full decorative card border. Artifacts:
-  [`expanded baseline`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/first-value-expanded-baseline.png)
-  and [`compact result`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/first-value-compact-final.png).
+  [`expanded baseline`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/first-value-expanded-baseline.png)
+  and [`compact result`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/first-value-compact-final.png).
 - A second 560 × 640 native pass followed the Reminder action. The former
   layout left the entire first-value card above a below-fold governance form;
   the revised layout gives the consequence the foreground, keeps exact
   evidence and the editable effect together, and progressively reveals the
   exact relationship and source-authority gates. Artifacts:
-  [`reminder consequence`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/consequence-reminder-final.png)
-  and [`source authority`](../docs/evaluations/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/consequence-source-review-final.png).
+  [`reminder consequence`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/consequence-reminder-final.png)
+  and [`source authority`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-macos-candidate-follow-up-companion/system/native-quick-panel/consequence-source-review-final.png).
 - Quick Panel scenes now use their 560 × 640 content size as the window size,
   so a restored workspace frame cannot turn the focused companion into a
   resizable, empty-canvas shell.

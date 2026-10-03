@@ -2,4 +2,3 @@ name: "Talent Signal CodeQL config"
 
 paths-ignore:
   - "apps/backend/src/evaluation/**"
-  - "scripts/evals/**"

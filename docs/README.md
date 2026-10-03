@@ -106,8 +106,8 @@ updated.
 - [Internal TestFlight backend on Tailscale](operations/testflight-local-backend.md)
   defines the owner-operated Mac, loopback, tailnet, and no-seed testing
   boundary.
-- [`evaluations/`](evaluations/) contains dated review evidence and generated
-  findings.
+- [Dated review evidence and generated findings](https://github.com/getyak/capir-evals/tree/main/evidence/)
+  live in the private capir-evals repository.
 - Editable architecture sources and rendered diagrams live beside the
   canonical document that explains them.
 

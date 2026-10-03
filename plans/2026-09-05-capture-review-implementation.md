@@ -24,7 +24,7 @@ runtime changes remain intact. No agents are delegated.
 - Add canonical capture readback, current review-basis tokens, source/speaker/date
   guards, durable iOS recovery, truthful receipts, and bounded local-source
   retention. Use the existing visual system and native vertical comparison.
-- The previous [review](../docs/evaluations/2026-09-05-notion-capture-design/report.md)
+- The previous [review](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-notion-capture-design/report.md)
   is the requirement source; this is implementation against existing UI, not a
   new visual direction.
 
@@ -38,7 +38,7 @@ runtime changes remain intact. No agents are delegated.
 ## Result
 
 Completed on 2026-09-05. Direct evidence and final boundaries are recorded in
-[`implementation.md`](../docs/evaluations/2026-09-05-notion-capture-design/implementation.md).
+[`implementation.md`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-notion-capture-design/implementation.md).
 
 ## Completion proof
 

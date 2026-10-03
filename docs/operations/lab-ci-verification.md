@@ -10,7 +10,8 @@ judge answer quality, enable branch protection, or approve a release.
 The independent producer is the **Consume the selected Lab regression** step
 in `.github/workflows/ci.yml`. The backend downloads its report, validates its
 origin and archive hash, and recomputes it against the current authenticated
-case and rerun using the same `packages/evaluation` consumer as the CLI.
+case and rerun using the same `packages/evaluation` consumer as the backend
+consumer command (`apps/backend/src/evaluation/consumeLabRegressionCommand.ts`).
 
 ## Operator configuration
 
@@ -40,7 +41,7 @@ and repository secret `LAB_EVALUATION_SESSION_TOKEN` with an unexpired session
 for a dedicated internal synthetic-data account. This is an ordinary backend
 session, not a restricted read-only credential; its account scope and secret
 handling therefore matter. Do not use a recruiter account containing private
-candidate material. The CLI performs read operations only, rejects redirects,
+candidate material. The consumer command performs read operations only, rejects redirects,
 bounds responses, and rechecks deletion, but those checks do not narrow the
 credential's underlying authority.
 
@@ -91,7 +92,7 @@ closed. No archive file is extracted onto the server filesystem.
 
 ## Verification evidence and references
 
-The [dated evaluation](../evaluations/2026-09-04-lab-ci/README.md) distinguishes
+The [dated evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-ci/README.md) distinguishes
 local protocol/database/native fixtures from actual hosted CI proof. Source
 implementation and locally passing tests alone do not prove a hosted run.
 

@@ -13,7 +13,7 @@ within the owner's delegated scope. Candidate generators and development scorers
 have no access to independent holdouts or release credentials. The separately
 calibrated final judge receives frozen evaluation material only through the
 trusted independent executor; it has no business-action or release authority. No per-case privacy gate is added. Credentials stay
-out of evaluation content. The [GET-12 parameter receipt](../docs/evaluations/2026-09-21-get-12/README.md)
+out of evaluation content. The [GET-12 parameter receipt](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-21-get-12/README.md)
 now records CNY with explicitly unlimited per-run/monthly money, DeepSeek Flash
 and production-inclusive scope. Provider/controller preparation, exact audience
 binding and live acceptance remain with GET-18/20. Implementation, deterministic proof and the existing baseline
@@ -85,7 +85,7 @@ outbox/runtime integration respectively. Independent review follows integration.
    build. Actual main Security `34148228407` also passed, including successful
    Swift build, Analyze and processed analysis `1737292249` on the merge SHA,
    with no Swift errors, warnings or results.
-   The [delivery recovery record](../docs/evaluations/2026-09-07-get-11-opik/delivery-recovery.md)
+   The [delivery recovery record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-11-opik/delivery-recovery.md)
    owns failure history, exact receipts and coverage limits. Delivery-record
    [PR 157](https://github.com/getyak/talent-signal/pull/157) also corrects one
    enclosing five-behavior controller/replay test deadline after its own CI

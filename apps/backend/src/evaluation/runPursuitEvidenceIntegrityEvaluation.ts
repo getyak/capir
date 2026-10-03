@@ -16,7 +16,7 @@ const artifactDir =
   process.env.EVALUATION_ARTIFACT_DIR ??
   fileURLToPath(
     new URL(
-      "../../../../docs/evaluations/2026-08-24-v1-prd-07",
+      "../../../../output/evaluation/2026-08-24-v1-prd-07",
       import.meta.url,
     ),
   );

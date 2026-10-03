@@ -33,4 +33,4 @@ Status: implementation rationale and review notes; not field research.
 - [Apple Calendar view options](https://support.apple.com/en-gb/guide/iphone/iphfd1054569/ios): 日期概览与列表提供不同阅读密度。
 - [Attio record activities](https://attio.com/help/reference/managing-your-data/records/add-record-activities): 一次会议可从关联记录进入；仅借鉴检索关系，不引入其账户同步和自动采集行为。
 - [Execution plan](../../plans/2026-09-04-relationship-calendar.md)
-- [Native evidence](../../docs/evaluations/2026-09-04-relationship-calendar/README.md)
+- [Native evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-relationship-calendar/README.md)

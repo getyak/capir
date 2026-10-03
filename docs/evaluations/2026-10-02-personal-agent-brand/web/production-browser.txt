@@ -1,9 +1,0 @@
-### Result
-{"status":200,"url":"https://gettalentsignal.com/","title":"capri | Keep important people and unfinished things close","headline":"People that matter.\nUnfinished things. Kept close.","demoSections":1,"errors":[]}
-### Ran Playwright code
-```js
-await (async(page)=>{const errors=[];const handler=e=>errors.push(String(e));page.on('pageerror',handler);const response=await page.goto('https://gettalentsignal.com',{waitUntil:'domcontentloaded',timeout:45000});await page.getByRole('heading',{level:1}).waitFor();const result={status:response.status(),url:page.url(),title:await page.title(),headline:await page.getByRole('heading',{level:1}).innerText(),demoSections:await page.getByRole('region',{name:'Synthetic screenshot continuity demo',exact:true}).count(),errors};page.off('pageerror',handler);return result;})(page);
-```
-### Page
-- Page URL: https://gettalentsignal.com/
-- Page Title: capri | Keep important people and unfinished things close

@@ -4,7 +4,7 @@
 
 本文回答：怎样让 iOS Lab 成为每天有用、能够证明产品是否变好的工具？
 它记录用户提出的新方向、设计时的实现依据、外部项目参考和建议方案。
-后续首批实现与真实模型验证见[交付记录](../../docs/evaluations/2026-09-04-lab-v2/README.md)，
+后续首批实现与真实模型验证见[交付记录](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-v2/README.md)，
 当前决策见 [ADR 0012](../../docs/decisions/0012-useful-device-lab-and-real-experiments.md)。
 本文的现状分析记录设计当时的基础，不代表后续实现的最新状态。
 后端切换、模型试用等后续进度及尚未完成的能力，以
@@ -69,7 +69,7 @@ Lab 中产生的实验不应变成他们需要理解的新工作流。
 | [显示设置](../../apps/ios/Sources/Features/AppSettingsView.swift)已有文字大小、卡片密度 | Lab 复用现有组件和偏好能力，增加临时覆盖及场景矩阵 |
 | [Standalone onboarding](../../apps/ios/Sources/Features/StandaloneOnboardingStore.swift)已有 replay/reset | 它属于独立 Demo，不能把 Demo 重置误报成真实账号恢复到新用户 |
 | [Chat provider](../../apps/backend/src/modules/chatAnswerProvider.ts)、[Agent gateway](../../apps/backend/src/modules/agentGateway.ts)、[Agent Host](../../apps/agent-host/README.md)已有真实执行基础 | 按任务复用生产逻辑与受限工具边界，避免再写一套只在 Lab 生效的 AI |
-| [评测包](../../packages/evaluation/src/gates.ts)和[评测执行器](../../apps/eval-runner/src/runner.ts)已存在 | 复用评测定义；是否已进入发布检查必须以实际 CI 执行记录证明 |
+| [评测包](../../packages/evaluation/src/gates.ts)和[评测执行器](https://github.com/getyak/capir-evals/blob/main/harness/apps/eval-runner/src/runner.ts)已存在 | 复用评测定义；是否已进入发布检查必须以实际 CI 执行记录证明 |
 
 这次纠正需要保留下来的判断是：预设输出证明了展示和记录流程；真实推理结果、
 产品任务成功、发布门禁和线上收益各自需要独立证据，不能互相代替。

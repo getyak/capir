@@ -33,7 +33,7 @@ billing or retention. Account, member and session changes hide old usage.
 
 Implementation, editable Figma, real PostgreSQL aggregate proof, Chromium and
 native WK presentation/cancel proof are recorded in the
-[dated evaluation](../docs/evaluations/2026-09-30-get-126/README.md).
+[dated evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-30-get-126/README.md).
 Independent review closes all P0/P1 and scores this checked slice 96/100.
 The evaluation is the authoritative home for test counts, observations,
 remaining deductions and limitations; this plan does not duplicate those receipts.

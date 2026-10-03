@@ -89,17 +89,6 @@ const WORKSPACE_BOUNDARIES = new Map([
     },
   ],
   [
-    "apps/eval-runner/package.json",
-    {
-      name: "@talent-signal/eval-runner",
-      allowedNames: [
-        "@talent-signal/agent",
-        "@talent-signal/contracts",
-        "@talent-signal/evaluation",
-      ],
-    },
-  ],
-  [
     "apps/web/package.json",
     {
       name: "@talent-signal/web",

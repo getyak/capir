@@ -36,7 +36,7 @@ failure. Keep full-screen shell chrome in the evidence.
 
 ## Evidence and corrections
 
-- [Round 1 evidence](../docs/evaluations/2026-09-06-ios-retrieval-craft/round-1/):
+- [Round 1 evidence](https://github.com/getyak/capir-evals/tree/main/evidence/2026-09-06-ios-retrieval-craft/round-1):
   mobile craft 80, workflow craft 74. Both behavioral reviews are 2/4,
   pass with changes, screenshots-only. No functional inference from stills.
 - Addressed clipped navigation, oversized chrome glyphs, singular result
@@ -50,9 +50,9 @@ failure. Keep full-screen shell chrome in the evidence.
   Baseline UI tests require the entire normal row inside the List.
 - Final focused run: long People, long Sessions, compact People, and Chinese dark
   AX5/menu checks all pass. Eleven distinct relevant tests have passing evidence;
-  [test chronology](../docs/evaluations/2026-09-06-ios-retrieval-craft/test-summary.txt)
+  [test chronology](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-ios-retrieval-craft/test-summary.txt)
   preserves failed and superseded intermediate checks.
-- Ten [round 2 images](../docs/evaluations/2026-09-06-ios-retrieval-craft/round-2/)
+- Ten [round 2 images](https://github.com/getyak/capir-evals/tree/main/evidence/2026-09-06-ios-retrieval-craft/round-2)
   and source hashes are frozen. Mobile scored 93/100; workflow scored 92/100.
   Both behavioral reviews are 3/4. Their exact deductions remain archived.
 - Round 3 implements width-fitting utility metadata, full-width AX5 identity
@@ -64,7 +64,7 @@ failure. Keep full-screen shell chrome in the evidence.
   specialists independently applied the original rubric: mobile 97/100 and
   workflow 95/100. Both behavior scores stay 3/4. The panel accepts the bounded
   implementation with documented optional refinements; no external release.
-- Final evidence and handoff: [evaluation README](../docs/evaluations/2026-09-06-ios-retrieval-craft/README.md)
-  and [panel result](../docs/evaluations/2026-09-06-ios-retrieval-craft/panel-result.json).
+- Final evidence and handoff: [evaluation README](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-ios-retrieval-craft/README.md)
+  and [panel result](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-ios-retrieval-craft/panel-result.json).
   Source/image hashes match, the frozen rubric is unchanged, git diff checks
   pass for owned files, and pnpm docs:check passes.

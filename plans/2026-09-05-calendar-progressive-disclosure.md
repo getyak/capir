@@ -17,7 +17,7 @@ calendar v1 is already published as 0.1.45; its release proof remains historical
 - Fresh native v1 screenshots show the first activity below several repeated
   control rows, large cards with duplicated time/status, and a rolling seven-day
   list labeled as a week. Before/after evidence is in
-  [the evaluation](../docs/evaluations/2026-09-05-calendar-progressive-disclosure/README.md).
+  [the evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-calendar-progressive-disclosure/README.md).
 - Use one compact view menu for view selection and date shortcuts; keep person
   filtering in a separate section and show an active filter chip outside it.
 - Default day rows remain chronological, with an explicit time rail; row height

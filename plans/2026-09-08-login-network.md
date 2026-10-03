@@ -48,7 +48,7 @@ TestFlight release or actual third-party login from local fixture validation.
 ## Completion
 
 Implemented and verified. See
-[the evidence record](../docs/evaluations/2026-09-08-login-network/README.md).
+[the evidence record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-08-login-network/README.md).
 Native tests exposed a tap/drag conflict in the initial short-pull implementation;
 local drag priority fixed it, and both iPhone 17 Pro and SE replay passed.
 The final AX5 layout gives login actions priority over the decorative hero.

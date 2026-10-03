@@ -1,5 +1,0 @@
-Integrated localhost journey validation failed (4):
-- every integrated command result must pass with exit code 0
-- XS-CAPTURE-01 must pass
-- XS-CAPTURE-01 pass requires a null exact_gap
-- chrome-capture-recording type does not match the contract

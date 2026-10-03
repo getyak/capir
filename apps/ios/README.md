@@ -89,7 +89,7 @@ resolved or its reported expiry; expiry is not a fresh server verification.
 Retry preserves a newer sign-in and can remove an old identity slot after its
 revocation credential has been discarded. Normal sign-out preserves scoped
 drafts and operation recovery rather than treating them as caches. These records
-never enter diagnostic exports. See the [reset evaluation](../../docs/evaluations/2026-09-05-lab-reset/README.md).
+never enter diagnostic exports. See the [reset evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-reset/README.md).
 
 **Appearance & accessibility** opens the actual People, Today, Sessions,
 concise review, full-evidence review and onboarding components with synthetic
@@ -137,7 +137,7 @@ surface is presented. This confirms one main-run-loop callback only; it does not
 prove that pixels reached the display, measure GPU work, represent a usable
 screen or provide first-token timing. A state update still measures store
 publication rather than a rendered frame. See the
-[automatic-stage evidence](../../docs/evaluations/2026-09-05-lab-automatic-stages/README.md).
+[automatic-stage evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-automatic-stages/README.md).
 
 During explicit capture, admitted runtime requests carry a random correlation
 UUID. A capability-enabled backend can return bounded typed stage metadata for
@@ -201,7 +201,7 @@ repopulate the cleared history, including after relaunch. The watermark expires
 once its window is outside retention. It does not delete system-held reports or
 independent exported files. Current native/source proof and the separate
 physical-device delivery gate are recorded in the
-[MetricKit evaluation](../../docs/evaluations/2026-09-04-lab-metrickit/README.md).
+[MetricKit evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-metrickit/README.md).
 
 **Isolated fault tests** opens a read-only synthetic workspace through the
 actual workspace client, decoder, store and compiled People/Today pages.
@@ -248,8 +248,8 @@ dispatch. Workspace Agent jobs reuse the product executor against a closed,
 read-only synthetic contact directory. Local-only tool resolutions record zero
 remote requests and no actual model; remote execution records the admitted
 actual configuration. All tasks retain zero business-write authority. See the
-[text batch evidence](../../docs/evaluations/2026-09-04-lab-batches/README.md)
-and [image/Agent parity evidence](../../docs/evaluations/2026-09-05-lab-batch-task-parity/README.md).
+[text batch evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-batches/README.md)
+and [image/Agent parity evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-batch-task-parity/README.md).
 
 Open a completed case output to **Save this failure as a regression**. Choose
 typed issues and the expected behavior; the server retains that exact attempt,
@@ -259,8 +259,8 @@ review notes never become model input. Pending mutations recover by stable ID
 in a protected, environment/account/user-scoped file; confirmed content stays
 server-owned. Deleting a case clears its saved content, derived cases and rerun
 results, including results that arrive late. Export is a separately reviewed
-copy with no execution authority. See the [regression evidence](../../docs/evaluations/2026-09-04-lab-regressions/README.md)
-and [evaluation consumption command](../../evals/v2/README.md#consume-a-lab-regression).
+copy with no execution authority. See the [regression evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-regressions/README.md)
+and [evaluation consumption command](https://github.com/getyak/capir-evals/blob/main/evals/v2/README.md#consume-a-lab-regression).
 The saved case's **CI verification** page reads a trusted GitHub workflow's
 existing report for one selected rerun. It shows record integrity separately
 from output quality and release enforcement, preserves lost-response recovery,
@@ -298,8 +298,8 @@ task content or hidden reasoning. A trial makes no model call until a normal
 product task runs. Unknown configuration responses recover by their saved ID;
 changing sign-in cannot replay a previous session's pending request. These
 personal trials are distinct from online A/B assignment and experiment reviews.
-See [session-trial proof](../../docs/evaluations/2026-09-04-lab-task-trials/README.md).
-See [controlled-observation proof](../../docs/evaluations/2026-09-05-lab-controlled-observation/README.md)
+See [session-trial proof](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-task-trials/README.md).
+See [controlled-observation proof](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-controlled-observation/README.md)
 for the signed product journey and bounded database evaluation.
 
 **Feature overrides** exposes a closed, revisioned catalog rather than an
@@ -317,7 +317,7 @@ an adoption receipt into its context manifest after idempotency replay has been
 resolved. Stopping or expiry restores the server value for later tasks; an
 earlier answer retains its original receipt. Account, session, catalog, or
 backend revision changes cannot carry an active override forward. See the
-[feature-override proof](../../docs/evaluations/2026-09-05-lab-feature-overrides/README.md).
+[feature-override proof](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-feature-overrides/README.md).
 
 **Build & environment → Environment & version** switches only among compiled,
 approved targets. Supply `TALENT_SIGNAL_ENVIRONMENT_PROFILES_JSON` to
@@ -335,7 +335,7 @@ rechecks on activation and saved-target relaunch, partitions credentials and
 recovery by environment/account/user, and rebuilds the workspace. Pending
 sources stay in their original scope; active writes or recording block the
 switch. Return through the same selector. See the
-[runtime evidence](../../docs/evaluations/2026-09-04-lab-runtime/README.md)
+[runtime evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-runtime/README.md)
 for the Simulator proof and its live-deployment limits.
 
 The original five synthetic replay scenarios, Signal Lens, Reality Receipts,

@@ -106,4 +106,4 @@ Only prompt configuration, source identifiers and version metadata are synced.
 
 Compose and supporting files are adapted from the official
 [Opik repository](https://github.com/comet-ml/opik/tree/main/deployment/docker-compose).
-See [verification evidence](../evaluations/2026-09-06-opik-prompts/bundled-runtime.md).
+See [verification evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-opik-prompts/bundled-runtime.md).

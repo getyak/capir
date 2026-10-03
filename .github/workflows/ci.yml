@@ -164,6 +164,7 @@ jobs:
           node --test scripts/verify-secret-environment.test.mjs scripts/infisical/manifest.test.mjs scripts/infisical/migrate.test.mjs scripts/infisical/run.test.mjs
           node --test scripts/macos/release-prerequisites.test.mjs
           node --test scripts/check-architecture-boundaries.test.mjs
+          node --test scripts/check-repository-hygiene.test.mjs scripts/evaluation/*.test.mjs
           node --test scripts/ci/*.test.mjs
           node --test scripts/ios/*.test.mjs
           find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
@@ -195,6 +196,7 @@ jobs:
           node scripts/check-docs.mjs
           node scripts/check-architecture-boundaries.mjs
           node scripts/check-architecture-diagrams.mjs
+          node scripts/check-repository-hygiene.mjs
 
       - name: Verify compiled wiki
         run: |
@@ -243,9 +245,6 @@ jobs:
 
       - name: Test
         run: pnpm test
-
-      - name: Run candidate momentum Eval
-        run: pnpm eval:core && pnpm eval:relationships:check
 
       - name: Build
         env:
@@ -306,8 +305,7 @@ jobs:
 
       - name: Verify Lab regression consumer boundaries
         run: |
-          pnpm --filter @talent-signal/eval-runner typecheck
-          pnpm --filter @talent-signal/eval-runner exec vitest run src/labRegression.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run src/evaluation/labRegressionConsumer.test.ts
 
       - name: Verify screenshot and Session authority with PostgreSQL
         env:
@@ -348,7 +346,7 @@ jobs:
           pnpm --filter @talent-signal/backend seed
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runLabRegressionEvaluation.ts
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runLabCIVerificationEvaluation.ts
-          pnpm --filter @talent-signal/eval-runner exec tsx src/cli.ts lab-regression \
+          pnpm --filter @talent-signal/backend exec tsx src/evaluation/consumeLabRegressionCommand.ts \
             --bundle "$LAB_REGRESSION_PROOF_OUTPUT_DIR/bundle.json" \
             --run "$LAB_REGRESSION_PROOF_OUTPUT_DIR/run.json" \
             --output "$GITHUB_WORKSPACE/build/lab-regression-report.json"
@@ -386,7 +384,7 @@ jobs:
           test -n "$LAB_RUN_ID"
           test -n "$LAB_BACKEND_ORIGIN"
           test -n "$TS_LAB_EVALUATION_TOKEN"
-          pnpm --filter @talent-signal/eval-runner exec tsx src/cli.ts lab-regression \
+          pnpm --filter @talent-signal/backend exec tsx src/evaluation/consumeLabRegressionCommand.ts \
             --backend "$LAB_BACKEND_ORIGIN" --regression-id "$LAB_CASE_ID" --run-id "$LAB_RUN_ID" \
             --output "$GITHUB_WORKSPACE/build/lab-selected-regression/lab-regression-report.json"
 
@@ -427,17 +425,14 @@ jobs:
 
       - name: Verify frozen execution, budgets, replay and release boundaries
         run: |
-          pnpm --filter @talent-signal/eval-runner typecheck
+          pnpm --filter @talent-signal/evaluation typecheck
           pnpm --filter @talent-signal/evaluation test
+          pnpm --filter @talent-signal/evaluation build
           pnpm --filter @talent-signal/agent exec vitest run src/runtimeObservation.test.ts
-          pnpm --filter @talent-signal/eval-runner exec vitest run src --maxWorkers=2
-          pnpm --filter @talent-signal/eval-runner p0
-          pnpm eval:proof
-          python3 -m unittest discover -s apps/eval-runner/optimizer -p '*_test.py'
 
       - name: Record what this credential-free job proves
         run: |
-          node --input-type=module -e 'import fs from "node:fs"; fs.mkdirSync("build", {recursive:true}); fs.writeFileSync("build/phase-one-ci.json", JSON.stringify({schemaVersion:"phase-one-ci-proof.v1", execution_integrity:"pass", deterministic_boundary:"pass", semantic_quality:"not_run", release_conditions:"not_run", providerKind:"deterministic_fake", releaseAuthority:"none", revision:process.env.GITHUB_SHA}));'
+          node --input-type=module -e 'import fs from "node:fs"; fs.mkdirSync("build", {recursive:true}); fs.writeFileSync("build/phase-one-ci.json", JSON.stringify({schemaVersion:"phase-one-ci-proof.v1", execution_integrity:"pass", deterministic_boundary:"pass", semantic_quality:"not_run", release_conditions:"not_run", private_case_evaluations:"not_run", private_semantic_evaluations:"not_run", private_release_evaluations:"not_run", private_evaluation_scope:"getyak/capir-evals private CI, not this public job", providerKind:"deterministic_fake", releaseAuthority:"none", revision:process.env.GITHUB_SHA}));'
 
       - name: Preserve control-plane verification status
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

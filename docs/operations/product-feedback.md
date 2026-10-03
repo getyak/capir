@@ -42,8 +42,10 @@ original timestamps and missing details; it never invokes a model to backfill
 history. Active Lab workspaces inherit only their admitted owner account scope.
 Unbound failures remain metadata-only in the local monitor.
 
-`apps/eval-runner/src/promptfooProvider.ts` implements Promptfoo's JavaScript
-provider interface and delegates to the existing Lab job service. Configure two
+The private evaluation harness implements Promptfoo's JavaScript provider
+interface in
+[`harness/apps/eval-runner/src/promptfooProvider.ts`](https://github.com/getyak/capir-evals/blob/main/harness/apps/eval-runner/src/promptfooProvider.ts)
+and delegates to the existing Lab job service. Configure two
 provider entries with `configurationIndex` 0 and 1, the same `backendURL`,
 `runKey`, and two `configurations` (`model`, `prompt_preset`). Pass a JSON prompt
 containing the saved regression's `id` and `content_hash`. Supply the signed-in
@@ -119,11 +121,11 @@ request/destination readback; a healthy endpoint alone is insufficient.
 Existing deletion receipts continue at their exact endpoint/workspace/project
 after account-scope changes. Orphan tombstones and old full-content exports still
 require the original frozen policy; never rewrite their policy to resend them.
-See the [incident evidence](../evaluations/2026-09-25-conversation-diagnostics/README.md).
+See the [incident evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-25-conversation-diagnostics/README.md).
 
 ## Verification
 
-See [GET-23 delivery evidence](../evaluations/2026-09-09-get-23/plan.md). Focused
+See [GET-23 delivery evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-09-get-23/plan.md). Focused
 PostgreSQL tests run through `PRODUCT_RUN_TEST_DATABASE_URL` in an explicitly
 owned `get23_proof` / `opik_capture_test` or CI `lab_regression_ci` database. Existing feedback tests
 exercise a captured unrated product run through actual Lab admission and rerun.
