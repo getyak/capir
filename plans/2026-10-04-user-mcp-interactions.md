@@ -141,3 +141,11 @@ entries, and MCP staging receives the existing server-owned queue run fence.
 Staging verifies the live claim in the same transaction, while human decisions
 always revalidate a real login session. A string format cannot confer authority.
 The already repaired immutable PUT provenance remains valid.
+
+A separate real Proxy preflight attempted a temporary synthetic credential on
+`mcp-generic`; the API correctly rejected manual OAUTH2 import because the pinned
+provider uses `MCP_OAUTH2_GENERIC`. No connection was created. This did not test
+Proxy transport or a provider grant and is not acceptance evidence. The rejected
+preflight is preserved as `preflight/nango-proxy-transport-proof.json`. OAuth must
+be validated through the real Connect flow rather than inferred from a synthetic
+import.
