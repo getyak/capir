@@ -137,6 +137,17 @@ must bind the server-generated request tag, account, user, provider and approved
 endpoint before recording an OAuth connection. The observed session expiry is
 30 minutes; use the returned expiry rather than assuming a fixed lifetime.
 
+The pinned runtime also supports `DELETE /connect/session` authenticated by the
+owning Connect session token, with no body or query. A fresh synthetic session
+was read with HTTP 200, deleted with HTTP 204, then refused with HTTP 401
+`unknown_connect_session_token`. This does not use the environment service key
+and does not delete a provider credential. It is a supported session-deletion
+mechanism, not proof that an already-running OAuth callback has finished: the
+pinned callback reads the Connect session after exchanging the provider token,
+and its session lookup does not check token expiry. Preserve a durable late-grant
+watch whenever callback closure remains unverified. See the
+[official session deletion reference](https://nango.dev/docs/reference/backend/http-api/connect/session/delete).
+
 Optional webhooks require the actual signing key and reachable callback route.
 No webhook callback was configured in the initial deployment; polling remains
 the completion path. Keep raw callback bodies, OAuth tokens and session links

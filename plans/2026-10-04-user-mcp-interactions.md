@@ -232,3 +232,13 @@ Its nonzero result concerns other owners' lifecycle inventory, not a space
 failure; those active/unreviewed directories remain untouched. `capir auth`
 still reports no grant for the exact configured test origins; local synthetic
 Web acceptance remains isolated from the shared staging database.
+
+Parent subsequently verified the actual supported `DELETE /connect/session`
+route, using the owning Connect token (not an environment/admin key): fresh
+synthetic session read200 -> delete204 -> read401
+`unknown_connect_session_token`. No provider grant or existing user session was
+touched. Evidence: `preflight/nango-connect-session-delete-proof.json`. This
+corrects any assumption that no session-deletion API exists; it still does not
+prove already-in-flight callback closure. Product integration of that supported
+mechanism must be assessed at the next checkpoint; do not equate indefinite
+watch status with a completed deletion or invent a callback grace period.
