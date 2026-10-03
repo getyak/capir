@@ -212,3 +212,23 @@ Evidence is `preflight/nango-cleanup-key-scope-proof.json`. The earlier `/config
 probe was an SPA fallback, not a permission check, and was corrected to the
 source-verified `/integrations/mcp-generic` route. No real provider credential
 was read or deleted, and provider grant completion remains unverified.
+
+### Cleanup draft checkpoint and final budgeted repair
+
+At turn450, independent synthetic production-function review confirmed four
+structural P1 in the cleanup draft: failure treated as authenticated absence,
+destructive fallback on reused identity/unfrozen scope, no ordinary background
+pump, and lost Lab association when reusing a prior pending attempt intent.
+Detailed source hashes and synthetic-proof limits are recorded in
+`independent-review-checkpoint-5.md`. Parent verified the pinned broker's callback
+session lookup has no expiry check; a 30-minute Connect token does not prove
+already-started callback closure. Repair8 must retain an honest late-grant watch
+instead of inventing capability closure, and complete the pending page/form work.
+The same task/provider/model/history/accounting resumed; the existing cumulative
+600-turn/8-repair ceiling was not increased. No final approval is recorded.
+
+Storage audit now reports 67 GiB free against the user-authorized 30 GiB minimum.
+Its nonzero result concerns other owners' lifecycle inventory, not a space
+failure; those active/unreviewed directories remain untouched. `capir auth`
+still reports no grant for the exact configured test origins; local synthetic
+Web acceptance remains isolated from the shared staging database.
