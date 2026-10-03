@@ -3,12 +3,13 @@ import { AGENT_TOOL_CATALOG, candidateToolNames } from "./toolCatalog.js";
 import { PublicResearchAgentFinalOutputSchema, PursuitAgentFinalOutputSchema, PersonResearchAgentFinalOutputSchema } from "./schemas.js";
 import { ClaudeHarnessFailure, runClaudeHarness, type HarnessTool } from "./claudeHarness.js";
 import { claudeHarnessConfiguration, type ClaudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
+import { CLAUDE_SDK_VERSION } from "./claudeSdkVersion.js";
 import type { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToolResult } from "./types.js";
 
 /** Existing artifact tasks share the same executor as natural chat and screenshots. */
 export class ClaudeAgentSDKProvider implements AgentProvider {
   readonly id = "claude-agent-sdk";
-  readonly sdkVersion = "0.3.266";
+  readonly sdkVersion = CLAUDE_SDK_VERSION;
   readonly inputCapabilities;
   private readonly configuration: ClaudeHarnessConfiguration;
 
