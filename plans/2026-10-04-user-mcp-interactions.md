@@ -52,11 +52,16 @@ Desktop knowledge workspace for users deciding which external capability to gran
 
 ## Active state
 
-- Pi task `20261004-020353-5e29b5f6` owns product implementation in its isolated
-  worktree, frozen to `xiaomi-token-plan-cn/mimo-v2.6-pro`. Five consolidated
-  repair batches preserve history and accounting; current ceilings are 600
-  cumulative turns and 8 repairs. Parent owns this plan, deployment, Notion,
-  independent review and acceptance. Product rollout remains incomplete.
+- Pi task `20261004-020353-5e29b5f6` was cancelled at 475 cumulative
+  turns and 8 repair batches after repeated failures demonstrated fixture and
+  lifecycle defects. Provider/model, session history and usage accounting are
+  preserved; no budget increase or provider fallback is in effect. Root now
+  owns backend cleanup and adoption. Native `mcp_frontend_complete` owns Web
+  directory/cards and `mcp_review` owns the atomic OAuth publication correction
+  and its focused lifecycle tests in the same implementation worktree with
+  non-overlapping files. A separate independent review is required afterward.
+  Parent owns deployment, Notion and final acceptance. Product rollout remains
+  incomplete.
 - Parent infrastructure and fixture commits are preserved on
   `codex/user-mcp-interactions`; Pi must not edit `compose.nango.yaml`,
   `deploy/nango/**`, `docs/operations/nango-local.md`, this plan or
@@ -242,3 +247,22 @@ corrects any assumption that no session-deletion API exists; it still does not
 prove already-in-flight callback closure. Product integration of that supported
 mechanism must be assessed at the next checkpoint; do not equate indefinite
 watch status with a completed deletion or invent a callback grace period.
+
+### Root cleanup correction after delegation cancellation
+
+The root corrected cleanup to validate complete account/user/provider/attempt/URL
+metadata and frozen broker/environment before DELETE. It watches all owned
+connections in the frozen attempt, including grants arriving after removal of
+the initial ID. A claim token and generation revision prevent stale workers
+from overwriting a late binding or emitting false confirmation audit records.
+Metadata malformed/unauthorized/truncated responses remain unresolved. Migration
+094 follows the already-applied migrations instead of rewriting their checksums.
+The background pump now waits for outstanding work during shutdown.
+
+Focused synthetic PostgreSQL/wire tests currently pass 20 tests across cleanup
+and Nango adapter suites, including multiple grants, changed owners, incomplete
+metadata pages, a real database late-binding barrier, and an actual Lab data wipe
+with its control-scope cleanup ledger surviving. This is intermediate regression
+evidence, not final source review, real provider authorization or product proof.
+The pinned Connect session DELETE capability is documented separately; its 204
+and subsequent GET401 do not prove closure of a callback already in flight.
