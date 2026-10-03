@@ -52,26 +52,38 @@ Desktop knowledge workspace for users deciding which external capability to gran
 
 ## Active state
 
-Implementation is in progress in Pi task 20261004-020353-5e29b5f6, branch codex/pi-20261004-020353-5e29b5f6, with frozen xiaomi-token-plan-cn/mimo-v2.6-pro. Parent owns this plan, independent verification/review, resident services, delivery and Notion. The task was paused at 185 and 211 turns to deliver grounded corrections, then resumed with the same history and two feedback repairs; no source changes were discarded.
-
-Confirmed pre-review gaps require correction before frontend acceptance: full endpoint paths were reduced to origin; adding only saved a disconnected record without handshake/tools discovery; submitted state preceded actual creation; secret-shaped arguments were silently altered; Nango proxy response limits were applied after full buffering; OAuth expiry ignored the actual session expiry. Verify an actual choice producer and the complete no-existing-connection queued-chat scenario. Preserve all unrelated work and other Pi tasks.
-
-The parent baseline Web/API proof processes on 3300/44317 were stopped before the worker's DB tests. The isolated owned PostgreSQL database is mcp_interactions_proof_20261004 on the existing local fixture container. CONTACT_AGENT_TEST_DATABASE_URL selects it; skipped DB tests are never counted as passed. Baseline real UI connected DeepWiki and discovered three tools; this is preflight evidence, not proof of the new chat/card chain.
-
-Nango uses upstream source153f8c5450e7dd7049504df4a323e25499369002/application0.71.12 with a native ARM64 Node22.22.2 runtime wrapper. The upstream hosted AMD64 runtime failed to initialize its WebAssembly HTTP parser under this host's emulator. The wrapper preserves the upstream compiled JS/static assets; no native .node modules existed. Registry config bytes and imported configurations/rootfs layers were verified against pinned manifests. Actual integrations are mcp-generic, notion-mcp and linear-mcp. The product service key has only connect_sessions:write, connections:list/read and proxy scopes. Session TTL observed on the actual runtime is 30 minutes. The resident Docker project talent-signal-nango is explicitly allowlisted and has a bounded restart/memory/logging policy.
-
-The user corrected the global storage floor to 30 GiB; both the guard and global instruction now match. Removed approximately 1.058 GB of confirmed disposable Docker build cache. Latest disk audit reported 63 GiB. Other tasks' aged/unregistered/unsafe Git-root evidence remains preserved; the full audit is not represented as clean. No iOS simulator was started by this task.
-
-Redacted preflight proof is preserved in ignored output/evaluation/user-mcp-interactions-20261004/preflight. Working temporary artifacts remain registered at /private/tmp/ai-test-user-mcp-interactions.r3u7UF until final proof is preserved and task cleanup is safe. No product rollout, merged PR or Notion address update has yet been claimed.
-
-Parent real-service readback confirmed GET /connections uses a connections array, not data. This newly confirmed OAuth polling blocker plus choice/rejection continuation bypass and bearer rename-mode consistency were sent as the second grounded feedback batch. Parent owns compose.nango.yaml, deploy/nango/Dockerfile.arm64 and docs/operations/nango-local.md; Pi owns product configuration and remaining implementation. The native service source is now reviewable; no final rollout has been claimed.
-
-Notion service ledger was updated and read back on 2026-10-04 with actual Nango API/Connect and product entry addresses. Its new section explicitly marks product integration and provider authorization unverified; existing unrelated ledger content was preserved. Final rollout evidence will update that same section after acceptance.
-
-Independent infrastructure review found no P0/P1 and one confirmed P2: raw Records database URL interpolation broke password rotation for URL-reserved characters. Parent removed the override, keeping the upstream encoded fallback on the same database, and added the real /ready startup healthcheck. Connect UI /health is SPA HTML; readiness claims were narrowed accordingly. Independent re-review closed the P2. Reviewed Compose revision 67a76833 was applied to the resident project; API /ready and Connect UI static readback returned 200, the same named database volume remained attached, and generic/Notion/Linear Connect sessions succeeded again. The API startup healthcheck is now healthy.
-
-Parent independently ran seven focused new/legacy MCP suites on the owned isolated DB: 67 tests passed without skips. The untouched baseline accountMcpLifecycle fixture failed before assertions because its real password identities lacked normalized-email reservations. Parent alone fixed that fixture in 632543fa, preserving password_human and original assertions; both authority lifecycle tests then passed without skips. Pi must leave that single test file unchanged. Redacted logs and file hashes are preserved in ignored output/evaluation/user-mcp-interactions-20261004/focused-backend-proof.json.
-
+- Pi task `20261004-020353-5e29b5f6` owns product implementation in its isolated
+  worktree, frozen to `xiaomi-token-plan-cn/mimo-v2.6-pro`. Five consolidated
+  repair batches preserve history and accounting; current ceilings are 600
+  cumulative turns and 8 repairs. Parent owns this plan, deployment, Notion,
+  independent review and acceptance. Product rollout remains incomplete.
+- Parent infrastructure and fixture commits are preserved on
+  `codex/user-mcp-interactions`; Pi must not edit `compose.nango.yaml`,
+  `deploy/nango/**`, `docs/operations/nango-local.md`, this plan or
+  `accountMcpLifecycle.integration.test.ts`. Reviewed Nango runtime and final
+  real pre-grant proof are recorded below and in the runbook. OAuth grants are
+  still unverified; no webhook callback was configured, so polling is required.
+- Test database `mcp_interactions_proof_20261004` is isolated and synthetic.
+  Owned Web/API proof listeners on 3300/44317 are stopped during repairs.
+  Artifact root `/private/tmp/ai-test-user-mcp-interactions.r3u7UF` remains
+  registered until formal evidence is preserved and cleanup is safe. No iOS
+  simulator was started by this task.
+- Parent independently ran seven MCP suites: 67 passed, no skips, before the
+  latest repairs. Baseline authority fixture setup was fixed in `632543fa`;
+  its two tests passed and independent review closed with no findings. Pi's
+  subsequent 17 lifecycle and 4 queued-chat passes are intermediate evidence,
+  not final source-bound acceptance. Transport-only DeepWiki proof negotiated
+  2025-11-25, discovered three original schemas and genuinely called
+  `read_wiki_structure` for public `facebook/react`. The configured staging
+  Anthropic provider probe also passed. Full UI/approval/Agent acceptance is pending.
+- Formal redacted proof lives in ignored
+  `output/evaluation/user-mcp-interactions-20261004/`. The existing Notion service
+  ledger was updated and read back with actual tailnet addresses; it explicitly
+  marks product rollout and provider grant incomplete. The storage floor is
+  30 GiB at the user's direction. Latest free space is 70 GiB; approximately
+  1.058 GB disposable build cache and 386321920 bytes of task-owned image
+  transfer archives were removed. Imported images and rollback evidence remain;
+  unrelated tasks' artifacts and active workloads are preserved.
 
 ## Real UI review checkpoint
 
@@ -94,8 +106,8 @@ Runtime origin configuration and a query suffix are insufficient.
 
 The native wrapper now applies one guarded initializer replacement at image build
 time and gives the modified entry asset a new content hash. The image
-`talent-signal-nango:153f8c54-node22-arm64-connect1` built successfully; independent
-review and a real pre-grant browser readback are pending. No provider grant or
+`talent-signal-nango:153f8c54-node22-arm64-connect1` built successfully and
+passed independent review and a real pre-grant browser readback. No provider grant or
 product acceptance is inferred from this build. The prior compatible image and
 resident encrypted database are preserved.
 
@@ -111,3 +123,21 @@ the pre-grant UI routing defect only. No provider grant was executed.
 Storage audit now reports 70 GiB free against the user-authorized 30 GiB
 minimum. Other tasks' registered artifacts remain untouched. Audit exit 2
 reflects their lifecycle inventory, not inadequate free space.
+
+### Second backend review checkpoint
+
+At 354 cumulative Pi turns, independent review confirmed seven remaining P1:
+host results still becoming human history/steering evidence; non-UUID strings
+used as trusted host authority; incomplete Session private-data/replay cleanup;
+delete-versus-in-flight settlement failure; abandoned connection/handshake claims
+without recovery; late OAuth callbacks after membership revocation; and polling
+that ignored the owner argument. The same task resumed with consolidated
+feedback5 and unchanged provider/model/history/accounting. No final review or
+product rollout has passed. Detailed redacted findings and source hashes are in
+`output/evaluation/user-mcp-interactions-20261004/independent-review-checkpoint-2.txt`.
+
+Parent selected the narrow fix: host result continuations enter independent queue
+entries, and MCP staging receives the existing server-owned queue run fence.
+Staging verifies the live claim in the same transaction, while human decisions
+always revalidate a real login session. A string format cannot confer authority.
+The already repaired immutable PUT provenance remains valid.
