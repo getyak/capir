@@ -467,7 +467,7 @@ struct CandidateSignalView: View {
                         .buttonStyle(TSPrimaryButtonStyle())
                         .accessibilityIdentifier("open-fixture")
                     } else {
-                        Text("Evaluation cases are unavailable in this build. Device-owned capture and live review remain available.")
+                        Text(appLanguage.text("Evaluation cases are unavailable in this build. Device-owned capture and live review remain available."))
                             .font(.subheadline)
                             .foregroundStyle(Color.tsMutedInk)
                             .fixedSize(horizontal: false, vertical: true)
@@ -558,7 +558,7 @@ struct CandidateSignalView: View {
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 if store.suite == nil {
-                    Text("The synthetic evaluation corpus is not bundled in this build.")
+                    Text(appLanguage.text("The synthetic evaluation corpus is not bundled in this build."))
                         .font(.caption)
                         .foregroundStyle(Color.tsMutedInk)
                         .fixedSize(horizontal: false, vertical: true)
