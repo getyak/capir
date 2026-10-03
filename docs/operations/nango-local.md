@@ -87,13 +87,24 @@ separately protected key under the owner's recovery policy before upgrades.
 
 `staging:/backend` receives a dedicated environment service key with exactly
 `environment:connect_sessions:write`, `environment:connections:list`,
-`environment:connections:read` and `environment:proxy`, plus the actual Nango
+`environment:connections:read`, `environment:proxy` and
+`environment:connections:delete`, plus the actual Nango
 webhook signing key, trusted API origin and environment `dev`. Nango `dev` is
 this self-hosted environment name; the Talent Signal deployment remains staging.
 The service key cannot manage integrations. Never copy dashboard/admin keys
 into the product backend. Create the configured `mcp-generic`, `notion-mcp`
 and `linear-mcp` integrations using the protected administrator path once;
 ordinary sessions do not need that privilege.
+
+The delete scope is required to remove the broker-held credential after a
+disconnect or replacement. Changing only local connection state does not erase
+Nango's credential. The dedicated service key's five scopes were read back after
+updating that existing key without rotation. A DELETE for a never-created
+synthetic connection reached the pinned handler and returned HTTP 400
+`unknown_connection`; integration detail access remained HTTP 403. This proves
+the delete permission, not deletion of a real user credential. Nango connection
+deletion and provider-side OAuth grant revocation are distinct; universal vendor
+revocation is not established by this deployment.
 
 ## Deployment and recovery
 

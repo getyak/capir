@@ -204,5 +204,11 @@ Repair7 resumes the same history and accounting to add durable exact broker
 cleanup, honest local/Nango/provider status, late-grant handling, and the pending
 single-page/theme/readiness work. The page must expose schema-driven parameter
 controls for ordinary tools, such as DeepWiki repoName, before exact approval.
-Parent owns the live service key's necessary delete-scope configuration; it has
-not yet been broadened. No provider credential was read or deleted in this review.
+Parent added only `environment:connections:delete` to the existing dedicated
+service key and read back its exact five-scope set. No key rotation was needed.
+A never-created synthetic identity returned the pinned DELETE handler's HTTP
+400 `unknown_connection`; protected integration detail access remained HTTP 403.
+Evidence is `preflight/nango-cleanup-key-scope-proof.json`. The earlier `/config`
+probe was an SPA fallback, not a permission check, and was corrected to the
+source-verified `/integrations/mcp-generic` route. No real provider credential
+was read or deleted, and provider grant completion remains unverified.
