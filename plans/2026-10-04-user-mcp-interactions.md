@@ -14,7 +14,7 @@ Remote HTTPS Streamable HTTP; anonymous and encrypted bearer connections; Nango-
 - Managed worktree: /Users/cubxxw/.codex/worktrees/user-mcp-interactions/talent-signal.
 - Existing modules: mcpClient, mcpConnections, mcpSecurity/mcpHttp, mcpRoutes; /workspace/extensions and /api/extensions management adapter. Existing handshake discards input schemas and does not execute tools or OAuth.
 - Ordinary workspace Agent has supplementalTools plus invokeTool; durable Session answer blocks and assistant-ui data parts already exist. Reuse rather than introducing another orchestration framework.
-- staging:/backend has MCP encryption key; no NANGO_API_KEY or webhook signing key was present at preflight. Asked user asynchronously for configured Nango project/credentials. Do all independent work while awaiting this prerequisite.
+- Nango prerequisites are resolved: parent deployed the free Auth/Proxy service on the existing host. API https://smile-m4-minimac-mini.tail25e61f.ts.net:15443 and Connect UI :16443 return HTTP 200. Workload secrets are isolated in staging:/nango; backend receives only a scoped API key, actual webhook signing key, trusted origin and environment from staging:/backend. No credentials are recorded here. Actual generic/Notion/Linear Connect sessions succeeded through the worker adapter; provider authorization has not yet completed.
 - Resident Web: https://smile-m4-minimac-mini.tail25e61f.ts.net:10443. Backend: https://smile-m4-minimac-mini.tail25e61f.ts.net. Internal tailnet deployment, not public production.
 - Notion target: Talent Signal · 三方服务台账, page 3d6a444a-6c00-8173-818f-d5e492982356; fetched before editing.
 
@@ -44,9 +44,22 @@ Desktop knowledge workspace for users deciding which external capability to gran
 - https://cubxxw.com/zh/ai-agent/posts/nango-user-defined-mcp-integration/ (retrieved with Exa after web open failed)
 - https://nango.dev/docs/guides/auth/mcp-auth.md
 - https://nango.dev/docs/reference/backend/http-api/connect/sessions/create
+- https://nango.dev/docs/guides/platform/self-hosting#free-self-hosting
+- https://nango.dev/docs/reference/backend/http-api/api-keys
+- https://github.com/NangoHQ/nango/blob/153f8c5450e7dd7049504df4a323e25499369002/packages/server/lib/utils/auth.ts
 - https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
 - https://www.assistant-ui.com/docs/tools
 
 ## Active state
 
-Design recorded; next: frozen Pi implementation batch. Parent owns independent review, delivery/deployment and external Notion write. Preserve all unrelated work and existing active Pi tasks.
+Implementation is in progress in Pi task 20261004-020353-5e29b5f6, branch codex/pi-20261004-020353-5e29b5f6, with frozen xiaomi-token-plan-cn/mimo-v2.6-pro. Parent owns this plan, independent verification/review, resident services, delivery and Notion. The task was paused at 185 turns to deliver grounded corrections, then resumed with the same history and one repair; no source changes were discarded.
+
+Confirmed pre-review gaps require correction before frontend acceptance: full endpoint paths were reduced to origin; adding only saved a disconnected record without handshake/tools discovery; submitted state preceded actual creation; secret-shaped arguments were silently altered; Nango proxy response limits were applied after full buffering; OAuth expiry ignored the actual session expiry. Verify an actual choice producer and the complete no-existing-connection queued-chat scenario. Preserve all unrelated work and other Pi tasks.
+
+The parent baseline Web/API proof processes on 3300/44317 were stopped before the worker's DB tests. The isolated owned PostgreSQL database is mcp_interactions_proof_20261004 on the existing local fixture container. CONTACT_AGENT_TEST_DATABASE_URL selects it; skipped DB tests are never counted as passed. Baseline real UI connected DeepWiki and discovered three tools; this is preflight evidence, not proof of the new chat/card chain.
+
+Nango uses upstream source153f8c5450e7dd7049504df4a323e25499369002/application0.71.12 with a native ARM64 Node22.22.2 runtime wrapper. The upstream hosted AMD64 runtime failed to initialize its WebAssembly HTTP parser under this host's emulator. The wrapper preserves the upstream compiled JS/static assets; no native .node modules existed. Registry config bytes and imported configurations/rootfs layers were verified against pinned manifests. Actual integrations are mcp-generic, notion-mcp and linear-mcp. The product service key has only connect_sessions:write, connections:list/read and proxy scopes. Session TTL observed on the actual runtime is 30 minutes. The resident Docker project talent-signal-nango is explicitly allowlisted and has a bounded restart/memory/logging policy.
+
+The user corrected the global storage floor to 30 GiB; both the guard and global instruction now match. Removed approximately 1.058 GB of confirmed disposable Docker build cache. Latest disk audit reported 63 GiB. Other tasks' aged/unregistered/unsafe Git-root evidence remains preserved; the full audit is not represented as clean. No iOS simulator was started by this task.
+
+Redacted preflight proof is preserved in ignored output/evaluation/user-mcp-interactions-20261004/preflight. Working temporary artifacts remain registered at /private/tmp/ai-test-user-mcp-interactions.r3u7UF until final proof is preserved and task cleanup is safe. No product rollout, merged PR or Notion address update has yet been claimed.
