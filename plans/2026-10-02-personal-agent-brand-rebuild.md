@@ -130,7 +130,7 @@ references; preserve historical decisions, test evidence and still-valid guides.
   important people and unfinished work. Screenshot-first, source-linked, and
   human-reviewed.` Repository slug and actual homepage URL remain compatible.
 - [x] Verify actual public website release if configured deployment performs one.
-- [ ] Save formal evidence, stop task-owned processes and remove only disposable
+- [x] Save formal evidence, stop task-owned processes and remove only disposable
   task-owned local test artifacts after their evidence is preserved.
 
 ## Known limits and current state
@@ -148,10 +148,13 @@ references; preserve historical decisions, test evidence and still-valid guides.
   synthetic Agent probe; the previous image, recovery pair, checkout pointer and
   keeper were restored and all old-runtime probes passed. A narrowly reviewed
   build guard now prevents this incomplete installation from being cached as
-  successful. Rebuild and backend deployment verification remain in progress.
+  successful. PR #277 merged after all applicable latest-head checks passed.
+  The corrected image downloaded every package, passed its offline check and
+  official TestFlight deployment probes. Runtime image/revision, recovery pair,
+  current pointer and restored keeper were verified; the prior release is kept.
 - Task-owned Next/prototype servers have stopped. Browser and deployment
-  receipts are preserved under the dated evaluation; disposable artifacts remain
-  until backend delivery evidence is preserved.
+  receipts are preserved under the dated evaluation, including the complete
+  production Chinese flow and backend deployment receipt.
 - Product positioning and latest brand spelling are user-supplied direction.
   If the user corrects the optional typo check, reapply the narrow display
   change. No new domain or support address is assumed.

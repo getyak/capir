@@ -1,0 +1,82 @@
+[
+  {
+    "bucket": "pass",
+    "name": "Vercel Preview Comments"
+  },
+  {
+    "bucket": "pass",
+    "name": "CI required"
+  },
+  {
+    "bucket": "pass",
+    "name": "Security required"
+  },
+  {
+    "bucket": "skipping",
+    "name": "CodeQL"
+  },
+  {
+    "bucket": "pass",
+    "name": "Backend quality"
+  },
+  {
+    "bucket": "pass",
+    "name": "Web quality"
+  },
+  {
+    "bucket": "pass",
+    "name": "Phase one control plane (no model credentials)"
+  },
+  {
+    "bucket": "skipping",
+    "name": "macOS Hybrid boundary"
+  },
+  {
+    "bucket": "skipping",
+    "name": "iOS release smoke"
+  },
+  {
+    "bucket": "pass",
+    "name": "CodeQL (actions)"
+  },
+  {
+    "bucket": "pass",
+    "name": "CodeQL (javascript-typescript)"
+  },
+  {
+    "bucket": "skipping",
+    "name": "CodeQL (swift)"
+  },
+  {
+    "bucket": "pass",
+    "name": "Dependency review"
+  },
+  {
+    "bucket": "pass",
+    "name": "Detect changes"
+  },
+  {
+    "bucket": "pass",
+    "name": "Repository policy and docs"
+  },
+  {
+    "bucket": "pass",
+    "name": "Detect changes"
+  },
+  {
+    "bucket": "pass",
+    "name": "Apply path labels"
+  },
+  {
+    "bucket": "pass",
+    "name": "Secret hygiene"
+  },
+  {
+    "bucket": "pass",
+    "name": "Vercel \u2013 talent-signal"
+  },
+  {
+    "bucket": "pass",
+    "name": "Vercel \u2013 talent-signal-web"
+  }
+]
