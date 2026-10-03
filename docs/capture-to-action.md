@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Turn one user-controlled conversation source into reviewed relationship
-state and one smallest useful action without losing evidence, consent, or user
-control.
+Turn a lightweight handoff of one conversation into useful understanding,
+selectively reviewed context, and a way to continue later without losing
+evidence, consent, or user control.
 
 This is the first complete product loop and the reference path for every future
 surface.
@@ -23,6 +23,17 @@ intentional capture
 → observed outcome
 → durable continuity
 ```
+
+The first response explains what was understood in ordinary language before
+asking the user to organize it. A source may contain acquaintance background,
+a temporary plan, or an unfinished commitment; each can be kept independently.
+The user need not select a contact, relationship type, or folder before seeing
+value. Material ambiguity is resolved before its dependent state is confirmed.
+
+Purpose-bound intake and internal filing are distinct from confirming long-lived
+Memory or work. An admitted source or draft can be retained only under its
+disclosed scope; processing does not make every extracted item permanent truth.
+“Pending confirmation” must remain visible until the actual decision and readback.
 
 The product should feel like finishing a thought, not administering a database.
 
@@ -163,13 +174,23 @@ user-controlled handoff rather than pretending to automate.
 The loop continues after execution:
 
 - Did the user complete or edit the action?
-- Did the candidate or client respond?
+- Did the other person respond?
 - Was the dependency resolved?
-- Did the assignment move?
+- Did the shared outcome move?
 - Was the earlier understanding later corrected?
 
+New evidence first compares with the existing Person, time-bound context, and
+open work. It may propose replacing an old plan, changing a commitment into
+waiting, or closing the same item. Preserve history and require the appropriate
+review; do not silently overwrite old meaning or create duplicate work.
+No promised date means no invented due date. The Agent's processing state is
+separate from the commitment's state. A request to pause reminders preserves
+context and does not infer disinterest or permission for another reminder.
+
 Confirmed state and observed outcomes update the timeline, Today, insight, and
-living page. Generated views remain rebuildable.
+living page. Generated views remain rebuildable. Preparation for the next
+exchange retrieves current supported context and makes missing or stale evidence
+explicit; retained history is not automatically current advice.
 
 ## Surface roles
 

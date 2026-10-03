@@ -254,7 +254,7 @@ final class CapturePreferences: ObservableObject {
         static let all = [showMenuBar, shortcut, afterSelection, topActivityHint, onboarding]
     }
 
-    /// Show Talent Signal in the menu bar. Defaults to `true` and is applied
+    /// Show capri in the menu bar. Defaults to `true` and is applied
     /// immediately by the owner of the menu scene.
     @Published var showMenuBar: Bool {
         didSet { store.set(showMenuBar, forKey: StorageKey.showMenuBar) }

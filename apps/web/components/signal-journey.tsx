@@ -325,12 +325,12 @@ export function SignalJourney() {
                   <span />
                   <span />
                   <span />
-                  <strong>Talent Signal · 网页端</strong>
+                  <strong>capri · 网页端</strong>
                 </div>
                 <div className={styles.outputImage}>
                   <Image
                     src="/marketing/signal-journey/web-relationship-output.webp"
-                    alt="展示证据与客户依赖项的 Talent Signal 网页端关系工作台"
+                    alt="展示证据与客户依赖项的 capri 网页端关系工作台"
                     fill
                     sizes="(max-width: 760px) 92vw, 720px"
                   />
@@ -341,7 +341,7 @@ export function SignalJourney() {
                 <div className={styles.phoneImage}>
                   <Image
                     src="/marketing/signal-journey/iphone-relationship-output.webp"
-                    alt="展示同一份关联证据的 Talent Signal iPhone 关系视图"
+                    alt="展示同一份关联证据的 capri iPhone 关系视图"
                     fill
                     sizes="210px"
                   />

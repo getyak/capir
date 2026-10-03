@@ -3,7 +3,7 @@
 > Quiet relational intelligence for evidence-first relationships.
 ## Design thesis
 
-Talent Signal should feel like a well-edited professional notebook with the precision of an evidence instrument.
+capri should feel like a well-edited professional notebook with the precision of an evidence instrument.
 
 It is not an ATS dashboard, an AI command center, a sales CRM with candidate labels, or a collection of decorative cards.
 

@@ -67,7 +67,7 @@ final class CaptureOnboardingWindowController: NSObject, NSWindowDelegate {
                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         next.animationBehavior = .none
         next.isReleasedWhenClosed = false
-        next.title = "Talent Signal · 截图"
+        next.title = "capri · 截图"
         next.delegate = self
         self.coordinator = coordinator
         next.contentViewController = NSHostingController(rootView: CaptureOnboardingView(coordinator: coordinator,

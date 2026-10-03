@@ -122,6 +122,6 @@ export function SessionSendTime({ at }: { at: unknown }) {
   const time = value.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
   const label = value.getFullYear() === now.getFullYear() && value.getMonth() === now.getMonth() && value.getDate() === now.getDate()
     ? `今天 ${time}`
-    : `${value.getMonth() + 1}月${value.getDate()}日 ${time}`;
-  return <div className={styles.sendTime}>{label}</div>;
+    : `${value.getFullYear() === now.getFullYear() ? "" : `${value.getFullYear()}年`}${value.getMonth() + 1}月${value.getDate()}日 ${time}`;
+  return <time className={styles.sendTime} dateTime={value.toISOString()} title={value.toLocaleString("zh-CN")}>{label}</time>;
 }

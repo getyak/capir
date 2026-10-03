@@ -271,11 +271,11 @@ enum TalentSignalLabClientError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .authenticationRequired:
-            return "Talent Signal Lab requires an authenticated internal build."
+            return "capri Lab requires an authenticated internal build."
         case let .backend(_, code, message):
             return "\(message) (\(code))"
         case .contractMismatch:
-            return "The Lab contract changed. Update Talent Signal and try again."
+            return "The Lab contract changed. Update capri and try again."
         case .invalidResponse:
             return "The Lab response could not be verified."
         case .loginFailed:

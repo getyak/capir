@@ -4,8 +4,9 @@ Select all rows relevant to the changed path. Record `pass`, `fail`, or `not_run
 
 ## Devices and environment
 
-- Small supported iPhone in portrait.
-- Large iPhone in portrait.
+- Primary shared iPhone for relevant native paths.
+- Compact iPhone only for affected small-screen, keyboard, or Dynamic Type risk;
+  record the reason and use the repository native session/storage guard.
 - Landscape where supported.
 - Current supported iOS plus the oldest deployment target.
 - Light, dark, increased contrast, and reduce transparency.
@@ -16,13 +17,16 @@ Select all rows relevant to the changed path. Record `pass`, `fail`, or `not_run
 
 ## Content extremes
 
-- Long and mixed-script candidate/role names.
+- Long and mixed-script Person/context names.
 - No avatar, no role, unknown company, and missing context.
 - One fact; many facts; long evidence; multiline recommendation.
 - Ambiguous relative date, absent timezone, and crossed midnight.
-- Same-name candidates and wrong-role suggestion.
+- Same-name people and wrong-context suggestion.
 - Cropped, low-contrast, quoted, forwarded, group-chat, and third-party messages.
 - No-action input, contradiction, retraction, expired deadline, superseded state.
+- New acquaintance without work, an undated promise, updated waiting state, and
+  paused reminders. Verify a second visit retrieves current context rather than
+  creating duplicate work or reviving a superseded plan.
 - Evidence becoming unavailable while its observation timestamp remains present;
   freshness must not hide lost authority in either primary or continuation rows.
 

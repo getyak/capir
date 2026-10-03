@@ -391,7 +391,7 @@ function LegacyConversationCanvas({
               ) : null
             }
             id="new-conversation-objective"
-            label="给 Talent Signal 发消息"
+            label="给 capri 发消息"
             maxLength={1_000}
             onCapture={() => setCaptureOpen(true)}
             onNavigate={(href) => router.push(href)}

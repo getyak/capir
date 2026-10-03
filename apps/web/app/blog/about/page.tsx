@@ -10,7 +10,7 @@ import { siteConfig } from "@/lib/site";
 export const metadata: Metadata = {
   title: "编辑方法",
   description:
-    "Talent Signal 如何研究、撰写、引用、更新和修正有关证据优先关系智能的公开内容。",
+    "capri 如何研究、撰写、引用、更新和修正有关证据优先关系智能的公开内容。",
   alternates: {
     canonical: "/blog/about",
   },
@@ -20,7 +20,7 @@ const editorialSchema = {
   "@context": "https://schema.org",
   "@type": "AboutPage",
   "@id": `${siteConfig.url}/blog/about#page`,
-  name: "Talent Signal 编辑方法",
+  name: "capri 编辑方法",
   description: metadata.description,
   url: `${siteConfig.url}/blog/about`,
   mainEntity: {
@@ -48,7 +48,7 @@ export default function EditorialMethodPage() {
             <p className="eyebrow">编辑方法</p>
             <h1>信任始于结论如何形成。</h1>
             <p>
-              Talent Signal 编辑团队把产品研究转化为面向维护客户、伙伴与协作关系的人的实践指南。
+              capri 编辑团队把产品研究转化为面向维护客户、伙伴与协作关系的人的实践指南。
             </p>
           </header>
 
@@ -56,7 +56,7 @@ export default function EditorialMethodPage() {
             <section id="who-writes">
               <h2>谁在写作</h2>
               <p>
-                在明确的出版负责人制度建立前，文章以 Talent Signal 编辑团队名义发布。署名代表组织身份，不是虚构人物。
+                在明确的出版负责人制度建立前，文章以 capri 编辑团队名义发布。署名代表组织身份，不是虚构人物。
               </p>
             </section>
             <section id="how-we-research">

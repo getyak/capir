@@ -168,7 +168,7 @@ enum LabWorkspaceError: LocalizedError, Equatable {
         case .authenticationRequired: "Sign in to the original account to continue this test-workspace operation."
         case .wrongAccount: "Return with the original account used to create this test workspace."
         case .invalidResponse: "The test-workspace response could not be verified."
-        case .contractMismatch: "The test-workspace contract changed. Update Talent Signal and try again."
+        case .contractMismatch: "The test-workspace contract changed. Update capri and try again."
         case .secureStore: "Protected test-workspace recovery is unavailable. Account content remains closed."
         case .busy: "Finish active requests or recording before changing workspaces."
         case .notEmpty: "The server did not verify this test workspace as empty and isolated."

@@ -65,6 +65,6 @@ final class SelectedTextServiceProviderTests: XCTestCase {
             error: &error
         )
 
-        XCTAssertEqual(error as String?, "Select text before choosing Review Selection with Talent Signal.")
+        XCTAssertEqual(error as String?, "Select text before choosing Review Selection with capri.")
     }
 }

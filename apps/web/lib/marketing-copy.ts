@@ -1,14 +1,14 @@
 import type { MarketingLocale } from "./marketing-locale";
 import { siteConfig } from "./site";
 
-export const relationshipDemoHref = "/relationships#relationship-experience";
+export const relationshipDemoHref = "/#personal-agent-demo";
 export function marketingAccessHref(locale: MarketingLocale) {
-  return `mailto:${siteConfig.email}?subject=${encodeURIComponent(locale === "en" ? "Request Talent Signal access" : "申请使用 Talent Signal")}`;
+  return `mailto:${siteConfig.email}?subject=${encodeURIComponent(locale === "en" ? `Request ${siteConfig.name} access` : `申请使用 ${siteConfig.name}`)}`;
 }
 
 const zh = {
   nav: ["产品", "使用方法", "信任", "定价", "研究"],
-  demo: "体验关系工作台",
+  demo: "体验截图接续",
   access: "申请使用",
   email: "通过邮件申请",
   login: "登录",
@@ -20,7 +20,7 @@ const zh = {
   explore: "探索",
   privacy: "隐私政策",
   original: "中文原文",
-  audience: "关系工作区 · 客户、伙伴与协作",
+  audience: "个人 Agent · 重要的人和未完的事",
   headline: ["每次跟进，", "都接得上上次对话。"],
   promise: "保留联系人的背景，发现对话里的变化，准备恰当的下一步。",
   methodTitle: "从一句话，到下一次好好交谈。",
@@ -55,9 +55,9 @@ const zh = {
   pricingLink: "查看使用与定价",
   faqs: [
     {
-      question: "这是怎样的 CRM？",
+      question: "它能帮我留下什么？",
       answer:
-        "以联系人为中心，把对话、承诺与日程放回持续的关系背景中。服务客户合作、伙伴关系、共同项目与招聘，让重要关系持续向前。",
+        "先理解你分享的对话，再由你选择留下认识背景或未完事项。产品方向是让新回复更新同一件事、下一次交流找回相关背景；实际开放范围在申请时明确。",
     },
     {
       question: "会自动发消息或安排日程吗？",
@@ -122,7 +122,7 @@ const zh = {
 type Copy = typeof zh;
 const en: Copy = {
   nav: ["Product", "How it works", "Trust", "Pricing", "Journal"],
-  demo: "Try the relationship workspace",
+  demo: "Try screenshot continuity",
   access: "Request access",
   email: "Apply by email",
   login: "Log in",
@@ -135,7 +135,7 @@ const en: Copy = {
   privacy: "Privacy policy",
   original: "Original Chinese",
   audience:
-    "Relationship workspace · Clients, partners & collaboration",
+    "Personal Agent · People and unfinished things",
   headline: ["Every follow-up,", "a conversation continued."],
   promise:
     "Keep the context, notice what changed, and prepare the right next step for each relationship.",
@@ -174,9 +174,9 @@ const en: Copy = {
   pricingLink: "View access & pricing",
   faqs: [
     {
-      question: "What kind of CRM is this?",
+      question: "What can I keep with it?",
       answer:
-        "A person-centered CRM that keeps conversations, commitments, and meetings in their relationship context. For client work, partnerships, shared projects, and recruiting—keep important relationships moving.",
+        "See a sourced understanding of a conversation you share, then choose context or an unfinished thing to keep. Updating the same item and recalling it next time are the product direction; confirm available capabilities when requesting access.",
     },
     {
       question: "Will it send messages or schedule meetings?",

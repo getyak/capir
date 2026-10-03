@@ -383,7 +383,7 @@ describe("server-rendered composer", () => {
       binding: null,
       canSubmit: false,
       id: "ssr-composer",
-      label: "给 Talent Signal 发消息",
+      label: "给 capri 发消息",
       maxLength: 1_000,
       onNavigate: () => {},
       onSubmit: () => {},
@@ -398,7 +398,7 @@ describe("server-rendered composer", () => {
 
   it("renders the accessible label, discovery hint and listbox wiring", () => {
     const html = render();
-    expect(html).toContain("给 Talent Signal 发消息");
+    expect(html).toContain("给 capri 发消息");
     expect(html).toContain(COMPOSER_DISCOVERY_HINT);
     expect(html).toContain('aria-autocomplete="list"');
     expect(html).toMatch(/maxlength="1000"/i);

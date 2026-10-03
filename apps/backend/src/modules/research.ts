@@ -771,7 +771,7 @@ export async function runPublicResearch(
   const createdAt = new Date();
   const leaseExpiresAt = new Date(createdAt.getTime() + 5 * 60_000);
   const authorizationScope =
-    `Public HTTPS research approved by the recruiter for ${allowedHostname}; ` +
+    `Public HTTPS research approved by the user for ${allowedHostname}; ` +
     `maximum ${request.authorization.maximum_page_count} pages and link depth ` +
     `${request.authorization.maximum_link_depth}.`;
   const initial = await inTransaction(pool, async (client) => {
@@ -953,7 +953,7 @@ export async function runPublicResearch(
               request.relationship_context_id,
           },
           binding_basis:
-            "The authenticated recruiter explicitly approved this bounded public research task.",
+            "The authenticated user explicitly approved this bounded public research task.",
         },
         resource: {
           client_resource_id: clientResourceId,

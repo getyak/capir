@@ -162,7 +162,7 @@ export default async function WorkspaceLayout({
         ) : null}
         <SessionDraftSessionBoundary storageScope={pendingSessionDraftScope} />
         <WorkspaceDirectoryScope binding={pendingBinding} />
-        <aside aria-label="Talent Signal 工作台" className={styles.sidebar}>
+        <aside aria-label="capri 工作台" className={styles.sidebar}>
           <WorkspaceShellNav binding={pendingBinding} />
           <div className={styles.sidebarScroll}>
             {pendingBinding ? (
@@ -186,12 +186,12 @@ export default async function WorkspaceLayout({
         <div className={styles.workspace}>
           <header className={styles.mobileHeader}>
             <Link
-              aria-label="Talent Signal 工作台"
+              aria-label="capri 工作台"
               className={styles.brand}
               href="/workspace"
             >
               <span aria-hidden="true" className={styles.brandMark} />
-              <span className={styles.brandName}>Talent Signal</span>
+              <span className={styles.brandName}>capri</span>
             </Link>
             <div className={styles.mobileAccount}>
               <WorkspaceGlobalSearchDialog binding={pendingBinding} />

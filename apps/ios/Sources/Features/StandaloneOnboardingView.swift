@@ -31,8 +31,8 @@ struct StandaloneOnboardingView: View {
     @FocusState private var signalTextFocused: Bool
 
     @State private var displayName = ""
-    @State private var selectedTemplate = "Hire someone"
-    @State private var outcome = "Hire a VP of Engineering"
+    @State private var selectedTemplate = "Build a partnership"
+    @State private var outcome = ""
     @State private var hasTargetDate = false
     @State private var targetDate = Date().addingTimeInterval(30 * 24 * 60 * 60)
     @State private var captureMode: CaptureMode = .text
@@ -381,10 +381,10 @@ struct StandaloneOnboardingView: View {
             Text(localized("Start with the outcome. People and evidence can arrive later."))
                 .foregroundStyle(Color.tsMutedInk)
             VStack(spacing: 10) {
-                ForEach(["Hire someone", "Win an opportunity", "Build a partnership", "Something else"], id: \.self) { template in
+                ForEach(["Build a partnership", "Win an opportunity", "Hire someone", "Something else"], id: \.self) { template in
                     choiceRow(
                         title: template,
-                        detail: template == "Hire someone" ? "Recommended for the showcase" : nil,
+                        detail: nil,
                         selected: selectedTemplate == template
                     ) {
                         selectedTemplate = template
@@ -396,7 +396,7 @@ struct StandaloneOnboardingView: View {
             }
             VStack(alignment: .leading, spacing: 8) {
                 Text(localized("Outcome")).font(.subheadline.weight(.semibold))
-                TextField("Hire a VP of Engineering", text: $outcome, axis: .vertical)
+                TextField(localized("Prepare the next conversation"), text: $outcome, axis: .vertical)
                     .lineLimit(2 ... 4)
                     .padding(14)
                     .background(Color.tsSurface, in: RoundedRectangle(cornerRadius: 14))
@@ -456,7 +456,7 @@ struct StandaloneOnboardingView: View {
 
     private var sourceChoice: some View {
         VStack(alignment: .leading, spacing: 22) {
-            pageTitle("Give Talent Signal one place to listen", eyebrow: "FIRST SOURCE")
+            pageTitle("Give capri one place to listen", eyebrow: "FIRST SOURCE")
             sourceChoiceButton(
                 icon: "text.cursor",
                 title: "Type a Signal",

@@ -12,7 +12,7 @@ struct CaptureMenuView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
                 TSBrandMark(size: 19, monochrome: true)
-                Text("Talent Signal").font(.system(size: 13, weight: .medium))
+                Text("capri").font(.system(size: 13, weight: .medium))
                 Spacer()
             }
             .padding(.horizontal, 15).padding(.top, 14).padding(.bottom, 12)

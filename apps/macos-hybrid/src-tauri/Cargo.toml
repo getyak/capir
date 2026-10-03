@@ -1,8 +1,8 @@
 [package]
 name = "talent-signal-macos-hybrid"
 version = "0.1.0"
-description = "Least-privilege Talent Signal macOS Hybrid feasibility shell"
-authors = ["Talent Signal"]
+description = "Least-privilege capri macOS Hybrid feasibility shell"
+authors = ["capri"]
 edition = "2024"
 rust-version = "1.88"
 

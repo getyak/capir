@@ -499,7 +499,7 @@ function AdvancedPane({ labEnabled }: { labEnabled: boolean }) {
         <section className={styles.devicePermissions} id="device-permissions">
           <h3>屏幕录制权限</h3>
           <p>
-            屏幕录制权限归这台 Mac 上的 Talent Signal 应用所有：打开应用 →「此 Mac 设置…」→「权限」→
+            屏幕录制权限归这台 Mac 上的 capri 应用所有：打开应用 →「此 Mac 设置…」→「权限」→
             macOS 系统设置。
           </p>
           <p>这个 Web 设置页无法授予或更改系统权限。</p>

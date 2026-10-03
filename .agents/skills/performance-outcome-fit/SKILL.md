@@ -1,6 +1,6 @@
 ---
 name: performance-outcome-fit
-description: Review Talent Signal product flows, candidate recommendations, role briefs, action cards, and hiring decisions through Lou Adler’s publicly documented performance-based and win-win hiring principles. Use when checking whether a proposed action is grounded in real job outcomes, comparable evidence, intrinsic motivation, and a credible career move rather than credentials, compensation, or generic process advancement.
+description: Review capri product flows, candidate recommendations, role briefs, action cards, and hiring decisions through Lou Adler’s publicly documented performance-based and win-win hiring principles. Use when checking whether a proposed action is grounded in real job outcomes, comparable evidence, intrinsic motivation, and a credible career move rather than credentials, compensation, or generic process advancement.
 ---
 
 # Performance Outcome Fit

@@ -104,7 +104,7 @@ struct RelationshipCalendarWeekGrid: View {
                 }
                 .accessibilityIdentifier("calendar-week-columns")
             }
-            Text(calendar.timeZone.identifier + " · " + appLanguage.text("Only Talent Signal activities are shown."))
+            Text(calendar.timeZone.identifier + " · " + appLanguage.text("Only capri activities are shown."))
                 .font(.caption).foregroundStyle(Color.tsMutedInk)
         }
         .accessibilityElement(children: .contain)
@@ -201,7 +201,7 @@ struct RelationshipCalendarWeekGrid: View {
         .buttonStyle(.plain)
         .accessibilityLabel(activity.personDisplayLabel + ", " + activity.displayTitle(in: appLanguage) + ", "
             + activity.contextDisplayLabel + ", " + timeRange(activity)
-            + (overlappingIDs.contains(activity.id) ? ", " + appLanguage.text("Overlaps another Talent Signal activity") : "")
+            + (overlappingIDs.contains(activity.id) ? ", " + appLanguage.text("Overlaps another capri activity") : "")
             + (activity.calendarSyncState == .failed ? ", " + appLanguage.text("Calendar sync failed") : "")
             + (activity.calendarSyncState == .missing ? ", " + appLanguage.text("Linked Calendar event missing") : "")
             + (activity.calendarSyncState == .unknown ? ", " + appLanguage.text("Calendar sync unverified") : ""))

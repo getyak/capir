@@ -430,7 +430,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         panel.message = "保存后请在日历应用中核对并确认导入。"
         panel.allowedContentTypes = [UTType(filenameExtension: "ics") ?? .data]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "Talent Signal-\(UUID().uuidString.prefix(8)).ics"
+        panel.nameFieldStringValue = "capri-\(UUID().uuidString.prefix(8)).ics"
         panel.beginSheetModal(for: window) { [weak self] result in
             guard result == .OK, let url = panel.url else {
                 self?.calendarDownloads.remove(ObjectIdentifier(download))
@@ -521,7 +521,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             completionHandler(false); return
         }
         let alert = NSAlert()
-        alert.messageText = "工作区确认 · \(origin.url.host ?? "Talent Signal")"
+        alert.messageText = "工作区确认 · \(origin.url.host ?? "capri")"
         alert.informativeText = message
         alert.addButton(withTitle: "确认")
         alert.addButton(withTitle: "取消")
@@ -534,7 +534,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             completionHandler(); return
         }
         let alert = NSAlert()
-        alert.messageText = "工作区 · \(origin.url.host ?? "Talent Signal")"
+        alert.messageText = "工作区 · \(origin.url.host ?? "capri")"
         alert.informativeText = message
         alert.addButton(withTitle: "好")
         alert.beginSheetModal(for: window) { _ in completionHandler() }

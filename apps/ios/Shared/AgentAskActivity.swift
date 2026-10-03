@@ -63,7 +63,7 @@ enum AgentAskActivityProjector {
                 actionTitle: nil,
                 action: .open,
                 accessibilityLabel: localized(
-                    "Talent Signal Agent is preparing a response.",
+                    "capri Agent is preparing a response.",
                     locale: locale
                 )
             )
@@ -75,7 +75,7 @@ enum AgentAskActivityProjector {
                 actionTitle: localized("Open", locale: locale),
                 action: .open,
                 accessibilityLabel: localized(
-                    "Talent Signal Agent response is ready to review.",
+                    "capri Agent response is ready to review.",
                     locale: locale
                 )
             )
@@ -87,7 +87,7 @@ enum AgentAskActivityProjector {
                 actionTitle: localized("Retry", locale: locale),
                 action: .retry,
                 accessibilityLabel: localized(
-                    "Talent Signal Agent did not connect. Open the protected Session to retry.",
+                    "capri Agent did not connect. Open the protected Session to retry.",
                     locale: locale
                 )
             )
@@ -99,7 +99,7 @@ enum AgentAskActivityProjector {
                 actionTitle: localized("Retry", locale: locale),
                 action: .retry,
                 accessibilityLabel: localized(
-                    "Talent Signal Agent response is delayed. Open the protected Session to check or retry.",
+                    "capri Agent response is delayed. Open the protected Session to check or retry.",
                     locale: locale
                 )
             )

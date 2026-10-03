@@ -56,7 +56,7 @@ describe("workspace critical loading path", () => {
       await WorkspaceLayout({ children: child }),
     );
     expect(html).toContain("Authentication boundary");
-    expect(html).not.toContain("Talent Signal 工作台");
+    expect(html).not.toContain("capri 工作台");
     expect(loadLabManifest).not.toHaveBeenCalled();
   });
 });

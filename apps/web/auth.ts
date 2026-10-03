@@ -147,7 +147,7 @@ function buildProviders(appleCredentials: AppleCredentials): Provider[] {
   const providers: Provider[] = [
     Credentials({
       id: "password-account",
-      name: "Talent Signal account",
+      name: "capri account",
       credentials: {
         mode: { label: "Mode", type: "text" },
         identifier: { label: "Username or email", type: "text" },

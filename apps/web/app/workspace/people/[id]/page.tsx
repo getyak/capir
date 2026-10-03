@@ -25,7 +25,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   robots: { follow: false, index: false },
-  title: "人物 · Talent Signal",
+  title: "人物 · capri",
 };
 
 const UUID =

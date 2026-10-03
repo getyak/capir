@@ -205,12 +205,12 @@ export function WorkspaceShellNav({
     >
       <div className={styles.brandRow}>
         <Link
-          aria-label="Talent Signal 工作台"
+          aria-label="capri 工作台"
           className={styles.brand}
           href="/workspace"
         >
           <span aria-hidden="true" className={styles.brandMark} />
-          <span className={styles.brandName}>Talent Signal</span>
+          <span className={styles.brandName}>capri</span>
         </Link>
         <div className={styles.brandActions}>
           <button

@@ -147,7 +147,7 @@ export function SettingsVersionsPane({
           data-unknown={webRelease ? "false" : "true"}
         >
           <div className={styles.versionHead}>
-            <strong>Talent Signal Web</strong>
+            <strong>capri Web</strong>
             <RevisionText
               value={webRelease ? webRelease.revision : null}
               missing="无法确认版本"
@@ -258,7 +258,7 @@ export function SettingsVersionsPane({
             <span className={styles.versionIdentity}>此设备无法读取</span>
           </div>
           <p className={styles.versionStatus}>
-            已安装版本只在对应的 iPhone 或 iPad 上可见：打开 Talent Signal → 设置 → 版本与状态。这里不会从发布清单推断。
+            已安装版本只在对应的 iPhone 或 iPad 上可见：打开 capri → 设置 → 版本与状态。这里不会从发布清单推断。
           </p>
         </section>
         <section
@@ -271,7 +271,7 @@ export function SettingsVersionsPane({
             <span className={styles.versionIdentity}>此设备无法读取</span>
           </div>
           <p className={styles.versionStatus}>
-            已安装版本在该浏览器的 Talent Signal Capture 扩展面板顶部显示；Chrome 报告可用更新时会提示。这里不能跨浏览器读取。
+            已安装版本在该浏览器的 capri Capture 扩展面板顶部显示；Chrome 报告可用更新时会提示。这里不能跨浏览器读取。
           </p>
         </section>
       </Group>

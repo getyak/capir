@@ -1649,7 +1649,7 @@ function CaptureWorkspace({
       {!embedded && !dialogMode ? (
         <header className={styles.header}>
           <Link href="/contact-agent" className={styles.brand}>
-            Talent Signal <span>关系工作台</span>
+            capri <span>关系工作台</span>
           </Link>
           <Link href="/workspace">返回工作台</Link>
         </header>

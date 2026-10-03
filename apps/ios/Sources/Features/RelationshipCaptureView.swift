@@ -1079,7 +1079,7 @@ struct RelationshipCaptureView: View {
                 if review.needsEvidenceReview {
                     Label(appLanguage.text("Speaker or source review is still unresolved"), systemImage: "person.crop.circle.badge.questionmark")
                         .foregroundStyle(Color.tsWarning)
-                    Text(appLanguage.text("No candidate facts can be confirmed from unknown-speaker text. Keep this source for review."))
+                    Text(appLanguage.text("No person facts can be confirmed from unknown-speaker text. Keep this source for review."))
                         .foregroundStyle(Color.tsMutedInk)
                     ForEach(review.fragments.filter { $0.attribution.status != "confirmed" || $0.reviewStatus != "reviewed" }) { fragment in
                         VStack(alignment: .leading, spacing: 12) {
@@ -1200,7 +1200,7 @@ struct RelationshipCaptureView: View {
                     icon: "tray.full",
                     title: appLanguage.text("Source saved without guessing a person"),
                     detail: appLanguage.text(
-                        "The reviewed evidence remains unresolved and cannot change any person Wiki until a recruiter resolves identity."
+                        "The reviewed evidence remains unresolved and cannot change any person Wiki until you resolve identity."
                     )
                 ) {
                     Button(appLanguage.text("Return to people")) {

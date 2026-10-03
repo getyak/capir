@@ -271,7 +271,7 @@ enum TalentSignalLabStateError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .capabilityBoundaryInvalid:
-            return "Talent Signal Lab stayed closed because this backend did not prove its synthetic-only, zero-write capability boundary."
+            return "capri Lab stayed closed because this backend did not prove its synthetic-only, zero-write capability boundary."
         case .comparisonNotVerifiable:
             return "The comparison could not prove an identical frozen snapshot and zero effects."
         case .isolationNotVerified:

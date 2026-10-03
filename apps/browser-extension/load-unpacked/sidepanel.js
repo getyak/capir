@@ -264,7 +264,7 @@ function renderMode() {
     : "Bring only what matters into review.";
   elements.captureLede.textContent = fixtureMode
     ? "Open a bundled synthetic case and inspect its evidence, proposed meaning, action boundary, and truthful receipt state."
-    : "Choose the visible page or text you selected. Talent Signal will show the exact payload before anything leaves this panel.";
+    : "Choose the visible page or text you selected. capri will show the exact payload before anything leaves this panel.";
 }
 
 async function loadFixtureSuite() {

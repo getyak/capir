@@ -7,7 +7,7 @@ struct AgentWorkLiveActivity: Widget {
         ActivityConfiguration(for: AgentWorkActivityAttributes.self) { context in
             let view = presentation(context)
             ActivityHandoffLockScreen(
-                name: agentWorkLocalized("Talent Signal Agent"),
+                name: agentWorkLocalized("capri Agent"),
                 content: content(context, view: view)
             )
             .activityBackgroundTint(Color.signalActivityBackground)

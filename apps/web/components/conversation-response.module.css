@@ -31,5 +31,5 @@
 .destination { color: var(--muted-strong); font-size: 0.875em; overflow-wrap: anywhere; }
 .response :is(pre, [tabindex]):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 
-[data-conversation-canvas] .response { font-size:14px; line-height:22px; }
-[data-conversation-canvas] .response ol > li { font-size:14px; line-height:22px; font-weight:400; margin:8px 0; }
+[data-conversation-canvas] .response { font-size:15px; line-height:25px; }
+[data-conversation-canvas] .response ol > li { font-size:15px; line-height:25px; font-weight:400; margin:8px 0; }

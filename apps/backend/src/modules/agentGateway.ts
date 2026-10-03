@@ -186,13 +186,13 @@ function mapProposalItems(
       const gapLabels = {
         identity_unresolved: [
           "Identity needs review",
-          "The candidate identity remains unresolved in reviewed evidence.",
-          "Close when a recruiter confirms or rejects the identity binding.",
+          "The person identity remains unresolved in reviewed evidence.",
+          "Close when a human confirms or rejects the identity binding.",
         ],
         contact_channel_unavailable: [
           "Contact channel unavailable",
           "No governed contact channel is currently available.",
-          "Close when a recruiter verifies an authorized contact channel.",
+          "Close when a human verifies an authorized contact channel.",
         ],
         availability_unknown: [
           "Availability remains unknown",
@@ -212,7 +212,7 @@ function mapProposalItems(
         evidence_conflict: [
           "Evidence conflict needs review",
           "Reviewed evidence contains a material contradiction.",
-          "Close when a recruiter resolves or explicitly preserves the dispute.",
+          "Close when a human resolves or explicitly preserves the dispute.",
         ],
         source_freshness_expired: [
           "Source freshness expired",
@@ -262,8 +262,8 @@ function mapProposalItems(
         const title = taskLabels[category as keyof typeof taskLabels];
         return {
           ...common,
-          reason: "This is a recruiter-owned operational step, not a candidate assessment.",
-          effect_summary: `Would add the recruiter-owned task “${title}” for human review only.`,
+          reason: "This is a user-owned operational step, not an assessment of the person.",
+          effect_summary: `Would add the user-owned task “${title}” for human review only.`,
           change: {
             kind: "add_action" as const,
             proposed_value: {

@@ -32,7 +32,7 @@ export function BindingForm({
     <section className="connection-card" id="connection">
       <div>
         <p className="eyebrow">连接设置</p>
-        <h2>连接本机 Talent Signal 后端</h2>
+        <h2>连接本机 capri 后端</h2>
         <p className="lede">
           只接受带显式端口、固定服务器证书的 <code>https://127.0.0.1</code> 或
           <code> https://localhost</code>。服务器证书会在发送令牌前完成 TLS 身份核验；

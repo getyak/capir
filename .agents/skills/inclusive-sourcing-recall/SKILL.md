@@ -1,6 +1,6 @@
 ---
 name: inclusive-sourcing-recall
-description: Audit sourcing strategies, talent maps, search queries, candidate discovery UX, outreach experiments, and hidden-talent coverage through Glen Cathey’s publicly documented critical-thinking, pattern-matching, dark-matter, and strategic-exclusion methods. Use when Talent Signal expands into sourcing or when a search may exclude qualified people because of titles, keywords, profile completeness, ranking, or overreliance on AI matching.
+description: Audit sourcing strategies, talent maps, search queries, candidate discovery UX, outreach experiments, and hidden-talent coverage through Glen Cathey’s publicly documented critical-thinking, pattern-matching, dark-matter, and strategic-exclusion methods. Use when capri expands into sourcing or when a search may exclude qualified people because of titles, keywords, profile completeness, ranking, or overreliance on AI matching.
 ---
 
 # Inclusive Sourcing Recall

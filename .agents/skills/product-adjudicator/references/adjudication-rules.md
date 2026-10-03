@@ -8,7 +8,8 @@ Let the specialist closest to the claim define the gate:
 - candidate trust and communication → candidate experience;
 - assessment validity, fairness, evaluator claims → selection science;
 - mobile interaction and accessibility → mobile UX;
-- recruiter operational value → recruiter workflow;
+- general workflow value → scenario-grounded usefulness evidence;
+- recruiting operational value → recruiter workflow only in recruiting context;
 - sourcing recall → inclusive sourcing;
 - current market change → trend radar;
 - outcome/fit, motivation, or potential → their named domain, within limits.

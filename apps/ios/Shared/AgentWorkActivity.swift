@@ -177,13 +177,13 @@ enum AgentWorkActivityProjector {
         guard let view = try? project(state) else {
             return AgentWorkActivityViewState(
                 eyebrow: agentWorkLocalized("CHECK STATUS"),
-                title: agentWorkLocalized("Open Talent Signal"),
+                title: agentWorkLocalized("Open capri"),
                 supportingText: agentWorkLocalized("This update needs review"),
                 boundaryText: agentWorkLocalized("No outcome assumed"),
                 glyph: .unknown,
                 action: nil,
                 accessibilityLabel: agentWorkLocalized(
-                    "This update needs review. No outcome assumed. Open Talent Signal."
+                    "This update needs review. No outcome assumed. Open capri."
                 ),
                 isTerminal: false,
                 isStale: false
@@ -310,7 +310,7 @@ enum AgentWorkActivityProjector {
             return viewState(
                 eyebrow: agentWorkLocalized("NEEDS YOU"),
                 title: agentWorkLocalized("Processing needs attention"),
-                supportingText: agentWorkLocalized("Open Talent Signal to resolve"),
+                supportingText: agentWorkLocalized("Open capri to resolve"),
                 boundaryText: agentWorkLocalized("No outcome assumed"),
                 glyph: .failed,
                 action: .resolve,
@@ -321,7 +321,7 @@ enum AgentWorkActivityProjector {
             return viewState(
                 eyebrow: agentWorkLocalized("CHECK STATUS"),
                 title: agentWorkLocalized("Result needs confirmation"),
-                supportingText: agentWorkLocalized("Open Talent Signal to reconcile"),
+                supportingText: agentWorkLocalized("Open capri to reconcile"),
                 boundaryText: agentWorkLocalized("No outcome assumed"),
                 glyph: .unknown,
                 action: .resolve,
@@ -372,7 +372,7 @@ enum AgentWorkActivityProjector {
             ? " \(agentWorkLocalized("Last update delayed."))"
             : ""
         let accessibilityLabel = [
-            agentWorkLocalized("Talent Signal Agent"),
+            agentWorkLocalized("capri Agent"),
             title,
             supportingText,
             boundaryText,

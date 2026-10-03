@@ -26,7 +26,7 @@ struct TalentSignalMacApp: App {
     }
 
     var body: some Scene {
-        Window("Talent Signal", id: "workspace") {
+        Window("capri", id: "workspace") {
             ApplicationZoomContainer(enabled: model.isAccessibilityZoomPreview) {
                 Group {
                     if isQuickPanelPreview {
@@ -102,7 +102,7 @@ struct TalentSignalMacApp: App {
         } label: {
             TSBrandMark(size: 22, monochrome: true)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Talent Signal")
+                .accessibilityLabel("capri")
         }
         .menuBarExtraStyle(.window)
     }
@@ -148,7 +148,7 @@ private struct TalentSignalCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
-        CommandMenu("Talent Signal") {
+        CommandMenu("capri") {
             Button("Open Quick Panel") {
                 openWindow(id: "quick-panel")
             }
