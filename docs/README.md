@@ -96,6 +96,8 @@ updated.
   ownership, Web settings, fixture credentials, sessions, and isolated test access.
 - [Secret delivery](operations/secrets.md) defines Infisical ownership, local
   injection, workload identity, environment isolation, and rotation.
+- [Owner-operated Nango Auth/Proxy](operations/nango-local.md) defines pinned
+  images, tailnet endpoints, isolated credentials and OAuth recovery.
 - [Prompt operations](operations/opik-prompts.md) explains editing, publishing,
   source imports and bundled releases with Opik version mirroring.
 - [Private Opik improvement](operations/opik-phase-one.md) covers corrections,
