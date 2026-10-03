@@ -11,6 +11,9 @@ COPY --from=upstream /app/nango /app/nango
 ARG CONNECT_API_ORIGIN=https://smile-m4-minimac-mini.tail25e61f.ts.net:15443
 COPY deploy/nango/configure-connect-ui.mjs /usr/local/lib/talent-signal-nango/configure-connect-ui.mjs
 RUN node /usr/local/lib/talent-signal-nango/configure-connect-ui.mjs /app/nango/packages/connect-ui/dist "$CONNECT_API_ORIGIN"
+COPY deploy/nango/configure-private-oauth.mjs /usr/local/lib/talent-signal-nango/configure-private-oauth.mjs
+RUN node /usr/local/lib/talent-signal-nango/configure-private-oauth.mjs /app/nango/packages/shared/dist/clients/mcpGeneric.client.js
+ENV TALENT_SIGNAL_NANGO_DCR_ONLY=true
 ENV NODE_ENV=production PORT=8080 SERVER_RUN_MODE=DOCKERIZED GIT_HASH=153f8c5450e7dd7049504df4a323e25499369002
 LABEL org.opencontainers.image.source=https://github.com/NangoHQ/nango org.opencontainers.image.revision=153f8c5450e7dd7049504df4a323e25499369002
 LABEL io.talentsignal.nango.connect-api-origin=${CONNECT_API_ORIGIN}

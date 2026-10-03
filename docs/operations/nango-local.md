@@ -14,10 +14,15 @@ The resident staging service uses the existing owner-operated Mac and tailnet:
 | API | https://smile-m4-minimac-mini.tail25e61f.ts.net:15443 | 127.0.0.1:4303 |
 | Connect UI | https://smile-m4-minimac-mini.tail25e61f.ts.net:16443 | 127.0.0.1:4309 |
 
-These addresses require Tailscale access. Dynamic client registration works
-without exposing the dashboard publicly. A provider requiring public client
-metadata retrieval cannot reach tailnet-only metadata; admit that provider
-only after a separately authorized public HTTPS metadata arrangement. Do not
+These addresses require Tailscale access. Dynamic client registration (DCR) works without exposing the dashboard publicly.
+The pinned generic client prefers CIMD whenever the server URL is HTTPS, including
+a tailnet-only URL. This wrapper applies a guarded method patch and explicitly
+sets `TALENT_SIGNAL_NANGO_DCR_ONLY=true`: generic OAuth selects a validated DCR
+endpoint or fails with `MCP_DCR_REQUIRED_FOR_PRIVATE_DEPLOYMENT`. CIMD-only and
+unsupported static-client services cannot connect in this deployment. A provider
+requiring public client metadata retrieval cannot reach tailnet-only metadata;
+admit that provider only after a separately authorized public HTTPS metadata
+arrangement and deliberate removal of the private DCR policy. Do not
 silently enable Funnel.
 
 The resident Docker project `talent-signal-nango` is explicitly allowlisted by
@@ -32,7 +37,8 @@ policy blocks private and link-local IPs with at most three redirects.
 Application source is `153f8c5450e7dd7049504df4a323e25499369002` (0.71.12).
 `deploy/nango/Dockerfile.arm64` pins the official hosted AMD64 application and
 native ARM64 Node 22.22.2 images by manifest digest. The upstream application's
-compiled server JS and dependencies are copied unchanged; the dependency tree
+compiled server JS and dependencies are copied with the two bounded patches
+described here; the dependency tree
 contains no `.node` native modules. The pinned Connect UI store defaults to
 `https://api.nango.dev`, even when runtime `NANGO_SERVER_URL` points elsewhere.
 `configure-connect-ui.mjs` replaces exactly that store initializer with the
@@ -40,7 +46,10 @@ bare HTTPS `NANGO_CONNECT_API_ORIGIN` (the API address above by default). It
 fails if the pinned signature or entry references change, leaves SDK defaults
 untouched, and renames the patched asset using its content hash to avoid stale
 browser caches. This is a bounded patch to the pinned prebuilt UI, not an
-upstream server change. The native wrapper is needed because
+upstream server change. `configure-private-oauth.mjs` separately inserts the
+explicit private-deployment DCR policy into the unique pinned generic selection
+method; all other OAuth logic stays upstream, and the dedicated Notion/Linear
+MCP provider DCR flows are unchanged. The native wrapper is needed because
 the official image failed to initialize its HTTP parser under this host's AMD64
 emulator; disabling V8 JIT also disables the WebAssembly parser and is not a
 working workaround.
@@ -64,7 +73,7 @@ nonsecret `NANGO_UPSTREAM_IMAGE` and `NANGO_NODE_IMAGE` build inputs with these
 verified aliases when using the offline import path; defaults remain immutable
 registry digests. Set `NANGO_POSTGRES_IMAGE=postgres:talent-signal-nango-16`
 when using the verified offline PostgreSQL alias. Do not retag an unrelated shared image. The resulting image
-is `talent-signal-nango:153f8c54-node22-arm64-connect1`.
+is `talent-signal-nango:153f8c54-node22-arm64-connect1-dcr1`.
 
 ## Secret delivery
 

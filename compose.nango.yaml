@@ -29,7 +29,7 @@ services:
     mem_limit: 128m
     logging: *bounded-logs
   server:
-    image: talent-signal-nango:153f8c54-node22-arm64-connect1
+    image: talent-signal-nango:153f8c54-node22-arm64-connect1-dcr1
     pull_policy: never
     restart: unless-stopped
     platform: linux/arm64
@@ -68,6 +68,7 @@ services:
       NANGO_DASHBOARD_PASSWORD: ${NANGO_DASHBOARD_PASSWORD:?required}
       NANGO_ADMIN_KEY: ${NANGO_ADMIN_KEY:?required}
       NANGO_CLOUD: 'false'
+      TALENT_SIGNAL_NANGO_DCR_ONLY: 'true'
       NANGO_LOGS_ENABLED: 'false'
       LOG_LEVEL: warn
       NANGO_OUTBOUND_URL_POLICY: '{"blockPrivateIps":true,"blockLinkLocal":true,"maxRedirects":3}'

@@ -149,3 +149,18 @@ Proxy transport or a provider grant and is not acceptance evidence. The rejected
 preflight is preserved as `preflight/nango-proxy-transport-proof.json`. OAuth must
 be validated through the real Connect flow rather than inferred from a synthetic
 import.
+
+### Private generic OAuth selection policy
+
+Live public metadata for Notion and Linear advertises both DCR and CIMD. Pinned
+Nango generic OAuth prefers CIMD whenever its HTTPS server URL generates a
+client metadata document URL; it does not distinguish an unreachable tailnet
+address. The dedicated `notion-mcp` and `linear-mcp` integrations use upstream
+MCP_OAUTH2 DCR directly, but user-defined generic OAuth requires an explicit
+private deployment policy.
+
+Parent added a guarded method patch and `TALENT_SIGNAL_NANGO_DCR_ONLY=true`.
+Generic OAuth chooses a validated registration endpoint or fails explicitly;
+CIMD-only services require a separately authorized public metadata arrangement.
+No Funnel was enabled. Image build, targeted policy checks, independent review
+and real pre-grant generic redirect proof are pending.
