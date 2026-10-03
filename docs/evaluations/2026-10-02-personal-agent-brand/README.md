@@ -62,3 +62,31 @@ production deployment `6813705324` succeeded for the merge commit. The actual
 capri title and new hero/demo, and had no browser page errors; see
 [production browser receipt](web/production-browser.txt). The same source's
 preview passed the save, reviewed reply update, pause and source-removal flow.
+
+The production Chinese surface subsequently passed that same complete flow,
+including a disabled replay after source removal and zero page errors. See the
+[save/new-reply receipt](web/production-zh-flow-part1.txt),
+[update/pause/removal receipt](web/production-zh-flow-part2.txt) and
+[production screenshot](web/production-zh.png).
+
+## Backend delivery and cleanup
+
+[PR #277](https://github.com/getyak/talent-signal/pull/277) merged as
+`d43a0772eef6263b6510eded7cd9abc3923905d7` after all applicable
+[latest-head checks](guard-latest-head-checks.json) passed. Its independent review
+found no unresolved P0, P1 or P2. The rebuilt image downloaded all 266 packages
+and passed the native runtime check. Its installed check also passed with
+network disabled in a read-only container.
+
+The official TestFlight deployment passed API/sidecar health, synthetic private
+Opik write/read/delete, silent-WAV ASR, Agent response and Apple authentication
+challenge probes. Both services use the exact new image; the runtime revision,
+Infisical recovery pair and current checkout pointer match. The launchd keeper
+was restored and the previous working release/image retained. See the
+[backend deployment receipt](backend-deployment.json).
+
+Task-owned preview/prototype/browser processes are stopped. Only the task's
+failed image, precisely identified private build cache, failed clean runtime
+checkout and generated host dependencies were removed. Historical evaluation
+files remain in Git; the active runtime checkout omits them with sparse checkout.
+Other tasks' source, artifacts, devices and services were not cleaned.
