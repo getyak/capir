@@ -276,7 +276,7 @@ function WorkspaceCorpusUnavailable({
             aria-label="工作区数据来源"
           >
             <strong>{source.label}</strong>
-            <p>{source.detail}</p>
+            <p>此页面暂时没有可审阅的评测案例。</p>
             <button type="button" onClick={() => window.location.reload()}>
               <ArrowCounterClockwise aria-hidden="true" size={15} />
               刷新来源
