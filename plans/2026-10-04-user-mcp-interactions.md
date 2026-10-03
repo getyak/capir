@@ -162,5 +162,11 @@ private deployment policy.
 Parent added a guarded method patch and `TALENT_SIGNAL_NANGO_DCR_ONLY=true`.
 Generic OAuth chooses a validated registration endpoint or fails explicitly;
 CIMD-only services require a separately authorized public metadata arrangement.
-No Funnel was enabled. Image build, targeted policy checks, independent review
-and real pre-grant generic redirect proof are pending.
+No Funnel was enabled. Eight targeted policy cases and independent review passed
+with no confirmed P0/P1/P2. Revision `8014d233` built and deployed the resident
+`153f8c54-node22-arm64-connect1-dcr1` image with healthy database, Redis and API.
+A fresh real generic Connect session for the Notion MCP endpoint reached the
+Notion login page after clicking Connect. Self-hosted API returned successful
+responses including the OAuth redirect; browser page errors were zero. Evidence:
+`preflight/nango-generic-dcr-redirect-proof.json`. No provider login or grant was
+performed, and this proves the pre-grant flow only, not Proxy/tool-call completion.
