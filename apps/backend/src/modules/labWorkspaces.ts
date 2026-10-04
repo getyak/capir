@@ -14,13 +14,15 @@ import { labStopAuthorityKeySQL } from "./labStopAuthority.js";
 type Query = Pick<Pool,"query"> | PoolClient;
 interface WorkspaceRow {
   external_cleanup_pending: number;
-  id:string; owner_account_id:string; owner_user_id:string; target_account_id:string; target_user_id:string;
+  id:string; owner_account_id:string|null; owner_user_id:string|null; owner_principal_id:string|null;
+  target_account_id:string; target_user_id:string;
   duration_hours:number; created_at:Date; empty_verified_at:Date|null; expires_at:Date;
   state:"active"|"deleting"|"deleted"; stop_id:string|null; stop_reason:"manual"|"expired"|null;
   stopped_at:Date|null; deleted_at:Date|null; media_scope_hash:string;
   media_manifest:Array<{object_key:string;storage_provider:string}>; cleanup_error:LabWorkspace["cleanup_error"];
 }
-interface EntryRow {id:string;workspace_id:string;owner_session_id:string;session_id:string;token_hash:string;
+interface EntryRow {id:string;workspace_id:string;owner_session_id:string|null;owner_principal_id:string|null;
+  principal_generation:number|null;session_id:string;token_hash:string;
   expires_at:Date;revoked_at:Date|null;}
 const iso = (value:Date|null)=>value?.toISOString()??null;
 const access = (auth:AuthContext,w:WorkspaceRow)=>
@@ -99,6 +101,7 @@ export class LabWorkspaceService {
       (SELECT count(*) FROM lab_test_workspace_media_writes WHERE workspace_id=$3 AND state<>'settled') AS pending`,
       [w.target_account_id,w.target_user_id,w.id])).rows[0]!;
     return {id:w.id,owner_account_id:w.owner_account_id,owner_user_id:w.owner_user_id,
+      owner_principal_id:w.owner_principal_id,
       account_id:w.target_account_id,user_id:w.target_user_id,name:`Test workspace · ${w.id.slice(0,8)}`,
       state:w.state==="active"&&w.expires_at.getTime()<=Date.now()?"expired":w.state,
       created_at:w.created_at.toISOString(),empty_verified_at:iso(w.empty_verified_at),expires_at:w.expires_at.toISOString(),
@@ -140,11 +143,14 @@ export class LabWorkspaceService {
   }
 
   private async describeEntry(client:Query,w:WorkspaceRow,e:EntryRow):Promise<LabWorkspaceEntry> {
-    const s=(await client.query<{active:boolean}>(`SELECT EXISTS(SELECT 1 FROM sessions child JOIN sessions parent ON parent.id=$2
-      JOIN users owner ON owner.id=parent.user_id AND owner.account_id=parent.account_id
-      WHERE child.id=$1 AND child.account_id=$3 AND child.user_id=$4 AND child.revoked_at IS NULL
-      AND child.expires_at>clock_timestamp() AND parent.revoked_at IS NULL AND parent.expires_at>clock_timestamp()
-      AND owner.status='active') AS active`,[e.session_id,e.owner_session_id,w.target_account_id,w.target_user_id])).rows[0]!;
+    // The shared authority predicate governs the entry's session for both
+    // lineage forms: a human parent session or an operator-principal entry.
+    const s=(await client.query<{active:boolean}>(`SELECT EXISTS(SELECT 1 FROM sessions
+      JOIN users ON users.account_id=sessions.account_id AND users.id=sessions.user_id
+      WHERE sessions.id=$1 AND sessions.account_id=$2 AND sessions.user_id=$3
+      AND sessions.revoked_at IS NULL AND sessions.expires_at>clock_timestamp()
+      AND users.status='active' AND ${labWorkspaceSessionActiveSQL}) AS active`,
+      [e.session_id,w.target_account_id,w.target_user_id])).rows[0]!;
     const state:LabWorkspaceEntry["state"]=e.revoked_at||w.state!=="active"?"revoked":
       e.expires_at.getTime()<=Date.now()||w.expires_at.getTime()<=Date.now()?"expired":!s.active?"revoked":"active";
     return {id:e.id,workspace_id:w.id,session_id:e.session_id,expires_at:e.expires_at.toISOString(),revoked_at:iso(e.revoked_at),state,
@@ -237,6 +243,9 @@ export class LabWorkspaceService {
       }
       failure="data_cleanup_failed";
       await inTransaction(this.pool,async client=>{
+        // Same canonical lock order as stop and password admission: the
+        // Lab-stop advisory key first, then the workspace row, then rows.
+        await client.query(`SELECT pg_advisory_xact_lock(${labStopAuthorityKeySQL})`,[w.target_account_id]);
         const current=(await client.query<WorkspaceRow>("SELECT * FROM lab_test_workspaces WHERE id=$1 FOR UPDATE",[id])).rows[0];
         if(!current||current.state!=="deleting")return;
         const currentTables=await this.tables(client);
@@ -271,6 +280,11 @@ export class LabWorkspaceService {
   async stop(auth:AuthContext,id:string,stopId:string):Promise<LabWorkspace> {
     await this.row(this.pool,auth,id);
     await this.beginStop(id,stopId,"manual",auth);await this.clean(id);return this.read(auth,id);
+  }
+  /** Operator-owned run stop: access is revoked before verified cleanup. The
+   * caller has already verified exact operator ownership of the run. */
+  async stopOperatorRun(id:string,stopId:string):Promise<void> {
+    await this.beginStop(id,stopId,"manual");await this.clean(id);
   }
   async sweep():Promise<void> {
     const rows=(await this.pool.query<{id:string}>(`SELECT id FROM lab_test_workspaces

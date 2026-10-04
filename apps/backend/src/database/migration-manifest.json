@@ -99,6 +99,7 @@
     "092_mcp_oauth_cleanup_provenance",
     "093_mcp_oauth_cleanup_attempts_default",
     "094_mcp_oauth_cleanup_generation",
-    "095_mcp_oauth_cleanup_effects"
+    "095_mcp_oauth_cleanup_effects",
+    "096_capir_test_provisioning"
   ]
 }

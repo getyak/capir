@@ -28,6 +28,7 @@ import {
   reserveVerifiedEmail,
 } from "./accountIdentity.js";
 import { labWorkspaceSessionActiveSQL } from "./labWorkspaceAccess.js";
+import { LabPasswordRejection, admitLabPasswordLogin } from "./capirTestSessions.js";
 import {
   consumeDummyPasswordWork,
   verifyPasswordCredential,
@@ -545,21 +546,8 @@ function requirePasswordAuth(config: BackendConfig): void {
   }
 }
 
-export async function createPasswordSession(
-  pool: Pool,
-  config: BackendConfig,
-  request: PasswordLoginRequest,
-): Promise<SessionResponse> {
-  requirePasswordAuth(config);
-  const identifier = request.identifier.trim().toLowerCase();
-  const client = await pool.connect();
-  let transactionOpen = false;
-
-  try {
-    await client.query("BEGIN");
-    transactionOpen = true;
-    const result = await client.query<PasswordIdentityRow>(
-      `SELECT
+const PASSWORD_IDENTITY_SELECT = `
+       SELECT
          accounts.id AS account_id,
          accounts.name AS account_name,
          accounts.slug AS account_slug,
@@ -576,7 +564,120 @@ export async function createPasswordSession(
        JOIN accounts ON accounts.id = users.account_id
        JOIN password_credentials
          ON password_credentials.account_id = users.account_id
-        AND password_credentials.user_id = users.id
+        AND password_credentials.user_id = users.id`;
+
+export async function createPasswordSession(
+  pool: Pool,
+  config: BackendConfig,
+  request: PasswordLoginRequest,
+): Promise<SessionResponse> {
+  requirePasswordAuth(config);
+  const identifier = request.identifier.trim().toLowerCase();
+  const client = await pool.connect();
+  let transactionOpen = false;
+
+  try {
+    await client.query("BEGIN");
+    transactionOpen = true;
+    // Isolated test identities establish the canonical operator lock order
+    // (Lab-stop advisory key -> workspace row -> credential rows) so password
+    // admission and stop/verified cleanup never invert locks. The preview is
+    // an unlocked kind read; every authoritative decision still happens under
+    // the locked lookups below.
+    const kindPreview = await client.query<{ user_kind: UserKind }>(
+      `SELECT DISTINCT users.kind AS user_kind FROM users
+        WHERE lower(users.username) = $1 OR lower(btrim(users.email)) = $1`,
+      [identifier],
+    );
+    if (kindPreview.rows.some((row) => row.user_kind === "lab_human")) {
+      if (kindPreview.rows.length > 1) {
+        await consumeDummyPasswordWork(request.password);
+        await client.query("COMMIT");
+        transactionOpen = false;
+        throw new ApiError(
+          409,
+          "PASSWORD_SIGN_IN_AMBIGUOUS",
+          "More than one account matches this email. Sign in with your username, or resolve the duplicate in Settings.",
+        );
+      }
+      const labResult = await client.query<PasswordIdentityRow>(
+        `${PASSWORD_IDENTITY_SELECT}
+       WHERE users.status = 'active'
+         AND (
+           lower(users.username) = $1 OR lower(btrim(users.email)) = $1
+         )`,
+        [identifier],
+      );
+      const labIdentity = labResult.rows[0];
+      if (
+        !labIdentity ||
+        labResult.rows.length !== 1 ||
+        labIdentity.user_kind !== "lab_human"
+      ) {
+        await consumeDummyPasswordWork(request.password);
+        await client.query("COMMIT");
+        transactionOpen = false;
+        throw new ApiError(
+          401,
+          "PASSWORD_SIGN_IN_FAILED",
+          "The username, email, or password is not recognized.",
+        );
+      }
+      let session: SessionResponse;
+      try {
+        session = await admitLabPasswordLogin(
+          client,
+          config,
+          {
+            accountId: labIdentity.account_id,
+            accountName: labIdentity.account_name,
+            accountSlug: labIdentity.account_slug,
+            displayName: labIdentity.display_name,
+            role: labIdentity.account_role,
+            userEmail: labIdentity.user_email,
+            userId: labIdentity.user_id,
+            userKind: "lab_human",
+            username: labIdentity.username,
+          },
+          request.password,
+          request.client_label,
+        );
+      } catch (error) {
+        // A rejected password mints no session or entry: roll back everything,
+        // then commit ONLY the intended lockout bookkeeping before surfacing
+        // the same generic failure as the ordinary password path.
+        await client.query("ROLLBACK");
+        transactionOpen = false;
+        if (error instanceof LabPasswordRejection) {
+          await client.query("BEGIN");
+          if (!error.credentialLocked) {
+            await client.query(
+              `UPDATE password_credentials
+                  SET failed_attempts = failed_attempts + 1,
+                      locked_until = CASE
+                        WHEN failed_attempts + 1 >= 6
+                          THEN now() + interval '15 minutes'
+                        ELSE NULL
+                      END
+                WHERE account_id = $1 AND user_id = $2`,
+              [labIdentity.account_id, labIdentity.user_id],
+            );
+          }
+          await client.query("COMMIT");
+          throw new ApiError(
+            401,
+            "PASSWORD_SIGN_IN_FAILED",
+            "The username, email, or password is not recognized.",
+          );
+        }
+        throw error;
+      }
+      await client.query("COMMIT");
+      transactionOpen = false;
+      return session;
+    }
+    const result = await client.query<PasswordIdentityRow>(
+      `${PASSWORD_IDENTITY_SELECT}
        WHERE users.status = 'active'
          AND (
            lower(users.username) = $1 OR lower(btrim(users.email)) = $1
@@ -645,6 +746,10 @@ export async function createPasswordSession(
        WHERE account_id = $1 AND user_id = $2`,
       [identity.account_id, identity.user_id],
     );
+    // Isolated test identities were admitted above under the canonical
+    // operator lock order. The ordinary path below is unchanged: a password
+    // credential resolves the login regardless of the user's historical kind;
+    // attaching a password never rewrites provenance.
     const session = await insertSession(
       client,
       config,
@@ -656,8 +761,6 @@ export async function createPasswordSession(
         role: identity.account_role,
         userEmail: identity.user_email,
         userId: identity.user_id,
-        // A password credential resolves the login regardless of the user's
-        // historical kind; attaching a password never rewrites provenance.
         userKind: identity.user_kind,
         username: identity.username,
       },

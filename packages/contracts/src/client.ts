@@ -1,3 +1,13 @@
+import type {
+  CapirTestCapabilitiesResponse,
+  CapirTestCreateRequest,
+  CapirTestHandoffExchangeRequest,
+  CapirTestHandoffExchangeResponse,
+  CapirTestHandoffRequest,
+  CapirTestHandoffResponse,
+  CapirTestRun,
+  CapirTestStopRequest,
+} from "./capirTestSchemas.js";
 import type { ProductRunDetail, ProductRunList, ProductRunFeedbackMutation } from "./productRunSchemas.js";
 import type { TimeScope, TimeActivityListResponse, TimeScheduleMutationRequest, TimeScheduleDeleteRequest, TimeScheduleResponse, TimeReviewRequest, TimeReviewResponse } from "./timeWorkspaceSchemas.js";
 import type { AccountSettings, AccountMutation, AccountOnboarding, AccountOnboardingMutation, AccountOnboardingPreview, AccountOnboardingPreviewRequest, CredentialChangeAttempt, CredentialChangeResult, CompleteCredentialChangeRequest, StartCredentialChangeRequest, PasswordRegistrationStartResponse, PasswordVerificationConfirmRequest, ReconciliationActionRequest, ReconciliationPrepareRequest, ReconciliationRecord } from "./accountSchemas.js";
@@ -271,6 +281,19 @@ export class TalentSignalClient {
     );
     this.setAccessToken(response.access_token);
     return response;
+  }
+
+  /**
+   * Canonical run readback for a live operator-owned test session (the direct
+   * password and private handoff banner source). Uses this client's ordinary
+   * session bearer; the separate provisioning client authority is unchanged.
+   */
+  async currentCapirTestRun(): Promise<CapirTestRun> {
+    const response = await this.request<{ run: CapirTestRun }>(
+      "/v1/capir/test-session",
+      { method: "GET" },
+    );
+    return response.run;
   }
 
   async registerWithPassword(
@@ -1657,5 +1680,150 @@ export class TalentSignalClient {
       );
     }
     return response;
+  }
+}
+
+/**
+ * Operator provisioning client for the `capir test ...` surfaces (Task 1).
+ *
+ * It authenticates with a high-entropy provisioning key (or the trusted Web
+ * consumer key for the private handoff exchange), never a human session, and
+ * never logs or echoes passwords, keys or handoff secrets. Every request
+ * refuses HTTP redirects and is bounded by a timeout: a hostile or misrouted
+ * endpoint can never receive the provisioning credential, the password or the
+ * Web consumer key through a followed redirect. Transport failures surface as
+ * one stable sanitized error that carries no URL, header or body material.
+ */
+export class CapirTestProvisioningClient {
+  readonly baseUrl: string;
+  private readonly provisioningKey: string | undefined;
+  private readonly backendOrigin: string | undefined;
+  private readonly timeoutMs: number;
+
+  constructor(
+    baseUrl: string,
+    options: {
+      provisioningKey?: string;
+      backendOrigin?: string;
+      timeoutMs?: number;
+    } = {},
+  ) {
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.provisioningKey = options.provisioningKey;
+    this.backendOrigin = options.backendOrigin;
+    this.timeoutMs = options.timeoutMs ?? 15_000;
+  }
+
+  capabilities(): Promise<CapirTestCapabilitiesResponse> {
+    return this.request<CapirTestCapabilitiesResponse>(
+      "/v1/capir/capabilities",
+      { method: "GET" },
+    );
+  }
+
+  create(request: CapirTestCreateRequest): Promise<CapirTestRun> {
+    return this.request<{ run: CapirTestRun }>("/v1/capir/tests", {
+      method: "POST",
+      body: request,
+    }).then((response) => response.run);
+  }
+
+  status(runId: string): Promise<CapirTestRun> {
+    return this.request<{ run: CapirTestRun }>(
+      `/v1/capir/tests/${encodeURIComponent(runId)}`,
+      { method: "GET" },
+    ).then((response) => response.run);
+  }
+
+  stop(runId: string, request: CapirTestStopRequest): Promise<CapirTestRun> {
+    return this.request<{ run: CapirTestRun }>(
+      `/v1/capir/tests/${encodeURIComponent(runId)}/stop`,
+      { method: "POST", body: request },
+    ).then((response) => response.run);
+  }
+
+  createHandoff(
+    runId: string,
+    request: CapirTestHandoffRequest,
+  ): Promise<CapirTestHandoffResponse> {
+    return this.request<CapirTestHandoffResponse>(
+      `/v1/capir/tests/${encodeURIComponent(runId)}/handoffs`,
+      { method: "POST", body: request },
+    );
+  }
+
+  /** Private Web-consumer exchange; consumes the one-use handoff secret. */
+  exchangeHandoff(
+    webConsumerKey: string,
+    request: CapirTestHandoffExchangeRequest,
+  ): Promise<CapirTestHandoffExchangeResponse> {
+    return this.request<CapirTestHandoffExchangeResponse>(
+      "/v1/capir/tests/handoffs/exchange",
+      {
+        method: "POST",
+        body: request,
+        headers: { "x-capir-web-consumer-key": webConsumerKey },
+      },
+    );
+  }
+
+  private async request<T>(
+    path: string,
+    options: {
+      method: "GET" | "POST";
+      body?: unknown;
+      headers?: Record<string, string>;
+    },
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method: options.method,
+        headers: {
+          accept: "application/json",
+          ...(options.body === undefined
+            ? {}
+            : { "content-type": "application/json" }),
+          ...(this.provisioningKey
+            ? { authorization: `Bearer ${this.provisioningKey}` }
+            : {}),
+          ...(this.backendOrigin
+            ? { "x-capir-backend-origin": this.backendOrigin }
+            : {}),
+          ...(options.headers ?? {}),
+        },
+        body:
+          options.body === undefined ? undefined : JSON.stringify(options.body),
+        // Never follow a redirect: credentials and secrets must not be
+        // replayed to another origin or path.
+        redirect: "error",
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch {
+      // Stable sanitized transport failure (redirect refused, timeout, DNS,
+      // TLS or connection errors): no URL, header or body material leaks.
+      throw new TalentSignalHttpError(
+        0,
+        "CAPIR_TEST_TRANSPORT_FAILED",
+        "The provisioning request could not reach the configured service.",
+        undefined,
+      );
+    }
+    let payload: unknown = {};
+    try {
+      payload = await response.json();
+    } catch {
+      // Non-JSON failures still surface as a typed error below.
+    }
+    if (!response.ok) {
+      const envelope = payload as ErrorEnvelope;
+      throw new TalentSignalHttpError(
+        response.status,
+        envelope.error?.code ?? "HTTP_ERROR",
+        envelope.error?.message ?? `Request failed with ${response.status}.`,
+        envelope.error?.details,
+      );
+    }
+    return payload as T;
   }
 }

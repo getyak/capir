@@ -98,26 +98,26 @@ The user confirmed the written design with `okk` on 2026-10-04.
 - Private handoff exchange verifies trusted Web consumer key and yields the
   existing session type; its one-use secret never appears in a public URL.
 
-- [ ] **Step 1: Add failing production-router PostgreSQL tests.** Pin generated
+- [x] **Step 1: Add failing production-router PostgreSQL tests.** Pin generated
   and supplied identity creation, canonical preset counts, zero side effects,
   exact request replay, changed-password conflict, quota and cross-principal/origin
   denial. Add `username_email_collision_preserves_real_login`,
   `password_login_has_matching_lab_entry`, `deadline_denies_before_sweep`,
   `stop_races_password_login`, `principal_generation_revokes_session` and
   `unknown_schema_refuses_cleanup`. Tests call real construction/routes.
-- [ ] **Step 2: Run those tests against one guard-owned disposable DB.** Expected:
+- [x] **Step 2: Run those tests against one guard-owned disposable DB.** Expected:
   failures identify missing real routes/admission, not substituted helper output.
-- [ ] **Step 3: Implement append-only operator ownership and entry lineage.**
+- [x] **Step 3: Implement append-only operator ownership and entry lineage.**
   Classify `capir_test_provisioners` and operation records as control scope.
   Preserve existing owner FKs; nullable human fields are legal only for a matching
   operator lineage. Expose truthful nullable/discriminated ownership to updated
   Web contracts. No fabricated ordinary human session is permitted.
-- [ ] **Step 4: Implement atomic create, replay and password admission.** Reuse
+- [x] **Step 4: Implement atomic create, replay and password admission.** Reuse
   existing scrypt and scenario resource-intake path. Lock normalized login
   identities, the operation, principal and run consistently. Replay verifies the
   stored scrypt password. Session/entry deadlines are no later than run expiry.
   Every authenticated Lab read uses the shared human/operator authority predicate.
-- [ ] **Step 5: Implement stop, sweep and private handoff.** Access is revoked
+- [x] **Step 5: Implement stop, sweep and private handoff.** Access is revoked
   before cleanup; local data/password/session deletion and pending broker effects
   are distinguished. Enforce exact operator ownership and origin/generation at
   every admission/publication boundary, including response-loss recovery.
@@ -127,8 +127,11 @@ The user confirmed the written design with `okk` on 2026-10-04.
   `pnpm --filter @talent-signal/backend exec vitest run capirTests` plus affected
   Lab/password/identity/MCP lifecycle suites with their disposable DB variables.
   Preserve sanitized assertion receipts; no live provider is used in these tests.
-- [ ] **Step 7: Commit the independently testable backend slice.** Review source,
+- [x] **Step 7: Commit the independently testable backend slice.** Review source,
   ownership diff and route-to-state traces before approving Task 2's integration.
+
+
+Checkpoint (2026-10-04): the adopted backend/contracts slice passed independent contracts build, backend typecheck, diff check, and **24/24** focused tests with zero skips on an owned database containing the exact historical staging `087_capir` migration. Existing human Lab lifecycle also passed. App composition remains below the existing 3208-line architecture limit. The broader affected MCP authority regression is recorded for root while Task 2 implements against these frozen interfaces; the pre-existing identity baseline remains 28 passed / 11 failed. No deployment or CLI acceptance is claimed.
 
 ## Task 2: CLI, human/AI help and authenticated Web entry
 
