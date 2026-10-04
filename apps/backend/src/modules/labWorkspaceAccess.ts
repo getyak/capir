@@ -1,10 +1,43 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import type { BackendConfig } from "../config.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
 import type { ChatMediaStorage } from "./chatMediaStorage.js";
 
+export interface OperatorTestDeployment {
+  enabled: boolean;
+  webOrigin: string | null;
+  backendOrigin: string | null;
+}
+
+/** Nonsecret serving scope shared by session and MCP-bearer resolvers. */
+export function operatorTestDeployment(config?: BackendConfig): OperatorTestDeployment {
+  return {
+    enabled: config?.internalLabEnabled === true && config.capirTests?.enabled === true,
+    webOrigin: config?.capirTests?.webOrigin ?? null,
+    backendOrigin: config?.capirTests?.backendOrigin ?? null,
+  };
+}
+
+/** Token lookup parameters 2–4: enabled, exact Web origin, exact backend origin.
+ * Human-parent Lab entries retain their existing canonical authority. */
+export const operatorLabDeploymentActiveSQL = `(NOT EXISTS (
+  SELECT 1 FROM lab_test_workspace_entries e
+  WHERE e.session_id=sessions.id AND e.owner_principal_id IS NOT NULL
+) OR ($2::boolean AND EXISTS (
+  SELECT 1 FROM capir_test_runs r
+  WHERE r.account_id=sessions.account_id AND r.user_id=sessions.user_id
+    AND r.web_origin=$3 AND r.backend_origin=$4
+)))`;
+
 // Called only in queries whose aliases are the actual users/sessions tables.
+// One shared authority predicate governs every Lab API/session read. A
+// lab_human session is active through exactly one lineage: either its existing
+// human parent session, or an operator-principal entry that matches its run's
+// workspace while the principal remains enabled at the recorded generation for
+// the run's exact registered origin pair. Principal revocation or rotation
+// invalidates operator entries even while cleanup is pending.
 export const labWorkspaceSessionActiveSQL = `(users.kind <> 'lab_human' OR EXISTS (
   SELECT 1 FROM lab_test_workspaces w
   JOIN lab_test_workspace_entries e ON e.workspace_id=w.id AND e.session_id=sessions.id
@@ -16,6 +49,21 @@ export const labWorkspaceSessionActiveSQL = `(users.kind <> 'lab_human' OR EXIST
     AND e.revoked_at IS NULL AND e.expires_at>clock_timestamp()
     AND parent.revoked_at IS NULL AND parent.expires_at>clock_timestamp()
     AND owner.status='active' AND owner.kind<>'lab_human'
+) OR EXISTS (
+  SELECT 1 FROM lab_test_workspaces w
+  JOIN lab_test_workspace_entries e ON e.workspace_id=w.id AND e.session_id=sessions.id
+  JOIN capir_test_runs r ON r.workspace_id=w.id AND r.principal_id=e.owner_principal_id
+  JOIN capir_test_provisioners p ON p.id=r.principal_id
+  WHERE w.target_account_id=users.account_id AND w.target_user_id=users.id
+    AND w.owner_principal_id=r.principal_id
+    AND w.owner_account_id IS NULL AND w.owner_user_id IS NULL
+    AND r.account_id=w.target_account_id AND r.user_id=w.target_user_id
+    AND w.state='active' AND w.expires_at>clock_timestamp()
+    AND e.revoked_at IS NULL AND e.expires_at>clock_timestamp()
+    AND e.owner_session_id IS NULL
+    AND e.principal_generation=r.principal_generation
+    AND p.state='enabled' AND p.generation=e.principal_generation
+    AND p.web_origin=r.web_origin AND p.backend_origin=r.backend_origin
 ))`;
 
 export async function lockLabMediaWorkspace(client: PoolClient, auth: AuthContext,

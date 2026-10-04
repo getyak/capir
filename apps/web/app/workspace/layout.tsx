@@ -22,6 +22,8 @@ import {
   readBackendSessionClaims,
   readPrimaryBackendSessionClaims,
 } from "@/lib/server/backendAuth";
+import { loadCapirTestBanner } from "@/lib/server/capir-test-entry";
+import { CapirTestBanner } from "@/components/capir-test-banner";
 import {
   TEST_WORKSPACE_COOKIE,
   testWorkspaceSession,
@@ -151,6 +153,19 @@ export default async function WorkspaceLayout({
     Boolean(testName) || (backendAccount?.slug.startsWith("fixture-") ?? fixtureFallback);
   const workspaceName = backendAccount?.name ?? null;
 
+  // Canonical operator-run banner: derived from the live run readback for
+  // every login method (direct password and private handoff alike), never
+  // from a cookie or account name. Expired/revoked/foreign runs fail closed.
+  let capirBanner = null;
+  try {
+    const claims = await readBackendSessionClaims();
+    if (claims && !backendSessionIsExpired(claims.backendExpiresAt)) {
+      capirBanner = await loadCapirTestBanner(claims);
+    }
+  } catch {
+    capirBanner = null;
+  }
+
 
   return (
     <WorkspacePrivacyBoundary privateContent={children}>
@@ -215,6 +230,7 @@ export default async function WorkspaceLayout({
               key={scope}
             >
               <SystemHealthProvider>
+                <CapirTestBanner banner={capirBanner} />
                 {testName && (
                   <div className={accountStyles.banner} role="status">
                     <span>测试空间 · {testName}</span>

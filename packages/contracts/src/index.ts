@@ -14,6 +14,7 @@ export * from "./labJobSchemas.js";
 export * from "./labRegressionSchemas.js";
 export * from "./labCISchemas.js";
 export * from "./labWorkspaceSchemas.js";
+export * from "./capirTestSchemas.js";
 export * from "./labFeatureSchemas.js";
 export * from "./agentSessionSchemas.js";
 export * from "./conversationQueueSchemas.js";
@@ -34,3 +35,9 @@ export * from "./mcpSchemas.js";
 export * from "./mcpInteractionSchemas.js";
 export * from "./timeWorkspaceSchemas.js";
 export * from "./memorySchemas.js";
+
+// Legacy Stage A capir client contract definitions (auth/sandbox) adopted from
+// the reviewed CLI source. They describe the historical human-grant surface for
+// client compatibility only; the current server does not implement them and
+// capability discovery must list those scopes as unavailable.
+export * from "./capirSchemas.js";

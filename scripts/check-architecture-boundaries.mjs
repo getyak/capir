@@ -17,9 +17,9 @@ const MIGRATION_MANIFEST =
 const MIGRATION_DIRECTORY = "apps/backend/src/database";
 const WORKSPACE_CONFIGURATION = "pnpm-workspace.yaml";
 const WORKSPACE_PATTERNS = ["apps/*", "packages/*"];
-const FROZEN_MIGRATION_COUNT = 99;
+const FROZEN_MIGRATION_COUNT = 100;
 const FROZEN_MIGRATION_DIGEST =
-  "40db97fe266f28fc4ffddbe245d89bdc3668d21beddd67f29a910dea550325d8";
+  "c668974d11ba552fff4d5e8e17c2c3dc100c977488f80ee4e328478394239f49";
 
 const LEGACY_MIGRATION_PREFIX_COLLISIONS = new Map([
   // Onboarding was deployed before the queue migration merged into main.
@@ -104,6 +104,13 @@ const WORKSPACE_BOUNDARIES = new Map([
     {
       name: "@talent-signal/macos-hybrid",
       allowedNames: ["@talent-signal/workspace-ui"],
+    },
+  ],
+  [
+    "apps/cli/package.json",
+    {
+      name: "@talent-signal/cli",
+      allowedNames: ["@talent-signal/contracts"],
     },
   ],
 ]);

@@ -71,6 +71,16 @@ services:
       NODE_ENV: production
       SIMULATED_AUTH_ENABLED: "false"
       TALENT_SIGNAL_INTERNAL_LAB_ENABLED: ${TALENT_SIGNAL_INTERNAL_LAB_ENABLED:-true}
+      # Internal test-account provisioning (capir test create). Disabled by
+      # default; the provisioning key and Web consumer key are injected only by
+      # the authorized deployment, never stored in this file.
+      CAPIR_TESTS_ENABLED: ${CAPIR_TESTS_ENABLED:-false}
+      CAPIR_TEST_PROVISIONING_KEY: ${CAPIR_TEST_PROVISIONING_KEY:-}
+      CAPIR_TEST_PROVISIONING_GENERATION: ${CAPIR_TEST_PROVISIONING_GENERATION:-1}
+      CAPIR_TEST_WEB_ORIGIN: ${CAPIR_TEST_WEB_ORIGIN:-}
+      CAPIR_TEST_BACKEND_ORIGIN: ${CAPIR_TEST_BACKEND_ORIGIN:-}
+      CAPIR_TEST_WEB_CONSUMER_KEY: ${CAPIR_TEST_WEB_CONSUMER_KEY:-}
+      CAPIR_TEST_MAX_ACTIVE_RUNS: ${CAPIR_TEST_MAX_ACTIVE_RUNS:-3}
       TALENT_SIGNAL_BACKEND_REVISION: ${TALENT_SIGNAL_BACKEND_REVISION:-}
       TALENT_SIGNAL_DEPLOYMENT_ID: ${TALENT_SIGNAL_DEPLOYMENT_ID:-talent-signal-testflight-local}
       TALENT_SIGNAL_DATA_DOMAIN: ${TALENT_SIGNAL_DATA_DOMAIN:-internal-testflight}

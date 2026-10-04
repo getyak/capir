@@ -94,6 +94,8 @@ updated.
   recovery, calendar handoff and ephemeral Agent range review.
 - [Account and workspace access](operations/account-access.md) explains personal
   ownership, Web settings, fixture credentials, sessions, and isolated test access.
+- [capir CLI reference](operations/capir-cli.md) documents the test-account,
+  model and strict-replay sandbox command surface.
 - [Secret delivery](operations/secrets.md) defines Infisical ownership, local
   injection, workload identity, environment isolation, and rotation.
 - [Owner-operated Nango Auth/Proxy](operations/nango-local.md) defines pinned

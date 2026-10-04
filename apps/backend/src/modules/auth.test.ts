@@ -217,6 +217,9 @@ describe("password authentication", () => {
     const client = {
       query: vi.fn(async (sql: string) => {
         if (sql === "BEGIN" || sql === "COMMIT") return { rows: [] };
+        if (sql.includes("SELECT DISTINCT users.kind AS user_kind")) {
+          return { rows: [{ user_kind: "password_human" }] };
+        }
         if (sql.includes("FROM users") && sql.includes("password_credentials")) {
           return {
             rows: [
@@ -274,6 +277,9 @@ describe("password authentication", () => {
     const client = {
       query: vi.fn(async (sql: string) => {
         if (sql === "BEGIN" || sql === "COMMIT") return { rows: [] };
+        if (sql.includes("SELECT DISTINCT users.kind AS user_kind")) {
+          return { rows: [{ user_kind: "password_human" }] };
+        }
         if (sql.includes("FROM users") && sql.includes("password_credentials")) {
           return {
             rows: [
@@ -341,6 +347,9 @@ describe("password authentication", () => {
     const client = {
       query: vi.fn(async (sql: string) => {
         if (sql === "BEGIN" || sql === "COMMIT") return { rows: [] };
+        if (sql.includes("SELECT DISTINCT users.kind AS user_kind")) {
+          return { rows: [{ user_kind: "password_human" }] };
+        }
         if (sql.includes("FROM users") && sql.includes("password_credentials")) {
           return { rows: [row, { ...row, user_id: "10000000-0000-4000-8000-000000000014" }] };
         }

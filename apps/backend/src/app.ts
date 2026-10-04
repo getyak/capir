@@ -32,8 +32,7 @@ import { LabTaskTrialService } from "./modules/labTaskTrials.js";
 import { registerLabTaskTrialRoutes } from "./modules/labTaskTrialRoutes.js";
 import { LabFeatureOverrideService } from "./modules/labFeatureOverrides.js";
 import { registerLabFeatureOverrideRoutes } from "./modules/labFeatureOverrideRoutes.js";
-import { LabWorkspaceService } from "./modules/labWorkspaces.js";
-import { registerLabWorkspaceRoutes } from "./modules/labWorkspaceRoutes.js";
+import { registerCapirTestWorkspaceRoutes } from "./modules/capirTestRoutes.js";
 import { LabExperimentJobService } from "./modules/labExperimentJobs.js";
 import { registerLabJobRoutes } from "./modules/labJobRoutes.js";
 import { environmentLabCIVerifier, type LabCIVerifying } from "./modules/labCIVerifier.js";
@@ -755,7 +754,7 @@ export async function buildApp(
   );
 
   registerGoogleAuth(app, pool, config);
-  const authenticate = createAuthGuard(pool, deploymentExposure?.workspaceIds);
+  const authenticate = createAuthGuard(pool, deploymentExposure?.workspaceIds, config);
   registerProductRunMonitoring(app, pool, authenticate);
   registerAccountManagement(app, pool, authenticate, config, dependencies.mail);
   registerAccountOnboarding(app, pool, authenticate);
@@ -780,11 +779,11 @@ export async function buildApp(
   registerMcpExtensionRoutes(app, pool, authenticate, {
     allowedOrigins: [],
     deploymentWorkspaceIds: deploymentExposure?.workspaceIds,
-  });
+  }, config);
   registerSystemHealthRoutes(app, pool, authenticate);
   registerRuntimeManifest(app, config);
   registerLoadedRuntimeConfiguration(app, config, authenticate, remoteChatProvider?.loadedTaskConfiguration, deploymentExposure);
-  registerLabWorkspaceRoutes(app,new LabWorkspaceService(pool,chatMediaStorage,config.sessionTtlSeconds),authenticate,config.internalLabEnabled===true);
+  registerCapirTestWorkspaceRoutes(app, pool, config, chatMediaStorage, authenticate);
 
   const labProviders = dependencies.labProviders ?? labModelProviders(remoteChatProvider);
   registerDesktopCaptureContext(app, authenticate, remoteChatProvider, labProviders, config.internalLabEnabled === true);
