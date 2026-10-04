@@ -8,6 +8,7 @@ import {
   ContactResearchToolResponseSchema,
   AgentPersonResearchPolicyError,
   assertPersonResearchQuery,
+  admitPublicContextAnchor,
   type ContactPublicSource,
   type ContactResearchChannel,
   type ContactResearchToolRequest,
@@ -29,11 +30,12 @@ import {
  *
  *   - `search_public_subject({ subject_id, channels? })` discovers public
  *     sources for ONE host-authorized public subject. The tool accepts only the
- *     host-owned subject id: names and ids come from the host registry (an
- *     explicit public-topic objective or inspected image evidence), never from
- *     model-authored raw text. The outbound provider request carries ONLY the
- *     fixed query `${name} biography official website` built from the
- *     host-owned name, that name as anchor, the channel list, and per-call ids.
+ *     host-owned subject id: names, ids, queries and context come from the host
+ *     registry (an explicit public-topic objective, inspected image evidence,
+ *     or the host's tentative first-contact subject), never from model-authored
+ *     raw text. The outbound provider request carries ONLY the host-derived
+ *     query built from the registered name plus its admitted source-grounded
+ *     context anchors, those same anchors, the channel list, and per-call ids.
  *     The objective, conversation text, screenshots and private notes never
  *     cross the boundary.
  *   - `fetch_public_sources({ source_ids })` reads sources this same run
@@ -60,9 +62,11 @@ import {
  *   optional `isCurrent` guard is asserted immediately before and after every
  *   provider dispatch, and a stale subject fails the call without registering
  *   or returning any source;
- * - the host name is re-checked with the existing person-research query policy
- *   (no contact details, addresses, background checks, face matching, or
- *   protected-trait assessment) before it can enter an outbound query;
+ * - the host name and derived query are re-checked with the existing person-
+ *   research query policy (no contact details, addresses, background checks,
+ *   face matching, or protected-trait assessment) before anything can enter an
+ *   outbound query; context anchors were admitted source-grounded and typed
+ *   upstream and are re-bounded here;
  * - responses are re-parsed and bound to the exact request via the existing
  *   `assertContactResearchResponseMatchesRequest` readback assertion plus an
  *   inline search validation: exact channel list/order, unique source ids, each
@@ -107,17 +111,53 @@ export const WORKSPACE_PUBLIC_RESEARCH_RESULTS_PER_CHANNEL = 3;
 /** Bound for listing host subjects inside the tool description. */
 export const WORKSPACE_PUBLIC_RESEARCH_MAX_LISTED_SUBJECTS = 10;
 
-/** The only query text that ever leaves the workspace for a public subject. */
-export function workspacePublicResearchQuery(name: string): string {
-  return `${name} biography official website`;
+/**
+ * Derive the ONLY query text that ever leaves the workspace for a public
+ * subject: the host-owned name plus admitted source-grounded context (works,
+ * roles, canonical public profiles/handles), bounded by the existing person-research query
+ * length. With no admissible context the minimal biography query is kept. The
+ * model cannot supply, edit, or widen this text.
+ */
+export function workspacePublicResearchQuery(
+  name: string,
+  contextAnchors: readonly WorkspacePublicResearchContextAnchor[] = [],
+): string {
+  const nameText = name.normalize("NFKC").trim();
+  const parts = [nameText];
+  for (const anchor of contextAnchors) {
+    if (!admitPublicContextAnchor(anchor.kind, anchor.text, [anchor.text])) continue;
+    const text = anchor.text.normalize("NFKC").trim();
+    if (text.length < 2) continue;
+    const candidate = [...parts, text].join(" ");
+    if (candidate.length > WORKSPACE_PUBLIC_RESEARCH_QUERY_MAX_LENGTH) continue;
+    parts.push(text);
+  }
+  if (parts.length === 1) {
+    const fallback = `${nameText} biography official website`;
+    return fallback.length <= WORKSPACE_PUBLIC_RESEARCH_QUERY_MAX_LENGTH
+      ? fallback
+      : nameText;
+  }
+  return parts.join(" ");
+}
+
+/** Existing person-research policy bounds an outbound query to 100 characters. */
+export const WORKSPACE_PUBLIC_RESEARCH_QUERY_MAX_LENGTH = 100;
+
+/** Typed, host-admitted public context; never model-authored text. */
+export interface WorkspacePublicResearchContextAnchor {
+  kind: "work" | "role" | "handle";
+  text: string;
 }
 
 /** Host-owned public subject. Names and ids are never model-authored. */
 export interface WorkspacePublicResearchSubject {
   /** Stable host id; the only subject reference the tools accept. */
   id: string;
-  /** Host-owned public name; used verbatim in the fixed outbound query. */
+  /** Host-owned public name; used verbatim in the derived outbound query. */
   name: string;
+  /** Admitted source-grounded context entering the query and anchors. */
+  contextAnchors?: readonly WorkspacePublicResearchContextAnchor[];
   /** Optional currency guard, asserted before and after every dispatch. */
   isCurrent?: () => Promise<boolean>;
 }
@@ -193,6 +233,14 @@ export interface WorkspacePublicResearchToolDefinitions {
     input: unknown,
     signal?: AbortSignal,
   ): Promise<WorkspacePublicResearchToolResult>;
+  /**
+   * Same-run search state for one subject so host-driven first-contact search
+   * can deduplicate a subject the model already searched this run.
+   */
+  subjectSearchState(subjectID: string): {
+    searched: boolean;
+    sources: readonly ContactPublicSource[];
+  };
 }
 
 const CHANNELS = [
@@ -438,8 +486,27 @@ export function createWorkspacePublicResearch(
     subjectID: string;
   }
   const discoveredSources = new Map<string, RegistryEntry>();
+  const subjectSources = new Map<string, Set<string>>();
+  const searchedSubjects = new Set<string>();
   let searchCalls = 0;
   let fetchCalls = 0;
+
+  const subjectAnchors = (subject: WorkspacePublicResearchSubject): string[] => {
+    const texts = [
+      subject.name,
+      ...(subject.contextAnchors ?? []).filter(anchor => admitPublicContextAnchor(anchor.kind, anchor.text, [anchor.text])).map((anchor) => anchor.text),
+    ];
+    const bounded: string[] = [];
+    for (const text of texts) {
+      const value = text.normalize("NFKC").trim();
+      if (value.length < 2 || value.length > 200 || bounded.includes(value)) continue;
+      bounded.push(value);
+      if (bounded.length >= WORKSPACE_PUBLIC_RESEARCH_MAX_SUBJECT_ANCHORS) break;
+    }
+    return bounded;
+  };
+  const subjectQuery = (subject: WorkspacePublicResearchSubject): string =>
+    workspacePublicResearchQuery(subject.name, subject.contextAnchors ?? []);
 
   const resolveSubject = (subjectID: string): WorkspacePublicResearchSubject | null =>
     options.authorizedSubjects().find((subject) => subject.id === subjectID) ?? null;
@@ -493,10 +560,11 @@ export function createWorkspacePublicResearch(
       );
     }
     try {
-      // Defense in depth on the host-owned name: no contact details,
-      // addresses, background checks, face matching, or sensitive assessment
-      // may ever enter an outbound public query.
+      // Defense in depth on the host-owned name and derived query: no contact
+      // details, addresses, background checks, face matching, or sensitive
+      // assessment may ever enter an outbound public query.
       assertPersonResearchQuery(subject.name);
+      assertPersonResearchQuery(subjectQuery(subject));
     } catch (error) {
       if (error instanceof AgentPersonResearchPolicyError) {
         return failure(
@@ -520,13 +588,14 @@ export function createWorkspacePublicResearch(
         contract_version: CONTACT_RESEARCH_CONTRACT,
         task_id: options.taskID,
         call_id: attemptCallID,
-        // Only the minimal host-owned public name crosses the boundary. The
+        // Only minimal host-owned public identity clues cross the boundary:
+        // the registered name and its admitted source-grounded context. The
         // objective, screenshots, and conversation text are never included.
-        anchors: [subject.name],
+        anchors: subjectAnchors(subject),
         input: {
           operation: "search",
           channels,
-          query: workspacePublicResearchQuery(subject.name),
+          query: subjectQuery(subject),
           maximum_results_per_channel: WORKSPACE_PUBLIC_RESEARCH_RESULTS_PER_CHANNEL,
         },
       });
@@ -642,10 +711,13 @@ export function createWorkspacePublicResearch(
     // through an accurate truncated flag.
     const accepted: ContactPublicSource[] = [];
     let dropped = 0;
+    searchedSubjects.add(subject.id);
     for (const source of response.sources) {
       const existing = discoveredSources.get(source.source_id);
       if (existing) {
-        discoveredSources.set(source.source_id, { source, subjectID: subject.id });
+        discoveredSources.set(source.source_id, { source:existing.source.stage === "fetched" ? existing.source : source, subjectID: subject.id });
+        const membership = subjectSources.get(subject.id) ?? new Set<string>();
+        membership.add(source.source_id); subjectSources.set(subject.id,membership);
         accepted.push(source);
         continue;
       }
@@ -654,6 +726,8 @@ export function createWorkspacePublicResearch(
         continue;
       }
       discoveredSources.set(source.source_id, { source, subjectID: subject.id });
+      const membership = subjectSources.get(subject.id) ?? new Set<string>();
+      membership.add(source.source_id); subjectSources.set(subject.id,membership);
       accepted.push(source);
     }
     const truncated =
@@ -668,7 +742,7 @@ export function createWorkspacePublicResearch(
         operation: "search",
         subject_id: subject.id,
         subject_name: subject.name,
-        query: workspacePublicResearchQuery(subject.name),
+        query: subjectQuery(subject),
         // Full source receipts (source_id, url, title, text, channel, provider,
         // content_hash, retrieved_at, stage) so citations can quote real URLs.
         sources: accepted,
@@ -744,13 +818,20 @@ export function createWorkspacePublicResearch(
       );
     }
     const subjects = [...involved.values()];
+    const fetchAnchors: string[] = [];
+    for (const subject of subjects) {
+      for (const text of subjectAnchors(subject)) {
+        if (fetchAnchors.includes(text)) continue;
+        fetchAnchors.push(text);
+        if (fetchAnchors.length >= WORKSPACE_PUBLIC_RESEARCH_MAX_SUBJECT_ANCHORS) break;
+      }
+      if (fetchAnchors.length >= WORKSPACE_PUBLIC_RESEARCH_MAX_SUBJECT_ANCHORS) break;
+    }
     const request: ContactResearchToolRequest = ContactResearchToolRequestSchema.parse({
       contract_version: CONTACT_RESEARCH_CONTRACT,
       task_id: options.taskID,
       call_id: callID,
-      anchors: subjects
-        .slice(0, WORKSPACE_PUBLIC_RESEARCH_MAX_SUBJECT_ANCHORS)
-        .map((subject) => subject.name),
+      anchors: fetchAnchors,
       input: { operation: "fetch", sources: entries.map((entry) => entry.source) },
     });
     // Reserve synchronously, immediately before dispatch; no failure refunds.
@@ -795,6 +876,10 @@ export function createWorkspacePublicResearch(
           "Public research is temporarily unavailable; no source was fetched.", detail),
         attempts,
       );
+    }
+    for (const source of response.sources) {
+      const previous = discoveredSources.get(source.source_id);
+      if (previous) discoveredSources.set(source.source_id, {...previous, source});
     }
     // The readback assertion guarantees `sources` contains exactly the
     // successful outcomes. A failed or unsupported outcome is only ever
@@ -865,7 +950,7 @@ export function createWorkspacePublicResearch(
     .join(", ");
   const subjectListing =
     initialSubjects.length === 0
-      ? "No text subject is registered yet. For people discussed in the admitted image, call inspect_current_image FIRST; its public_subjects supplies authorized ids. This is an available research tool, not an authorization failure."
+      ? "No text subject is registered yet. For people discussed in the admitted image, call inspect_current_image FIRST; its public_subjects supplies authorized ids. A clearly named direct-chat counterparty is admitted as a tentative subject there as well. This is an available research tool, not an authorization failure."
       : `Currently authorized public subjects: ${listed}${initialSubjects.length > WORKSPACE_PUBLIC_RESEARCH_MAX_LISTED_SUBJECTS ? ", and more" : ""}.`;
 
   const tool = (
@@ -901,10 +986,16 @@ export function createWorkspacePublicResearch(
       search_public_subject: SEARCH_SCHEMA,
       fetch_public_sources: FETCH_SCHEMA,
     },
+    subjectSearchState: (subjectID) => ({
+      searched: searchedSubjects.has(subjectID),
+      sources: [...discoveredSources.values()]
+        .filter((entry) => subjectSources.get(subjectID)?.has(entry.source.source_id))
+        .map((entry) => entry.source),
+    }),
     tools: [
       tool(
         "search_public_subject",
-        `Discover public sources about ONE authorized public subject by subject_id. ${subjectListing} Subjects and names come from the host; results are a third-party topic and never identify or bind the chat counterparty or any contact. The search sends only \`\${name} biography official website\`; never send conversation text, screenshots, or contact details. At most three search attempts are available in this turn, including failures: use the spare attempt once to recover a failed subject lookup when two people were requested; do not repeat successful searches. A genuinely transient transport failure is retried once automatically inside this budget; every dispatch, including that retry, consumes one attempt and is listed in the attempt receipts. Default channel is web; channels may select the existing public channel allowlist. Returns untrusted source receipts with urls for citations. If this tool reports unavailable, say plainly that public research could not run; never claim a lookup.`,
+        `Discover public sources about ONE authorized public subject by subject_id. ${subjectListing} Subjects, names, and context come from the host; a subject may be a tentative first-contact name observation, and results never confirm or bind an identity. The host derives the outbound query and anchors solely from its registry: the registered name plus admitted source-grounded context (works, roles, public handles); never send or request conversation text, screenshots, or contact details. At most three search attempts are available in this turn, including failures: use the spare attempt once to recover a failed subject lookup when two people were requested; do not repeat successful searches. A genuinely transient transport failure is retried once automatically inside this budget; every dispatch, including that retry, consumes one attempt and is listed in the attempt receipts. Default channel is web; channels may select the existing public channel allowlist. Returns untrusted source receipts with urls for citations. If this tool reports unavailable, say plainly that public research could not run; never claim a lookup.`,
         SEARCH_SCHEMA,
       ),
       tool(
