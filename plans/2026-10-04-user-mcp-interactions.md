@@ -37,9 +37,9 @@ Desktop knowledge workspace for users deciding which external capability to gran
 - [x] Implement contracts/persistence, guarded MCP calls, Nango adapter, Agent integration and shared cards/catalog.
 - [x] Focused meaningful tests including DB-backed lifecycle, independent review and fixes.
 - [x] Deploy clean reviewed backend and Web; verify real anonymous services from the activated runtime and preserve local ordinary-chat/refresh proof.
-- [ ] Complete post-deployment authenticated Web acceptance after the operator supplies a valid staging login. Real bearer/provider OAuth grants remain unverified.
+- [x] Complete post-deployment authenticated Web acceptance through the installed capir test CLI and ordinary password login. Real bearer/provider OAuth grants remain unverified.
 - [x] Record release proof and update/read back Notion addresses with accurate acceptance limits.
-- [ ] Finish authenticated acceptance and remaining owned fixture cleanup; close only when requested acceptance actually holds.
+- [x] Complete actual chat/catalog/restore acceptance, preserve proof and clean owned fixtures.
 
 ## Sources
 
@@ -407,3 +407,43 @@ merged revision, real local/activated-runtime evidence and the remaining login/
 OAuth limits; the page was read back after writing. Other service entries and
 credentials were not changed. Superseded task images were removed; the previous
 deployed image and resident volumes remain for recovery.
+
+
+### Final authenticated release acceptance, 2026-10-04
+
+Completed requested chat/catalog acceptance on the real tailnet staging surface.
+The approved capir test implementation removes the earlier missing-login blocker:
+installed CLI provisioned a synthetic daily identity, entered it through the
+private headed-browser handoff, and passed ordinary password login. Web/backend/
+CLI use immutable revision d9153b46445d842b4e9e649089f59b708fc54583 after protected
+PR 286/287 merges and independent exact-source review.
+
+Ordinary chat session 4beb05b3-a2c4-4eac-87ca-cd3847ae2aa8 added DeepWiki through
+its actual form, discovered three tools and obtained human approval for
+read_wiki_structure(repoName=facebook/react). Real succeeded call
+1bb72f04-ec54-4daa-bcb9-8dc366f66db8 is durably linked to the original session's
+Agent continuation. The response uses the actual React repository result.
+The catalog added Context7, discovered two tools and completed approved
+resolve-library-id(libraryName=React, query=Find official React documentation
+for useState examples); succeeded call 39bca0b7-ff1c-410f-a0f9-ca0b92a9ed58
+returned genuine official-documentation matches. Refresh, a fresh ordinary
+password login and 375px light/dark rendering restore the real state.
+No completed vendor or Agent call was repeated to repair a proof-harness error.
+
+Notion page 3d6a444a-6c00-8173-818f-d5e492982356 now contains actual addresses,
+final release, usable CLI commands and the staged proof; readback at
+2026-10-04T09:06:30.507Z confirms the old missing-login blocker was removed.
+The earlier provider OAuth limitation remains explicit: no vendor consent or
+OAuth Proxy tool call is claimed. Anonymous service acceptance does not grant
+access to a user's Notion/Linear account.
+
+The owned staging accounts stopped to deleted; password/session denial and run
+keyring pruning were verified. The isolated mcp_interactions_proof_20261004 and
+mcp_cleanup_proof_20261004 databases had no active connections before removal.
+The registered private artifacts were removed only after formal evidence was
+preserved in the original project's ignored output/evaluation directories:
+user-mcp-interactions-20261004 (earlier implementation/transport proof) and
+capir-test-create-20261004 (final deployed chat/catalog/login/cleanup proof).
+Real accounts, resident Nango/DB services and immutable current/rollback releases
+remain. Historical checkpoints above retain their original scope and are
+superseded by this completion record.

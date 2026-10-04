@@ -195,7 +195,7 @@ adopts both batches without overlapping writers.
   `pnpm --filter @talent-signal/web typecheck`;
   focused `vitest` selectors for capir test entry, auth and workspace-session tests;
   `pnpm docs:check`; `git diff --check`. No raw credential output in test reports.
-- [ ] **Step 7: Commit and perform independent whole-branch review.** Root binds
+- [x] **Step 7: Commit and perform independent whole-branch review.** Root binds
   review evidence to the exact revision and fixes all confirmed P0/P1. Re-review
   affected findings; do not claim a reviewed design is implemented acceptance.
 
@@ -207,36 +207,36 @@ adopts both batches without overlapping writers.
 `output/evaluation/capir-test-create-20261004/`; deployed immutable release
 receipts; accurate Notion MCP/service chapter only.
 
-- [ ] **Step 1: Preflight one owned isolated integration environment.** Audit
+- [x] **Step 1: Preflight one owned isolated integration environment.** Audit
   storage, select loopback ports and disposable DB/artifact paths, and verify
   the relevant historical migration checksum and new table classification. Use
   synthetic inputs; preserve other users' databases, evidence and live services.
-- [ ] **Step 2: Run the actual built CLI from no browser login.** Create daily
+- [x] **Step 2: Run the actual built CLI from no browser login.** Create daily
   default credentials and supplied credentials, verify returned passwords through
   real password login and canonical Web/BFF reads, exact dataset counts, private
   handoff, mobile/desktop banner, history and refresh. Keep raw secret stdout
   private; publish only sanitized receipt metadata.
-- [ ] **Step 3: Exercise actual failure, expiry and cleanup.** Confirm exact
+- [x] **Step 3: Exercise actual failure, expiry and cleanup.** Confirm exact
   request recovery, conflict, response loss and browser launch failure. For a
   disposable test fixture, admit a near deadline through the actual producer;
   observe expired password login/session denial before sweep and canonical
   cleanup afterward. Production TTL is not reduced to accelerate tests.
-- [ ] **Step 4: Create/attach a PR and close latest applicable gates.** Root
+- [x] **Step 4: Create/attach a PR and close latest applicable gates.** Root
   publishes reviewable source only, waits for all current-head CI/security and
   applicable deployment checks, fixes failures and merges under normal protection.
   Read back the merge; no Linear issue is invented.
-- [ ] **Step 5: Provision/install and deploy the reviewed release.** Inject the
+- [x] **Step 5: Provision/install and deploy the reviewed release.** Inject the
   dedicated operator credential privately into configured server/CLI stores;
   never use a Pi coding key. Build clean immutable Colima-visible backend/Web
   checkouts; run `scripts/deploy/testflight-local.sh`, Web build/activation and
   existing deployment probes. Update installed CLI and exact environment config.
   Serialize keeper recovery image/revision/pointer changes and restore it.
-- [ ] **Step 6: Run actual staging CLI-to-Web proof.** Show global/nested/JSON
+- [x] **Step 6: Run actual staging CLI-to-Web proof.** Show global/nested/JSON
   help, create/readback/password login, username/data/TTL and cleanup on deployed
   service. Use this valid synthetic test identity for the outstanding MCP chat
   and catalog acceptance; real vendor OAuth consent remains human-owned. Update
   Notion addresses and proof limits, then read back.
-- [ ] **Step 7: Classify evidence and clean owned resources.** Save passing and
+- [x] **Step 7: Classify evidence and clean owned resources.** Save passing and
   failing sanitized receipts, stop exact owned runs/processes, verify DB/keyring
   cleanup and remove owned temporary artifact copies. Keep immutable live/rollback
   releases and other task assets. Close only after requested acceptance holds.
@@ -248,13 +248,12 @@ receipts; accurate Notion MCP/service chapter only.
 - [x] Implementation plan drafted and self-reviewed against every spec section.
 - [x] Human review of this written implementation plan: user explicitly approved
   implementation on 2026-10-04; Pi/MiMo remains the selected coding method.
-- [x] Task 1 implementation and local verification; final review and deployment remain Task 3.
-- [x] Task 2 implementation and verification; independent whole-branch review remains pending.
-- [ ] Task 3 review, installed-command proof, deployment and final acceptance.
+- [x] Task 1 implementation, real PostgreSQL verification and exact-source independent review.
+- [x] Task 2 CLI/Web implementation, verification and independent whole-branch review.
+- [x] Task 3 installed-command proof, reviewed deployment, real staging acceptance, Notion readback and owned cleanup.
 
-Do not start coding contracts until the plan review is received. On approval,
-read `superpowers:executing-plans`, preflight the single Pi writer lock, and issue
-the first bounded contract without changing frozen provider/model/budget values.
+The approved plan has been executed. The checkpoints below preserve historical
+observations; the final release record is the authoritative completion state.
 
 ### Execution started
 
@@ -317,3 +316,62 @@ after assigning explicit deadlines to multi-instance and real-lock tests that
 had retained the runner's five-second default. All original assertions remain.
 Backend typecheck and regenerated wiki/docs checks passed. Source-frozen review
 closure remains pending before PR delivery and deployed acceptance.
+
+
+### Final release and acceptance, 2026-10-04
+
+Completed. PR 286 and the deployed-entry correction PR 287 were independently
+reviewed at their exact final heads, passed all applicable latest-head protected
+CI/security gates and merged. The Web, backend and installed CLI now run the
+same immutable revision `d9153b46445d842b4e9e649089f59b708fc54583`. Backend
+mandatory deployment probes passed; the saved recovery image/revision, clean
+checkout pointer and restored keeper were read back. The previous release is
+retained for recovery. No unrelated checkout changes were adopted.
+
+The installed `capir`, real native OS keyring and staging origin pair passed
+all five human/nested/JSON help forms; daily creation (12 contacts, 30 observations,
+4 tasks), ordinary password login and canonical data readback; generated 168-bit
+password output; exact failed-handoff recovery preserving the allocation and
+password; and default headed browser private POST handoff with rendered identity
+verification. A supplied username and stdin password with empty preset and `1d`
+lifetime also passed ordinary login. Status does not disclose credentials.
+The actual production proxy correction admits only the exact private entry POST;
+other protected mutations remain gated. Final CLI tests passed 165/165, full Web
+checks 1738/1738, and the real PostgreSQL provisioning suite 30/30. Response-loss,
+conflict, stop/admission races, near-deadline denial before sweep and expiry
+cleanup use the disposable database/CI fixtures; staging lifetimes were not
+shortened and no waiting for a full 24-hour deadline is claimed.
+
+Actual staging Web login, refresh, desktop and 375px light/dark rendering passed
+for daily and empty identities. The same synthetic daily identity completed an
+ordinary DeepWiki chat form, exact approved read_wiki_structure(facebook/react),
+real receipt and same-session Agent continuation. Canonical response
+unboundConversationBlocks and hostResult.call_id match the approved call.
+The directory added Context7 and completed the approved resolve-library-id call
+with genuine React documentation matches. Refresh and a new browser's ordinary
+password login restore the cards, result and answer. Harness locator/response
+field failures were corrected by canonical readback without repeating completed
+provider calls. The existing five-session limit was respected by logging out only
+an owned completed proof session.
+
+The existing Notion service chapter was updated and fetched back at
+2026-10-04T09:06:30.507Z: actual entry addresses, final revision, executable CLI
+help/create/status/stop commands and evidence limits match the release. Vendor
+OAuth consent and OAuth Proxy calls remain unverified and human-owned; real
+anonymous DeepWiki/Context7 proof does not imply vendor authorization.
+
+Both owned staging runs stopped to deleted with no cleanup error. Their passwords
+and retained session were denied 401, and native run-password keyring items were
+removed. The three owned CLI test databases and dedicated role, two MCP fixture
+databases, both registered private artifacts and unreferenced premerge image tag
+were removed after preserving sanitized receipts. Shared databases, real accounts,
+resident services, simulator pool and live/previous releases were preserved.
+The installed staging operator remains in native keyring for future authorized
+capir test create use. No raw passwords, tokens or operator keys enter these docs.
+
+Formal evidence is preserved in the original project's ignored
+output/evaluation/capir-test-create-20261004: acceptance-record.json,
+installed-staging-cli-proof.json, staging-web-login-proof.json,
+staging-mcp-ui-proof.json, staging-mcp-new-login-proof.json,
+staging-stop-proof.json, backend-final-recovery-proof.json,
+notion-final-readback.json, exact PR/gate receipts and rendered screenshots.
