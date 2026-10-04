@@ -74,7 +74,7 @@ configuration out of ordinary work. Standard installer UI retains explicit conse
 
 ## Verification readback
 
-See [verification evidence](../docs/evaluations/2026-09-22-macos-updates/README.md).
+See [verification evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-22-macos-updates/README.md).
 Local update 900001 → 900002 succeeded. A corrupted 900003 archive was rejected;
 restoring signed bytes allowed recovery to 900003. Connection/settings and the
 account-footer integration were observed in the actual host. Production credentials

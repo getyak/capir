@@ -43,7 +43,7 @@ One owner implements and verifies this slice in the current working tree.
 
 ## Verification record
 
-- [Dated evaluation](../docs/evaluations/2026-09-04-lab-v2/README.md) owns
+- [Dated evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-v2/README.md) owns
   screenshots, live provider evidence, scope and remaining device-release gaps.
 - Live proof used exactly two configured `glm-5.3` calls on synthetic evidence.
   No second model was configured; the UI explicitly calls this repeatability.

@@ -55,7 +55,21 @@ and Person may appear later. Received means durable admission, not AI completion
 Unknown network results remain unknown until reconciliation or a same-key retry.
 
 No fixture login or synthetic text substitution is used on this real path.
-Bundled synthetic fixture mode remains network-free and explicitly labeled.
+Synthetic fixture mode remains network-free and explicitly labeled.
+
+## Optional evaluation fixtures
+
+The eight-case candidate-momentum evaluation corpus is not shipped in this
+package. It has one authoritative private home: the private
+`getyak/capir-evals` repository (GET-134). Disposable private evaluation runs
+may inject the canonical `evals/candidate-momentum-v1.json` as
+`load-unpacked/fixtures/candidate-momentum-v1.json`; until a suite loads
+successfully, the "Synthetic fixtures" mode option stays disabled and the
+panel runs in live mode. Corpus absence is a normal live-mode state, never a
+fixture-package error, and `?mode=fixture` degrades clearly to live. The panel
+never fetches remote corpus data, and `scripts/validate-package.mjs` does not
+require the corpus file. See
+[`load-unpacked/fixtures/README.md`](load-unpacked/fixtures/README.md).
 
 ## Lifecycle and recovery
 

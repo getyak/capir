@@ -49,7 +49,7 @@ export const SCOPE_LABEL: Record<
 export function connectionErrorCopy(code: string | null): string | null {
   switch (code) {
     case "MCP_REQUIRES_AUTH":
-      return "服务器需要授权。请编辑连接并填写 Bearer 密钥；其他登录方式暂不支持。";
+      return "服务器需要授权。请按连接的授权方式完成 OAuth，或编辑连接并填写 Bearer 密钥。";
     case "MCP_CREDENTIAL_UNAVAILABLE":
       return "当前部署尚未启用凭据存储，无法读取已保存的密钥。请联系管理员。";
     case "MCP_PROTOCOL_UNSUPPORTED":

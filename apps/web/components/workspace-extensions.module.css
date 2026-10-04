@@ -749,3 +749,6 @@
     min-height: 44px;
   }
 }
+
+.directionCards > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.directionCards > button { min-height: 44px; }

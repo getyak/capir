@@ -104,8 +104,13 @@ describe("MCP handshake over Streamable HTTP", () => {
     expect(result.status).toBe("verified");
     expect(result.protocolVersion).toBe("2025-11-25");
     expect(result.tools).toEqual([
-      { description: "Synthetic read tool", name: "alpha", read_only: true },
-      { description: "No annotation", name: "beta", read_only: false },
+      {
+        description: "Synthetic read tool",
+        inputSchema: '{"properties":{},"type":"object"}',
+        name: "alpha",
+        read_only: true,
+      },
+      { description: "No annotation", inputSchema: null, name: "beta", read_only: false },
     ]);
   });
 

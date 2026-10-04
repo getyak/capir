@@ -545,7 +545,7 @@ export function IntegratedWorkspaceApp({
 
         <div className="integration-layout">
           <aside className="integration-rail" aria-label="Journey status">
-            <p className="eyebrow">TS-CORE-01 · LOCALHOST</p>
+            <p className="eyebrow">SYNTHETIC REVIEW · LOCALHOST</p>
             <h1>One source. One governed decision.</h1>
             <p>
               Inspect the source, decide each proposed fact, then authorize one

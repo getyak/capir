@@ -101,7 +101,7 @@ The external-effects invariant remains empty in every Agent case.
 ## Simulator and full-stack journeys
 
 Backend full-stack proof is
-[`pursuit-domain-runtime.json`](../../docs/evaluations/2026-08-24-v1-prd-01/pursuit-domain-runtime.json).
+[`pursuit-domain-runtime.json`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-24-v1-prd-01/pursuit-domain-runtime.json).
 The iOS Today → Pursuit → Review → readback journey remains a required PRD-05
 artifact and is not claimed by this proof.
 

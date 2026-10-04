@@ -38,7 +38,7 @@ bucket is exercised; local storage proof is labeled separately.
 
 ## Completion
 
-The [evaluation record](../docs/evaluations/2026-09-06-multi-image-contact/README.md)
+The [evaluation record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-multi-image-contact/README.md)
 contains browser, provider, database, native-test, and deployment evidence.
 The real two-image task recovered from provider 429 using stored originals,
 then reused the contact and stored six source-linked messages. Ten-image
@@ -65,7 +65,7 @@ TestFlight `0.1.59 (20260906062355)` is processed, and a read-only audit confirm
 that exact build is valid and available to the configured internal testing
 group. No invitations or tester relationships were changed.
 
-The [integrated release record](../docs/evaluations/2026-09-06-multi-image-contact/release.md)
+The [integrated release record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-multi-image-contact/release.md)
 owns the CI proof, deployed source hashes, Apple receipt, and access readback.
 Live S3 remains unconfigured; the private local adapter is deployed. This is a
 remaining environment boundary, not a claim of live S3 or device installation.

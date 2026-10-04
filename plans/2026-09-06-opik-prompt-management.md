@@ -36,7 +36,7 @@ conversation tracing is introduced.
 
 ## Completion evidence
 
-The [verification report](../docs/evaluations/2026-09-06-opik-prompts/README.md)
+The [verification report](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-opik-prompts/README.md)
 contains the actual UI, ten-version receipt, GLM-5.3 synthetic response,
 production rollback and live deployment readbacks. All production bindings are
 back on their intended v1. Focused suites pass 160 tests; builds, type checks,

@@ -62,7 +62,7 @@ React cache is per server request; it is not a cross-request authorization cache
 - Implementation, Web lint/tests/build and docs checks pass. Independent review
   has no unresolved P0/P1/P2; its script cleanup P2 was fixed and independently
   checked with a missing build (nonzero exit without hanging).
-- [Production HTTP evidence](../docs/evaluations/2026-09-10-web-loading/README.md)
+- [Production HTTP evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-10-web-loading/README.md)
   records the before/after measurements and cache/account regression checks.
 - Lab panels were also split into a lazy dialog module; the provider remains
   mounted to preserve navigation state. Person merge stays unchanged because it

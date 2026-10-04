@@ -54,7 +54,7 @@ unknown-attempt file-append gaps. Independent final review passed with no
 unresolved P0/P1/P2; 114 affected tests passed for this historical scope.
 Existing backend storage passed an isolated synthetic save/original-image
 readback, and the real UI passed the labeled local fixture; see the
-[verification record](../docs/evaluations/2026-09-21-get38-input/README.md).
+[verification record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-21-get38-input/README.md).
 PR #231 merged as `224cd374` and was activated in the resident Web release.
 Linear reached Done before the user's correction. That delivery does not meet
 the clarified inline-message requirement; the correction plan owns remaining

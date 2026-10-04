@@ -1,0 +1,21 @@
+# Pinned Nango application 0.71.12 / source 153f8c5450e7dd7049504df4a323e25499369002.
+# The official hosted image contains JS/static assets and no native .node modules.
+# Run those assets with native ARM64 Node: QEMU cannot initialize this release's
+# WebAssembly HTTP parser on the owner-operated Mac. Do not use --jitless.
+ARG UPSTREAM_IMAGE=nangohq/nango-server@sha256:e4208c41c8cc7cdc2562327552842c42e87bf667798534ccce7ad92b74c11e13
+ARG NODE_IMAGE=node@sha256:fafa2e47e02abfbc93b0a071b6c409da8568f5cfed66aef54fb7e11c3fb0d921
+FROM --platform=linux/amd64 ${UPSTREAM_IMAGE} AS upstream
+FROM --platform=linux/arm64 ${NODE_IMAGE}
+WORKDIR /app/nango
+COPY --from=upstream /app/nango /app/nango
+ARG CONNECT_API_ORIGIN=https://smile-m4-minimac-mini.tail25e61f.ts.net:15443
+COPY deploy/nango/configure-connect-ui.mjs /usr/local/lib/talent-signal-nango/configure-connect-ui.mjs
+RUN node /usr/local/lib/talent-signal-nango/configure-connect-ui.mjs /app/nango/packages/connect-ui/dist "$CONNECT_API_ORIGIN"
+COPY deploy/nango/configure-private-oauth.mjs /usr/local/lib/talent-signal-nango/configure-private-oauth.mjs
+RUN node /usr/local/lib/talent-signal-nango/configure-private-oauth.mjs /app/nango/packages/shared/dist/clients/mcpGeneric.client.js
+ENV TALENT_SIGNAL_NANGO_DCR_ONLY=true
+ENV NODE_ENV=production PORT=8080 SERVER_RUN_MODE=DOCKERIZED GIT_HASH=153f8c5450e7dd7049504df4a323e25499369002
+LABEL org.opencontainers.image.source=https://github.com/NangoHQ/nango org.opencontainers.image.revision=153f8c5450e7dd7049504df4a323e25499369002
+LABEL io.talentsignal.nango.connect-api-origin=${CONNECT_API_ORIGIN}
+EXPOSE 3003 3009
+CMD ["packages/server/entrypoint.sh"]

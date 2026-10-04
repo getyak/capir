@@ -23,6 +23,14 @@ are meaningful states. A deterministic fake transport proves plumbing; it
 cannot certify semantic quality or authorize a release. A green ordinary PR
 check does not mean a funded model comparison or deployment occurred.
 
+Evaluation commands in this playbook run inside the private `capir-evals`
+execution snapshot (`.workspaces/<source-sha>`, reconstructed from the product
+checkout at an exact committed revision), where the extracted evaluation
+harness is restored at its historical relative paths. They do not run in the
+product checkout. From the product, `pnpm eval:*` forwards eval aliases through
+[`scripts/evaluation/run-private.mjs`](../../evals/README.md) to the private
+runner.
+
 ## Correct an answer
 
 In a signed-in canonical Session, use **Correct answer** beside the response.
@@ -50,7 +58,8 @@ model or task executor. Dataset synchronization or remote recovery must not
 change the dataset digest attached to the original run.
 
 ```sh
-OPIK_PROJECT_NAME=PROJECT pnpm --filter @talent-signal/eval-runner opik:export \
+# In the private capir-evals execution snapshot (see evals/README.md):
+OPIK_PROJECT_NAME=PROJECT pnpm eval:opik:export \
   --run-id RUN_ID --artifact-dir /private/results \
   --ledger-dir /private/projection-ledger --owner-controlled
 ```
@@ -74,15 +83,16 @@ the explicit string `"unlimited"` when the owner has authorized no ceiling;
 missing authorization is still unconfigured. Usage, request reservations and
 final-validation reserves remain finite integer amounts. Missing pricing or
 credentials also leaves paid execution unconfigured. The dated
-[GET-12 parameter receipt](../evaluations/2026-09-21-get-12/README.md) owns the
+[GET-12 parameter receipt](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-21-get-12/README.md) owns the
 current CNY authorization, model choice, existing instance and release handoff.
 
 ```sh
-pnpm --filter @talent-signal/eval-runner optimization start --controller-dir /private/controller --run-id RUN_ID
-pnpm --filter @talent-signal/eval-runner optimization run --controller-dir /private/controller --run-id RUN_ID
-pnpm --filter @talent-signal/eval-runner optimization status --controller-dir /private/controller --run-id RUN_ID
-pnpm --filter @talent-signal/eval-runner optimization stop --controller-dir /private/controller --run-id RUN_ID
-pnpm --filter @talent-signal/eval-runner optimization resume --controller-dir /private/controller --run-id RUN_ID
+# In the private capir-evals execution snapshot (see evals/README.md):
+pnpm eval:optimization start --controller-dir /private/controller --run-id RUN_ID
+pnpm eval:optimization run --controller-dir /private/controller --run-id RUN_ID
+pnpm eval:optimization status --controller-dir /private/controller --run-id RUN_ID
+pnpm eval:optimization stop --controller-dir /private/controller --run-id RUN_ID
+pnpm eval:optimization resume --controller-dir /private/controller --run-id RUN_ID
 ```
 
 `replay` reads recorded trials without execution; `revoke` invalidates the
@@ -98,7 +108,7 @@ grant by itself.
 Inject `TALENT_SIGNAL_PHASE_ONE_PROVIDER_API_KEY` only into the trusted
 controller, never the Python worker, a case, a report or command-line text.
 
-See the [optimizer instructions](../../apps/eval-runner/optimizer/README.md)
+See the [optimizer instructions](https://github.com/getyak/capir-evals/blob/main/harness/apps/eval-runner/optimizer/README.md)
 for controller inputs and the bounded Python search. It uses the same
 relationship provider, serializer and parser as the product. The initial
 search varies registered task guidance and approved dev demonstrations. It
@@ -135,14 +145,15 @@ not a measurement of a user's editing time or number of edits.
 Register every holdout exposure in the owner-controlled dataset lifecycle. Before
 using that source for development, retire its complete connected source group
 and supply a fresh independent replacement in the original partition. The
-[dataset lifecycle commands](../../evals/contracts/phase-one-controller.md#retire-exposed-holdouts-and-replenish-their-source-groups)
+[dataset lifecycle commands](https://github.com/getyak/capir-evals/blob/main/evals/contracts/phase-one-controller.md#retire-exposed-holdouts-and-replenish-their-source-groups)
 preserve original provenance, record repeated access and invalidate old reports;
 they do not copy final gold into candidate-generator input.
 
 ```sh
-pnpm --filter @talent-signal/eval-runner phase-one freeze --controller-dir /private/controller
-pnpm --filter @talent-signal/eval-runner phase-one verify --controller-dir /private/controller
-pnpm --filter @talent-signal/eval-runner phase-one inspect --controller-dir /private/controller
+# In the private capir-evals execution snapshot (see evals/README.md):
+pnpm eval:phase-one freeze --controller-dir /private/controller
+pnpm eval:phase-one verify --controller-dir /private/controller
+pnpm eval:phase-one inspect --controller-dir /private/controller
 ```
 
 Use the controller's trusted keys and authorization store; keys or approvals
@@ -167,7 +178,7 @@ proof binds the fixed checks, application revision, implementation source and
 emitted runtime build. Runtime readback captures the emitted build digest at
 process startup; a source-mode process or incomplete build reports unavailable.
 The final controller rejects stale builds and source changes. See the
-[controller contract](../../evals/contracts/README.md) for signing, independent
+[controller contract](https://github.com/getyak/capir-evals/blob/main/evals/contracts/README.md) for signing, independent
 review and the baseline → candidate → restored rollback commands.
 
 Deployment exposure is separate from the study's holdout-exposure digest.
@@ -212,5 +223,5 @@ export. Retention and source removal sweep pending writes, failed attempts and
 crash remnants. Readback, retry and deletion behavior is part of the release
 evidence, not an assumption about an SDK flush.
 
-See the [dated verification](../evaluations/2026-09-07-get-11-opik/README.md)
+See the [dated verification](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-11-opik/README.md)
 for measured results and any execution parameters still outstanding.

@@ -1,5 +1,0 @@
-baseline_app_path=/var/folders/qk/yyffbdsn4gz71wd9gf_3rb8r0000gn/T/talent-signal-macos.ENWgAB/Build/Products/Debug/TalentSignalMac.app
-5e23124b9445f59c327b42a934b854fce0080619ad8d5cf8c310d7879c0203d0  /var/folders/qk/yyffbdsn4gz71wd9gf_3rb8r0000gn/T/talent-signal-macos.ENWgAB/Build/Products/Debug/TalentSignalMac.app/Contents/MacOS/TalentSignalMac
-895c88f2cabbd160500c875cfb56687e9f9b1d83f6de793ceffde67dd46a926d  /var/folders/qk/yyffbdsn4gz71wd9gf_3rb8r0000gn/T/talent-signal-macos.ENWgAB/Build/Products/Debug/TalentSignalMac.app/Contents/MacOS/TalentSignalMac.debug.dylib
-0.1.0
-7

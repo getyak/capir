@@ -92,7 +92,7 @@ no-result zone for the same intended row action.
 - The detailed decision and verification matrix live in
   [`docs/research/ios-relationship-library-design-benchmark.md`](../docs/research/ios-relationship-library-design-benchmark.md#fifth-iteration-row-gesture-ownership).
 - The synthetic baseline screenshot and bounded interpretation live in
-  [`docs/evaluations/2026-09-01-ios-row-gesture-research/`](../docs/evaluations/2026-09-01-ios-row-gesture-research/README.md).
+  [`docs/evaluations/2026-09-01-ios-row-gesture-research/`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-ios-row-gesture-research/README.md).
 - The canonical design system now keeps the narrow gesture-ownership invariant
   and routes detail to the research instead of growing always-loaded guidance.
 - Temporary failing UI probes were removed after evidence capture. The user's

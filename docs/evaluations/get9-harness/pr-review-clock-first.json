@@ -1,9 +1,0 @@
-{
-  "probe": "claude-calendar-continuation.v1",
-  "dataClass": "synthetic",
-  "status": "failed",
-  "errorCode": "CLAUDE_HARNESS_TIMEOUT",
-  "completedRuns": 0,
-  "durationMs": 62206,
-  "setup_failure": "The operator selected unused local proxy port 7890; the verified host proxy is 7897. No completed model turn. This is not an availability verdict on Hao."
-}

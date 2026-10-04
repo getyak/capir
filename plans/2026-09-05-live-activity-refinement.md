@@ -83,7 +83,7 @@ and `pnpm docs:check`. Physical-device claims require physical-device evidence.
   encountered an unrelated in-progress RelationshipCapture test stub; focused
   test receipts are explicitly attributed to the isolated clean-base build.
 - The final source, 16 unedited screenshots, and test summaries are recorded in
-  [the evaluation](../docs/evaluations/2026-09-05-live-activity-refinement/README.md).
+  [the evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-live-activity-refinement/README.md).
   The system-card screenshots preserve Apple's first-use permission prompt;
   they are not presented as physically locked-device evidence.
 - The isolated PR branch was rebased onto current `origin/main`. Its App build,

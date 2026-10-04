@@ -52,7 +52,7 @@ transport trust boundary. Verify it with synthetic traffic before admitting
 private data; a loopback proxy can still forward traffic remotely.
  The deployment validator and synthetic
 probe must pass for the selected runtime; configuration alone is not proof.
-See [GET-9 acceptance evidence](../evaluations/get9-harness/README.md) for actual
+See [GET-9 acceptance evidence](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/README.md) for actual
 model receipts and the still-open native reliability gate.
 
 The TestFlight Compose boundary differs from synthetic development:

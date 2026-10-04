@@ -99,6 +99,13 @@ images and named volumes preserve the library. Stop with
 `docker compose -f deploy/opik/compose.json stop`; preserve volumes to retain
 history. The UI binds to Mac loopback on port 5173.
 
+The one-shot bucket initializer uses the `mc` binary bundled in the same
+pinned MinIO server image as the storage service. This avoids a separate
+client-image pull while preserving the existing idempotent bucket setup and
+policy. Initialization must still exit successfully before the backend starts.
+Use a clean deployment checkout with VM-readable bind mounts as described in
+[the local backend runbook](testflight-local-backend.md).
+
 The installation provides Prompt Library and the core UI/API. Python evaluation
 workers and Playground model connections remain unconfigured. No application
 model key or private conversation is copied into Opik by these prompt commands.
@@ -106,4 +113,4 @@ Only prompt configuration, source identifiers and version metadata are synced.
 
 Compose and supporting files are adapted from the official
 [Opik repository](https://github.com/comet-ml/opik/tree/main/deployment/docker-compose).
-See [verification evidence](../evaluations/2026-09-06-opik-prompts/bundled-runtime.md).
+See [verification evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-opik-prompts/bundled-runtime.md).

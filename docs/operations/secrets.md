@@ -103,13 +103,22 @@ Infisical readback before removing the source file. Never copy the reserved
 
 The iOS workflows prefer the pinned Infisical Secrets Action with GitHub OIDC.
 The identity is restricted to the exact immutable subject
-`repo:getyak@269524475/talent-signal@1322192683:environment:testflight`, custom audience
+`repo:getyak@269524475/capir@1322192683:environment:testflight`, custom audience
 `infisical://talent-signal/testflight`, environment `staging`, and path
 `/release`. The OIDC discovery URL is the provider origin
 `https://token.actions.githubusercontent.com`; Infisical performs discovery
 from that origin. Its base project access remains `no-access`; a path-scoped
 Additional Privilege grants only `describeSecret` and `readValue`. This keeps
 the same least-privilege boundary on plans where custom roles are unavailable.
+
+Repository names in OIDC subjects and `workflow_ref` claims can change even
+when their numeric IDs remain the same. After a rename, read the authoritative
+prefix with `gh api repos/getyak/capir/actions/oidc/customization/sub`, then
+update only the exact name-bound subject and workflow reference on the existing
+TestFlight/macOS release identities. Preserve owner/repository IDs, protected
+environments, workflow paths, branch claims, audiences, token limits and scoped
+permissions; read back the field diff before retrying the failed release.
+Never replace an exact subject with a wildcard to repair a rename.
 
 The `INFISICAL_TESTFLIGHT_IDENTITY_ID` variable is bound to the protected
 release identity. Release `0.1.13 (20260828111000)` completed Apple processing

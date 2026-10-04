@@ -82,13 +82,13 @@ task. Real AI created a Person. A subsequent reviewed screenshot reused that
 Person, including recovery of the same task after a backend restart and provider
 429. Original image readback returned HTTP 200. Screenshots are in
 `output/web-capture-pipeline/` (synthetic sources only). See the
-[evaluation record](../docs/evaluations/2026-09-10-web-capture/README.md).
+[evaluation record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-10-web-capture/README.md).
 
 ## Delivery status
 
 Implementation and review verification are complete. The final PostgreSQL suite
 passes 24/24, including explicit namesake selection and deletion interruption /
-replay. The [evaluation record](../docs/evaluations/2026-09-10-web-capture/README.md)
+replay. The [evaluation record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-10-web-capture/README.md)
 owns the synthetic live SDK and regression evidence. The final delivery commit
 must pass CI and be deployed through the local TestFlight script before merge.
 [PR #175](https://github.com/getyak/talent-signal/pull/175) is the authoritative

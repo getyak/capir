@@ -4,7 +4,7 @@
 - Original language: English
 - Rights: public sources; original summaries only, no copied prompts
 - Related implementation: [product prompts](../../apps/agent/src/prompts.ts)
-- Related evidence: [prompt evaluation](../../docs/evaluations/2026-09-06-prompt-simplification/README.md)
+- Related evidence: [prompt evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-prompt-simplification/README.md)
 
 ## Anthropic: context engineering
 

@@ -9,7 +9,7 @@ No private screenshot replay, contact write, or unrelated workspace edits.
 
 ## Evidence and decision
 
-See [incident evidence](../docs/evaluations/2026-09-25-conversation-diagnostics/README.md)
+See [incident evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-25-conversation-diagnostics/README.md)
 and [operational contract](../docs/operations/product-feedback.md).
 The failed run has no captured exception; exact historical cause cannot be
 recovered. Queue admission/storage worked. Two synthetic live provider probes

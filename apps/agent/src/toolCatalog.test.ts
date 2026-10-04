@@ -72,6 +72,7 @@ describe("provider-neutral Agent capability catalog", () => {
     expect(WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES).toEqual([
       "contact_workspace",
       "memory_review",
+      "mcp_connections",
     ]);
     expect(candidateToolNames(PURSUIT_AGENT_TOOL_NAMES)).toEqual([
       "stage_pursuit_proposal",
@@ -101,18 +102,19 @@ describe("provider-neutral Agent capability catalog", () => {
       (capability) => capability.consequence === "durable_candidate",
     );
 
-    expect(capabilities).toHaveLength(13);
+    expect(capabilities).toHaveLength(14);
     expect(durable.map((capability) => capability.name)).toEqual([
       "stage_pursuit_proposal",
       "create_research_artifact",
       "create_person_research_artifact",
       "contact_workspace",
       "memory_review",
+      "mcp_connections",
     ]);
     expect(
       durable.every(
         (capability) =>
-          !capability.openWorld &&
+          capability.openWorld === (capability.name === "mcp_connections") &&
           capability.reversibility === "discardable" &&
           capability.idempotency === "content_fingerprint",
       ),
@@ -126,6 +128,16 @@ describe("provider-neutral Agent capability catalog", () => {
     expect(AGENT_TOOL_CATALOG.memory_review.approval).toBe(
       "human_review_before_apply",
     );
+    expect(AGENT_TOOL_CATALOG.mcp_connections).toMatchObject({
+      consequence: "durable_candidate",
+      approval: "human_review_before_apply",
+      openWorld: true,
+      reversibility: "discardable",
+      idempotency: "content_fingerprint",
+    });
+    expect(AGENT_TOOL_CATALOG.mcp_connections.schema.safeParse({
+      operation: "execute", connection_id: "b1c3f1fc-1e15-4cd3-89a1-b64cf0b66817",
+    }).success).toBe(false);
   });
 
   it("admits bounded contact operations but exposes no apply operation", () => {

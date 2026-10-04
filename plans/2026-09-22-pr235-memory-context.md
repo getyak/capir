@@ -44,6 +44,6 @@ environment blocker without presenting deployment as successful.
 
 Agent: 296 passed, 1 skipped. Focused backend suites: 141 passed. Backend build,
 Agent/Web typechecks, and documentation/architecture checks passed.
-See [the follow-up report](../docs/evaluations/get40/memory-context-followup.md)
+See [the follow-up report](https://github.com/getyak/capir-evals/blob/main/evidence/get40/memory-context-followup.md)
 for scope, reproduction and limits. Existing iOS CI failed on an unrelated
 accessibility-audit timeout. No paid-model rerun, merge or production deployment.

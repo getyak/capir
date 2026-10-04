@@ -16,8 +16,6 @@
 !packages/contracts/**
 !packages/evaluation/
 !packages/evaluation/**
-!evals/
-!evals/candidate-momentum-v1.json
 **/node_modules
 **/dist
 **/.env*

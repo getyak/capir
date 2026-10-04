@@ -14,7 +14,7 @@ interaction refinement, not a new visual identity.
 
 ## Baseline and isolation
 
-- [Diagnosis](../docs/evaluations/2026-09-04-ios-scroll-jitter.md): missing guide
+- [Diagnosis](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-ios-scroll-jitter.md): missing guide
   clearance is measured; sustained frame stalls were not independently proven.
 - Current shared working checkout has substantial concurrent work, including iOS tests
   using the existing simulator. Implement in `/tmp/talent-signal-scroll-continuity`

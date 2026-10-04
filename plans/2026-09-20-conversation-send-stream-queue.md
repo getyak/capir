@@ -80,7 +80,7 @@ run, or clear a newer draft. The legacy synchronous
 
 ## Verification and release state
 
-See [the evidence record](../docs/evaluations/2026-09-20-conversation-send/implementation-evidence.md)
+See [the evidence record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-20-conversation-send/implementation-evidence.md)
 for exact checks and their boundaries. Backend type checking, the production Web
 build, focused client tests, 541 backend unit tests, and 21 queue/SSE tests pass. Independent HTTP proof
 covers ten admission, streaming, cancellation, and recovery properties.

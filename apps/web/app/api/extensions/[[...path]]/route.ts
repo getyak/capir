@@ -33,15 +33,28 @@ const ROUTES: Array<{ methods: string[]; path: string[] }> = [
   { methods: ["GET", "POST"], path: ["clients"] },
   { methods: ["POST"], path: ["clients", ":id", "revoke"] },
   { methods: ["GET"], path: ["endpoints"] },
+  { methods: ["GET"], path: ["directory"] },
+  { methods: ["GET"], path: ["oauth", "availability"] },
+  { methods: ["POST"], path: ["oauth", "poll", ":token"] },
+  { methods: ["GET"], path: ["interactions"] },
+  { methods: ["POST"], path: ["interactions", "propose-call"] },
+  { methods: ["POST"], path: ["interactions", "propose-connection"] },
+  { methods: ["GET"], path: ["interactions", ":id"] },
+  { methods: ["POST"], path: ["interactions", ":id", "resolve"] },
 ];
+
+const TOKEN = /^[A-Za-z0-9_.:\-]{1,120}$/u;
 
 function matches(path: string[], method: string): string[] | null {
   for (const route of ROUTES) {
     if (!route.methods.includes(method)) continue;
     if (route.path.length !== path.length) continue;
-    const ok = route.path.every((segment, index) =>
-      segment === ":id" ? UUID.test(path[index] ?? "") : segment === path[index],
-    );
+    const ok = route.path.every((segment, index) => {
+      const value = path[index] ?? "";
+      if (segment === ":id") return UUID.test(value);
+      if (segment === ":token") return TOKEN.test(value);
+      return segment === value;
+    });
     if (ok) return route.path;
   }
   return null;
@@ -132,7 +145,9 @@ async function handle(
       return response(await loadMcpExtensionSnapshot(), 200);
     }
     const upstreamPath = route
-      .map((segment, index) => (segment === ":id" ? normalized[index] : segment))
+      .map((segment, index) =>
+        segment === ":id" || segment === ":token" ? normalized[index] : segment,
+      )
       .join("/");
     const url = `${backendAuthBaseUrl()}/v1/mcp/${upstreamPath}`;
 

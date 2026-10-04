@@ -30,7 +30,7 @@ Root owns synthesis, Markdown, integration hooks, localization, documentation, X
 
 ## Current state
 
-Complete. The final 110-file product artifact has independent recruiter/mobile/safety follow-up, zero remaining confirmed implementation findings and no active veto. Native cancellation and response-loss/footer recovery pass; the final Release build and required local TestFlight backend deployment/readback pass. The [evaluation report](../docs/evaluations/2026-09-07-get-5/README.md) owns final results; [twenty checks](../docs/evaluations/2026-09-07-get-5/checks.md) define the evidence boundary.
+Complete. The final 110-file product artifact has independent recruiter/mobile/safety follow-up, zero remaining confirmed implementation findings and no active veto. Native cancellation and response-loss/footer recovery pass; the final Release build and required local TestFlight backend deployment/readback pass. The [evaluation report](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-5/README.md) owns final results; [twenty checks](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-5/checks.md) define the evidence boundary.
 
 ## Verified implementation
 

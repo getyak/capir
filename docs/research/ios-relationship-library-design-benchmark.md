@@ -508,7 +508,7 @@ Xcode 26.6 produced three outcomes:
 | Slower medium left drag | Reveal `Remove`; remain in Sessions | Stayed in Sessions; revealed nothing |
 
 The captured synthetic evidence is in the
-[`2026-09-01 iOS row gesture baseline`](../evaluations/2026-09-01-ios-row-gesture-research/README.md).
+[`2026-09-01 iOS row gesture baseline`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-ios-row-gesture-research/README.md).
 The probes did not reach a stable revealed state, so they could not truthfully
 validate dismissal. This is evidence of an arbitration failure, not evidence
 that dismissal is correct or incorrect in isolation.

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { crc32, deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import type { LabJob, LabRegressionExport } from "@talent-signal/contracts";
@@ -7,7 +6,37 @@ import { readLabCIArchive } from "./labCIArchive.js";
 import { GitHubLabCIVerifier, environmentLabCIVerifier } from "./labCIVerifier.js";
 
 const now = "2026-09-04T12:00:00.000Z", revision = "a".repeat(40), repositoryId = 1322192683;
-const stored = JSON.parse(readFileSync(new URL("../../../../docs/evaluations/2026-09-04-lab-regressions/regression-native-proof.json", import.meta.url), "utf8")) as { export_bundle: LabRegressionExport; rerun: LabJob };
+// Self-contained synthetic Lab records. The historical native proof this test
+// once read lives in the private capir-evals evidence archive; public tests do
+// not depend on private evaluation data.
+const hash = (value: unknown) => digestCanonicalJson(value).slice(7);
+const uuid = (n: number) => `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+function syntheticRecords(): { export_bundle: LabRegressionExport; rerun: LabJob } {
+  const reference = "2026-09-04T10:00:00.000Z";
+  const input = { objective: "Synthetic question", context_blocks: [], allowed_citation_ids: ["source-1"] };
+  const sample = { id: "synthetic-conflict", title: "Synthetic conflict", revision: "1", partition: "held_out" as const,
+    input_json: JSON.stringify(input), input_hash: hash(input), expected: "Original expectation." };
+  const definition: LabJob["definition"] = { task: "relationship_text", cases: [sample],
+    configurations: [{ model: "fixture-model", prompt_preset: "baseline", prompt_revision: "prompt-1" }, { model: "fixture-model", prompt_preset: "concise", prompt_revision: "prompt-2" }],
+    comparison: "prompt", repetitions: 1, call_limit: 2, max_output_tokens_per_call: 1600, reference_time: reference,
+    backend_revision: "fixture-backend-revision", instrument_revision: "lab-relationship-answer-job/1", tool_access: [], business_write_count: 0, cost_status: "unavailable" };
+  const attempts: LabJob["attempts"] = [0, 1].map((i) => ({ id: uuid(i + 20), ordinal: i, case_id: sample.id, configuration_index: i, repetition: 1,
+    status: "completed", started_at: reference, finished_at: reference, requested_model: "fixture-model", actual_model: "fixture-model",
+    prompt_revision: `prompt-${i + 1}`, actual_prompt_revision: `prompt-${i + 1}`, provider_request_id: `fixture-${i}`, duration_ms: 10,
+    input_tokens: 20, output_tokens: 5, title: "Synthetic result", answer: "Model output marker; inspect the evidence.", citation_ids: ["source-1"], error_code: null,
+    checks: [{ id: "output_contract", verdict: "pass", summary: "Fixture output shape" }] }));
+  const snapshot: LabRegressionExport["snapshot"] = { schema_version: "lab-regression.v1", data_class: "registered_synthetic",
+    source_job_id: uuid(1), source_definition_hash: hash(definition), source_attempt: { ...attempts[0]!, id: uuid(10) }, case: sample,
+    configurations: definition.configurations, reference_time: reference, backend_revision: definition.backend_revision, instrument_revision: definition.instrument_revision,
+    failure_categories: ["missed_uncertainty"], expected_behavior: "Expected behavior marker", review_note: "Review note marker", reviewer_id: uuid(3), reviewed_at: reference };
+  const export_bundle: LabRegressionExport = { schema_version: "lab-regression-bundle.v1", execution_authority: "none", id: uuid(2), content_hash: hash(snapshot),
+    snapshot, created_at: reference, expires_at: "2026-12-01T10:00:00.000Z" };
+  definition.regression_source = { id: export_bundle.id, content_hash: export_bundle.content_hash };
+  const rerun: LabJob = { id: uuid(4), definition_hash: hash(definition), definition, status: "completed", attempts, calls_reserved: 2,
+    created_at: reference, expires_at: "2026-09-11T10:00:00.000Z", cancel_requested_at: null, review: "b", failure_categories: [], quality: "needs_review" };
+  return { export_bundle, rerun };
+}
+const stored = syntheticRecords();
 function archive(value: unknown, name = "lab-regression-report.json", method = 8) {
   const payload = Buffer.from(JSON.stringify(value)), filename = Buffer.from(name), compressed = method === 8 ? deflateRawSync(payload) : payload;
   const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4); local.writeUInt16LE(method, 8);

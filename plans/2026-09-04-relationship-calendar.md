@@ -49,7 +49,7 @@ physical-device, Calendar-import, or attendee-response verification.
 
 ## Completion
 
-All three milestones are complete. See the [native evidence](../docs/evaluations/2026-09-04-relationship-calendar/README.md) and its verification ledger. Thirteen unique focused tests passed, with further scoped rechecks after refinements. The pre-existing calendar AX5 test used an invalid raw content-size value; corrected to `UICTContentSizeCategoryAccessibilityXXXL`, asserted enlarged name height, and verified the scrolled agenda and reachable preparation button. Decorative icons now keep their bounds at that size. Final source built successfully and Chinese native readback preserved date/view/person after opening and closing the person record. No external effects were exercised.
+All three milestones are complete. See the [native evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-relationship-calendar/README.md) and its verification ledger. Thirteen unique focused tests passed, with further scoped rechecks after refinements. The pre-existing calendar AX5 test used an invalid raw content-size value; corrected to `UICTContentSizeCategoryAccessibilityXXXL`, asserted enlarged name height, and verified the scrolled agenda and reachable preparation button. Decorative icons now keep their bounds at that size. Final source built successfully and Chinese native readback preserved date/view/person after opening and closing the person record. No external effects were exercised.
 
 ## Authorized release
 
@@ -64,7 +64,7 @@ The release worktree starts at `56aff0d` (`origin/main`).
 4. Complete: automation receipt and tag bind the calendar merge commit; a
    read-only audit confirms the exact build is available to the internal group.
 
-The [published-release evidence](../docs/evaluations/2026-09-04-relationship-calendar/README.md#published-release)
+The [published-release evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-relationship-calendar/README.md#published-release)
 owns version, build, processing, access and workflow links. The release worktree
 excluded unrelated uncommitted Lab changes and preserved the shared checkout.
 No public App Store submission or invitation was performed. Physical-device

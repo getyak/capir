@@ -64,7 +64,7 @@ unknown responses reuse immutable intent and do not create duplicate contacts.
 
 ## Evidence and remaining work
 
-The [delivery evidence](../docs/evaluations/2026-09-06-screenshot-contact-agent/README.md)
+The [delivery evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-screenshot-contact-agent/README.md)
 is the authoritative case/check/deployment record. Initial API Lin case and
 both new/existing Andrew cases are complete. Web recovery preserves capture IDs
 and message counts. Mobile Web was inspected at 390 pixels with no horizontal

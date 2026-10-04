@@ -60,7 +60,7 @@ independent review and fixed the confirmed findings.
   build artifact. Production, Studio and unrelated artifacts were preserved.
 - Remaining: current-head remote CI and quality work. The nine semantic
   failures and K04 timeout remain open; the PR stays draft.
-  [Detailed evidence](../docs/evaluations/2026-09-24-relationship-conversations.md)
+  [Detailed evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-24-relationship-conversations.md)
   is authoritative; older targeted passes do not replace the final full run.
 
 ## Verification boundaries

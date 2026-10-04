@@ -7,7 +7,7 @@
 - Accessed: 2026-09-05, Asia/Shanghai.
 - Rights and confidentiality: user supplied for product review; store only
   a limited design summary, no candidate conversation data or full article.
-- Used by: [Concept evaluation](../../docs/evaluations/2026-09-05-notion-capture-design/report.md).
+- Used by: [Concept evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-notion-capture-design/report.md).
 
 ## Source-section evidence inventory
 

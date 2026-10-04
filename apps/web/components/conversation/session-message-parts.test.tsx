@@ -157,3 +157,27 @@ it("restores every steered original before one final result and uses actual run 
   expect(messages[1]?.content[1]).toMatchObject({ data: { messageId: duplicate.message_id, images: first.images } });
   expect(messages[2]?.content[0]).toMatchObject({ data: { startedAt: "2026-09-29T01:00:03Z", endedAt: "2026-09-29T01:00:11Z", timingBasis: "run", completedTools: first.response.execution.tools } });
 });
+
+it("preserves host result identity without projecting internal continuation as a human message at any lifecycle", () => {
+  const host = { request_id: PROPOSAL, call_id: MESSAGE, original_message_id: MESSAGE,
+    actor_user_id: PROPOSAL, kind: "form" as const, outcome: "submitted", choice_id: null, receipt_ref: null };
+  const base: ConversationQueueEntry = { queue_entry_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", message_id: MESSAGE,
+    sequence: 2, status: "queued", objective: "PRIVATE_HOST_CONTINUATION", host_result: host,
+    created_at: "2026-10-04T01:00:00Z", updated_at: "2026-10-04T01:00:00Z", revision: 1,
+    run_id: null, stage: null, cancel_requested: false, failure_code: null };
+  for (const status of ["queued", "failed", "interrupted"] as const) {
+    const projected = sessionMessages({ turns: [], active: null, preview: null, queued: [{ ...base, status }] });
+    expect(projected.map(message => message.role)).toEqual(["assistant"]);
+    expect(projected[0]?.content[0]).toMatchObject({ name: "talent-signal.mcp-human-result", data: { result: host } });
+    expect(JSON.stringify(projected)).not.toContain(base.objective);
+  }
+  const active = sessionMessages({ turns: [], active: { ...base, status: "running" }, preview: null });
+  expect(active.map(message => message.role)).toEqual(["assistant"]);
+  expect(active[0]?.content[0]).toMatchObject({ name: "talent-signal.mcp-human-result", data: { result: host } });
+  const completed = turn();
+  completed.objective = base.objective;
+  completed.response.hostResult = host;
+  const restored = sessionMessages({ turns: [completed], active: null, preview: null });
+  expect(restored.map(message => message.role)).toEqual(["assistant"]);
+  expect(JSON.stringify(restored)).not.toContain(base.objective);
+});

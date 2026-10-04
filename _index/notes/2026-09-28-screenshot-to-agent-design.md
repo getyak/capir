@@ -5,7 +5,7 @@
 - Supersedes: the text composer and current-task panel from the earlier menu-bar exploration.
 - User direction: screenshot first, minimal steps, automatic upload and Agent processing; remove the current-task section; keep the menu elegant and useful.
 - Scope: research and editable Figma design using synthetic content. No real screenshot was submitted for model processing, no new screen permission was granted, and no product code changed.
-- Delivered: [Figma design section](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=220-1991), [compact menu](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=220-1997), and [verification record](../../docs/evaluations/2026-09-28-menu-bar-capture/README.md).
+- Delivered: [Figma design section](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=220-1991), [compact menu](https://www.figma.com/design/7Z8yHplvwjVhpq8IuKv87f?node-id=220-1997), and [verification record](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-28-menu-bar-capture/README.md).
 
 ## Decision
 

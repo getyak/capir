@@ -29,6 +29,7 @@ import {
   fixtureCheck,
   fixtureSubmit,
 } from "./lib/fixture-transport.js";
+import { initializeFixtureMode } from "./lib/fixture-suite.js";
 import {
   dispositionPresentation,
   isSyntheticTransport,
@@ -123,7 +124,10 @@ const elements = {
 const query = new URLSearchParams(location.search);
 
 const state = {
-  mode: query.get("mode") === "fixture" ? "fixture" : "live",
+  // Fixture mode is requested only for an explicit ?mode=fixture query and is
+  // applied only after the optional fixture suite loads successfully
+  // (see lib/fixture-suite.js). Without a corpus the panel stays live.
+  mode: "live",
   fixtureSuite: null,
   draft: null,
   image: null,
@@ -253,6 +257,13 @@ function draftChanged() {
 
 function renderMode() {
   const fixtureMode = state.mode === "fixture";
+  const fixtureOption = elements.modeSelect.querySelector(
+    'option[value="fixture"]',
+  );
+  if (fixtureOption) {
+    // The fixture option is unavailable until a fixture suite loads.
+    fixtureOption.disabled = !state.fixtureSuite;
+  }
   elements.modeSelect.value = state.mode;
   elements.liveControls.hidden = fixtureMode;
   elements.fixtureControls.hidden = !fixtureMode;
@@ -260,22 +271,18 @@ function renderMode() {
     ? "Deterministic evaluation"
     : "Intentional capture";
   elements.captureTitle.textContent = fixtureMode
-    ? "Exercise the same eight safety cases."
+    ? "Open a synthetic evaluation case."
     : "Bring only what matters into review.";
   elements.captureLede.textContent = fixtureMode
-    ? "Open a bundled synthetic case and inspect its evidence, proposed meaning, action boundary, and truthful receipt state."
+    ? "Open a synthetic case and inspect its evidence, proposed meaning, action boundary, and truthful receipt state."
     : "Choose the visible page or text you selected. capri will show the exact payload before anything leaves this panel.";
 }
 
-async function loadFixtureSuite() {
-  const response = await fetch("./fixtures/candidate-momentum-v1.json");
-  if (!response.ok) {
-    throw new Error("The bundled fixture suite could not be loaded.");
-  }
-  state.fixtureSuite = await response.json();
+function populateFixtureControls(suite) {
+  state.fixtureSuite = suite;
   elements.fixtureCase.replaceChildren();
 
-  for (const fixtureCase of state.fixtureSuite.cases) {
+  for (const fixtureCase of suite.cases) {
     const option = document.createElement("option");
     option.value = fixtureCase.id;
     option.textContent = `${fixtureCase.id} · ${fixtureCase.title}`;
@@ -285,7 +292,7 @@ async function loadFixtureSuite() {
   const requestedCase = query.get("case");
   if (
     requestedCase &&
-    state.fixtureSuite.cases.some((item) => item.id === requestedCase)
+    suite.cases.some((item) => item.id === requestedCase)
   ) {
     elements.fixtureCase.value = requestedCase;
   }
@@ -398,7 +405,7 @@ async function loadSelectedFixture() {
     (item) => item.id === elements.fixtureCase.value,
   );
   if (!fixtureCase) {
-    showCaptureAlert("Fixture unavailable", "Choose another bundled case.");
+    showCaptureAlert("Fixture unavailable", "Choose another case.");
     return;
   }
 
@@ -1445,19 +1452,37 @@ async function initialize() {
       : "An extension update is available. Finish this review before updating in Chrome extensions.";
   });
   elements.localOrigin.value = DEFAULT_LOCAL_ORIGIN;
+
+  // The evaluation corpus is optional (GET-134). Ordinary live startup without
+  // a corpus never shows a fixture-package error and never becomes fixture
+  // mode; ?mode=fixture degrades clearly to live when no suite loads.
+  const fixtureStartup = await initializeFixtureMode({
+    requestedMode: query.get("mode"),
+  });
+  state.mode = fixtureStartup.mode;
+  if (fixtureStartup.fixtureSuite) {
+    populateFixtureControls(fixtureStartup.fixtureSuite);
+  }
   renderMode();
+  if (fixtureStartup.notice) {
+    showCaptureAlert("Fixture suite unavailable", fixtureStartup.notice, "status");
+    announce(fixtureStartup.notice);
+  }
   await renderHandoffRecovery();
-  try {
-    await loadFixtureSuite();
-    if (state.mode === "fixture") {
+
+  if (state.mode === "fixture" && state.fixtureSuite) {
+    try {
       if (query.get("audit") === "long-mixed-text") {
         await loadLongMixedScriptSample();
       } else {
         await loadSelectedFixture();
       }
+    } catch (error) {
+      showCaptureAlert(
+        "Fixture case unavailable",
+        error instanceof Error ? error.message : "The fixture case could not be opened.",
+      );
     }
-  } catch (error) {
-    showCaptureAlert("Fixture package unavailable", error.message);
   }
 }
 

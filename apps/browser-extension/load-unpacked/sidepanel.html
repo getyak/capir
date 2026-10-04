@@ -39,7 +39,8 @@
         <span>Source</span>
         <select id="mode-select" aria-label="Capture source mode">
           <option value="live">Current tab</option>
-          <option value="fixture">Synthetic fixtures</option>
+          <!-- Enabled only after the optional fixture suite loads (GET-134). -->
+          <option value="fixture" disabled>Synthetic fixtures</option>
         </select>
       </label>
     </header>

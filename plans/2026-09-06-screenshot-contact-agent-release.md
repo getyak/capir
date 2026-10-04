@@ -38,11 +38,11 @@ merged as `76265c7ee69de2d223bb4b9d0e65f2c04eced093`.
 - [Release workflow](https://github.com/getyak/talent-signal/actions/runs/34000737448)
   completed after Apple confirmed the exact upload as valid. The automation-owned
   [GitHub release](https://github.com/getyak/talent-signal/releases/tag/v0.1.57)
-  contains the IPA and [immutable processing receipt](../docs/evaluations/2026-09-06-screenshot-contact-agent/testflight-release-receipt.json).
+  contains the IPA and [immutable processing receipt](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-screenshot-contact-agent/testflight-release-receipt.json).
 - [Read-only access audit](https://github.com/getyak/talent-signal/actions/runs/34001221666)
   confirmed the exact version/build, `VALID`, active internal membership,
   all-build access, and `SERVER_ACCESS_READY=true`. No invitation was resent.
-  [Sanitized audit](../docs/evaluations/2026-09-06-screenshot-contact-agent/testflight-access-verification.json)
+  [Sanitized audit](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-06-screenshot-contact-agent/testflight-access-verification.json)
   does not claim a physical-device installation of this exact build.
 - The deployed image is
   `sha256:e0d094795577a87f4c948f64dd53bba7301091584a64c4a0cd7431b77d0a9bea`.

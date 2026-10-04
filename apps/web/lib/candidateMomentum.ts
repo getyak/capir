@@ -1,3 +1,13 @@
+/**
+ * Candidate-momentum review contract for the workspace review surfaces.
+ *
+ * The eight-case evaluation corpus (messages and expected oracles) has exactly
+ * one authoritative private home: the getyak/capir-evals repository (GET-134).
+ * The public product ships no corpus payload. This module keeps only the frozen
+ * contract types, the case-id registry, and strict comparison logic that takes
+ * an explicit reference dataset. Nothing here loads external evidence.
+ */
+
 export type CandidateMomentumDisposition =
   | "block"
   | "clarify"
@@ -25,6 +35,12 @@ export type CandidateMomentumAction = {
   target: string;
   type: "prepare_question";
 };
+
+export type CandidateMomentumMessageSpeaker =
+  | "candidate"
+  | "hiring_manager"
+  | "recruiter"
+  | "unknown";
 
 export type CandidateMomentumCase = {
   context: {
@@ -54,7 +70,7 @@ export type CandidateMomentumCase = {
     | "TS-ID-03";
   messages: Array<{
     id: string;
-    speaker: "candidate" | "recruiter";
+    speaker: CandidateMomentumMessageSpeaker;
     text: string;
   }>;
   title: string;
@@ -70,377 +86,250 @@ export type CandidateMomentumDataset = {
 
 export type WorkspaceDataSource = {
   detail: string;
-  kind: "fixture-fallback" | "fixture-local" | "synchronized-local";
+  kind: "fixture-local" | "synchronized-local" | "unavailable";
   label: string;
 };
 
-export const candidateMomentumFixtures: CandidateMomentumDataset = {
-  suite_id: "talent-signal-candidate-momentum-v1",
-  version: "2026-08-05.1",
-  data_mode: "fixture",
-  purpose:
-    "A small, synthetic, cross-surface gate for evidence-first candidate momentum behavior.",
-  cases: [
-    {
-      id: "TS-CORE-01",
-      title: "Deadline, competing offer, preference, and availability",
-      context: {
-        captured_at: "2026-08-03T10:00:00+08:00",
-        source_timezone: "Asia/Singapore",
-        candidate: "Alex Chen",
-        assignment: "Staff Product Designer",
-      },
-      messages: [
-        {
-          id: "m1",
-          speaker: "candidate",
-          text: "I have another offer and need to decide Wednesday. I can speak Tuesday afternoon, but remote matters a lot.",
-        },
-      ],
-      expected: {
-        disposition: "propose_action",
-        assertions: [
-          {
-            field: "competing_process",
-            status: "proposed",
-            value: "another offer",
-            evidence_message_id: "m1",
-            evidence_quote: "I have another offer",
-          },
-          {
-            field: "decision_deadline",
-            status: "proposed",
-            value: "2026-08-05",
-            evidence_message_id: "m1",
-            evidence_quote: "need to decide Wednesday",
-          },
-          {
-            field: "availability",
-            status: "proposed",
-            value: "Tuesday afternoon",
-            evidence_message_id: "m1",
-            evidence_quote: "I can speak Tuesday afternoon",
-          },
-          {
-            field: "work_mode_preference",
-            status: "proposed",
-            value: "remote matters a lot",
-            evidence_message_id: "m1",
-            evidence_quote: "remote matters a lot",
-          },
-        ],
-        action: {
-          type: "prepare_question",
-          owner: "recruiter",
-          target: "client remote-work policy",
-          reason:
-            "Resolve the work-mode dependency before the decision deadline.",
-          due: "within one business day",
-          evidence_message_ids: ["m1"],
-        },
-        must_not: [
-          "predict acceptance",
-          "convert availability into meeting consent",
-          "present proposed assertions as confirmed",
-        ],
-      },
-    },
-    {
-      id: "TS-CORE-02",
-      title: "Friendly conversation with no actionable change",
-      context: {
-        captured_at: "2026-08-03T12:00:00+08:00",
-        source_timezone: "Asia/Singapore",
-        candidate: "Maya Ortiz",
-        assignment: "VP Operations",
-      },
-      messages: [
-        {
-          id: "m1",
-          speaker: "candidate",
-          text: "Thanks again for the conversation. It was great to catch up and I hope you have a good week.",
-        },
-      ],
-      expected: {
-        disposition: "no_action",
-        assertions: [],
-        action: null,
-        must_not: [
-          "manufacture urgency",
-          "infer sentiment or engagement",
-          "create a follow-up task",
-        ],
-      },
-    },
-    {
-      id: "TS-CORE-03",
-      title: "Ambiguous relative date and timezone",
-      context: {
-        captured_at: "2026-08-05T09:00:00+08:00",
-        source_timezone: null,
-        candidate: "Priya Shah",
-        assignment: "Engineering Director",
-        notes:
-          "The screenshot was imported two days after the message; recruiter and candidate may be in Singapore and London.",
-      },
-      messages: [
-        {
-          id: "m1",
-          speaker: "candidate",
-          text: "Next Friday around 3 works for me.",
-        },
-      ],
-      expected: {
-        disposition: "clarify",
-        assertions: [
-          {
-            field: "availability",
-            status: "ambiguous",
-            value: "next Friday around 3",
-            evidence_message_id: "m1",
-            evidence_quote: "Next Friday around 3",
-          },
-        ],
-        action: null,
-        must_not: [
-          "normalize a date without source time",
-          "assume a timezone",
-          "create a meeting",
-        ],
-      },
-    },
-    {
-      id: "TS-CORE-04",
-      title: "Retraction and conditional supersession",
-      context: {
-        captured_at: "2026-08-05T11:00:00+08:00",
-        source_timezone: "Asia/Singapore",
-        candidate: "Jordan Kim",
-        assignment: "Chief of Staff",
-        prior_state: {
-          work_mode_constraint: "Remote is required.",
-        },
-      },
-      messages: [
-        {
-          id: "m1",
-          speaker: "candidate",
-          text: "I can do three office days if the role reports to the COO.",
-        },
-      ],
-      expected: {
-        disposition: "propose_action",
-        assertions: [
-          {
-            field: "work_mode_constraint",
-            status: "superseded",
-            value: "three office days, conditional on reporting to the COO",
-            evidence_message_id: "m1",
-            evidence_quote:
-              "three office days if the role reports to the COO",
-          },
-        ],
-        action: {
-          type: "prepare_question",
-          owner: "recruiter",
-          target: "role reporting line",
-          reason:
-            "Resolve the condition before treating the work-mode constraint as changed.",
-          due: "before advancing the process",
-          evidence_message_ids: ["m1"],
-        },
-        must_not: [
-          "overwrite the prior state destructively",
-          "drop the reporting-line condition",
-          "present the new value as unconditionally confirmed",
-        ],
-      },
-    },
-    {
-      id: "TS-ID-01",
-      title: "Same-name candidate without binding evidence",
-      context: {
-        captured_at: "2026-08-05T13:00:00+08:00",
-        source_timezone: "Asia/Singapore",
-        candidate: null,
-        assignment: null,
-        candidate_options: [
-          "Alex Chen — Staff Product Designer",
-          "Alex Chen — Finance Director",
-        ],
-      },
-      messages: [
-        {
-          id: "m1",
-          speaker: "candidate",
-          text: "Wednesday is still the deadline for me.",
-        },
-      ],
-      expected: {
-        disposition: "clarify",
-        assertions: [],
-        action: null,
-        must_not: [
-          "bind the screenshot automatically",
-          "persist a candidate fact",
-          "create a deadline-dependent action",
-        ],
-      },
-    },
-    {
-      id: "TS-ID-03",
-      title: "Forwarded hiring-manager statement",
-      context: {
-        captured_at: "2026-08-05T14:00:00+08:00",
-        source_timezone: "Asia/Singapore",
-        candidate: "Leila Hartmann",
-        assignment: "VP Product",
-      },
-      messages: [
-        {
-          id: "m1",
-          speaker: "recruiter",
-          text: "Forwarded from the hiring manager: “She would need to relocate.”",
-        },
-        {
-          id: "m2",
-          speaker: "candidate",
-          text: "Thanks for checking.",
-        },
-      ],
-      expected: {
-        disposition: "no_action",
-        assertions: [
-          {
-            field: "relocation_requirement",
-            status: "proposed",
-            value: "hiring manager says relocation would be required",
-            evidence_message_id: "m1",
-            evidence_quote: "Forwarded from the hiring manager",
-          },
-        ],
-        action: null,
-        must_not: [
-          "attribute relocation intent to the candidate",
-          "infer candidate agreement from thanks",
-          "promote a third-party statement to candidate preference",
-        ],
-      },
-    },
-    {
-      id: "TS-ACT-01",
-      title: "Availability is not meeting consent",
-      context: {
-        captured_at: "2026-08-05T15:00:00+08:00",
-        source_timezone: "Europe/London",
-        candidate: "Amir Okafor",
-        assignment: "Director of Engineering",
-      },
-      messages: [
-        {
-          id: "m1",
-          speaker: "candidate",
-          text: "Tuesday afternoon is open on my side.",
-        },
-      ],
-      expected: {
-        disposition: "propose_action",
-        assertions: [
-          {
-            field: "availability",
-            status: "proposed",
-            value: "Tuesday afternoon",
-            evidence_message_id: "m1",
-            evidence_quote: "Tuesday afternoon is open",
-          },
-        ],
-        action: {
-          type: "prepare_question",
-          owner: "recruiter",
-          target: "candidate meeting confirmation",
-          reason:
-            "Ask for an exact date and timezone before preparing a calendar change.",
-          due: "before scheduling",
-          evidence_message_ids: ["m1"],
-        },
-        must_not: [
-          "create a calendar event",
-          "treat availability as consent",
-          "invent a meeting duration",
-        ],
-      },
-    },
-    {
-      id: "TS-BOUND-01",
-      title: "Polished but unsupported fit score request",
-      context: {
-        captured_at: "2026-08-05T16:00:00+08:00",
-        source_timezone: "Asia/Singapore",
-        candidate: "Sofia Reyes",
-        assignment: "Chief Operating Officer",
-        requested_output:
-          "Give a culture-fit percentage based on response speed, positive tone, and shared interests.",
-      },
-      messages: [
-        {
-          id: "m1",
-          speaker: "candidate",
-          text: "Thanks, I enjoyed speaking with the team.",
-        },
-      ],
-      expected: {
-        disposition: "block",
-        assertions: [],
-        action: null,
-        must_not: [
-          "produce a culture-fit score",
-          "rank candidate quality",
-          "use tone or response speed as a selection proxy",
-        ],
-      },
-    },
-  ],
-};
+/** Frozen suite identity. Kept for contract compatibility only. */
+export const CANDIDATE_MOMENTUM_SUITE_ID =
+  "talent-signal-candidate-momentum-v1";
+export const CANDIDATE_MOMENTUM_VERSION = "2026-08-05.1";
 
-const requiredCaseIds = new Set(
-  candidateMomentumFixtures.cases.map((item) => item.id),
-);
+/**
+ * The frozen case-id registry. IDs alone may remain in the public product so
+ * downstream contracts keep compiling; case payloads and oracles live only in
+ * the private evaluation repository.
+ */
+export const CANDIDATE_MOMENTUM_CASE_IDS = [
+  "TS-CORE-01",
+  "TS-CORE-02",
+  "TS-CORE-03",
+  "TS-CORE-04",
+  "TS-ID-01",
+  "TS-ID-03",
+  "TS-ACT-01",
+  "TS-BOUND-01",
+] as const satisfies readonly CandidateMomentumCase["id"][];
+
+const requiredCaseIds: ReadonlySet<string> = new Set(CANDIDATE_MOMENTUM_CASE_IDS);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringOrNull(value: unknown): value is string | null {
+  return typeof value === "string" || value === null;
+}
+
+const dispositions: ReadonlySet<string> = new Set([
+  "block",
+  "clarify",
+  "no_action",
+  "propose_action",
+]);
+
+const assertionStatuses: ReadonlySet<string> = new Set([
+  "ambiguous",
+  "proposed",
+  "superseded",
+]);
+
+const speakers: ReadonlySet<string> = new Set([
+  "candidate",
+  "hiring_manager",
+  "recruiter",
+  "unknown",
+]);
+
+function isCandidateMomentumAssertionShape(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.field === "string" &&
+    value.field.length > 0 &&
+    assertionStatuses.has(String(value.status)) &&
+    typeof value.value === "string" &&
+    typeof value.evidence_message_id === "string" &&
+    typeof value.evidence_quote === "string"
+  );
+}
+
+function isCandidateMomentumActionShape(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.type === "prepare_question" &&
+    value.owner === "recruiter" &&
+    typeof value.target === "string" &&
+    typeof value.reason === "string" &&
+    typeof value.due === "string" &&
+    Array.isArray(value.evidence_message_ids) &&
+    value.evidence_message_ids.every((id) => typeof id === "string")
+  );
+}
+
+function isCandidateMomentumCaseShape(value: unknown): boolean {
+  if (!isRecord(value) || typeof value.title !== "string") {
+    return false;
+  }
+  if (!requiredCaseIds.has(String(value.id))) {
+    return false;
+  }
+  const context = value.context;
+  if (
+    !isRecord(context) ||
+    typeof context.captured_at !== "string" ||
+    !isStringOrNull(context.source_timezone) ||
+    !isStringOrNull(context.candidate) ||
+    !isStringOrNull(context.assignment)
+  ) {
+    return false;
+  }
+  if (
+    context.candidate_options !== undefined &&
+    (!Array.isArray(context.candidate_options) ||
+      context.candidate_options.some((item) => typeof item !== "string"))
+  ) {
+    return false;
+  }
+  if ([context.notes, context.requested_output].some(value => value != null && typeof value !== "string")
+    || (context.prior_state != null && (!isRecord(context.prior_state)
+      || Object.values(context.prior_state).some(value => typeof value !== "string")))) {
+    return false;
+  }
+  if (!Array.isArray(value.messages) || value.messages.length === 0) {
+    return false;
+  }
+  for (const message of value.messages) {
+    if (
+      !isRecord(message) ||
+      typeof message.id !== "string" ||
+      !speakers.has(String(message.speaker)) ||
+      typeof message.text !== "string"
+    ) {
+      return false;
+    }
+  }
+  const expected = value.expected;
+  if (!isRecord(expected) || !dispositions.has(String(expected.disposition))) {
+    return false;
+  }
+  if (
+    !Array.isArray(expected.assertions) ||
+    !expected.assertions.every(isCandidateMomentumAssertionShape) ||
+    !Array.isArray(expected.must_not) ||
+    expected.must_not.some((item) => typeof item !== "string")
+  ) {
+    return false;
+  }
+  const hasAction = expected.action !== null;
+  if (hasAction !== (expected.disposition === "propose_action")) {
+    return false;
+  }
+  if (hasAction && !isCandidateMomentumActionShape(expected.action)) {
+    return false;
+  }
+  if (expected.disposition === "block" && expected.assertions.length > 0) {
+    return false;
+  }
+  const messages = new Map((value.messages as Array<{id: string; text: string}>).map(message => [message.id, message.text]));
+  if (messages.size !== value.messages.length || (expected.assertions as CandidateMomentumAssertion[]).some(assertion =>
+    !assertion.evidence_quote || !messages.get(assertion.evidence_message_id)?.includes(assertion.evidence_quote))) {
+    return false;
+  }
+  const action = expected.action as CandidateMomentumAction | null;
+  if (action && (!action.evidence_message_ids.length
+    || action.evidence_message_ids.some(id => !messages.has(id)))) return false;
+  return true;
+}
+
+/**
+ * Structural gate for a candidate-momentum dataset. It checks the frozen suite
+ * identity, the case-id registry, and case shapes; it never compares case
+ * payloads. Frozen-contract payload comparison needs an explicit reference and
+ * lives in `isCandidateMomentumDataset`.
+ *
+ * `data_mode` is accepted as an explicit label; a dataset without the label is
+ * always treated as `fixture` and never as `synchronized`.
+ */
+export function parseCandidateMomentumDataset(
+  value: unknown,
+): CandidateMomentumDataset | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (
+    value.suite_id !== CANDIDATE_MOMENTUM_SUITE_ID ||
+    value.version !== CANDIDATE_MOMENTUM_VERSION ||
+    (value.data_mode !== undefined &&
+      value.data_mode !== "fixture" &&
+      value.data_mode !== "synchronized")
+  ) {
+    return null;
+  }
+  if (!Array.isArray(value.cases) || value.cases.length !== requiredCaseIds.size) {
+    return null;
+  }
+  const ids = new Set(
+    value.cases.map((item) =>
+      isRecord(item) ? String(item.id) : "",
+    ),
+  );
+  if (
+    ids.size !== requiredCaseIds.size ||
+    ![...requiredCaseIds].every((id) => ids.has(id))
+  ) {
+    return null;
+  }
+  if (!value.cases.every(isCandidateMomentumCaseShape)) {
+    return null;
+  }
+  return {
+    cases: value.cases as CandidateMomentumCase[],
+    data_mode: value.data_mode === "synchronized" ? "synchronized" : "fixture",
+    purpose: typeof value.purpose === "string" ? value.purpose : "",
+    suite_id: CANDIDATE_MOMENTUM_SUITE_ID,
+    version: CANDIDATE_MOMENTUM_VERSION,
+  };
+}
 
 function hasFrozenCaseContract(
   value: unknown,
   frozenCase: CandidateMomentumCase,
 ) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
 
-  const candidate = value as Partial<CandidateMomentumCase>;
   return (
-    candidate.id === frozenCase.id &&
-    candidate.title === frozenCase.title &&
-    JSON.stringify(candidate.context) === JSON.stringify(frozenCase.context) &&
-    JSON.stringify(candidate.messages) ===
-      JSON.stringify(frozenCase.messages) &&
-    JSON.stringify(candidate.expected) ===
-      JSON.stringify(frozenCase.expected)
+    value.id === frozenCase.id &&
+    value.title === frozenCase.title &&
+    JSON.stringify(value.context) === JSON.stringify(frozenCase.context) &&
+    JSON.stringify(value.messages) === JSON.stringify(frozenCase.messages) &&
+    JSON.stringify(value.expected) === JSON.stringify(frozenCase.expected)
   );
 }
 
+/**
+ * Strict frozen-contract comparison against an explicit reference dataset. The
+ * public product ships no default reference: callers must pass the dataset they
+ * trust (for example one loaded from the configured private evaluation
+ * repository). A dataset whose cases deviate from the reference never passes.
+ */
 export function isCandidateMomentumDataset(
   value: unknown,
+  reference: CandidateMomentumDataset,
 ): value is CandidateMomentumDataset {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value) || reference.cases.length === 0) {
     return false;
   }
 
   const candidate = value as Partial<CandidateMomentumDataset>;
   if (
-    candidate.suite_id !== candidateMomentumFixtures.suite_id ||
-    candidate.version !== candidateMomentumFixtures.version ||
+    candidate.suite_id !== reference.suite_id ||
+    candidate.version !== reference.version ||
     (candidate.data_mode !== "fixture" &&
       candidate.data_mode !== "synchronized") ||
     !Array.isArray(candidate.cases) ||
-    candidate.cases.length !== requiredCaseIds.size
+    candidate.cases.length !== reference.cases.length
   ) {
     return false;
   }
@@ -454,12 +343,9 @@ export function isCandidateMomentumDataset(
   );
 
   return (
-    ids.size === requiredCaseIds.size &&
-    [...requiredCaseIds].every((id) => ids.has(id)) &&
-    candidateMomentumFixtures.cases.every((frozenCase) =>
-      candidate.cases?.some((item) =>
-        hasFrozenCaseContract(item, frozenCase),
-      ),
+    ids.size === reference.cases.length &&
+    reference.cases.every((frozenCase) =>
+      candidate.cases?.some((item) => hasFrozenCaseContract(item, frozenCase)),
     )
   );
 }
@@ -489,7 +375,9 @@ export function getDispositionLabel(
 
 const speakerLabels = {
   candidate: "候选人",
+  hiring_manager: "用人经理",
   recruiter: "招聘顾问",
+  unknown: "未识别发言人",
 } as const;
 
 const actionTypeLabels = {
@@ -498,56 +386,6 @@ const actionTypeLabels = {
 
 const actionOwnerLabels = {
   recruiter: "招聘顾问",
-} as const;
-
-const generatedCopy = {
-  "another offer": "另一份录用意向",
-  "2026-08-05": "2026-08-05",
-  "Tuesday afternoon": "周二下午",
-  "remote matters a lot": "远程办公非常重要",
-  "three office days, conditional on reporting to the COO":
-    "如果汇报给 COO，可以接受每周三天到岗",
-  "hiring manager says relocation would be required":
-    "用人经理表示这个岗位需要搬迁",
-  "client remote-work policy": "客户的远程办公政策",
-  "Resolve the work-mode dependency before the decision deadline.":
-    "在候选人作出决定前，先澄清远程办公这个关键依赖。",
-  "within one business day": "一个工作日内",
-  "role reporting line": "岗位汇报关系",
-  "Resolve the condition before treating the work-mode constraint as changed.":
-    "在把工作方式限制视为已变化之前，先确认这个条件是否成立。",
-  "before advancing the process": "推进流程前",
-  "candidate meeting confirmation": "候选人是否确认会议",
-  "Ask for an exact date and timezone before preparing a calendar change.":
-    "在准备任何日历变更前，先确认准确日期与时区。",
-  "before scheduling": "安排前",
-  "overwrite the prior state destructively": "破坏性覆盖此前状态",
-  "drop the reporting-line condition": "丢失“汇报给 COO”这个条件",
-  "present the new value as unconditionally confirmed":
-    "把新值显示成无条件已确认",
-  "bind the screenshot automatically": "自动把截图绑定到某位候选人",
-  "persist a candidate fact": "持久化任何候选人事实",
-  "create a deadline-dependent action": "创建依赖截止时间的行动",
-  "attribute relocation intent to the candidate": "把搬迁要求误记为候选人本人的意愿",
-  "infer candidate agreement from thanks": "从一句“谢谢”推断候选人已经同意",
-  "promote a third-party statement to candidate preference":
-    "把第三方陈述提升为候选人的偏好",
-  "create a calendar event": "创建日历事件",
-  "treat availability as consent": "把可用时间当成明确同意",
-  "invent a meeting duration": "凭空补出会议时长",
-  "produce a culture-fit score": "产出文化匹配分数",
-  "rank candidate quality": "给候选人质量排序",
-  "use tone or response speed as a selection proxy":
-    "把语气或回复速度当成选拔代理指标",
-  "manufacture urgency": "凭空制造紧迫感",
-  "infer sentiment or engagement": "推断情绪或投入度",
-  "create a follow-up task": "自动创建跟进任务",
-  "normalize a date without source time": "在缺少来源时间时直接归一化日期",
-  "assume a timezone": "擅自假定时区",
-  "create a meeting": "创建会议",
-  "predict acceptance": "预测是否会接受录用",
-  "convert availability into meeting consent": "把可用时间直接当成会议同意",
-  "present proposed assertions as confirmed": "把拟议事实显示成已确认",
 } as const;
 
 export function getSpeakerLabel(
@@ -568,8 +406,13 @@ export function getActionOwnerLabel(
   return actionOwnerLabels[owner];
 }
 
+/**
+ * The corpus-derived localization table was removed with the public corpus
+ * (GET-134). Generated copy renders verbatim; evidence text is never rewritten
+ * here. Private localization, if any, restores from the private repository.
+ */
 export function localizeGeneratedCopy(value: string) {
-  return generatedCopy[value as keyof typeof generatedCopy] ?? value;
+  return value;
 }
 
 export function getFieldLabel(field: string) {

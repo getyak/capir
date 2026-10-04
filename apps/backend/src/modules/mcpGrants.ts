@@ -18,7 +18,7 @@ import { ApiError } from "../lib/apiError.js";
 import { appendAudit } from "../lib/audit.js";
 import { sha256 } from "../lib/hash.js";
 import { claimIdempotency, completeIdempotency } from "../lib/idempotency.js";
-import { labWorkspaceSessionActiveSQL } from "./labWorkspaceAccess.js";
+import { labWorkspaceSessionActiveSQL, operatorLabDeploymentActiveSQL, type OperatorTestDeployment } from "./labWorkspaceAccess.js";
 import type { AuthContext } from "./auth.js";
 
 /**
@@ -44,6 +44,7 @@ export interface McpGrantContext {
 
 export interface McpGrantAuthority {
   deploymentWorkspaceIds?: readonly string[];
+  operatorTestDeployment?: OperatorTestDeployment;
 }
 
 interface McpGrantRow {
@@ -379,9 +380,11 @@ export async function resolveMcpGrant(
              WHERE sessions.account_id = users.account_id
                AND sessions.user_id = users.id
                AND ${labWorkspaceSessionActiveSQL}
+               AND ${operatorLabDeploymentActiveSQL}
            )
          )`,
-      [sha256(token)],
+      [sha256(token), authority.operatorTestDeployment?.enabled === true,
+        authority.operatorTestDeployment?.webOrigin ?? null, authority.operatorTestDeployment?.backendOrigin ?? null],
     )
   ).rows[0];
   if (!row) return null;

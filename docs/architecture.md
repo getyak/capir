@@ -297,8 +297,8 @@ extensions.
 
 The dated diagram reviews are stored in:
 
-- [Architecture panel](evaluations/architecture-diagrams-panel-2026-08-04.json)
-- [Visual acceptance review](evaluations/architecture-diagrams-visual-review-2026-08-04.md)
+- [Architecture panel](https://github.com/getyak/capir-evals/blob/main/evidence/architecture-diagrams-panel-2026-08-04.json)
+- [Visual acceptance review](https://github.com/getyak/capir-evals/blob/main/evidence/architecture-diagrams-visual-review-2026-08-04.md)
 
 ## Reconsider when
 Revisit this architecture when:

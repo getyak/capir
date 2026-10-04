@@ -28,11 +28,11 @@ hosted execution gaps, and operational detail belong in:
 
 - [Lab decision](decisions/0012-useful-device-lab-and-real-experiments.md);
 - [Hosted verification](operations/lab-ci-verification.md);
-- [Appearance](evaluations/2026-09-04-lab-appearance/README.md),
-  [diagnostics](evaluations/2026-09-04-lab-diagnostics/README.md),
-  [faults](evaluations/2026-09-04-lab-faults/README.md),
-  [stage correlation](evaluations/2026-09-04-lab-stages/README.md), and
-  [MetricKit](evaluations/2026-09-04-lab-metrickit/README.md) evaluations.
+- [Appearance](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-appearance/README.md),
+  [diagnostics](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-diagnostics/README.md),
+  [faults](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-faults/README.md),
+  [stage correlation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-stages/README.md), and
+  [MetricKit](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-metrickit/README.md) evaluations.
 
 Stateful evaluators use disposable workspaces or retire only their own classified
 fixtures. Evaluation data remains visibly synthetic and cannot be relabeled as

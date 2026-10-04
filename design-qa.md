@@ -1902,11 +1902,11 @@ final result: passed
 ## Source truth and implementation evidence
 
 - Selected visual direction: option 2,
-  `docs/evaluations/2026-09-02-ios-today-inline-decisions/selected-direction-2.png`.
+  [selected-direction-2.png](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-02-ios-today-inline-decisions/selected-direction-2.png).
 - Implemented iPhone 17 Pro Simulator surface:
-  `docs/evaluations/2026-09-02-ios-today-inline-decisions/implementation-final.png`.
+  [implementation-final.png](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-02-ios-today-inline-decisions/implementation-final.png).
 - Same-state combined comparison:
-  `docs/evaluations/2026-09-02-ios-today-inline-decisions/source-vs-implementation.png`.
+  [source-vs-implementation.png](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-02-ios-today-inline-decisions/source-vs-implementation.png).
 - Reference source: 852 × 1844 pixels. The comparison pads it to the
   implementation viewport without cropping.
 - Implementation viewport: 1206 × 2622 pixels at iPhone 17 Pro Simulator
@@ -1915,9 +1915,9 @@ final result: passed
 - Compared state: synthetic preview, next relationship moment visible, two
   pending inline decisions, evidence collapsed.
 - Focused approved-contact receipt:
-  `docs/evaluations/2026-09-02-ios-today-inline-decisions/contact-approved-receipt.png`.
+  [contact-approved-receipt.png](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-02-ios-today-inline-decisions/contact-approved-receipt.png).
 - Focused dismissed-calendar receipt:
-  `docs/evaluations/2026-09-02-ios-today-inline-decisions/calendar-dismissed-receipt.png`.
+  [calendar-dismissed-receipt.png](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-02-ios-today-inline-decisions/calendar-dismissed-receipt.png).
 
 ## Finding and resolution
 

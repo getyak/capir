@@ -100,4 +100,4 @@ source parity.
 
 The selection evidence, rejected direction, before-and-after renders, and
 reconsideration signal are retained in the dated
-[brand mark evaluation](../docs/evaluations/2026-08-07-brand-mark-redesign/README.md).
+[brand mark evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-07-brand-mark-redesign/README.md).

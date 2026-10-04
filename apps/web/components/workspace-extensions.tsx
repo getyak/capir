@@ -16,8 +16,8 @@ import {
 } from "./workspace-extensions-outbound";
 import {
   ConnectionDialog,
-  InboundPanel,
 } from "./workspace-extensions-inbound";
+import { McpDirectoryPanel } from "./mcp/mcp-directory";
 import { ConfirmDialog } from "./workspace-extensions-dialogs";
 import {
   ExtensionRequestError,
@@ -31,7 +31,6 @@ import { workspaceSessionFetch } from "./workspace-session-request";
 import styles from "./workspace-extensions.module.css";
 
 export function WorkspaceExtensions({
-  connections: initialConnections,
   grants: initialGrants,
   endpoints: initialEndpoints,
   error,
@@ -46,12 +45,11 @@ export function WorkspaceExtensions({
   recoveryHref: string | null;
 }) {
   const [direction, setDirection] = useState<Direction>("inbound");
-  const [connections, setConnections] = useState(initialConnections);
+  const [inboundRefresh, setInboundRefresh] = useState(0);
   const [grants, setGrants] = useState(initialGrants);
   const [endpoints, setEndpoints] = useState(initialEndpoints);
   const [snapshotError, setSnapshotError] = useState<string | null>(error);
   const [reloading, setReloading] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<McpConnection | null>(null);
   const [clientOpen, setClientOpen] = useState(false);
   const [revealed, setRevealed] = useState<{
@@ -117,48 +115,15 @@ export function WorkspaceExtensions({
         endpoints: McpEndpointsResponse;
         grants: McpClientGrant[];
       };
-      setConnections(payload.connections);
       setEndpoints(payload.endpoints);
       setGrants(payload.grants);
+      setInboundRefresh((value) => value + 1);
     } catch (caught) {
       setSnapshotError(
         caught instanceof Error ? caught.message : "扩展状态暂时不可用。",
       );
     } finally {
       setReloading(false);
-    }
-  }
-
-  function replaceConnection(connection: McpConnection) {
-    setConnections((current) => {
-      const exists = current.some((item) => item.id === connection.id);
-      return exists
-        ? current.map((item) => (item.id === connection.id ? connection : item))
-        : [connection, ...current];
-    });
-  }
-
-  async function connect(connection: McpConnection) {
-    mark(connection.id, true);
-    try {
-      const payload = (await request(`/connections/${connection.id}/connect`, {
-        body: {
-          expected_revision: connection.revision,
-          idempotency_key: crypto.randomUUID(),
-        },
-        method: "POST",
-      })) as { connection: McpConnection };
-      replaceConnection(payload.connection);
-      setNotice(
-        payload.connection.status === "verified"
-          ? `已验证 ${payload.connection.friendly_name}，发现 ${payload.connection.tools_count} 个工具。`
-          : `${payload.connection.friendly_name} 尚未通过验证。`,
-      );
-    } catch (caught) {
-      setNotice(caught instanceof Error ? caught.message : "连接未完成。");
-      await reload();
-    } finally {
-      mark(connection.id, false);
     }
   }
 
@@ -175,10 +140,12 @@ export function WorkspaceExtensions({
           method: "POST",
         },
       )) as { connection: McpConnection };
-      replaceConnection(payload.connection);
       setConfirm(null);
+      setInboundRefresh((value) => value + 1);
       setNotice(
-        `已断开 ${payload.connection.friendly_name}，并清除已保存的密钥与工具缓存。`,
+        payload.connection.auth_mode === "oauth"
+          ? `已停止 ${payload.connection.friendly_name} 的本地访问。代理凭据清理会继续核验；供应商侧授权请到供应商设置管理。`
+          : `已断开 ${payload.connection.friendly_name}，已移除本地密钥与工具缓存。`,
       );
     } catch (caught) {
       setNotice(caught instanceof Error ? caught.message : "断开未完成。");
@@ -283,18 +250,12 @@ export function WorkspaceExtensions({
       ) : null}
 
       {direction === "inbound" ? (
-        <InboundPanel
-          connections={connections}
-          onAdd={() => setAddOpen(true)}
-          onConnect={(connection) => void connect(connection)}
-          onDisconnect={(connection) =>
-            setConfirm({ connection, kind: "disconnect" })
-          }
+        <McpDirectoryPanel
+          key={sessionVersion}
+          sessionVersion={sessionVersion}
+          refreshVersion={inboundRefresh}
           onEdit={(connection) => setEditTarget(connection)}
-          onReload={() => void reload()}
-          pending={pending}
-          reloading={reloading}
-          snapshotError={snapshotError}
+          onDisconnect={(connection) => setConfirm({ connection, kind: "disconnect" })}
         />
       ) : (
         <OutboundPanel
@@ -316,28 +277,14 @@ export function WorkspaceExtensions({
         </div>
       ) : null}
 
-      {addOpen ? (
-        <ConnectionDialog
-          onClose={() => setAddOpen(false)}
-          onSaved={(connection) => {
-            replaceConnection(connection);
-            setAddOpen(false);
-            setNotice(
-              `已保存 ${connection.friendly_name}。保存地址不等于连接，请点击连接完成握手。`,
-            );
-          }}
-          onStale={() => void reload()}
-          request={request}
-        />
-      ) : null}
-
       {editTarget ? (
         <ConnectionDialog
           connection={editTarget}
+          sessionVersion={sessionVersion}
           onClose={() => setEditTarget(null)}
           onSaved={(connection) => {
-            replaceConnection(connection);
             setEditTarget(null);
+            setInboundRefresh((value) => value + 1);
             setNotice(
               `已更新 ${connection.friendly_name}。请重新连接以核验新的地址或密钥。`,
             );
@@ -380,7 +327,9 @@ export function WorkspaceExtensions({
           confirm?.kind === "revoke"
             ? `撤销后，${confirm.grant.name} 的令牌会立即失效，无法再读取工作区。`
             : confirm
-              ? `断开 ${confirm.connection.friendly_name} 会清除已保存的密钥与工具缓存；再次连接需要重新配置密钥。`
+              ? confirm.connection.auth_mode === "oauth"
+                ? `停止 ${confirm.connection.friendly_name} 的本地访问并发起代理凭据清理。供应商侧授权需要在供应商设置中管理。`
+                : `断开 ${confirm.connection.friendly_name} 会移除本地密钥与工具缓存；再次连接需要重新配置密钥。`
               : ""
         }
         onCancel={() => setConfirm(null)}

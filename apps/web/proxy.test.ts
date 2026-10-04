@@ -75,3 +75,19 @@ it("admits only the published MCP endpoint outside the workspace session guard",
   // Extension management stays inside the workspace guard.
   expect(proxy(new NextRequest("https://example.test/api/extensions/clients", { method: "POST" })).status).toBe(401);
 });
+
+it("admits the exact private test-entry POST before a workspace session exists", () => {
+  for (const path of ["/api/capir/test-entry", "/api/capir/test-entry/"]) {
+    const request = new NextRequest(`https://example.test${path}`, {
+      method: "POST", body: '{"handoff_secret":"synthetic-one-use-proof"}',
+    });
+    expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
+    expect(request.bodyUsed).toBe(false);
+  }
+  for (const path of ["/api/capir", "/api/capir/test-entry/other", "/api/capir/tests", "/api/extensions/connections"]) {
+    expect(proxy(new NextRequest(`https://example.test${path}`, { method: "POST" })).status).toBe(401);
+  }
+  for (const method of ["PUT", "PATCH", "DELETE"]) {
+    expect(proxy(new NextRequest("https://example.test/api/capir/test-entry", { method })).status).toBe(401);
+  }
+});

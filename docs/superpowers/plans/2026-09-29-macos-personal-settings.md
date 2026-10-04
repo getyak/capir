@@ -167,7 +167,7 @@ path; account identity comes from verified server sessions, never handoff parame
 
 **Files:** Update `docs/operations/macos-distribution.md`, `docs/design-system.md`
 and relevant account guidance only where shipped behavior changes. Record evidence
-in `docs/evaluations/2026-09-29-personal-settings/` using synthetic accounts.
+in `output/evaluation/2026-09-29-personal-settings/` (ignored local output) using synthetic accounts.
 
 - [x] Run `pnpm macos:check`, the focused Web suites from Tasks 3–4,
   `pnpm typecheck`, `pnpm lint`, and `pnpm build`. Evidence: `pnpm macos:check`

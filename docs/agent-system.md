@@ -110,7 +110,7 @@ The model proposes intent. The control plane decides whether a capability exists
 Validate original tool arguments before provider normalization discards unknown fields.
 Repair hints use bounded schema-owned names/codes, never rejected values or unknown keys; diagnostic failures preserve denial. Per-Run SDK observations may omit identical successful state metadata; changed/error state and source evidence remain intact, and tool authority is checked anew.
 
-Fact confirmation, exact-effect approval and destination verification remain independent decisions; passing one never substitutes for another.
+Fact confirmation, exact-effect approval and destination verification remain independent decisions; passing one never substitutes for another. User-owned remote MCP rides `mcp_connections` in this class: staging executes nothing, every call needs the human's exact single-use approval bound to the original input schema regardless of remote read-only hints, and resolved receipts return to the same conversation as provenance, never confirmed relationship evidence.
 
 ## Context engineering
 

@@ -94,8 +94,12 @@ updated.
   recovery, calendar handoff and ephemeral Agent range review.
 - [Account and workspace access](operations/account-access.md) explains personal
   ownership, Web settings, fixture credentials, sessions, and isolated test access.
+- [capir CLI reference](operations/capir-cli.md) documents the test-account,
+  model and strict-replay sandbox command surface.
 - [Secret delivery](operations/secrets.md) defines Infisical ownership, local
   injection, workload identity, environment isolation, and rotation.
+- [Owner-operated Nango Auth/Proxy](operations/nango-local.md) defines pinned
+  images, tailnet endpoints, isolated credentials and OAuth recovery.
 - [Prompt operations](operations/opik-prompts.md) explains editing, publishing,
   source imports and bundled releases with Opik version mirroring.
 - [Private Opik improvement](operations/opik-phase-one.md) covers corrections,
@@ -106,8 +110,8 @@ updated.
 - [Internal TestFlight backend on Tailscale](operations/testflight-local-backend.md)
   defines the owner-operated Mac, loopback, tailnet, and no-seed testing
   boundary.
-- [`evaluations/`](evaluations/) contains dated review evidence and generated
-  findings.
+- [Dated review evidence and generated findings](https://github.com/getyak/capir-evals/tree/main/evidence/)
+  live in the private capir-evals repository.
 - Editable architecture sources and rendered diagrams live beside the
   canonical document that explains them.
 

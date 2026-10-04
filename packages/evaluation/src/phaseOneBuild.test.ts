@@ -7,13 +7,13 @@ import { phaseOneImplementationSourceDigest, phaseOneRuntimeBuildDigest } from "
 const directories: string[] = [];
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "phase-one-build-")); directories.push(root);
-  for (const path of ["apps/agent", "apps/backend", "apps/eval-runner", "packages/contracts", "packages/evaluation"]) {
+  for (const path of ["apps/agent", "apps/backend", "packages/contracts", "packages/evaluation"]) {
     mkdirSync(join(root, path, "src"), { recursive: true }); mkdirSync(join(root, path, "dist"));
     writeFileSync(join(root, path, "src", "entry.ts"), "export const loaded = 'source';\n");
     writeFileSync(join(root, path, "dist", "entry.js"), "export const loaded = 'compiled';\n");
     writeFileSync(join(root, path, "package.json"), "{}");
   }
-  mkdirSync(join(root, "apps/eval-runner/optimizer")); mkdirSync(join(root, ".github/workflows"), { recursive: true });
+  mkdirSync(join(root, ".github/workflows"), { recursive: true });
   writeFileSync(join(root, ".github/workflows/ci.yml"), "name: test"); writeFileSync(join(root, "pnpm-lock.yaml"), "lockfileVersion: 9");
   return root;
 }

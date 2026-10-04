@@ -39,7 +39,7 @@ is required. Do not infer demo behavior from the page's runtime claims.
 
 ## Result
 
-- [Report](../docs/evaluations/2026-09-05-notion-capture-design/report.md)
+- [Report](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-notion-capture-design/report.md)
   recommends continuing with changes to decision grouping, partial-confirmation
   dependencies, and retention/resumption semantics.
 - Panel JSON contract validation passed.

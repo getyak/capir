@@ -1,10 +1,10 @@
 # Scoped general capabilities in the shared Harness
 
 Status: file/computation implemented and independently reviewed in the GET-9
-follow-up; [Web download](../evaluations/get9-harness/completeness-run-files-web-ui.json)
-and [native Simulator saving](../evaluations/get9-harness/completeness-run-files-ios-ui.json)
+follow-up; [Web download](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/completeness-run-files-web-ui.json)
+and [native Simulator saving](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/completeness-run-files-ios-ui.json)
 are verified. Browser implementation and synthetic product verification are
-recorded in the [browser review](../evaluations/get9-harness/completeness-browser-review.md).
+recorded in the [browser review](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/completeness-browser-review.md).
 Production deployment and installed Chrome acceptance remain open.
 
 ## Context
@@ -70,7 +70,7 @@ languages, outbound network or arbitrary package installation are required.
 Reconsider browser admission if complete request-level public-network mediation
 cannot be demonstrated. Keep production browser capability unadmitted until its
 verification, independent review and deployment checks pass. File/computation evidence and remaining acceptance limits are in
-the [evaluation review](../evaluations/get9-harness/completeness-run-files-review.md).
+the [evaluation review](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/completeness-run-files-review.md).
 
 References: [QuickJS/WASM isolation and exposed APIs](https://github.com/justjake/quickjs-emscripten#exposing-apis),
 [runtime limits](https://github.com/justjake/quickjs-emscripten/blob/main/doc/quickjs-emscripten/classes/QuickJSRuntime.md).

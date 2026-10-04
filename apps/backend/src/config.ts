@@ -15,6 +15,20 @@ export interface BackendConfig {
   sessionTtlSeconds: number;
   simulatedAuthEnabled: boolean;
   internalLabEnabled?: boolean;
+  /** Internal test-account provisioning (`capir test create`). Disabled by default. */
+  capirTests?: {
+    enabled: boolean;
+    /** High-entropy operator service credential; only its hash reaches the database. */
+    provisioningKey?: string;
+    /** Operator credential generation; rotation must bump it to revoke live entries. */
+    provisioningGeneration: number;
+    /** Exact registered origin pair for provisioning requests and Web entry. */
+    webOrigin?: string;
+    backendOrigin?: string;
+    /** Trusted Web consumer key for the private one-use handoff exchange. */
+    webConsumerKey?: string;
+    maxActiveRuns: number;
+  } | undefined;
   /** Server-side mail transport for account verification (Resend). */
   mailTransport?: { apiKey: string; fromEmail: string };
   /** Base URL used to build email verification links (Web origin). */
@@ -193,6 +207,34 @@ export function loadConfig(): BackendConfig {
       : undefined;
   const verificationBaseUrl = process.env.AUTH_VERIFICATION_BASE_URL?.trim();
 
+  const capirTestsEnabled = parseBoolean(process.env.CAPIR_TESTS_ENABLED, false);
+  const capirProvisioningKey = process.env.CAPIR_TEST_PROVISIONING_KEY?.trim();
+  const capirWebOrigin = process.env.CAPIR_TEST_WEB_ORIGIN?.trim();
+  const capirBackendOrigin = process.env.CAPIR_TEST_BACKEND_ORIGIN?.trim();
+  const capirWebConsumerKey = process.env.CAPIR_TEST_WEB_CONSUMER_KEY?.trim();
+  const capirProvisioningGeneration = Number.parseInt(
+    process.env.CAPIR_TEST_PROVISIONING_GENERATION ?? "1",
+    10,
+  );
+  const capirMaxActiveRuns = Number.parseInt(
+    process.env.CAPIR_TEST_MAX_ACTIVE_RUNS ?? "3",
+    10,
+  );
+  if (!Number.isInteger(capirProvisioningGeneration) || capirProvisioningGeneration < 1) {
+    throw new Error("CAPIR_TEST_PROVISIONING_GENERATION must be a positive integer.");
+  }
+  if (!Number.isInteger(capirMaxActiveRuns) || capirMaxActiveRuns < 1 || capirMaxActiveRuns > 20) {
+    throw new Error("CAPIR_TEST_MAX_ACTIVE_RUNS must be an integer between 1 and 20.");
+  }
+  if (
+    capirTestsEnabled &&
+    (!internalLabEnabled || !capirProvisioningKey || !capirWebOrigin || !capirBackendOrigin)
+  ) {
+    throw new Error(
+      "CAPIR_TESTS_ENABLED requires TALENT_SIGNAL_INTERNAL_LAB_ENABLED, CAPIR_TEST_PROVISIONING_KEY, CAPIR_TEST_WEB_ORIGIN and CAPIR_TEST_BACKEND_ORIGIN.",
+    );
+  }
+
   return {
     allowedOrigins: (
       process.env.ALLOWED_ORIGINS ??
@@ -222,6 +264,17 @@ export function loadConfig(): BackendConfig {
     ),
     simulatedAuthEnabled,
     internalLabEnabled,
+    capirTests: capirTestsEnabled
+      ? {
+          enabled: true,
+          provisioningGeneration: capirProvisioningGeneration,
+          maxActiveRuns: capirMaxActiveRuns,
+          ...(capirProvisioningKey ? { provisioningKey: capirProvisioningKey } : {}),
+          ...(capirWebOrigin ? { webOrigin: capirWebOrigin } : {}),
+          ...(capirBackendOrigin ? { backendOrigin: capirBackendOrigin } : {}),
+          ...(capirWebConsumerKey ? { webConsumerKey: capirWebConsumerKey } : {}),
+        }
+      : undefined,
     chatMediaStorage,
     ...(mailTransport ? { mailTransport } : {}),
     ...(verificationBaseUrl ? { verificationBaseUrl } : {}),

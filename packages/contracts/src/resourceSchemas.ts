@@ -1511,6 +1511,26 @@ export const ChatResponseBlockSchema = Type.Object(
         { maxItems: 10, uniqueItems: true },
       ),
     ),
+    /**
+     * Stage reference to a durable user-owned MCP human request. The card
+     * reloads the canonical request; this reference carries no authority and
+     * is never a snapshot of its data.
+     */
+    mcp_interaction: Type.Optional(
+      Type.Object(
+        {
+          request_id: Id,
+          call_id: Id,
+          kind: Type.Union(
+            ["approval", "choice", "form", "secret", "oauth"].map((kind) =>
+              Type.Literal(kind),
+            ),
+          ),
+          state: Type.String({ minLength: 1, maxLength: 24 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     target_ref: Type.Optional(
       Type.Object(
         {

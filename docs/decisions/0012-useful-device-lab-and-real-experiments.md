@@ -150,23 +150,23 @@ an authenticated-session opt-in; it does not perform online assignment.
 
 ## Evidence and reconsideration
 
-See the [first delivery evaluation](../evaluations/2026-09-04-lab-v2/README.md)
-and [runtime extension evidence](../evaluations/2026-09-04-lab-runtime/README.md),
-plus [session-trial evidence](../evaluations/2026-09-04-lab-task-trials/README.md).
-The [controlled-observation evaluation](../evaluations/2026-09-05-lab-controlled-observation/README.md)
+See the [first delivery evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-v2/README.md)
+and [runtime extension evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-runtime/README.md),
+plus [session-trial evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-task-trials/README.md).
+The [controlled-observation evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-controlled-observation/README.md)
 verifies the frozen plan, unique sampling, descriptive summary, guardrail stop,
 and default restoration through a normal product task.
-The [test-workspace backend evaluation](../evaluations/2026-09-05-lab-workspaces/README.md)
+The [test-workspace backend evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-workspaces/README.md)
 verifies isolated creation, delegated-session invalidation, write closure,
 local-media and database cleanup, schema fail-closed behavior, and expiry.
-The [native test-workspace evaluation](../evaluations/2026-09-05-lab-workspace-native/README.md)
+The [native test-workspace evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-workspace-native/README.md)
 verifies protected Keychain recovery, generation-safe account adoption, persistent
 isolation labeling, original-account return, and deletion readback on Simulator.
-The [batch evaluation](../evaluations/2026-09-04-lab-batches/README.md) verifies
+The [batch evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-batches/README.md) verifies
 durable worker ownership, cancellation, recovery and actual native model output.
-The [regression evaluation](../evaluations/2026-09-04-lab-regressions/README.md)
+The [regression evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-regressions/README.md)
 verifies saved-case recovery, reruns, deletion and shared evaluation consumption.
-The [appearance evaluation](../evaluations/2026-09-04-lab-appearance/README.md)
+The [appearance evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-04-lab-appearance/README.md)
 verifies device presets, app trial restoration and compiled page states.
 Reconsider scenario coverage when real model failures cannot be represented
 with the existing synthetic cases. Expand model configuration only with

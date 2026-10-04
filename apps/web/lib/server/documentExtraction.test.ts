@@ -23,7 +23,7 @@ describe("bounded document extraction", () => {
       "https://example.test/portfolio",
     ]);
     expect(result.fragments[0]).toMatchObject({
-      parser: { name: "mammoth-raw-text", version: "1.12.3" },
+      parser: { name: "mammoth-raw-text", version: "1.13.0" },
       review_status: "proposed",
       attribution: { actor_kind: "document_author", status: "proposed" },
     });

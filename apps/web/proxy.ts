@@ -14,6 +14,9 @@ export function proxy(request: NextRequest) {
     // exists: anonymous grant preparation and proof-bound exchange/cancel
     // carry their own bounded authentication and never an account header.
     || path === "/api/desktop-auth" || path.startsWith("/api/desktop-auth/")
+    // A test session is established here, so the exact POST carries its own
+    // one-use proof, origin and consumer checks before any workspace exists.
+    || (path === "/api/capir/test-entry" && request.method === "POST")
     || ["/api/auth", "/api/browser-extension", "/api/dev"].some(
       prefix => path === prefix || path.startsWith(`${prefix}/`),
     );

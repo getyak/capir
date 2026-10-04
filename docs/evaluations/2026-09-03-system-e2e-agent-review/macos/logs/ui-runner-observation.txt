@@ -1,6 +1,0 @@
-Command: RUN_MACOS_UI_TESTS=1 pnpm macos:check
-Observed: native build, unit test, and build-for-testing stages completed. xcodebuild then started test-without-building for TalentSignalMacUITests.
-Runner process: TalentSignalMacUITests-Runner
-Observation window: more than three minutes with no UI-test case event or result.
-Disposition: interrupted by this lane; UI assertions are not counted as passed or failed.
-Cleanup: the orphaned TalentSignalMacUITests-Runner process started by this lane was explicitly stopped. testmanagerd was not touched.

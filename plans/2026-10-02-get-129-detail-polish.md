@@ -76,5 +76,5 @@ Missing/incorrect harness environment attempts were corrected before acceptance.
 Main run 37007639753 timed out in the abort-ignoring queue-provider proof.
 The owned `codex/get-129-main-ci-repair` branch starts from merged main a911bfcf.
 Only the queue integration test file and related evidence/plan are owned by this repair;
-UI source and its 98/100 assessment stay unchanged. See [the CI repair evaluation](../docs/evaluations/2026-10-02-get-129-detail-polish/ci-repair.md)
+UI source and its 98/100 assessment stay unchanged. See [the CI repair evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-10-02-get-129-detail-polish/ci-repair.md)
 for its authoritative cause, counterexample, verification and delivery record.

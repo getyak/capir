@@ -56,7 +56,7 @@ Record focused test results here before handoff.
   questions can search/read and terminate with zero model turns.
   [Unscoped Chat](../apps/backend/src/modules/unscopedChat.ts) still labels that
   result `agent_completed`; it is not proof of remote inference. The newer
-  [Lab parity evidence](../docs/evaluations/2026-09-05-lab-batch-task-parity/README.md)
+  [Lab parity evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-05-lab-batch-task-parity/README.md)
   explicitly distinguishes local-only from remote attempts.
 - [Pursuit Runs](../apps/backend/src/modules/agentRuns.ts) default to the
   deterministic provider. Remote Pursuit evidence admission is synthetic-only.

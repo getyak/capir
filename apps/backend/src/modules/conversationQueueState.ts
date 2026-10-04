@@ -6,12 +6,14 @@ import {
   type ConversationQueueEntry,
   type ConversationQueueEntryStatus,
   type ConversationQueueSnapshot,
+  type McpHumanResult,
 } from "@talent-signal/contracts";
 import type { Pool, PoolClient } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
+import { assertAccountActive } from "./accountIdentity.js";
 import { assertSessionForChat } from "./agentSessionSources.js";
 import { readConversationMessageImageManifests } from "./conversationMessageImages.js";
 import { publishConversationQueueChanged } from "./conversationQueueLive.js";
@@ -28,6 +30,7 @@ const ACTIVE_STATUSES: ConversationQueueEntryStatus[] = [
 ];
 
 export interface ConversationQueueEntryRow {
+  host_result: unknown;
   account_id: string;
   session_id: string;
   id: string;
@@ -89,6 +92,8 @@ export class ConversationQueueLeaseLostError extends Error {
 
 export interface ClaimedConversationQueueEntry {
   accountId: string;
+  /** Host-only typed MCP human result; never a user-authored claim. */
+  hostResult: import("@talent-signal/contracts").McpHumanResult | null;
   sessionId: string;
   authSessionId: string | null;
   entryId: string;
@@ -127,6 +132,7 @@ function toEntry(
     sequence: asNumber(row.sequence),
     status: row.status,
     objective: row.objective ?? "",
+    ...(row.host_result ? { host_result: row.host_result as McpHumanResult } : {}),
     ...(images && images.length > 0 ? { images } : {}),
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
@@ -345,6 +351,9 @@ export async function claimNextConversationQueueEntry(
     await bumpConversationQueueState(client, input.accountId, input.sessionId);
     return {
       accountId: updated.account_id,
+      hostResult: updated.host_result
+        ? (updated.host_result as import("@talent-signal/contracts").McpHumanResult)
+        : null,
       sessionId: updated.session_id,
       authSessionId: updated.auth_session_id,
       entryId: updated.id,
@@ -394,16 +403,22 @@ export async function refreshConversationQueueLease(
   pool: Pool,
   fence: ConversationQueueRunFence,
 ): Promise<{ cancelRequested: boolean } | null> {
-  const row = (
-    await pool.query<{ cancel_requested: boolean }>(
-      `UPDATE conversation_queue_entries
-       SET lease_expires_at=now()+($6::int * interval '1 millisecond'), updated_at=now()
-       WHERE ${fencePredicateAllowCancel(1)}
-       RETURNING cancel_requested`,
-      [...fenceValues(fence), CONVERSATION_QUEUE_LEASE_MS],
-    )
-  ).rows[0];
-  return row ? { cancelRequested: row.cancel_requested } : null;
+  return inTransaction(pool, async (client) => {
+    // MCP staging holds the account fence before the queue claim. Acquire the
+    // retirement fence first too; taking the queue row before its write trigger
+    // waits on the account would deadlock with staging's claim revalidation.
+    await assertAccountActive(client, fence.accountId);
+    const row = (
+      await client.query<{ cancel_requested: boolean }>(
+        `UPDATE conversation_queue_entries
+         SET lease_expires_at=now()+($6::int * interval '1 millisecond'), updated_at=now()
+         WHERE ${fencePredicateAllowCancel(1)}
+         RETURNING cancel_requested`,
+        [...fenceValues(fence), CONVERSATION_QUEUE_LEASE_MS],
+      )
+    ).rows[0];
+    return row ? { cancelRequested: row.cancel_requested } : null;
+  });
 }
 
 export async function assertConversationQueueOwnedClaim(
@@ -855,6 +870,9 @@ export async function reclaimStaleConversationQueueEntry(
     await bumpConversationQueueState(client, input.accountId, input.sessionId);
     return {
       accountId: updated.account_id,
+      hostResult: updated.host_result
+        ? (updated.host_result as import("@talent-signal/contracts").McpHumanResult)
+        : null,
       sessionId: updated.session_id,
       authSessionId: updated.auth_session_id,
       entryId: updated.id,

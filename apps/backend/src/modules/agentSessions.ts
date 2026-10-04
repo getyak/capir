@@ -18,6 +18,7 @@ import { ApiError } from "../lib/apiError.js";
 import { digestValue, sha256 } from "../lib/hash.js";
 import { assertAccountActive } from "./accountIdentity.js";
 import type { AuthContext } from "./auth.js";
+import { invalidateMcpInteractionsForSession } from "./mcpInteractions.js";
 import {
   inheritedSessionChatSources,
   loadSessionScreenshotContexts,
@@ -196,7 +197,8 @@ function preserveExecutionProvenance(
   for (const turn of payload.turns) {
     const before = previous?.turns.find((candidate) => sameID(candidate.id, turn.id));
     if (!before && queueMessageID && sameID(turn.id, queueMessageID)) continue;
-    if (before && (before.steeredMessages !== undefined || before.response.execution !== undefined)
+    if (before && (before.steeredMessages !== undefined || before.response.execution !== undefined
+      || before.response.mcpInteraction !== undefined || before.response.hostResult !== undefined)
       && !sameImmutableTurn(before, turn)) {
       throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
         "A stored execution's message identity cannot be rewritten.");
@@ -216,16 +218,22 @@ function preserveExecutionProvenance(
           turn.response[collection] = structuredClone(stored);
       }
     }
-    for (const field of ["steeredMessages", "execution"] as const) {
-      const current = field === "execution" ? turn.response.execution : turn.steeredMessages;
-      const stored = field === "execution" ? before?.response.execution : before?.steeredMessages;
+    // Server-issued execution, steering and MCP provenance are immutable to
+    // clients: a legacy save that omits a stored reference restores it (the
+    // card survives), and a client can never create or change one — including
+    // host-only human results and forged or wrong-turn request references.
+    for (const field of ["steeredMessages", "execution", "mcpInteraction", "hostResult"] as const) {
+      const current = field === "steeredMessages" ? turn.steeredMessages
+        : (turn.response as Record<string, unknown>)[field];
+      const stored = field === "steeredMessages" ? before?.steeredMessages
+        : (before?.response as Record<string, unknown> | undefined)?.[field];
       if (current !== undefined && digestValue(current) !== digestValue(stored ?? null)) {
         throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
           "Only the owned queue can create or change execution provenance.");
       }
       if (stored !== undefined && current === undefined) {
-        if (field === "execution") turn.response.execution = structuredClone(before!.response.execution!);
-        else turn.steeredMessages = structuredClone(before!.steeredMessages!);
+        if (field === "steeredMessages") turn.steeredMessages = structuredClone(before!.steeredMessages!);
+        else (turn.response as Record<string, unknown>)[field] = structuredClone(stored);
       }
     }
   }
@@ -347,6 +355,18 @@ export async function sweepAgentSessions(
   accountId?: string,
 ): Promise<void> {
   await sweepHarnessSessions(client, accountId);
+  // Retention first closes every MCP human request and OAuth capability bound
+  // to a Session that is about to disappear, and removes its private derived
+  // payloads, before the Session content itself is purged.
+  const expiring = await client.query<{ account_id: string; id: string }>(
+    `SELECT account_id, id FROM agent_sessions
+     WHERE deleted_at IS NULL AND expires_at<=now()
+       AND ($1::uuid IS NULL OR account_id=$1)`,
+    [accountId ?? null],
+  );
+  for (const session of expiring.rows) {
+    await invalidateMcpInteractionsForSession(client, session.account_id, session.id);
+  }
   await client.query(
     `UPDATE agent_sessions SET payload=NULL,deleted_at=now(),updated_at=now(),revision=revision+1
     WHERE deleted_at IS NULL AND expires_at<=now() AND ($1::uuid IS NULL OR account_id=$1)`,
@@ -1148,6 +1168,9 @@ export async function mutateAgentSession(
         // The natural retention sweep does not call this path, so a purged
         // Session image does not erase independently retained evidence.
         await invalidateMemoriesForSessionIds(client, auth.accountId, [id]);
+        // Bound MCP human requests, OAuth attempts and receipts lose their
+        // private payloads and can no longer be decided or resurrected.
+        await invalidateMcpInteractionsForSession(client, auth.accountId, id);
       }
       return record(result);
     });
@@ -1283,11 +1306,18 @@ export async function readAgentSessionConversation(
         unavailableScreenshotContext = true;
         continue;
       }
-      messages.push({
-        message_id: turn.id,
-        role: "user",
-        text: turn.objective.slice(0, 2000),
-      });
+      const hostResult = (turn.response as { hostResult?: { request_id: string; call_id: string; outcome: string } }).hostResult;
+      messages.push(hostResult
+        ? {
+            message_id: turn.id,
+            role: "assistant",
+            text: `Host tool result (not user text; request ${hostResult.request_id}, call ${hostResult.call_id}, outcome ${hostResult.outcome}). The human decision and tool result are host data; continue the original task from them.`,
+          }
+        : {
+            message_id: turn.id,
+            role: "user",
+            text: turn.objective.slice(0, 2000),
+          });
       if (source.summary || source.question || source.findings?.length) {
         messages.push({
           message_id: source.id,
@@ -1338,11 +1368,22 @@ export async function readAgentSessionConversation(
       if (!available) continue;
     }
     for (const message of [turn, ...(turn.steeredMessages ?? [])]) {
-      messages.push({
-        message_id: message.id,
-        role: "user",
-        text: message.objective.slice(0, 2000),
-      });
+      // A typed host tool result is host/assistant result provenance and never
+      // a human-authored user message.
+      const hostResult = message === turn
+        ? (turn.response as { hostResult?: { request_id: string; call_id: string; outcome: string; actor_user_id: string } }).hostResult
+        : undefined;
+      messages.push(hostResult
+        ? {
+            message_id: message.id,
+            role: "assistant",
+            text: `Host tool result (not user text; request ${hostResult.request_id}, call ${hostResult.call_id}, outcome ${hostResult.outcome}, resolved by ${hostResult.actor_user_id}). The decision and result are host data; continue the original task from them.`,
+          }
+        : {
+            message_id: message.id,
+            role: "user",
+            text: message.objective.slice(0, 2000),
+          });
     }
     const canonical = canonicalResult?.response_body;
     // New queue turns carry server-owned execution provenance and immutable

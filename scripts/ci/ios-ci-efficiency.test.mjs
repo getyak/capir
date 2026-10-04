@@ -76,7 +76,7 @@ test("required gate rejects skipped or failed iOS when its scope requires execut
     const outcome = spawnSync("bash", ["-e", "-c", body], {
       encoding: "utf8",
       env: { ...process.env, CHANGES_RESULT: "success", REPOSITORY_RESULT: "success",
-        WEB_RESULT: "success", BACKEND_RESULT: "success", PHASE_ONE_RESULT: "success",
+        WEB_RESULT: "success", CLI_RESULT: "success", BACKEND_RESULT: "success", PHASE_ONE_RESULT: "success",
         DOCS_ONLY: "false", MACOS_HYBRID_REQUIRED: "false", MACOS_HYBRID_RESULT: "skipped",
         IOS_REQUIRED: required, IOS_RESULT: result },
     });

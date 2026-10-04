@@ -27,7 +27,7 @@ import { readConversationMessageImage } from "./conversationMessageImages.js";
 import { registerConversationQueueRoutes } from "./conversationQueueRoutes.js";
 import { ApiError } from "../lib/apiError.js";
 import { subscribeConversationQueueLive, type ConversationQueueLivePreview } from "./conversationQueueLive.js";
-import { closeConversationQueueSteeringIntake } from "./conversationQueueState.js";
+import { assertConversationQueueOwnedClaim, closeConversationQueueSteeringIntake, refreshConversationQueueLease } from "./conversationQueueState.js";
 import { persistConversationQueueCompletion } from "./conversationQueueCompletion.js";
 import { executeUnscopedChatTask } from "./unscopedChat.js";
 import { getAgentSession, readAgentSessionConversation } from "./agentSessions.js";
@@ -277,6 +277,44 @@ async function commitUnpublishedStop(sessionId: string, accountId: string): Prom
 }
 
 suite("durable conversation queue", () => {
+  it("lets an account-fenced MCP transaction inspect its claim while a heartbeat waits on the account", async () => {
+    const seeded = await seedSession();
+    const heartbeatPool = new Pool({ connectionString: databaseURL, max: 1, statement_timeout: 5000 });
+    const authority = await pool!.connect();
+    let heartbeat: Promise<unknown> | undefined;
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        session_id: seeded.sessionId, message_id: randomUUID(),
+        idempotency_key: randomUUID(), objective: "Lock order proof",
+      });
+      const claim = await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: randomUUID(),
+      });
+      expect(claim?.accountId).toBe(seeded.accountId);
+      const fence = { ...claim!, sessionId: seeded.sessionId };
+      const heartbeatPid = (await heartbeatPool.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      const authorityPid = (await authority.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await authority.query("BEGIN");
+      await authority.query("SET LOCAL lock_timeout = '500ms'");
+      await authority.query("SELECT id FROM accounts WHERE id=$1 FOR UPDATE", [seeded.accountId]);
+      // Real PostgreSQL blocking is the barrier: no sleep guesses or mocked SQL.
+      heartbeat = refreshConversationQueueLease(heartbeatPool, fence);
+      await waitFor(async () => {
+        const row = (await pool!.query<{ blocked: boolean }>(
+          "SELECT $2::int = ANY(pg_blocking_pids($1)) AS blocked", [heartbeatPid, authorityPid],
+        )).rows[0];
+        return row?.blocked === true;
+      }, 3000);
+      await expect(assertConversationQueueOwnedClaim(authority, fence)).resolves.toEqual({ cancelRequested: false });
+    } finally {
+      await authority.query("ROLLBACK");
+      authority.release();
+      await heartbeat;
+      await heartbeatPool.end();
+      await removeProofAccount(seeded.accountId);
+    }
+  });
+
   it("preserves the admitted user turn when stopped before any visible text", async () => {
     const seeded = await seedSession();
     const provider = new ScriptedConversationProvider();

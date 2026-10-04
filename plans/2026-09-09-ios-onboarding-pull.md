@@ -41,5 +41,5 @@ Apple references: [transient gesture state](https://developer.apple.com/document
 ## Completion evidence
 
 Native results and screenshot evidence are recorded in
-[the evaluation](../docs/evaluations/2026-09-09-onboarding-pull/README.md). Simulator tests
+[the evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-09-onboarding-pull/README.md). Simulator tests
 cannot establish physical-device haptic quality; report that limit explicitly.

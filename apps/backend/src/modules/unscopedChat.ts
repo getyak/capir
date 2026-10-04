@@ -126,6 +126,10 @@ export async function executeUnscopedChatTask(input: {
   request: UnscopedChatTaskRequest;
   /** Host-owned queue attempt identity; never accepted from the public request. */
   taskID?: string;
+  /** Host-only typed MCP human result; enters the run as host data. */
+  hostResult?: import("@talent-signal/contracts").McpHumanResult | null;
+  /** Live queue run claim; the only host staging authority. */
+  hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
   provider: RemoteChatAnswerProviding | null;
   database?: DatabaseClient;
   probePool?: Pool;
@@ -234,6 +238,8 @@ export async function executeUnscopedChatTask(input: {
         isWorkspaceConversationAgentProvider(input.provider)
       ) {
         const execution = await executeWorkspaceConversationAgent({
+          ...(input.hostResult ? { hostResult: input.hostResult } : {}),
+          ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}),
           database: input.database,
           auth: input.auth,
           objective: effectiveObjective,

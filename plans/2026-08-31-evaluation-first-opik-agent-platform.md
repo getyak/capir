@@ -109,9 +109,9 @@ trust.
 
 ### Executable assets to preserve
 
-- [`evals/candidate-momentum-v1.json`](../evals/candidate-momentum-v1.json)
+- [`evals/candidate-momentum-v1.json`](https://github.com/getyak/capir-evals/blob/main/evals/candidate-momentum-v1.json)
   freezes eight core cases.
-- [`scripts/evals/validate-candidate-momentum.mjs`](../scripts/evals/validate-candidate-momentum.mjs)
+- [`scripts/evals/validate-candidate-momentum.mjs`](https://github.com/getyak/capir-evals/blob/main/harness/scripts/evals/validate-candidate-momentum.mjs)
   validates the small suite and cross-surface evaluation contract.
 - [`packages/contracts/src/telemetrySchemas.ts`](../packages/contracts/src/telemetrySchemas.ts)
   defines account-scoped traces, governed artifacts, spans, events, and four
@@ -154,13 +154,13 @@ The current worktree already exposes the first executable path that the unified
 Evaluation system should preserve rather than replace:
 
 1. Repository-owned frozen fixture cases live in
-   [`evals/candidate-momentum-v1.json`](../evals/candidate-momentum-v1.json).
+   [`evals/candidate-momentum-v1.json`](https://github.com/getyak/capir-evals/blob/main/evals/candidate-momentum-v1.json).
 2. Structural contract checks for that suite live in
-   [`scripts/evals/validate-candidate-momentum.mjs`](../scripts/evals/validate-candidate-momentum.mjs).
+   [`scripts/evals/validate-candidate-momentum.mjs`](https://github.com/getyak/capir-evals/blob/main/harness/scripts/evals/validate-candidate-momentum.mjs).
 3. The V1 release-oracle layer for twelve governed journeys lives in
-   [`scripts/evals/validate-v1-p0-journeys.mjs`](../scripts/evals/validate-v1-p0-journeys.mjs)
+   [`scripts/evals/validate-v1-p0-journeys.mjs`](https://github.com/getyak/capir-evals/blob/main/harness/scripts/evals/validate-v1-p0-journeys.mjs)
    and the paired manifest/runtime artifacts under
-   [`docs/evaluations/2026-08-24-v1-prd-08/`](../docs/evaluations/2026-08-24-v1-prd-08/).
+   [`docs/evaluations/2026-08-24-v1-prd-08/`](https://github.com/getyak/capir-evals/tree/main/evidence/2026-08-24-v1-prd-08).
 4. Deterministic Agent control-plane replay currently enters through
    [`apps/backend/src/evaluation/runAgentControlPlaneEvaluation.ts`](../apps/backend/src/evaluation/runAgentControlPlaneEvaluation.ts),
    which creates synthetic capture/pursuit fixtures and runs repeated
@@ -1247,7 +1247,7 @@ Re-plan if:
   the same DatasetVersion; both traces, experiment-item links, terminal states,
   and atomic scores were read back; one trace and its experiment-item link were
   deleted with absence read back. The machine-verifiable evidence is
-  [`docs/evaluations/2026-09-01-evaluation-platform/opik-integration-proof.json`](../docs/evaluations/2026-09-01-evaluation-platform/opik-integration-proof.json).
+  [`docs/evaluations/2026-09-01-evaluation-platform/opik-integration-proof.json`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-evaluation-platform/opik-integration-proof.json).
 - 2026-09-01: M4 engineering implemented feedback definitions, proposal-only
   annotation import, conflict-preserving explicit adjudication, 60-decision
   calibration thresholds, order-stability checks, a non-P0 informational model
@@ -1313,10 +1313,10 @@ Re-plan if:
   return `pass`, while code correctness and selection science return
   `pass_with_changes` with no vetoes.
 - 2026-09-01: the final non-averaged engineering-integration score is 95/100 in
-  [`engineering-integration-scorecard.json`](../docs/evaluations/2026-09-01-evaluation-platform/engineering-integration-scorecard.json).
+  [`engineering-integration-scorecard.json`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-evaluation-platform/engineering-integration-scorecard.json).
   Three points are withheld for absent named human-workflow/calibration
   evidence and two for the unarchived raw physical-row query. The adjudicated
-  [`product-panel.json`](../docs/evaluations/2026-09-01-evaluation-platform/product-panel.json)
+  [`product-panel.json`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-evaluation-platform/product-panel.json)
   therefore records `pass_with_changes` for engineering and `needs_evidence`
   for release. This is the intended truthful stopping state: implementation is
   complete, but synthetic engineering proof cannot grant product release.

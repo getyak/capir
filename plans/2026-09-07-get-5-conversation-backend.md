@@ -62,7 +62,7 @@ choice and caused the narrow implementation fixes recorded there.
 
 ## Credentialed synthetic proof and resulting fixes
 
-The [live provider receipt](../docs/evaluations/2026-09-07-get-5/conversation-provider-proof.json)
+The [live provider receipt](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-5/conversation-provider-proof.json)
 records GLM-5.3 requests using synthetic invented people and `example.com`
 addresses. Infisical's host login was unavailable. An isolated temporary probe
 used the already-admitted backend process environment; no key was printed,
@@ -107,7 +107,7 @@ the curated, secret-free receipt above is the durable evidence.
 
 ## Final screenshot continuity provider proof
 
-The [screenshot provider receipt](../docs/evaluations/2026-09-07-get-5/screenshot-provider-proof.json)
+The [screenshot provider receipt](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-5/screenshot-provider-proof.json)
 records two actual GLM-5.3 trials after the Session backend owner froze migration
 055 and reported 121 passing PostgreSQL/backend tests. The unbound follow-up
 and the newly bound first question both used the canonical synthetic screenshot

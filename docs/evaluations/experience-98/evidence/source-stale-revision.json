@@ -1,8 +1,0 @@
-{
-  "task": "b05c6822-c958-4e36-8d97-ccaa50906778",
-  "page_revision": 13,
-  "actual_revision": 14,
-  "action": "candidate button immediately posts identity selection",
-  "result": "409 CONTACT_TASK_REVISION_CHANGED; stale task retained, no recovery action",
-  "data": "synthetic Lab workspace only"
-}

@@ -66,7 +66,12 @@ export interface ConversationQueueProviderSelection {
 
 export type ConversationQueueProviderSelector = (
   client: Pool,
-  input: { auth: AuthContext; idempotencyKey: string },
+  input: {
+    auth: AuthContext;
+    /** Persisted queue login identity; NULL is a governed host continuation. */
+    authSessionId: string | null;
+    idempotencyKey: string;
+  },
 ) => Promise<ConversationQueueProviderSelection>;
 
 export interface ConversationQueueRunnerOptions {
@@ -522,6 +527,7 @@ export class ConversationQueueRunner {
         const selection = this.options.selectProvider
           ? await this.options.selectProvider(this.options.pool, {
               auth,
+              authSessionId: claimed.authSessionId,
               idempotencyKey: `conversation-queue:${claimed.entryId}`,
             })
           : { provider: this.options.provider };
@@ -580,6 +586,12 @@ export class ConversationQueueRunner {
         if (steering) await openConversationQueueSteeringIntake(this.options.pool, fence);
         else await steeringSource.closeIntake({ force: true });
         const execution = await executeUnscopedChatTask({
+          hostAuthority: {
+            fence,
+            messageId: claimed.messageId,
+            sessionId: claimed.sessionId,
+          },
+          hostResult: claimed.hostResult,
           taskID: claimed.runId,
           request: {
             idempotency_key: `conversation-queue:${claimed.entryId}`,

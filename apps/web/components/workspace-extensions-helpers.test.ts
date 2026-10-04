@@ -13,11 +13,12 @@ describe("extension UI copy", () => {
     expect(copy).not.toMatch(/TALENT_SIGNAL|ENCRYPTION|KEY|_/u);
   });
 
-  it("offers credential recovery without implying an authorization flow", () => {
+  it("offers credential and OAuth recovery without claiming a completed authorization", () => {
     const copy = connectionErrorCopy("MCP_REQUIRES_AUTH");
     expect(copy).toContain("编辑连接");
     expect(copy).toContain("Bearer 密钥");
-    expect(copy).not.toMatch(/OAuth|登录成功|已授权/u);
+    expect(copy).toContain("OAuth");
+    expect(copy).not.toMatch(/登录成功|已授权/u);
   });
 
   it("returns null for an unknown error code", () => {

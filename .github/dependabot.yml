@@ -15,10 +15,6 @@ updates:
 
   - package-ecosystem: npm
     directory: /
-    # Evaluation snapshots are immutable evidence, not maintained applications.
-    exclude-paths:
-      - "docs/evaluations/2026-09-01-momentum-experience-v2-direction/prototype-snapshot/**"
-      - "docs/evaluations/2026-09-04-mx01-design-quality-v2/prototype-source/**"
     schedule:
       interval: weekly
       day: monday

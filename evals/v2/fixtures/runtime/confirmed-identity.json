@@ -1,9 +1,0 @@
-{
-  "schemaVersion": "evaluation-dependency-fixture.v1",
-  "fixtureId": "dependency:confirmed-identity:r1",
-  "component": "identity",
-  "value": {
-    "bindingState": "reviewed_or_explicitly_unresolved",
-    "crossAccountVisibility": false
-  }
-}

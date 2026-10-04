@@ -14,7 +14,7 @@ import {
 const baseUrl = process.env.API_BASE_URL ?? "http://127.0.0.1:4317";
 const outputPath = resolve(
   process.env.RETENTION_EVALUATION_OUTPUT ??
-    "docs/evaluations/round-3/retention/localhost-backend-retention.json",
+    "output/evaluation/round-3/retention/localhost-backend-retention.json",
 );
 const runId =
   process.env.RETENTION_EVALUATION_RUN_ID ??

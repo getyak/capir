@@ -9,7 +9,7 @@ and interruption preserve context and authority.
 
 Completion is observable when the frozen post-change build passes the gesture,
 recovery, accessibility, visual, and latency gates recorded in
-[`docs/evaluations/2026-09-01-ios-retrieval-experience/README.md`](../docs/evaluations/2026-09-01-ios-retrieval-experience/README.md),
+[`docs/evaluations/2026-09-01-ios-retrieval-experience/README.md`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-ios-retrieval-experience/README.md),
 and the independent panel contains no active safety veto.
 
 ## Scope
@@ -96,7 +96,7 @@ Rejected:
 - Preferred-person multi-context Ask: zero backend requests and no pending
   submission before explicit context selection.
 - Evidence:
-  [`docs/evaluations/2026-09-01-ios-retrieval-experience/README.md`](../docs/evaluations/2026-09-01-ios-retrieval-experience/README.md)
+  [`docs/evaluations/2026-09-01-ios-retrieval-experience/README.md`](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-01-ios-retrieval-experience/README.md)
 
 ## Verification gates
 

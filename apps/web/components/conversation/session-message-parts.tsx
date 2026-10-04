@@ -23,6 +23,7 @@ import { MemoryReviewCard } from "../memory-review/memory-review-card";
 import { sessionBlockTitle } from "../session-workbench/session-presentation";
 import { ConversationImageStrip } from "./conversation-images";
 import { SessionCalendarDraftCard } from "./session-calendar-draft-card";
+import { McpRequestCard } from "../mcp/mcp-request-card";
 import { sessionHumanMessages } from "@/lib/session-human-messages";
 export { sessionHumanMessages } from "@/lib/session-human-messages";
 import styles from "./queued-conversation.module.css";
@@ -133,6 +134,25 @@ export function sessionMessages(input: {
         fallback: "日历草稿可在这段对话中处理。",
       },
     });
+    if (turn.response.hostResult) content.push({
+      type: "data", name: "talent-signal.mcp-human-result",
+      data: {
+        version: 1,
+        messageId: turn.id,
+        result: turn.response.hostResult,
+      },
+    });
+    if (turn.response.mcpInteraction) content.push({
+      type: "data", name: "talent-signal.mcp-interaction",
+      data: {
+        version: 1,
+        messageId: turn.id,
+        requestId: turn.response.mcpInteraction.request_id,
+        callId: turn.response.mcpInteraction.call_id,
+        kind: turn.response.mcpInteraction.kind,
+        state: turn.response.mcpInteraction.state,
+      },
+    });
     const awaiting = false; // Current decision state is read by the governed cards.
     const interrupted = conversationTurnInterrupted(turn.response, turn.id);
     const execution = canonicalExecution(turn.response);
@@ -164,11 +184,12 @@ export function sessionMessages(input: {
       type: "data", name: "talent-signal.user-images",
       data: { messageId: active.message_id, images: active.images, local: false },
     });
-    messages.push({ id: `${active.message_id}:user`, role: "user", content: userContent, createdAt: new Date(active.created_at) });
+    if (!active.host_result) messages.push({ id: `${active.message_id}:user`, role: "user", content: userContent, createdAt: new Date(active.created_at) });
     const preview = input.preview?.run_id === active.run_id ? input.preview : null;
     messages.push({
       id: `${active.message_id}:assistant`, role: "assistant",
       content: [
+        ...(active.host_result ? [{ type: "data" as const, name: "talent-signal.mcp-human-result", data: { version: 1, messageId: active.message_id, result: active.host_result } }] : []),
         // Milestone-only dialogue updates, separate from the semantic result
         // blocks that appear only after terminal history readback.
         { type: "data", name: "talent-signal.run-update", data: {
@@ -195,9 +216,11 @@ export function sessionMessages(input: {
     const content: SessionProjectedMessage["content"] = [];
     if (entry.objective) content.push({ type: "text", text: entry.objective });
     if (entry.images?.length) content.push({ type: "data", name: "talent-signal.user-images", data: { messageId: entry.message_id, images: entry.images, local: false } });
-    messages.push({ id: `${entry.message_id}:user`, role: "user", content, createdAt: new Date(entry.created_at) });
+    if (!entry.host_result) messages.push({ id: `${entry.message_id}:user`, role: "user", content, createdAt: new Date(entry.created_at) });
     if (active?.run_id && entry.steers_run_id === active.run_id && entry.steer_state !== "unsupported") continue;
-    messages.push({ id: `${entry.message_id}:assistant`, role: "assistant", content: [{ type: "data", name: "talent-signal.execution", data: {
+    messages.push({ id: `${entry.message_id}:assistant`, role: "assistant", content: [
+      ...(entry.host_result ? [{ type: "data" as const, name: "talent-signal.mcp-human-result", data: { version: 1, messageId: entry.message_id, result: entry.host_result } }] : []),
+      { type: "data", name: "talent-signal.execution", data: {
       phase: conversationExecutionPhase({ entry, readbackComplete: false, awaitingDecision: false }),
       stage: entry.stage, startedAt: entry.started_at ?? entry.created_at,
       timingBasis: entry.started_at ? "run" : "receipt",
@@ -266,6 +289,41 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
   }
   if (name === "talent-signal.calendar" && data.version === 1 && typeof data.draftId === "string") {
     return <SessionCalendarDraftCard draftId={data.draftId} binding={context.meetingBinding} sessionId={context.sessionId} onDecisionState={state => context.onDecisionState?.(`calendar:${data.draftId}`, state)}/>;
+  }
+  if (name === "talent-signal.mcp-human-result" && data.version === 1) {
+    // Host-owned typed human result: rendered with its provenance as a result
+    // part, never as a user-authored message.
+    const result = dataRecord(data.result);
+    if (!result) return <span>这项结果暂时无法显示。</span>;
+    return (
+      <div className={styles.semanticBubble}>
+        <h3>MCP 工具结果</h3>
+        <ConversationResponse lead={false}>
+          {result.outcome === "submitted" ? "你的确认已记录。" : result.outcome === "rejected" ? "你已拒绝这次请求，Agent 将按此结果继续。" : "这次请求的结果已记录。"}
+        </ConversationResponse>
+        <details><summary>查看结果来源</summary>
+          <p>request_id：{String(result.request_id)}</p>
+          <p>call_id：{String(result.call_id)}</p>
+          <p>结果：{String(result.outcome)}</p>
+        </details>
+      </div>
+    );
+  }
+  if (name === "talent-signal.mcp-interaction" && data.version === 1 && typeof data.requestId === "string") {
+    // The card reloads the canonical request; the part carries only a stable
+    // reference with the last observed lifecycle state.
+    return <McpRequestCard
+      fallback={typeof data.kind === "string" && typeof data.state === "string"
+        ? {
+            kind: data.kind as never,
+            purpose: typeof data.purpose === "string" ? data.purpose : "",
+            state: data.state as never,
+          }
+        : undefined}
+      onDecisionState={state => context.onDecisionState?.(`mcp:${data.requestId}`,
+        state === "unknown" ? "unknown" : state === "pending" || state === "waiting" || state === "submitting" ? "pending" : "resolved")}
+      requestId={data.requestId}
+      sessionVersion={context.binding ?? ""}/>;
   }
   if (name === "talent-signal.execution") {
     return <SessionExecutionRecord data={data}/>;
