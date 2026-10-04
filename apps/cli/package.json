@@ -23,7 +23,7 @@
   "devDependencies": {
     "@types/node": "^26.5.0",
     "@types/pg": "^8.23.1",
-    "pg": "^8.23.0",
+    "pg": "^8.23.1",
     "tsx": "^4.23.15",
     "typescript": "npm:@typescript/typescript6@6.0.2"
   }
