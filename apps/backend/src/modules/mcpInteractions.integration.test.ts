@@ -960,7 +960,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("binds an OAuth request to the real Nango session expiry", async () => {
-    const fixture = await createMcpFixture("oauth-expiry");
+    const fixture = await createMcpFixture("broker-expiry");
     const sessionExpiry = new Date(Date.now() + 30 * 60 * 1000).toISOString();
     const fetcher = (async (input: RequestInfo | URL) => {
       if (String(input).endsWith("/connect/sessions")) {
@@ -1381,7 +1381,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("refuses OAuth completion and polling after owner withdrawal or across members", async () => {
-    const fixture = await createMcpFixture("oauth-withdrawal");
+    const fixture = await createMcpFixture("broker-withdrawal");
     const secondUserId = randomUUID();
     const secondSessionId = randomUUID();
     await pool!.query(
@@ -1658,7 +1658,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it.each([false, true])("watches a rejected OAuth capability without UI or webhook (previously approved=%s)", async (approved) => {
-    const fixture = await createMcpFixture("oauth-reject-watch");
+    const fixture = await createMcpFixture("broker-reject-watch");
     let stop: (() => Promise<void>) | undefined;
     try {
       const probe = await stageOAuthProbe(fixture, async () => undefined, approved);
@@ -1761,7 +1761,7 @@ suite("durable MCP human interactions", () => {
     ...["account_id", "user_id", "provider", "connect_request_id", "mcp_server_url"].map((tag) => `missing_${tag}`)];
   it.each(admissionCases.flatMap((caseName) => ["poll", "webhook"].map((path) => ({ caseName, path }))))(
     "rejects $caseName metadata before $path claim or any proxy request", async ({ caseName, path }) => {
-      const fixture = await createMcpFixture("oauth-admission-negative");
+      const fixture = await createMcpFixture("broker-admission-negative");
       try {
         const probe = await stageOAuthProbe(fixture);
         if (caseName === "wrong_account") probe.metadata.tags.account_id = randomUUID();
@@ -1792,7 +1792,7 @@ suite("durable MCP human interactions", () => {
   );
 
   it("accepts full frozen metadata through production approval and owner polling", async () => {
-    const fixture = await createMcpFixture("oauth-admission-positive");
+    const fixture = await createMcpFixture("broker-admission-positive");
     try {
       const probe = await stageOAuthProbe(fixture);
       expect((await pollNangoConnectRequest(pool!, fixture.auth, probe.connectRequestId, probe.dependencies)).request?.state).toBe("submitted");
@@ -1801,7 +1801,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it.each(["owner", "account"])("holds %s authority through OAuth publication against a real PostgreSQL revoke barrier", async (scope) => {
-    const fixture = await createMcpFixture("oauth-sql-barrier");
+    const fixture = await createMcpFixture("broker-sql-barrier");
     const held = barrier();
     const release = barrier();
     let authorityReads = 0;
@@ -1849,7 +1849,7 @@ suite("durable MCP human interactions", () => {
   }, 15000);
 
   it("does not overwrite a disconnect committed during the OAuth handshake", async () => {
-    const fixture = await createMcpFixture("oauth-disconnect-barrier");
+    const fixture = await createMcpFixture("broker-disconnect-barrier");
     try {
       const probe = await stageOAuthProbe(fixture, async () => {
         const connection = await pool!.query("SELECT id,revision FROM mcp_connections WHERE account_id=$1 AND auth_mode='oauth'", [fixture.accountId]);
@@ -1869,7 +1869,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("does not overwrite a newer revision of the same OAuth binding", async () => {
-    const fixture = await createMcpFixture("oauth-revision-barrier");
+    const fixture = await createMcpFixture("broker-revision-barrier");
     try {
       const probe = await stageOAuthProbe(fixture, async () => {
         // A separate accepted connection edit preserves the grant identity but
@@ -1917,7 +1917,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("settles OAuth atomically when the owner is withdrawn mid-handshake", async () => {
-    const fixture = await createMcpFixture("oauth-atomic");
+    const fixture = await createMcpFixture("broker-atomic");
     const nangoConfig = {
       apiKey: "test-key",
       baseUrl: "https://api.nango.dev",
@@ -2080,7 +2080,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("keeps an in-flight OAuth deletion to minimal outcome with no capability", async () => {
-    const fixture = await createMcpFixture("oauth-delete-race");
+    const fixture = await createMcpFixture("broker-delete-race");
     const nangoConfig = {
       apiKey: "test-key",
       baseUrl: "https://api.nango.dev",

@@ -349,3 +349,16 @@ resolve-library-id call, returning genuine React documentation library matches.
 Its rendered receipt is preserved alongside the DeepWiki and ordinary-chat proof.
 Storage reports59GiB above the authorized30GiB floor. Clean release rollout,
 post-deployment real-surface acceptance and Notion readback remain pending.
+
+### Remaining scanner fixture classification, 08:47 CST
+
+The latest remote Backend/Web quality, macOS boundary and security jobs pass;
+CodeQL removes alerts82-84 but still classifies the returned fixture Session ID
+as a password. Independent review confirms no password/token in its SHA256
+idempotency path. The primary CodeQL SensitiveCall implementation classifies a
+whole function result when any literal argument resembles sensitive data;
+all nine reported calls use oauth-* test slug labels. Those nonsecret fixture
+labels now describe broker-* scenarios. OAuth modes, test names, provider
+metadata, assertions, hashing and scanner rules are unchanged. No alert was
+dismissed. Fresh scanning must demonstrate whether this naming clarification
+closes the false positive; release activation still waits for all current gates.
