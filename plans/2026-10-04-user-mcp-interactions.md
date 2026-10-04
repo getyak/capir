@@ -36,8 +36,10 @@ Desktop knowledge workspace for users deciding which external capability to gran
 - [x] Inspect article, current architecture, isolation, credentials and Notion destination.
 - [x] Implement contracts/persistence, guarded MCP calls, Nango adapter, Agent integration and shared cards/catalog.
 - [x] Focused meaningful tests including DB-backed lifecycle, independent review and fixes.
-- [ ] Deploy clean reviewed revision; verify anonymous/Bearer live services and real ordinary chat, refresh and one tool call. Verify OAuth only against real configured Nango/provider.
-- [ ] Record proof and update Notion addresses; close only when requested acceptance actually holds.
+- [x] Deploy clean reviewed backend and Web; verify real anonymous services from the activated runtime and preserve local ordinary-chat/refresh proof.
+- [ ] Complete post-deployment authenticated Web acceptance after the operator supplies a valid staging login. Real bearer/provider OAuth grants remain unverified.
+- [x] Record release proof and update/read back Notion addresses with accurate acceptance limits.
+- [ ] Finish authenticated acceptance and remaining owned fixture cleanup; close only when requested acceptance actually holds.
 
 ## Sources
 
@@ -362,3 +364,46 @@ labels now describe broker-* scenarios. OAuth modes, test names, provider
 metadata, assertions, hashing and scanner rules are unchanged. No alert was
 dismissed. Fresh scanning must demonstrate whether this naming clarification
 closes the false positive; release activation still waits for all current gates.
+
+### Reviewed release deployed, 09:20 CST
+
+All 20 latest-head PR checks have no pending/failed entries, including required
+CI/Security, Backend/Web quality, iOS smoke and macOS boundary. CodeQL has 0
+results; no alert was dismissed. PR 284 is confirmed merged as
+dbf47826a6e43cb0f0f064134fe4c4bc752520fc; its source tree equals the reviewed
+f05c84b5 head. The actual backend and resident Web now run the merged revision.
+Web build ID is 1GQHw9BrqxEruNnhTZ4nL. Production simulated authentication remains
+false; the deployed database includes migration 095.
+
+The initial release attempted Opik bind mounts from the Codex checkout, outside
+this host's configured Colima mounts. Initialization failed before API activation.
+The existing operational runbook already describes this exact boundary; no new
+global rule is needed. The corrected immutable release lives under an existing
+mounted data root. Web is at
+/Users/cubxxw/data/talent-signal-releases/mcp-dbf47826; its separate clean backend
+recovery checkout is /Users/cubxxw/data/talent-signal-runtime-releases/dbf47826.
+The live releases must remain unchanged. Deployment notes are written in this
+separate worktree. Resident data volumes are preserved; the VM was not restarted.
+
+Actual activated-container production transport completed genuine DeepWiki
+read_wiki_structure(facebook/react) and Context7 resolve-library-id(React):
+succeeded, effectSent=true, discovery of 3/2 tools. This proves released transport
+and networking, not authenticated Web cards or OAuth authorization. Actual HTTPS
+Web login/providers and API readiness were read back. Backend recovery image,
+revision and checkout pointer were aligned after deployment probes. The existing
+health keeper was temporarily unloaded for that serialized update and restored
+with last exit 0. Opik, Apple, silent-voice and configured-model deployment probes
+passed. 11 served HTTPS Extensions assets match the immutable Web build hashes.
+
+The task-specific capir environment exists, but auth status confirms no scoped
+credential for the exact staging origin. The documented development fixture
+password is not a shared-staging login. A valid human login was requested while
+independent delivery continued. Post-deployment authenticated isolated-space
+proof and actual vendor OAuth login/grant remain pending; they are not replaced
+by local proof, transport calls or a login page 200. Owned 3300/44317 listeners
+are stopped and formal evidence is preserved in the parent evaluation directory.
+Notion page 3d6a444a-6c00-8173-818f-d5e492982356 now records deployed addresses,
+merged revision, real local/activated-runtime evidence and the remaining login/
+OAuth limits; the page was read back after writing. Other service entries and
+credentials were not changed. Superseded task images were removed; the previous
+deployed image and resident volumes remain for recovery.
