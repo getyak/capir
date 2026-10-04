@@ -266,3 +266,34 @@ with its control-scope cleanup ledger surviving. This is intermediate regression
 evidence, not final source review, real provider authorization or product proof.
 The pinned Connect session DELETE capability is documented separately; its 204
 and subsequent GET401 do not prove closure of a callback already in flight.
+
+### Native completion and real product proof, 07:55 CST
+
+The frozen Pi task was cancelled after 475 turns and eight repair attempts;
+no provider, model or budget increase occurred. Root and native agents now own
+the implementation. Cleanup has complete frozen identity, generation CAS and
+control-scope per-dispatch effect receipts (migration095), including partial
+remote success and stale-claim barriers. Its isolated PostgreSQL/wire suite
+passes21 tests. Independent review closes prior cleanup, atomic OAuth, exact
+broker binding, generic rejection and scoped private choice retention defects.
+The latest interaction suite passes63 PostgreSQL tests.
+
+The actual local Web/BFF/API directory added DeepWiki, discovered three tools,
+staged and manually approved read_wiki_structure for public facebook/react, and
+rendered a genuine successful receipt. Refresh and fresh browser context restored
+the result;375px light/dark views had no horizontal overflow. These observations
+are directory product proof, not real OAuth grant proof or release proof.
+
+The actual ordinary chat staged its inline connection card using the configured
+Anthropic Agent. After real approval and discovery, its host-result continuation
+failed before model execution. Independent production-service read-only PG proof
+identifies22P02: nullable stored login-session identity becomes a queue sentinel,
+then the production Lab provider selector treats it as UUID. A narrow explicit
+null-login/default-provider fix and construction-path regression are in progress.
+This remains an open P1; no completed full chat acceptance, PR or rollout is
+claimed. Scoped MCP chat token allowance was raised to96k after measured33679
+input tokens exceeded the32k ordinary-chat allowance; cost, turns and tool limits
+remain unchanged.53 targeted provider tests pass independently.
+
+Latest storage audit reports about65GiB above the authorized30GiB floor. Other
+owners' active evidence and unrelated source edits remain preserved.
