@@ -243,3 +243,12 @@ describe("credential-free metadata readback and frozen proxy", () => {
     ).rejects.toMatchObject({ code: "MCP_OAUTH_UNAVAILABLE" });
   });
 });
+
+it("keeps webhook JSON tag keys inert without invoking prototype setters", () => {
+  const result = parseNangoAuthWebhook('{"type":"auth","operation":"creation","connectionId":"conn-1","providerConfigKey":"notion-mcp","provider":"notion","tags":{"__proto__":"remote","constructor":"remote","Connect_Request_ID":"mcpconn_exact"}}');
+  expect(result).not.toBeNull();
+  expect(Object.getPrototypeOf(result!.tags)).toBe(Object.prototype);
+  expect(Object.hasOwn(result!.tags, "__proto__")).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(result!.tags, "__proto__")?.get).toBeUndefined();
+  expect(result!.tags.connect_request_id).toBe("mcpconn_exact");
+});

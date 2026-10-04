@@ -208,3 +208,13 @@ describe("secret redaction for every persisted or echoed surface", () => {
     expect(looksLikeSecret("name", "ordinary text")).toBe(false);
   });
 });
+
+it("redacts hostile JSON keys as inert own properties without prototype mutation", () => {
+  const output = redactSecrets(JSON.parse('{"__proto__":{"polluted":true,"password":"private"},"constructor":{"prototype":{"polluted":true}},"keep":"visible"}')) as Record<string, unknown>;
+  expect(Object.getPrototypeOf(output)).toBe(Object.prototype);
+  expect(Object.hasOwn(output, "__proto__")).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(output, "__proto__")?.get).toBeUndefined();
+  expect(JSON.stringify(output)).toContain('"password":"[redacted]"');
+  expect(JSON.stringify(output)).not.toContain('"private"');
+  expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+});

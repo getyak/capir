@@ -59,7 +59,7 @@ interface Fixture {
   userId: string;
 }
 
-async function seed(label: string): Promise<Fixture> {
+async function createMcpFixture(label: string): Promise<Fixture> {
   const accountId = randomUUID();
   const userId = randomUUID();
   const sessionId = randomUUID();
@@ -351,7 +351,7 @@ afterAll(async () => {
 
 suite("durable MCP human interactions", () => {
   it("stages a canonical request that a reload reads from current state", async () => {
-    const fixture = await seed("canonical");
+    const fixture = await createMcpFixture("canonical");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       const staged = await proposeMcpToolCall(pool!, fixture.auth, callPropose(fixture), dependencies);
@@ -373,7 +373,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("denies a foreign session or message binding before staging", async () => {
-    const fixture = await seed("binding");
+    const fixture = await createMcpFixture("binding");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       // A message that belongs to no conversation queue entry is refused.
@@ -387,7 +387,7 @@ suite("durable MCP human interactions", () => {
       ).rejects.toMatchObject({ code: "MCP_INTERACTION_SCOPE_MISMATCH" });
       // A session the acting human does not own is refused.
       const foreignSessionId = randomUUID();
-      const other = await seed("binding-other");
+      const other = await createMcpFixture("binding-other");
       try {
         await expect(
           proposeMcpToolCall(
@@ -422,7 +422,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("rejects invalid arguments against the original schema and never executes", async () => {
-    const fixture = await seed("invalid-args");
+    const fixture = await createMcpFixture("invalid-args");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       await expect(
@@ -448,8 +448,8 @@ suite("durable MCP human interactions", () => {
   });
 
   it("is invisible across accounts and unresolvable across sessions", async () => {
-    const owner = await seed("scope-owner");
-    const other = await seed("scope-other");
+    const owner = await createMcpFixture("scope-owner");
+    const other = await createMcpFixture("scope-other");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       const staged = await proposeMcpToolCall(pool!, owner.auth, callPropose(owner), dependencies);
@@ -513,7 +513,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("rejection and no-action execute nothing and stay recoverable", async () => {
-    const fixture = await seed("rejection");
+    const fixture = await createMcpFixture("rejection");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       const staged = await proposeMcpToolCall(pool!, fixture.auth, callPropose(fixture), dependencies);
@@ -541,7 +541,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("expires stale requests before any decision can act", async () => {
-    const fixture = await seed("expiry");
+    const fixture = await createMcpFixture("expiry");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult, [], {
         requestTtlMs: 1_000,
@@ -566,7 +566,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("replays a duplicate resolution and claims execution exactly once", async () => {
-    const fixture = await seed("replay");
+    const fixture = await createMcpFixture("replay");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       const staged = await proposeMcpToolCall(pool!, fixture.auth, callPropose(fixture), dependencies);
@@ -614,7 +614,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("invalidates an approval when the connection revision changes", async () => {
-    const fixture = await seed("stale");
+    const fixture = await createMcpFixture("stale");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       const staged = await proposeMcpToolCall(pool!, fixture.auth, callPropose(fixture), dependencies);
@@ -637,7 +637,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("settles an unreadable outcome after send as unknown and never retries", async () => {
-    const fixture = await seed("unknown");
+    const fixture = await createMcpFixture("unknown");
     try {
       const { dependencies, calls } = dependenciesWith(async () => ({
         ...successResult,
@@ -672,7 +672,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("settles a definitive failure distinctly from an unknown outcome", async () => {
-    const fixture = await seed("failure");
+    const fixture = await createMcpFixture("failure");
     try {
       const { dependencies } = dependenciesWith(async () => ({
         ...successResult,
@@ -697,7 +697,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("keeps the transient secret out of every durable and echoed surface", async () => {
-    const fixture = await seed("secret");
+    const fixture = await createMcpFixture("secret");
     const continuations: McpInteractionContinuation[] = [];
     const secret = "tsuper-secret-bearer-value-123456";
     try {
@@ -776,7 +776,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("returns the resolved result to the same conversation as a durable receipt", async () => {
-    const fixture = await seed("continuation");
+    const fixture = await createMcpFixture("continuation");
     const continuations: McpInteractionContinuation[] = [];
     try {
       const { dependencies } = dependenciesWith(async () => successResult, continuations);
@@ -809,7 +809,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("keeps bearer mode on a rename and clears stale bindings on endpoint changes", async () => {
-    const fixture = await seed("update-modes");
+    const fixture = await createMcpFixture("update-modes");
     try {
       const inbound = {
         encryptionKey,
@@ -922,7 +922,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("rejects a server URL with a query before proposing anything", async () => {
-    const fixture = await seed("query-reject");
+    const fixture = await createMcpFixture("query-reject");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       await expect(
@@ -960,7 +960,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("binds an OAuth request to the real Nango session expiry", async () => {
-    const fixture = await seed("oauth-expiry");
+    const fixture = await createMcpFixture("oauth-expiry");
     const sessionExpiry = new Date(Date.now() + 30 * 60 * 1000).toISOString();
     const fetcher = (async (input: RequestInfo | URL) => {
       if (String(input).endsWith("/connect/sessions")) {
@@ -1012,7 +1012,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("stages a bounded choice and returns the selection to the conversation", async () => {
-    const fixture = await seed("choice");
+    const fixture = await createMcpFixture("choice");
     const continuations: McpInteractionContinuation[] = [];
     try {
       const { dependencies } = dependenciesWith(async () => successResult, continuations);
@@ -1087,7 +1087,7 @@ suite("durable MCP human interactions", () => {
   }
 
   it("mints staging authority only from a live run claim or a live login session", async () => {
-    const fixture = await seed("authority");
+    const fixture = await createMcpFixture("authority");
     try {
       const { dependencies, calls } = dependenciesWith(async () => successResult);
       const authority = await seedRunClaim(fixture);
@@ -1154,7 +1154,7 @@ suite("durable MCP human interactions", () => {
       ).rejects.toMatchObject({ code: "MCP_INTERACTION_SCOPE_MISMATCH" });
 
       // A revoked owner cannot stage even with a live-looking claim.
-      const revoked = await seed("authority-revoked");
+      const revoked = await createMcpFixture("authority-revoked");
       try {
         const revokedAuthority = await seedRunClaim(revoked);
         await pool!.query("UPDATE users SET status='revoked' WHERE account_id=$1", [revoked.accountId]);
@@ -1178,7 +1178,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("scrubs private derived data and replay snapshots on session deletion", async () => {
-    const fixture = await seed("deletion-scrub");
+    const fixture = await createMcpFixture("deletion-scrub");
     const continuations: McpInteractionContinuation[] = [];
     try {
       const { dependencies } = dependenciesWith(async () => successResult, continuations, {
@@ -1263,7 +1263,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("settles dispatched work truthfully when the session dies mid-flight", async () => {
-    const fixture = await seed("deletion-inflight");
+    const fixture = await createMcpFixture("deletion-inflight");
     const continuations: McpInteractionContinuation[] = [];
     try {
       const { dependencies } = dependenciesWith(async (input) => {
@@ -1302,7 +1302,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("reconciles abandoned connection work without duplicating connections", async () => {
-    const fixture = await seed("abandoned-work");
+    const fixture = await createMcpFixture("abandoned-work");
     try {
       const handshake = fakeHandshakeExchange([{ name: "probe" }]);
       const { dependencies } = dependenciesWith(async () => successResult, [], {
@@ -1381,7 +1381,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("refuses OAuth completion and polling after owner withdrawal or across members", async () => {
-    const fixture = await seed("oauth-withdrawal");
+    const fixture = await createMcpFixture("oauth-withdrawal");
     const secondUserId = randomUUID();
     const secondSessionId = randomUUID();
     await pool!.query(
@@ -1541,7 +1541,7 @@ suite("durable MCP human interactions", () => {
 
   it("never regrows private data when deletion races a tool settlement", async () => {
     // Order A: deletion commits before the late result settles.
-    const fixture = await seed("race-delete-first");
+    const fixture = await createMcpFixture("race-delete-first");
     const continuations: McpInteractionContinuation[] = [];
     try {
       const { dependencies } = dependenciesWith(async () => {
@@ -1578,7 +1578,7 @@ suite("durable MCP human interactions", () => {
 
     // Order B: the deletion transaction starts during the in-flight call and
     // must leave a scrubbed final state no matter which side commits first.
-    const fixtureB = await seed("race-settle-first");
+    const fixtureB = await createMcpFixture("race-settle-first");
     const continuationsB: McpInteractionContinuation[] = [];
     const deletionRef: { promise: Promise<void> | null } = { promise: null };
     try {
@@ -1623,7 +1623,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("keeps the genuine directory-scope receipt when no conversation session is bound", async () => {
-    const fixture = await seed("directory-scope");
+    const fixture = await createMcpFixture("directory-scope");
     try {
       const { dependencies } = dependenciesWith(async () => ({
         ...successResult,
@@ -1658,7 +1658,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it.each([false, true])("watches a rejected OAuth capability without UI or webhook (previously approved=%s)", async (approved) => {
-    const fixture = await seed("oauth-reject-watch");
+    const fixture = await createMcpFixture("oauth-reject-watch");
     let stop: (() => Promise<void>) | undefined;
     try {
       const probe = await stageOAuthProbe(fixture, async () => undefined, approved);
@@ -1713,7 +1713,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("scrubs a private choice identifier from only the deleted Session while retaining call provenance", async () => {
-    const fixture = await seed("choice-id-retention");
+    const fixture = await createMcpFixture("choice-id-retention");
     const marker = "PRIVATE_FREEFORM_OPTION_patient_notes";
     const elsewhere = "PRESERVE_OTHER_SCOPE_OPTION";
     try {
@@ -1761,7 +1761,7 @@ suite("durable MCP human interactions", () => {
     ...["account_id", "user_id", "provider", "connect_request_id", "mcp_server_url"].map((tag) => `missing_${tag}`)];
   it.each(admissionCases.flatMap((caseName) => ["poll", "webhook"].map((path) => ({ caseName, path }))))(
     "rejects $caseName metadata before $path claim or any proxy request", async ({ caseName, path }) => {
-      const fixture = await seed("oauth-admission-negative");
+      const fixture = await createMcpFixture("oauth-admission-negative");
       try {
         const probe = await stageOAuthProbe(fixture);
         if (caseName === "wrong_account") probe.metadata.tags.account_id = randomUUID();
@@ -1792,7 +1792,7 @@ suite("durable MCP human interactions", () => {
   );
 
   it("accepts full frozen metadata through production approval and owner polling", async () => {
-    const fixture = await seed("oauth-admission-positive");
+    const fixture = await createMcpFixture("oauth-admission-positive");
     try {
       const probe = await stageOAuthProbe(fixture);
       expect((await pollNangoConnectRequest(pool!, fixture.auth, probe.connectRequestId, probe.dependencies)).request?.state).toBe("submitted");
@@ -1801,7 +1801,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it.each(["owner", "account"])("holds %s authority through OAuth publication against a real PostgreSQL revoke barrier", async (scope) => {
-    const fixture = await seed("oauth-sql-barrier");
+    const fixture = await createMcpFixture("oauth-sql-barrier");
     const held = barrier();
     const release = barrier();
     let authorityReads = 0;
@@ -1849,7 +1849,7 @@ suite("durable MCP human interactions", () => {
   }, 15000);
 
   it("does not overwrite a disconnect committed during the OAuth handshake", async () => {
-    const fixture = await seed("oauth-disconnect-barrier");
+    const fixture = await createMcpFixture("oauth-disconnect-barrier");
     try {
       const probe = await stageOAuthProbe(fixture, async () => {
         const connection = await pool!.query("SELECT id,revision FROM mcp_connections WHERE account_id=$1 AND auth_mode='oauth'", [fixture.accountId]);
@@ -1869,7 +1869,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("does not overwrite a newer revision of the same OAuth binding", async () => {
-    const fixture = await seed("oauth-revision-barrier");
+    const fixture = await createMcpFixture("oauth-revision-barrier");
     try {
       const probe = await stageOAuthProbe(fixture, async () => {
         // A separate accepted connection edit preserves the grant identity but
@@ -1889,7 +1889,7 @@ suite("durable MCP human interactions", () => {
   it.each(["verified", "withdrawn", "edited"])("recovers the original OAuth binding through atomic publication (%s)", async (scenario) => {
     const withdrawn = scenario === "withdrawn";
     const edited = scenario === "edited";
-    const fixture = await seed(`oauth-restart-${scenario}`);
+    const fixture = await createMcpFixture(`oauth-restart-${scenario}`);
     try {
       const probe = await stageOAuthProbe(fixture, async () => {
         if (withdrawn) await pool!.query("UPDATE users SET status='revoked' WHERE account_id=$1 AND id=$2", [fixture.accountId, fixture.userId]);
@@ -1917,7 +1917,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("settles OAuth atomically when the owner is withdrawn mid-handshake", async () => {
-    const fixture = await seed("oauth-atomic");
+    const fixture = await createMcpFixture("oauth-atomic");
     const nangoConfig = {
       apiKey: "test-key",
       baseUrl: "https://api.nango.dev",
@@ -2080,7 +2080,7 @@ suite("durable MCP human interactions", () => {
   });
 
   it("keeps an in-flight OAuth deletion to minimal outcome with no capability", async () => {
-    const fixture = await seed("oauth-delete-race");
+    const fixture = await createMcpFixture("oauth-delete-race");
     const nangoConfig = {
       apiKey: "test-key",
       baseUrl: "https://api.nango.dev",
@@ -2216,7 +2216,7 @@ suite("durable MCP human interactions", () => {
     }
   });
   it("redacts secret-shaped remote echo from the public result receipt", async () => {
-    const fixture = await seed("echo");
+    const fixture = await createMcpFixture("echo");
     try {
       const { dependencies } = dependenciesWith(async () => ({
         ...successResult,

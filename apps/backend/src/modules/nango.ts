@@ -257,12 +257,15 @@ export function parseNangoAuthWebhook(rawBody: string): NangoAuthWebhook | null 
   ) {
     return null;
   }
-  const tags: Record<string, string> = {};
-  if (value.tags && typeof value.tags === "object" && value.tags !== null) {
-    for (const [key, item] of Object.entries(value.tags as Record<string, unknown>)) {
-      if (typeof item === "string" && item.length <= 255) tags[key.toLowerCase()] = item;
-    }
-  }
+  // Define inert own data properties, including hostile JSON property names;
+  // no prototype setter is used for remote webhook metadata.
+  const tags: Record<string, string> = Object.fromEntries(
+    value.tags && typeof value.tags === "object"
+      ? Object.entries(value.tags as Record<string, unknown>)
+          .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length <= 255)
+          .map(([key, item]) => [key.toLowerCase(), item])
+      : [],
+  );
   return {
     connectionId,
     environment: typeof value.environment === "string" ? value.environment : null,
@@ -285,12 +288,15 @@ export interface NangoConnectionMetadata {
 }
 
 function metadataEntry(value: Record<string, unknown>): NangoConnectionMetadata {
-  const tags: Record<string, string> = {};
-  if (value.tags && typeof value.tags === "object" && value.tags !== null) {
-    for (const [key, item] of Object.entries(value.tags as Record<string, unknown>)) {
-      if (typeof item === "string" && item.length <= 255) tags[key.toLowerCase()] = item;
-    }
-  }
+  // Define inert own data properties, including hostile JSON property names;
+  // no prototype setter is used for remote webhook metadata.
+  const tags: Record<string, string> = Object.fromEntries(
+    value.tags && typeof value.tags === "object"
+      ? Object.entries(value.tags as Record<string, unknown>)
+          .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length <= 255)
+          .map(([key, item]) => [key.toLowerCase(), item])
+      : [],
+  );
   const metadata: Record<string, unknown> = {};
   if (value.metadata && typeof value.metadata === "object" && value.metadata !== null) {
     for (const [key, item] of Object.entries(value.metadata as Record<string, unknown>)) {

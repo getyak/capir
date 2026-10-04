@@ -490,11 +490,11 @@ export function redactSecrets(value: unknown, keyHint: string | null = null): un
   }
   if (Array.isArray(value)) return value.map((item) => redactSecrets(item, keyHint));
   if (isRecord(value)) {
-    const output: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-      output[key] = SECRET_KEY_PATTERN.test(key) ? "[redacted]" : redactSecrets(child, key);
-    }
-    return output;
+    // fromEntries defines own data properties; untrusted __proto__ keys
+    // never invoke a prototype setter while retaining inert JSON content.
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [
+      key, SECRET_KEY_PATTERN.test(key) ? "[redacted]" : redactSecrets(child, key),
+    ]));
   }
   return value;
 }

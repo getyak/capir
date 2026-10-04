@@ -330,42 +330,6 @@ export async function updateMcpConnection(
     if (!current) {
       throw new ApiError(404, "MCP_CONNECTION_NOT_FOUND", "This connection no longer exists.");
     }
-    const dropsBrokerBinding =
-      current.auth_mode === "oauth" &&
-      Boolean(current.nango_connection_id) &&
-      (input.bearer_secret !== undefined ||
-        input.server_url !== current.server_url);
-    if (dropsBrokerBinding && current.nango_connection_id && current.nango_provider) {
-      const attempt = await client.query<{
-        broker_base_url: string | null;
-        capability_expires_at: Date | null;
-        connect_request_id: string;
-        created_by_user_id: string;
-        environment: string | null;
-      }>(
-        `SELECT connect_request_id, created_by_user_id, environment,
-                broker_base_url, capability_expires_at
-         FROM mcp_oauth_connect_requests
-         WHERE account_id = $1 AND nango_connection_id = $2`,
-        [auth.accountId, current.nango_connection_id],
-      );
-      const bound = attempt.rows[0] ?? null;
-      await recordOauthCleanup(client, {
-        accountId: auth.accountId,
-        brokerBaseUrl: bound?.broker_base_url ?? null,
-        capabilityExpiresAt: bound?.capability_expires_at ?? null,
-        connectRequestId: bound?.connect_request_id ?? null,
-        createdByUserId: bound?.created_by_user_id ?? auth.userId,
-        environment: bound?.environment ?? null,
-        nangoConnectionId: current.nango_connection_id,
-        provenance:
-          input.server_url !== current.server_url
-            ? "endpoint_replaced"
-            : "credential_replaced",
-        provider: current.nango_provider,
-        targetOrigin: current.server_url,
-      });
-    }
     if (current.revision !== input.expected_revision) {
       throw new ApiError(
         409,
@@ -436,6 +400,40 @@ export async function updateMcpConnection(
       connection: record(row),
       contract_version: CONTRACT_VERSION,
     };
+    // Reconcile the broker from the authoritative stored transition, not
+    // client intent. The update and cleanup watch commit atomically.
+    if (current.auth_mode === "oauth" && current.nango_connection_id && current.nango_provider
+      && row.nango_connection_id !== current.nango_connection_id) {
+      const attempt = await client.query<{
+        broker_base_url: string | null;
+        capability_expires_at: Date | null;
+        connect_request_id: string;
+        created_by_user_id: string;
+        environment: string | null;
+      }>(
+        `SELECT connect_request_id, created_by_user_id, environment,
+                broker_base_url, capability_expires_at
+         FROM mcp_oauth_connect_requests
+         WHERE account_id = $1 AND nango_connection_id = $2`,
+        [auth.accountId, current.nango_connection_id],
+      );
+      const bound = attempt.rows[0] ?? null;
+      await recordOauthCleanup(client, {
+        accountId: auth.accountId,
+        brokerBaseUrl: bound?.broker_base_url ?? null,
+        capabilityExpiresAt: bound?.capability_expires_at ?? null,
+        connectRequestId: bound?.connect_request_id ?? null,
+        createdByUserId: bound?.created_by_user_id ?? auth.userId,
+        environment: bound?.environment ?? null,
+        nangoConnectionId: current.nango_connection_id,
+        provenance:
+          row.server_url !== current.server_url
+            ? "endpoint_replaced"
+            : "credential_replaced",
+        provider: current.nango_provider,
+        targetOrigin: current.server_url,
+      });
+    }
     await appendAudit(client, actor, "mcp_connection.updated", "mcp_connection", id, {
       credential_configured: Boolean(row.credential_ciphertext),
       external_effect_count: 0,

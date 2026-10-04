@@ -50,8 +50,6 @@ const pool = url
 const suite = url ? describe : describe.skip;
 vi.setConfig({ testTimeout: 30_000 });
 
-const silentLogger = { info: () => undefined, warn: () => undefined, error: () => undefined };
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -66,6 +64,59 @@ async function waitFor(
     await sleep(25);
   }
   throw new Error("Timed out waiting for the expected MCP conversation state.");
+}
+
+function queueDiagnosticLogger() {
+  const events: Record<string, unknown>[] = [];
+  const capture = (level: string, metadata: Record<string, unknown>) => {
+    const safe: Record<string, unknown> = { level };
+    for (const key of ["queue_entry_id", "run_id", "failure_code", "status"]) {
+      const value = metadata[key];
+      if (typeof value === "string" && /^[a-z0-9_-]{1,80}$/iu.test(value)) safe[key] = value;
+    }
+    if (typeof metadata.duration_ms === "number") safe.duration_ms = metadata.duration_ms;
+    const code = (metadata.err as { code?: unknown } | undefined)?.code;
+    if (typeof code === "string" && /^[a-z0-9_-]{1,80}$/iu.test(code)) safe.error_code = code;
+    events.push(safe);
+    if (events.length > 60) events.shift();
+  };
+  return { events, logger: {
+    info: (metadata: Record<string, unknown>) => capture("info", metadata),
+    warn: (metadata: Record<string, unknown>) => capture("warn", metadata),
+    error: (metadata: Record<string, unknown>) => capture("error", metadata),
+  } };
+}
+
+async function waitForCompletedQueue(accountId: string, expectedCount: number, events: Record<string, unknown>[] = []) {
+  const started = Date.now();
+  try {
+    await waitFor(async () => {
+      const rows = await pool!.query<{ status: string }>(
+        "SELECT status FROM conversation_queue_entries WHERE account_id=$1 ORDER BY created_at", [accountId]);
+      if (rows.rows.some((row) => ["failed", "cancelled", "interrupted"].includes(row.status))) {
+        throw new Error("The synthetic MCP queue reached an unexpected terminal state.");
+      }
+      return rows.rows.length === expectedCount && rows.rows.every((row) => row.status === "completed");
+    });
+  } catch (error) {
+    // Control-plane metadata only, captured before fixture teardown. Exclude
+    // objectives, provider prose, results and arbitrary span/error contents.
+    const queue = await pool!.query(`SELECT id,status,failure_code,attempt,
+      lease_generation,lease_expires_at>clock_timestamp() AS lease_live,
+      result IS NOT NULL AS has_result,claimed_at,result_recorded_at,persisted_at,completed_at,updated_at
+      FROM conversation_queue_entries WHERE account_id=$1 ORDER BY created_at`, [accountId]);
+    const spans = await pool!.query(`SELECT s.span->>'name' AS name,s.span->>'kind' AS kind,
+      s.span->>'status' AS status,s.span->>'started_at' AS started_at,
+      s.span->>'finished_at' AS finished_at,
+      s.span->'metadata'->>'failure_code' AS failure_code,
+      s.span->'metadata'->>'duration_ms' AS duration_ms
+      FROM product_run_spans s JOIN product_runs r ON r.id=s.run_id
+      WHERE r.account_id=$1 ORDER BY s.created_at DESC LIMIT 30`, [accountId]);
+    throw new Error(`Synthetic MCP queue did not complete: ${JSON.stringify({
+      elapsed_wait_ms: Date.now() - started, expected_count: expectedCount,
+      queue: queue.rows, spans: spans.rows, events,
+    })}`, { cause: error });
+  }
 }
 
 class ScriptedMcpConversationProvider implements RemoteChatAnswerProviding {
@@ -397,7 +448,7 @@ class ScriptedStagingProvider implements RemoteChatAnswerProviding {
 async function withStack<T>(
   fixture: Fixture,
   provider: RemoteChatAnswerProviding,
-  run: (app: Fastify.FastifyInstance) => Promise<T>,
+  run: (app: Fastify.FastifyInstance, diagnostics: Record<string, unknown>[]) => Promise<T>,
 ): Promise<T> {
   const app = Fastify();
   app.decorateRequest("auth", null as unknown as AuthContext);
@@ -421,10 +472,11 @@ async function withStack<T>(
     }),
   });
   await app.ready();
+  const diagnostics = queueDiagnosticLogger();
   const runner = new ConversationQueueRunner({
     pool: pool!,
     provider,
-    logger: silentLogger,
+    logger: diagnostics.logger,
     pollIntervalMs: 20,
     heartbeatMs: 60,
     recoveryIntervalMs: 10_000,
@@ -432,7 +484,7 @@ async function withStack<T>(
   });
   runner.start();
   try {
-    return await run(app);
+    return await run(app, diagnostics.events);
   } finally {
     await runner.close();
     await app.close();
@@ -562,6 +614,7 @@ suite("user-owned MCP in the ordinary queued conversation", () => {
     const provider = new ScriptedMcpConversationProvider();
     provider.connectionId = fixture.connectionId;
     provider.sessionId = fixture.sessionId;
+    const diagnostics = queueDiagnosticLogger();
     const app = Fastify();
     app.decorateRequest("auth", null as unknown as AuthContext);
     app.setErrorHandler((error, _request, reply) => {
@@ -591,7 +644,7 @@ suite("user-owned MCP in the ordinary queued conversation", () => {
     const runner = new ConversationQueueRunner({
       pool: pool!,
       provider,
-      logger: silentLogger,
+      logger: diagnostics.logger,
       pollIntervalMs: 20,
       heartbeatMs: 60,
       recoveryIntervalMs: 10_000,
@@ -652,13 +705,7 @@ suite("user-owned MCP in the ordinary queued conversation", () => {
 
       // 3. The staged reference rides the persisted answer block once the
       // first turn is durably written.
-      await waitFor(async () => {
-        const rows = await pool!.query<{ status: string }>(
-          "SELECT status FROM conversation_queue_entries WHERE account_id=$1 ORDER BY created_at",
-          [fixture.accountId],
-        );
-        return rows.rows.length === 1 && rows.rows[0]!.status === "completed";
-      });
+      await waitForCompletedQueue(fixture.accountId, 1, diagnostics.events);
       const conversation = await readAgentSessionConversation(pool!, fixture.auth, fixture.sessionId, {
         personId: null,
         relationshipContextId: null,
@@ -722,13 +769,7 @@ suite("user-owned MCP in the ordinary queued conversation", () => {
       expect(provider.systemPrompts[1]).toContain(syntheticToolResultText);
       const secondHistory = provider.histories[1]!;
       expect(secondHistory.some((message) => message.text === objective)).toBe(true);
-      const completion = await waitFor(async () => {
-        const rows = await pool!.query<{ status: string }>(
-          "SELECT status FROM conversation_queue_entries WHERE account_id=$1 ORDER BY created_at",
-          [fixture.accountId],
-        );
-        return rows.rows.length === 2 && rows.rows.every((row) => row.status === "completed");
-      }).then(() => true);
+      const completion = await waitForCompletedQueue(fixture.accountId, 2, diagnostics.events).then(() => true);
       expect(completion).toBe(true);
 
       // No blind retry: one staged call, one claim, one remote effect.
@@ -769,7 +810,7 @@ suite("user-owned MCP in the ordinary queued conversation", () => {
       },
     ]);
     try {
-      await withStack(fixture, provider, async (app) => {
+      await withStack(fixture, provider, async (app, diagnostics) => {
         try {
           expect((await admit(app, fixture, "帮我添加服务。")).statusCode).toBe(202);
           await waitFor(() => provider.objectives.length === 1);
@@ -845,13 +886,7 @@ suite("user-owned MCP in the ordinary queued conversation", () => {
           // Release the original run; both complete and the typed result is the
           // durable turn provenance, not a fabricated user message.
           release();
-          await waitFor(async () => {
-            const rows = await pool!.query<{ status: string }>(
-              "SELECT status FROM conversation_queue_entries WHERE account_id=$1 ORDER BY created_at",
-              [fixture.accountId],
-            );
-            return rows.rows.length === 2 && rows.rows.every((row) => row.status === "completed");
-          });
+          await waitForCompletedQueue(fixture.accountId, 2, diagnostics);
           const payload = await pool!.query<{ payload: { turns: Array<{ response?: { hostResult?: { request_id: string } } }> } }>(
             "SELECT payload FROM agent_sessions WHERE account_id=$1",
             [fixture.accountId],

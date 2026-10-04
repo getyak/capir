@@ -321,3 +321,31 @@ completion wait timed out after staging the card. Native owner is diagnosing
 controlled liveness metadata; no blind timeout increase or live DB testing.
 PR/remote checks, clean revision deployment and post-deployment acceptance remain
 pending. Real provider OAuth login/grant remains unverified.
+
+### CI repair and second real catalog provider, 08:37 CST
+
+PR284 is attached to this task. Latest local combined MCP PostgreSQL suites
+pass83/83 after scoped diagnostic metadata was added without increasing the
+15-second queue wait. The earlier intermittent wait has no confirmed root cause;
+the diagnostics preserve only owned identity, status, timing and failure codes.
+
+First remote CI identified a separate compatibility regression: adding a null
+host_request_id changed pre-deployment human-message idempotency hashes. The
+field is now included only for genuine host results; independent source review
+confirms ordinary text/image identity matches origin/main. The existing old
+receipt regression and all56 conversation queue PostgreSQL tests pass.
+
+First CodeQL reported three input-dependent cleanup/prototype assignment issues;
+the implementation now derives cleanup from persisted transitions and creates
+redacted/tagged maps without dynamic property assignment.22 unit regressions
+pass. An independently reviewed real PostgreSQL transition probe verifies OAuth
+rename, endpoint/credential replacement, replay and stale-revision behavior.
+The fourth alert followed a fixture random Session ID through a helper named
+seed, not a password; renaming it createMcpFixture clarifies its actual role
+without suppressing the security rule. Fresh latest-head scanning remains required.
+
+The actual local Context7 catalog discovered two tools and completed an approved
+resolve-library-id call, returning genuine React documentation library matches.
+Its rendered receipt is preserved alongside the DeepWiki and ordinary-chat proof.
+Storage reports59GiB above the authorized30GiB floor. Clean release rollout,
+post-deployment real-surface acceptance and Notion readback remain pending.

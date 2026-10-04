@@ -89,7 +89,11 @@ export async function admitConversationQueueEntry(
       CONVERSATION_QUEUE_OPERATION_SCOPE,
       request.idempotency_key,
       {
-        host_request_id: request.host_result?.request_id ?? null,
+        // Preserve historical human-message hashes; only host results add
+        // their request identity to the idempotency payload.
+        ...(request.host_result
+          ? { host_request_id: request.host_result.request_id }
+          : {}),
         session_id: request.session_id,
         message_id: request.message_id,
         objective: request.objective,
