@@ -1167,7 +1167,7 @@ describe("conversation-only context and proactive contact drafts", () => {
     );
     await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
-      objective: "我们约定下周四先看文字方案",
+      objective: "陈宇：我们约定下周四先看文字方案",
       contacts: { search: vi.fn(), read: vi.fn() },
       memory,
       provider,
@@ -1182,7 +1182,7 @@ describe("conversation-only context and proactive contact drafts", () => {
     const explicitStage = vi.fn(async () => stagedProposal);
     await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
-      objective: "先给结论",
+      objective: "陈宇说先给结论",
       contacts: { search: vi.fn(), read: vi.fn() },
       memory: { recall: vi.fn(async () => ({ items: [] })), stage: explicitStage },
       provider: new ScriptedAgentProvider(

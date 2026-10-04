@@ -879,3 +879,8 @@ describe("provider channel failure recovery",()=>{
   ok(await research.execute("search_public_subject",{subject_id:"one",channels:["web","weibo"]}));expect(execute).toHaveBeenCalledOnce();
  });
 });
+
+it("includes canonical profile context while excluding malformed/private anchors from the actual query",()=>{
+ expect(workspacePublicResearchQuery("Andrej Karpathy",[{kind:"handle",text:"https://github.com/karpathy"},{kind:"work",text:"nanoGPT"}])).toBe("Andrej Karpathy https://github.com/karpathy nanoGPT");
+ expect(workspacePublicResearchQuery("Andrej Karpathy",[{kind:"handle",text:"https://example.test/profile/test%40gmail.com"},{kind:"work",text:"NeedsTherapy"}])).toBe("Andrej Karpathy biography official website");
+});

@@ -15,7 +15,7 @@ import {
   resolveProductPrompt, promptReference, type PromptSnapshot,
   DEFAULT_AGENT_BUDGET,
   currentImageInspection, ArkCurrentImageInspector, type CurrentImageInspector,
-  publicSubjectRegistry, WorkspacePublicSubjectSearchSchema, WorkspacePublicSourceFetchSchema,
+  publicSubjectRegistry, publicSearchDeclined, publicContextAnchorsFromText, WorkspacePublicSubjectSearchSchema, WorkspacePublicSourceFetchSchema,
   WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES,
   WorkspaceConversationFinalOutputSchema,
   fingerprint,
@@ -24,6 +24,7 @@ import {
   type AgentToolResult,
   type AgentVisibleProgressStage,
   type ConversationMessage,
+  type MemoryProposalCandidateInput,
   type MemoryReviewInput,
   type RuntimeObservationContext,
 } from "@talent-signal/agent";
@@ -48,6 +49,15 @@ import {
 import { currentStableHandleOwner, type MemoryImageManifestEntry } from "./memoryReviewStore.js";
 import { LocalContactResearchClient, type ContactResearchClient } from "./contactResearchClient.js";
 import { createWorkspacePublicResearch } from "./workspacePublicResearch.js";
+import {
+  createFirstContactResearch,
+  firstContactNameCandidate,
+  firstContactResearchAnswerAlreadyCovered,
+  firstContactResearchAnswerSection,
+  withFirstContactNameCandidate,
+  type FirstContactResearchReceipt,
+  type FirstContactResearchSubject,
+} from "./firstContactResearch.js";
 
 
 export { WORKSPACE_CONVERSATION_SYSTEM_PROMPT } from "@talent-signal/agent";
@@ -124,6 +134,12 @@ export interface WorkspaceMemoryLookup {
     /** Exact host-admitted text for this one source, never combined fragments. */
     sourceText?: string;
     items: readonly WorkspaceMemoryProposalCandidate[];
+    /**
+     * Host-owned source-grounded person-name candidate for a first-contact
+     * proposal. The model never authors it; the governed staging adapter merges
+     * it into the proposal items once, without duplicating an existing name.
+     */
+    nameCandidate?: MemoryProposalCandidateInput | null;
   }): Promise<WorkspaceMemoryStagedProposal | null>;
 }
 
@@ -167,6 +183,8 @@ export interface WorkspaceConversationAgentExecution {
   event: WorkspaceConversationAgentEvent | null;
   /** Independent optional review reference; never the sole agent event. */
   memoryProposal: { proposal_id: string; revision: number } | null;
+  /** Same-run first-contact public research receipts (tentative, unconfirmed). */
+  firstContactResearch: readonly FirstContactResearchReceipt[];
   providerResult: AgentProviderResult;
 }
 
@@ -475,14 +493,86 @@ export async function executeWorkspaceConversationAgentCore(input: {
   const abort = new AbortController();
   const research = input.researchClient ? createWorkspacePublicResearch({
     client: input.researchClient, taskID: randomUUID(), authorizedSubjects: () => {
-      if (sourceTexts().some(text => /(?:不要|不许|别|禁止)[^，。！？;；\n]{0,12}(?:搜|查|检索|研究)|(?:do not|don['’]t|never)\s+(?:search|research|look up)/iu.test(text))) return [];
+      if (lookupTexts().some(text => publicSearchDeclined(text))) return [];
       return [...new Map([subjects.subjects(), ...sourceTexts().slice(1).map(text => publicSubjectRegistry(text).subjects())]
-        .flat().map(subject => [subject.id, subject])).values()];
+        .flat().map(subject => [subject.id, subject])).values()]
+        .map(subject => ({
+          id: subject.id,
+          name: subject.name,
+          ...(subject.anchors?.length ? { contextAnchors: subject.anchors } : {}),
+          ...(subject.isCurrent ? { isCurrent: subject.isCurrent } : {}),
+        }));
     }, signal: abort.signal,
   }) : null;
   const researchTools = research?.tools.map(tool => ({...tool,
     schema: tool.name === "search_public_subject" ? WorkspacePublicSubjectSearchSchema : WorkspacePublicSourceFetchSchema,
   })) ?? [];
+  // Host-enforced first-contact public research: every first-contact proposal
+  // attempts bounded search + fetch before presentation, or carries one
+  // explicit honest status. Disabled/unconfigured runs never pretend context
+  // was searched, and the explicit no-search decision always wins.
+  const hostResearchCompletions: import("@talent-signal/agent").HarnessToolCompletion[] = [];
+  const firstContactResearch = createFirstContactResearch({
+    research,
+    searchOptedOut: () => lookupTexts().some(text => publicSearchDeclined(text)),
+    onToolCompletion: receipt => { hostResearchCompletions.push(receipt); input.onToolCompletion?.(receipt); },
+  });
+  const firstContactReceipts: FirstContactResearchReceipt[] = [];
+  const attemptFirstContactResearch = async (
+    subject: FirstContactResearchSubject | null,
+  ): Promise<FirstContactResearchReceipt> => {
+    let receipt: FirstContactResearchReceipt;
+    try {
+      receipt = await firstContactResearch.attempt(subject);
+    } catch (error) {
+      abort.signal.throwIfAborted();
+      await input.assertCurrent?.();
+      if (error instanceof Error && ["PUBLIC_RESEARCH_CANCELLED", "PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT"].includes(error.message)) throw error;
+      receipt = {
+        status: "failed",
+        identity_status: "tentative",
+        subject_id: subject?.id ?? null,
+        subject_name: subject?.name ?? null,
+        searched_at: null,
+        citations: [],
+        summary: "Public search failed; no fetched context is available (tentative identity)",
+        detail: "FIRST_CONTACT_RESEARCH_FAILED",
+      };
+    }
+    firstContactReceipts.push(receipt);
+    return receipt;
+  };
+  // The host may research only its own registered subjects. A validated
+  // first-contact proposal admits its exact source-grounded proposed name as a
+  // tentative subject bound to the current source message; the model cannot
+  // register or widen anything.
+  const subjectForProposal = (
+    name: string,
+    binding: string,
+    groundingTexts: readonly string[],
+    anchors?: readonly import("@talent-signal/agent").PublicContextAnchorInput[],
+  ): FirstContactResearchSubject | null => {
+    const target = name.normalize("NFKC").trim();
+    if (!target || !groundingTexts.some(text => text.normalize("NFKC").includes(target))) return null;
+    const contextAnchors = [...(anchors??[]), ...groundingTexts.flatMap(text=>publicContextAnchorsFromText(target,text))];
+    const existing = subjects.subjects().find(subject => subject.name.normalize("NFKC").trim() === target);
+    if (existing && (existing.anchors?.length || !contextAnchors.length)) return { id: existing.id, name: existing.name };
+    const registered = subjects.registerTentative({
+      name: target,
+      binding,
+      isCurrent: async () => messageSources.has(binding),
+      ...(contextAnchors.length ? { anchors:contextAnchors } : {}),
+      groundingTexts,
+    });
+    return registered ? { id: registered.id, name: registered.name } : null;
+  };
+  const assertProposalCurrent = async (executionSignal?: AbortSignal) => {
+    abort.signal.throwIfAborted();
+    executionSignal?.throwIfAborted();
+    await input.assertCurrent?.();
+    abort.signal.throwIfAborted();
+    executionSignal?.throwIfAborted();
+  };
   const timeout = setTimeout(
     () => abort.abort(new Error("WORKSPACE_CONVERSATION_TIMEOUT")),
     durationMs,
@@ -733,6 +823,17 @@ export async function executeWorkspaceConversationAgentCore(input: {
       }
       if (itemSources.size > 1) return toolFailure(name, "MEMORY_SOURCE_REVIEW_SPLIT", "Review messages separately; one proposal cannot merge their provenance.");
       if (itemSources.size) memorySourceID = [...itemSources][0]!;
+      if (request.contact_decision === "new" && !currentCounterparty && newContactLocator?.kind !== "image_region") {
+        const nameSourceID = newContactLocator?.kind === "message"
+          ? newContactLocator.message_id ?? memorySourceID : memorySourceID;
+        if ((newContactLocator?.kind === "message" && newContactLocator.session_id && newContactLocator.session_id !== input.sessionID)
+          || !isGroundedExcerpt(request.person_display_label?.trim()??"",messageSources.get(nameSourceID)??"")
+          || (itemSources.size > 0 && nameSourceID !== memorySourceID)) {
+          return toolFailure(name,"MEMORY_SOURCE_UNGROUNDED","A new contact name must belong to the same current authored message as its Memory items.");
+        }
+        memorySourceID = nameSourceID;
+        request.new_contact_source_locator = {kind:"message",session_id:input.sessionID??null,message_id:nameSourceID};
+      }
       if (memorySourceID !== sourceMessageID && (imageRegions.length > 0))
         return toolFailure(name, "MEMORY_SOURCE_REVIEW_SPLIT", "Review the image and supplemental message separately.");
       for (const item of request.items) {
@@ -830,7 +931,38 @@ export async function executeWorkspaceConversationAgentCore(input: {
       if (runState.memoryProposal || memoryStagePending) return toolFailure(name,
         "MEMORY_PROPOSAL_ALREADY_STAGED", "Only one Memory proposal may be staged per turn.");
       memoryStagePending = true;
+      let firstContact: FirstContactResearchReceipt | null = null;
       try {
+        // Host-enforced bounded public search + fetch BEFORE presentation, or
+        // one explicit honest status. The model cannot skip or fake this, and a
+        // research failure never blocks the reviewable proposal.
+        if (request.contact_decision === "new") {
+          firstContact = await attemptFirstContactResearch(
+            currentCounterparty
+              ? (currentCounterparty.subject_id
+                ? { id: currentCounterparty.subject_id, name: currentCounterparty.name }
+                : null)
+              : subjectForProposal(newContactDisplayLabel, memorySourceID, [messageSources.get(memorySourceID) ?? ""]),
+          );
+        }
+        // Host-owned source-grounded person-name candidate for the visible
+        // direct-chat counterparty; the model never authors or duplicates it.
+        const nameCandidate = request.contact_decision === "new" && currentCounterparty
+          ? firstContactNameCandidate({
+              name: currentCounterparty.name,
+              nameExcerpt: currentCounterparty.source_excerpt,
+              sourceLocator: currentCounterparty.source_locator as MemoryProposalCandidateInput["source_locator"],
+              ...(currentCounterparty.source_warning ? { sourceWarning: currentCounterparty.source_warning } : {}),
+            })
+          : request.contact_decision === "new"
+            ? firstContactNameCandidate({
+                name: newContactDisplayLabel,
+                nameExcerpt: newContactDisplayLabel,
+                sourceLocator: {kind:"message",session_id:input.sessionID??null,message_id:memorySourceID},
+              })
+            : null;
+        await assertProposalCurrent(executionSignal);
+        if (currentCounterparty && !await imageInspection.counterparty()) throw new Error("PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT");
         staged = await input.memory.stage({
           surface: "chat",
           personID,
@@ -842,8 +974,11 @@ export async function executeWorkspaceConversationAgentCore(input: {
           sourceMessageID: memorySourceID,
           sourceText: messageSources.get(memorySourceID) ?? "",
           items: request.items,
+          ...(nameCandidate ? { nameCandidate } : {}),
         });
-      } catch {
+      } catch (error) {
+        await assertProposalCurrent(executionSignal);
+        if (error instanceof Error && ["PUBLIC_RESEARCH_CANCELLED", "PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT"].includes(error.message)) throw error;
         // An optional Memory suggestion must never destroy the helpful answer.
         return toolFailure(
           name,
@@ -875,6 +1010,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
           contact_status: staged.contactStatus,
           person_display_label: staged.personDisplayLabel,
           relationship_display_label: staged.relationshipDisplayLabel ?? null,
+          ...(firstContact ? { first_contact_research: firstContact } : {}),
           ...(staged.contactStatus === "ambiguous" ? { instruction: "A same-name contact needs human identity review in the card. Do not bind or create a duplicate automatically; explain the choice briefly." } : {}),
           consequence: "No Memory or contact changed; a human review card was staged.",
         },
@@ -1146,6 +1282,22 @@ export async function executeWorkspaceConversationAgentCore(input: {
         "An exact contact candidate already exists. Search its current identity clue and prepare an update only if uniquely resolved; otherwise clarify.");
     }
 
+    // A first-contact creation attempts bounded public search + fetch BEFORE
+    // the proposal is presented (host-enforced), or carries one explicit
+    // honest status. Updating existing state is not first contact.
+    const firstContact = request.operation === "propose_create"
+      ? await attemptFirstContactResearch(subjectForProposal(
+          request.display_name,
+          proposalSource[0],
+          [proposalSource[1]],
+          request.identity_clue
+            && (request.identity_clue.type === "public_profile_url" || request.identity_clue.type === "linkedin_url")
+            ? [{ kind: "handle" as const, text: request.identity_clue.value }]
+            : undefined,
+        ))
+      : null;
+
+    await assertProposalCurrent(executionSignal);
     const candidateFingerprint = fingerprint({
       operation: request.operation,
       payload: request,
@@ -1181,6 +1333,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         operation: request.operation,
         status: "needs_review",
         consequence: "No contact data changed.",
+        ...(firstContact ? { first_contact_research: firstContact } : {}),
         possible_duplicates: possibleDuplicates.map((person) => ({
               person_id: person.personID,
               display_label: person.displayLabel,
@@ -1304,11 +1457,24 @@ export async function executeWorkspaceConversationAgentCore(input: {
       if (counterparty) {
         abort.signal.throwIfAborted();
         await input.assertCurrent?.();
+        // Host-enforced bounded public search + fetch BEFORE the default card is
+        // presented, or one explicit honest status (tentative identity only).
+        await attemptFirstContactResearch(counterparty.subject_id ? {id:counterparty.subject_id,name:counterparty.name} : null);
+        await assertProposalCurrent();
+        if (!await imageInspection.counterparty()) throw new Error("PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT");
+        // The host stages the source-grounded name candidate itself; the model
+        // is never asked to invent a Memory item for this card.
+        const nameCandidate = firstContactNameCandidate({
+          name: counterparty.name,
+          nameExcerpt: counterparty.source_excerpt,
+          sourceLocator: counterparty.source_locator as MemoryProposalCandidateInput["source_locator"],
+          ...(counterparty.source_warning ? {sourceWarning: counterparty.source_warning} : {}),
+        });
         try {
           runState.memoryProposal = await input.memory.stage({surface:"chat",personID:null,contextID:null,
             contactDecision:"new",identityAuthority:"tentative",identityClue:null,
             newContact:{display_label:counterparty.name,relationship_context:`与${counterparty.name}的交流`,source_locator:counterparty.source_locator},
-            sourceMessageID,items:[]});
+            sourceMessageID,items:[],...(nameCandidate?{nameCandidate}:{})});
         } catch { /* An optional contact review must not discard the answer. */ }
         await input.assertCurrent?.();
       }
@@ -1316,6 +1482,17 @@ export async function executeWorkspaceConversationAgentCore(input: {
     const output = measureLabServerStageSync("validation", () => WorkspaceConversationFinalOutputSchema.parse(
       providerResult.structuredOutput,
     ));
+    if (hostResearchCompletions.length) {
+      providerResult.toolCompletions = [...(providerResult.toolCompletions??[]), ...hostResearchCompletions]
+        .sort((a,b)=>a.completedAt.localeCompare(b.completedAt));
+    }
+    // Fetched citations, retrieved_at and tentative identity status survive
+    // replay in the durable Session answer; only actually fetched receipts are
+    // rendered as background.
+    const withResearchSection = (body: string): string =>
+      firstContactReceipts.length === 0 || firstContactResearchAnswerAlreadyCovered(body, firstContactReceipts)
+        ? body
+        : body + firstContactResearchAnswerSection(firstContactReceipts);
     if (runState.memoryProposal?.contactStatus === "ambiguous" && "body" in output
       && !/同名|same.name/iu.test(output.body)) {
       output.body += /\p{Script=Han}/u.test(input.objective)
@@ -1351,7 +1528,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
               "这次没能完成整理，还没有保存任何内容。请重试，或补充说明你想推进的事。",
               false,
             )
-          : block("answer", output.title, output.body, false, runState.mcpInteraction),
+          : block("answer", output.title, withResearchSection(output.body), false, runState.mcpInteraction),
         event:
           !markupOnly && runState.readScope && resolvedPerson && resolvedContext
             ? {
@@ -1364,6 +1541,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
               }
             : null,
         memoryProposal: memoryRef(runState.memoryProposal),
+        firstContactResearch: firstContactReceipts,
         providerResult,
       };
     }
@@ -1386,7 +1564,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         seenLabels.add(label);
       }
       return {
-        block: block("clarification", output.title, output.body, true, runState.mcpInteraction),
+        block: block("clarification", output.title, withResearchSection(output.body), true, runState.mcpInteraction),
         event: candidates.length > 0
           ? {
               kind: "contact_candidates",
@@ -1396,6 +1574,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
             }
           : null,
         memoryProposal: memoryRef(runState.memoryProposal),
+        firstContactResearch: firstContactReceipts,
         providerResult,
       };
     }
@@ -1420,9 +1599,9 @@ export async function executeWorkspaceConversationAgentCore(input: {
         block: block(
           "answer",
           /\p{Script=Han}/u.test(input.objective) ? "已找到联系人" : "Contact found",
-          /\p{Script=Han}/u.test(input.objective)
+          withResearchSection(/\p{Script=Han}/u.test(input.objective)
             ? `我找到了 ${person.displayLabel} · ${context.displayLabel}，将只用这段关系的已授权上下文继续回答。`
-            : `I found ${person.displayLabel} · ${context.displayLabel} and will continue with only that relationship's authorized context.`,
+            : `I found ${person.displayLabel} · ${context.displayLabel} and will continue with only that relationship's authorized context.`),
           false,
         ),
         event: {
@@ -1434,6 +1613,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
           tool_summary: `Contact search · ${person.displayLabel} · ${context.displayLabel}`,
         },
         memoryProposal: memoryRef(runState.memoryProposal),
+        firstContactResearch: firstContactReceipts,
         providerResult,
       };
     }
@@ -1450,13 +1630,14 @@ export async function executeWorkspaceConversationAgentCore(input: {
       block: block(
         "identity_review",
         /\p{Script=Han}/u.test(input.objective) ? "联系人更改提议" : "Contact change proposed",
-        /\p{Script=Han}/u.test(input.objective)
+        withResearchSection(/\p{Script=Han}/u.test(input.objective)
           ? "我已准备一张可审阅卡片。确认前不会更改联系人。"
-          : "I prepared a review card. No contact will change until you confirm.",
+          : "I prepared a review card. No contact will change until you confirm."),
         true,
       ),
       event: runState.proposal,
       memoryProposal: memoryRef(runState.memoryProposal),
+      firstContactResearch: firstContactReceipts,
       providerResult,
     };
   } finally {
@@ -1596,6 +1777,7 @@ export async function executeWorkspaceConversationAgent(input: {
       sourceMessageID,
       sourceText,
       items,
+      nameCandidate,
     }) => withDatabaseTransaction(async (client) => {
       const admittedText = messageSources.get(sourceMessageID);
       if (admittedText === undefined || (sourceText !== undefined && sourceText !== admittedText)) return null;
@@ -1660,7 +1842,7 @@ export async function executeWorkspaceConversationAgent(input: {
               name: "workspace-conversation",
               version: "1",
             },
-            items: [...items] as MemoryProposalStageRequest["items"],
+            items: withFirstContactNameCandidate(items, nameCandidate ?? null) as MemoryProposalStageRequest["items"],
           },
           authority,
         );
