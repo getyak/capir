@@ -268,3 +268,8 @@ clean, no active Pi writer, storage51GiB against30GiB floor. Existing shared art
 registry warnings are outside this task and are not approval to clean other work.
 Owned disposable PostgreSQL database and role are capir_test_create_20261004.
 Private media/config/artifacts are under /private/tmp/ai-test-capir-test-create.VfCizc.
+
+Task1 Pi batch: `20261004-103155-4faef287`, frozen source `b69d10d2`,
+Xiaomi Token Plan MiMo Pro. Base99 migrations and passwordCredential2/2 passed.
+Installed CLI baseline confirmed global readable and nested test help fail;
+sanitized red receipts are retained in the owned private artifact.

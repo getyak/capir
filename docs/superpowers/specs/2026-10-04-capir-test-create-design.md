@@ -1,6 +1,6 @@
 # capir test account creation
 
-Status: design for human review; implementation has not started.
+Status: user-approved design; implementation started on 2026-10-04.
 
 ## Outcome
 
