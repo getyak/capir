@@ -377,11 +377,14 @@ async function resolveRunPassword(
         { clientState: requestIds(entry, entry?.request_id ?? "") },
       );
     }
-    // A stored run item exists only for generated passwords; replay recovers
-    // the original one even when the journal entry itself was lost.
+    // The semantic intent (including credential mode) was validated before
+    // reading this item. A crash can leave its matching intent without the
+    // recovery marker, but the preserved generated password still belongs
+    // to this operation. Fresh orphan items are rejected above.
     return {
       password: existing,
-      generated: entry?.credential_identity === "generated" || entry === undefined,
+      generated: entry?.credential_identity === "generated" ||
+        (entry?.credential_identity === undefined && supplied === undefined),
       resumed: true,
       store,
     };
@@ -739,6 +742,18 @@ export async function runTestStop(
     operatorKey,
     deps,
   );
+  if (run.cleanup_error !== null) {
+    throw new CapirCliError(
+      "CAPIR_TEST_CLEANUP_INCOMPLETE",
+      EXIT.INFRASTRUCTURE,
+      `Access was revoked, but cleanup failed (${run.cleanup_error}). Resume the same stop with --request-id ${requestId} after resolving the cleanup failure.`,
+      {
+        run,
+        recoverableRequestId: requestId,
+        clientState: requestIds(deps.journal.find(requestId), requestId),
+      },
+    );
+  }
   return {
     payload: {
       run,
@@ -750,6 +765,7 @@ export async function runTestStop(
       `run id: ${run.id}`,
       `state: ${run.state}`,
       `local credential removed: ${credential_removed ? "yes" : "no"}`,
+      ...(run.state === "deleting" ? [`external cleanup pending; check: capir test status ${run.id} --env ${environment.name}`] : []),
     ].join("\n"),
   };
 }

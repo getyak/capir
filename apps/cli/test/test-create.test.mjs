@@ -142,7 +142,7 @@ async function startTestBackend(options = {}) {
         }
         for (const entry of runs.values()) {
           if (entry.run.id === stop[1]) {
-            entry.run = { ...entry.run, state: "deleted" };
+            entry.run = { ...entry.run, state: options.stopState ?? "deleted", cleanup_error: options.cleanupError ?? null };
             return send(200, { schema_version: "capir-test.v1", run: entry.run });
           }
         }
@@ -429,6 +429,28 @@ describe("test command isolation from model prompts", () => {
 });
 
 describe("exact recovery and conflict boundaries", () => {
+  it("reports incomplete cleanup honestly and retains same-operation recovery", async (t) => {
+    const directory = scratch();
+    const backend = await startTestBackend({ stopState: "deleting", cleanupError: "media_cleanup_failed" });
+    t.after(() => backend.close());
+    const env = prepared(directory, backend.origin);
+    const created = JSON.parse((await runCliBin(["test", "create", "--env", "t"], env)).stdout);
+    for (const human of [false, true]) {
+      const requestId = randomUUID();
+      const result = await runCliBin(["test", "stop", created.run.id, "--env", "t", "--request-id", requestId, ...(human ? ["--human"] : [])], env);
+      assert.equal(result.code, 3, result.stdout);
+      assert.ok(result.stdout.includes("media_cleanup_failed"));
+      assert.ok(!result.stdout.includes(created.generated_credential.password));
+      if (!human) {
+        const envelope = JSON.parse(result.stdout);
+        assert.equal(envelope.ok, false);
+        assert.equal(envelope.run.state, "deleting");
+        assert.equal(envelope.error.recoverable_request_id, requestId);
+      }
+    }
+    assert.deepEqual(keyringEntries(directory), {}, "revocation still prunes this operation's local credential");
+  });
+
   it("response_loss_reuses_password_and_request", async (t) => {
     const directory = scratch();
     const backend = await startTestBackend({ dropFirstCreate: true });
@@ -652,6 +674,39 @@ describe("browser readiness is separate from creation", () => {
 
 
 describe("default generated-operation identity and recovery", () => {
+  it("recovers the generated credential after a crash between keyring and journal writes", async (t) => {
+    const directory = scratch();
+    const backend = await startTestBackend();
+    t.after(() => backend.close());
+    const journal = new OperationJournal(join(directory, "config"));
+    const persistMode = journal.setCredentialIdentity.bind(journal);
+    let crash = true;
+    journal.setCredentialIdentity = (...args) => {
+      if (crash) {
+        crash = false;
+        throw new Error("simulated process death after keyring write");
+      }
+      return persistMode(...args);
+    };
+    const deps = inProcessDeps(directory, backend.origin, { journal });
+    const requestId = randomUUID();
+    const argv = ["test", "create", "--env", "t", "--request-id", requestId];
+    const interrupted = await runCli(argv, deps);
+    assert.equal(interrupted.exitCode, 3);
+    assert.equal(journal.find(requestId).credential_identity, undefined);
+    assert.equal(backend.runs.size, 0, "the crash occurs before dispatch");
+    const recovered = await runCli(argv, deps);
+    assert.equal(recovered.exitCode, 0, recovered.output);
+    const credential = JSON.parse(recovered.output).generated_credential;
+    assert.ok(credential?.password, "the preserved random password must be returned");
+    assert.equal(journal.find(requestId).credential_identity, "generated");
+    const replay = await runCli(argv, deps);
+    assert.equal(replay.exitCode, 0, replay.output);
+    assert.deepEqual(JSON.parse(replay.output).generated_credential, credential);
+    assert.equal(backend.runs.size, 1, "both retries recover one run");
+    assert.ok(!readFileSync(journal.path, "utf8").includes(credential.password));
+  });
+
   it("default_generated_create_keeps_one_journal_identity_and_stop_prunes", async (t) => {
     const directory = scratch();
     const backend = await startTestBackend();

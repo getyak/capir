@@ -36,6 +36,12 @@ capir test stop <run-id> --env <name>
   preserved credential. Recovery never rotates, resets or allocates another run.
 - `--open web` opens a fresh isolated browser context through a one-use
   private handoff; the secret never appears in a URL.
+- Provisioned identities enter the workspace directly. Permanent sign-in
+  method changes and account reconciliation reject test identities on either
+  side of the transaction.
+- `stop` revokes access first. Cleanup failures return exit code `3`, the
+  canonical run and the same recoverable request id. External cleanup still
+  pending without a failure is reported separately in human output.
 
 Machine callers add `--json` for the stable help schema (arguments, defaults,
 examples, error codes) and for operation envelopes. Plain help is readable

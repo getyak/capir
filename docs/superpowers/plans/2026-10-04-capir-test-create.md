@@ -301,3 +301,19 @@ The reviewer closed all four findings with no new confirmed P0/P1. CLI/Web and
 the final whole-branch review, delivery and deployed acceptance remain pending.
 
 Root Task 2 checkpoint (2026-10-04): adopted 77 CLI/Web/documentation/CI files without replacing the reviewed backend. The Pi runner correctly rejected two mechanical wiki-routing files outside its original list; root inspected and explicitly accepted only those required documentation changes. Root checks passed: CLI 162/162 (zero skips), full Web 1737/1737, Web typecheck/lint, docs:check, and 10 executable CI-scope tests. The CI aggregate now denies failed/cancelled/missing/skipped runtime CLI jobs, and the MCP retry test waits for actual Web Crypto dispatch rather than a fixed microtask count. Web loopback transport preserves the separately registered backend origin, private cookies are bounded by both deadlines, and the public test entry has a themed responsive layout. These are local implementation results; installed staging CLI/Web/MCP and Notion acceptance remain Task 3.
+
+Whole-branch review of `906582e3` identified a generated-password recovery
+window between keyring persistence and journal mode persistence. Root retained
+the failing production CLI regression and fixed exact-intent recovery without
+adopting orphan credentials. Real HTTP/PostgreSQL counterexamples also admitted
+Lab credential-change attempts and reconciliation proposals; no transfer into a
+real account was executed. Locked user-kind guards now reject permanent
+credential changes and either reconciliation direction. Newly provisioned
+identities skip onboarding, and cleanup failures return an incomplete receipt
+with the original recovery id. CLI checks passed 164/164, ordinary-account
+credential regressions passed 10/10, and the reviewer independently passed the
+three crash/cleanup/orphan checks. The complete provisioning suite passed 30/30
+after assigning explicit deadlines to multi-instance and real-lock tests that
+had retained the runner's five-second default. All original assertions remain.
+Backend typecheck and regenerated wiki/docs checks passed. Source-frozen review
+closure remains pending before PR delivery and deployed acceptance.

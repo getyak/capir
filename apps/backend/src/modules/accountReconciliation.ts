@@ -525,10 +525,13 @@ async function lockBothParties(
     );
   }
   for (const party of [first, second]) {
-    await client.query(
-      `SELECT profile_revision FROM users WHERE account_id = $1 AND id = $2 FOR ${mode}`,
+    const user = await client.query<{ kind: string }>(
+      `SELECT profile_revision, kind FROM users WHERE account_id = $1 AND id = $2 FOR ${mode}`,
       [party.accountId, party.userId],
     );
+    if (user.rows[0]?.kind === "lab_human") {
+      throw new ApiError(403, "TEST_ACCOUNT_READ_ONLY", "Test accounts cannot transfer permanent sign-in methods.");
+    }
   }
 }
 

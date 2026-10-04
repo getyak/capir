@@ -484,8 +484,8 @@ export class CapirTestsService {
           `Test workspace · ${runId.slice(0, 8)}`,
         ]);
         await client.query(
-          `INSERT INTO users(id, account_id, email, display_name, kind, username)
-           VALUES ($1, $2, $3, 'Test user', 'lab_human', $4)`,
+          `INSERT INTO users(id, account_id, email, display_name, kind, username, onboarding_status)
+           VALUES ($1, $2, $3, 'Test user', 'lab_human', $4, 'skipped')`,
           [userId, accountId, email, handle],
         );
         await client.query(

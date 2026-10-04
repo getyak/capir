@@ -59,3 +59,8 @@ digest and the created, updated, or removed pages.
 
 - Source digest: `76bce04c5912c293`
 - Updated: `docs/operations/capir-cli.md`
+
+## 2026-10-04T07:33:14.690Z
+
+- Source digest: `2cb0e7ef7d078f27`
+- Updated: `docs/operations/capir-cli.md`

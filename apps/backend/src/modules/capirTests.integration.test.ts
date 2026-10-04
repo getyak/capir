@@ -291,6 +291,70 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
     await pool?.end();
   }, 120_000);
 
+  it("keeps provisioned identities outside permanent credential changes", async () => {
+    const created = await createRun();
+    expect(created.response.statusCode, created.response.body).toBe(200);
+    const login = await passwordLogin(created.username, created.password);
+    expect(login.statusCode).toBe(200);
+    const headers = { authorization: `Bearer ${login.json().access_token}` };
+    const settings = (await app.inject({ method: "GET", url: "/v1/account/settings", headers })).json();
+    for (const intent of ["change_password", "link_provider"] as const) {
+      const result = await app.inject({
+        method: "POST", url: "/v1/account/login-methods/attempts", headers,
+        payload: {
+          id: randomUUID(), intent, ...(intent === "link_provider" ? { provider: "google" } : {}),
+          origin: "client:capir-tests", client_label: "capir-tests",
+          step_up: { kind: "password", password: created.password },
+          expected_account_revision: settings.workspace.revision,
+          expected_user_revision: settings.user.revision,
+        },
+      });
+      expect(result.statusCode, result.body).toBe(403);
+      expect(result.json().error.code).toBe("TEST_ACCOUNT_READ_ONLY");
+    }
+    const attempts = await pool!.query("SELECT 1 FROM credential_change_attempts WHERE account_id=$1", [created.run.account_id]);
+    expect(attempts.rowCount).toBe(0);
+    expect((await passwordLogin(created.username, created.password)).statusCode).toBe(200);
+  }, 30_000);
+
+  it("refuses reconciliation across the synthetic account boundary in both directions", async () => {
+    const created = await createRun();
+    expect(created.response.statusCode, created.response.body).toBe(200);
+    const accountId = randomUUID();
+    const userId = randomUUID();
+    const username = `ordinary-${randomBytes(4).toString("hex")}`;
+    const password = generatedPassword();
+    await insertPasswordFixtureUser(accountId, userId, `${username}@example.test`, username, password);
+    try {
+      const ordinary = { username, password, accountId };
+      const synthetic = { username: created.username, password: created.password, accountId: created.run.account_id };
+      for (const [canonical, duplicate] of [[synthetic, ordinary], [ordinary, synthetic]] as const) {
+        const login = await passwordLogin(canonical.username, canonical.password);
+        expect(login.statusCode).toBe(200);
+        const headers = { authorization: `Bearer ${login.json().access_token}` };
+        const settings = (await app.inject({ method: "GET", url: "/v1/account/settings", headers })).json();
+        const result = await app.inject({
+          method: "POST", url: "/v1/account/reconciliations/prepare", headers,
+          payload: {
+            id: randomUUID(), proof: { kind: "password", identifier: duplicate.username, password: duplicate.password },
+            step_up: { kind: "password", password: canonical.password },
+            expected_account_revision: settings.workspace.revision,
+            expected_user_revision: settings.user.revision,
+          },
+        });
+        expect(result.statusCode, result.body).toBe(403);
+        expect(result.json().error.code).toBe("TEST_ACCOUNT_READ_ONLY");
+      }
+      const attempts = await pool!.query("SELECT 1 FROM account_reconciliation_requests WHERE account_id=ANY($1::uuid[]) OR duplicate_account_id=ANY($1::uuid[])", [[accountId, created.run.account_id]]);
+      expect(attempts.rowCount).toBe(0);
+      expect((await passwordLogin(username, password)).statusCode).toBe(200);
+    } finally {
+      // Only these fixture-owned requests can exist when running the red test.
+      await pool!.query("DELETE FROM account_reconciliation_requests WHERE account_id=$1 OR duplicate_account_id=$1", [accountId]);
+      await removePasswordFixtureUser(accountId);
+    }
+  }, 30_000);
+
   it("creates a usable daily test account and admits a real password login with a matching Lab entry", async () => {
     const requestId = randomUUID();
     const suppliedPassword = randomBytes(18).toString("base64url");
@@ -326,6 +390,9 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
     expect(session.user.id).toBe(run.user_id);
     expect(session.user.kind).toBe("lab_human");
     expect(session.user.username).toBe(username);
+    const onboarding = await app.inject({ method: "GET", url: "/v1/account/onboarding", headers: { authorization: `Bearer ${session.access_token}` } });
+    expect(onboarding.statusCode, onboarding.body).toBe(200);
+    expect(onboarding.json().status).toBe("skipped");
     expect(Boolean(session.access_token), "a real session token is required").toBe(true);
     expect(login.body.includes(suppliedPassword), "login output must not echo the password").toBe(false);
 
@@ -672,7 +739,7 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
       await serialPool.end();
       await stopRun(String(created.run.id));
     }
-  });
+  }, 30_000);
 
   it("takes the workspace fence before rejected-password bookkeeping locks its credential", async () => {
     const created = await createRun();
@@ -715,7 +782,7 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
       await rejected;
       await stopRun(String(created.run.id));
     }
-  });
+  }, 60_000);
 
   it.each(["webOrigin", "backendOrigin", "disabled"] as const)("denies operator test passwords and sessions on a %s instance", async (setting) => {
     const created = await createRun();
@@ -739,7 +806,7 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
       await foreign.close();
       await stopRun(String(created.run.id));
     }
-  });
+  }, 30_000);
 
   it("serializes exact create replay with principal rotation before verifying its credential", async () => {
     const created = await createRun();
@@ -778,7 +845,7 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
       await pool!.query("UPDATE capir_test_provisioners SET generation=1 WHERE label='configured'");
       await stopRun(String(created.run.id));
     }
-  });
+  }, 60_000);
 
   it("binds an existing operator test MCP bearer to the enabled serving origin pair", async () => {
     const created = await createRun();
@@ -814,7 +881,7 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
       for (const instance of instances.reverse()) await instance.close();
       await stopRun(String(created.run.id));
     }
-  });
+  }, 30_000);
 
   it("denies provisioning when disabled and truthfully discloses capabilities", async () => {
     const disabledApp = await buildTestApp({
@@ -1047,7 +1114,7 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
       await foreignInstance.close();
       await stopRun(String(created.run.id));
     }
-  });
+  }, 30_000);
 
   it("creates one-use handoffs that admit exactly one matching session per run", async () => {
     const created = await createRun();
