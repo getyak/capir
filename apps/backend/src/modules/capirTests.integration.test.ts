@@ -848,6 +848,30 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
     await ensureCapirTestProvisioningPrincipal(pool!, { ...settings, provisioningKey });
   }, 30_000);
 
+  it.each(["webOrigin", "backendOrigin"] as const)("rejects a handoff on an instance with a different %s without consuming it", async (originSetting) => {
+    const created = await createRun();
+    expect(created.response.statusCode).toBe(200);
+    const handoff = await app.inject({
+      method: "POST", url: `/v1/capir/tests/${created.run.id}/handoffs`,
+      headers: provisioningHeaders(), payload: { request_id: randomUUID() },
+    });
+    expect(handoff.statusCode).toBe(200);
+    const payload = { handoff_secret: handoff.json().handoff_secret, web_origin: webOrigin };
+    const headers = { "x-capir-web-consumer-key": webConsumerKey };
+    const foreignInstance = await buildTestApp({ ...mainSettings(), [originSetting]: "https://foreign-instance.test.invalid" });
+    try {
+      await foreignInstance.ready();
+      const refused = await foreignInstance.inject({ method: "POST", url: "/v1/capir/tests/handoffs/exchange", headers, payload });
+      expect(refused.statusCode, "the consumer key must not authorize a different deployment origin pair").toBe(403);
+      expect((await pool!.query("SELECT id FROM sessions WHERE account_id=$1", [created.run.account_id])).rowCount).toBe(0);
+      const valid = await app.inject({ method: "POST", url: "/v1/capir/tests/handoffs/exchange", headers, payload });
+      expect(valid.statusCode, "a denied exchange must preserve the one-use handoff").toBe(200);
+      expect((await pool!.query("SELECT id FROM sessions WHERE account_id=$1", [created.run.account_id])).rowCount).toBe(1);
+    } finally {
+      await foreignInstance.close();
+    }
+  });
+
   it("creates one-use handoffs that admit exactly one matching session per run", async () => {
     const created = await createRun();
     expect(created.response.statusCode, created.response.body).toBe(200);

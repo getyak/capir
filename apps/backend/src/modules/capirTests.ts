@@ -774,7 +774,11 @@ export class CapirTestsService {
       if (row.consumed_at !== null || row.expires_at.getTime() <= Date.now()) {
         throw new ApiError(409, "CAPIR_TEST_HANDOFF_CONSUMED", "This one-use handoff has already been exchanged.");
       }
-      if (request.web_origin !== row.web_origin) {
+      if (
+        request.web_origin !== row.web_origin ||
+        row.web_origin !== this.config.capirTests?.webOrigin ||
+        row.backend_origin !== this.config.capirTests?.backendOrigin
+      ) {
         throw new ApiError(403, "CAPIR_TEST_ORIGIN_DENIED", "This handoff is bound to an exact origin.");
       }
       const principalActive =

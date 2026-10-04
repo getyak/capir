@@ -13,6 +13,7 @@ import type { Pool, PoolClient } from "pg";
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
+import { assertAccountActive } from "./accountIdentity.js";
 import { assertSessionForChat } from "./agentSessionSources.js";
 import { readConversationMessageImageManifests } from "./conversationMessageImages.js";
 import { publishConversationQueueChanged } from "./conversationQueueLive.js";
@@ -402,16 +403,22 @@ export async function refreshConversationQueueLease(
   pool: Pool,
   fence: ConversationQueueRunFence,
 ): Promise<{ cancelRequested: boolean } | null> {
-  const row = (
-    await pool.query<{ cancel_requested: boolean }>(
-      `UPDATE conversation_queue_entries
-       SET lease_expires_at=now()+($6::int * interval '1 millisecond'), updated_at=now()
-       WHERE ${fencePredicateAllowCancel(1)}
-       RETURNING cancel_requested`,
-      [...fenceValues(fence), CONVERSATION_QUEUE_LEASE_MS],
-    )
-  ).rows[0];
-  return row ? { cancelRequested: row.cancel_requested } : null;
+  return inTransaction(pool, async (client) => {
+    // MCP staging holds the account fence before the queue claim. Acquire the
+    // retirement fence first too; taking the queue row before its write trigger
+    // waits on the account would deadlock with staging's claim revalidation.
+    await assertAccountActive(client, fence.accountId);
+    const row = (
+      await client.query<{ cancel_requested: boolean }>(
+        `UPDATE conversation_queue_entries
+         SET lease_expires_at=now()+($6::int * interval '1 millisecond'), updated_at=now()
+         WHERE ${fencePredicateAllowCancel(1)}
+         RETURNING cancel_requested`,
+        [...fenceValues(fence), CONVERSATION_QUEUE_LEASE_MS],
+      )
+    ).rows[0];
+    return row ? { cancelRequested: row.cancel_requested } : null;
+  });
 }
 
 export async function assertConversationQueueOwnedClaim(

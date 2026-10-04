@@ -121,7 +121,7 @@ The user confirmed the written design with `okk` on 2026-10-04.
   before cleanup; local data/password/session deletion and pending broker effects
   are distinguished. Enforce exact operator ownership and origin/generation at
   every admission/publication boundary, including response-loss recovery.
-- [ ] **Step 6: Run focused tests and relevant regression groups.** Commands:
+- [x] **Step 6: Run focused tests and relevant regression groups.** Commands:
   `pnpm --filter @talent-signal/contracts build`;
   `pnpm --filter @talent-signal/backend typecheck`;
   `pnpm --filter @talent-signal/backend exec vitest run capirTests` plus affected
@@ -248,7 +248,7 @@ receipts; accurate Notion MCP/service chapter only.
 - [x] Implementation plan drafted and self-reviewed against every spec section.
 - [x] Human review of this written implementation plan: user explicitly approved
   implementation on 2026-10-04; Pi/MiMo remains the selected coding method.
-- [ ] Task 1 implementation and verification.
+- [x] Task 1 implementation and local verification; final review and deployment remain Task 3.
 - [ ] Task 2 implementation and verification.
 - [ ] Task 3 review, installed-command proof, deployment and final acceptance.
 
@@ -276,3 +276,14 @@ Task1 Pi batch: `20261004-103155-4faef287`, frozen source `b69d10d2`,
 Xiaomi Token Plan MiMo Pro. Base99 migrations and passwordCredential2/2 passed.
 Installed CLI baseline confirmed global readable and nested test help fail;
 sanitized red receipts are retained in the owned private artifact.
+
+Root Task 1 verification after adoption: all 26 provisioning/password/client
+checks passed on the owned PostgreSQL database with the exact historical staging
+087 schema, and all 151 affected queue/MCP checks passed without skipped tests.
+Backend typecheck and diff checks passed. Two independently reproduced issues
+were corrected: heartbeat now acquires the account retirement fence before its
+queue row, preventing the observed account/claim lock inversion; private handoff
+exchange verifies both origins against the serving instance before consuming
+the one-use secret. Real PostgreSQL lock barriers and wrong-instance HTTP tests
+retain their failing and passing receipts. Existing account-identity baseline
+failures remain separately classified; these results are not deployment proof.
