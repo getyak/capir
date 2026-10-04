@@ -57,10 +57,13 @@ the supported set and actual expiration timestamp. No non-expiring accounts.
 
 `--username` uses the existing username validator and uniqueness rules. Omitted
 names are unique per run. A collision returns a stable conflict without changing
-the existing user's credentials or data. Synthetic email ownership remains
-explicit: generated addresses use the internal test namespace, and an
-email-shaped supplied username follows the existing username/email invariant.
-It must not silently claim or verify a real third party's email address.
+the existing user's credentials or data. Generated email addresses use the
+reserved `lab.invalid` namespace. Email-shaped supplied usernames are accepted
+only in that namespace and follow the existing username/email invariant; other
+email domains are rejected, since this command proves no email ownership.
+Under the same database identity lock, a supplied handle is compared with both
+existing login usernames and primary emails, using the actual login normalizer.
+It cannot create a second identifier match that breaks an existing user's login.
 
 Only one of `--password` and `--password-stdin` is accepted. Supplied passwords
 follow the existing password limits. With neither option, the CLI generates at
@@ -100,6 +103,50 @@ including before the next cleanup sweep. Production simulated auth stays off.
 Test identities never authorize account invitations, provider linking to another
 user, access to a real person's data, or permanent account conversion.
 
+### Operator ownership and session lineage
+
+Current Lab creation requires an active non-Lab parent human session; its owners
+reference users. The new flow cannot manufacture a human AuthContext or skip
+those checks. Introduce a control-scope provisioning principal with an opaque ID,
+allowed origin pair, active/revoked state and credential generation. Operator
+credentials are high-entropy service credentials, not password credentials.
+
+Append schema supporting exactly two workspace ownership forms: the existing
+human account/user owner pair, or one provisioning-principal ID. These forms are
+mutually exclusive. Existing human owner foreign keys and authority checks stay
+effective; operator-owned runs leave human owner fields null. The operator
+registry and its audit metadata are classified explicitly as control scope.
+
+Extend Lab entries with the same exclusive lineage: an existing human parent
+session or an operator-principal ID and generation. An operator entry is active
+only when the target account/user/session all match that workspace, the entry
+and workspace are active and unexpired, and the principal remains enabled at the
+recorded generation for those exact origins. A principal revocation invalidates
+its entries even if cleanup is pending. Human parent-session admission keeps its
+existing semantics. One shared authority predicate governs every Lab API/session
+read; no broad `lab_human` exemption is introduced.
+
+The new operator API owns only its own run creation, status, stop and handoff.
+It does not reuse a human capir OAuth grant to pretend a prior human approval.
+New operator handoffs use the trusted Web consumer key, a one-use secret/private
+POST, exact account/run/origin binding and the same lineage/expiry recheck.
+Existing Stage A human authorization and strict replay remain separate.
+
+### Real password admission
+
+After existing scrypt verification, a Lab password login must lock its canonical
+workspace and matching provisioned target user inside the login transaction.
+Only an active, unexpired run with a matching enabled principal is admitted.
+That transaction creates both the session and its matching Lab entry, with
+session/entry expiration clamped to the run deadline. It must not mint a bare
+session that fails the Lab authority predicate on its first read.
+
+Stop/expiry transitions take the same workspace lock. If stop wins, login
+creates no session; if login wins, stop revokes that session/entry. The ordinary
+human password path remains unchanged. CLI password-based entry, direct Web
+login, private handoff and authenticated readback all use this canonical rule;
+the browser must not invent missing entry/session relationships.
+
 ## Atomic creation and recovery
 
 The backend owns atomic creation of the isolated account, user, salted scrypt
@@ -120,6 +167,10 @@ are retained only in a run-specific OS-keyring item until run stop/expiry,
 never in the plaintext journal. Semantic conflict checks include username,
 credential identity, preset, origin and lifetime. The backend stores only a
 password hash, not a reversible password or a fast unsalted password digest.
+For replay, lock the original operation and verify the submitted password with
+the stored scrypt credential; an opaque identity match or equality between
+fresh randomly salted hashes is insufficient. A different password on the same
+request ID is a semantic conflict and never rotates the previous credential.
 An ambiguous response is recovered by exact request ID, never by creating
 another account automatically. A conflicting existing keyring entry is not
 overwritten. Cancellation must settle or report pending allocation honestly.
