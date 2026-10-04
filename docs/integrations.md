@@ -87,7 +87,13 @@ explicit read scopes. Browser sessions and provider credentials are never
 exported as client credentials. Member suspension or role changes revoke prior
 grants permanently; reinstatement does not restore them. Published projections
 exclude raw evidence, conversations, contact handles and external writes.
-Transport support and deployment configuration live in the
+Remote tool calls need one exact, single-use human approval bound to the
+original discovered input schema; resolved results re-enter the same
+conversation as durable receipts with provenance and never become confirmed
+relationship evidence. Optional Nango-mediated OAuth binds a server-generated
+connect request to the approved endpoint and account identity; without
+configuration OAuth is explicitly unavailable. Transport support and
+deployment configuration live in the
 [MCP operations guide](operations/mcp-extensions.md).
 
 ### Model providers

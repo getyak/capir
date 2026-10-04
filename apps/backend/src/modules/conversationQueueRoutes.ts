@@ -115,6 +115,13 @@ export function registerConversationQueueRoutes(
           },
         });
       }
+      if ((request.body as { host_result?: unknown }).host_result !== undefined) {
+        throw new ApiError(
+          422,
+          "CONVERSATION_QUEUE_HOST_RESULT_REFUSED",
+          "Host tool results are written by the governed host path and cannot be submitted by a client.",
+        );
+      }
       const result = await admitConversationQueueEntry(
         pool,
         request.auth,

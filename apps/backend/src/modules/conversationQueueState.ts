@@ -6,6 +6,7 @@ import {
   type ConversationQueueEntry,
   type ConversationQueueEntryStatus,
   type ConversationQueueSnapshot,
+  type McpHumanResult,
 } from "@talent-signal/contracts";
 import type { Pool, PoolClient } from "pg";
 
@@ -28,6 +29,7 @@ const ACTIVE_STATUSES: ConversationQueueEntryStatus[] = [
 ];
 
 export interface ConversationQueueEntryRow {
+  host_result: unknown;
   account_id: string;
   session_id: string;
   id: string;
@@ -89,6 +91,8 @@ export class ConversationQueueLeaseLostError extends Error {
 
 export interface ClaimedConversationQueueEntry {
   accountId: string;
+  /** Host-only typed MCP human result; never a user-authored claim. */
+  hostResult: import("@talent-signal/contracts").McpHumanResult | null;
   sessionId: string;
   authSessionId: string | null;
   entryId: string;
@@ -127,6 +131,7 @@ function toEntry(
     sequence: asNumber(row.sequence),
     status: row.status,
     objective: row.objective ?? "",
+    ...(row.host_result ? { host_result: row.host_result as McpHumanResult } : {}),
     ...(images && images.length > 0 ? { images } : {}),
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
@@ -345,6 +350,9 @@ export async function claimNextConversationQueueEntry(
     await bumpConversationQueueState(client, input.accountId, input.sessionId);
     return {
       accountId: updated.account_id,
+      hostResult: updated.host_result
+        ? (updated.host_result as import("@talent-signal/contracts").McpHumanResult)
+        : null,
       sessionId: updated.session_id,
       authSessionId: updated.auth_session_id,
       entryId: updated.id,
@@ -855,6 +863,9 @@ export async function reclaimStaleConversationQueueEntry(
     await bumpConversationQueueState(client, input.accountId, input.sessionId);
     return {
       accountId: updated.account_id,
+      hostResult: updated.host_result
+        ? (updated.host_result as import("@talent-signal/contracts").McpHumanResult)
+        : null,
       sessionId: updated.session_id,
       authSessionId: updated.auth_session_id,
       entryId: updated.id,

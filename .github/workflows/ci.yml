@@ -323,6 +323,7 @@ jobs:
           pnpm --filter @talent-signal/backend exec vitest run src/modules/conversationQueue.integration.test.ts src/modules/conversationQueueStream.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/timeActivities.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/memoryReview.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism src/modules/mcpInteractions.integration.test.ts src/modules/mcpConversation.integration.test.ts src/modules/mcpOauthCleanup.integration.test.ts
 
       - name: Verify account authority and isolated workspace cleanup
         env:

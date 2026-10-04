@@ -1,4 +1,6 @@
 import { Type, type Static } from "@sinclair/typebox";
+
+import { McpHumanResultSchema } from "./mcpInteractionSchemas.js";
 import { CONTRACT_VERSION } from "./constants.js";
 
 /**
@@ -83,6 +85,9 @@ export const ConversationQueueEntrySchema = Type.Object(
     status: ConversationQueueEntryStatusSchema,
     // Empty only for an images-only message; the client renders a placeholder.
     objective: Type.String({ maxLength: 1_000 }),
+    // Canonical redacted host result provenance for transcript projection.
+    // This output field carries no client authority to admit a continuation.
+    host_result: Type.Optional(McpHumanResultSchema),
     images: Type.Optional(
       Type.Array(ConversationImageManifestSchema, { maxItems: 10 }),
     ),
@@ -155,6 +160,9 @@ export const ConversationQueueAdmitRequestSchema = Type.Object(
     images: Type.Optional(
       Type.Array(ConversationImageUploadSchema, { maxItems: 10 }),
     ),
+    // Host-owned typed MCP human result. Only the governed host writes it; a
+    // client submission is refused and it never becomes a user-authored claim.
+    host_result: Type.Optional(McpHumanResultSchema),
   },
   obj,
 );

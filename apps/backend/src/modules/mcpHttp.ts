@@ -29,6 +29,8 @@ export interface McpExchangeInput {
   headers: Record<string, string>;
   maxBytes?: number;
   method: "GET" | "POST";
+  /** Fires once the request body has been handed to the socket. */
+  onRequestSent?: () => void;
   target: McpResolvedTarget;
   timeoutMs?: number;
 }
@@ -231,5 +233,8 @@ export async function mcpPinnedExchange(
       request.write(input.body);
     }
     request.end();
+    // The effect leg now owns a possible external outcome: every later
+    // unreadable failure must be treated as outcome_unknown by callers.
+    input.onRequestSent?.();
   });
 }

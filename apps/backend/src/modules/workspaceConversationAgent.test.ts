@@ -117,6 +117,19 @@ describe("workspace conversation Agent", () => {
         byteSize: 3, contentHash: "a".repeat(64), dataBase64: "AAAA" }] } : {}) });
     expect(run).toHaveBeenCalledOnce();
   });
+  it.each(["Hello", "Add my MCP", "Use DeepWiki"])("keeps MCP round trips within the same cost and execution limits: %s", async objective => {
+    const provider = new ScriptedAgentProvider([], { outcome: "reply", title: "Ready", body: "Ready" });
+    const run = vi.fn<AgentProvider["run"]>(async request => {
+      expect(request.budget).toMatchObject({ maxTaskTokens: objective === "Hello" ? 32_000 : 96_000,
+        maxEstimatedUsd: 1, maxTurns: 6, maxToolCalls: 6, maxDurationMs: 180_000 });
+      return { structuredOutput: { outcome: "reply", title: "Ready", body: "Ready" },
+        inputTokens: 0, outputTokens: 0, estimatedUsd: 0, turns: 1, permissionDenials: [] };
+    });
+    await executeWorkspaceConversationAgentCore({ workspaceID: auth.accountId, objective,
+      contacts: { search: vi.fn(), read: vi.fn() }, provider: { ...provider, id: "claude-agent-sdk", run },
+      mcpConnections: { handle: vi.fn() } });
+    expect(run).toHaveBeenCalledOnce();
+  });
   it("can reply without opening the contact workspace", async () => {
     const query = vi.fn();
     const execution = await executeWorkspaceConversationAgent({
@@ -1557,5 +1570,41 @@ describe("shared screenshot relationship review", () => {
     });
     expect(stage).not.toHaveBeenCalled();
     expect(observed[0]).toMatchObject({ ok: false, error: { code: "MEMORY_SOURCE_NOT_CURRENT" } });
+  });
+});
+
+describe("canonical approved MCP result in host continuation", () => {
+  const hostResult = { request_id: personID, call_id: contextID, original_message_id: personID,
+    actor_user_id: auth.userId, kind: "approval" as const, outcome: "submitted", choice_id: null, receipt_ref: contextID };
+  it("passes the actual bounded receipt beyond the continuation excerpt and rechecks authority after reading", async () => {
+    const read = vi.fn(async () => ({ ok: true, data: { receipt: { call_id: contextID,
+      result_summary: "first topic only", result_json: JSON.stringify({content:[{type:"text",text:"1 Overview\n2 Reconciler\n3 Rendering Targets"}]}) } } }));
+    const guard = vi.fn();
+    const scripted = new ScriptedAgentProvider([], { outcome: "reply", title: "Topics", body: "Three topics" });
+    const run = vi.spyOn(scripted, "run");
+    await executeWorkspaceConversationAgentCore({ workspaceID: auth.accountId, objective: "shortened continuation",
+      contacts: { search: vi.fn(), read: vi.fn() }, provider: scripted,
+      hostResult, mcpConnections: { handle: read }, assertCurrent: guard });
+    expect(read).toHaveBeenCalledExactlyOnceWith({operation:"read_receipt",call_id:contextID});
+    expect(run.mock.calls[0]?.[0].systemPrompt).toContain("3 Rendering Targets");
+    expect(run.mock.calls[0]?.[0].systemPrompt).toContain("untrusted tool data");
+    expect(guard.mock.invocationCallOrder.some(order => order > read.mock.invocationCallOrder[0]! && order < run.mock.invocationCallOrder[0]!)).toBe(true);
+  });
+  it.each([false, true])("does not substitute a missing or oversized result with invented content (oversized=%s)", async oversized => {
+    const read = vi.fn(async () => oversized ? {ok:true,data:{receipt:{result_json:"x".repeat(33_000)}}} : {ok:false});
+    const scripted = new ScriptedAgentProvider([], { outcome: "reply", title: "Unknown", body: "Unavailable" });
+    const run = vi.spyOn(scripted, "run");
+    await executeWorkspaceConversationAgentCore({workspaceID:auth.accountId,objective:"Continue",contacts:{search:vi.fn(),read:vi.fn()},provider:scripted,hostResult,mcpConnections:{handle:read}});
+    expect(run.mock.calls[0]?.[0].systemPrompt).toContain("receipt could not be read");
+    expect(run.mock.calls[0]?.[0].systemPrompt).not.toContain("x".repeat(200));
+    expect(read).toHaveBeenCalledOnce();
+  });
+  it("does not dispatch the model after a receipt read loses the source fence", async () => {
+    let readDone = false;
+    const read = vi.fn(async () => {readDone=true;return {ok:true,data:{receipt:{result_json:"private receipt"}}};});
+    const scripted = new ScriptedAgentProvider([], {outcome:"reply",title:"Unexpected",body:"Unexpected"});
+    const run = vi.spyOn(scripted,"run");
+    await expect(executeWorkspaceConversationAgentCore({workspaceID:auth.accountId,objective:"Continue",contacts:{search:vi.fn(),read:vi.fn()},provider:scripted,hostResult,mcpConnections:{handle:read},assertCurrent:async()=>{if(readDone)throw new Error("SOURCE_WITHDRAWN");}})).rejects.toThrow("SOURCE_WITHDRAWN");
+    expect(run).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import { CONTRACT_VERSION } from "./constants.js";
 import { ConversationImageManifestSchema } from "./conversationQueueSchemas.js";
+import { McpHumanResultSchema } from "./mcpInteractionSchemas.js";
 
 const obj = { additionalProperties: false } as const;
 const id = Type.String({ format: "uuid" });
@@ -126,6 +127,24 @@ const response = Type.Object(
     ),
     // Display-only link; review/export always rereads the governed projection.
     meetingDraft: optional(Type.Object({id,title:text(200)},obj)),
+    // Durable user-owned MCP human request reference. The card always reloads
+    // the canonical request; this is only a stable pointer with its last known
+    // lifecycle state, never an executable snapshot.
+    mcpInteraction: optional(
+      Type.Object(
+        {
+          request_id: id,
+          call_id: id,
+          kind: text(24),
+          state: text(24),
+        },
+        obj,
+      ),
+    ),
+    // Host-only typed human result for a resolved MCP interaction. Server
+    // issued and immutable on client save; rendered as a result part, never a
+    // user-authored turn.
+    hostResult: optional(McpHumanResultSchema),
   },
   obj,
 );

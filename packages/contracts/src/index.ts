@@ -31,5 +31,6 @@ export * from "./productRunSchemas.js";
 export * from "./accountSchemas.js";
 
 export * from "./mcpSchemas.js";
+export * from "./mcpInteractionSchemas.js";
 export * from "./timeWorkspaceSchemas.js";
 export * from "./memorySchemas.js";

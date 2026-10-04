@@ -16,6 +16,7 @@ import {
 import type { Pool } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
+import { recordOauthCleanup } from "./mcpOauthCleanup.js";
 import { ApiError } from "../lib/apiError.js";
 import { appendAudit } from "../lib/audit.js";
 import {
@@ -47,7 +48,10 @@ import {
  */
 
 interface McpConnectionRow {
+  auth_mode: McpConnection["auth_mode"];
   credential_ciphertext: string | null;
+  nango_connection_id: string | null;
+  nango_provider: string | null;
   created_at: Date;
   discovered_tools: unknown;
   friendly_name: string;
@@ -90,18 +94,25 @@ function safeErrorCode(value: string | null): McpConnectionErrorCode | null {
     : null;
 }
 
-function discoveredTools(value: unknown): McpDiscoveredTool[] {
+function discoveredTools(value: unknown): McpConnection["tools"] {
   if (!Array.isArray(value)) return [];
-  const tools: McpDiscoveredTool[] = [];
+  const tools: McpConnection["tools"] = [];
   for (const item of value) {
     if (!item || typeof item !== "object") continue;
-    const candidate = item as Partial<McpDiscoveredTool>;
+    const candidate = item as Partial<McpDiscoveredTool> & { input_schema?: unknown };
     if (typeof candidate.name !== "string") continue;
+    const retained =
+      typeof candidate.input_schema === "string"
+        ? candidate.input_schema
+        : typeof candidate.inputSchema === "string"
+          ? candidate.inputSchema
+          : null;
     tools.push({
       description:
         typeof candidate.description === "string"
           ? candidate.description.slice(0, 2_000)
           : "",
+      input_schema: retained ? retained.slice(0, 20_000) : null,
       name: candidate.name.slice(0, 128),
       read_only: candidate.read_only === true,
     });
@@ -114,7 +125,9 @@ function record(row: McpConnectionRow): McpConnection {
   const tools = discoveredTools(row.discovered_tools);
   return {
     created_at: row.created_at.toISOString(),
+    auth_mode: row.auth_mode ?? "anonymous",
     credential_configured: Boolean(row.credential_ciphertext),
+    oauth_connected: row.auth_mode === "oauth" && Boolean(row.nango_connection_id),
     friendly_name: row.friendly_name,
     id: row.id,
     last_checked_at: row.last_checked_at?.toISOString() ?? null,
@@ -131,7 +144,8 @@ function record(row: McpConnectionRow): McpConnection {
 
 const CONNECTION_COLUMNS = `id, friendly_name, server_url, credential_ciphertext,
   status, last_checked_at, last_error_code, last_error_message,
-  discovered_tools, tools_count, revision, created_at, updated_at`;
+  discovered_tools, tools_count, revision, created_at, updated_at,
+  auth_mode, nango_connection_id, nango_provider`;
 
 async function readConnection(
   client: DatabaseClient,
@@ -214,12 +228,18 @@ export async function createMcpConnection(
       [auth.accountId],
     );
     const actor = { accountId: auth.accountId, actorUserId: auth.userId };
+    // The request snapshot identifies the operation without ever carrying the
+    // secret itself.
     const claim = await claimIdempotency(
       client,
       actor,
       "create_mcp_connection",
       input.idempotency_key,
-      input,
+      {
+        friendly_name: input.friendly_name,
+        server_url: input.server_url,
+        secret_present: input.bearer_secret !== undefined && input.bearer_secret !== null,
+      },
     );
     if (claim.replay) {
       return claim.replay.body as McpConnectionResponse;
@@ -229,9 +249,9 @@ export async function createMcpConnection(
       await client.query<McpConnectionRow>(
         `INSERT INTO mcp_connections(
            account_id, id, created_by_user_id, friendly_name, server_url,
-           credential_ciphertext, status
+           credential_ciphertext, status, auth_mode
          )
-         VALUES ($1, $2, $3, $4, $5, $6, 'disconnected')
+         VALUES ($1, $2, $3, $4, $5, $6, 'disconnected', $7)
          RETURNING ${CONNECTION_COLUMNS}`,
         [
           auth.accountId,
@@ -240,6 +260,7 @@ export async function createMcpConnection(
           input.friendly_name,
           input.server_url,
           ciphertext,
+          ciphertext ? "bearer" : "anonymous",
         ],
       )
     ).rows[0];
@@ -295,7 +316,12 @@ export async function updateMcpConnection(
       actor,
       `update_mcp_connection:${id}`,
       input.idempotency_key,
-      input,
+      {
+        expected_revision: input.expected_revision,
+        friendly_name: input.friendly_name,
+        server_url: input.server_url,
+        secret_present: input.bearer_secret !== undefined && input.bearer_secret !== null,
+      },
     );
     if (claim.replay) {
       return claim.replay.body as McpConnectionResponse;
@@ -325,6 +351,24 @@ export async function updateMcpConnection(
                ELSE credential_ciphertext
              END,
              status = 'disconnected',
+             -- The authorization mode follows exactly what survives this
+             -- update: an explicit secret replaces it, an endpoint change
+             -- clears the old origin's credential and OAuth broker refs, and
+             -- a rename without a secret keeps a still-valid bearer intact.
+             auth_mode = CASE
+               WHEN $5::boolean AND $6 IS NOT NULL THEN 'bearer'
+               WHEN $5::boolean THEN 'anonymous'
+               WHEN server_url IS DISTINCT FROM $4 THEN 'anonymous'
+               ELSE auth_mode
+             END,
+             nango_connection_id = CASE
+               WHEN $5::boolean OR server_url IS DISTINCT FROM $4 THEN NULL
+               ELSE nango_connection_id
+             END,
+             nango_provider = CASE
+               WHEN $5::boolean OR server_url IS DISTINCT FROM $4 THEN NULL
+               ELSE nango_provider
+             END,
              last_checked_at = NULL,
              last_error_code = NULL,
              last_error_message = NULL,
@@ -356,6 +400,40 @@ export async function updateMcpConnection(
       connection: record(row),
       contract_version: CONTRACT_VERSION,
     };
+    // Reconcile the broker from the authoritative stored transition, not
+    // client intent. The update and cleanup watch commit atomically.
+    if (current.auth_mode === "oauth" && current.nango_connection_id && current.nango_provider
+      && row.nango_connection_id !== current.nango_connection_id) {
+      const attempt = await client.query<{
+        broker_base_url: string | null;
+        capability_expires_at: Date | null;
+        connect_request_id: string;
+        created_by_user_id: string;
+        environment: string | null;
+      }>(
+        `SELECT connect_request_id, created_by_user_id, environment,
+                broker_base_url, capability_expires_at
+         FROM mcp_oauth_connect_requests
+         WHERE account_id = $1 AND nango_connection_id = $2`,
+        [auth.accountId, current.nango_connection_id],
+      );
+      const bound = attempt.rows[0] ?? null;
+      await recordOauthCleanup(client, {
+        accountId: auth.accountId,
+        brokerBaseUrl: bound?.broker_base_url ?? null,
+        capabilityExpiresAt: bound?.capability_expires_at ?? null,
+        connectRequestId: bound?.connect_request_id ?? null,
+        createdByUserId: bound?.created_by_user_id ?? auth.userId,
+        environment: bound?.environment ?? null,
+        nangoConnectionId: current.nango_connection_id,
+        provenance:
+          row.server_url !== current.server_url
+            ? "endpoint_replaced"
+            : "credential_replaced",
+        provider: current.nango_provider,
+        targetOrigin: current.server_url,
+      });
+    }
     await appendAudit(client, actor, "mcp_connection.updated", "mcp_connection", id, {
       credential_configured: Boolean(row.credential_ciphertext),
       external_effect_count: 0,
@@ -516,11 +594,50 @@ export async function disconnectMcpConnection(
       input,
     );
     if (claim.replay) return claim.replay.body as McpConnectionResponse;
+    const before = await readConnection(client, auth, id);
+    if (
+      before?.auth_mode === "oauth" &&
+      before.nango_connection_id &&
+      before.nango_provider
+    ) {
+      // Local access stops now; the Nango-held credential needs its own
+      // confirmed removal. The frozen provenance and ORIGINAL grant owner are
+      // derived from the bound attempt before any source row is cleared.
+      const attempt = await client.query<{
+        broker_base_url: string | null;
+        capability_expires_at: Date | null;
+        connect_request_id: string;
+        created_by_user_id: string;
+        environment: string | null;
+      }>(
+        `SELECT connect_request_id, created_by_user_id, environment,
+                broker_base_url, capability_expires_at
+         FROM mcp_oauth_connect_requests
+         WHERE account_id = $1 AND nango_connection_id = $2`,
+        [auth.accountId, before.nango_connection_id],
+      );
+      const bound = attempt.rows[0] ?? null;
+      await recordOauthCleanup(client, {
+        accountId: auth.accountId,
+        brokerBaseUrl: bound?.broker_base_url ?? null,
+        capabilityExpiresAt: bound?.capability_expires_at ?? null,
+        connectRequestId: bound?.connect_request_id ?? null,
+        createdByUserId: bound?.created_by_user_id ?? auth.userId,
+        environment: bound?.environment ?? null,
+        nangoConnectionId: before.nango_connection_id,
+        provenance: "disconnect",
+        provider: before.nango_provider,
+        targetOrigin: before.server_url,
+      });
+    }
     const row = (
       await client.query<McpConnectionRow>(
         `UPDATE mcp_connections
          SET status = 'disconnected',
              credential_ciphertext = NULL,
+             auth_mode = 'anonymous',
+             nango_connection_id = NULL,
+             nango_provider = NULL,
              last_checked_at = NULL,
              last_error_code = NULL,
              last_error_message = NULL,
@@ -545,8 +662,12 @@ export async function disconnectMcpConnection(
       );
     }
     await appendAudit(client, actor, "mcp_connection.disconnected", "mcp_connection", id, {
-      credential_cleared: true,
+      // Distinct facts: local access is stopped and the local secret is gone;
+      // broker-credential removal is confirmed separately, and a vendor grant
+      // revocation is never claimed here.
+      broker_cleanup: row.auth_mode === "oauth" ? "pending" : "not_applicable",
       external_effect_count: 0,
+      local_credential_cleared: true,
       revision: row.revision,
     });
     const body: McpConnectionResponse = {

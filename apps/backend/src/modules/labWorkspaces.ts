@@ -8,10 +8,12 @@ import { sha256 } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
 import type { ChatMediaStorage } from "./chatMediaStorage.js";
 import { labWorkspaceSessionActiveSQL } from "./labWorkspaceAccess.js";
+import { recordLabStopCleanup, reconcileMcpOAuthCleanup } from "./mcpOauthCleanup.js";
 import { labStopAuthorityKeySQL } from "./labStopAuthority.js";
 
 type Query = Pick<Pool,"query"> | PoolClient;
 interface WorkspaceRow {
+  external_cleanup_pending: number;
   id:string; owner_account_id:string; owner_user_id:string; target_account_id:string; target_user_id:string;
   duration_hours:number; created_at:Date; empty_verified_at:Date|null; expires_at:Date;
   state:"active"|"deleting"|"deleted"; stop_id:string|null; stop_reason:"manual"|"expired"|null;
@@ -210,6 +212,14 @@ export class LabWorkspaceService {
     try {
       const w=(await this.pool.query<WorkspaceRow>("SELECT * FROM lab_test_workspaces WHERE id=$1",[id])).rows[0];
       if(!w||w.state!=="deleting")return;
+      if(w.external_cleanup_pending>0){
+        // Local data was already wiped; only the external broker cleanup is
+        // outstanding. Reconcile it and keep the deletion claim honest.
+        await reconcileMcpOAuthCleanup(this.pool);
+        const remaining=Number((await this.pool.query<{n:string}>("SELECT count(*) AS n FROM mcp_oauth_cleanup WHERE lab_workspace_id=$1 AND (state<>'confirmed' OR closure_state='open')",[id])).rows[0]!.n);
+        await this.pool.query("UPDATE lab_test_workspaces SET state=$2,deleted_at=CASE WHEN $3=0 THEN coalesce(deleted_at,now()) ELSE deleted_at END,external_cleanup_pending=$3 WHERE id=$1",[id,remaining===0?"deleted":"deleting",remaining]);
+        return;
+      }
       const identity=(await this.pool.query<{valid:boolean}>(`SELECT EXISTS(SELECT 1 FROM users WHERE id=$2
         AND account_id=$1 AND kind='lab_human' AND status='revoked') AS valid`,[w.target_account_id,w.target_user_id])).rows[0]!;
       if(!identity.valid||w.owner_account_id===w.target_account_id)throw new Error("Invalid test-account ownership");
@@ -234,6 +244,10 @@ export class LabWorkspaceService {
           current.media_scope_hash!==w.media_scope_hash||JSON.stringify(current.media_manifest)!==JSON.stringify(w.media_manifest))throw new Error("Cleanup scope changed");
         const unsettled=Number((await client.query<{n:string}>("SELECT count(*) AS n FROM lab_test_workspace_media_writes WHERE workspace_id=$1 AND state<>'settled'",[id])).rows[0]!.n);
         if(unsettled>0){failure="media_unsettled";throw new Error("A media write became unsettled");}
+        // Preserve the only outstanding broker-cleanup identities before the
+        // wipe removes their source rows: the cleanup ledger (control scope)
+        // survives so external OAuth credentials can still be removed.
+        const externalPending = await recordLabStopCleanup(client, w.target_account_id, id, w.target_user_id);
         // A single statement preserves the existing NO ACTION FK contract while
         // deleting the mutually referring account graph. Never disable constraints.
         await client.query("SELECT set_config('talent_signal.lab_cleanup_account',$1,true)",[w.target_account_id]);
@@ -244,7 +258,10 @@ export class LabWorkspaceService {
         const sessions=Number((await client.query<{n:string}>("SELECT count(*) AS n FROM sessions WHERE account_id=$1",[w.target_account_id])).rows[0]!.n);
         if(sessions!==0)throw new Error("Test credentials not removed");
         await client.query("DELETE FROM lab_test_workspace_media_writes WHERE workspace_id=$1",[id]);
-        await client.query("UPDATE lab_test_workspaces SET state='deleted',deleted_at=now(),cleanup_error=NULL,media_manifest='[]'::jsonb WHERE id=$1",[id]);
+        // Honest claim: local data deletion is verified by readback, but the
+        // workspace is not "deleted" while external broker cleanup is still
+        // pending; reconciliation finalizes it when every cleanup confirms.
+        await client.query("UPDATE lab_test_workspaces SET state=$2,deleted_at=CASE WHEN $3=0 THEN now() ELSE deleted_at END,cleanup_error=NULL,media_manifest='[]'::jsonb,external_cleanup_pending=$3 WHERE id=$1",[id,externalPending===0?"deleted":"deleting",externalPending]);
       });
     }catch{
       await this.pool.query("UPDATE lab_test_workspaces SET cleanup_error=$2 WHERE id=$1 AND state='deleting'",[id,failure]);
