@@ -124,6 +124,13 @@ type QueueTurn = {
     unboundConversationBlocks: ReturnType<typeof displayBlocks>;
     memoryProposal?: { proposal_id: string; revision: number };
     meetingDraft?: {id:string;title:string};
+    mcpInteraction?: {
+      request_id: string;
+      call_id: string;
+      kind: string;
+      state: string;
+    };
+    hostResult?: import("@talent-signal/contracts").McpHumanResult;
     execution?: ConversationQueueExecutionRecord;
   };
 };
@@ -132,7 +139,7 @@ function queueTurn(
   messageId: string,
   objective: string,
   acceptedAt: string,
-  response: { taskID: string; disposition: string; blocks: ChatResponseBlock[]; createdAt: string; memoryProposal?: { proposal_id: string; revision: number } },
+  response: { taskID: string; disposition: string; blocks: ChatResponseBlock[]; createdAt: string; memoryProposal?: { proposal_id: string; revision: number }; hostResult?: import("@talent-signal/contracts").McpHumanResult },
   images: readonly ConversationImageManifest[] = [],
   fold: {
     steered?: readonly ConversationQueueSteeredMessage[];
@@ -156,6 +163,15 @@ function queueTurn(
       ...(response.blocks.find(block=>block.calendar_draft)?.calendar_draft
         ? {meetingDraft:{id:response.blocks.find(block=>block.calendar_draft)!.calendar_draft!.id,title:response.blocks.find(block=>block.calendar_draft)!.calendar_draft!.title}} : {}),
       ...(response.memoryProposal ? { memoryProposal: response.memoryProposal } : {}),
+      // The staged MCP request reference rides with the turn; the card itself
+      // always reloads the canonical request record.
+      ...(response.blocks.find((block) => block.mcp_interaction)?.mcp_interaction
+        ? {
+            mcpInteraction:
+              response.blocks.find((block) => block.mcp_interaction)!.mcp_interaction,
+          }
+        : {}),
+      ...(response.hostResult ? { hostResult: response.hostResult } : {}),
       ...(fold.execution ? { execution: fold.execution } : {}),
     },
   };
@@ -291,6 +307,13 @@ export async function persistConversationQueueCompletion(
   // The fold is read under the live fence: exactly the messages this run
   // actually delivered, never the ones still waiting or unsupported.
   const fold = await readConversationQueueSteeringFold(pool, input.fence);
+  const hostResultRow = await pool.query<{ host_result: unknown }>(
+    "SELECT host_result FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+    [auth.accountId, input.fence.entryId],
+  );
+  const hostResult = (hostResultRow.rows[0]?.host_result ?? null) as
+    | import("@talent-signal/contracts").McpHumanResult
+    | null;
   const chinese = /\p{Script=Han}/u.test(input.objective);
   const blocks = fold.unsupportedCount > 0
     ? [...body.blocks, unsupportedSteeringNote(fold.unsupportedCount, chinese)]
@@ -312,6 +335,7 @@ export async function persistConversationQueueCompletion(
       ...(body.memory_proposal
         ? { memoryProposal: { proposal_id: body.memory_proposal.proposal_id, revision: body.memory_proposal.revision } }
         : {}),
+      ...(hostResult ? { hostResult } : {}),
     }, input.images, {
       steered: fold.delivered,
       ...(input.result.execution ? { execution: input.result.execution } : {}),

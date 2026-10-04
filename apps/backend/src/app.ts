@@ -12,6 +12,7 @@ import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.j
 import { registerDesktopBrowserLogin } from "./routes/desktopBrowserLogin.js";
 import { postgresDesktopBrowserLoginDb, sweepDesktopBrowserLoginAttempts } from "./modules/desktopBrowserLogin.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
+import { startMcpOAuthCleanupPump } from "./modules/mcpOauthCleanup.js";
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
 import { registerAgentPreferenceRoutes } from "./modules/agentPreferenceRoutes.js";
@@ -3131,6 +3132,10 @@ export async function buildApp(
   const conversationQueueSelectProvider: ConversationQueueProviderSelector | undefined =
     config.internalLabEnabled
       ? async (client, input) => {
+          // Host result entries carry the live queue fence, not a login or
+          // session-scoped trial. Keep the SAME configured default adapter;
+          // never fabricate or borrow a UUID to query a human's Lab trial.
+          if (input.authSessionId === null) return { provider: remoteChatProvider };
           const trial = labTrials.taskContext(
             input.auth,
             "unscoped_chat",
@@ -3189,7 +3194,11 @@ export async function buildApp(
       await sweepDesktopBrowserLoginAttempts(postgresDesktopBrowserLoginDb(pool));
     },
   });
-  app.addHook("preClose", async () => { await conversationQueueRunner.close(); });
+  // Restart-safe bounded lifecycle pump: broker-cleanup reconciliation runs
+  // even when nobody opens the UI, with no overlap and durable state across
+  // process restarts.
+  const stopMcpOauthCleanup = startMcpOAuthCleanupPump(pool);
+  app.addHook("preClose", async () => { await stopMcpOauthCleanup(); await conversationQueueRunner.close(); });
   app.addHook("onClose", async () => {
     await stopProductProjection();
     await screenshotRunner?.close();

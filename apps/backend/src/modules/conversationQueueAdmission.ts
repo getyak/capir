@@ -89,6 +89,7 @@ export async function admitConversationQueueEntry(
       CONVERSATION_QUEUE_OPERATION_SCOPE,
       request.idempotency_key,
       {
+        host_request_id: request.host_result?.request_id ?? null,
         session_id: request.session_id,
         message_id: request.message_id,
         objective: request.objective,
@@ -162,17 +163,23 @@ export async function admitConversationQueueEntry(
     // work. The lookup runs under the same session advisory lock as the run's
     // intake closure, so a message is either processed by the live run or
     // truthfully the next task — never silently dropped in between.
-    const leader = await readConversationQueueSteeringLeader(
-      client,
-      auth.accountId,
-      request.session_id,
-    );
+    // A host result continuation always enters its own queue entry and never
+    // attaches to a live steering leader: the human-message steering feed
+    // would drop or fabricate its typed result metadata. Ordinary user
+    // steering is unchanged.
+    const leader = request.host_result
+      ? null
+      : await readConversationQueueSteeringLeader(
+          client,
+          auth.accountId,
+          request.session_id,
+        );
     const entry = (
       await client.query<ConversationQueueEntryRow>(
         `INSERT INTO conversation_queue_entries(
            account_id,session_id,id,message_id,created_by_user_id,auth_session_id,sequence,status,content_state,
-           objective,time_zone,idempotency_key,revision,expires_at,images_hash,steer_group_entry_id
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,'queued','retained',$8,$9,$10,1,$11,$12,$13)
+           objective,time_zone,idempotency_key,revision,expires_at,images_hash,steer_group_entry_id,host_result
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,'queued','retained',$8,$9,$10,1,$11,$12,$13,$14::jsonb)
          RETURNING *`,
         [
           auth.accountId,
@@ -180,7 +187,9 @@ export async function admitConversationQueueEntry(
           randomUUID(),
           request.message_id,
           auth.userId,
-          auth.sessionId,
+          // A governed host continuation has no live login session; the
+          // column is nullable and never fabricates one.
+          auth.sessionId || null,
           sequence,
           request.objective,
           request.time_zone ?? null,
@@ -188,6 +197,7 @@ export async function admitConversationQueueEntry(
           expiresAt,
           imagesHash,
           leader?.entryId ?? null,
+          request.host_result ? JSON.stringify(request.host_result).slice(0, 4096) : null,
         ],
       )
     ).rows[0]!;
@@ -333,6 +343,13 @@ async function applyMutation(
     );
   }
   if (request.kind === "edit") {
+    if (row.host_result != null) {
+      throw new ApiError(
+        409,
+        "CONVERSATION_QUEUE_HOST_RESULT_IMMUTABLE",
+        "A host result preserves the accepted decision and cannot be edited.",
+      );
+    }
     if (row.status !== "queued") {
       throw new ApiError(
         409,

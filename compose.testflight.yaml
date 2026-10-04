@@ -59,6 +59,12 @@ services:
     build: *backend-build
     environment:
       TALENT_SIGNAL_MCP_ENCRYPTION_KEY: ${TALENT_SIGNAL_MCP_ENCRYPTION_KEY:-}
+      # Optional Nango OAuth broker. Absent values make OAuth explicitly
+      # unavailable; nothing fakes a connected state.
+      NANGO_API_KEY: ${NANGO_API_KEY:-}
+      NANGO_WEBHOOK_SIGNING_KEY: ${NANGO_WEBHOOK_SIGNING_KEY:-}
+      NANGO_BASE_URL: ${NANGO_BASE_URL:-}
+      NANGO_ENVIRONMENT: ${NANGO_ENVIRONMENT:-}
       TALENT_SIGNAL_MCP_PUBLIC_ORIGIN: ${TALENT_SIGNAL_MCP_PUBLIC_ORIGIN:-}
       TALENT_SIGNAL_MCP_ALLOWED_ORIGINS: ${TALENT_SIGNAL_MCP_ALLOWED_ORIGINS:-}
       DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}

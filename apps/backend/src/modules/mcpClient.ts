@@ -68,6 +68,8 @@ export interface McpDiscoveredTool {
   description: string;
   name: string;
   read_only: boolean;
+  /** The original discovered input schema as bounded inert JSON text. */
+  inputSchema: string | null;
 }
 
 export interface McpHandshakeResult {
@@ -263,6 +265,7 @@ function normalizeTool(value: unknown, secret?: string | null): McpDiscoveredToo
       : "";
   if (secret) description = description.split(secret).join("[redacted]");
   description = description.replace(/\u0000/gu, "").slice(0, MCP_MAX_TOOL_DESCRIPTION).replace(/[\uD800-\uDFFF]/gu, "\uFFFD");
+  let inputSchema: string | null = null;
   if (tool.inputSchema !== undefined) {
     let serialized = "";
     try {
@@ -271,12 +274,303 @@ function normalizeTool(value: unknown, secret?: string | null): McpDiscoveredToo
       return null;
     }
     if (serialized.length > MCP_MAX_TOOL_SCHEMA_CHARS) return null;
+    if (secret) serialized = serialized.split(secret).join("[redacted]");
+    inputSchema = serialized;
   }
   return {
     description,
+    inputSchema,
     name: tool.name,
     read_only: tool.annotations?.readOnlyHint === true,
   };
+}
+
+export type McpToolCallStatus =
+  | "succeeded"
+  | "failed"
+  | "outcome_unknown"
+  | "unauthorized";
+
+export interface McpToolCallInput {
+  allowInsecureTls?: boolean;
+  bearerSecret?: string | null;
+  exchange?: typeof mcpPinnedExchange;
+  target: McpResolvedTarget;
+  timeoutMs?: number;
+  toolName: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface McpToolCallResult {
+  status: McpToolCallStatus;
+  errorCode: McpConnectionErrorCode | null;
+  protocolVersion: string | null;
+  /** The tool reported `isError`; distinct from transport and JSON-RPC failure. */
+  isError: boolean;
+  /** A JSON-RPC error object, not a tool result. */
+  jsonrpcError: boolean;
+  /** True once the tools/call request body reached the socket. */
+  effectSent: boolean;
+  /** Raw tool result content as bounded JSON text; caller redacts before use. */
+  resultText: string | null;
+}
+
+const MCP_TOOL_CALL_RESULT_MAX_CHARS = 64_000;
+
+function toolCallFailure(
+  errorCode: McpConnectionErrorCode,
+  effectSent: boolean,
+  status: McpToolCallStatus = "failed",
+): McpToolCallResult {
+  return {
+    effectSent,
+    errorCode,
+    isError: false,
+    jsonrpcError: false,
+    protocolVersion: null,
+    resultText: null,
+    status,
+  };
+}
+
+function toolResultText(result: unknown): string | null {
+  if (result === undefined || result === null) return null;
+  let text: string;
+  try {
+    text = JSON.stringify(result);
+  } catch {
+    return null;
+  }
+  if (text.length > MCP_TOOL_CALL_RESULT_MAX_CHARS) {
+    text = `${text.slice(0, MCP_TOOL_CALL_RESULT_MAX_CHARS - 1)}…`;
+  }
+  return text;
+}
+
+/**
+ * A real Streamable HTTP tool execution: initialize, initialized, tools/list
+ * (bounded pagination) and tools/call with the negotiated session and protocol
+ * headers. A JSON-RPC error and a tool `isError` result are distinguished.
+ * When the request body has been sent and the outcome cannot be read, the
+ * result is `outcome_unknown` so the caller never blindly retries a possibly
+ * applied external effect.
+ */
+export async function performMcpToolCall(
+  input: McpToolCallInput,
+): Promise<McpToolCallResult> {
+  const deadline = Date.now() + (input.timeoutMs ?? MCP_REQUEST_TIMEOUT_MS);
+  let effectSent = false;
+  function remaining(callInput: McpToolCallInput): McpHandshakeInput {
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs <= 0) {
+      throw new McpTransportError("MCP_TIMEOUT", MCP_ERROR_MESSAGES.MCP_TIMEOUT);
+    }
+    return {
+      allowInsecureTls: callInput.allowInsecureTls === true,
+      bearerSecret: callInput.bearerSecret ?? null,
+      ...(callInput.exchange ? { exchange: callInput.exchange } : {}),
+      target: callInput.target,
+      timeoutMs,
+    };
+  }
+  try {
+    const initializeId = 101;
+    const initializeResponse = await call(
+      remaining(input),
+      initializeId,
+      "initialize",
+      {
+        capabilities: {},
+        clientInfo: { name: "talent-signal", version: "1.0.0" },
+        protocolVersion: MCP_SUPPORTED_PROTOCOL_VERSIONS[0],
+      },
+      null,
+      null,
+    );
+    if (initializeResponse.status === 401) {
+      return toolCallFailure("MCP_REQUIRES_AUTH", false, "unauthorized");
+    }
+    if (initializeResponse.status === 403) {
+      return toolCallFailure("MCP_UNAUTHORIZED", false, "unauthorized");
+    }
+    if (initializeResponse.status >= 400) {
+      return toolCallFailure("MCP_HANDSHAKE_FAILED", false);
+    }
+    const initialize = decodeJsonRpcResponse(initializeResponse, initializeId);
+    if (initialize.hasError) return toolCallFailure("MCP_HANDSHAKE_FAILED", false);
+    const protocolVersion =
+      initialize.result &&
+      typeof initialize.result === "object" &&
+      typeof (initialize.result as { protocolVersion?: unknown }).protocolVersion ===
+        "string"
+        ? (initialize.result as { protocolVersion: string }).protocolVersion
+        : null;
+    if (
+      !protocolVersion ||
+      !(MCP_SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(
+        protocolVersion,
+      )
+    ) {
+      return toolCallFailure("MCP_PROTOCOL_UNSUPPORTED", false);
+    }
+    const sessionId =
+      typeof initializeResponse.headers["mcp-session-id"] === "string"
+        ? initializeResponse.headers["mcp-session-id"]
+        : Array.isArray(initializeResponse.headers["mcp-session-id"])
+          ? initializeResponse.headers["mcp-session-id"][0] ?? null
+          : null;
+
+    await notifyInitialized(remaining(input), sessionId, protocolVersion);
+
+    // Discover the tool with the same bounded pagination as the handshake so
+    // the execution targets exactly the advertised tool name.
+    let found = false;
+    let cursor: string | null = null;
+    const cursors = new Set<string>();
+    for (let page = 0; page < MCP_MAX_TOOL_PAGES; page += 1) {
+      const response = await call(
+        remaining(input),
+        102 + page,
+        "tools/list",
+        cursor ? { cursor } : {},
+        sessionId,
+        protocolVersion,
+      );
+      if (response.status === 401) {
+        return toolCallFailure("MCP_REQUIRES_AUTH", false, "unauthorized");
+      }
+      if (response.status >= 400) {
+        return toolCallFailure("MCP_HANDSHAKE_FAILED", false);
+      }
+      const decoded = decodeJsonRpcResponse(response, 102 + page);
+      if (decoded.hasError) return toolCallFailure("MCP_HANDSHAKE_FAILED", false);
+      const result = decoded.result as
+        | { nextCursor?: unknown; tools?: unknown }
+        | undefined;
+      if (!Array.isArray(result?.tools)) {
+        return toolCallFailure("MCP_RESPONSE_INVALID", false);
+      }
+      for (const raw of result.tools) {
+        const tool = normalizeTool(raw, input.bearerSecret);
+        if (tool?.name === input.toolName) found = true;
+      }
+      if (typeof result?.nextCursor === "string" && result.nextCursor) {
+        if (page === MCP_MAX_TOOL_PAGES - 1 || cursors.has(result.nextCursor)) {
+          return toolCallFailure("MCP_TOO_MANY_TOOLS", false);
+        }
+        cursors.add(result.nextCursor);
+        cursor = result.nextCursor;
+      } else {
+        cursor = null;
+        break;
+      }
+    }
+    if (!found) return toolCallFailure("MCP_HANDSHAKE_FAILED", false);
+
+    const exchange = input.exchange ?? mcpPinnedExchange;
+    const callId = 201;
+    const response = await exchange({
+      allowInsecureTls: input.allowInsecureTls === true,
+      body: JSON.stringify({
+        id: callId,
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { arguments: input.arguments, name: input.toolName },
+      }),
+      expectedJsonRpcId: callId,
+      headers: {
+        ...agentHeaders(remaining(input)),
+        ...(sessionId ? { "mcp-session-id": sessionId } : {}),
+        "mcp-protocol-version": protocolVersion,
+      },
+      maxBytes: MCP_RESPONSE_MAX_BYTES,
+      method: "POST",
+      onRequestSent: () => {
+        effectSent = true;
+      },
+      target: input.target,
+      timeoutMs: Math.max(0, deadline - Date.now()),
+    });
+    if (response.status === 401) {
+      return toolCallFailure("MCP_UNAUTHORIZED", effectSent, "unauthorized");
+    }
+    if (response.status >= 500) {
+      // A lost or failed upstream reply after dispatch cannot prove the effect
+      // did not happen; it is unknown and never blindly retried.
+      return toolCallFailure(
+        "MCP_HANDSHAKE_FAILED",
+        effectSent,
+        effectSent ? "outcome_unknown" : "failed",
+      );
+    }
+    if (response.status >= 400) {
+      return toolCallFailure("MCP_HANDSHAKE_FAILED", effectSent);
+    }
+    let decoded: { hasError: boolean; result?: unknown };
+    try {
+      decoded = decodeJsonRpcResponse(response, callId);
+    } catch {
+      return toolCallFailure(
+        "MCP_RESPONSE_INVALID",
+        effectSent,
+        effectSent ? "outcome_unknown" : "failed",
+      );
+    }
+    if (decoded.hasError) {
+      return {
+        effectSent,
+        errorCode: "MCP_HANDSHAKE_FAILED",
+        isError: false,
+        jsonrpcError: true,
+        protocolVersion,
+        resultText: null,
+        status: "failed",
+      };
+    }
+    const toolResult = decoded.result as { isError?: unknown; content?: unknown } | undefined;
+    const isError = toolResult?.isError === true;
+    return {
+      effectSent,
+      errorCode: isError ? "MCP_HANDSHAKE_FAILED" : null,
+      isError,
+      jsonrpcError: false,
+      protocolVersion,
+      resultText: toolResultText(decoded.result),
+      status: isError ? "failed" : "succeeded",
+    };
+  } catch (error) {
+    if (error instanceof McpUrlRejectedError) {
+      const code: McpConnectionErrorCode =
+        error.code === "MCP_DNS_UNAVAILABLE"
+          ? "MCP_DNS_UNAVAILABLE"
+          : "MCP_ENDPOINT_REJECTED";
+      return toolCallFailure(code, effectSent);
+    }
+    if (error instanceof McpTransportError) {
+      const known: McpConnectionErrorCode[] = [
+        "MCP_DNS_UNAVAILABLE",
+        "MCP_REDIRECT_REFUSED",
+        "MCP_TIMEOUT",
+        "MCP_RESPONSE_TOO_LARGE",
+        "MCP_RESPONSE_INVALID",
+        "MCP_HANDSHAKE_FAILED",
+        "MCP_UNAUTHORIZED",
+      ];
+      const code = known.includes(error.code as McpConnectionErrorCode)
+        ? (error.code as McpConnectionErrorCode)
+        : "MCP_HANDSHAKE_FAILED";
+      // After the tools/call body was sent the effect may have been applied;
+      // an unreadable outcome is never retried and never reported as failure.
+      const unknown =
+        effectSent &&
+        (code === "MCP_TIMEOUT" ||
+          code === "MCP_HANDSHAKE_FAILED" ||
+          code === "MCP_RESPONSE_INVALID" ||
+          code === "MCP_RESPONSE_TOO_LARGE");
+      return toolCallFailure(code, effectSent, unknown ? "outcome_unknown" : "failed");
+    }
+    return toolCallFailure("MCP_HANDSHAKE_FAILED", effectSent);
+  }
 }
 
 /**

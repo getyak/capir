@@ -10,8 +10,9 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
+import { mcpIntentIdentity, workspaceIntentScope } from "./mcp/mcp-intent";
 import { ExtensionDialog } from "./workspace-extensions-dialogs";
 import {
   connectionErrorCopy,
@@ -192,12 +193,14 @@ export function InboundPanel({
 }
 
 export function ConnectionDialog({
+  sessionVersion,
   connection,
   onClose,
   onSaved,
   onStale,
   request,
 }: {
+  sessionVersion: string;
   connection?: McpConnection;
   onClose: () => void;
   onSaved: (connection: McpConnection) => void;
@@ -209,7 +212,7 @@ export function ConnectionDialog({
   const [secret, setSecret] = useState("");
   const [removeSecret, setRemoveSecret] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [requestKey] = useState(() => crypto.randomUUID());
+  const keys = useRef(new Map<string, string>());
   const [failure, setFailure] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
 
@@ -221,6 +224,9 @@ export function ConnectionDialog({
     setFailure(null);
     setStale(false);
     try {
+      const identity = await mcpIntentIdentity(workspaceIntentScope(sessionVersion), "edit-connection", [connection?.id, connection?.revision, name.trim(), url.trim(), secret, removeSecret]);
+      const requestKey = keys.current.get(identity) ?? crypto.randomUUID();
+      keys.current.set(identity, requestKey);
       let payload:
         | { connection: McpConnection }
         | { contract_version: string; connection: McpConnection };
@@ -248,6 +254,7 @@ export function ConnectionDialog({
           method: "POST",
         })) as { connection: McpConnection };
       }
+      keys.current.delete(identity);
       onSaved(payload.connection);
     } catch (caught) {
       if (
@@ -259,7 +266,9 @@ export function ConnectionDialog({
       } else {
         setFailure(caught instanceof Error ? caught.message : "无法保存连接。");
       }
+    } finally {
       setBusy(false);
+      setSecret("");
     }
   }
 
@@ -321,7 +330,7 @@ export function ConnectionDialog({
         />
         {urlChanged ? (
           <small>
-            地址已改变：保存会先清除旧地址的密钥与工具缓存，除非在下面填写新密钥。
+            地址已改变：旧地址的本地访问将停止，密钥与工具缓存会移除；OAuth 代理凭据另外清理。
           </small>
         ) : null}
       </label>

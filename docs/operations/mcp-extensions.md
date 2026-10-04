@@ -125,8 +125,108 @@ content type, accept, session id, protocol version) and deliberately does not
 attach browser login cookies. The Next middleware admits only the exact
 `/api/mcp` path outside the workspace session guard.
 
+## User-owned tool calls and durable human requests
+
+Tool discovery grants nothing. Every remote tool call needs one exact,
+single-use human approval, irrespective of any remote `readOnlyHint`. The
+backend persists a typed request envelope (`089_mcp_interactions`): call id,
+kind (approval, choice, form, secret, oauth), account/user/conversation-session
+identity, revision, the original discovered input schema, the exact bound
+arguments, expiry, lifecycle and a public result receipt with provenance. A
+card always reloads the canonical record; a snapshot is never authority.
+
+Arguments are validated against the original bounded input schema, including
+nested arrays and local `#/$defs` references; unsupported schemas (remote
+references, combinators, recursion) are rejected safely. Validated arguments
+are stored byte-for-byte; secret-shaped parameters are refused with
+`MCP_CALL_SECRET_ARGUMENTS` instead of being rewritten. Bearer secrets are typed into a transient field and stored only as encrypted
+connection credentials for later authorized calls. Plaintext is cleared from
+the field after submission or a Session change. Message, history, idempotency,
+audit and provider logs stay free of it; remote echo is redacted from results,
+schemas and errors.
+
+Resolution revalidates account, member and the acting login session inside its
+transaction, then claims execution exactly once. The network effect runs
+outside any long database lock. A timeout, overflow or lost reply after the
+request body was sent settles as `outcome_unknown` and is never retried. A
+disconnect, credential change or endpoint change bumps the connection
+revision and invalidates stale approvals. Adding a connection runs the real
+`initialize`/`initialized`/`tools/list` handshake before the request settles:
+a save-only record is never success. The resolved result re-enters the same
+conversation through the ordinary queued conversation and the Agent continues
+the original task without repetition. Stage references ride the answer block
+and Session parts; the shared card renders all five kinds with the states
+waiting, pending, submitting, submitted, expired, rejected, failed and
+unknown.
+
+The curated Extensions directory lists real official remote services with
+their exact verified domain (Context7 `mcp.context7.com`, DeepWiki
+`mcp.deepwiki.com`, Notion `mcp.notion.com`, Linear `mcp.linear.app`). Entries
+stage the same durable requests; the connected tool inspector stages the same
+exact call approvals and shows receipts. The host continuation reads the already approved, owner-scoped canonical receipt before dispatching the Agent. Its bounded redacted payload stays tool data rather than human evidence; the source fence is rechecked after readback. The short conversation excerpt never substitutes for the complete retained result, and this local read cannot rerun the remote tool.
+
+## Nango-mediated OAuth (optional)
+
+OAuth is mediated by a Nango deployment and is optional authorization
+infrastructure, not product truth. Without `NANGO_API_KEY` and
+`NANGO_WEBHOOK_SIGNING_KEY` the surfaces show OAuth as unavailable and
+nothing fakes a connected state. `NANGO_BASE_URL` must be a bare HTTPS origin
+(fixed default `https://api.nango.dev`).
+
+A server-generated `connect_request_id` binds account, user, conversation
+session, approved MCP server URL and provider into the connect session's tags
+and a fixed `connection_config.mcp_server_url`; the request and connect rows
+are bounded by the real Nango session expiry. Completion is verified through
+raw-body HMAC (`X-Nango-Hmac-Sha256`) of the auth webhook followed by the
+authoritative credential-free backend readback (`GET /connections` with the
+tags filter, envelope `{ "connections": [...] }`); credentials are never
+fetched into this system and an unsupported envelope fails closed. A
+client-supplied connection id is never authority; polling supplements a lost
+webhook through the same server-side tag discovery. Call traffic goes through
+the Nango proxy with the frozen approved target (`Base-Url-Override` =
+approved origin, path = approved endpoint path), only MCP transport headers
+pass through, and `Retries: 0`. `/v1/mcp/oauth/webhook` is the single public
+incoming webhook route: bounded, persisted and deduplicated before it
+acknowledges.
+
+The self-hosted Nango runtime itself (compose, Dockerfile, runbook) is owned
+by deployment operations; the backend consumes only the four optional fields
+above. The Nango runtime needs its own `NANGO_ENCRYPTION_KEY`,
+`NANGO_DB_USER`, `NANGO_DB_PASSWORD`, `NANGO_DB_NAME`,
+`NANGO_DASHBOARD_USERNAME`, `NANGO_DASHBOARD_PASSWORD`, `NANGO_SECRET_KEY_DEV`
+and `NANGO_ADMIN_KEY` (Infisical group `/nango`, contract `localNango`).
+
+## OAuth cleanup observations
+
+Disconnect, replacement, withdrawal and Lab stop freeze cleanup intent before
+removing local authority. The control-scope cleanup ledger preserves the original
+account/user, complete endpoint, attempt, provider and actual broker environment.
+Only credential-free metadata matching all these facts authorizes deletion.
+Malformed, unavailable, unauthorized or incomplete pages cannot prove absence.
+The watcher covers every owned grant in the frozen attempt and keeps retrying
+without requiring a page visit. A claim token and generation revision prevent
+stale workers from confirming changed state.
+
+Migration `095_mcp_oauth_cleanup_effects` records each DELETE identity before
+network dispatch and its observed outcome afterward. These receipts survive a
+partial failure, stale settlement and Lab product-data wipe; cleanup does not
+recreate account-scoped audit data after Lab stop. The initial `dispatched` state denotes durable dispatch intent, not proof
+that network bytes were transmitted: a process can stop before fetch. Without
+an observed response, the attempt remains unresolved. Successful broker deletion confirms removal
+of its held credential, not universal provider-side OAuth revocation.
+
+The pinned broker supports `DELETE /connect/session` authenticated by the
+session's own Connect token. It blocks subsequent session lookup, but a callback
+that already loaded the session may still finish. Until source-backed closure
+covers those callbacks, the attempt watch remains open and Lab external cleanup
+remains pending even after the currently observed credentials are removed.
+
 ## Explicit non-goals
 
-OAuth, dynamic client registration, stdio transport, sampling, prompts,
-resources, agent registration, and tool execution are not implemented. The
-published surface is read-only.
+The product does not manage OAuth client registration itself; the configured
+Nango broker performs provider-supported dynamic registration. Stdio transport,
+sampling, prompts, resources,
+agent registration without a human request, and any tool execution without an
+exact human approval are not implemented. Unknown remote read-only
+annotations grant no authority. The published outbound surface stays
+read-only.
