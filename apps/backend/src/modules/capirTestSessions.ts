@@ -76,8 +76,12 @@ interface LockedRun {
  */
 export async function lockLabRunForAdmission(
   client: PoolClient,
+  config: BackendConfig,
   identity: LabPasswordIdentity,
 ): Promise<LockedRun> {
+  if (config.internalLabEnabled !== true || config.capirTests?.enabled !== true) {
+    throw new ApiError(403, "CAPIR_TESTS_DISABLED", "Internal test-account access is disabled on this service.");
+  }
   if (identity.userKind !== "lab_human") {
     throw new ApiError(
       400,
@@ -140,6 +144,9 @@ export async function lockLabRunForAdmission(
       "LAB_TEST_SESSION_ADMISSION_DENIED",
       "The username, email, or password is not recognized.",
     );
+  }
+  if (run.run_web_origin !== config.capirTests.webOrigin || run.run_backend_origin !== config.capirTests.backendOrigin) {
+    throw new ApiError(403, "CAPIR_TEST_ORIGIN_DENIED", "This test run belongs to a different serving origin pair.");
   }
   const principalActive =
     run.principal_state === "enabled" &&
@@ -260,7 +267,7 @@ export async function admitLabPasswordSession(
   identity: LabPasswordIdentity,
   clientLabel: string,
 ): Promise<SessionResponse> {
-  const run = await lockLabRunForAdmission(client, identity);
+  const run = await lockLabRunForAdmission(client, config, identity);
   return insertAdmittedSession(client, config, run, identity, clientLabel);
 }
 
@@ -277,7 +284,7 @@ export async function admitLabPasswordLogin(
   password: string,
   clientLabel: string,
 ): Promise<SessionResponse> {
-  const run = await lockLabRunForAdmission(client, identity);
+  const run = await lockLabRunForAdmission(client, config, identity);
   const credential = (
     await client.query<{
       password_scrypt: string;

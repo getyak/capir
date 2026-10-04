@@ -27,8 +27,8 @@ import {
   normalizeEmail,
   reserveVerifiedEmail,
 } from "./accountIdentity.js";
-import { labWorkspaceSessionActiveSQL } from "./labWorkspaceAccess.js";
-import { LabPasswordRejection, admitLabPasswordLogin } from "./capirTestSessions.js";
+import { labWorkspaceSessionActiveSQL, operatorLabDeploymentActiveSQL, operatorTestDeployment } from "./labWorkspaceAccess.js";
+import { LabPasswordRejection, admitLabPasswordLogin, lockLabRunForAdmission } from "./capirTestSessions.js";
 import {
   consumeDummyPasswordWork,
   verifyPasswordCredential,
@@ -623,22 +623,23 @@ export async function createPasswordSession(
           "The username, email, or password is not recognized.",
         );
       }
+      const admissionIdentity = {
+        accountId: labIdentity.account_id,
+        accountName: labIdentity.account_name,
+        accountSlug: labIdentity.account_slug,
+        displayName: labIdentity.display_name,
+        role: labIdentity.account_role,
+        userEmail: labIdentity.user_email,
+        userId: labIdentity.user_id,
+        userKind: "lab_human" as const,
+        username: labIdentity.username,
+      };
       let session: SessionResponse;
       try {
         session = await admitLabPasswordLogin(
           client,
           config,
-          {
-            accountId: labIdentity.account_id,
-            accountName: labIdentity.account_name,
-            accountSlug: labIdentity.account_slug,
-            displayName: labIdentity.display_name,
-            role: labIdentity.account_role,
-            userEmail: labIdentity.user_email,
-            userId: labIdentity.user_id,
-            userKind: "lab_human",
-            username: labIdentity.username,
-          },
+          admissionIdentity,
           request.password,
           request.client_label,
         );
@@ -650,6 +651,8 @@ export async function createPasswordSession(
         transactionOpen = false;
         if (error instanceof LabPasswordRejection) {
           await client.query("BEGIN");
+          transactionOpen = true;
+          await lockLabRunForAdmission(client, config, admissionIdentity);
           if (!error.credentialLocked) {
             await client.query(
               `UPDATE password_credentials
@@ -664,6 +667,7 @@ export async function createPasswordSession(
             );
           }
           await client.query("COMMIT");
+          transactionOpen = false;
           throw new ApiError(
             401,
             "PASSWORD_SIGN_IN_FAILED",
@@ -884,8 +888,9 @@ export async function revokeCurrentSession(
   }
 }
 
-export function createAuthGuard(pool: Pool, deploymentWorkspaceIds?: readonly string[]): preHandlerHookHandler {
+export function createAuthGuard(pool: Pool, deploymentWorkspaceIds?: readonly string[], config?: BackendConfig): preHandlerHookHandler {
   const audience = deploymentWorkspaceIds ? new Set(deploymentWorkspaceIds) : null;
+  const deployment = operatorTestDeployment(config);
   return async function authGuard(request): Promise<void> {
     const authorization = request.headers.authorization;
     if (!authorization?.startsWith("Bearer ")) {
@@ -920,8 +925,9 @@ export function createAuthGuard(pool: Pool, deploymentWorkspaceIds?: readonly st
          AND sessions.revoked_at IS NULL
          AND sessions.expires_at > now()
          AND users.status = 'active'
-         AND ${labWorkspaceSessionActiveSQL}`,
-      [sha256(accessToken)],
+         AND ${labWorkspaceSessionActiveSQL}
+         AND ${operatorLabDeploymentActiveSQL}`,
+      [sha256(accessToken), deployment.enabled, deployment.webOrigin, deployment.backendOrigin],
     );
     const auth = result.rows[0];
     if (!auth) {

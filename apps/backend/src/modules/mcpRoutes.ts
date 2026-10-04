@@ -31,6 +31,8 @@ import {
 } from "@talent-signal/contracts";
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import type { Pool } from "pg";
+import type { BackendConfig } from "../config.js";
+import { operatorTestDeployment } from "./labWorkspaceAccess.js";
 import { Type } from "@sinclair/typebox";
 
 import {
@@ -96,6 +98,7 @@ export function registerMcpExtensionRoutes(
   pool: Pool,
   authenticate: preHandlerHookHandler,
   options: McpRouteOptions = {},
+  config?: BackendConfig,
 ): void {
   const inbound = options.inbound ?? inboundDependencies();
   const publicOrigin =
@@ -302,6 +305,7 @@ export function registerMcpExtensionRoutes(
     publicOrigin,
     resolveGrant: (authorization) =>
       resolveMcpGrant(pool, authorization, {
+        operatorTestDeployment: operatorTestDeployment(config),
         ...(options.deploymentWorkspaceIds
           ? { deploymentWorkspaceIds: options.deploymentWorkspaceIds }
           : {}),

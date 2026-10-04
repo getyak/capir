@@ -287,3 +287,15 @@ exchange verifies both origins against the serving instance before consuming
 the one-use secret. Real PostgreSQL lock barriers and wrong-instance HTTP tests
 retain their failing and passing receipts. Existing account-identity baseline
 failures remain separately classified; these results are not deployment proof.
+
+Independent backend review closed four subsequent findings after real database
+counterexamples: failed-password bookkeeping now tracks its second transaction
+and acquires canonical admission locks before credential writes; exact replay
+holds principal/workspace/operation/credential authority across scrypt; operator
+password admission and both session/MCP bearer resolvers enforce the enabled
+serving origin pair. The shared resolver scope contains no credentials. Final
+backend checks passed 33/33 provisioning/password/client tests and 151/151
+queue/MCP tests, with no skips, plus backend typecheck and the existing human Lab
+lifecycle (parent records preserved; zero external model/business writes).
+The reviewer closed all four findings with no new confirmed P0/P1. CLI/Web and
+the final whole-branch review, delivery and deployed acceptance remain pending.

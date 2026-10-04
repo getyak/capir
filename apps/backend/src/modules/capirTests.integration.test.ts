@@ -69,9 +69,9 @@ const countingModelProvider: RemoteChatAnswerProviding = {
 
 type CapirSettings = NonNullable<Parameters<typeof buildApp>[0]["config"]["capirTests"]>;
 
-async function buildTestApp(capirTests: CapirSettings): Promise<App> {
+async function buildTestApp(capirTests: CapirSettings, appPool = pool!): Promise<App> {
   return buildApp({
-    pool: pool!,
+    pool: appPool,
     config: {
       databaseUrl: database!, host: "127.0.0.1", port: 0, allowedOrigins: [webOrigin],
       appleSignInAudiences: [], appleSignInEnabled: false, passwordAuthEnabled: true,
@@ -116,6 +116,15 @@ interface CreatedRun {
 
 function generatedPassword(): string {
   return randomBytes(18).toString("base64url");
+}
+
+async function waitForBlockedBy(pid: number): Promise<void> {
+  for (let n = 0; n < 300; n++) {
+    const blocked = await pool!.query("SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))", [pid]);
+    if (blocked.rowCount) return;
+    await delay(10);
+  }
+  throw new Error("The expected PostgreSQL lock barrier was not reached.");
 }
 
 async function createRun(overrides: Record<string, unknown> = {}): Promise<CreatedRun> {
@@ -640,6 +649,173 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
     expect(stopped.json().run.state).toBe("deleted");
   }, 60_000);
 
+  it("rolls back a rejected-password bookkeeping fault before reusing the connection", async () => {
+    const created = await createRun();
+    expect(created.response.statusCode).toBe(200);
+    const serialPool = new Pool({ connectionString: database, max: 1 });
+    const serialApp = await buildTestApp(mainSettings(), serialPool);
+    try {
+      await serialApp.ready();
+      await pool!.query(`CREATE FUNCTION capir_test_bookkeeping_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.failed_attempts > OLD.failed_attempts THEN RAISE EXCEPTION 'synthetic bookkeeping fault'; END IF; RETURN NEW; END $$`);
+      await pool!.query("CREATE TRIGGER capir_test_bookkeeping_fault BEFORE UPDATE ON password_credentials FOR EACH ROW EXECUTE FUNCTION capir_test_bookkeeping_fault()");
+      const failed = await serialApp.inject({ method: "POST", url: "/v1/auth/password/login", payload: {
+        identifier: created.username, password: generatedPassword(), client_label: "fault-proof",
+      } });
+      expect(failed.statusCode).toBe(500);
+      await expect(serialPool.query("SELECT 1 AS usable")).resolves.toMatchObject({ rows: [{ usable: 1 }] });
+    } finally {
+      await pool!.query("DROP TRIGGER IF EXISTS capir_test_bookkeeping_fault ON password_credentials");
+      await pool!.query("DROP FUNCTION IF EXISTS capir_test_bookkeeping_fault()");
+      await serialPool.query("ROLLBACK");
+      await serialApp.close();
+      await serialPool.end();
+      await stopRun(String(created.run.id));
+    }
+  });
+
+  it("takes the workspace fence before rejected-password bookkeeping locks its credential", async () => {
+    const created = await createRun();
+    expect(created.response.statusCode).toBe(200);
+    const credentialHolder = await pool!.connect();
+    const workspaceHolder = await pool!.connect();
+    let credentialHeld = false;
+    let rejected: Promise<LightMyRequestResponse> | undefined;
+    try {
+      const credentialPid = (await credentialHolder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      const workspacePid = (await workspaceHolder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await credentialHolder.query("BEGIN");
+      credentialHeld = true;
+      await credentialHolder.query("SELECT account_id FROM password_credentials WHERE account_id=$1 FOR UPDATE", [created.run.account_id]);
+      rejected = passwordLogin(created.username, generatedPassword()).then(value => value);
+      await waitForBlockedBy(credentialPid);
+      await workspaceHolder.query("BEGIN");
+      const workspaceLock = workspaceHolder.query("SELECT id FROM lab_test_workspaces WHERE id=$1 FOR UPDATE", [created.run.id]);
+      // Enqueue a canonical workspace-first contender before the rejection's
+      // first transaction releases its locks.
+      let queued = false;
+      for (let n = 0; n < 300 && !queued; n++) {
+        queued = (await pool!.query<{ queued: boolean }>("SELECT cardinality(pg_blocking_pids($1)) > 0 AS queued", [workspacePid])).rows[0]!.queued;
+        if (!queued) await delay(10);
+      }
+      expect(queued).toBe(true);
+      await credentialHolder.query("COMMIT");
+      credentialHeld = false;
+      await workspaceLock;
+      await waitForBlockedBy(workspacePid);
+      await workspaceHolder.query("SET LOCAL lock_timeout='500ms'");
+      await expect(workspaceHolder.query("SELECT account_id FROM password_credentials WHERE account_id=$1 FOR UPDATE", [created.run.account_id])).resolves.toMatchObject({ rowCount: 1 });
+      await workspaceHolder.query("ROLLBACK");
+      expect((await rejected).statusCode).toBe(401);
+    } finally {
+      if (credentialHeld) await credentialHolder.query("ROLLBACK");
+      await workspaceHolder.query("ROLLBACK");
+      credentialHolder.release();
+      workspaceHolder.release();
+      await rejected;
+      await stopRun(String(created.run.id));
+    }
+  });
+
+  it.each(["webOrigin", "backendOrigin", "disabled"] as const)("denies operator test passwords and sessions on a %s instance", async (setting) => {
+    const created = await createRun();
+    expect(created.response.statusCode).toBe(200);
+    const valid = await passwordLogin(created.username, created.password);
+    expect(valid.statusCode).toBe(200);
+    const settings = setting === "disabled" ? { ...mainSettings(), enabled: false } : {
+      ...mainSettings(), [setting]: "https://foreign-password-instance.test.invalid",
+    };
+    const foreign = await buildTestApp(settings);
+    try {
+      await foreign.ready();
+      const read = await foreign.inject({ method: "GET", url: "/v1/auth/session", headers: { authorization: `Bearer ${valid.json().access_token}` } });
+      expect(read.statusCode, "an operator test session belongs to its enabled serving origin pair").toBe(401);
+      const refused = await foreign.inject({ method: "POST", url: "/v1/auth/password/login", payload: {
+        identifier: created.username, password: created.password, client_label: "foreign-proof",
+      } });
+      expect(refused.statusCode).toBe(403);
+      expect((await pool!.query("SELECT id FROM sessions WHERE account_id=$1", [created.run.account_id])).rowCount).toBe(1);
+    } finally {
+      await foreign.close();
+      await stopRun(String(created.run.id));
+    }
+  });
+
+  it("serializes exact create replay with principal rotation before verifying its credential", async () => {
+    const created = await createRun();
+    expect(created.response.statusCode).toBe(200);
+    const holder = await pool!.connect();
+    let replay: Promise<LightMyRequestResponse> | undefined;
+    let rotation: Promise<void> | undefined;
+    try {
+      const holderPid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+      await holder.query("BEGIN");
+      await holder.query("LOCK TABLE password_credentials IN ACCESS EXCLUSIVE MODE");
+      replay = app.inject({ method: "POST", url: "/v1/capir/tests", headers: provisioningHeaders(), payload: {
+        request_id: created.requestId, username: created.username, password: created.password,
+        preset: "empty", duration_hours: 4, web_origin: webOrigin,
+      } }).then(value => value);
+      await waitForBlockedBy(holderPid);
+      const replayPid = (await pool!.query<{ pid: number }>("SELECT pid FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))", [holderPid])).rows[0]!.pid;
+      rotation = ensureCapirTestProvisioningPrincipal(pool!, { ...mainSettings(), provisioningGeneration: 2 });
+      const rotationCommittedEarly = await Promise.race([
+        rotation.then(() => true), waitForBlockedBy(replayPid).then(() => false),
+      ]);
+      expect(rotationCommittedEarly, "rotation cannot commit while replay is verifying an old ready snapshot").toBe(false);
+      await holder.query("COMMIT");
+      const recovered = await replay;
+      expect(recovered.statusCode).toBe(200);
+      expect(recovered.json().run.id).toBe(created.run.id);
+      expect(recovered.json().run.state).toBe("ready");
+      await rotation;
+      const after = await app.inject({ method: "GET", url: `/v1/capir/tests/${created.run.id}`, headers: provisioningHeaders() });
+      expect(after.json().run.state).toBe("revoked");
+    } finally {
+      await holder.query("ROLLBACK");
+      holder.release();
+      await replay;
+      await rotation;
+      await pool!.query("UPDATE capir_test_provisioners SET generation=1 WHERE label='configured'");
+      await stopRun(String(created.run.id));
+    }
+  });
+
+  it("binds an existing operator test MCP bearer to the enabled serving origin pair", async () => {
+    const created = await createRun();
+    expect(created.response.statusCode).toBe(200);
+    const login = await passwordLogin(created.username, created.password);
+    expect(login.statusCode).toBe(200);
+    const previous = process.env.TALENT_SIGNAL_MCP_PUBLIC_ORIGIN;
+    const instances: App[] = [];
+    try {
+      process.env.TALENT_SIGNAL_MCP_PUBLIC_ORIGIN = backendOrigin;
+      const proper = await buildTestApp(mainSettings());
+      instances.push(proper);
+      await proper.ready();
+      const grant = await proper.inject({ method: "POST", url: "/v1/mcp/clients", headers: { authorization: `Bearer ${login.json().access_token}` }, payload: {
+        name: "Synthetic origin proof", scopes: ["workspace_metadata_read"], expires_in_days: 1, idempotency_key: randomUUID(),
+      } });
+      expect(grant.statusCode).toBe(201);
+      const headers = { authorization: `Bearer ${grant.json().token}`, accept: "application/json, text/event-stream" };
+      const payload = { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+        protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "capir-origin-proof", version: "1" },
+      } };
+      expect((await proper.inject({ method: "POST", url: "/v1/mcp", headers, payload })).statusCode).toBe(200);
+      for (const changed of [{ webOrigin: "https://foreign-mcp.test.invalid" }, { backendOrigin: "https://foreign-mcp.test.invalid" }, { enabled: false }]) {
+        const foreign = await buildTestApp({ ...mainSettings(), ...changed });
+        instances.push(foreign);
+        await foreign.ready();
+        const denied = await foreign.inject({ method: "POST", url: "/v1/mcp", headers, payload });
+        expect(denied.statusCode, "the independent MCP bearer resolver must enforce the same deployment boundary").toBe(401);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.TALENT_SIGNAL_MCP_PUBLIC_ORIGIN;
+      else process.env.TALENT_SIGNAL_MCP_PUBLIC_ORIGIN = previous;
+      for (const instance of instances.reverse()) await instance.close();
+      await stopRun(String(created.run.id));
+    }
+  });
+
   it("denies provisioning when disabled and truthfully discloses capabilities", async () => {
     const disabledApp = await buildTestApp({
       enabled: false,
@@ -869,6 +1045,7 @@ describe.skipIf(!pool)("capir test provisioning (PostgreSQL)", () => {
       expect((await pool!.query("SELECT id FROM sessions WHERE account_id=$1", [created.run.account_id])).rowCount).toBe(1);
     } finally {
       await foreignInstance.close();
+      await stopRun(String(created.run.id));
     }
   });
 

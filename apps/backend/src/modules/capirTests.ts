@@ -27,6 +27,7 @@ import {
 } from "./capirTestScenarios.js";
 import {
   admitLabPasswordSession,
+  lockLabRunForAdmission,
   type LabPasswordIdentity,
 } from "./capirTestSessions.js";
 import type { ChatMediaStorage } from "./chatMediaStorage.js";
@@ -571,9 +572,18 @@ export class CapirTestsService {
       if (!row) {
         throw new ApiError(409, "CAPIR_TEST_REQUEST_CONFLICT", "This request ID already belongs to a different test-run operation.");
       }
+      // The same account's stop/admission lock order also governs replay.
+      // Keep authority and the operation stable throughout async scrypt work.
+      await lockLabRunForAdmission(client, this.config, {
+        accountId: row.account_id, userId: row.user_id,
+        accountName: `Test workspace · ${row.workspace_id.slice(0, 8)}`,
+        accountSlug: `lab-${row.workspace_id}`, displayName: "Test user",
+        role: "member", userEmail: row.email, userKind: "lab_human", username: row.username,
+      });
+      await client.query("SELECT id FROM capir_test_runs WHERE id=$1 FOR UPDATE", [row.id]);
       const credential = (
         await client.query<{ password_scrypt: string }>(
-          "SELECT password_scrypt FROM password_credentials WHERE account_id=$1 AND user_id=$2",
+          "SELECT password_scrypt FROM password_credentials WHERE account_id=$1 AND user_id=$2 FOR UPDATE",
           [row.account_id, row.user_id],
         )
       ).rows[0];

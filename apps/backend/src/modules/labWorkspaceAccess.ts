@@ -1,8 +1,35 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import type { BackendConfig } from "../config.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
 import type { ChatMediaStorage } from "./chatMediaStorage.js";
+
+export interface OperatorTestDeployment {
+  enabled: boolean;
+  webOrigin: string | null;
+  backendOrigin: string | null;
+}
+
+/** Nonsecret serving scope shared by session and MCP-bearer resolvers. */
+export function operatorTestDeployment(config?: BackendConfig): OperatorTestDeployment {
+  return {
+    enabled: config?.internalLabEnabled === true && config.capirTests?.enabled === true,
+    webOrigin: config?.capirTests?.webOrigin ?? null,
+    backendOrigin: config?.capirTests?.backendOrigin ?? null,
+  };
+}
+
+/** Token lookup parameters 2–4: enabled, exact Web origin, exact backend origin.
+ * Human-parent Lab entries retain their existing canonical authority. */
+export const operatorLabDeploymentActiveSQL = `(NOT EXISTS (
+  SELECT 1 FROM lab_test_workspace_entries e
+  WHERE e.session_id=sessions.id AND e.owner_principal_id IS NOT NULL
+) OR ($2::boolean AND EXISTS (
+  SELECT 1 FROM capir_test_runs r
+  WHERE r.account_id=sessions.account_id AND r.user_id=sessions.user_id
+    AND r.web_origin=$3 AND r.backend_origin=$4
+)))`;
 
 // Called only in queries whose aliases are the actual users/sessions tables.
 // One shared authority predicate governs every Lab API/session read. A
