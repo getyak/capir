@@ -280,18 +280,23 @@ describe("McpDirectoryPanel", () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
       field.dispatchEvent(new Event("input", { bubbles: true }));
     });
+    const submitted = (count: number) => vi.waitFor(async () => {
+      await flush();
+      expect(fetcher.mock.calls.filter((call) => String(call[0]).includes("propose-call"))).toHaveLength(count);
+      expect(button("提交精确调用请求（lookup）").disabled).toBe(false);
+    }, { timeout: 2_000, interval: 10 });
     await fill("React hooks");
     await act(async () => button("提交精确调用请求（lookup）").click());
-    await flush();
+    await submitted(1);
     await act(async () => button("提交精确调用请求（lookup）").click());
-    await flush();
+    await submitted(2);
     await fill("React context");
     await act(async () => button("提交精确调用请求（lookup）").click());
-    await flush();
+    await submitted(3);
     await act(async () => root.render(createElement(McpDirectoryPanel, { sessionVersion: "other-user-session" })));
     await flush();
     await act(async () => button("提交精确调用请求（lookup）").click());
-    await flush();
+    await submitted(4);
     const calls = fetcher.mock.calls.filter((call) => String(call[0]).includes("propose-call"));
     const bodies = calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)));
     expect(bodies[0].arguments).toBe('{"query":"React hooks"}');
