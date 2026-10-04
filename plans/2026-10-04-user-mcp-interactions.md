@@ -34,8 +34,8 @@ Desktop knowledge workspace for users deciding which external capability to gran
 ## Milestones
 
 - [x] Inspect article, current architecture, isolation, credentials and Notion destination.
-- [ ] Implement contracts/persistence, guarded MCP calls, Nango adapter, Agent integration and shared cards/catalog.
-- [ ] Focused meaningful tests including DB-backed lifecycle, independent review and fixes.
+- [x] Implement contracts/persistence, guarded MCP calls, Nango adapter, Agent integration and shared cards/catalog.
+- [x] Focused meaningful tests including DB-backed lifecycle, independent review and fixes.
 - [ ] Deploy clean reviewed revision; verify anonymous/Bearer live services and real ordinary chat, refresh and one tool call. Verify OAuth only against real configured Nango/provider.
 - [ ] Record proof and update Notion addresses; close only when requested acceptance actually holds.
 
@@ -297,3 +297,27 @@ remain unchanged.53 targeted provider tests pass independently.
 
 Latest storage audit reports about65GiB above the authorized30GiB floor. Other
 owners' active evidence and unrelated source edits remain preserved.
+
+### Final local ordinary-chat proof and adoption, 08:20 CST
+
+Independent review closes all confirmed P0/P1/P2 in the scoped implementation,
+including the production Lab selector, immutable host objectives and approved
+full-receipt readback. Its frozen hashes and evidence limits are preserved in
+`output/evaluation/user-mcp-interactions-20261004/independent-review-cleanup-and-final.md`.
+Source commit b1f3aae1 was cleanly adopted as821b2e74 with no conflicts.
+
+A fresh ordinary Web conversation ff06ac28-5efd-4210-8e26-933f0f042baf
+added DeepWiki Final Chat Proof through its actual form, completed real discovery,
+staged exact read_wiki_structure(repoName=facebook/react), received explicit UI
+approval, returned a genuine result and continued with the configured Anthropic
+Agent. The answer lists Repository Overview, Core Reconciler Architecture and
+Rendering Targets correctly. Refresh and a fresh375px browser context restore
+the cards and final answer without exposing internal continuation instructions.
+Formal screenshots and canonical queue/call proof reside in the same ignored
+evaluation directory. This is full local product proof, not staging rollout.
+
+Post-adoption combined isolated PG check reports82/83 passed: one initial queue
+completion wait timed out after staging the card. Native owner is diagnosing
+controlled liveness metadata; no blind timeout increase or live DB testing.
+PR/remote checks, clean revision deployment and post-deployment acceptance remain
+pending. Real provider OAuth login/grant remains unverified.
