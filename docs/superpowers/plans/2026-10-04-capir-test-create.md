@@ -243,8 +243,8 @@ receipts; accurate Notion MCP/service chapter only.
 - [x] Written design approved by user; independent design review closed identified
   operator-lineage, real-login, identifier-collision and replay requirements.
 - [x] Implementation plan drafted and self-reviewed against every spec section.
-- [ ] Human review of this written implementation plan (required by the selected
-  writing-plans workflow); Pi/MiMo method is already selected by user instructions.
+- [x] Human review of this written implementation plan: user explicitly approved
+  implementation on 2026-10-04; Pi/MiMo remains the selected coding method.
 - [ ] Task 1 implementation and verification.
 - [ ] Task 2 implementation and verification.
 - [ ] Task 3 review, installed-command proof, deployment and final acceptance.
@@ -252,3 +252,19 @@ receipts; accurate Notion MCP/service chapter only.
 Do not start coding contracts until the plan review is received. On approval,
 read `superpowers:executing-plans`, preflight the single Pi writer lock, and issue
 the first bounded contract without changing frozen provider/model/budget values.
+
+### Execution started
+
+Ruling: Pi/MiMo owns bounded coding batches, while Codex retains the execution ledger,
+independent review and delivery. This preserves the user-selected method over the
+inline-only wording of executing-plans; it does not waive review or acceptance.
+Ruling: Adopt the reviewed CLI client and only required backend infrastructure;
+do not restore the unrelated entire stale Stage A backend branch. Discovery must
+describe actual supported test provisioning and any unavailable legacy scopes.
+Historical schema/checksums still require comparison with the deployed database.
+
+Preflight: baseline remains current origin/main98f566d1; isolated task branch is
+clean, no active Pi writer, storage51GiB against30GiB floor. Existing shared artifact
+registry warnings are outside this task and are not approval to clean other work.
+Owned disposable PostgreSQL database and role are capir_test_create_20261004.
+Private media/config/artifacts are under /private/tmp/ai-test-capir-test-create.VfCizc.
