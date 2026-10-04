@@ -213,7 +213,11 @@ describe("McpRequestCard", () => {
     });
     await flush();
     await act(async () => button("API token").click());
-    await flush();
+    await vi.waitFor(async () => {
+      await flush();
+      expect(fetcher.mock.calls.some((call) => String(call[0]).includes("/resolve"))).toBe(true);
+      expect(text()).toContain("已确认");
+    }, { timeout: 2000, interval: 10 });
     const body = JSON.parse(
       String((fetcher.mock.calls.find((call) => String(call[0]).includes("/resolve"))![1] as RequestInit).body),
     ) as Record<string, unknown>;

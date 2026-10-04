@@ -118,7 +118,8 @@ it("resolves the built runner for source-wrapper use and defaults to a headed br
   assert.ok(browserRunnerEntry().endsWith("/dist/browser-runner.js"));
   const moduleUrl = new URL("../src/runner.ts", import.meta.url).href;
   const child = spawn("pnpm", ["exec", "tsx", "-e",
-    `import {browserRunnerEntry} from ${JSON.stringify(moduleUrl)}; console.log(browserRunnerEntry())`]);
+    `import {browserRunnerEntry} from ${JSON.stringify(moduleUrl)}; console.log(browserRunnerEntry())`],
+    { cwd: fileURLToPath(new URL("..", import.meta.url)) });
   let stdout = "", stderr = "";
   child.stdout.on("data", (data) => { stdout += data; });
   child.stderr.on("data", (data) => { stderr += data; });

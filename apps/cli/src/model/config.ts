@@ -1,4 +1,4 @@
-import { readFileSync, mkdirSync, chmodSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync, statSync } from 'node:fs';
+import { readSync, fstatSync, mkdirSync, chmodSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { configDirectory } from '../config.js';
@@ -60,9 +60,24 @@ export function loadConfig(env: NodeJS.ProcessEnv): ModelConfig {
   let raw: unknown;
   try {
     const file = join(configDirectory(env), 'models.json');
-    if (statSync(file).size > LIMIT.config)
-      fail('CAPIR_MODEL_CONFIG', 'Model configuration exceeds 64 KiB.');
-    raw = JSON.parse(readFileSync(file, 'utf8'));
+    const fd = openSync(file, 'r');
+    try {
+      const stats = fstatSync(fd);
+      if (!stats.isFile() || stats.size > LIMIT.config)
+        fail('CAPIR_MODEL_CONFIG', 'Model configuration exceeds 64 KiB or is not a regular file.');
+      // Inspect and read the same descriptor. The bounded buffer also denies
+      // growth after inspection without allocating from an untrusted size.
+      const data = Buffer.alloc(LIMIT.config + 1);
+      let bytes = 0;
+      while (bytes < data.length) {
+        const count = readSync(fd, data, bytes, data.length - bytes, bytes);
+        if (count === 0) break;
+        bytes += count;
+      }
+      if (bytes > LIMIT.config)
+        fail('CAPIR_MODEL_CONFIG', 'Model configuration exceeds 64 KiB.');
+      raw = JSON.parse(data.subarray(0, bytes).toString('utf8'));
+    } finally { closeSync(fd); }
   }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT')

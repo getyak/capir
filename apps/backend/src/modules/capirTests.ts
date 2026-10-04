@@ -61,7 +61,8 @@ export const CAPIR_TEST_UNSUPPORTED_SCOPES = [
 const CAPIR_TEST_COMMANDS = ["test.create", "test.status", "test.stop", "test.handoffs"] as const;
 
 const HANDLE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{2,39}$/;
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Domain segments cannot consume separators, so dotted input has one parse.
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 const LAB_EMAIL_DOMAIN = "@lab.invalid";
 const HANDOFF_TTL_MS = 10 * 60 * 1_000;
 

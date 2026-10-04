@@ -10,6 +10,7 @@
     "typescript": "npm:@typescript/typescript6@6.0.2"
   },
   "scripts": {
+    "capir": "node apps/cli/dist/cli.js",
     "architecture:boundaries": "node scripts/check-architecture-boundaries.mjs",
     "architecture:contract:sync": "node scripts/check-architecture-boundaries.mjs --write-contract",
     "architecture:check": "pnpm architecture:boundaries && pnpm architecture:diagrams:check",

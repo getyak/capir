@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -243,6 +243,9 @@ describe("built CLI subprocess", () => {
 });
 
 it("the advertised source wrapper reaches the built browser runner with a stub sandbox", async () => {
+  const repository = fileURLToPath(new URL("../../..", import.meta.url));
+  const manifest = JSON.parse(readFileSync(join(repository, "package.json"), "utf8"));
+  assert.ok(manifest.scripts.capir, "the repository must own its CLI entry point instead of resolving a global capir");
   const directory = scratch();
   const webOrigin = "http://127.0.0.1:3999";
   const stub = await startStubBackend(({ method, path }) => {
@@ -259,7 +262,7 @@ it("the advertised source wrapper reaches the built browser runner with a stub s
   try {
     const child = spawn("pnpm", ["capir", "--", "sandbox", "start", "--env", "t", "--open", "web"], {
       cwd: fileURLToPath(new URL("../../..", import.meta.url)),
-      env: { PATH: process.env.PATH, HOME: process.env.HOME, CAPIR_CONFIG_DIR: directory,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, ...(process.env.CI ? { CI: process.env.CI } : {}), CAPIR_CONFIG_DIR: directory,
         CAPIR_TOKEN: token43(), PLAYWRIGHT_BROWSERS_PATH: join(directory, "no-browser") },
       stdio: ["ignore", "pipe", "pipe"],
     });

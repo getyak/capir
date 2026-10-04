@@ -4,7 +4,34 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cli, fixture, provider } from './model-helpers.mjs';
 import { sandboxResponse } from './helpers.mjs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { loadConfig } from '../dist/model/config.js';
 const add = name => ['models','add',name,'--provider','openai-compatible','--base-url','http://127.0.0.1:9999/v1','--model','fixture','--auth','none'];
+test('bounds configuration reads even when the file grows after its size check', async t => {
+  const { root, env } = await fixture(t);
+  const file = join(root, 'models.json');
+  const valid = JSON.stringify({ schema_version: 'capir.models.v1', default_profile: null, profiles: {} });
+  await writeFile(file, valid);
+  const originalStat = fs.statSync;
+  const originalFstat = fs.fstatSync;
+  let grew = false;
+  const growAfterCheck = value => {
+    if (!grew) { grew = true; fs.appendFileSync(file, ' '.repeat(64 * 1024 + 1)); }
+    return value;
+  };
+  fs.statSync = (...args) => growAfterCheck(originalStat(...args));
+  fs.fstatSync = (...args) => growAfterCheck(originalFstat(...args));
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => loadConfig(env), { code: 'CAPIR_MODEL_CONFIG' });
+    assert.ok(grew, 'the real file changed between size inspection and reading');
+  } finally {
+    fs.statSync = originalStat;
+    fs.fstatSync = originalFstat;
+    syncBuiltinESMExports();
+  }
+});
 test('profiles mutate atomically without storing keys or selecting implicit defaults', async t => {
   const {root,env} = await fixture(t);
   assert.equal((await cli([...add('first'),'--default'],env)).code,0);
