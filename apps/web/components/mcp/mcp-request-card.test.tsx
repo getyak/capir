@@ -340,12 +340,22 @@ describe("McpRequestCard", () => {
     });
     await act(async () => root.render(createElement(McpRequestCard, { requestId: REQUEST_ID, sessionVersion: SESSION_VERSION })));
     await flush();
+    const waitForDecision = async (count: number) => {
+      // Intent hashing uses Web Crypto, which may finish after a microtask
+      // flush. Wait for the actual dispatch and restored decision controls.
+      await vi.waitFor(async () => {
+        await flush();
+        expect(fetcher.mock.calls.filter((call) => String(call[0]).includes("/resolve"))).toHaveLength(count);
+        expect(button("确认执行").disabled).toBe(false);
+        expect(button("拒绝").disabled).toBe(false);
+      }, { timeout: 2000, interval: 10 });
+    };
     await act(async () => button("确认执行").click());
-    await flush();
+    await waitForDecision(1);
     await act(async () => button("确认执行").click());
-    await flush();
+    await waitForDecision(2);
     await act(async () => button("拒绝").click());
-    await flush();
+    await waitForDecision(3);
     const bodies = fetcher.mock.calls.filter((call) => String(call[0]).includes("/resolve")).map((call) => JSON.parse(String((call[1] as RequestInit).body)));
     expect(bodies[0].idempotency_key).toBe(bodies[1].idempotency_key);
     expect(bodies[2].idempotency_key).not.toBe(bodies[1].idempotency_key);

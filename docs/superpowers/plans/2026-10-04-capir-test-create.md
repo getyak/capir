@@ -166,30 +166,30 @@ adopts both batches without overlapping writers.
 - Web entry exchanges a one-use handoff through private POST, installs only the
   target test session and verifies canonical identity before opening workspace.
 
-- [ ] **Step 1: Add failing built-CLI and Web-entry tests.** Cover nested/JSON
+- [x] **Step 1: Add failing built-CLI and Web-entry tests.** Cover nested/JSON
   help without environment/keyring/stdin access; random password entropy and
   defaults; chosen username/password; stdin exclusivity; duration/preset parsing;
   no model fallback; command/output/error secret handling.
   Add `response_loss_reuses_password_and_request`, `keyring_conflict_no_overwrite`,
   `stdout_failure_keeps_recovery`, `browser_failure_keeps_ready_run`,
   `cross_origin_handoff_no_cookie` and `direct_password_login_test_banner`.
-- [ ] **Step 2: Run targeted tests and retain the genuine failing observations.**
+- [x] **Step 2: Run targeted tests and retain the genuine failing observations.**
   Expected: missing command/help/entry fails without allocating public accounts.
-- [ ] **Step 3: Implement parser, offline help and command dispatch.** Default
+- [x] **Step 3: Implement parser, offline help and command dispatch.** Default
   create preset/lifetime are daily/4h; `1d` canonicalizes to 24h. Missing named
   environment is an actionable error. Help prints readable examples by default;
   `--json` is explicitly supported for existing machine callers. Preserve other
   commands' JSON contracts and actual capability/unsupported discovery.
-- [ ] **Step 4: Implement credential-safe exact recovery and output.** Persist
+- [x] **Step 4: Implement credential-safe exact recovery and output.** Persist
   generated password in run keyring before sending; plaintext never enters the
   journal. Return it only after verified ready state. Keep it through delivered or
   recoverable success until stop/expiry; prune expired local items on later use.
   A missing item never causes silent password rotation or allocation retry.
-- [ ] **Step 5: Wire private browser entry and canonical banner.** Direct
+- [x] **Step 5: Wire private browser entry and canonical banner.** Direct
   password login and CLI handoff both resolve the same live Lab account and
   deadline. An expired/revoked entry never falls through into a real workspace.
   Fresh browser contexts contain synthetic data; tokens never appear in URLs.
-- [ ] **Step 6: Run built CLI tests and focused Web/auth tests.** Commands:
+- [x] **Step 6: Run built CLI tests and focused Web/auth tests.** Commands:
   `pnpm --filter @talent-signal/cli build`;
   `pnpm --filter @talent-signal/cli test`;
   `pnpm --filter @talent-signal/web typecheck`;
@@ -249,7 +249,7 @@ receipts; accurate Notion MCP/service chapter only.
 - [x] Human review of this written implementation plan: user explicitly approved
   implementation on 2026-10-04; Pi/MiMo remains the selected coding method.
 - [x] Task 1 implementation and local verification; final review and deployment remain Task 3.
-- [ ] Task 2 implementation and verification.
+- [x] Task 2 implementation and verification; independent whole-branch review remains pending.
 - [ ] Task 3 review, installed-command proof, deployment and final acceptance.
 
 Do not start coding contracts until the plan review is received. On approval,
@@ -299,3 +299,5 @@ queue/MCP tests, with no skips, plus backend typecheck and the existing human La
 lifecycle (parent records preserved; zero external model/business writes).
 The reviewer closed all four findings with no new confirmed P0/P1. CLI/Web and
 the final whole-branch review, delivery and deployed acceptance remain pending.
+
+Root Task 2 checkpoint (2026-10-04): adopted 77 CLI/Web/documentation/CI files without replacing the reviewed backend. The Pi runner correctly rejected two mechanical wiki-routing files outside its original list; root inspected and explicitly accepted only those required documentation changes. Root checks passed: CLI 162/162 (zero skips), full Web 1737/1737, Web typecheck/lint, docs:check, and 10 executable CI-scope tests. The CI aggregate now denies failed/cancelled/missing/skipped runtime CLI jobs, and the MCP retry test waits for actual Web Crypto dispatch rather than a fixed microtask count. Web loopback transport preserves the separately registered backend origin, private cookies are bounded by both deadlines, and the public test entry has a themed responsive layout. These are local implementation results; installed staging CLI/Web/MCP and Notion acceptance remain Task 3.

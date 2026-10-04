@@ -1,0 +1,60 @@
+---
+id: capir-cli
+title: capir CLI reference
+summary: The capir command surface for test accounts, model commands and strict-replay sandboxes.
+status: published
+language: en
+target: docs/operations/capir-cli.md
+---
+
+# capir CLI reference
+
+Concise reference for the `capir` CLI. [Account and workspace access](../../docs/operations/account-access.md)
+owns the operational procedures; `capir help` is the offline entry point and
+renders this surface without configuration, network access or credential reads.
+
+## Test accounts
+
+```bash
+capir help test create                  # offline: arguments, defaults, errors
+capir test create --env <name>          # generated username + password, daily, 4h
+capir test create --env <name> --preset daily --open web
+capir test create --env <name> --username qa-mcp --password-stdin --expires-in 4h
+capir test status <run-id> --env <name>
+capir test stop <run-id> --env <name>
+```
+
+- `--env <name>` is always explicit; help never resolves an environment.
+- `--preset daily` seeds 12 contacts, 30 observations and 4 tasks; `--preset
+  empty` seeds nothing. Creation invokes no model, email or OAuth flow.
+- `--expires-in` accepts `1h`, `4h`, `24h` and the equivalent `1d`; the
+  default is `4h`. No account is non-expiring.
+- `--password` and `--password-stdin` are exclusive. A generated password has
+  at least 128 bits of OS cryptographic entropy and is printed exactly once by
+  the dedicated success projection; supplied passwords are never echoed.
+- `--request-id <uuid>` resumes the exact recorded operation and reuses its
+  preserved credential. Recovery never rotates, resets or allocates another run.
+- `--open web` opens a fresh isolated browser context through a one-use
+  private handoff; the secret never appears in a URL.
+
+Machine callers add `--json` for the stable help schema (arguments, defaults,
+examples, error codes) and for operation envelopes. Plain help is readable
+text; it never reads stdin, loads a credential, uses the network or writes an
+operation journal, even with hostile-looking flags present.
+
+## Credentials
+
+The operator provisioning credential is service material distinct from the
+human `CAPIR_TOKEN`: the OS keyring service `talent-signal.capir-test-operator`
+with account `capir-test-operator:<backend-origin>|<web-origin>`, or the
+ephemeral `CAPIR_TEST_OPERATOR_TOKEN`. Run passwords live in run-specific
+keyring items (service `talent-signal.capir-test-run`) bound to the operator
+credential fingerprint, the exact origin pair and the request id, and are
+removed on stop or expiry.
+
+## Model and sandbox commands
+
+`capir ask`, `capir chat` and `capir models` run explicitly configured text
+models. `capir auth` and `capir sandbox` keep their strict-replay semantics.
+Actual server capability discovery lists legacy scopes that the current
+service does not implement as unsupported; they are never silently emulated.

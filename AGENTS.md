@@ -48,6 +48,15 @@ work through [`REVIEW.md`](REVIEW.md).
 5. Re-plan when evidence invalidates the approach, then route durable learning
    before handoff.
 
+## AI product acceptance
+
+For AI product acceptance, inspect `capir help test create`, then use
+`capir test create --env <test-env> --preset daily --open web`. Reuse the
+returned run/request ID; credentials belong only to that expiring test
+account. Retain sanitized evidence, then verify `capir test stop` cleanup.
+[Account and workspace access](docs/operations/account-access.md) owns the
+full provisioning and test-command procedures.
+
 Prefer the narrowest relevant checks. For documentation changes, also run
 `pnpm docs:check`. Test ambiguity, no-action, failure, stale state, retry,
 recovery, and deletion when they are relevant to the outcome.

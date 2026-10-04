@@ -314,31 +314,54 @@ simulated API in local evaluations, or an isolated internal test workspace.
 
 ## AI acceptance entry
 
-Prefer `capir auth` and command-line entry for AI acceptance. Reuse a valid
-origin-bound OS-keyring grant or an ephemeral, preprovisioned `CAPIR_TOKEN`
-instead of repeating interactive login. Select the test environment explicitly;
-the fixture identifier above applies only to an isolated seeded backend.
+This page is the single home for capir test-account provisioning and test
+commands. `capir help test create` is the offline entry point and
+[the CLI reference](capir-cli.md) documents the full command surface.
 
-With capir installed and the named environment configured:
+Provisioning prerequisite: an authorized installation provides one
+origin-bound operator credential in the dedicated OS keyring entry (service
+`talent-signal.capir-test-operator`, account
+`capir-test-operator:<backend-origin>|<web-origin>`) or as the ephemeral
+`CAPIR_TEST_OPERATOR_TOKEN` environment variable. It is service material,
+distinct from the human `CAPIR_TOKEN`, and it authorizes only its own internal
+test runs. The CLI never asks a human browser login for this flow.
+
+With capir installed and a named environment configured:
 
 ```bash
-capir auth status --env local-test
-node scripts/ai-workspace-entry.mjs --env local-test --check-only
-node scripts/ai-workspace-entry.mjs --env local-test
-node scripts/ai-workspace-entry.mjs --env local-test --sandbox <sandbox-uuid>
+# 1. Discover the exact create contract (offline, allocates nothing).
+capir help test create
+
+# 2. Create one expiring test account (defaults: daily 12/30/4, 4h).
+capir test create --env local-test --preset daily --open web
+
+# 3. Reuse the returned run id and request id for readback and recovery.
+capir test status <run-id> --env local-test
+capir test create --env local-test --request-id <request-id>   # exact replay
+
+# 4. Stop the owned run and verify cleanup.
+capir test stop <run-id> --env local-test
 ```
 
-The entry helper validates the current grant before creating a `daily` replay
-sandbox or reopening the selected sandbox. It does not initiate OAuth, renew a
-grant, or replace credentials. Missing or expired authorization stops before
-sandbox allocation: provision a scoped test token through the approved test
-environment, or run `capir auth login --env local-test` once. Stop the owned
-sandbox with `capir sandbox stop <sandbox-uuid> --env local-test` after
-retaining evidence. `CAPIR_BIN` may select an explicitly installed executable.
+`--open web` opens a fresh isolated browser context through a one-use private
+handoff; the handoff secret never appears in a URL. Without it, sign in at the
+Web login page with the returned username and password. Both entry paths show
+the same authoritative test-space banner and deadline inside the workspace,
+derived from the canonical run readback — never from a cookie or account name.
+Expired, stopped, rotated or revoked runs deny new sign-ins and existing
+sessions before cleanup; there is no real-account fallback.
 
-The capir backend, registered origins and server-only Web handoff configuration
-must be deployed for that exact environment. Stage A supports Web entry only;
-an authenticated Web proof does not establish native macOS login acceptance.
+Credentials: a generated password is printed exactly once through the
+dedicated success projection and kept in a run-specific OS keyring item for
+exact replay until stop or expiry; supplied passwords are never echoed.
+Passwords, tokens and handoff secrets never enter journals, errors, receipts
+or URLs. Retain sanitized evidence only, then stop the run.
+
+The capir backend, registered origins and the server-only Web consumer key
+must be deployed for that exact environment. Legacy `capir auth`/
+`capir sandbox` surfaces keep their own strict-replay semantics and are
+discoverable as unsupported where the server does not implement them; an
+authenticated Web proof does not establish native macOS login acceptance.
 
 ## Internal test workspaces
 

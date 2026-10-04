@@ -49,3 +49,13 @@ digest and the created, updated, or removed pages.
 
 - Source digest: `99e79aa8685010a2`
 - Updated: `docs/research/cloud-screenshot-processing-privacy.md`
+
+## 2026-10-04T06:34:12.596Z
+
+- Source digest: `615d442690114f12`
+- Created: `docs/operations/capir-cli.md`
+
+## 2026-10-04T07:00:56.334Z
+
+- Source digest: `76bce04c5912c293`
+- Updated: `docs/operations/capir-cli.md`
