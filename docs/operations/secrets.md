@@ -47,7 +47,12 @@ If an authorized local API operation needs the human CLI token, capture
 malformed output before constructing a request. Never print the captured value,
 request headers, response bodies, or exception text that can contain them;
 report only the operation and status. A rejected or revoked session requires
-`infisical login`, not a copied human token in a workload identity.
+`infisical login`, not a copied human token in a workload identity. Diagnose
+authorization at the intended operation: an unrelated probe returning 404 does
+not establish an expired session, and successful project access does not prove
+organization Identity EditAuth authority. An OIDC attach denied for that action
+requires an eligible organization principal; do not widen the workload role or
+substitute human credentials in Actions.
 
 ## Workload identities
 

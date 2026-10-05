@@ -21,10 +21,13 @@ Publish immutable `capir-v0.2.0` and `capir-v0.2.1` from two reviewed commits in
 
 1. Complete locally: release packaging, bootstrap, updater, offline routing,
    rollback and bounded automatic notices; preserve unrelated user work.
-2. Active: final package/bootstrap verification and latest-head CI. Independent
-   review has closed all confirmed findings; re-review material changes.
-3. Pending: merge the two version commits through required checks, then publish
-   both signed releases using the dedicated Infisical OIDC identity.
+2. Complete: final verification, independent review and all four platform
+   archive smokes passed. [PR 291](https://github.com/getyak/capir/pull/291)
+   merged as `0d1c9b3e144091221033608fe8b08fff438fb943`; both release sources
+   are main ancestors.
+3. Active: attach the dedicated Infisical OIDC configuration, then publish
+   both signed releases. The current principal lacks organization Identity
+   EditAuth (HTTP 403); project access and canonical signing-key import work.
 4. Pending: install A from GitHub, publish B, verify automatic notice and real
    update/rollback/re-update/no-op; migrate the legacy launcher with backup.
 
@@ -58,11 +61,22 @@ Link merged PR, release and signed manifest; retain sanitized command evidence f
   passed. Workflow actionlint and shellcheck passed. Official Node package tests
   6/6 and real shell bootstrap tests10/10 passed, including bounded chunked bodies;
   four GitHub platforms remain mandatory before release acceptance.
-- Signing key is generated in restricted parent-owned local storage. Its public
-  key is committed; canonical import and a dedicated OIDC identity still require
-  human Infisical reauthorization. Latest read-only local auth check returned404.
-  A previously provisioned temporary GitHub secret was removed and read back
-  absent; there is no signing fallback. Credential details remain private.
+- The signing key is canonical in `staging:/release:CAPIR_RELEASE_SIGNING_KEY`;
+  readback derives the committed public key exactly. Restricted local key
+  storage stays until actual OIDC signing succeeds. A temporary GitHub signing
+  secret was removed and read back absent; there is no signing fallback.
+- Direct target-project access succeeded. An HTTP 404 from an authentication
+  probe did not establish expired authorization. The actual OIDC attach fails
+  with HTTP 403 for missing organization Identity EditAuth; an eligible human
+  principal must complete that operation. No tag, public release or user
+  launcher change has occurred.
+- Organization identity creation hit its plan quota. The dormant identity
+  `4fb817bd-e093-405a-a3b2-3b49b5fb82b1` had no authentication methods,
+  additional privileges or last login, both roles were no-access, and no
+  repository/environment identity variable referenced it. Its baseline was
+  preserved before renaming it for capir release. OIDC configuration remains
+  unattached; there is no expanded access. Private admin configuration and
+  resumable provisioning receipts are prepared.
 - GitHub `capir-release` environment is provisioned with custom deployment policy
   allowing only `main` and `capir-v*`. Ruleset24493698 protects only `capir-v*`
   version tags from update/deletion; creation stays permitted and the mutable
@@ -133,3 +147,17 @@ independently; no global query exclusion or alert dismissal was applied. Parent
 CLI build/typecheck and218 passing tests (one skip) and pure35/35 passed again.
 This does not claim protection from every external bin-directory writer during
 plan/apply. Fresh source commits and latest-head CI still precede merge.
+
+## Latest-head merge evidence
+
+Release sources are `9669bd480f6fdc053f8b61e2d1718058cd6bba29` (0.2.0)
+and `0cba7e8cb4531fc64d0c07b5b8105d7cf59caa0f` (0.2.1). Required CI
+and Security passed that final head; all four real archive smokes passed.
+The four final JavaScript alerts were independently verified false positives
+and individually dismissed against their affected PR instances, with receipts
+and rationale. No global query exclusion was introduced. The earlier scanning
+notes describe intermediate runs, not the final disposition.
+
+The additional Web processing-status request was delivered in PR 293. It does
+not replace pending signed publication, actual install/update/rollback and
+backed-up user-launcher replacement acceptance.
