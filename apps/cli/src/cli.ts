@@ -8,6 +8,10 @@
  * - The system browser opener can be substituted with CAPIR_BROWSER_OPEN for
  *   owned test browsers; that substitution is a test/operations hook and is
  *   recorded as such in reports.
+ * - The `update` family is routed BEFORE model parsing so no model ever
+ *   receives update keywords. The bounded automatic update notice runs only
+ *   after successful ordinary interactive commands (stderr only, managed
+ *   installs only, never help/--version/doctor/update/--json/noninteractive).
  */
 import { spawn } from "node:child_process";
 import { configDirectory } from "./config.js";
@@ -26,6 +30,10 @@ import {
   operatorCredentialStore,
   type RunPasswordStore,
 } from "./testCredentials.js";
+import {
+  maybePrintUpdateNotice,
+  updateNoticeEligible,
+} from "./update/notice.js";
 import type { CapirEnvironment } from "./config.js";
 
 function openBrowser(url: string): Promise<void> {
@@ -77,10 +85,42 @@ async function testRunPasswordStore(account: string): Promise<RunPasswordStore> 
   return createRunPasswordStore(await loadKeyring(), account);
 }
 
-if (!(await runModelCli(process.argv.slice(2)))) {
-const result = await runCli(process.argv.slice(2), {
+const UPDATE_NOTICE_VALUE_FLAGS = new Set([
+  "profile", "model", "system", "max-tokens", "timeout", "provider",
+  "base-url", "api-key-env", "auth", "token-limit-field", "system-role",
+  "env", "client-label", "username", "password", "expires-in", "preset",
+  "request-id", "open", "receipt-dir", "wait", "role", "scenario",
+  "model-policy", "duration-hours", "surface",
+]);
+
+/**
+ * True when the invocation targets the `update` family. Value-aware leading
+ * flag skipping mirrors model parsing so a flag VALUE of "update" (e.g.
+ * `--env update`) never routes to the updater. Routed before any model parse.
+ */
+function updateRequested(argv: string[]): boolean {
+  const rest = argv[0] === "--" ? argv.slice(1) : [...argv];
+  let index = 0;
+  while (index < rest.length && rest[index]!.startsWith("-")) {
+    const token = rest[index]!;
+    if (token === "--") break;
+    index += UPDATE_NOTICE_VALUE_FLAGS.has(token.slice(2)) ? 2 : 1;
+  }
+  return rest[index] === "update";
+}
+
+const argv = process.argv.slice(2);
+
+// Downstream pipes closing early (e.g. `| head`) are normal; never crash or
+// write a stack trace into stderr for them.
+process.stdout.on("error", (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE") process.exit(0);
+  throw error;
+});
+
+const dependencies = {
   env: process.env,
-  fetchImpl: (...args) => fetch(...args),
+  fetchImpl: (...args: Parameters<typeof fetch>) => fetch(...args),
   credentialStore,
   testOperatorStore,
   testRunPasswordStore,
@@ -88,13 +128,29 @@ const result = await runCli(process.argv.slice(2), {
   interactive: Boolean(
     (process.stdin.isTTY && process.stdout.isTTY) || process.env.CAPIR_BROWSER_OPEN,
   ),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep: (ms: number): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, ms)),
   journal: new OperationJournal(configDirectory(process.env)),
-});
+};
 
-process.stdout.write(`${result.output}\n`);
-process.exitCode = result.exitCode;
+if (updateRequested(argv)) {
+  const result = await runCli(argv, dependencies);
+  process.stdout.write(`${result.output}\n`);
+  process.exitCode = result.exitCode;
+} else if (!(await runModelCli(argv))) {
+  const result = await runCli(argv, dependencies);
+  process.stdout.write(`${result.output}\n`);
+  process.exitCode = result.exitCode;
+}
 
+// Bounded automatic update notice: stderr only, successful ordinary
+// interactive commands only, never blocking longer than its own hard cap.
+if ((process.exitCode ?? 0) === 0 && updateNoticeEligible(argv)) {
+  await maybePrintUpdateNotice({
+    env: process.env,
+    fetchImpl: dependencies.fetchImpl as never,
+    invokedBinary: process.argv[1] ?? "",
+    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+  });
 }
 
 if (forceModelExit) process.exit(process.exitCode ?? 0);

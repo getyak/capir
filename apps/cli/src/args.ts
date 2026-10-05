@@ -18,7 +18,10 @@ export type CommandName =
   | "sandbox stop"
   | "test create"
   | "test status"
-  | "test stop";
+  | "test stop"
+  | "update";
+
+export type UpdateMode = "check" | "apply" | "rollback";
 
 export interface ParsedArgs {
   command: CommandName;
@@ -55,6 +58,8 @@ export interface ParsedArgs {
   expiresRaw?: string;
   /** test status / stop positional target */
   runId?: string;
+  /** update family mode: --check, --rollback or the default apply. */
+  updateMode: UpdateMode;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -120,6 +125,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     waitSeconds: 90,
     preset: "daily",
     passwordStdin: false,
+    updateMode: "apply",
   };
   const positionals: string[] = [];
   parsed.suppliedFlags = [];
@@ -170,6 +176,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
       }
       case "--password-stdin":
         parsed.passwordStdin = true;
+        break;
+      case "--check":
+        parsed.updateMode = "check";
+        break;
+      case "--rollback":
+        parsed.updateMode = "rollback";
         break;
       case "--expires-in": {
         const [value, next] = flagValue(rest, i, "--expires-in");
@@ -330,6 +342,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
     return parsed;
   }
+  if (first === "update") {
+    // Routed before model parsing: no model ever receives update keywords.
+    if (parsed.help) {
+      parsed.command = "help";
+      parsed.helpPath = "update";
+      return parsed;
+    }
+    parsed.command = "update";
+    if (second !== undefined || third !== undefined)
+      throw invalidArgument(
+        "CAPIR_CLI_INVALID_ARGUMENT",
+        `Unexpected positional argument "${(second ?? third)!}". The update family takes flags only: --check, --rollback.`,
+      );
+    return parsed;
+  }
   const noTargetCommands = new Set<CommandName>([
     "help",
     "auth login",
@@ -395,12 +422,21 @@ export function validateRequestShape(args: ParsedArgs): void {
     "test create": [...common, "--json", "--username", "--password", "--password-stdin", "--expires-in", "--preset", "--request-id", "--open", "--receipt-dir", "--timeout"],
     "test status": [...common, "--json"],
     "test stop": [...common, "--json", "--request-id"],
+    // update never resolves an environment and needs no credential.
+    update: ["--help", "-h", "--version", "--human", "--json", "--check", "--rollback"],
   };
   for (const flag of args.suppliedFlags ?? []) if (!allowed[args.command].includes(flag))
     throw invalidArgument("CAPIR_CLI_INVALID_ARGUMENT", `${flag} does not apply to ${args.command}.`);
 
   if (args.requestId !== undefined && !UUID.test(args.requestId))
     throw invalidArgument("CAPIR_CLI_INVALID_ARGUMENT", "--request-id must be a UUID.");
+
+  if (args.command === "update") {
+    if (args.suppliedFlags?.includes("--check") && args.suppliedFlags?.includes("--rollback"))
+      throw invalidArgument("CAPIR_CLI_INVALID_ARGUMENT", "Choose only one of --check and --rollback.");
+    if (args.suppliedFlags?.includes("--check")) args.updateMode = "check";
+    if (args.suppliedFlags?.includes("--rollback")) args.updateMode = "rollback";
+  }
 
   if (args.command === "test create") {
     if (args.password !== undefined && args.passwordStdin)

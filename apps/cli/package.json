@@ -1,8 +1,11 @@
 {
   "name": "@talent-signal/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
