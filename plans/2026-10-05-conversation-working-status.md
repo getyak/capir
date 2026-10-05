@@ -28,8 +28,15 @@ projection and phase tests enforce it.
   The isolated component fixture is not authenticated backend/model proof.
 - Independent read-only review found no actionable defects.
 - Passed: conversation components and execution helpers, 123/123 tests.
-- Pending: PR checks and delivery readback.
+- Delivered: [PR 293](https://github.com/getyak/capir/pull/293) merged at
+  `52fb9a6928c7ec03382a6b8a2b0064aa74a6fa8f`. All applicable latest-head
+  CI/security checks and both Vercel preview builds passed.
+- Rendered evidence is preserved in the private task state directory; the
+  registered component fixture artifact and its server were removed.
+  Unrelated source-checkout changes remain untouched.
 
 CLI updater PR 291 merged at 0d1c9b3e, but signed publication and local replacement
-remain blocked on human Infisical login. This additional Web task does not
+remain blocked on organization Identity EditAuth permission (HTTP 403).
+The existing session can read the target project; the canonical signing-key
+import and public-key readback match have passed. This additional Web task does not
 replace that pending authorized outcome.
