@@ -25,44 +25,49 @@ const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const workflow = readFileSync(join(REPO_ROOT, ".github/workflows/release-capir.yml"), "utf8");
 const ciWorkflow = readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8");
 const installSh = readFileSync(new URL("./install.sh", import.meta.url), "utf8");
+const prWorkflow = readFileSync(join(REPO_ROOT, ".github/workflows/package-capir.yml"), "utf8");
 const publicKey = readFileSync(new URL("./release-public-key.txt", import.meta.url), "utf8");
 
 const work = mkdtempSync(join(tmpdir(), "capir-policy-test-"));
 after(() => rmSync(work, { recursive: true, force: true }));
 
 describe("release workflow: triggers and scope", () => {
-  it("smokes PRs on all four runners and releases only from tags or dispatch", () => {
-    assert.match(workflow, /pull_request:\n    paths:/);
+  it("isolates read-only PR smoke from trusted tag publication", () => {
+    assert.match(prWorkflow, /pull_request:\n    paths:/);
+    assert.match(prWorkflow, /permissions:\n  contents: read/);
+    assert.ok(!prWorkflow.includes("environment:") && !prWorkflow.includes("id-token:") && !prWorkflow.includes("Infisical/"));
     assert.match(workflow, /push:\n    tags:\n      - "capir-v\*"/);
-    assert.match(workflow, /workflow_dispatch:\n    inputs:\n      version:/);
-    assert.match(workflow, /description: "Exact release version \(X\.Y\.Z\)/);
-    // Publication is gated to trusted events and never runs for PRs.
-    assert.match(
-      workflow,
-      /if: needs\.validate\.outputs\.publish == 'true' && \(github\.event_name == 'push' \|\| github\.event_name == 'workflow_dispatch'\)/,
-    );
-    assert.ok(!workflow.includes("pull_request_target"));
+    assert.ok(!workflow.includes("  pull_request:") && !workflow.includes("  workflow_dispatch:"));
+    assert.match(workflow, /if: needs\.validate\.outputs\.publish == 'true' && github\.event_name == 'push'/);
+    assert.ok(!prWorkflow.includes("pull_request_target"));
   });
 
   it("uses only valid hosted runner labels mapped to every platform", () => {
     for (const platform of SUPPORTED_PLATFORMS) {
-      assert.ok(workflow.includes(`platform: ${platform}`), `matrix covers ${platform}`);
-      assert.ok(workflow.includes(`runner: ${RUNNERS[platform]}`), `runner pinned for ${platform}`);
+      assert.ok(workflow.includes(`platform: ${platform}`) && prWorkflow.includes(`platform: ${platform}`), `both matrices cover ${platform}`);
+      assert.ok(workflow.includes(`runner: ${RUNNERS[platform]}`) && prWorkflow.includes(`runner: ${RUNNERS[platform]}`), `both runners pinned for ${platform}`);
       assert.ok(HOSTED_RUNNER_LABELS.has(RUNNERS[platform]), `${RUNNERS[platform]} is a hosted label`);
     }
   });
 
-  it("keeps PR checkout separate and installs Node before pnpm without shared caches", () => {
-    const packageJob = workflow.slice(workflow.indexOf("\n  package:\n"), workflow.indexOf("\n  publish:\n"));
-    assert.ok(packageJob.includes("if: github.event_name == 'pull_request'"));
-    assert.ok(packageJob.includes("if: github.event_name != 'pull_request'"));
-    assert.ok(packageJob.indexOf("Set up Node.js for the build") < packageJob.indexOf("Set up pnpm"));
-    assert.ok(packageJob.includes("package-manager-cache: false"));
-    assert.ok(!packageJob.includes("cache: pnpm"));
+  it("installs exact integrity-locked JavaScript pnpm after Node on every runner", () => {
+    for (const source of [workflow, prWorkflow]) {
+      const job = source.slice(source.indexOf("\n  package:\n"));
+      assert.ok(job.indexOf("Set up Node.js for the build") < job.indexOf("Set up locked pnpm"));
+      assert.ok(job.includes("package-manager-cache: false"));
+      assert.ok(job.includes("npm ci --prefix scripts/capir/pnpm-bootstrap --ignore-scripts"));
+      assert.ok(!job.includes("cache: pnpm") && !job.includes("uses: pnpm/action-setup"));
+    }
+    const lock = JSON.parse(readFileSync(join(REPO_ROOT, "scripts/capir/pnpm-bootstrap/package-lock.json")));
+    const entry = lock.packages["node_modules/pnpm"];
+    assert.equal(entry.version, "11.18.0");
+    assert.match(entry.integrity, /^sha512-/);
+    assert.equal(entry.resolved, "https://registry.npmjs.org/pnpm/-/pnpm-11.18.0.tgz");
+    assert.ok(!/\n\s+ref:/.test(prWorkflow), "PR uses the default event checkout");
   });
 
   it("pins every action to a full commit SHA", () => {
-    for (const line of workflow.split("\n")) {
+    for (const line of (workflow + "\n" + prWorkflow).split("\n")) {
       const match = /^\s*(?:- )?uses:\s+(\S+)/.exec(line);
       if (!match) continue;
       const reference = match[1];
@@ -101,25 +106,27 @@ describe("release workflow: Infisical-only signing", () => {
     const publishIndex = workflow.indexOf("\n  publish:\n");
     const signIndex = workflow.indexOf("manifest.mjs sign");
     assert.ok(publishIndex !== -1 && signIndex > publishIndex, "signing lives in the publish job");
-    assert.ok(workflow.indexOf("pull_request") < publishIndex, "publish job exists outside PR scope");
+    assert.ok(!prWorkflow.includes("manifest.mjs sign"), "PR has no signing stage");
   });
 });
 
 describe("release workflow: publication wiring", () => {
   it("serializes all release versions and freezes the validated source SHA", () => {
-    assert.ok(workflow.includes("|| 'stable'"));
+    assert.ok(workflow.includes("group: capir-release-stable"));
     assert.ok(workflow.includes('echo "ref=$(git rev-parse HEAD)"'));
-    assert.equal((workflow.match(/ref: \$\{\{ needs\.validate\.outputs\.ref \}\}/g) ?? []).length, 2);
+    assert.equal((workflow.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []).length, 2);
     assert.ok(workflow.includes('node scripts/capir/publication.mjs publish'));
     assert.ok(workflow.includes('RELEASE_COMMIT: ${{ needs.validate.outputs.ref }}'));
   });
-  it("passes manual input as data and requests only the signing key", () => {
-    assert.ok(workflow.includes('CAPIR_DISPATCH_VERSION: ${{ inputs.version }}'));
-    assert.ok(workflow.includes('node scripts/capir/publication.mjs version'));
-    assert.ok(!workflow.includes('version="${{ github.event.inputs.version }}"'));
+  it("binds event SHA to validated tag and requests only the signing key", () => {
+    assert.ok(workflow.includes('--revision "$GITHUB_SHA"'));
+    assert.ok(!workflow.includes("inputs.version") && !workflow.includes("workflow_dispatch:"));
     assert.ok(workflow.includes('secret-name: CAPIR_RELEASE_SIGNING_KEY'));
     assert.ok(workflow.includes('include-imports: false'));
+    assert.ok(workflow.includes('CAPIR_IDENTITY_ID: ${{ vars.INFISICAL_CAPIR_IDENTITY_ID }}'));
+    assert.ok(!workflow.includes('[ -z "${{ vars.INFISICAL_CAPIR_IDENTITY_ID }}" ]'));
   });
+
 });
 
 describe("release gate: release-source binding", () => {

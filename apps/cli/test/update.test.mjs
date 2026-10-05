@@ -605,7 +605,7 @@ describe("standalone installer: launcher direct exec and managed binding", () =>
     const { root, binDir } = managedRootSetup("direct-exec");
     await installFixture({ root, binDir, release: releaseA });
     const launcher = join(binDir, "capir");
-    assert.equal(readFileSync(launcher, "utf8"), launcherScript(root));
+    assert.equal(readFileSync(launcher, "utf8"), launcherScript(realpathSync(root)));
 
     // REAL direct exec smoke: the launcher is executed as a command with the
     // environment override removed; it must resolve its fixed root.
@@ -850,4 +850,37 @@ describe("smoke failure recovery", () => {
     const result = await smokePortableTree(tree, VERSION_A);
     assert.equal(result.keyring, "loaded");
   });
+});
+
+
+describe("launcher within managed root", () => {
+  it("installs root/bin and supports the real update and rollback transitions", async () => {
+    const { root } = managedRootSetup("root-bin");
+    const binDir = join(root, "bin");
+    await installFixture({ root, binDir, release: releaseA });
+    assert.equal(resolveInstall(invokedFor(root, VERSION_A)).method, "managed");
+    const update = await runUpdate(["update", "--json"], { root, version: VERSION_A, release: releaseB });
+    assert.equal(update.result.exitCode, 0, update.result.output);
+    assert.equal(readState(root).current_version, VERSION_B);
+    const rollback = await runUpdate(["update", "--rollback", "--json"], { root, version: VERSION_B, release: releaseB });
+    assert.equal(rollback.result.exitCode, 0, rollback.result.output);
+    assert.equal(readState(root).current_version, VERSION_A);
+    assert.equal(runLauncher(binDir, ["--version"]).status, 0);
+  });
+});
+
+
+it("root/bin remains managed when the installation root is a directory symlink", async () => {
+  const base = scratch("root-bin-alias"), physicalRoot = join(base, "physical"), alias = join(base, "alias");
+  mkdirSync(physicalRoot);symlinkSync(physicalRoot, alias);
+  const binDir = join(alias, "bin");
+  await installFixture({ root: alias, binDir, release: releaseA });
+  assert.equal(readState(alias).install_root, realpathSync(physicalRoot));
+  assert.equal(readFileSync(join(binDir, "capir"), "utf8"), launcherScript(realpathSync(physicalRoot)));
+  assert.equal(resolveInstall(invokedFor(alias, VERSION_A)).method, "managed");
+  const update = await runUpdate(["update", "--json"], { root: alias, version: VERSION_A, release: releaseB });
+  assert.equal(update.result.exitCode, 0, update.result.output);
+  const rollback = await runUpdate(["update", "--rollback", "--json"], { root: alias, version: VERSION_B, release: releaseB });
+  assert.equal(rollback.result.exitCode, 0, rollback.result.output);
+  assert.equal(readState(alias).current_version, VERSION_A);
 });

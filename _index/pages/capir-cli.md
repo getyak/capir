@@ -152,3 +152,13 @@ older version. Bootstrap downloads are bounded while streaming, including
 responses without a Content-Length header. Custom relative installation paths
 are saved as absolute paths; different-filesystem staging is copied and smoke
 checked on the destination filesystem before activation.
+
+
+A custom launcher directory may be inside the managed root (for example
+`<root>/bin`). The `versions`, `current` and `staging` paths are reserved and
+rejected before replacement. Installer metadata and launcher content bind to
+one physical installation root, including when the requested path is a symlink.
+PR package smoke runs in a separate read-only workflow. Signed publication runs
+only for validated `capir-v*` tag events; retries use GitHub workflow rerun.
+Builds install the exact pnpm JavaScript distribution from a committed npm lock
+with SHA512 integrity so Intel macOS needs no native pnpm binary.

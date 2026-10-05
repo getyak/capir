@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync, readlinkSync, lstatSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, readlinkSync, lstatSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLauncher, applyLauncher } from "../dist/update/layout.js";
@@ -44,5 +44,23 @@ test("launcher undo restores an existing binary byte for byte", () => {
     assert.deepEqual(readFileSync(launcher), original);
     assert.deepEqual(readFileSync(applied.backup), original);
     assert.equal(lstatSync(launcher).mode & 0o777, 0o751);
+  } finally { rmSync(work, { recursive: true, force: true }); }
+});
+
+
+test("reserved version, current and staging launcher paths are refused before mutation", () => {
+  const root = join(tmpdir(), "capir-reserved-layout");
+  for (const relative of ["versions/1.0.0/bin/capir", "current/bin/capir", "staging/bin/capir"])
+    assert.throws(() => planLauncher(join(root, relative), root, true), { code: "CAPIR_UPDATE_LAUNCHER_CONFLICT" });
+});
+
+
+test("a bin-directory symlink cannot hide a reserved version launcher location", () => {
+  const work = mkdtempSync(join(tmpdir(), "capir-parent-alias-"));
+  try {
+    const root = join(work, "install"), target = join(root, "versions", "1.0.0", "bin");
+    mkdirSync(target, { recursive: true });
+    const alias = join(work, "bin-alias");symlinkSync(target, alias);
+    assert.throws(() => planLauncher(join(alias, "capir"), root, true), { code: "CAPIR_UPDATE_LAUNCHER_CONFLICT" });
   } finally { rmSync(work, { recursive: true, force: true }); }
 });

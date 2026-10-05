@@ -339,13 +339,16 @@ export async function installPortable(options: {
   replaceExisting: boolean;
   transport: UpdateTransport;
 }): Promise<UpdateOutcome> {
-  const { tree, archivePath, manifest, asset, installRoot, binDir, replaceExisting, transport } = options;
+  const { tree, archivePath, manifest, asset, installRoot: requestedInstallRoot, binDir, replaceExisting, transport } = options;
   await verifyArchiveFile(archivePath, asset);
   assertManifestTreeBinding(tree, manifest, asset);
   validatePortableTree(tree);
   const stagedSmoke = await smokePortableTree(tree, manifest.version);
 
-  mkdirSync(versionsDirectory(installRoot), { recursive: true, mode: 0o700 });
+  mkdirSync(versionsDirectory(requestedInstallRoot), { recursive: true, mode: 0o700 });
+  // Save metadata and generate launcher bytes from one physical root, even
+  // when the user's install-root path contains directory symlinks.
+  const installRoot = realpathSync(requestedInstallRoot);
   return withLock(installRoot, transport, async () => {
     const existingState = readState(installRoot);
     const launcherPath = join(binDir, "capir");

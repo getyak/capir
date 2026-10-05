@@ -38,7 +38,7 @@ import {
   chmodSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CapirCliError, EXIT } from "../errors.js";
 
 export const INSTALL_STATE_SCHEMA_VERSION = "capir-install-state.v1";
@@ -259,6 +259,13 @@ export function planLauncher(
   installRoot: string,
   replaceExisting: boolean,
 ): LauncherPlan {
+  // A launcher may live at root/bin, but never within mutable version or
+  // staging trees: those directories have a different lifecycle.
+  for (const reserved of [versionsDirectory(installRoot), join(installRoot, "current"), stagingDirectory(installRoot)]) {
+    if (isInside(reserved, launcher) || isInside(physical(reserved), physical(launcher)))
+      throw new CapirCliError("CAPIR_UPDATE_LAUNCHER_CONFLICT", EXIT.INFRASTRUCTURE,
+        "Launcher directory cannot be inside capir versions, current or staging. Choose a separate bin directory.");
+  }
   let entry;
   try {
     entry = lstatSync(launcher);
@@ -368,7 +375,10 @@ function physical(path: string): string {
   try {
     return realpathSync(path);
   } catch {
-    return resolve(path);
+    // A planned launcher may not exist yet; resolve its existing ancestors
+    // so a bin-directory symlink cannot hide a reserved version path.
+    const absolute = resolve(path), parent = dirname(absolute);
+    return parent === absolute ? absolute : join(physical(parent), basename(absolute));
   }
 }
 
@@ -415,7 +425,14 @@ export function resolveInstall(
   if (physical(state.install_root) !== physical(root)) return unmanaged("state-root-mismatch");
   if (state.platform !== platform) return unmanaged("state-platform-mismatch");
   const launcherPhysical = physical(state.launcher);
-  if (isInside(root, launcherPhysical)) return unmanaged("launcher-mismatch");
+  if (isInside(versionsDirectory(root), launcherPhysical) || isInside(stagingDirectory(root), launcherPhysical))
+    return unmanaged("launcher-mismatch");
+  if (isInside(root, launcherPhysical)) {
+    try {
+      if (!isManagedLauncher(readFileSync(state.launcher, "utf8"), state.install_root))
+        return unmanaged("launcher-mismatch");
+    } catch { return unmanaged("launcher-mismatch"); }
+  }
   if (!state.versions[invokedVersion]) return unmanaged("version-not-recorded");
 
   return {

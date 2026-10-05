@@ -52,9 +52,9 @@ Link merged PR, release and signed manifest; retain sanitized command evidence f
 - Independent review also closed cross-filesystem installation, absolute custom
   paths, bounded bootstrap streaming, failed-smoke cleanup and binary launcher
   restoration. Publication regressions13/13 passed independently. Parent full
-  CLI build/typecheck passed; tests214 passed,1 skipped (real Linux cross-filesystem
+  CLI build/typecheck passed; tests218 passed,1 skipped (real Linux cross-filesystem
   probe unavailable on macOS; explicit EXDEV recovery test passed).
-- Parent manifest/publication/policy tests34/34, docs:check and Wiki tests8/8
+- Parent manifest/publication/policy tests35/35, docs:check and Wiki tests8/8
   passed. Workflow actionlint and shellcheck passed. Official Node package tests
   6/6 and real shell bootstrap tests10/10 passed, including bounded chunked bodies;
   four GitHub platforms remain mandatory before release acceptance.
@@ -92,3 +92,29 @@ redirections are grouped for CI shellcheck. Full-repository actionlint with
 shellcheck on PATH and policy15/15 passed; independent review found no defect in
 this correction. The next source commits will become the release A/B targets;
 prior PR history is preserved. Fresh-head CI remains required before merge.
+
+
+The second run showed the pnpm action still invokes self-update from11.25 to
+11.18, requesting an unavailable Intel native binary. Both package workflows
+now install pnpm11.18's JavaScript distribution through a committed npm lock
+with SHA512 integrity. PR smoke is a separate read-only workflow with default
+checkout and no signing stage. Publication is tags-only; immutable event SHA
+must equal the validated tag commit and is used by both downstream checkouts.
+Release retries use GitHub rerun, avoiding a separate user-supplied ref path.
+Local exact JavaScript pnpm reports11.18.0. Latest-head CI must confirm all four
+platforms and closure of the workflow alerts before merge.
+
+
+MiMo's single review of frozen head6431c43a completed with two lower-priority
+findings, independently confirmed: a root/bin launcher was misclassified and a
+repository variable was interpolated into shell source. The parent corrected
+managed root/bin ownership, rejected reserved launcher paths before mutation,
+and passed identity metadata through an environment variable. Current-head
+closure will be recorded separately from the model's historical snapshot;
+no repeated paid review of the same commit is needed.
+
+Final local verification: CLI build/typecheck and218/219 tests passed (one
+platform-specific skip); latest shell bootstrap10/10 passed. The physical-root
+correction closes the independent reviewer's root/bin alias finding; regression
+coverage exercises a real directory-symlink root through install, update and
+rollback. Reserved-path aliases are rejected before launcher mutation.
