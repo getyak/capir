@@ -664,7 +664,8 @@ export class ConversationQueueRunner {
         if (execution.remoteStatus === "fallback") {
           const failureCode = execution.remoteFailureCode ?? "MODEL_RUN_FAILED";
           this.options.logger.warn(
-            { ...queueRunCorrelation(claimed), ...execution.remoteDiagnostics, failure_code: failureCode },
+            { ...queueRunCorrelation(claimed), failure_code: failureCode,
+              ...execution.remoteDiagnostics, queue_failure_code: failureCode },
             "conversation queue model run did not complete",
           );
           await this.finalizeRetained(fence, failureCode, { auth, claimed, partialText: previewText, completedTools });
