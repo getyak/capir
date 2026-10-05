@@ -52,6 +52,15 @@ describe("release workflow: triggers and scope", () => {
     }
   });
 
+  it("keeps PR checkout separate and installs Node before pnpm without shared caches", () => {
+    const packageJob = workflow.slice(workflow.indexOf("\n  package:\n"), workflow.indexOf("\n  publish:\n"));
+    assert.ok(packageJob.includes("if: github.event_name == 'pull_request'"));
+    assert.ok(packageJob.includes("if: github.event_name != 'pull_request'"));
+    assert.ok(packageJob.indexOf("Set up Node.js for the build") < packageJob.indexOf("Set up pnpm"));
+    assert.ok(packageJob.includes("package-manager-cache: false"));
+    assert.ok(!packageJob.includes("cache: pnpm"));
+  });
+
   it("pins every action to a full commit SHA", () => {
     for (const line of workflow.split("\n")) {
       const match = /^\s*(?:- )?uses:\s+(\S+)/.exec(line);
@@ -89,7 +98,7 @@ describe("release workflow: Infisical-only signing", () => {
   });
 
   it("keeps manifest signing inside the trusted publish job only", () => {
-    const publishIndex = workflow.indexOf("  publish:");
+    const publishIndex = workflow.indexOf("\n  publish:\n");
     const signIndex = workflow.indexOf("manifest.mjs sign");
     assert.ok(publishIndex !== -1 && signIndex > publishIndex, "signing lives in the publish job");
     assert.ok(workflow.indexOf("pull_request") < publishIndex, "publish job exists outside PR scope");

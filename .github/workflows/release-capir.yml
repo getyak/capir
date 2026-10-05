@@ -70,10 +70,12 @@ jobs:
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
             version="$(node -p "require('./apps/cli/package.json').version")"
-            echo "version=${version}" >> "$GITHUB_OUTPUT"
-            echo "tag=" >> "$GITHUB_OUTPUT"
-            echo "ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "version=${version}"
+              echo "tag="
+              echo "ref=${GITHUB_SHA}"
+              echo "publish=false"
+            } >> "$GITHUB_OUTPUT"
             echo "PR package smoke only; nothing is signed or published"
             exit 0
           fi
@@ -89,10 +91,12 @@ jobs:
           git checkout --detach "$tag"
           node scripts/capir/release-gate.mjs validate --tag "$tag" --revision "$(git rev-parse HEAD)"
           node scripts/capir/release-gate.mjs check-version --tag "$tag"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "publish=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+            echo "ref=$(git rev-parse HEAD)"
+            echo "publish=true"
+          } >> "$GITHUB_OUTPUT"
 
   package:
     name: Package ${{ matrix.platform }}
@@ -112,22 +116,31 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
+      - name: Check out the pull request revision
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
       - name: Check out the release revision
+        if: github.event_name != 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.validate.outputs.ref }}
           persist-credentials: false
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.18.0
-
+      # pnpm v11 on Intel macOS requires Node >=22.13 before action-setup.
+      # Source: https://github.com/pnpm/action-setup#using-pnpmsetup-instead
       - name: Set up Node.js for the build
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
-          cache: pnpm
+          package-manager-cache: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.18.0
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

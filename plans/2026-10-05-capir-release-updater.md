@@ -78,3 +78,17 @@ Link merged PR, release and signed manifest; retain sanitized command evidence f
 
 Real GitHub publishing, four-platform CI and installed-user replacement are not
 proven by local fixtures. This plan stays active until those observations exist.
+
+
+## First GitHub run and corrections
+
+PR291 first head `6431c43ac00f886b11bc3cfa5cfd8d72191bb77b` built and
+smoked real darwin-arm64, linux-arm64 and linux-x64 archives. Intel macOS stopped
+in pnpm bootstrap. The pinned pnpm v11 action requires Node22.13+ to be installed
+first on Intel macOS; this is now explicit. The package job disables all store
+caching and uses separate default-event PR checkout versus validated release
+SHA checkout, addressing the introduced CodeQL workflow alerts. Workflow output
+redirections are grouped for CI shellcheck. Full-repository actionlint with
+shellcheck on PATH and policy15/15 passed; independent review found no defect in
+this correction. The next source commits will become the release A/B targets;
+prior PR history is preserved. Fresh-head CI remains required before merge.
