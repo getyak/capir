@@ -47,6 +47,9 @@ export function displayText(objective: string, images: readonly ConversationImag
 }
 
 export function queueFailureText(code: string | null, hasImages: boolean): string {
+  if (code === "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED" || code === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED") return hasImages
+    ? "图片分析已达到本次处理的 token 预算，原图已保留。可重试或移除。"
+    : "本次处理已达到 token 预算，消息已保留。可重试或移除。";
   if (code === "MODEL_RUN_TIMEOUT") return hasImages
     ? "图片分析超时，原图已保留。可重试；反复失败时请移除并重新发送较小的图片。"
     : "本次处理超时，消息已保留。可重试。";

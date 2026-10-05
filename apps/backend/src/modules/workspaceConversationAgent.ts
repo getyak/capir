@@ -1430,13 +1430,13 @@ export async function executeWorkspaceConversationAgentCore(input: {
           : {}),
         budget: {
           ...DEFAULT_AGENT_BUDGET,
-          // Image and MCP context are resent after a tool receipt. Real MCP
-          // acceptance exceeded 32k after two responses before staging a card.
-          // Bound these round trips without increasing dollars, duration,
-          // turns, or tool-call limits; ordinary text keeps its existing cap.
-          maxTaskTokens: input.inputParts?.some(part => part.kind === "image") ||
-            (input.mcpConnections && (input.hostResult || /\bMCP\b|DeepWiki|Context7/iu.test(input.objective)))
-            ? 96_000 : DEFAULT_AGENT_BUDGET.maxTaskTokens,
+          // Admitted current/history images repeat across tool rounds. This
+          // is the cumulative allowance, not a single context/output limit.
+          // MCP-only and ordinary text retain their existing allowances.
+          maxTaskTokens: input.inputParts?.some(part => part.kind === "image")
+            ? 100_000_000
+            : input.mcpConnections && (input.hostResult || /\bMCP\b|DeepWiki|Context7/iu.test(input.objective))
+              ? 96_000 : DEFAULT_AGENT_BUDGET.maxTaskTokens,
           maxTurns: Math.min(DEFAULT_AGENT_BUDGET.maxTurns, 6),
           maxToolCalls: Math.min(DEFAULT_AGENT_BUDGET.maxToolCalls, 6),
           maxDurationMs: durationMs,
