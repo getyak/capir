@@ -6,7 +6,7 @@
  * with injected transports. stdout is exactly one JSON document (or `--human`
  * text); every failure is a stable redacted error envelope.
  */
-import { readFileSync } from "node:fs";
+import { readVersion as readRunningVersion } from "./version.js";
 import { parseArgs, validateRequestShape } from "./args.js";
 import { configDirectory, resolveEnvironment, type CapirEnvironment } from "./config.js";
 import { CapirCliError, EXIT, type ExitCode } from "./errors.js";
@@ -29,6 +29,8 @@ import {
   type SuccessEnvelope,
 } from "./output.js";
 import { machineHelpPayload, renderGlobalHelp, USAGE } from "./help.js";
+import { renderUpdateHelp, UPDATE_HELP_PATHS } from "./updateHelp.js";
+import { runUpdateCommand, type UpdateMode } from "./update/command.js";
 import { runAuthLogin } from "./login.js";
 import { runAuthLogout, runAuthStatus } from "./auth.js";
 import {
@@ -78,6 +80,18 @@ export interface RunDependencies {
     options?: { receiptTimeoutMs?: number },
   ) => Promise<RunnerReceipt>;
   journal?: OperationJournal;
+  /** Absolute path of the executed CLI script; binds managed-update metadata. */
+  invokedBinary?: string;
+  /** Explicit updater seams for tests (trust key, channel URLs); production omits them. */
+  update?: {
+    trustPublicKey?: string;
+    channelManifestUrl?: string;
+    channelSignatureUrl?: string;
+    requestTimeoutMs?: number;
+    lockTimeoutMs?: number;
+    now?: () => Date;
+    platform?: string;
+  };
 }
 
 export interface RunResult {
@@ -87,8 +101,28 @@ export interface RunResult {
 
 function commandLabel(argv: string[]): string {
   const rest = argv[0] === "--" ? argv.slice(1) : argv;
-  const [first, second] = rest;
+  // Skip leading flags value-aware so `--json update --rollback` is labeled
+  // as an update command, never as help.
+  const VALUE_FLAGS = new Set([
+    "profile", "model", "system", "max-tokens", "timeout", "provider",
+    "base-url", "api-key-env", "auth", "token-limit-field", "system-role",
+    "env", "client-label", "username", "password", "expires-in", "preset",
+    "request-id", "open", "receipt-dir", "wait", "role", "scenario",
+    "model-policy", "duration-hours", "surface",
+  ]);
+  let index = 0;
+  while (index < rest.length && rest[index]!.startsWith("-")) {
+    const token = rest[index]!;
+    if (token === "--") break;
+    index += VALUE_FLAGS.has(token.slice(2)) ? 2 : 1;
+  }
+  const [first, second] = rest.slice(index);
   if (!first || first.startsWith("-")) return "help";
+  if (first === "update") {
+    if (rest.includes("--check")) return "update --check";
+    if (rest.includes("--rollback")) return "update --rollback";
+    return "update";
+  }
   const candidate = second ? `${first} ${second}` : first;
   const known = new Set([
     "help",
@@ -107,15 +141,7 @@ function commandLabel(argv: string[]): string {
 }
 
 export function readVersion(): string {
-  try {
-    return (
-      JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
-        version: string;
-      }
-    ).version;
-  } catch {
-    return "0.0.0";
-  }
+  return readRunningVersion();
 }
 
 export async function runCli(argv: string[], dependencies: RunDependencies): Promise<RunResult> {
@@ -124,7 +150,9 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
   let human = argv.includes("--human");
   try {
     const args = parseArgs(argv);
-    human = args.human;
+    // The update family defaults to readable text; `--json` opts into the
+    // stable envelope. Every other command keeps its JSON-default contract.
+    human = args.command === "update" ? !args.json : args.human;
     if (args.version) {
       return finish(
         successEnvelope("capir", { version: readVersion(), usage_summary: USAGE.summary }),
@@ -138,16 +166,32 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
       const path = args.helpPath;
       if (args.json) {
         const payload = path
-          ? { help: JSON.parse(renderTestHelp(path, "json")) as Record<string, unknown> }
+          ? { help: JSON.parse(renderHelp(path, "json")) as Record<string, unknown> }
           : machineHelpPayload();
         return finish(successEnvelope("help", payload), false);
       }
       return {
         exitCode: EXIT.SUCCESS,
-        output: path ? renderTestHelp(path, "human") : renderGlobalHelp(),
+        output: path ? renderHelp(path, "human") : renderGlobalHelp(),
       };
     }
     validateRequestShape(args);
+    if (args.command === "update") {
+      // No environment resolution, no credential load, no journal: update
+      // runs on release metadata only and is dispatched before any model path.
+      const result = await runUpdateCommand(args.updateMode as UpdateMode, {
+        env,
+        fetchImpl: dependencies.fetchImpl,
+        invokedBinary: dependencies.invokedBinary ?? process.argv[1] ?? "",
+        ...(dependencies.update ?? {}),
+      });
+      return {
+        exitCode: EXIT.SUCCESS,
+        output: human
+          ? result.humanOutput
+          : JSON.stringify(successEnvelope(updateCommandLabel(args.updateMode), result.payload)),
+      };
+    }
     const environment = resolveEnvironment(args.environment, env);
 
     if (
@@ -257,6 +301,16 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
   } catch (error) {
     return renderFailure(error, label, human);
   }
+}
+
+function updateCommandLabel(mode: string): string {
+  return mode === "check" ? "update --check" : mode === "rollback" ? "update --rollback" : "update";
+}
+
+function renderHelp(path: string, format: "human" | "json"): string {
+  return UPDATE_HELP_PATHS.includes(path as (typeof UPDATE_HELP_PATHS)[number])
+    ? renderUpdateHelp(path, format)
+    : renderTestHelp(path, format);
 }
 
 function finish(envelope: SuccessEnvelope, human: boolean): RunResult {

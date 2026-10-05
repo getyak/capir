@@ -42,6 +42,13 @@ cache for local offline recovery; the encryption key stays in the operating
 system keychain. Production cannot use that path: the shared wrapper requires
 `INFISICAL_TOKEN`, and Machine Identity fetch failure stops the command.
 
+If an authorized local API operation needs the human CLI token, capture
+`infisical user get token --plain --silent` in memory and reject multiline or
+malformed output before constructing a request. Never print the captured value,
+request headers, response bodies, or exception text that can contain them;
+report only the operation and status. A rejected or revoked session requires
+`infisical login`, not a copied human token in a workload identity.
+
 ## Workload identities
 
 Use a separate least-privilege Machine Identity for each workload and
