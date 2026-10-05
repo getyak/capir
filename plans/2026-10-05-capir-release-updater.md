@@ -118,3 +118,18 @@ platform-specific skip); latest shell bootstrap10/10 passed. The physical-root
 correction closes the independent reviewer's root/bin alias finding; regression
 coverage exercises a real directory-symlink root through install, update and
 rollback. Reserved-path aliases are rejected before launcher mutation.
+
+## JavaScript scanning closure
+
+Four real PR platform package smokes passed on4776796d, including Intel macOS.
+JavaScript CodeQL then reported launcher snapshot check/use, runtime network
+write and two source-policy regex alerts. Launcher snapshots now use one
+no-follow, nonblocking descriptor for fstat/read/close; symlinks preserve their
+identity and always require explicit replacement. Runtime archives are checked
+in memory against one exact official SHASUMS entry before disk writes, with a
+strict Node version. Source assertions use literal includes. The intended
+verified runtime-download sink has one documented CodeQL annotation, reviewed
+independently; no global query exclusion or alert dismissal was applied. Parent
+CLI build/typecheck and218 passing tests (one skip) and pure35/35 passed again.
+This does not claim protection from every external bin-directory writer during
+plan/apply. Fresh source commits and latest-head CI still precede merge.

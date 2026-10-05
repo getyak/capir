@@ -26,7 +26,11 @@
  */
 import {
   existsSync,
+  closeSync,
+  constants,
+  fstatSync,
   lstatSync,
+  openSync,
   mkdirSync,
   readFileSync,
   readlinkSync,
@@ -266,18 +270,30 @@ export function planLauncher(
       throw new CapirCliError("CAPIR_UPDATE_LAUNCHER_CONFLICT", EXIT.INFRASTRUCTURE,
         "Launcher directory cannot be inside capir versions, current or staging. Choose a separate bin directory.");
   }
-  let entry;
+  let descriptor: number;
+  let previousLink: string | undefined;
+  let text: Buffer | null = null;
+  let previousMode = 0o755;
   try {
-    entry = lstatSync(launcher);
+    // Snapshot regular files through one descriptor. Never follow a launcher
+    // symlink or block on a FIFO while deciding ownership and preserving bytes.
+    descriptor = openSync(launcher, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return { mode: "write", launcher, previous: null, previousMode: 0o755 };
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { mode: "write", launcher, previous: null, previousMode };
+    if (code !== "ELOOP" && code !== "EMLINK") throw error;
+    previousLink = readlinkSync(launcher);
+    descriptor = -1;
   }
-  const previousLink = entry.isSymbolicLink() ? readlinkSync(launcher) : undefined;
-  const text = previousLink !== undefined && !existsSync(launcher)
-    ? null
-    : readFileSync(launcher);
-  const previousMode = entry.mode & 0o777;
+  if (descriptor >= 0) {
+    try {
+      const entry = fstatSync(descriptor);
+      if (!entry.isFile()) throw new CapirCliError("CAPIR_UPDATE_LAUNCHER_CONFLICT", EXIT.INFRASTRUCTURE,
+        "Existing launcher must be a regular file or an explicitly replaced symlink.");
+      previousMode = entry.mode & 0o777;
+      text = readFileSync(descriptor);
+    } finally { closeSync(descriptor); }
+  }
   const linkIdentity = previousLink === undefined ? {} : { previousLink };
   if (text !== null && isManagedLauncher(text.toString("utf8"), installRoot)) {
     return { mode: "write", launcher, previous: text, previousMode, ...linkIdentity };

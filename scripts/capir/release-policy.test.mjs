@@ -187,10 +187,10 @@ describe("packaging and installer policy", () => {
     const packager = readFileSync(new URL("./package-portable.mjs", import.meta.url), "utf8");
     assert.match(packager, /"deploy", "--legacy", "--prod"/);
     assert.match(packager, /PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD/);
-    assert.match(packager, /official-nodejs\.org/);
+    assert.ok(packager.includes("official-nodejs.org"));
     const runtime = readFileSync(new URL("./node-runtime.mjs", import.meta.url), "utf8");
     assert.match(runtime, /SHASUMS256\.txt/);
-    assert.match(runtime, /nodejs\.org\/dist/);
+    assert.ok(runtime.includes("https://nodejs.org/dist"));
   });
 
   it("keeps canonical getyak/capir release URLs across the slice", () => {

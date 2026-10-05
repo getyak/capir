@@ -31,6 +31,7 @@ const ARCHIVE_NAMES = {
 
 export function nodeArchiveName(platform, nodeVersion) {
   if (!SUPPORTED_PLATFORMS.includes(platform)) throw new Error(`unsupported platform ${platform}`);
+  if (!/^\d+\.\d+\.\d+$/.test(nodeVersion)) throw new Error("invalid Node runtime version");
   return ARCHIVE_NAMES[platform](nodeVersion);
 }
 
@@ -43,6 +44,10 @@ export function sha256File(path) {
  * filename must appear with exactly one sha256 line and the digest must match.
  */
 export function verifyAgainstShasums(archivePath, shasumsText, filename) {
+  return verifyRuntimeBytes(readFileSync(archivePath), shasumsText, filename);
+}
+
+function verifyRuntimeBytes(archiveBytes, shasumsText, filename) {
   const lines = shasumsText
     .split("\n")
     .map((line) => line.trim())
@@ -54,7 +59,7 @@ export function verifyAgainstShasums(archivePath, shasumsText, filename) {
   if (matches.length !== 1)
     throw new Error(`SHASUMS256.txt must name ${filename} exactly once; found ${matches.length}`);
   const expected = /^([0-9a-f]{64})/.exec(matches[0])[1];
-  const actual = sha256File(archivePath);
+  const actual = createHash("sha256").update(archiveBytes).digest("hex");
   if (actual !== expected)
     throw new Error(`Node archive sha256 mismatch for ${filename}: expected ${expected}, got ${actual}`);
   return { sha256: actual, expected };
@@ -83,8 +88,10 @@ export async function fetchNodeRuntime({
   const shasumsText = (await download(`${base}/SHASUMS256.txt`)).toString("utf8");
   const archiveBytes = await download(`${base}/${filename}`);
   const archivePath = join(outDir, filename);
-  writeFileSync(archivePath, archiveBytes);
-  const { sha256 } = verifyAgainstShasums(archivePath, shasumsText, filename);
+  const { sha256 } = verifyRuntimeBytes(archiveBytes, shasumsText, filename);
+  // Intentional runtime download: requested URLs use the fixed official HTTPS
+  // origin; exact filename/version and SHA256 are checked before disk writes.
+  writeFileSync(archivePath, archiveBytes); // lgtm[js/http-to-file-access] Verified official Node runtime; intentional download.
   const nodeDir = extractNodeArchive(archivePath, outDir);
   return { archivePath, sha256, shasumsText, nodeDir, filename };
 }

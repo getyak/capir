@@ -41,6 +41,7 @@ describe("official Node runtime provenance", () => {
     const bytes = Buffer.from("not really a node archive");
     writeFileSync(archive, bytes);
     const digest = createHash("sha256").update(bytes).digest("hex");
+    assert.throws(() => nodeArchiveName(hostPlatform(), "../../untrusted"), /invalid Node runtime version/);
     const filename = nodeArchiveName(hostPlatform(), DEFAULT_NODE_VERSION);
     const shasums = `${digest}  ${filename}\n`;
     assert.equal(verifyAgainstShasums(archive, shasums, filename).sha256, digest);
@@ -69,6 +70,7 @@ describe("official Node runtime provenance", () => {
       }),
       /sha256 mismatch/,
     );
+    assert.deepEqual(readdirSync(join(work, "node-runtime-bad")), [], "rejected bytes never reach disk");
   });
 });
 
