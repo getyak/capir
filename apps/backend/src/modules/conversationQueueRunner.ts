@@ -1,4 +1,4 @@
-import { beginQueueRunMonitoring, completeQueueRunMonitoring, queueRunCorrelation } from "./conversationQueueMonitoring.js";
+import { beginQueueRunMonitoring, completeQueueRunMonitoring, queueRunCorrelation, reconcileRecoveredQueueRunMonitoring } from "./conversationQueueMonitoring.js";
 import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
 import { randomUUID } from "node:crypto";
 
@@ -272,13 +272,24 @@ export class ConversationQueueRunner {
           const images = await readConversationMessageImageManifests(
             this.options.pool, reclaimed.accountId, [reclaimed.entryId],
           );
-          await this.finalizeCancelled(auth, reclaimed, fence, "", images.get(reclaimed.entryId) ?? []);
+          const cancelled = await this.finalizeCancelled(
+            auth, reclaimed, fence, "", images.get(reclaimed.entryId) ?? [],
+          );
+          // Only the canonical cancelled terminal state reconciles the
+          // attempt's monitoring; a failed stop persistence keeps the queue
+          // running and must leave the product run untouched.
+          if (cancelled) {
+            await reconcileRecoveredQueueRunMonitoring(this.options.pool, reclaimed, this.options.logger);
+          }
           this.options.logger.warn(
             { queue_entry_id: reclaimed.entryId },
             "conversation queue attempted settlement of a recovered stop",
           );
           continue;
         }
+        // The queue's terminal truth now reconciles the crashed attempt's
+        // monitoring; diagnostics stay best-effort and never gate recovery.
+        await reconcileRecoveredQueueRunMonitoring(this.options.pool, reclaimed, this.options.logger);
         this.options.logger.warn(
           { queue_entry_id: reclaimed.entryId },
           "conversation queue recovered an interrupted run and paused its queue",
@@ -724,7 +735,7 @@ export class ConversationQueueRunner {
     partialText: string,
     images: ConversationImageManifest[],
     tools: Array<{ name: string; completed_at: string }> = [],
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await persistConversationQueueCancellation(this.options.pool, auth, {
         fence,
@@ -738,7 +749,7 @@ export class ConversationQueueRunner {
         execution: { started_at: claimed.claimedAt, completed_at: new Date().toISOString(), tools },
       });
     } catch (error) {
-      if (error instanceof ConversationQueueLeaseLostError) return;
+      if (error instanceof ConversationQueueLeaseLostError) return false;
       // Never scrub the admitted message if its history was not saved. A
       // transient failure can retry on lease recovery; revoked or expired
       // context still cannot receive a partial answer and retains its existing
@@ -747,12 +758,13 @@ export class ConversationQueueRunner {
         { queue_entry_id: claimed.entryId, err: error },
         "conversation queue stop could not persist a partial answer",
       );
-      return;
+      return false;
     }
-    await finalizeConversationQueueEntry(this.options.pool, {
+    const finalized = await finalizeConversationQueueEntry(this.options.pool, {
       fence,
       status: "cancelled",
     }).catch(() => undefined);
+    return finalized?.applied === true || finalized?.effectiveStatus === "cancelled";
   }
 
   private async finalizeRetained(
