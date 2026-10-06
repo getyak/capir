@@ -303,7 +303,8 @@
   .row:active,
   .retry:active {
     transform: none;
-    scale: 1;
+    /* Keep this separate from transform through production CSS lowering. */
+    scale: 1 !important;
   }
 }
 
