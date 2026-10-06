@@ -76,7 +76,6 @@
 .recoveryContent { margin:10px 0 2px; padding:9px 10px; border-radius:9px; background:var(--surface-muted,#f5f4ed); font:inherit; font-size:13px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; }
 .canvas button:focus-visible,.details summary:focus-visible { outline:2px solid var(--muted-strong,var(--muted)); outline-offset:3px; }
 @keyframes breathe { 0%,100% { opacity:.35; } 50% { opacity:1; } }
-@media(prefers-reduced-motion:reduce) { .pulse,.cursor { animation:none; }.composer,.send,.sendActions .stop,.starters button,.queueActions button,.composerImageRemove,.imageClose { transition:none; }.send:not(:disabled):hover,.send:not(:disabled):active,.stop:active:not(:disabled),.starters button:active,.queueActions button:active:not(:disabled),.composerImageRemove:active,.imageClose:active,.latest:active { transform:none; } }
 @media(max-width:640px) { .header { padding:10px 16px; min-height:60px; gap:8px; }.header h1 { font-size:15px; line-height:23px; }.details { right:8px; top:8px; }.transcript { padding:0 16px 16px; }.dock { padding:0 16px max(16px,env(safe-area-inset-bottom)); }.queue { margin:0 2px 8px; max-height:170px; }.queueActions button { min-width:44px; min-height:44px; }.stop { min-height:44px; }.send { min-width:44px; min-height:44px; }.userMessage { max-width:90%; font-size:14px; }.welcome { padding:0 2px; gap:11px; }.welcome h2 { font-size:26px; }.welcomeMark { width:25px; height:25px; }.starters { margin-top:14px; gap:2px 14px; }.starters button { min-height:44px; }.canvas[data-empty="true"] .transcript { padding:0 22px; }.canvas[data-empty="true"] .dock { margin-top:22px; }.canvas[data-empty="true"] { padding-bottom:36px; }.footer { font-size:12px; }.footer span:last-child { display:none; }.runMeta { flex-wrap:wrap; gap:4px; }.turn { margin-bottom:28px; } }
 
 @media(max-height:520px) { .canvas[data-empty="true"] { justify-content:flex-start; padding-top:24px; padding-bottom:14px; } }
@@ -102,7 +101,7 @@
 .imageDialog img { max-width:min(92vw,1100px); max-height:78vh; object-fit:contain; border-radius:10px; background:#111; }
 .imageDialogTitle { position:absolute; top:14px; left:50%; transform:translateX(-50%); margin:0; color:#fff; font-size:12px; font-weight:500; }
 .imageClose { position:absolute; top:12px; right:14px; display:grid; place-items:center; width:44px; height:44px; border-radius:50%; border:0; background:#ffffff1f; color:#fff; cursor:pointer; }
-.imageClose:active { transform:scale(0.92); }
+.imageClose:active svg { transform:scale(0.92); }
 .imageDialogMessage { color:#fff; font-size:13px; }
 .composerImages { display:flex; flex-wrap:wrap; gap:7px; margin:0 8px 8px; }
 .composerImage { position:relative; width:64px; height:64px; border-radius:10px; overflow:hidden; border:1px solid var(--line-soft); background:var(--surface-muted,#f3f4f0); }
@@ -110,7 +109,7 @@
 .composerImageRemove { position:absolute; top:2px; right:2px; display:grid; place-items:center; width:22px; height:22px; border:0; border-radius:50%; background:#000000a6; color:#fff; cursor:pointer; padding:0; }
 /* Quiet 22px face with a full 44px removal target. */
 .composerImageRemove::after { content:""; position:absolute; inset:-11px; }
-.composerImageRemove:active { transform:scale(0.9); }
+.composerImageRemove:active svg { transform:scale(0.9); }
 .composerImageHint { margin:0 8px 6px; color:var(--muted); font-size:11px; }
 @media(max-width:640px) { .imageButton,.imagePlaceholder { width:84px; height:84px; } .imageClose { width:44px; height:44px; } }
 .imageRetry { margin-top:6px; border:0; background:none; color:var(--ink); text-decoration:underline; font-size:11px; padding:4px 0; cursor:pointer; }
@@ -153,3 +152,5 @@
   .composerImageRemove, .imageClose { background:Canvas; border:1px solid CanvasText; color:CanvasText; }
   .canvas button:focus-visible, .details summary:focus-visible { outline:2px solid Highlight; }
 }
+
+@media(prefers-reduced-motion:reduce) { .pulse,.cursor { animation:none; }.composer,.send,.sendActions .stop,.starters button,.queueActions button,.composerImageRemove,.imageClose { transition:none; }.send:not(:disabled):hover,.send:not(:disabled):active,.stop:active:not(:disabled),.starters button:active,.queueActions button:active:not(:disabled),.composerImageRemove:active svg,.imageClose:active svg,.latest:active { transform:none; } }

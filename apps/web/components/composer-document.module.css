@@ -76,7 +76,7 @@
   color: var(--ink);
 }
 
-.close:active {
+.close:active svg {
   transform: scale(0.92);
 }
 
@@ -282,7 +282,7 @@
     transition: none;
   }
 
-  .close:active,
+  .close:active svg,
   .primary:active:not(:disabled),
   .secondary:active,
   .fill:active {

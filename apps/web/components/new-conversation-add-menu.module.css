@@ -35,7 +35,7 @@
 }
 
 .trigger:active:not(:disabled) svg {
-  transform: scale(0.92);
+  scale: 0.92;
 }
 
 .trigger:disabled {
@@ -50,6 +50,7 @@
 
 .trigger svg {
   display: block;
+  transition: scale 100ms ease-out;
 }
 
 .panel {
@@ -112,7 +113,7 @@
 }
 
 .back:active svg {
-  transform: scale(0.92);
+  scale: 0.92;
 }
 
 .back:focus-visible {
@@ -290,6 +291,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .trigger,
+  .trigger svg,
   .back,
   .row,
   .retry {
@@ -301,6 +303,7 @@
   .row:active,
   .retry:active {
     transform: none;
+    scale: 1;
   }
 }
 
