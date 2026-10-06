@@ -44,7 +44,7 @@ changes are authorized by this curation.
 - [x] Preserve real person-avatar preferences through the rewritten menu;
       verify focused menu and avatar cases, lint, and typecheck.
 - [x] Run pnpm docs:check and review the complete diff against REVIEW.md.
-- [ ] Commit, push the isolated branch, create and attach a PR, and read back
+- [x] Commit, push the isolated branch, create a PR, and read back
       the remote revision. Confirm no primary files were changed by this chat.
 
 ## Evidence and limits
@@ -84,3 +84,7 @@ not rerun for this presentation/documentation curation.
 
 Primary selected source hashes still match the captured pre-curation snapshot.
 The isolated branch, not the primary checkout, owns all edits in this PR.
+
+Submission: https://github.com/getyak/capir/pull/297 on branch
+`codex/curate-local-work-20261006`. Source commit: `8b6d9956`.
+Remote main was rechecked at `4e0840fd` before submission.
