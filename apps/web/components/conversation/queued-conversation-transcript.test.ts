@@ -137,7 +137,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("composes the transcript: send time, user objective, milestone updates, execution record and standalone result", async () => {
+it("composes the transcript: send time, user objective, observed status, execution draft and standalone result", async () => {
   await act(async () => {
     root?.render(createElement(QueuedConversation, {
       chatBinding: "chat-binding",
@@ -152,9 +152,11 @@ it("composes the transcript: send time, user objective, milestone updates, execu
   expect(text.match(/\d+月\d+日 \d{2}:\d{2}/gu)?.length).toBe(2);
   // User objective and the trailing bubble carry the message content.
   expect(text).toContain("帮我整理林晓和周予的合作进展。");
-  // Milestone-only dialogue updates are separate from the semantic result.
-  expect(document.querySelectorAll("[data-run-update]").length).toBeGreaterThan(0);
-  expect(text).toContain("我先核对两人的沟通记录。");
+  // Processing is observed status; genuine preview stays in execution details.
+  expect(document.querySelectorAll("[data-run-update]")).toHaveLength(0);
+  expect(document.querySelector('[role="status"]')?.textContent).toBe("正在处理");
+  expect(text).not.toContain("收到，我先理清这件事。");
+  expect(document.querySelector('[aria-label="回复草稿，尚未完成"]')?.textContent).toContain("我先核对两人的沟通记录。");
   // The in-place execution record reports observed state and elapsed time.
   const phases = [...document.querySelectorAll("[data-phase]")].map((node) => node.getAttribute("data-phase"));
   expect(phases).toContain("running");

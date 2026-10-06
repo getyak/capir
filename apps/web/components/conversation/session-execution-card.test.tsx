@@ -25,7 +25,9 @@ describe("in-place execution card", () => {
       milestones: [{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-09-30T01:00:01.000Z" }],
       failureCode: null,
     }));
-    expect(html).toContain("执行中");
+    expect(html).toContain("正在处理");
+    expect(html).toContain("capri");
+    expect(html).toContain('role="status"');
     expect(html).toContain("正在阅读相关记录");
     expect(html).toContain("用时");
     expect(html).toContain("data-elapsed-ms");
@@ -115,4 +117,15 @@ it("renders a whole forming Markdown draft only inside execution details", () =>
   expect(html).toContain("<ol");
   expect(html).toContain("<table");
   expect(html).not.toContain("data-run-update");
+});
+
+it("keeps waiting, stopping and terminal outcomes distinct from active processing", () => {
+  for (const phase of ["queued", "stopping", "failed", "interrupted", "completed"] as const) {
+    const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
+      phase, stage: null, startedAt: "2026-10-05T01:00:00Z", milestones: [],
+      endedAt: phase === "queued" || phase === "stopping" ? null : "2026-10-05T01:00:03Z",
+    }));
+    expect(html).not.toContain("正在处理");
+    expect(html.includes('data-live="true"')).toBe(phase === "queued" || phase === "stopping");
+  }
 });

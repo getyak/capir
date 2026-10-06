@@ -76,6 +76,16 @@ answer must not claim fresh source support until its scope and authority are
 revalidated. Shared or forked conversations carry only the reviewed context;
 sharing does not inherit decisions, permissions, or execution authority.
 
+When proposing a first contact, look up the observed name with minimal,
+source-grounded public context before presenting the review. Useful public
+clues can deepen the acquaintance context; private dialogue must not become a
+search query. Search results remain tentative public background with sources
+and retrieval time, separate from confirmed identity and Memory. Preserve the
+observed name as a reviewable, source-attributed Memory candidate in the Memory
+creation flow. Human confirmation saves it; fictional or AI-generated chats
+never establish a real relationship. Declined, disabled, unavailable, empty,
+and failed research must be visible without pretending a lookup succeeded.
+
 ## People, memory, and unfinished things
 
 These layers grow independently from the same governed sources:

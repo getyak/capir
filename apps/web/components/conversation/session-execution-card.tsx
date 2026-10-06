@@ -10,6 +10,7 @@ import {
   type ConversationExecutionMilestone,
   type ConversationExecutionPhase,
 } from "@/lib/conversation-execution";
+import { siteConfig } from "@/lib/site";
 import { ConversationResponse } from "../conversation-response";
 import styles from "./queued-conversation.module.css";
 
@@ -61,14 +62,15 @@ export function SessionExecutionCard({
   const elapsedMs = conversationElapsedMs({ startedAt, nowMs, endedAt });
   const stageLabel = conversationStageLabel(stage);
   return (
-    <details className={styles.execution} data-phase={phase} data-run-stage={stage ?? undefined} open={defaultOpen}>
-      <summary className={styles.executionSummary}>
-        <span className={styles.executionState}>{conversationExecutionPhaseLabel(phase)}</span>
-        {stageLabel && live ? <span className={styles.executionStage}>{stageLabel}</span> : null}
+    <details className={styles.execution} data-phase={phase} data-run-stage={stage ?? undefined} data-live={live ? "true" : undefined} open={defaultOpen}>
+      <summary className={styles.executionSummary} title={live ? stageLabel ?? undefined : undefined}>
+        {live ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
+        <span className={styles.executionState} role={live ? "status" : undefined}>{phase === "running" && live ? "正在处理" : conversationExecutionPhaseLabel(phase)}</span>
         {completedTools.length > 0 ? <span className={styles.executionStage}>已记录 {completedTools.length} 次工具完成</span> : null}
         <span className={styles.executionElapsed} data-elapsed-ms={elapsedMs}>{phase === "queued" ? "已等待" : timingBasis === "receipt" ? "记录跨度" : "用时"} {conversationElapsedLabel(elapsedMs)}</span>
       </summary>
       <div className={styles.executionDetail}>
+        {stageLabel && live ? <p>{stageLabel}</p> : null}
         {failureCode ? <p className={styles.executionFailure}>失败代码：{failureCode}</p> : null}
         {completedTools.length > 0 ? <ol className={styles.executionMilestones} aria-label="工具完成记录">
           {completedTools.map((tool, index) => <li key={`${index}:${tool.completed_at}`}>

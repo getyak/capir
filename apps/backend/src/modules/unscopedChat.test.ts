@@ -39,6 +39,19 @@ describe("unscoped Agent conversation", () => {
     expect(JSON.stringify(execution.body)).not.toContain("WORKSPACE_CONVERSATION_TIMEOUT");
   });
 
+  it("preserves a bounded token-budget reason without a second provider call", async () => {
+    const answer = vi.fn(async () => { throw new Error("CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED"); });
+    const execution = await executeUnscopedChatTask({ request,
+      provider: { providerId: "claude-agent-sdk", model: "synthetic", supportsImageInput: true, answer },
+    });
+    expect(answer).toHaveBeenCalledOnce();
+    expect(execution.remoteStatus).toBe("fallback");
+    expect(execution.remoteFailureCode).toBe("MODEL_RUN_TOKEN_BUDGET_EXHAUSTED");
+    expect(execution.remoteDiagnostics?.failure_code).toBe("CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED");
+    expect(execution.body.external_effects).toEqual([]);
+    expect(JSON.stringify(execution.body)).not.toContain("CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED");
+  });
+
   it("loads canonical same-scope dialogue before answering a follow-up", async () => {
     const messages = [{ message_id: "previous", role: "assistant" as const, text: "1. Call. 2. Draft an email." }];
     vi.mocked(readAgentSessionConversation).mockResolvedValueOnce({ hasRecordedTurns: true, messages });

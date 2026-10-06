@@ -107,13 +107,22 @@ metadata-only through cleanup and expire with the run. Missing capture must
 never turn a successful product request into a failure.
 
 Workspace Claude has one total deadline, including image inspection, SDK
-startup and tools: `TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS`, default `180000`,
-validated range `30000`–`300000`. Ark retains its own 40-second ceiling within
-that deadline. Claude token limits remain 96,000 for image requests and 32,000
-for text requests; turn, tool and dollar limits are unchanged. The deadline is
-independent of HTTP admission or the 55-second SSE reconnect. Cancellation and
-source revocation remain immediate. The 180-second default is provisional;
-use measured stage timings and timeout rates before tuning it further.
+startup and tools: `TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS`, default `1800000`,
+validated range `30000`–`1800000`. Ark retains its own 40-second ceiling within
+that deadline. Admitted current and historical images have a cumulative Claude
+allowance of 100,000,000 tokens, including repeated context and cache usage
+across tool rounds. This is not a single context-window or output limit.
+Ordinary text remains at 32,000 tokens; MCP-only context retains 96,000.
+Turn, tool and dollar limits are unchanged. The deadline is independent of
+HTTP admission or the 55-second SSE reconnect. Cancellation and source
+revocation remain immediate; source expiry can end a run earlier.
+
+Token exhaustion is persisted as `MODEL_RUN_TOKEN_BUDGET_EXHAUSTED`, separately
+from `MODEL_RUN_TIMEOUT`. Queue warnings keep the original whitelisted harness
+`failure_code` and expose the queue classification as `queue_failure_code`.
+The failed-message view distinguishes these reasons while retaining the input
+and explicit retry/removal controls. Unknown errors retain a generic failure;
+no raw provider prose or private input enters the diagnostic codes.
 
 Local product capture and native Opik export are separate. Opik requires the
 account in `TALENT_SIGNAL_OPIK_RUNTIME_POLICY`, a runtime reload, and actual

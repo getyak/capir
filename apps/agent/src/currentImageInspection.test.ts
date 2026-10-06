@@ -82,3 +82,12 @@ describe("Ark observation parsing",()=>{
   await expect(inspect({type:"object",properties:{description:{type:"string"}}})).rejects.toThrow();
  });
 });
+
+it("returns tentative counterparty IDs from on-demand inspection",async()=>{
+ const registry=publicSubjectRegistry("");
+ const capability=currentImageInspection({images:[image],subjectRegistry:registry,isCurrent:async()=>true,inspector:{inspect:async()=>({...observation,conversation_kind:"direct",counterparty_name:"Andrej Karpathy",visible_text:["Andrej Karpathy","nanoGPT"],public_context_anchors:[{name:"Andrej Karpathy",kind:"work",excerpt:"nanoGPT"}],source_warning:"ai_generated_or_fictional"})}});
+ const result=await capability.tools[0]!.execute({artifact_id:image.artifactID},signal);
+ const data=JSON.parse((result.content[0] as {text:string}).text);
+ expect(data.public_subjects).toEqual([{id:registry.subjects()[0]!.id,name:"Andrej Karpathy",anchors:[{kind:"work",text:"nanoGPT"}],tentative:true}]);
+ expect(await capability.counterparty()).toMatchObject({source_warning:"ai_generated_or_fictional",subject_id:registry.subjects()[0]!.id});
+});

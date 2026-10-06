@@ -100,8 +100,8 @@ describe("quiet workspace shell render", () => {
     expect(html).toContain("有什么想一起理清的？");
     // The default composer stays a single attachment/send pair: the person and
     // capture affordances live behind one compact add control, not a strip.
-    expect(html).toContain("添加截图或查找人物");
-    expect(html).toContain('aria-controls="composer-add-panel"');
+    expect(html).toContain("添加文件、工具与提示，或查找人物");
+    expect(html).toMatch(/aria-controls="[^"]+-add-panel"/);
     expect(html).not.toContain("未关联人物");
     expect(html).not.toContain("选择人物");
     expect(html).toContain("queued-conversation-composer");

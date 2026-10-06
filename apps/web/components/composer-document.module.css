@@ -1,0 +1,322 @@
+/*
+ * Composer document review dialog.
+ *
+ * One quiet modal surface: full extracted text, an editable excerpt and the
+ * exact budget against the untouched draft. Warm neutral tokens throughout;
+ * the original file is never attached, so nothing here resembles an
+ * attachment chip.
+ */
+
+.overlay {
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+  inset: 0;
+  position: fixed;
+  z-index: 80;
+}
+
+.dialog {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 18px);
+  box-shadow: var(--shadow-focus);
+  box-sizing: border-box;
+  color: var(--ink);
+  display: grid;
+  gap: 12px;
+  left: 50%;
+  max-height: min(84dvh, 720px);
+  max-width: min(560px, calc(100vw - 32px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px;
+  position: fixed;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  z-index: 81;
+}
+
+.title {
+  align-items: center;
+  display: flex;
+  font-size: 0.9375rem;
+  font-weight: 560;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+  padding-right: 40px;
+}
+
+.fileName {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 44px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  transition: transform 100ms ease-out;
+  width: 44px;
+}
+
+.close:hover {
+  background: color-mix(in srgb, var(--surface-muted) 78%, transparent);
+  color: var(--ink);
+}
+
+.close:active svg {
+  transform: scale(0.92);
+}
+
+.close:focus-visible {
+  outline: 2px solid var(--muted-strong, var(--muted));
+  outline-offset: 2px;
+}
+
+.description {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.notice {
+  background: color-mix(in srgb, var(--surface-muted) 72%, transparent);
+  border-radius: var(--input-radius, 10px);
+  color: var(--muted-strong, var(--muted));
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.warning {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.65;
+  margin: 0;
+}
+
+.loading {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  margin: 0;
+}
+
+.error {
+  color: var(--accent-strong);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  margin: 0;
+}
+
+.textSection {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+}
+
+.sectionLabel {
+  color: var(--muted-strong, var(--muted));
+  font-size: 0.75rem;
+  font-weight: 560;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.fullText {
+  background: color-mix(in srgb, var(--surface-muted) 55%, transparent);
+  border: 1px solid var(--line-soft, var(--line));
+  border-radius: var(--input-radius, 10px);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.75;
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.excerpt {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--input-radius, 10px);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.75;
+  max-height: 240px;
+  min-height: 96px;
+  padding: 10px 12px;
+  resize: vertical;
+  width: 100%;
+}
+
+.excerpt:focus-visible {
+  border-color: color-mix(in srgb, var(--focus) 42%, var(--line));
+  outline: 2px solid color-mix(in srgb, var(--focus) 30%, transparent);
+  outline-offset: 1px;
+}
+
+.excerpt:disabled {
+  color: var(--muted);
+}
+
+.count {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
+.countOver {
+  color: var(--accent-strong);
+  composes: count;
+  font-weight: 560;
+}
+
+.fill {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  justify-self: start;
+  min-height: 44px;
+  padding: 3px 16px;
+}
+
+.fill:active {
+  transform: scale(0.97);
+}
+
+.fill:focus-visible {
+  outline: 2px solid var(--muted-strong, var(--muted));
+  outline-offset: 2px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.primary,
+.secondary {
+  border: 0;
+  border-radius: var(--button-radius, 999px);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8125rem;
+  min-height: 44px;
+  padding: 0 18px;
+  transition: transform 100ms ease-out;
+}
+
+.primary {
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.primary:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.primary:disabled {
+  background: var(--surface-muted);
+  color: var(--muted);
+  cursor: default;
+}
+
+.secondary {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.secondary:active {
+  transform: scale(0.97);
+}
+
+.primary:focus-visible,
+.secondary:focus-visible {
+  outline: 2px solid var(--muted-strong, var(--muted));
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .dialog {
+    gap: 10px;
+    max-height: 88dvh;
+    padding: 16px;
+  }
+
+  .fullText {
+    max-height: 160px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .close,
+  .primary,
+  .secondary,
+  .fill {
+    transition: none;
+  }
+
+  .close:active svg,
+  .primary:active:not(:disabled),
+  .secondary:active,
+  .fill:active {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .overlay {
+    background: color-mix(in srgb, var(--ink) 55%, transparent);
+  }
+
+  .notice,
+  .fullText {
+    background: var(--surface-muted);
+  }
+}
+
+@media (forced-colors: active) {
+  .overlay {
+    background: Canvas;
+    opacity: 0.6;
+  }
+
+  .dialog {
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  .close:focus-visible,
+  .fill:focus-visible,
+  .primary:focus-visible,
+  .secondary:focus-visible,
+  .excerpt:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}

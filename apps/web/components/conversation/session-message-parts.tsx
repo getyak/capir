@@ -190,12 +190,7 @@ export function sessionMessages(input: {
       id: `${active.message_id}:assistant`, role: "assistant",
       content: [
         ...(active.host_result ? [{ type: "data" as const, name: "talent-signal.mcp-human-result", data: { version: 1, messageId: active.message_id, result: active.host_result } }] : []),
-        // Milestone-only dialogue updates, separate from the semantic result
-        // blocks that appear only after terminal history readback.
-        { type: "data", name: "talent-signal.run-update", data: {
-          updates: ["收到，我先理清这件事。"],
-          stage: preview?.stage ?? active.stage ?? null,
-        } },
+        // In-flight state is a status record, never a fabricated reply.
         { type: "data", name: "talent-signal.execution", data: {
           phase: conversationExecutionPhase({ entry: active, readbackComplete: false, awaitingDecision: false }),
           stage: preview?.stage ?? active.stage ?? null,

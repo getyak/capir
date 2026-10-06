@@ -28,3 +28,20 @@ describe("public topic admission",()=>{
   expect(publicSubjectRegistry("请\t研究\tSimon Willison\tand\tCraig Mod 的文章").subjects().map(s=>s.name)).toEqual(["Simon Willison","Craig Mod"]);
  });
 });
+
+describe("first-contact context boundary",()=>{
+ it("admits exact header and nanoGPT while refusing private/context instructions",()=>{
+  const registry=publicSubjectRegistry("");
+  const result=registry.registerCounterparty({name:"Andrej Karpathy",excerpt:"Andrej Karpathy",visibleText:["Andrej Karpathy","Reproduce nanoGPT on a small dataset.","HIV positive","家住北京朝阳区","Divorce pending","NeedsTherapy"],artifactID:"image",isCurrent:async()=>true,anchors:[{kind:"work",text:"nanoGPT"},{kind:"work",text:"HIV positive"},{kind:"role",text:"家住北京朝阳区"},{kind:"work",text:"Divorce pending"},{kind:"work",text:"NeedsTherapy"}]});
+  expect(result?.anchors).toEqual([{kind:"work",text:"nanoGPT"}]);
+  expect(registry.registerCounterparty({name:"Andrej Karpathy",excerpt:"Andrej Karpathy",visibleText:["Mentioned Andrej Karpathy yesterday"],artifactID:"other",isCurrent:async()=>true})).toBeNull();
+ });
+ it.each(["http://192.168.1.4/profile","https://example.test/profile/test%40gmail.com","https://example.test/profile#token=SecretExample","https://github.com/karpathy?token=abc","https://github.com:8443/karpathy","https://github.com/karpathy%40gmail.com"])("refuses private/noncanonical handles: %s",url=>{
+  const registry=publicSubjectRegistry("");
+  expect(registry.registerTentative({name:"Andrej Karpathy",binding:"message",groundingTexts:[url],anchors:[{kind:"handle",text:url}]})?.anchors).toBeUndefined();
+ });
+ it("keeps only a canonical public profile handle",()=>{
+  const url="https://github.com/karpathy";
+  expect(publicSubjectRegistry("").registerTentative({name:"Andrej Karpathy",binding:"message",groundingTexts:[url],anchors:[{kind:"handle",text:url}]})?.anchors).toEqual([{kind:"handle",text:url}]);
+ });
+});

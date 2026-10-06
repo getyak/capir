@@ -74,7 +74,12 @@ The TestFlight Compose boundary differs from synthetic development:
 - workspace conversation public research has its own explicit
   `TALENT_SIGNAL_WORKSPACE_PUBLIC_RESEARCH_ENABLED` flag in `staging:/backend`.
   It defaults to false. Enabling it passes the gate into the API container;
-  public search credentials remain in the existing Agent Host sidecar;
+  public search credentials remain in the existing Agent Host sidecar. When
+  enabled, first-contact proposals trigger host-owned bounded search and fetch,
+  independent of the model calling tools. Queries use the observed name and
+  admitted public context; genuine completions appear in the Session Tools
+  record. Both the flag and socket are required. Missing configuration or
+  provider failures produce an explicit research status, never invented context;
 - recruiter dictation has its own admission gate and server-only provider
   credential boundary;
 - Docker logs rotate locally.

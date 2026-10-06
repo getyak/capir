@@ -92,7 +92,7 @@ describe("workspace conversation Agent", () => {
     expect(stage).not.toHaveBeenCalled();
   });
 
-  it.each([["claude-agent-sdk", 180_000], ["scripted", 35_000]])("admits the %s adapter's complete execution budget", async (id, duration) => {
+  it.each([["claude-agent-sdk", 1_800_000], ["scripted", 35_000]])("admits the %s adapter's complete execution budget", async (id, duration) => {
     const provider = new ScriptedAgentProvider([], { outcome: "reply", title: "Ready", body: "Ready" });
     const run = vi.fn<AgentProvider["run"]>(async request => {
       expect(request.budget.maxDurationMs).toBe(duration);
@@ -106,8 +106,8 @@ describe("workspace conversation Agent", () => {
   it.each([false, true])("bounds the visual round-trip budget without widening other limits (image=%s)", async image => {
     const provider = new ScriptedAgentProvider([], { outcome: "reply", title: "Ready", body: "Ready" });
     const run = vi.fn<AgentProvider["run"]>(async request => {
-      expect(request.budget).toMatchObject({ maxTaskTokens: image ? 96_000 : 32_000,
-        maxEstimatedUsd: 1, maxTurns: 6, maxToolCalls: 6, maxDurationMs: 180_000 });
+      expect(request.budget).toMatchObject({ maxTaskTokens: image ? 100_000_000 : 32_000,
+        maxEstimatedUsd: 1, maxTurns: 6, maxToolCalls: 6, maxDurationMs: 1_800_000 });
       return { structuredOutput: { outcome: "reply", title: "Ready", body: "Ready" },
         inputTokens: 0, outputTokens: 0, estimatedUsd: 0, turns: 1, permissionDenials: [] };
     });
@@ -121,7 +121,7 @@ describe("workspace conversation Agent", () => {
     const provider = new ScriptedAgentProvider([], { outcome: "reply", title: "Ready", body: "Ready" });
     const run = vi.fn<AgentProvider["run"]>(async request => {
       expect(request.budget).toMatchObject({ maxTaskTokens: objective === "Hello" ? 32_000 : 96_000,
-        maxEstimatedUsd: 1, maxTurns: 6, maxToolCalls: 6, maxDurationMs: 180_000 });
+        maxEstimatedUsd: 1, maxTurns: 6, maxToolCalls: 6, maxDurationMs: 1_800_000 });
       return { structuredOutput: { outcome: "reply", title: "Ready", body: "Ready" },
         inputTokens: 0, outputTokens: 0, estimatedUsd: 0, turns: 1, permissionDenials: [] };
     });
@@ -1167,7 +1167,7 @@ describe("conversation-only context and proactive contact drafts", () => {
     );
     await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
-      objective: "我们约定下周四先看文字方案",
+      objective: "陈宇：我们约定下周四先看文字方案",
       contacts: { search: vi.fn(), read: vi.fn() },
       memory,
       provider,
@@ -1182,7 +1182,7 @@ describe("conversation-only context and proactive contact drafts", () => {
     const explicitStage = vi.fn(async () => stagedProposal);
     await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
-      objective: "先给结论",
+      objective: "陈宇说先给结论",
       contacts: { search: vi.fn(), read: vi.fn() },
       memory: { recall: vi.fn(async () => ({ items: [] })), stage: explicitStage },
       provider: new ScriptedAgentProvider(

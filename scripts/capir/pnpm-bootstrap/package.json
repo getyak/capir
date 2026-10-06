@@ -1,0 +1,8 @@
+{
+  "name": "capir-pnpm-bootstrap",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "pnpm": "11.18.0"
+  }
+}

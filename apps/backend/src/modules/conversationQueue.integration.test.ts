@@ -156,6 +156,7 @@ class ScriptedConversationProvider implements RemoteChatAnswerProviding {
   failWith: Error | null = null;
   lastSignal: AbortSignal | null = null;
   lastInputParts: readonly AgentProviderInputPart[] = [];
+  lastBudget: AgentProviderRequest["budget"] | null = null;
   /** Emits no preview or progress callbacks, so a racing stop stays unobserved
    * until the failure/shutdown finalization path re-checks it. */
   silent = false;
@@ -172,6 +173,7 @@ class ScriptedConversationProvider implements RemoteChatAnswerProviding {
   ): Promise<AgentProviderResult> {
     this.calls.push(request.objective);
     this.lastInputParts = request.inputParts ?? [];
+    this.lastBudget = request.budget;
     this.active += 1;
     this.maxActive = Math.max(this.maxActive, this.active);
     this.lastSignal = signal;
@@ -1914,6 +1916,7 @@ suite("conversation message images", () => {
 
       const imageParts = provider.lastInputParts.filter(part => part.kind === "image");
       expect(imageParts).toHaveLength(1);
+      expect(provider.lastBudget?.maxTaskTokens).toBe(100_000_000);
       expect(imageParts[0]).toMatchObject({ kind: "image", mimeType: "image/png", byteSize: bytes.length,
         contentHash: createHash("sha256").update(bytes).digest("hex"), dataBase64: bytes.toString("base64") });
 
@@ -1928,6 +1931,42 @@ suite("conversation message images", () => {
       await runner.close();
       await removeProofAccount(seeded.accountId);
     }
+  });
+
+  it("retains token exhaustion, diagnostic code and exact image through failure and retry", async () => {
+    const seeded = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    Object.defineProperties(provider, { providerId: { value: "claude-agent-sdk" }, id: { value: "claude-agent-sdk" } });
+    provider.failWith = new Error("CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED");
+    const warn = vi.fn();
+    const runner = new ConversationQueueRunner({ pool: pool!, provider,
+      logger: { ...silentLogger, warn }, pollIntervalMs: 10, heartbeatMs: 40 });
+    runner.start();
+    const bytes = pngBytes(7);
+    const message = randomUUID();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, { session_id: seeded.sessionId, message_id: message,
+        idempotency_key: randomUUID(), objective: "", images: [pngUpload(bytes)] });
+      await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "failed");
+      expect((await entryRow(seeded.sessionId, seeded.accountId))[0]).toMatchObject({
+        failure_code: "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED", content_state: "retained", result: null,
+      });
+      const snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      expect(snapshot.queued[0]?.failure_code).toBe("MODEL_RUN_TOKEN_BUDGET_EXHAUSTED");
+      expect(snapshot.queued[0]?.images).toHaveLength(1);
+      expect((await readConversationMessageImage(pool!, seeded.auth, seeded.sessionId, message, 0))?.content.equals(bytes)).toBe(true);
+      expect(warn.mock.calls.some(([metadata]) => metadata.failure_code === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED"
+        && metadata.queue_failure_code === "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED")).toBe(true);
+      expect(provider.calls).toHaveLength(1);
+      provider.failWith = null;
+      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, { kind: "retry", queue_entry_id: snapshot.queued[0]!.queue_entry_id,
+        expected_revision: snapshot.revision, idempotency_key: randomUUID() });
+      const retried = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, { kind: "continue", expected_revision: retried.revision, idempotency_key: randomUUID() });
+      await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "completed");
+      expect(provider.calls).toHaveLength(2);
+      expect((await getAgentSession(pool!, seeded.auth, seeded.sessionId)).payload?.turns[0]?.id).toBe(message);
+    } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
   });
 
   it("rejects empty text without images and conflicting bytes or order for one message", async () => {
@@ -2068,6 +2107,7 @@ suite("conversation image compatibility and followups", () => {
       await waitFor(() => provider.calls.length === 2);
       const images = provider.lastInputParts.filter(part => part.kind === "image");
       expect(images).toHaveLength(1);
+      expect(provider.lastBudget?.maxTaskTokens).toBe(100_000_000);
       expect(images[0]).toMatchObject({
         artifactID: expect.stringContaining(message),
         contentHash: createHash("sha256").update(bytes).digest("hex"),

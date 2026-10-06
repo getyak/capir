@@ -70,7 +70,7 @@ export interface UnscopedChatExecution {
   previousTaskIDs: string[];
   remoteStatus: "agent_completed" | "completed" | "disabled" | "fallback";
   /** Bounded operator diagnostic; never a raw provider error or user content. */
-  remoteFailureCode?: "MODEL_RUN_TIMEOUT";
+  remoteFailureCode?: "MODEL_RUN_TIMEOUT" | "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED";
   remoteDiagnostics?: Record<string, string | number | boolean | null>;
   providerResult: RemoteChatAnswerResult | null;
   agentProviderResult: {
@@ -306,9 +306,13 @@ export async function executeUnscopedChatTask(input: {
     } catch (error) {
       remoteDiagnostics = conversationRunDiagnostics(error);
       await recordProductEvent("conversation.model.failure", "context", undefined, undefined, remoteDiagnostics, { failed: true });
-      if (input.provider.providerId === "claude-agent-sdk" &&
-        ["WORKSPACE_CONVERSATION_TIMEOUT", "CLAUDE_HARNESS_TIMEOUT"].includes(claudeHarnessInterruptionCode(error))) {
-        remoteFailureCode = "MODEL_RUN_TIMEOUT";
+      if (input.provider.providerId === "claude-agent-sdk") {
+        const interruption = claudeHarnessInterruptionCode(error);
+        if (["WORKSPACE_CONVERSATION_TIMEOUT", "CLAUDE_HARNESS_TIMEOUT"].includes(interruption)) {
+          remoteFailureCode = "MODEL_RUN_TIMEOUT";
+        } else if (interruption === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED") {
+          remoteFailureCode = "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED";
+        }
       }
       providerResult = null;
       agentProviderResult = null;

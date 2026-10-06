@@ -7,12 +7,36 @@ import { executeWorkspaceConversationAgentCore } from "./workspaceConversationAg
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 describe("workspace conversation deadline", () => {
   it("admits a bounded configurable deadline without changing legacy adapters", () => {
-    expect(workspaceConversationTimeoutMs("claude-agent-sdk", "")).toBe(180_000);
+    expect(workspaceConversationTimeoutMs("claude-agent-sdk", "")).toBe(1_800_000);
+    expect(workspaceConversationTimeoutMs("claude-agent-sdk", "1800000")).toBe(1_800_000);
     expect(workspaceConversationTimeoutMs("claude-agent-sdk", "240000")).toBe(240_000);
     expect(workspaceConversationTimeoutMs("legacy", "240000")).toBe(35_000);
-    for (const value of ["0", "Infinity", "300001", "29999", "120000.5", "bad"]) {
+    for (const value of ["0", "Infinity", "1800001", "29999", "120000.5", "bad"]) {
       expect(() => workspaceConversationTimeoutMs("claude-agent-sdk", value)).toThrow("CONVERSATION_TIMEOUT_CONFIGURATION_INVALID");
     }
+  });
+
+  it("keeps a default run alive beyond three minutes and stops at thirty minutes", async () => {
+    vi.stubEnv("TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS", "");
+    const promptSnapshot = await resolveProductPrompt("assistant/workspace");
+    vi.useFakeTimers();
+    let enter!: () => void;
+    const started = new Promise<void>(resolve => { enter = resolve; });
+    let settled = false;
+    const run: AgentProvider["run"] = async (_request, _tool, signal) => {
+      enter();
+      await new Promise<void>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+      throw new Error("Unexpected completion");
+    };
+    const outcome = executeWorkspaceConversationAgentCore({ workspaceID: "test", objective: "hello", promptSnapshot,
+      provider: { ...new ScriptedAgentProvider([], {}), id: "claude-agent-sdk", run },
+      contacts: { search: async () => [], read: vi.fn() },
+    }).then(() => null, error => error).finally(() => { settled = true; });
+    await started;
+    await vi.advanceTimersByTimeAsync(180_001);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_619_999);
+    expect((await outcome)?.message).toBe("WORKSPACE_CONVERSATION_TIMEOUT");
   });
 
   it.each(["complete", "deadline", "cancel", "late"] as const)("handles %s under one cancellable run", async mode => {

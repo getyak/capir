@@ -102,7 +102,8 @@ test("bounds the workspace conversation deadline before deployment", () => {
     TALENT_SIGNAL_AGENT_MODEL: "claude-sonnet-5", ANTHROPIC_API_KEY: "synthetic-test-key",
   };
   assert.equal(verifyTestflightChatEnvironment({ ...environment, TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS: "180000" }).ok, true);
-  for (const duration of ["0", "300001", "NaN"]) {
+  assert.equal(verifyTestflightChatEnvironment({ ...environment, TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS: "1800000" }).ok, true);
+  for (const duration of ["0", "1800001", "NaN"]) {
     const result = verifyTestflightChatEnvironment({ ...environment, TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS: duration });
     assert.equal(result.ok, false);
     assert.ok(result.issues.includes("CONVERSATION_TIMEOUT_CONFIGURATION_INVALID"));

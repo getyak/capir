@@ -285,6 +285,14 @@ jobs:
       - name: Test the capir CLI
         run: pnpm --filter @talent-signal/cli test
 
+      - name: Test the capir release tooling and installer policy
+        run: |
+          node --test scripts/capir/manifest.test.mjs scripts/capir/package-portable.test.mjs scripts/capir/release-policy.test.mjs scripts/capir/publication.test.mjs
+          shellcheck scripts/capir/install.sh
+
+      - name: Test the capir installer bootstrap end to end
+        run: node --test scripts/capir/install.test.mjs
+
   backend:
     name: Backend quality
     needs: changes

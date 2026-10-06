@@ -8,6 +8,7 @@
  * schema for existing machine callers.
  */
 import type { TestHelpPath } from "./testHelp.js";
+import { UPDATE_HELP_PATHS } from "./updateHelp.js";
 
 export const USAGE = {
   summary:
@@ -27,6 +28,7 @@ export const USAGE = {
     "test create": "Create one expiring, isolated test account with synthetic data (defaults: --preset daily --expires-in 4h).",
     "test status": "Read one test run (read-only; never reveals a password).",
     "test stop": "Stop a test run and prune its local run credential.",
+    update: "Standalone managed releases: update --check, update, update --rollback (offline help).",
     help: "This offline discovery surface; --json renders the stable machine schema.",
   },
   flags: [
@@ -70,9 +72,11 @@ export const HELP_PATHS: TestHelpPath[] = [
   "test stop",
 ];
 
+export const ALL_HELP_PATHS = [...HELP_PATHS, ...UPDATE_HELP_PATHS];
+
 /** Stable machine help: unchanged `usage` plus the offline help routing. */
 export function machineHelpPayload(): Record<string, unknown> {
-  return { usage: USAGE, help_paths: HELP_PATHS };
+  return { usage: USAGE, help_paths: ALL_HELP_PATHS };
 }
 
 /** Readable global help: commands, quick start, defaults and next actions. */
@@ -88,6 +92,7 @@ export function renderGlobalHelp(): string {
     "  capir auth login|status|logout   scoped Web-consent grants (OS keyring)",
     "  capir sandbox start|status|stop   strict-replay sandboxes",
     "  capir test create|status|stop     expiring isolated test accounts (no prior login)",
+    "  capir update [--check|--rollback] managed standalone releases (offline help)",
     "  capir help [command]        offline help; --json renders the stable schema",
     "",
     "AI product acceptance (quick start)",

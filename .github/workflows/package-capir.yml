@@ -1,0 +1,81 @@
+name: capir package smoke
+
+on:
+  pull_request:
+    paths:
+      - "apps/cli/**"
+      - "scripts/capir/**"
+      - ".github/workflows/release-capir.yml"
+      - ".github/workflows/package-capir.yml"
+      - "pnpm-lock.yaml"
+      - "packages/contracts/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capir-package-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CAPIR_NODE_VERSION: "22.23.2"
+
+jobs:
+  package:
+    name: Package ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-26
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: linux-x64
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out the tested pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js for the build
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Set up locked pnpm JavaScript distribution
+        run: |
+          npm ci --prefix scripts/capir/pnpm-bootstrap --ignore-scripts --no-audit --no-fund
+          echo "$GITHUB_WORKSPACE/scripts/capir/pnpm-bootstrap/node_modules/.bin" >> "$GITHUB_PATH"
+          test "$(scripts/capir/pnpm-bootstrap/node_modules/.bin/pnpm --version)" = "11.18.0"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the capir CLI
+        run: pnpm --filter @talent-signal/cli build
+
+      - name: Build the portable package with the official runtime
+        run: |
+          version="$(node -p "require('./apps/cli/package.json').version")"
+          node scripts/capir/package-portable.mjs --version "$version" --revision "$GITHUB_SHA" --out build/capir
+
+      - name: Smoke the real built archive
+        env:
+          CAPIR_PACKAGE_PLATFORM: ${{ matrix.platform }}
+        run: |
+          version="$(node -p "require('./apps/cli/package.json').version")"
+          node scripts/capir/smoke-portable.mjs --archive "build/capir/capir-${version}-${CAPIR_PACKAGE_PLATFORM}.tar.gz" --version "$version"
+
+      - name: Upload the verified archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: capir-${{ matrix.platform }}
+          path: build/capir/*.tar.gz
+          if-no-files-found: error
