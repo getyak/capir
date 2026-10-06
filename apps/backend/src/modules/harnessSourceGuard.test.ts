@@ -47,8 +47,9 @@ function expectRejectionEvent(spans: ProductRunSpan[], failureCode: string, phas
   expect(span.status).toBe("failed");
   expect(span.error).toBe("Operation failed");
   expect(span.metadata).toEqual({ failure_code: failureCode, phase });
-  expect(span.input).toMatchObject({ status: "unavailable" });
-  expect(span.output).toMatchObject({ status: "unavailable" });
+  const empty = { status: "unavailable", original_bytes: 0, retained_bytes: 0, sha256: null };
+  expect(span.input).toEqual(empty);
+  expect(span.output).toEqual(empty);
 }
 
 async function flushAsyncWork() {
@@ -288,6 +289,24 @@ describe("harness source guard rejection diagnostics", () => {
       await expect(guard()).rejects.toMatchObject({ statusCode: 409, code: "HARNESS_SOURCE_CHANGED" });
     });
     expectRejectionEvent(spans, "SESSION_MISSING", "recheck");
+  });
+
+  it("labels a Lab gate failure during a source recheck as recheck", async () => {
+    const { spans, sink } = eventSink();
+    const probe = fakeClient(async () => ({ rows: [workspaceRow({ stop_clear: false })] }));
+    const database = queuedClient({ rows: [sourceRow()] });
+    // Admission succeeds before the independent Lab authority changes.
+    let reads = 0;
+    const changingProbe = fakeClient(async () => ({ rows: [workspaceRow({ stop_clear: ++reads === 1 })] }));
+    await withProductRunCapture(sink, async () => {
+      const guard = await createHarnessSourceGuard(database.client, auth(), sessionID, () => authority(), changingProbe.client);
+      await expect(guard()).rejects.toMatchObject({ statusCode: 409, code: "HARNESS_SOURCE_CHANGED" });
+    });
+    expectRejectionEvent(spans, "LAB_STOP_PENDING", "recheck");
+    const standalone = eventSink();
+    await expect(withProductRunCapture(standalone.sink, () => assertHarnessLabAuthority(probe.client, auth(), "recheck")))
+      .rejects.toMatchObject({ statusCode: 409, code: "HARNESS_SOURCE_CHANGED" });
+    expectRejectionEvent(standalone.spans, "LAB_STOP_PENDING", "recheck");
   });
 
   it("labels a standalone Lab gate rejection as admission and keeps its error", async () => {
