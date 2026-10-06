@@ -257,6 +257,27 @@ it("keeps zoom as a compact fit/100% percentage toggle", async () => {
   expect(button("缩放 适应窗口，点击切换为原始 100%").textContent).toBe("适应");
 });
 
+it("lets keyboard users pan the actual-size stage while retaining navigation on viewer controls", async () => {
+  await renderStrip({ images: [imageManifest(0), imageManifest(1)] });
+  await act(async () => { document.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!.click(); });
+  await flush();
+  await act(async () => { button("缩放 适应窗口，点击切换为原始 100%").click(); });
+  const stage = dialog().querySelector<HTMLElement>(`.${styles.imageStage}`)!;
+  stage.focus();
+  expect(document.activeElement).toBe(stage);
+  const pan = new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+  await act(async () => { stage.dispatchEvent(pan); });
+  expect(pan.defaultPrevented).toBe(false);
+  expect(positionText()).toBe("1 / 2");
+
+  const next = button("下一张图片");
+  next.focus();
+  const navigate = new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+  await act(async () => { next.dispatchEvent(navigate); });
+  expect(navigate.defaultPrevented).toBe(true);
+  expect(positionText()).toBe("2 / 2");
+});
+
 it("downloads and opens the exact original bytes only on explicit clicks with the original file name", async () => {
   const anchors: Array<{ download: string; href: string }> = [];
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {

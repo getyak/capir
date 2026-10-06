@@ -130,6 +130,7 @@
 /* Quiet compact faces with full 44px touch targets. */
 .imageZoom::after, .imageControl::after, .imageClose::after, .imageNav::after { content:""; position:absolute; inset:-6px; }
 .imageStage { flex:1; min-height:0; width:100%; display:flex; align-items:flex-start; justify-content:flex-start; overflow:auto; overscroll-behavior:contain; }
+.imageStage:focus-visible { outline:2px solid #fff; outline-offset:-2px; }
 .imageStage img { margin:auto; flex:none; border-radius:10px; background:#111; object-fit:contain; }
 .imageStage[data-zoom="fit"] img { max-width:min(100%,1100px); max-height:100%; }
 .imageStage[data-zoom="actual"] img { max-width:none; max-height:none; flex:none; }
@@ -194,6 +195,7 @@
   .composerImageRemove, .imageZoom, .imageControl, .imageNav, .imageClose, .imageRetryInline { background:Canvas; border:1px solid CanvasText; color:CanvasText; }
   .imageDialogMessage, .imageFileName, .imagePosition { color:CanvasText; }
   .imageDialog button:focus-visible { outline:2px solid Highlight; }
+  .imageStage:focus-visible { outline-color:Highlight; }
   .canvas button:focus-visible, .details summary:focus-visible { outline:2px solid Highlight; }
 }
 

@@ -189,6 +189,8 @@ function LoadedConversationImageStrip({
     if (event.target === event.currentTarget) setOpen(false);
   };
   const onKeyDown = (event: React.KeyboardEvent) => {
+    // The actual-size scroll region keeps native keyboard panning.
+    if (zoom === "actual" && event.target === stageRef.current) return;
     if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
     else if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
   };
@@ -301,7 +303,7 @@ function LoadedConversationImageStrip({
                 </button>
               </Dialog.Close>
             </div>
-            <div className={styles.imageStage} data-zoom={zoom} onClick={onBlankClose} ref={stageRef}>
+            <div aria-label={zoom === "actual" ? "原图预览，使用方向键滚动" : "原图预览"} className={styles.imageStage} data-zoom={zoom} onClick={onBlankClose} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
               {images.length > 1 ? (
                 <button aria-label="上一张图片" className={styles.imageNav} data-side="previous" onClick={() => step(-1)} type="button">
                   <CaretLeft aria-hidden size={18} />

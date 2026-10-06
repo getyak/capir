@@ -147,6 +147,20 @@ Independent review corrections (parent-owned):
   restoration, and stopping further reads after unmount. Parent reran Web typecheck successfully; lint/docs receipts are
   collected separately before delivery.
 
+MiMo advisory review of `6b007763` returned one confirmed P3: dialog-level
+arrow capture blocked native keyboard panning at 100% zoom. Its JSON omitted
+the required finding title, so automatic publication failed format validation.
+The parent inspected and posted the adjudicated finding as COMMENT review
+5427194419, bound to that exact head. The correction makes the actual-size
+stage a labelled focusable region with visible focus and leaves its native
+arrow scrolling available; navigation keys still work on viewer controls.
+A regression test failed at the intercepted arrow before the correction.
+Independent re-review confirmed the P3 closed with no remaining P0/P1 and
+independently passed 25 focused tests. Parent typecheck and docs checks pass;
+latest-head CI is still required after this change.
+Earlier CI/Security passed on `6b007763`, including 236 Web files / 1825 tests;
+those receipts are historical and cannot replace the next head's gates.
+
 ## Milestones and acceptance
 
 1. Complete: scoped implementation with preserved authorization, identity,
