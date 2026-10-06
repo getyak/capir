@@ -88,6 +88,49 @@ Apply these rules:
 - Use strong hierarchy before borders, shadows, or additional containers.
 - Keep tags and metadata secondary to the current dependency and evidence.
 - Do not introduce a competing palette, icon language, or material system.
+- For desktop concept images, compare rendered type, avatar footprint, row
+  pitch, and chrome against the user's reference at equal viewport scale.
+  Prompted dimensions alone are not evidence of compactness. Keep contact
+  overflow within a bounded trailing area so names cannot displace Session
+  titles; disclose secondary metadata on demand. Supply approved brand assets
+  from `brand/README.md` instead of carrying forward invented mockup marks.
+- For avatar-led conversation navigation, compare expanded and collapsed
+  states with identical content. Include two sessions sharing the same
+  participant set; an avatar alone must not silently choose an ambiguous
+  session. Keep contact groups distinct from conversation participants. Verify
+  both rail order and footer anchoring from the rendered screen, including
+  person pages; detached sidebar copies must not bypass the shared source.
+
+## Maintain the Figma workspace
+
+When extending or reorganizing a shared design file:
+
+- Inspect its existing pages and sections before appending work. Update the
+  owning platform/flow section and its linked directory; do not create another
+  page for each issue or a second live copy for an overview.
+- Keep one visible current entry per feature. Label current direction,
+  implementation reference, unverified flow, exploration, and historical
+  reference separately. Visual polish never establishes release status.
+- Name prototype starting points by task, platform, and design status; avoid
+  default `Flow N` labels and indistinguishable names. Keep separate starts when
+  they serve independent review tasks or version comparisons. Verify saved
+  names and original destinations rather than imposing a fixed flow count.
+- Put reusable cross-surface components in the system area; keep feature-local
+  components with their examples and link to them. Reuse instances and existing
+  variables instead of creating parallel sources.
+- Use a consistent reading order, section edges, spacing, and descriptive
+  screen names. Keep old versions in a named reference section. New editorial
+  headings and directories use auto layout; original screen layouts remain
+  intact unless their redesign is in scope.
+- Before moving linked screens across pages, capture the reactions on their
+  interactive descendants, component references, IDs, parents, and positions.
+  Page moves can drop prototype actions even when IDs survive. Restore and
+  read back affected routes after all destinations arrive; preserve transition
+  parameters and inspect a real click-through when the surface is available.
+- Verify saved directory destinations, original node/instance preservation,
+  section bounds, and readable rendered overviews. State any unverified
+  interaction explicitly. Keep dated manifests in evaluations and active
+  migration state in a plan, not in this Skill.
 
 ## Implement complete states
 
