@@ -6,6 +6,7 @@ import type { EvidenceFragmentInput } from "@talent-signal/contracts";
 import mammoth from "mammoth";
 import mammothPackage from "mammoth/package.json";
 import { PDFParse } from "pdf-parse";
+import { assertBoundedDocxArchive } from "./bounded-docx";
 
 const MAX_FILE_BYTES = 6 * 1024 * 1024;
 const MAX_DOCX_BYTES = 3 * 1024 * 1024;
@@ -188,6 +189,7 @@ export async function extractDocument(
     if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
       throw new Error("所选文件没有有效的 DOCX 容器。");
     }
+    await assertBoundedDocxArchive(bytes);
     const result = await mammoth.extractRawText({
       buffer: Buffer.from(bytes),
     });

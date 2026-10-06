@@ -1,0 +1,344 @@
+/*
+ * The composer's compact add menu.
+ *
+ * A quiet warm-neutral popover: one level of rows, two secondary views, no
+ * decoration. It is portaled to document.body and positioned in script, so
+ * nothing here may depend on the composer's box for layout. Tokens come from
+ * the mirrored workspace theme scope; rows respond on pointer-down.
+ */
+
+.anchor {
+  display: inline-flex;
+  flex: 0 0 auto;
+  position: relative;
+}
+
+.trigger {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted-strong, var(--muted));
+  cursor: pointer;
+  display: inline-flex;
+  height: 44px;
+  justify-content: center;
+  padding: 0;
+  transition: transform 100ms ease-out;
+  width: 44px;
+}
+
+.trigger:hover,
+.trigger[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--surface-muted) 78%, transparent);
+  color: var(--ink);
+}
+
+.trigger:active:not(:disabled) svg {
+  scale: 0.92;
+}
+
+.trigger:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.trigger:focus-visible {
+  outline: 2px solid var(--muted-strong, var(--muted));
+  outline-offset: 2px;
+}
+
+.trigger svg {
+  display: block;
+  transition: scale 100ms ease-out;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius, 18px);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 10%, transparent);
+  box-sizing: border-box;
+  display: grid;
+  gap: 4px;
+  max-height: 360px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  position: fixed;
+  scrollbar-width: thin;
+  width: 288px;
+  z-index: 60;
+}
+
+.group {
+  display: grid;
+  gap: 1px;
+}
+
+.viewHeader {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  padding: 2px 4px 4px;
+}
+
+.back {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 36px;
+  justify-content: center;
+  padding: 0;
+  position: relative;
+  transition: transform 100ms ease-out;
+  width: 36px;
+}
+
+/* Quiet 36px face, full 44px target. */
+.back::after {
+  content: "";
+  inset: -4px;
+  position: absolute;
+}
+
+.back:hover {
+  background: color-mix(in srgb, var(--surface-muted) 78%, transparent);
+  color: var(--ink);
+}
+
+.back:active svg {
+  scale: 0.92;
+}
+
+.back:focus-visible {
+  outline: 2px solid var(--muted-strong, var(--muted));
+  outline-offset: 1px;
+}
+
+.viewTitle {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 560;
+  line-height: 21px;
+}
+
+.row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--input-radius, 10px);
+  color: var(--muted-strong, var(--muted));
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 10px;
+  text-align: left;
+  transition:
+    background-color 120ms ease-out,
+    transform 100ms ease-out;
+  width: 100%;
+}
+
+.row:hover {
+  background: var(--surface-selected, color-mix(in srgb, var(--ink) 6%, var(--surface)));
+  color: var(--ink);
+}
+
+.row:active {
+  background: var(--surface-selected, var(--surface-muted));
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--muted-strong, var(--muted));
+  outline-offset: -2px;
+}
+
+.rowIcon {
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowText strong {
+  color: var(--ink);
+  display: block;
+  font-size: 15px;
+  font-weight: 540;
+  line-height: 21px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowText small {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  line-height: 17px;
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowArrow {
+  color: var(--muted);
+  flex: 0 0 auto;
+  opacity: 0;
+}
+
+.row:hover .rowArrow,
+.row:focus-visible .rowArrow {
+  opacity: 1;
+}
+
+.rowTag {
+  border: 1px solid var(--line-soft, var(--line));
+  border-radius: 999px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 0.6875rem;
+  padding: 1px 7px;
+}
+
+.search {
+  align-items: center;
+  border-bottom: 1px solid var(--line-soft, var(--line));
+  color: var(--muted);
+  display: flex;
+  gap: 8px;
+  margin: 2px 4px 4px;
+  padding: 2px 6px 8px;
+}
+
+.search input {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  font: inherit;
+  font-size: 15px;
+  line-height: 21px;
+  min-height: 36px;
+  min-width: 0;
+  outline: none;
+  padding: 4px 0;
+  width: 100%;
+}
+
+.search input::placeholder {
+  color: color-mix(in srgb, var(--muted) 88%, var(--background));
+}
+
+.search:focus-within {
+  border-bottom-color: color-mix(in srgb, var(--focus) 45%, var(--line));
+}
+
+.state {
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 8px;
+  line-height: 17px;
+  padding: 8px 10px;
+}
+
+.state p {
+  margin: 0;
+}
+
+.retry {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  justify-self: start;
+  min-height: 44px;
+  padding: 3px 16px;
+}
+
+.retry:active {
+  transform: scale(0.97);
+}
+
+.retry:focus-visible {
+  outline: 2px solid var(--muted-strong, var(--muted));
+  outline-offset: 2px;
+}
+
+.note {
+  border-top: 1px solid var(--line-soft, var(--line));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 17px;
+  margin: 2px 0 0;
+  padding: 7px 8px 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trigger,
+  .trigger svg,
+  .back,
+  .row,
+  .retry {
+    transition: none;
+  }
+
+  .trigger:active:not(:disabled) svg,
+  .back:active svg,
+  .row:active,
+  .retry:active {
+    transform: none;
+    /* Keep this separate from transform through production CSS lowering. */
+    scale: 1 !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .panel {
+    background: var(--surface);
+    border-color: var(--line-strong, var(--line));
+    box-shadow: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .panel {
+    background: Canvas;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  .row:hover {
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .row:hover .rowText strong,
+  .row:hover .rowText small,
+  .row:hover .rowIcon,
+  .row:hover .rowArrow {
+    color: HighlightText;
+  }
+
+  .trigger:focus-visible,
+  .back:focus-visible,
+  .row:focus-visible,
+  .retry:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}

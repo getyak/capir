@@ -2,7 +2,7 @@
 
 import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Stop, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { conversationHome } from "@/lib/conversation-local";
 import {
@@ -12,7 +12,6 @@ import {
 import type { LegacyConversationRecovery } from "@/lib/conversation-legacy";
 import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
 import type { ConversationImageManifest, MemoryProposalItem } from "@talent-signal/contracts";
-import { ComposerAddMenu } from "../new-conversation-add-menu";
 import { WorkspaceComposer } from "../workspace-composer";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { conversationNearBottom } from "../session-workbench/session-presentation";
@@ -63,7 +62,6 @@ export function QueuedConversation(props: Props) {
   const [admitted, setAdmitted] = useState(Boolean(props.initialDetail));
   const handedOff = useRef(Boolean(props.initialDetail));
   const navigating = useRef(false);
-  const filePicker = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // A Next Link can be pending while the old pathname is still visible.
     const leaving = () => { navigating.current = true; };
@@ -192,11 +190,6 @@ export function QueuedConversation(props: Props) {
   function latest() { userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }
   async function send() { if (await chat.submit()) { userScroll.current = false; follows.current = true; setAway(false); } }
   function navigate(href: string) { navigating.current = true; router.push(href); }
-  function pickFiles() { filePicker.current?.click(); }
-  const onPicked = useCallback((files: FileList | null) => {
-    const selected = Array.from(files ?? []);
-    if (selected.length) void chat.addFiles(selected);
-  }, [chat]);
   async function remove() {
     if (await chat.remove()) {
       const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }));
@@ -265,9 +258,7 @@ export function QueuedConversation(props: Props) {
       {chat.preparing && <p className={styles.composerImageHint} role="status">正在准备图片…</p>}
       {chat.submitting && <p className={styles.composerImageHint} role="status">正在发送…</p>}
       <div className={styles.composer}>
-        <input accept="image/png,image/jpeg,image/webp" aria-hidden="true" hidden multiple onChange={event => { onPicked(event.target.files); event.target.value = ""; }} ref={filePicker} tabIndex={-1} type="file" />
         <WorkspaceComposer id="queued-conversation-composer" label="消息" value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? "继续补充，会并入当前任务…" : "继续补充，会按顺序处理…" : paused ? "继续输入，消息会加入暂停的队列…" : imageCount ? "可加一句话说明，或直接发送图片…" : "有什么想一起理清的？"} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
-          footerStart={<ComposerAddMenu binding={props.detailBinding} onAttachImages={pickFiles} onNavigate={navigate}/>}
           footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} aria-label={acceptsSteering ? "补充当前任务" : active || queued.length || paused ? "加入队列" : "发送消息"} title={acceptsSteering ? "补充当前任务" : active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}><ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
       {!hasContent && <div className={styles.starters} aria-label="开始一个话题">{["你可以帮我做什么？", "梳理今天需要跟进的人"].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
