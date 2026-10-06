@@ -368,7 +368,11 @@ export function ComposerAddMenu({
     applyPortalTheme(element, trigger.current);
     position();
     const observer = new ResizeObserver(schedulePosition);
-    if (trigger.current) observer.observe(trigger.current);
+    // The trigger can move without changing its own 44px size (for example
+    // when a health banner appears). Observe its layout containers as well.
+    for (let container: HTMLElement | null = trigger.current; container && container !== document.body; container = container.parentElement) {
+      observer.observe(container);
+    }
     observer.observe(element);
     window.addEventListener("resize", schedulePosition);
     window.addEventListener("scroll", schedulePosition, true);
