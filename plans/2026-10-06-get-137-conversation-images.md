@@ -139,6 +139,8 @@ Independent review corrections (parent-owned):
 - Navigation controls sit outside stage layout. Fit uses the stage's actual
   width capped at 1100px, while auto margins allow 100% overflow to scroll from
   the top-left edge instead of clipping negative centered overflow.
+- Single strips have an explicit responsive card width, avoiding cyclic intrinsic
+  percentage sizing and keeping both loading and ready cards right-aligned.
 - Folded lists scroll within their strip for the supported maximum of ten images
   on narrow screens; expand/retry controls retain 44px mobile touch targets.
 - The focused suite now passes 24 tests, including decode-error/retry, focus
