@@ -157,6 +157,54 @@ it("restores every steered original before one final result and uses actual run 
   expect(messages[2]?.content[0]).toMatchObject({ data: { startedAt: "2026-09-29T01:00:03Z", endedAt: "2026-09-29T01:00:11Z", timingBasis: "run", completedTools: first.response.execution.tools } });
 });
 
+it("keeps sent image manifests in original order and identity for history, active and queued messages", () => {
+  const images = ["first.png", "second.png", "third.png"].map((file_name, position) => ({
+    attachment_id: `f0000000-0000-4000-8000-${String(position).padStart(12, "0")}`,
+    file_name,
+    media_type: "image/png" as const,
+    byte_size: 8,
+    content_hash: "a".repeat(64),
+  }));
+  const first = turn();
+  first.objective = "看这三张截图";
+  first.images = images;
+  const history = sessionMessages({ turns: [first], active: null, preview: null })[0]!;
+  expect(history.id).toBe(`${MESSAGE}:user`);
+  // Mixed sends keep readable text before the ordered image manifest.
+  expect(history.content.map((part) => part.type)).toEqual(["text", "data"]);
+  const historyParts = history.content as Array<{ type: string; name?: string; data?: unknown }>;
+  const historyImages = historyParts.find((part) => part.name === "talent-signal.user-images")!.data as Record<string, unknown>;
+  expect(historyImages).toMatchObject({ messageId: MESSAGE, local: false });
+  expect(historyImages.images).toEqual(images);
+
+  const entry: ConversationQueueEntry = {
+    queue_entry_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    message_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    sequence: 1,
+    status: "queued",
+    objective: "",
+    images,
+    created_at: "2026-10-06T01:00:00Z",
+    updated_at: "2026-10-06T01:00:00Z",
+    revision: 1,
+    run_id: null,
+    stage: null,
+    cancel_requested: false,
+    failure_code: null,
+  };
+  for (const projected of [
+    sessionMessages({ turns: [], active: { ...entry, status: "running" }, preview: null })[0]!,
+    sessionMessages({ turns: [], active: null, preview: null, queued: [entry] })[0]!,
+  ]) {
+    expect(projected.id).toBe(`${entry.message_id}:user`);
+    const projectedParts = projected.content as Array<{ type: string; name?: string; data?: unknown }>;
+    const projectedImages = projectedParts.find((part) => part.name === "talent-signal.user-images")!.data as Record<string, unknown>;
+    expect(projectedImages).toMatchObject({ messageId: entry.message_id, local: false });
+    // Array position stays the immutable order; nothing is renumbered.
+    expect((projectedImages.images as typeof images).map((image) => image.file_name)).toEqual(["first.png", "second.png", "third.png"]);
+  }
+});
+
 it("preserves host result identity without projecting internal continuation as a human message at any lifecycle", () => {
   const host = { request_id: PROPOSAL, call_id: MESSAGE, original_message_id: MESSAGE,
     actor_user_id: PROPOSAL, kind: "form" as const, outcome: "submitted", choice_id: null, receipt_ref: null };

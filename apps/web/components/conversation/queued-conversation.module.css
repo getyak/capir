@@ -19,7 +19,14 @@
 /* Trailing user bubbles; one centered timestamp per send above them. */
 .sendTime { color:var(--muted); display:block; font-size:12px; line-height:19px; margin:0 0 12px; text-align:center; }
 .userRow { display:flex; justify-content:flex-end; margin-bottom:20px; }
+.userStack { display:flex; flex-direction:column; align-items:flex-end; gap:6px; min-width:0; max-width:min(540px,82%); }
 .userMessage { max-width:min(540px,82%); width:fit-content; background:var(--workspace-user-bubble); padding:12px 16px; border-radius:16px; font-size:14px; line-height:22px; white-space:pre-wrap; overflow-wrap:anywhere; box-sizing:border-box; }
+/* Image-bearing sends keep the images out of a prominent text bubble frame:
+   the session transcript stacks them below the text bubble, and the local
+   pending wrapper drops the frame around its inline strip. Text-only and
+   non-image messages keep the original bubble unchanged. */
+.userStack > .userMessage { max-width:100%; }
+.userMessage:has(> .images) { background:none; padding:0; }
 /* Leading Agent identity: the brand mark owns the 24px avatar column. */
 .answer { display:grid; grid-template-columns:20px minmax(0,1fr); column-gap:14px; min-width:0; padding:0; align-items:start; }
 .identity { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:500; color:var(--muted); margin:2px 0 0; }
@@ -76,7 +83,7 @@
 .recoveryContent { margin:10px 0 2px; padding:9px 10px; border-radius:9px; background:var(--surface-muted,#f5f4ed); font:inherit; font-size:13px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; }
 .canvas button:focus-visible,.details summary:focus-visible { outline:2px solid var(--muted-strong,var(--muted)); outline-offset:3px; }
 @keyframes breathe { 0%,100% { opacity:.35; } 50% { opacity:1; } }
-@media(max-width:640px) { .header { padding:10px 16px; min-height:60px; gap:8px; }.header h1 { font-size:15px; line-height:23px; }.details { right:8px; top:8px; }.transcript { padding:0 16px 16px; }.dock { padding:0 16px max(16px,env(safe-area-inset-bottom)); }.queue { margin:0 2px 8px; max-height:170px; }.queueActions button { min-width:44px; min-height:44px; }.stop { min-height:44px; }.send { min-width:44px; min-height:44px; }.userMessage { max-width:90%; font-size:14px; }.welcome { padding:0 2px; gap:11px; }.welcome h2 { font-size:26px; }.welcomeMark { width:25px; height:25px; }.starters { margin-top:14px; gap:2px 14px; }.starters button { min-height:44px; }.canvas[data-empty="true"] .transcript { padding:0 22px; }.canvas[data-empty="true"] .dock { margin-top:22px; }.canvas[data-empty="true"] { padding-bottom:36px; }.footer { font-size:12px; }.footer span:last-child { display:none; }.runMeta { flex-wrap:wrap; gap:4px; }.turn { margin-bottom:28px; } }
+@media(max-width:640px) { .header { padding:10px 16px; min-height:60px; gap:8px; }.header h1 { font-size:15px; line-height:23px; }.details { right:8px; top:8px; }.transcript { padding:0 16px 16px; }.dock { padding:0 16px max(16px,env(safe-area-inset-bottom)); }.queue { margin:0 2px 8px; max-height:170px; }.queueActions button { min-width:44px; min-height:44px; }.stop { min-height:44px; }.send { min-width:44px; min-height:44px; }.userStack { max-width:min(540px,90%); }.userMessage { max-width:90%; font-size:14px; }.welcome { padding:0 2px; gap:11px; }.welcome h2 { font-size:26px; }.welcomeMark { width:25px; height:25px; }.starters { margin-top:14px; gap:2px 14px; }.starters button { min-height:44px; }.canvas[data-empty="true"] .transcript { padding:0 22px; }.canvas[data-empty="true"] .dock { margin-top:22px; }.canvas[data-empty="true"] { padding-bottom:36px; }.footer { font-size:12px; }.footer span:last-child { display:none; }.runMeta { flex-wrap:wrap; gap:4px; }.turn { margin-bottom:28px; } }
 
 @media(max-height:520px) { .canvas[data-empty="true"] { justify-content:flex-start; padding-top:24px; padding-bottom:14px; } }
 /* Short mobile windows need room above the persistent bottom navigation. */
@@ -88,7 +95,7 @@
 @media(max-width:640px) { .recovery { margin:0 2px 8px; }.recoveryActions button { min-width:44px; min-height:44px; padding:8px 10px; } }
 
 /* Inline conversation images: thumbnails in history, queue and the composer. */
-.images { margin-top:9px; }
+.images { margin-top:9px; max-width:100%; }
 .images[data-compact="true"] { margin-top:6px; }
 .imageList { list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:7px; }
 .imageItem { flex:none; }
@@ -96,13 +103,48 @@
 .imageButton img { width:100%; height:100%; object-fit:cover; display:block; }
 .imagePlaceholder { display:grid; place-items:center; width:96px; height:96px; padding:6px; box-sizing:border-box; border:1px dashed var(--line-soft); border-radius:11px; color:var(--muted); font-size:10px; text-align:center; }
 .imagePlaceholder[data-error="true"] { border-style:solid; }
+/* One sent image stays directly visible instead of a small thumbnail. */
+.images[data-layout="single"] { width:300px; }
+.images[data-layout="single"] .imageItem { width:100%; min-width:0; }
+.images[data-layout="single"] .imageButton, .images[data-layout="single"] .imagePlaceholder { width:100%; height:auto; aspect-ratio:3/2; }
+/* Several sent images fold into overlapping cards with a count and explicit
+   expand/collapse; every card stays clickable on its visible edge. */
+.images[data-layout="folded"] .imageList { flex-wrap:nowrap; align-items:center; overflow-x:auto; padding:3px 26px 3px 2px; }
+.images[data-layout="folded"] .imageItem { margin-left:-58px; transform:rotate(-1.1deg); }
+.images[data-layout="folded"] .imageItem:first-child { margin-left:0; }
+.images[data-layout="folded"] .imageItem:nth-child(even) { transform:rotate(1.3deg) translateY(-3px); }
+.images[data-layout="folded"] .imageButton, .images[data-layout="folded"] .imagePlaceholder { border-radius:10px; box-shadow:0 1px 5px rgb(0 0 0 / 14%); }
+.imageStripActions { display:flex; align-items:center; gap:12px; margin-top:6px; }
+.imageTotal { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.imageExpand { border:0; background:none; color:var(--ink); text-decoration:underline; font-size:11px; padding:4px 0; cursor:pointer; }
+.imageExpand:active { opacity:.7; }
 .imageBackdrop { position:fixed; inset:0; background:#000000b3; z-index:60; }
-.imageDialog { position:fixed; inset:0; z-index:61; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:44px 20px 24px; outline:0; }
-.imageDialog img { max-width:min(92vw,1100px); max-height:78vh; object-fit:contain; border-radius:10px; background:#111; }
-.imageDialogTitle { position:absolute; top:14px; left:50%; transform:translateX(-50%); margin:0; color:#fff; font-size:12px; font-weight:500; }
-.imageClose { position:absolute; top:12px; right:14px; display:grid; place-items:center; width:44px; height:44px; border-radius:50%; border:0; background:#ffffff1f; color:#fff; cursor:pointer; }
+.imageDialog { position:fixed; inset:0; z-index:61; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:0; padding:52px 20px 44px; outline:0; }
+.imageToolbar { position:absolute; top:12px; right:14px; z-index:2; display:flex; align-items:center; gap:6px; }
+.imageZoom, .imageControl, .imageClose, .imageNav { position:relative; display:grid; place-items:center; border:0; background:#ffffff1f; color:#fff; cursor:pointer; }
+.imageZoom { min-width:52px; height:32px; padding:0 12px; border-radius:999px; font-size:12px; font-variant-numeric:tabular-nums; }
+.imageControl { width:36px; height:32px; border-radius:999px; }
+.imageControl:disabled { opacity:.45; cursor:default; }
+.imageClose { width:36px; height:32px; border-radius:999px; }
 .imageClose:active svg { transform:scale(0.92); }
-.imageDialogMessage { color:#fff; font-size:13px; }
+/* Quiet compact faces with full 44px touch targets. */
+.imageZoom::after, .imageControl::after, .imageClose::after, .imageNav::after { content:""; position:absolute; inset:-6px; }
+.imageStage { flex:1; min-height:0; width:100%; display:flex; align-items:flex-start; justify-content:flex-start; overflow:auto; overscroll-behavior:contain; }
+.imageStage:focus-visible { outline:2px solid #fff; outline-offset:-2px; }
+.imageStage img { margin:auto; flex:none; border-radius:10px; background:#111; object-fit:contain; }
+.imageStage[data-zoom="fit"] img { max-width:min(100%,1100px); max-height:100%; }
+.imageStage[data-zoom="actual"] img { max-width:none; max-height:none; flex:none; }
+.imageNav { position:fixed; top:50%; width:44px; height:44px; border-radius:50%; transform:translateY(-50%); }
+.imageNav[data-side="previous"] { left:24px; }
+.imageNav[data-side="next"] { right:24px; }
+.imageNav:active svg { transform:scale(0.92); }
+.imageMeta { position:absolute; left:0; right:0; bottom:12px; display:flex; justify-content:center; align-items:baseline; gap:10px; padding:0 16px; pointer-events:none; }
+.imageFileName { margin:0; max-width:60vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#fff; font-size:12px; font-weight:500; }
+.imagePosition { color:#ffffffb0; font-size:12px; font-variant-numeric:tabular-nums; }
+.imageDialog button:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+.imageDialogMessage { display:grid; gap:10px; justify-items:center; color:#fff; font-size:13px; }
+.imageDialogMessage p { margin:0; }
+.imageRetryInline { border:0; background:#ffffff1f; color:#fff; border-radius:999px; padding:9px 14px; font-size:12px; cursor:pointer; }
 .composerImages { display:flex; flex-wrap:wrap; gap:7px; margin:0 8px 8px; }
 .composerImage { position:relative; width:64px; height:64px; border-radius:10px; overflow:hidden; border:1px solid var(--line-soft); background:var(--surface-muted,#f3f4f0); }
 .composerImage img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -111,7 +153,7 @@
 .composerImageRemove::after { content:""; position:absolute; inset:-11px; }
 .composerImageRemove:active svg { transform:scale(0.9); }
 .composerImageHint { margin:0 8px 6px; color:var(--muted); font-size:11px; }
-@media(max-width:640px) { .imageButton,.imagePlaceholder { width:84px; height:84px; } .imageClose { width:44px; height:44px; } }
+@media(max-width:640px) { .imageExpand,.imageRetry { min-height:44px; } .imageButton,.imagePlaceholder { width:84px; height:84px; } .images[data-layout="single"] { width:240px; } .images[data-layout="folded"] .imageItem { margin-left:-52px; } .imageNav[data-side="previous"] { left:8px; } .imageNav[data-side="next"] { right:8px; } .imageZoom { min-width:60px; } .imageZoom,.imageControl,.imageClose { min-height:44px; } .imageControl { width:44px; } .imageClose { width:44px; } .imageMeta { bottom:max(12px,env(safe-area-inset-bottom)); } }
 .imageRetry { margin-top:6px; border:0; background:none; color:var(--ink); text-decoration:underline; font-size:11px; padding:4px 0; cursor:pointer; }
 .imageRetry:active { opacity:.7; }
 
@@ -142,6 +184,7 @@
   .canvas, .transcript { background:var(--background); }
   .queue, .notice, .recovery, .detailPanel, .latest, .milestone, .semanticBubble { background:var(--surface); }
   .userMessage { background:var(--workspace-user-bubble); }
+  .userMessage:has(> .images) { background:none; }
   .imageBackdrop { background:#000; }
 }
 
@@ -149,8 +192,11 @@
 @media(forced-colors:active) {
   .canvas { background:Canvas; color:CanvasText; }
   .queue, .notice, .recovery, .detailPanel, .userMessage, .milestone, .semanticBubble, .latest, .composerImage, .imageButton, .imagePlaceholder { border:1px solid CanvasText; }
-  .composerImageRemove, .imageClose { background:Canvas; border:1px solid CanvasText; color:CanvasText; }
+  .composerImageRemove, .imageZoom, .imageControl, .imageNav, .imageClose, .imageRetryInline { background:Canvas; border:1px solid CanvasText; color:CanvasText; }
+  .imageDialogMessage, .imageFileName, .imagePosition { color:CanvasText; }
+  .imageDialog button:focus-visible { outline:2px solid Highlight; }
+  .imageStage:focus-visible { outline-color:Highlight; }
   .canvas button:focus-visible, .details summary:focus-visible { outline:2px solid Highlight; }
 }
 
-@media(prefers-reduced-motion:reduce) { .pulse,.cursor { animation:none; }.composer,.send,.sendActions .stop,.starters button,.queueActions button,.composerImageRemove,.imageClose { transition:none; }.send:not(:disabled):hover,.send:not(:disabled):active,.stop:active:not(:disabled),.starters button:active,.queueActions button:active:not(:disabled),.composerImageRemove:active svg,.imageClose:active svg,.latest:active { transform:none; } }
+@media(prefers-reduced-motion:reduce) { .pulse,.cursor { animation:none; }.composer,.send,.sendActions .stop,.starters button,.queueActions button,.composerImageRemove,.imageClose,.imageZoom,.imageControl,.imageNav { transition:none; }.send:not(:disabled):hover,.send:not(:disabled):active,.stop:active:not(:disabled),.starters button:active,.queueActions button:active:not(:disabled),.composerImageRemove:active svg,.imageClose:active svg,.imageNav:active svg,.latest:active { transform:none; } }

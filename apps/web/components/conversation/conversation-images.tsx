@@ -1,8 +1,8 @@
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { X } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowSquareOut, CaretLeft, CaretRight, DownloadSimple, X } from "@phosphor-icons/react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ConversationImageManifest } from "@talent-signal/contracts";
 
@@ -28,14 +28,20 @@ function imageKey(images: readonly ConversationImageManifest[]): string {
 }
 
 /**
- * Inline conversation image strip.
+ * Inline conversation image strip with an exact-image viewer.
  *
  * Bytes always arrive through the scoped proxy or the local durable store,
  * never through a bare `<img src>` pointing at a sensitive URL. Object URLs are
  * created per mounted strip and revoked when the strip unmounts or the account
- * binding changes. Clicking a thumbnail opens the original in a viewing dialog;
- * nothing is processed automatically. A failed read shows an explicit retry
- * instead of an indefinite loading placeholder.
+ * binding changes. One sent image renders directly; several render as folded
+ * overlapping cards with a count and explicit expand/collapse. Clicking an
+ * exact thumbnail opens only that image in the viewer, with previous/next
+ * navigation in the original manifest order. The viewer opens or downloads
+ * the original bytes only from the object URL and only on an explicit user
+ * click, always naming the original file. Partial, unavailable and decode
+ * failures keep their manifest position and stay honest and retryable; a
+ * rejected local durable read ends in the same retryable state instead of an
+ * indefinite loading placeholder.
  */
 export function ConversationImageStrip(props: Props) {
   const [attempt, setAttempt] = useState(0);
@@ -55,88 +61,212 @@ function LoadedConversationImageStrip({
 }: Props & { onRetry: () => void }) {
   const [urls, setUrls] = useState<Array<string | null>>(() => images.map(() => null));
   const [failed, setFailed] = useState<boolean[]>(() => images.map(() => false));
+  const [expanded, setExpanded] = useState(false);
   const [open, setOpen] = useState(false);
+  const [index, setIndex] = useState(0);
+  const [zoom, setZoom] = useState<"fit" | "actual">("fit");
+  const [fitPercent, setFitPercent] = useState<number | null>(null);
   const created = useRef<string[]>([]);
+  const current = useRef<Array<string | null>>(images.map(() => null));
+  const generation = useRef(0);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
   const keys = imageKey(images);
 
+  const markFailed = (position: number) => {
+    const url = current.current[position];
+    if (url) {
+      URL.revokeObjectURL(url);
+      created.current = created.current.filter((entry) => entry !== url);
+      current.current[position] = null;
+      setUrls((previous) => previous.map((value, i) => (i === position ? null : value)));
+    }
+    setFailed((previous) => previous.map((value, i) => (i === position ? true : value)));
+  };
+
+  /** Replace one object URL, revoking the bytes it supersedes immediately. */
+  const replaceUrl = (position: number, url: string) => {
+    const previous = current.current[position];
+    if (previous) {
+      URL.revokeObjectURL(previous);
+      created.current = created.current.filter((entry) => entry !== previous);
+    }
+    current.current[position] = url;
+    created.current.push(url);
+    setUrls((previous) => previous.map((value, i) => (i === position ? url : value)));
+  };
+
+  const loadServer = async (position: number, alive: () => boolean) => {
+    try {
+      const response = await workspaceSessionFetch(
+        `/api/workspace-sessions/${encodeURIComponent(sessionId)}/conversation-images/${encodeURIComponent(messageId)}/${position}`,
+        { cache: "no-store", headers: { "x-workspace-session": binding }, signal: AbortSignal.timeout(15_000) },
+      );
+      if (!alive()) return;
+      if (!response.ok) { markFailed(position); return; }
+      const blob = await response.blob();
+      if (!alive()) return;
+      replaceUrl(position, URL.createObjectURL(blob));
+    } catch {
+      if (alive()) markFailed(position);
+    }
+  };
+
+  const loadLocal = async (alive: () => boolean, only?: number) => {
+    const positions = only === undefined ? images.map((_, position) => position) : [only];
+    try {
+      const stored = await loadConversationImages(scope, sessionId, messageId);
+      if (!alive()) return;
+      const ordered = [...stored].sort((a, b) => a.position - b.position);
+      for (const position of positions) {
+        const manifest = images[position];
+        const record = ordered[position];
+        if (!record || !manifest || record.attachment_id !== manifest.attachment_id) { markFailed(position); continue; }
+        replaceUrl(position, URL.createObjectURL(record.blob));
+      }
+    } catch {
+      // A denied or broken durable store ends in an explicit retryable state,
+      // never an eternal loading placeholder.
+      if (!alive()) return;
+      for (const position of positions) markFailed(position);
+    }
+  };
+
   useEffect(() => {
-    let cancelled = false;
+    generation.current += 1;
+    const run = generation.current;
+    const alive = () => generation.current === run;
     for (const url of created.current) URL.revokeObjectURL(url);
     created.current = [];
-    const keep = (url: string) => created.current.push(url);
-    const markFailed = (index: number) => setFailed((previous) => previous.map((value, position) => (position === index ? true : value)));
+    current.current = images.map(() => null);
     void (async () => {
-      if (local) {
-        const stored = await loadConversationImages(scope, sessionId, messageId);
-        if (cancelled) return;
-        const ordered = [...stored].sort((a, b) => a.position - b.position);
-        const next = images.map((manifest, index) => {
-          const record = ordered[index];
-          if (!record || record.attachment_id !== manifest.attachment_id) { markFailed(index); return null; }
-          const url = URL.createObjectURL(record.blob);
-          keep(url);
-          return url;
-        });
-        if (!cancelled) setUrls(next);
-        return;
-      }
-      for (let index = 0; index < images.length; index += 1) {
-        try {
-          const response = await workspaceSessionFetch(
-            `/api/workspace-sessions/${encodeURIComponent(sessionId)}/conversation-images/${encodeURIComponent(messageId)}/${index}`,
-            { cache: "no-store", headers: { "x-workspace-session": binding }, signal: AbortSignal.timeout(15_000) },
-          );
-          if (cancelled) return;
-          if (!response.ok) { markFailed(index); continue; }
-          const blob = await response.blob();
-          if (cancelled) return;
-          const url = URL.createObjectURL(blob);
-          keep(url);
-          setUrls((previous) => previous.map((value, position) => (position === index ? url : value)));
-        } catch {
-          if (!cancelled) markFailed(index);
-        }
-      }
+      if (local) { await loadLocal(alive); return; }
+      // Sequential readback keeps one quiet transcript-side fetch at a time.
+      for (let position = 0; position < images.length && alive(); position += 1) await loadServer(position, alive);
     })();
     return () => {
-      cancelled = true;
+      generation.current += 1;
       for (const url of created.current) URL.revokeObjectURL(url);
       created.current = [];
+      current.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, messageId, scope, binding, local, keys]);
 
+  const measure = useCallback(() => {
+    const image = imageRef.current;
+    const stage = stageRef.current;
+    if (!image || !stage) { setFitPercent(null); return; }
+    const rect = stage.getBoundingClientRect();
+    if (!image.naturalWidth || !image.naturalHeight || rect.width < 1 || rect.height < 1) { setFitPercent(null); return; }
+    const scale = Math.min(Math.min(rect.width, 1100) / image.naturalWidth, rect.height / image.naturalHeight);
+    setFitPercent(Math.max(1, Math.min(100, Math.round(scale * 100))));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open, index, measure]);
+
   if (images.length === 0) return null;
-  const ready = urls.filter((url): url is string => Boolean(url)).length;
   const anyFailed = failed.some(Boolean);
+  const layout = images.length === 1 ? "single" : expanded ? "expanded" : "folded";
+
+  const openAt = (position: number, trigger: HTMLButtonElement) => {
+    triggerRef.current = trigger;
+    setIndex(position);
+    setZoom("fit");
+    setFitPercent(null);
+    setOpen(true);
+  };
+  const step = (delta: number) => setIndex((current) => (current + delta + images.length) % images.length);
+  /** Only blank dialog space closes; the image and every control keep it open. */
+  const onBlankClose = (event: React.MouseEvent) => {
+    if (event.target === event.currentTarget) setOpen(false);
+  };
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    // The actual-size scroll region keeps native keyboard panning.
+    if (zoom === "actual" && event.target === stageRef.current) return;
+    if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
+    else if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
+  };
+  const retryOne = (position: number) => {
+    setFailed((previous) => previous.map((value, i) => (i === position ? false : value)));
+    const run = generation.current;
+    const alive = () => generation.current === run;
+    void (async () => {
+      if (local) await loadLocal(alive, position);
+      else await loadServer(position, alive);
+    })();
+  };
+  /** Open and download use only the mounted object URL on an explicit click. */
+  const openOriginal = () => {
+    const url = urls[index];
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+  };
+  const downloadOriginal = () => {
+    const url = urls[index];
+    const name = images[index]?.file_name;
+    if (!url || !name) return;
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    anchor.rel = "noopener";
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+  };
+
+  const zoomLabel = zoom === "actual" ? "100%" : fitPercent === null ? "适应" : `${fitPercent}%`;
+  const zoomDescription = zoom === "actual"
+    ? "缩放 100%（原始大小），点击切换为适应窗口"
+    : "缩放 适应窗口，点击切换为原始 100%";
+  const shown = images[index];
 
   return (
-    <div className={styles.images} data-compact={compact ? "true" : undefined}>
+    <div className={styles.images} data-compact={compact ? "true" : undefined} data-layout={layout} ref={stripRef}>
       <ul className={styles.imageList} aria-label={`消息中的 ${images.length} 张图片`}>
-        {images.map((image, index) => (
+        {images.map((image, position) => (
           <li className={styles.imageItem} key={image.attachment_id}>
-            {urls[index] ? (
+            {urls[position] ? (
               <button
                 className={styles.imageButton}
-                onClick={() => setOpen(true)}
-                title={`查看原图 ${index + 1}`}
+                onClick={(event) => openAt(position, event.currentTarget)}
+                title={`查看原图 ${position + 1}`}
                 type="button"
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt={image.file_name} src={urls[index]!} />
+                <img alt={image.file_name} onError={() => markFailed(position)} src={urls[position]!} />
               </button>
             ) : (
               <span
                 className={styles.imagePlaceholder}
-                data-error={failed[index] ? "true" : undefined}
+                data-error={failed[position] ? "true" : undefined}
                 role="status"
               >
-                {failed[index] ? "图片暂时无法读取" : "正在读取图片…"}
+                {failed[position] ? "图片暂时无法读取" : "正在读取图片…"}
               </span>
             )}
           </li>
         ))}
       </ul>
+      {images.length > 1 ? (
+        <div className={styles.imageStripActions}>
+          <span className={styles.imageTotal}>{images.length} 张图片</span>
+          <button
+            aria-expanded={expanded}
+            className={styles.imageExpand}
+            onClick={() => setExpanded((value) => !value)}
+            type="button"
+          >
+            {expanded ? "收起图片" : "展开图片"}
+          </button>
+        </div>
+      ) : null}
       {anyFailed ? (
         <button className={styles.imageRetry} onClick={onRetry} type="button">
           重新读取图片
@@ -145,22 +275,70 @@ function LoadedConversationImageStrip({
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className={styles.imageBackdrop} />
-          <Dialog.Content className={styles.imageDialog} aria-describedby={undefined}>
-            <Dialog.Title className={styles.imageDialogTitle}>
-              原图{ready > 0 ? "" : "（正在读取）"}
-            </Dialog.Title>
-            <Dialog.Close asChild>
-              <button aria-label="关闭原图" className={styles.imageClose} type="button">
-                <X aria-hidden size={17} />
+          <Dialog.Content
+            aria-describedby={undefined}
+            className={styles.imageDialog}
+            onClick={onBlankClose}
+            onKeyDown={onKeyDown}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              const trigger = triggerRef.current;
+              // A decode failure can remove the original thumbnail button.
+              (trigger?.isConnected ? trigger : stripRef.current?.querySelector<HTMLButtonElement>("button"))?.focus();
+            }}
+          >
+            <div className={styles.imageToolbar}>
+              <button aria-label={zoomDescription} className={styles.imageZoom} onClick={() => setZoom((value) => (value === "actual" ? "fit" : "actual"))} type="button">
+                {zoomLabel}
               </button>
-            </Dialog.Close>
-            {urls.map((url, index) =>
-              url ? (
+              <button aria-label="在新标签页打开原图" className={styles.imageControl} disabled={!urls[index]} onClick={openOriginal} type="button">
+                <ArrowSquareOut aria-hidden size={16} />
+              </button>
+              <button aria-label="下载原图" className={styles.imageControl} disabled={!urls[index]} onClick={downloadOriginal} type="button">
+                <DownloadSimple aria-hidden size={16} />
+              </button>
+              <Dialog.Close asChild>
+                <button aria-label="关闭原图" className={styles.imageClose} type="button">
+                  <X aria-hidden size={17} />
+                </button>
+              </Dialog.Close>
+            </div>
+            <div aria-label={zoom === "actual" ? "原图预览，使用方向键滚动" : "原图预览"} className={styles.imageStage} data-zoom={zoom} onClick={onBlankClose} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
+              {images.length > 1 ? (
+                <button aria-label="上一张图片" className={styles.imageNav} data-side="previous" onClick={() => step(-1)} type="button">
+                  <CaretLeft aria-hidden size={18} />
+                </button>
+              ) : null}
+              {urls[index] ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img alt={images[index]?.file_name ?? `原图 ${index + 1}`} key={images[index]?.attachment_id ?? index} src={url} />
-              ) : null,
-            )}
-            {ready === 0 ? <p className={styles.imageDialogMessage}>原图暂时无法读取，请关闭后重试。</p> : null}
+                <img
+                  alt={shown?.file_name ?? `原图 ${index + 1}`}
+                  data-zoom={zoom}
+                  onError={() => markFailed(index)}
+                  onLoad={measure}
+                  ref={imageRef}
+                  src={urls[index]!}
+                />
+              ) : (
+                <div className={styles.imageDialogMessage} role="status">
+                  <p>{failed[index] ? "这张图片暂时无法读取。" : "正在读取图片…"}</p>
+                  {failed[index] ? (
+                    <button className={styles.imageRetryInline} onClick={() => retryOne(index)} type="button">
+                      重新读取
+                    </button>
+                  ) : null}
+                </div>
+              )}
+              {images.length > 1 ? (
+                <button aria-label="下一张图片" className={styles.imageNav} data-side="next" onClick={() => step(1)} type="button">
+                  <CaretRight aria-hidden size={18} />
+                </button>
+              ) : null}
+            </div>
+            <div className={styles.imageMeta}>
+              <Dialog.Title className={styles.imageFileName}>{shown?.file_name ?? "原图"}</Dialog.Title>
+              <span className={styles.imagePosition}>{index + 1} / {images.length}</span>
+            </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

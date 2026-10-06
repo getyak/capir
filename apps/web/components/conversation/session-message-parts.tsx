@@ -333,10 +333,18 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
 }
 
 export function SessionUserMessage({ context }: { context: RenderContext }) {
+  // Sent images stand outside the text bubble: each text part keeps one
+  // readable bubble and image parts render directly beneath it, so an
+  // image-bearing message never grows a prominent outer text bubble frame.
+  // Text-only messages keep the original single bubble. The empty-text
+  // synthetic part renders nothing instead of an empty bubble frame.
   return <MessagePrimitive.Root className={styles.turn} role="article">
-    <div className={styles.userRow}><div className={styles.userMessage}>
-      <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? part.text
-        : part.type === "data" ? renderSessionData(part.name, part.data, context) : null}</MessagePrimitive.Parts>
+    <div className={styles.userRow}><div className={styles.userStack}>
+      <MessagePrimitive.Parts>{({ part }) => part.type === "text" && part.text
+        ? <div className={styles.userMessage}>{part.text}</div>
+        : <></>}</MessagePrimitive.Parts>
+      <MessagePrimitive.Parts>{({ part }) => part.type === "data" ? renderSessionData(part.name, part.data, context)
+        : part.type === "text" ? <></> : null}</MessagePrimitive.Parts>
     </div></div>
   </MessagePrimitive.Root>;
 }
