@@ -117,11 +117,19 @@
   margin-left: auto;
 }
 
+/* The discovery hint stays in the accessibility tree but only surfaces on
+   focus, so the quiet canvas is not covered in permanent instructions. */
 .hint {
   color: var(--muted);
   font-size: 0.75rem;
   letter-spacing: 0.01em;
+  opacity: 0;
+  transition: opacity 140ms var(--ease-out);
   white-space: nowrap;
+}
+
+.composer:focus-within .hint {
+  opacity: 1;
 }
 
 .meter {
@@ -178,6 +186,11 @@
   min-height: 44px;
   padding: 8px 10px;
   text-align: left;
+  transition: transform 100ms ease-out;
+}
+
+.item:active {
+  transform: scale(0.985);
 }
 
 .item[data-selected="true"],
@@ -249,8 +262,12 @@
   font: inherit;
   font-size: 0.75rem;
   justify-self: start;
-  min-height: 30px;
-  padding: 3px 12px;
+  min-height: 44px;
+  padding: 3px 16px;
+}
+
+.retry:active {
+  transform: scale(0.97);
 }
 
 .disclosure,
@@ -295,8 +312,51 @@
     transition: none;
   }
 
+  .hint {
+    transition: none;
+  }
+
+  .item,
+  .retry {
+    transition: none;
+  }
+
+  .item:active,
+  .retry:active {
+    transform: none;
+  }
+
   .menu {
     animation: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .composer {
+    background: var(--surface);
+  }
+
+  .dropHint {
+    background: var(--surface);
+  }
+}
+
+@media (forced-colors: active) {
+  .composer:focus-within {
+    outline: 2px solid Highlight;
+  }
+
+  .menu,
+  .retry {
+    background: Canvas;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  .item[data-selected="true"],
+  .item:hover {
+    background: Highlight;
+    color: HighlightText;
   }
 }
 
