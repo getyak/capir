@@ -74,6 +74,8 @@
 .group {
   display: grid;
   gap: 1px;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 
 .viewHeader {

@@ -30,6 +30,7 @@ import {
 } from "@/lib/workspace-sidebar";
 import { WORKSPACE_SLASH_COMMANDS } from "@/lib/workspace-composer";
 import { useWorkspaceDirectory } from "./workspace-search";
+import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import styles from "./new-conversation-add-menu.module.css";
 
 /**
@@ -60,6 +61,7 @@ type MenuRow = {
   title: string;
   detail: string;
   tag?: string;
+  person?: { id: string; label: string; avatarUrl?: string | null };
   run: MenuRun;
 };
 
@@ -240,6 +242,7 @@ export function ComposerAddMenu({
         icon: User,
         title: person.label,
         detail: person.detail,
+        person,
         run: { kind: "navigate", href: sidebarPersonHref(person) },
       }));
     }
@@ -701,7 +704,17 @@ function MenuButton({
       onPointerDown={(event) => event.preventDefault()}
       type="button"
     >
-      <Icon aria-hidden="true" className={styles.rowIcon} size={17} weight="duotone" />
+      {row.person ? (
+        <PersonDirectoryAvatar
+          id={row.person.id}
+          label={row.person.label}
+          url={row.person.avatarUrl}
+          className={styles.rowIcon}
+          size={36}
+        />
+      ) : (
+        <Icon aria-hidden="true" className={styles.rowIcon} size={17} weight="duotone" />
+      )}
       <span className={styles.rowText}>
         <strong>{row.title}</strong>
         <small>{row.detail}</small>
