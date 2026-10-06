@@ -2597,6 +2597,51 @@ suite("recovered run monitoring reconciliation", () => {
     } finally { await removeProofAccount(seeded.accountId); }
   });
 
+  it("reconciles rejected stored-result recovery without restoring a withdrawn Session", async () => {
+    const seeded = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    const runner = new ConversationQueueRunner({ pool: pool!, provider, logger: silentLogger });
+    try {
+      const messageId = randomUUID();
+      const objective = "Synthetic withdrawn-source recovery";
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId, message_id: messageId, objective,
+      });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "withdrawn-source-worker",
+      }))!;
+      await beginQueueRunMonitoring(pool!, claimed, silentLogger);
+      const execution = await executeUnscopedChatTask({
+        request: { idempotency_key: `conversation-queue:${claimed.entryId}`, session_id: seeded.sessionId, message_id: messageId, objective },
+        provider, database: pool!, auth: seeded.auth, images: [],
+      });
+      const result: ConversationQueueExecutionResult = {
+        body: execution.body, conversationMessageIDs: execution.conversationMessageIDs,
+        previousTaskIDs: execution.previousTaskIDs, conversationSources: execution.conversationSources ?? [],
+        remoteStatus: execution.remoteStatus, images: [],
+        audit: { providerID: null, model: null, providerRequestID: null, prompt: null, contactAgentEventKind: null },
+      };
+      await recordConversationQueueResult(pool!, claimed, result);
+      // Inject the same withdrawn-source shape required by the canonical
+      // Session tombstone constraint; never leave a deleted source body.
+      await pool!.query("UPDATE agent_sessions SET payload=NULL,deleted_at=now() WHERE account_id=$1 AND id=$2", [seeded.accountId, seeded.sessionId]);
+      await pool!.query("UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed.entryId]);
+      const calls = provider.calls.length;
+      await runner.recover();
+      const entry = (await entryRow(seeded.sessionId, seeded.accountId))[0]!;
+      expect(entry).toMatchObject({ status: "failed", failure_code: "SOURCE_REVOKED" });
+      expect(entry.result).toBeNull();
+      const run = (await productRunRow(claimed.runId))!;
+      expect(run).toMatchObject({ status: "failed", task_id: null, objective: "", input: null, output: null });
+      const canonical = (await pool!.query<{ completed_at: Date }>("SELECT completed_at FROM conversation_queue_entries WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed.entryId])).rows[0]!;
+      expect(run.finished_at!.getTime()).toBe(canonical.completed_at.getTime());
+      const session = (await pool!.query<{ deleted_at: Date | null; payload: AgentSessionPayload | null }>("SELECT deleted_at,payload FROM agent_sessions WHERE account_id=$1 AND id=$2", [seeded.accountId, seeded.sessionId])).rows[0]!;
+      expect(session.deleted_at).not.toBeNull();
+      expect(session.payload).toBeNull();
+      expect(provider.calls).toHaveLength(calls);
+    } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
+  });
+
   it("projects a stored failed result as partial and completes the same attempt on persistence replay", async () => {
     const seeded = await seedSession();
     const provider = new ScriptedConversationProvider();

@@ -15,8 +15,9 @@ const state = vi.hoisted(() => ({
   reclaim: vi.fn(),
   runnerAuth: vi.fn(),
   finalize: vi.fn(),
+  readResult: vi.fn(),
 }));
-const completion = vi.hoisted(() => ({ persistCancellation: vi.fn() }));
+const completion = vi.hoisted(() => ({ persistCancellation: vi.fn(), persistCompletion: vi.fn() }));
 const images = vi.hoisted(() => ({ readManifests: vi.fn() }));
 
 vi.mock("./conversationQueueState.js", async (importOriginal) => ({
@@ -25,10 +26,12 @@ vi.mock("./conversationQueueState.js", async (importOriginal) => ({
   reclaimStaleConversationQueueEntry: state.reclaim,
   runnerAuthContext: state.runnerAuth,
   finalizeConversationQueueEntry: state.finalize,
+  readConversationQueueResult: state.readResult,
 }));
 vi.mock("./conversationQueueCompletion.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./conversationQueueCompletion.js")>()),
   persistConversationQueueCancellation: completion.persistCancellation,
+  persistConversationQueueCompletion: completion.persistCompletion,
 }));
 vi.mock("./conversationMessageImages.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./conversationMessageImages.js")>()),
@@ -116,10 +119,56 @@ beforeEach(() => {
   state.reclaim.mockResolvedValue(reclaimed);
   state.runnerAuth.mockResolvedValue(auth);
   completion.persistCancellation.mockResolvedValue(undefined);
+  completion.persistCompletion.mockResolvedValue(undefined);
+  state.readResult.mockResolvedValue({ images: [] });
   images.readManifests.mockResolvedValue(new Map([[ids.entryId, []]]));
 });
 
 describe("recovered monitoring reconciliation wiring", () => {
+  it("reconciles a stop raced against stored-result completion", async () => {
+    const { pool, queries, events } = proofPool();
+    state.reclaim.mockResolvedValue({ ...reclaimed, hasResult: true });
+    completion.persistCompletion.mockImplementation(async () => { events.push("persist:replay"); });
+    state.finalize.mockImplementation(async (_pool: Pool, input: { status: string }) => {
+      events.push(`finalize:${input.status}`);
+      return input.status === "completed"
+        ? { applied: false, effectiveStatus: "running" }
+        : { applied: true, effectiveStatus: "cancelled" };
+    });
+    await new ConversationQueueRunner({ pool, provider: null, logger: proofLogger() }).recover();
+    expect(events).toEqual(["persist:replay", "finalize:completed", "finalize:cancelled", "monitor:reconcile"]);
+    expect(queries).toHaveLength(1);
+    expect(queries[0]!.params).toEqual([
+      ids.accountId, ids.sessionId, ids.entryId, ids.runId, 2, ids.createdByUserId,
+    ]);
+  });
+
+  it("reconciles a withdrawn source after stored-result replay rejects it", async () => {
+    const { pool, events } = proofPool();
+    state.reclaim.mockResolvedValue({ ...reclaimed, hasResult: true });
+    completion.persistCompletion.mockRejectedValue(Object.assign(new Error("SYNTHETIC_SOURCE_REVOKED"), { statusCode: 410 }));
+    state.finalize.mockImplementation(async (_pool: Pool, input: { status: string }) => {
+      events.push(`finalize:${input.status}`);
+      return { applied: true, effectiveStatus: "failed" };
+    });
+    await new ConversationQueueRunner({ pool, provider: null, logger: proofLogger() }).recover();
+    expect(events).toEqual(["finalize:failed", "monitor:reconcile"]);
+    expect(state.finalize).toHaveBeenCalledWith(pool, expect.objectContaining({ status: "failed", failureCode: "SOURCE_REVOKED" }));
+  });
+
+  it("does not reconcile a recovered stop when finalization throws", async () => {
+    const { pool, queries, events } = proofPool();
+    state.finalize.mockImplementation(async (_pool: Pool, input: { status: string }) => {
+      events.push(`finalize:${input.status}`);
+      if (input.status === "cancelled") throw new Error("SYNTHETIC_FINALIZE_FAILURE");
+      return { applied: false, effectiveStatus: "running" };
+    });
+    completion.persistCancellation.mockImplementation(async () => { events.push("persist:cancel"); });
+    await new ConversationQueueRunner({ pool, provider: null, logger: proofLogger() }).recover();
+    expect(events).toEqual(["finalize:interrupted", "persist:cancel", "finalize:cancelled"]);
+    expect(queries).toEqual([]);
+  });
+
   it("reconciles the recovered attempt only after recovery finalizes it interrupted", async () => {
     const { pool, queries, events } = proofPool();
     const logger = proofLogger();

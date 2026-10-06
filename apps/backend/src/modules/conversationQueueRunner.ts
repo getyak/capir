@@ -251,9 +251,13 @@ export class ConversationQueueRunner {
           if (result) {
             const recovered = await this.replayPersistence(auth, reclaimed, result, fence);
             if (recovered) {
+              // Replay can instead settle a raced stop or withdrawn source.
+              // Project only canonical terminal truth; completed and retained
+              // running attempts remain untouched by this fenced statement.
+              await reconcileRecoveredQueueRunMonitoring(this.options.pool, reclaimed, this.options.logger);
               this.options.logger.info(
                 { queue_entry_id: reclaimed.entryId, code: "RESULT_REPLAY" },
-                "conversation queue result was persisted without a new model call",
+                "conversation queue stored-result recovery was handled without a new model call",
               );
               continue;
             }
