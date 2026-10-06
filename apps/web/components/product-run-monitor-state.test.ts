@@ -54,6 +54,9 @@ describe("status and duration truth", () => {
       interrupted: "已中断", waiting_for_user: "待确认", partial: "部分完成", cancelled: "已停止",
     })) expect(statusLabel(status)).toBe(label);
     expect(statusLabel("weird_state")).toBe("weird_state");
+    for (const status of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(statusLabel(status)).toBe(status);
+    }
   });
 
   it("distinguishes every terminal phase and never folds unknown into completed", () => {

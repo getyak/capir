@@ -235,6 +235,28 @@ describe("monitor refresh controls", () => {
     expect(listFetches()).toHaveLength(3);
   });
 
+  it("changes selected-detail polling controls without triggering an immediate read", async () => {
+    fetcher.mockImplementation(async (input: RequestInfo | URL) => /\/api\/product-runs\/[\w-]{36}$/.test(String(input))
+      ? jsonResponse(detailFixture()) : jsonResponse(listBody([runFixture()])));
+    await render(<ProductRunMonitor />);
+    selectRun("帮我整理这段对话");
+    await advance(1);
+    expect(detailFetches()).toHaveLength(1);
+    const toggle = mount.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const interval = mount.querySelector<HTMLSelectElement>('select[aria-label="自动刷新间隔"]')!;
+    setCheckbox(toggle);
+    await advance(60_000);
+    expect(detailFetches()).toHaveLength(1);
+    change(interval, "30000");
+    await advance(1);
+    expect(detailFetches()).toHaveLength(1);
+    setCheckbox(toggle);
+    await advance(29_000);
+    expect(detailFetches()).toHaveLength(1);
+    await advance(1_000);
+    expect(detailFetches()).toHaveLength(2);
+  });
+
   it("pauses latest-page polling during historical pagination while the selected detail polls independently", async () => {
     fetcher.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);

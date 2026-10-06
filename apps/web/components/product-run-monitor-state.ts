@@ -56,7 +56,7 @@ export function statusPhase(status: string): StatusPhase {
 
 /** Exact label for a known status; an unknown status is shown verbatim. */
 export function statusLabel(status: string): string {
-  return RUN_STATUS_LABELS[status] ?? status;
+  return Object.hasOwn(RUN_STATUS_LABELS, status) ? RUN_STATUS_LABELS[status] : status;
 }
 
 /** Only an actually running run may read "in progress". */

@@ -257,16 +257,22 @@ export function ProductRunMonitor({ sessionBinding }: { sessionBinding?: string 
     return () => clearInterval(timer);
   }, [autoRefresh, intervalMs, historical, loadList]);
 
-  // Selected detail polls on its own schedule, independent of list pagination.
+  // Selecting a different run reads it once, even with polling disabled.
   useEffect(() => {
     if (!selectedID) return;
     const requestGeneration = detailGeneration;
     const initial = setTimeout(() => void loadDetail(selectedID), 0);
+    return () => { clearTimeout(initial); requestGeneration.current++; };
+  }, [selectedID, loadDetail]);
+
+  // Changing polling controls only changes the timer, never causes a read.
+  useEffect(() => {
+    if (!selectedID || !autoRefresh) return;
     const timer = setInterval(() => {
       if (!pollTick({ visible: document.visibilityState === "visible", autoRefresh, inFlight: detailBusy.current })) return;
       void loadDetail(selectedID);
     }, intervalMs);
-    return () => { clearTimeout(initial); clearInterval(timer); requestGeneration.current++; };
+    return () => clearInterval(timer);
   }, [selectedID, loadDetail, autoRefresh, intervalMs]);
 
   // Visibility resume: one bounded immediate fetch per stream, never a burst.
