@@ -16,6 +16,49 @@ backfilled or invented.
 - The monitor separates helpful, unhelpful, and unrated runs, with platform,
   outcome, question search, paginated history, answer previews, original input,
   context/model calls, tool calls, and versioned feedback history.
+- Refresh controls are explicit and truthful. An auto-refresh toggle and a
+  5/10/30-second interval selector (default 10 seconds) drive authenticated GET
+  reads only; polling never starts provider or job execution and creates no
+  schedule. Automatic polling runs only while the monitor tab is the visible
+  tab. Latest-page list polling pauses during historical pagination, while the
+  selected detail polls on its own; the manual refresh reads the latest list
+  page and the selected detail and resumes latest-page polling. List and detail
+  carry separate freshness, failure and stale labels, and a visibility resume
+  issues one bounded immediate fetch per stream instead of replaying missed
+  ticks. Overlapping reads are skipped and stale responses are fenced by
+  generation; appended pages deduplicate run IDs and disable load-more in
+  flight. A filter change clears the old list immediately, including while the
+  next read is debounced or pending.
+- The trace view keeps recorded truth. Status labels stay exact and unknown
+  statuses are shown verbatim rather than folded into "completed"; terminal
+  indicators distinguish completed, failed, cancelled, interrupted, waiting,
+  partial and fallback states. A missing or malformed timestamp reads as an
+  unknown duration on terminal states and "in progress" only while actually
+  running. The failed-tool count is displayed separately from the final run
+  status, so a completed run with failed tool spans shows both; total recorded
+  spans, the reported model, and run attempts are separate facts. Parent
+  hierarchy is compact indentation with explicit parent names instead of a
+  fabricated sequential chain. Input/output bodies name their captured size
+  state (redacted, truncated, unavailable) explicitly. When the source is
+  withdrawn the metadata trace remains visible while bodies, originals and
+  feedback stay hidden; a later read never restores a previously shown body.
+- Conversation originals appear inline only for conversation runs whose
+  persisted input keeps content available with a validated session and message
+  identity and validated image manifests. The captured session must match the
+  run's own persisted session, and a manifest batch is rejected wholesale (no
+  partial list, no renumbering) when it is invalid, duplicated, or beyond the
+  conversation contract of 10 images / 30 MB. Images are read through the
+  existing authenticated
+  `/api/workspace-sessions/:id/conversation-images/:messageId/:index` route in
+  immutable manifest order; screenshot-task runs keep their existing task image
+  route. There is no fallback to another session or message, and file names are
+  labels, never identity. Bytes arrive only as object URLs through the
+  authenticated readback and are bound to the exact source route and login
+  binding. The resident page supplies the opaque credential binding and remounts
+  the monitor when it changes; credentials never become component props.
+  A withdrawn login or changed source removes displayed bytes in the
+  same commit, and no base64 enters the DOM or logs. No input image is shown
+  when the context is absent.
 - A changed screenshot answer has no inherited rating. Each historical feedback
   event retains its answer version only while that source generation is admitted.
 - Web follow-ups pass the preceding task ID. The backend retrieves that owner's
@@ -24,12 +67,27 @@ backfilled or invented.
 
 ## Evaluation use
 
-The detail pane exports the captured execution for review. Relationship text
-runs with intact captured model inputs can also become development cases in the
-existing Lab regression library. A reviewer writes an expected behavior, then
-compares two admitted model/prompt configurations in Lab. The actual original
-input is frozen; a thumb or correction is never silently treated as a gold
-answer, a semantic pass, or proof of improvement. Unrated cases can be saved too.
+The detail pane exports the captured execution for review under an explicit
+purpose label (`product-run-review-and-case-design`) together with the exact
+captured output hash and run ID; the export carries the same captured version it
+reviews. Feedback inside an export or a saved case is user feedback, never gold
+labels.
+
+Relationship text runs with intact captured model inputs can also become
+development cases in the existing Lab regression library. A reviewer writes an
+expected behavior, then compares two admitted model/prompt configurations in
+Lab. The actual original input is frozen; a thumb or correction is never
+silently treated as a gold answer, a semantic pass, or proof of improvement.
+Unrated cases can be saved too.
+
+A saved regression case binds to one exact run output version: capture state
+resets when the run ID or the exact output hash changes, and a missing or blank
+output hash disables capture until a version exists. Replay support mirrors the
+canonical Lab capture policy: a completed answer span with a complete captured
+input and output body that proves the answer carried no images. An older text
+record without an images key or an explicit empty batch is proven image-free; a
+malformed or unprovable capture is never treated as replayable. Image runs stay
+non-replayable and the UI names that limitation explicitly.
 
 Screenshot and person-research details can be inspected/exported, but their
 end-to-end automatic replay is not implemented by this adapter. The UI names
