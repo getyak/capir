@@ -12,8 +12,8 @@ Alternative A: floating attachment/tools menu with one-step upload, deeper Peopl
 
 Milestones:
 1. Implement the shared menu, file preview and conversation visual rhythm (complete).
-2. Independent source review and focused checks complete; actual browser acceptance pending.
-3. Clean-source resident Web deployment and live acceptance in progress.
+2. Independent review, full Web checks and actual browser acceptance complete.
+3. Clean-source resident Web deployment, authenticated live acceptance and launchd restart recovery complete.
 
 Done evidence: passing focused checks, before/after browser evidence, responsive menu bounds and keyboard recovery, document preview/cancel/error preserving draft, image flow unchanged, clean-source deployment receipt and authenticated live behavior. Cloud Figma quota was exhausted; the existing desktop Figwright plugin recovered design inspection and editable design work.
 
@@ -54,3 +54,9 @@ The controlled full Web rerun (`vitest run --maxWorkers=2`) passed all 1810 case
 Final touch review: the visible image remove face is 22 px with a 44 px expanded hit target. Browser edge-press exposed active scaling of the whole control; press feedback now scales only the SVG, preserving the target through pointer release. The same rule applies to preview close and menu controls. Reduced-motion overrides follow the normal rules in the cascade and reset SVG scale/transform. Independent follow-up review closed this P2 and confirmed no open findings. Real Tailscale browser checks already verified native TXT selection, explicit preview/add and native undo, PDF/DOCX extraction and cancel, unsupported file rejection, send-cap boundaries, rapid menu toggles and dark 360 px viewport containment. The final CSS correction is awaiting clean-source activation and edge-press/reduced-motion acceptance.
 
 Production acceptance exposed CSS lowering that merged `transform: none; scale: 1` into `transform: scale(1)`, leaving the base independent `scale: .92` active under reduced motion. This was reproduced with installed Lightning CSS 1.33.0 and the production CSSOM. The accessibility override now marks the independent scale reset important, which keeps it separate through lowering. The image removal edge press passed with its stationary 44 px expanded target. Final reduced-motion acceptance is being repeated after a rebuilt clean release.
+
+## Delivery acceptance
+
+Resident Web is clean detached revision `41107da2c6ed1ce06f8ecedeb9d45192f2cfd4f2`, build `9cHHiz1V2hp512uIClO5i`. Final production reduced-motion press retains independent scale 1; image SVG transform resets to none, and expanded edge removal succeeds. Settled secondary Escape returns to root; the next Escape closes and restores focus. Ten rapid toggle pairs produced no page errors. Service restart recovered authentication and the protected workspace with the exact synthetic identity. No backend/native deployment was needed. Source functional checks: full 1810 Web tests across 235 files, typecheck, touched lint, production build and docs/architecture passed; six pre-existing app lint warnings remain. The baseline Agent dependency failure is outside this UI slice and remains visible.
+
+Formal dated evidence is preserved in ignored `output/evaluation/2026-10-06-web-quiet-composer/`: selected Figma comparisons and live screenshots, structured browser checks, release/restart receipt, review closure and acceptance. UI runtime is deployed; source remains on `codex/web-quiet-composer` for review. The final plan-status commit changes documentation only and does not change the deployed runtime revision. The first superseded task release was safely removed after preserving its receipt; previous clean release remains for rollback.
