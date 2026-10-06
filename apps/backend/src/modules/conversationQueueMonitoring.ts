@@ -7,9 +7,77 @@ import type { ClaimedConversationQueueEntry } from "./conversationQueueState.js"
 import type { ConversationQueueExecutionResult } from "./conversationQueueCompletion.js";
 import type { ConversationQueueRunnerLogger } from "./conversationQueueRunner.js";
 
-export function queueRunCorrelation(claim: ClaimedConversationQueueEntry) {
+export type QueueRunCorrelation = Pick<ClaimedConversationQueueEntry,
+  "sessionId" | "messageId" | "entryId" | "runId" | "attempt">;
+
+export function queueRunCorrelation(claim: QueueRunCorrelation) {
   return { session_id: claim.sessionId, message_id: claim.messageId, queue_entry_id: claim.entryId,
     run_id: claim.runId, task_id: claim.runId, attempt: claim.attempt };
+}
+
+export type RecoveredQueueRunAttempt = QueueRunCorrelation
+  & Pick<ClaimedConversationQueueEntry, "accountId" | "createdByUserId" | "leaseGeneration">;
+
+const RECOVERED_TERMINAL_QUEUE_STATUSES = ["interrupted", "cancelled", "failed"] as const;
+
+/** Diagnostic projection of canonical terminal queue truth for one attempt.
+ * A failed attempt that keeps its stored result projects `partial`, matching
+ * `settle`. Nothing here can invent `completed`: it stays exclusive to
+ * canonical completion/output linkage.
+ */
+export function recoveredQueueRunStatus(queueStatus: string, hasStoredResult: boolean):
+  "interrupted" | "cancelled" | "failed" | "partial" | null {
+  if (queueStatus === "interrupted" || queueStatus === "cancelled") return queueStatus;
+  if (queueStatus === "failed") return hasStoredResult ? "partial" : "failed";
+  return null;
+}
+
+/** Built from the verified projection only, so the statement and its semantics cannot drift. */
+function recoveredQueueRunStatusCase(): string {
+  const branches = RECOVERED_TERMINAL_QUEUE_STATUSES.flatMap((queueStatus) =>
+    [false, true].map((hasStoredResult) =>
+      `WHEN q.status='${queueStatus}' AND (q.result IS NOT NULL)=${hasStoredResult}`
+      + ` THEN '${recoveredQueueRunStatus(queueStatus, hasStoredResult)!}'`));
+  return `CASE ${branches.join(" ")} END`;
+}
+
+/** Best-effort monitoring reconciliation for a recovered terminal attempt.
+ *
+ * The queue stays the single status authority: one fenced statement projects
+ * its terminal truth onto the attempt's monitoring row, atomically bound to the
+ * canonical queue row account/session/entry/run/lease generation and to the
+ * product run's own id/account/session/created user. Terminal finalization
+ * clears `lease_owner`, so the generation fences the attempt instead of a
+ * cleared owner; a stale retry, generation, account or session never reaches
+ * another attempt. The write is metadata only — never input/output/objective,
+ * source generation, task_id, spans or a fabricated duration — takes the
+ * canonical `completed_at` as its finish time, and requires the product row to
+ * stay unbound, running and unexpired instead of resurrecting deleted or
+ * expired records. Repeated calls are inert, and a diagnostic failure never
+ * changes queue truth or fails recovery.
+ */
+export async function reconcileRecoveredQueueRunMonitoring(
+  pool: Pool,
+  attempt: RecoveredQueueRunAttempt,
+  logger: ConversationQueueRunnerLogger,
+): Promise<void> {
+  try {
+    await pool.query(`UPDATE product_runs r
+      SET status=${recoveredQueueRunStatusCase()},
+        finished_at=q.completed_at, updated_at=now()
+      FROM conversation_queue_entries q
+      WHERE q.account_id=$1 AND q.session_id=$2 AND q.id=$3 AND q.run_id=$4 AND q.lease_generation=$5
+        AND q.created_by_user_id=$6
+        AND q.status IN (${RECOVERED_TERMINAL_QUEUE_STATUSES.map((status) => `'${status}'`).join(",")})
+        AND r.id=q.run_id AND r.account_id=q.account_id AND r.session_id=q.session_id
+        AND r.user_id=q.created_by_user_id
+        AND r.task_id IS NULL AND r.status IN ('running','partial') AND r.expires_at>clock_timestamp()`,
+    [attempt.accountId, attempt.sessionId, attempt.entryId, attempt.runId,
+      attempt.leaseGeneration, attempt.createdByUserId]);
+  } catch {
+    logger.warn({ ...queueRunCorrelation(attempt), failure_code: "MONITORING_UNAVAILABLE" },
+      "conversation queue recovery could not reconcile monitoring");
+  }
 }
 
 /** Each model attempt owns a capture context, even when the diagnostic DB is unavailable. */
