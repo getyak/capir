@@ -68,6 +68,7 @@ function formatUsageTime(value: string): string {
 /** Read-only weekly usage row with a disclosure; never fabricates a count. */
 export function WeeklyUsageRow({ store }: { store: WeeklyUsageStore | null }) {
   const [open, setOpen] = useState(false);
+  const disclosure = useRef<HTMLButtonElement>(null);
   const view = useSyncExternalStore(
     store ? store.subscribe : noopSubscribe,
     store ? store.getSnapshot : () => loadingView,
@@ -80,6 +81,7 @@ export function WeeklyUsageRow({ store }: { store: WeeklyUsageStore | null }) {
         <button
           aria-expanded={open}
           className={styles.usageDisclosure}
+          ref={disclosure}
           onClick={() => setOpen((value) => !value)}
           type="button"
         >
@@ -101,7 +103,11 @@ export function WeeklyUsageRow({ store }: { store: WeeklyUsageStore | null }) {
         {view.status === "error" && store ? (
           <button
             className={styles.usageRetry}
-            onClick={() => store.refresh()}
+            onClick={() => {
+              // The retry disappears while loading; retain a stable focus target.
+              disclosure.current?.focus();
+              store.refresh();
+            }}
             type="button"
           >
             重试

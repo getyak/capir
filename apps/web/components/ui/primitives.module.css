@@ -46,7 +46,8 @@
 }
 
 .popover {
-  z-index: 50;
+  /* Above mobile chrome (60), below the independent avatar modal (220). */
+  z-index: 100;
   border: 1px solid var(--line);
   border-radius: var(--card-radius);
   background: var(--surface);

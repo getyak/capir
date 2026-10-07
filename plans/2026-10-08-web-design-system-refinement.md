@@ -81,3 +81,9 @@ Pre-build verification:63 affected tests pass, full lint has0 errors/6 existing 
 
 
 Resident changed during pre-build review to7c977072 (buildatFNARfOVbnKC64dSfU9Y): another task's reduced-motion layout-transition fix plus canonical craft guidance. Reconcile that accepted lineage before freezing this account release. It changes globals and separately owned plan/skill only, with no account-source overlap. The activation expected-old revision is now7c977072, subject to another live readback under lock.
+
+
+## First account live inspection / two concrete corrections
+Clean merge1e8c2ef7 built and activated under CAS against7c977072; buildnzR98sG_uAmES3ARF8sEG and six HTTPS assets match. Real Chrome reaches75 passing checks, including account/help Escape order, tab/arrow controls, two avatar-modal exits, five widths in both themes, scope-bound usage failure/retry and44px targets. It then reveals a real focus loss when retry unmounts. Focus now moves to the stable usage disclosure before refreshing; the mounted test verifies it through successful readback.
+
+Visual inspection of1280light,390dark,320light and390x500 expanded screenshots also reveals mobile dock chrome painting over the account's bottom action. Mere bounds/visibility were insufficient. Restore the account popover's intended100 stacking level (chrome60; independent avatar220) and add point-hit verification for the short viewport's reachable final action. Do not accept the initial live batch as complete until both corrections are clean-built, reactivated and rerun. The activation wrapper's first file-descriptor type error stopped before service mutation; its repaired held-lock activation succeeded. First browser console has one404 resource and the intentionally injected503; capture exact sanitized resource paths on the next run before classifying it.

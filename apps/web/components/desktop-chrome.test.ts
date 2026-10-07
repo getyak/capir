@@ -330,6 +330,10 @@ describe("weekly usage row", () => {
       retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(store.refreshed).toBe(1);
+    expect(document.activeElement).toBe(host.querySelector("button[aria-expanded]"));
+    await act(async () => store.set({ status: "ready", usage: usageResponse(12) }));
+    expect(host.textContent).not.toContain("重试");
+    expect(document.activeElement).toBe(host.querySelector("button[aria-expanded]"));
   });
 
   it("shows loading honestly and hides a previous account's result after switching", async () => {
