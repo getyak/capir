@@ -318,6 +318,42 @@ This page is the single home for capir test-account provisioning and test
 commands. `capir help test create` is the offline entry point and
 [the CLI reference](capir-cli.md) documents the full command surface.
 
+### Autonomous acceptance identities
+
+Prepare authorized synthetic identities before requesting a human login.
+First reuse a valid dedicated acceptance credential through `capir auth`; use
+the default development fixture only on the explicitly seeded development
+backend above. A missing shared-service fixture is not a reason to ask the
+product owner to sign in, reset another account, or run the global seed.
+
+Browser-owned CLI authorization requires a primary identity. `capir test
+create` provisions a restricted `lab_human` identity and disposable data; that
+identity cannot approve a CLI grant. To verify this boundary on a resident
+service, an authorized server operator may provision one new, empty synthetic
+primary fixture in a uniquely named account, using the existing
+`createRealIdentity` transaction and password encoder. Use a reserved
+`example.invalid` address, leave email verification unset, record the task and
+exact account/user IDs, and keep the generated password in the OS keyring or
+process memory. Do not overwrite an existing login, claim mailbox verification,
+mint a substitute browser session, or enable simulated authentication.
+
+Exercise real password sign-in, browser consent, PKCE exchange and keyring
+readback before granting this fixture test entitlement. Verify default denial
+first; then explicitly grant only its own test scopes with the registry command
+below, reauthorize, and use the ordinary CLI for create/status/stop. Confirm
+daily counts and idempotent retry from server readback. Operator credentials
+prepare the fixture; they never replace the human CLI grant under test.
+
+Stop and verify deletion of every owned run before retiring the fixture.
+Revoke its CLI grants, test entitlement and sessions, disable its login, remove
+only its exact temporary keyring items, and read back these states. Retain
+minimal nonsecret provenance/audit receipts; never broadly delete shared
+accounts or discard uncertain cleanup evidence. This procedure tests the
+authorization loop, not public email-verification signup. Request human input
+only when a genuinely necessary external authorization is unavailable.
+
+### Personal CLI authorization
+
 The default personal flow is browser-owned CLI authorization:
 
 ```bash
