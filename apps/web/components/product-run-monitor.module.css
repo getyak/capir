@@ -9,4 +9,4 @@
 .page .refresh button { min-width: 44px; }
 @media (prefers-reduced-motion: reduce) { .page *, .page *::before, .page *::after { animation: none !important; transition: none !important; } }
 
-@media(max-width:680px) { .toolbar { flex-wrap: wrap; gap: 0; } .refresh { justify-content: flex-end; flex: 1 1 100%; padding: 8px 0; } }
+@media(max-width:680px) { .toolbar { flex-wrap: wrap; gap: 0; } .filters { gap: 8px; } .filters button { gap: 4px; white-space: nowrap; } .filters span { min-width: 20px; padding: 3px 4px; } .refresh { justify-content: flex-end; flex: 1 1 100%; padding: 8px 0; } }
