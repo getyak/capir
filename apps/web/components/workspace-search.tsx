@@ -293,8 +293,15 @@ export function WorkspaceGlobalSearchDialog({
         }}
         ref={dialog}
         onKeyDown={(event) => {
-          if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 ||
-              (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+          if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+          if (event.key === "Escape") {
+            // A search input's native Escape clears its text before cancelling
+            // the dialog. The visible shortcut promises one step back.
+            event.preventDefault();
+            close();
+            return;
+          }
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
           const links = Array.from(dialog.current?.querySelectorAll<HTMLAnchorElement>("[data-search-result]") ?? []);
           if (!links.length) return;
           const index = links.indexOf(document.activeElement as HTMLAnchorElement);

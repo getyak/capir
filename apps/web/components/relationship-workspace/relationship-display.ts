@@ -110,3 +110,16 @@ export function resourceStateLabel(resource: Pick<RelationshipResourceListItem, 
   if (resource.source_authorization_state === "expired") return "授权已过期";
   return { received: "已接收", parsing: "正在整理", needs_identity_review: "待核对身份", needs_fact_review: "待审阅事实", ready: "已就绪", failed: "整理失败" }[resource.processing_state];
 }
+
+/** Extraction review is separate from confirming a relationship fact. */
+export function fragmentReviewLabel(status: string) {
+  return ({ proposed: "待核对提取", reviewed: "提取已核对", rejected: "提取已驳回" } as Record<string, string>)[status] ?? "提取状态待核实";
+}
+export function fragmentLocationLabel(kind: string) {
+  return ({ message: "对话片段", image_region: "图片片段", document_region: "文档区域", url_excerpt: "网页摘录", contact_field: "联系人资料", note_revision: "备注", document_text: "文档片段" } as Record<string, string>)[kind] ?? "来源片段";
+}
+export function fragmentAttributionLabel(actor: string, status: string) {
+  const who = ({ candidate: "对方", recruiter: "记录人", client: "客户", document_author: "文档作者", public_source: "公开来源", unknown: "说话人不明" } as Record<string, string>)[actor] ?? "作者不明";
+  const state = ({ confirmed: "归属已核对", proposed: "归属待核对", unknown: "归属尚未确定" } as Record<string, string>)[status] ?? "归属待核实";
+  return `${who} · ${state}`;
+}

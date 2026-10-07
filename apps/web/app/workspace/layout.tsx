@@ -17,6 +17,7 @@ import { WorkspaceGlobalSearchDialog } from "@/components/workspace-search";
 import { WorkspaceSidebarPeople } from "@/components/workspace-sidebar-people";
 import { WorkspacePrivacyEntry, WorkspaceRouteHeader } from "@/components/workspace-route-header";
 import { WorkspacePrivacyBoundary } from "@/components/workspace-privacy-boundary";
+import { WorkspaceSessionBoundary } from "@/components/workspace-session-boundary";
 import styles from "@/components/workspace-shell.module.css";
 import {
   readBackendSessionClaims,
@@ -28,7 +29,7 @@ import {
   TEST_WORKSPACE_COOKIE,
   testWorkspaceSession,
 } from "@/lib/server/testWorkspaceSession";
-import { backendSessionIsExpired } from "@/lib/backend-session";
+import { backendSessionIsExpired, isBackendSessionExpiredError } from "@/lib/backend-session";
 import { leaveTestWorkspace } from "@/app/workspace/settings/testing/actions";
 import accountStyles from "@/components/account-settings.module.css";
 import { SystemHealthProvider } from "@/components/system-health-provider";
@@ -116,12 +117,19 @@ export default async function WorkspaceLayout({
           currentDisplayName = profile.user.display_name;
           backendAccount.name = profile.workspace.name;
         }
-      } catch { /* Keep authenticated labels available during settings outages. */ }
+      } catch (error) {
+        // Confirmed revocation is different from a settings/network outage.
+        // Do not leave private chrome mounted under an invalid credential.
+        if (isBackendSessionExpiredError(error)) throw error;
+      }
       pendingBinding = workspaceSessionsBinding(claims);
       pendingSessionDraftScope = workspaceSessionDraftStorageScope(claims);
     }
   } catch {
     /* Scope mismatch or unreadable test session: stay unbound. */
+    scope = null;
+    pendingBinding = null;
+    pendingSessionDraftScope = null;
   }
   const hasTestWorkspace = (await cookies()).has(TEST_WORKSPACE_COOKIE);
   if (!scope) {
@@ -168,7 +176,7 @@ export default async function WorkspaceLayout({
 
 
   return (
-    <WorkspacePrivacyBoundary privateContent={children}>
+    <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
       <PersonContextPanelProvider binding={pendingBinding}>
       <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
@@ -247,6 +255,6 @@ export default async function WorkspaceLayout({
       </div>
       </PersonContextPanelProvider>
       </AvatarPreferencesProvider>
-    </WorkspacePrivacyBoundary>
+    </WorkspacePrivacyBoundary></WorkspaceSessionBoundary>
   );
 }

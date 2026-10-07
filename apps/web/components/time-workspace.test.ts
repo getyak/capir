@@ -174,3 +174,165 @@ describe("rendered time workspace", () => {
   });
 
 });
+
+const admittedId = "b3000000-0000-4000-8000-000000000007";
+const admittedSource = { ...timeFixtureActivity, id: `person_created:${admittedId}`, kind: "person_created" as const, source_id: admittedId, source_revision: 3, title: "EVIDENCE-ALPHA", summary: "", occurred_at: "2026-09-21T01:00:00.000Z", recorded_at: "2026-09-21T01:00:00.000Z", ends_at: null, local_day: "2026-09-21", person_id: null, person_label: null, relationship_context_id: null, context_label: null, session_id: null, status: "recorded" as const, authority: "system_record" as const };
+function feedOf(activities: unknown[], more = false) {
+  return { contract_version: CONTRACT_VERSION, scope, activities, next_cursor: more ? "next" : null, complete: !more, coverage_note: "Session retention 30 days", snapshot_at: "2026-09-21T00:00:00.000Z" };
+}
+function reviewPayload(overrides: Record<string, unknown> = {}) {
+  return { contract_version: CONTRACT_VERSION, scope, generated_at: "2026-09-21T01:05:00.000Z", title: "REVIEW-ALPHA", body: "Private review body", sources: [admittedSource], complete: true, coverage_note: "Session retention 30 days", authority: "unconfirmed", external_effect: "none", ...overrides };
+}
+async function askWith(question: string) {
+  await act(async () => {
+    const textarea = host.querySelector("textarea")!;
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, question);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click("回顾当前范围");
+}
+async function toggleVisibility(state: "visible" | "hidden") {
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: state });
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+}
+describe("review continuity", () => {
+  afterEach(() => { vi.useRealTimers(); Reflect.deleteProperty(document, "visibilityState"); });
+
+  it("places one named collapsed review disclosure before the growing feed in DOM order", async () => {
+    await render();
+    const dock = host.querySelector("details")!;
+    const canvas = host.querySelector('section[aria-label="时间记录"]')!;
+    expect(dock.querySelector("summary")!.textContent).toContain("范围回顾");
+    expect(dock.hasAttribute("open")).toBe(false);
+    expect(dock.compareDocumentPosition(canvas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps a completed review through the 60-second auto refresh with an explicit stale label", async () => {
+    vi.useFakeTimers();
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    expect(host.textContent).toContain("ANSWER-ONE"); expect(host.textContent).toContain("待核对的整理");
+    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {});
+    expect(host.textContent).toContain("ANSWER-ONE");
+    expect(host.textContent).toContain("旧整理 · 未核实");
+    expect(host.textContent).toContain("不作为当前事实");
+    expect(host.textContent).not.toContain("待核对的整理");
+  });
+
+  it("keeps the review through foregrounding and marks it stale after the re-read", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    await toggleVisibility("hidden"); await toggleVisibility("visible");
+    expect(host.textContent).toContain("ANSWER-ONE");
+    expect(host.textContent).toContain("旧整理 · 未核实");
+    expect(host.textContent).toContain("不作为当前事实");
+  });
+
+  it("clears the review when the calendar scope changes", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    expect(host.textContent).toContain("ANSWER-ONE");
+    mock.query = "day=2026-09-22&tz=UTC"; await render();
+    expect(host.textContent).not.toContain("ANSWER-ONE");
+  });
+
+  it("clears the review when the account binding changes", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    expect(host.textContent).toContain("ANSWER-ONE");
+    await act(async () => { root.render(createElement(TimeWorkspace, { people: [], peopleError: null, binding: "b", legacyDraft: null })); });
+    expect(host.textContent).not.toContain("ANSWER-ONE");
+  });
+
+  it("clears the review when the workspace session expires", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    await act(async () => window.dispatchEvent(new Event(WORKSPACE_SESSION_EXPIRED_EVENT)));
+    expect(host.textContent).not.toContain("ANSWER-ONE");
+    expect(host.textContent).not.toContain("Private review body");
+  });
+
+  it("clears generated prose when an admitted source changes", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    expect(host.textContent).toContain("EVIDENCE-ALPHA · 2026-09-21");
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload() : feedOf([{ ...admittedSource, source_revision: 4, title: "EVIDENCE-ALPHA-V2" }]));
+    await toggleVisibility("hidden"); await toggleVisibility("visible");
+    expect(host.textContent).not.toContain("ANSWER-ONE");
+    expect(host.textContent).not.toContain("Private review body");
+    expect(host.textContent).not.toContain("EVIDENCE-ALPHA ·");
+    expect(host.textContent).toContain("旧回顾已清除");
+  });
+
+  it("clears the review and says so when an admitted source disappears from a complete readback", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload() : feedOf([payload().activities[0]!]));
+    await toggleVisibility("hidden"); await toggleVisibility("visible");
+    expect(host.textContent).not.toContain("ANSWER-ONE");
+    expect(host.textContent).not.toContain("EVIDENCE-ALPHA");
+    expect(host.textContent).toContain("旧回顾已清除");
+  });
+
+  it("never establishes source absence from a partial first page", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload() : feedOf([], true));
+    await toggleVisibility("hidden"); await toggleVisibility("visible");
+    expect(host.textContent).toContain("ANSWER-ONE");
+    expect(host.textContent).toContain("分页未完成时不能据此认定来源不存在");
+    expect(host.textContent).toContain("EVIDENCE-ALPHA · 2026-09-21（本次读取未覆盖，未核实）");
+  });
+
+  it("keeps the old review as unverified stale when the refresh fails", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload() : Promise.reject(new Error("Transport down")));
+    await toggleVisibility("hidden"); await toggleVisibility("visible");
+    expect(host.textContent).toContain("时间记录暂时无法读取");
+    expect(host.textContent).toContain("ANSWER-ONE");
+    expect(host.textContent).toContain("旧整理 · 未核实");
+    expect(host.textContent).toContain("不作为当前事实");
+  });
+
+  it("keeps the old answer tied to its own question when regeneration fails", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-ONE" }) : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? Promise.reject(new Error("Transport down")) : feedOf([admittedSource]));
+    await askWith("问题二");
+    expect(host.textContent).toContain("Transport down");
+    expect(host.textContent).toContain("ANSWER-ONE");
+    expect(host.textContent).toContain("回答的问题：问题一");
+    expect(host.textContent).toContain("当前输入的问题不同");
+    expect(host.textContent).toContain("旧整理 · 未核实");
+  });
+
+  it("releases the busy lock and recovers when a pending generation is canceled", async () => {
+    let resolveReview!: (value: unknown) => void;
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? new Promise((resolve) => { resolveReview = resolve; }) : feedOf([admittedSource]));
+    await render();
+    await act(async () => {
+      const textarea = host.querySelector("textarea")!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "问题一");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click("回顾当前范围");
+    expect([...host.querySelectorAll("button")].find((b) => b.textContent === "正在回顾…")!.disabled).toBe(true);
+    await toggleVisibility("hidden");
+    expect([...host.querySelectorAll("button")].find((b) => b.textContent === "回顾当前范围")!.disabled).toBe(false);
+    await act(async () => resolveReview(reviewPayload({ title: "ANSWER-LATE" })));
+    expect(host.textContent).not.toContain("ANSWER-LATE");
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({ title: "ANSWER-TWO" }) : feedOf([admittedSource]));
+    await click("回顾当前范围");
+    expect(host.textContent).toContain("ANSWER-TWO");
+  });
+
+  it("stores no model output or private review data in tab storage", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload() : feedOf([admittedSource]));
+    await render(); await askWith("问题一");
+    expect(host.textContent).toContain("Private review body");
+    expect(Object.keys(sessionStorage)).toHaveLength(0);
+    expect(Object.keys(localStorage)).toHaveLength(0);
+  });
+});
