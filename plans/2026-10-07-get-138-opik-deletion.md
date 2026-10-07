@@ -42,8 +42,15 @@ observation policy, unrelated service cleanup or native simulator testing.
    backend consumer tests, Agent and Backend typechecks, Agent build,
    XML validation, repository hygiene and documentation checks passed.
    Pi's broader Agent suite passed 385 tests; the opt-in live test was skipped.
-3. Create a GET-138-linked PR; verify all current-head CI/security gates, merge
-   without bypass, and read back merge state.
+3. Active: [PR #304](https://github.com/getyak/capir/pull/304) is linked to GET-138.
+   Independent review passed. MiMo's single PR-review invocation timed out at
+   1,800 seconds without a validated report; it was neither published nor
+   retried. The first Web CI run exposed microtask-only waiting before Web
+   Crypto completed in MCP tests. Bounded waits preserve dispatch, secret
+   clearing and request-identity assertions; no product logic changed. A second
+   counterexample appeared in the directory test under the prepared resident
+   suite and receives the same narrow correction. Verify every applicable gate
+   on the final head, merge without bypass, and read back merge state.
 4. Serialize resident updates with the backend keeper. Deploy affected API,
    Agent Host, Web and Opik configuration from clean committed source. Recover
    only exact locks whose Docker volume-writer namespace is proven inactive.
@@ -63,12 +70,13 @@ resource observations are independent of this queue fix.
 
 ## Resident source preservation
 
-The current Web (`c67e4ef9`) and backend (`6b9dbfaf`) contain independently
+The latest current Web (`86946270`, advanced from `c67e4ef9` during this task)
+and backend (`6b9dbfaf`) contain independently
 approved local changes not yet on remote main. Build service-specific clean
 committed release descendants of those existing revisions with only the
-GET-138 fix applied after PR merge; retain their existing behavior. Do not
+GET-138 fix prepared before and activated after PR merge; retain their existing behavior. Do not
 replace them with a main-only release that loses those changes. Record each
 actual release revision and re-run its applicable checks before activation.
-The active parallel design chat currently works on Figma/native macOS, with no
-observed Web/backend deployment in its current turn. Recheck ownership before
-activation.
+A pre-activation recheck detected the approved Web keyboard-choice update at
+`86946270`; the prepared release was rebased onto it before rebuilding and
+source-specific verification. Recheck both services again before activation.
