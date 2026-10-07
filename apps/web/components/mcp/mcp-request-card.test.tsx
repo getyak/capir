@@ -109,7 +109,10 @@ describe("McpRequestCard", () => {
       expect(sessionHeaderOf(call)).toBe(SESSION_VERSION);
     }
     await act(async () => button("确认执行").click());
-    await flush();
+    await vi.waitFor(async () => {
+      await flush();
+      expect(text()).toContain("已确认");
+    }, { timeout: 2000, interval: 10 });
     const resolveCall = fetcher.mock.calls.find((call) => String(call[0]).includes("/resolve"))!;
     expect(sessionHeaderOf(resolveCall)).toBe(SESSION_VERSION);
     const body = JSON.parse(String((resolveCall[1] as RequestInit).body)) as Record<string, unknown>;
@@ -149,7 +152,11 @@ describe("McpRequestCard", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => button("确认并连接").click());
-    await flush();
+    await vi.waitFor(async () => {
+      await flush();
+      expect(fetcher.mock.calls.filter((call) => String(call[0]).includes("/resolve"))).toHaveLength(1);
+      expect((mount.querySelector('input[type="password"]') as HTMLInputElement | null)?.value ?? "").toBe("");
+    }, { timeout: 2000, interval: 10 });
     const payloads = fetcher.mock.calls
       .filter((call) => String(call[0]).includes("/resolve"))
       .map((call) => String((call[1] as RequestInit).body));
@@ -182,9 +189,14 @@ describe("McpRequestCard", () => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => button("确认并连接").click());
-    await flush();
-    expect((mount.querySelector('input[type="password"]') as HTMLInputElement | null)?.value ?? "").toBe("");
-    expect(text()).toContain("网络异常");
+    // Web Crypto intent hashing may finish after a microtask-only flush.
+    // Observe the actual failed dispatch and completed cleanup.
+    await vi.waitFor(async () => {
+      await flush();
+      expect(fetcher.mock.calls.filter((call) => String(call[0]).includes("/resolve"))).toHaveLength(1);
+      expect((mount.querySelector('input[type="password"]') as HTMLInputElement | null)?.value ?? "").toBe("");
+      expect(text()).toContain("网络异常");
+    }, { timeout: 2000, interval: 10 });
   });
 
   it("submits a choice and labels settled states without decision actions", async () => {
