@@ -52,3 +52,11 @@ Final runtime code commit29e77e62 includes narrow toolbar wrapping and non-break
 
 ## Global cleanup authorization and release resumption
 The user explicitly authorized autonomous cleanup of verified completed, reproducible artifacts across all projects. The authoritative preference is now in the global Codex AGENTS.md. Previous permission-pending checkpoints are historical and superseded. Current free space is 33 GiB; inspected Daypage artifacts contain unfinished-task evidence and remain protected. Resume the committed monitor fix without deleting unrelated evidence. Confirm the free-byte floor again immediately before building.
+
+
+## Monitor release acceptance — October 8
+The prior storage blocker is resolved. Global autonomous cleanup authorization is persisted; inspected unfinished Daypage artifacts remain protected. Frozen install and clean production build259df8a5 passed with32.62GiB before build. Resident Web activation, restart and HTTPS login recovery are confirmed, buildFPeXP3O-gx49qj3Ue5zug; prior61828661 remains rollback. Backend lineage is unchanged.
+
+A new named isolated empty test workspace returned HTTP200 lists. Real browser measurements pass320/390/768/1440 with no horizontal overflow, non-breaking narrow labels and>=44px visible main controls. Filter pressed state, refresh and explicit light/dark behavior pass. Resource and timeout diagnostics are retained without asserting a leak or causal attribution. No other task process was terminated and no native test was launched. Earlier pending-permission and undelivered-CSS checkpoints are historical. The monitor delivery milestone is complete; model metadata use and source deletion latency remain unmet wider experience requirements.
+
+Final cleanup: replacement run9809ddf2 is deleted with cleanup_error null by separate status readback. All owned browsers are closed; registered temporary artifact removal is confirmed. Ten obsolete8b dependency trees removed after zero-open-handle inspection and99 parent symlink replacements. Sources, formal evidence and rollback remain. Documentation and architecture checks pass. Free disk36.65GiB after cleanup.
