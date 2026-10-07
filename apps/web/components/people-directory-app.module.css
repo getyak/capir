@@ -116,6 +116,13 @@
   color: var(--muted);
 }
 
+/* The committed-filter action owns clearing here; retain native draft clearing
+ * before submission rather than presenting two different X actions together. */
+.search[data-filter-active] input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .tableHeader {
   border-bottom: 1px solid var(--line-soft);
   color: var(--muted);

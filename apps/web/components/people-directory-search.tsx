@@ -24,7 +24,7 @@ export function PeopleDirectorySearch({ query, returnSessionId }: {
   }, [query]);
 
   return (
-    <Form action="/workspace/people" className={styles.search} scroll={false}>
+    <Form action="/workspace/people" className={styles.search} data-filter-active={query ? true : undefined} scroll={false}>
       <MagnifyingGlass aria-hidden="true" size={20} />
       <input
         ref={input}
