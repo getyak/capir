@@ -30,7 +30,8 @@
 }
 
 /* Creation owns one form; the page scrolls without a competing composer. */
-.desk:global(.relationship-desk) :global(.context-chat--standalone)[data-creating] :global(.context-agent-thread) {
+.desk:global(.relationship-desk) :global(.context-chat--standalone)[data-creating] :global(.context-agent-thread),
+.desk:global(.relationship-desk) :global(.context-chat--standalone)[data-creating] :global(.context-agent-create) {
   max-height: none;
   overflow: visible;
 }
