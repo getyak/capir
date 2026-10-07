@@ -318,7 +318,63 @@ This page is the single home for capir test-account provisioning and test
 commands. `capir help test create` is the offline entry point and
 [the CLI reference](capir-cli.md) documents the full command surface.
 
-Provisioning prerequisite: an authorized installation provides one
+The default personal flow is browser-owned CLI authorization:
+
+```bash
+capir auth login --env staging       # reuses a live credential, otherwise browser consent
+capir auth status --env staging      # read-only; never refreshes
+capir test create --env staging --preset daily --open web
+capir auth logout --env staging      # revokes this grant and its derived entries
+```
+
+Consent shows the primary account, CLI label, exact environment and scopes.
+Login uses S256 PKCE and a literal ephemeral `127.0.0.1` callback. The browser
+session and CLI grant are independent: browser sign-out does not sign out the
+CLI. Manage the current account's CLI grants at **Settings → Account → CLI
+authorizations** (`/workspace/settings/cli`). Test identities cannot authorize a
+CLI or manage a real account's grants.
+
+A successful `capir-auth.v2` login stores one versioned record in the OS keyring
+(service `talent-signal.capir`, account `capir:<backend-origin>|<web-origin>`).
+It includes origin pair, grant/scope/expiry, access and refresh credentials and
+last verified identity. There is no plaintext fallback. Access lasts 15 minutes,
+refresh idle lasts 7 days, absolute grant life is 30 days, and the one-use code
+lasts 60 seconds by default; discovery reports server-configured lifetimes.
+Ordinary authorized commands refresh when necessary. Refresh rotation cannot
+widen authority. A durable keyring intent is written before refresh dispatch;
+a lost response or interrupted rotation requires deliberate logout and re-login
+instead of replaying a possibly consumed token. The server retains consumed
+refresh hashes and revokes the whole family if one is replayed.
+
+Status distinguishes missing, active, expired, revoked and unverified. During a
+transport failure cached identity is explicitly **last verified**, never current.
+Logout can prove the grant with refresh material after access expiry, without
+rotating first; an uncertain revoke preserves the exact record for retry and
+cannot erase a newer login. `CAPIR_TOKEN` is ephemeral: it is never persisted,
+refreshed, combined with another identity or deleted by local logout.
+
+Personal test access is **deny by default**, including administrators. A server
+operator explicitly grants the identified real account/user access through
+`apps/backend/src/database/manageCapirTestEntitlement.ts grant|revoke
+<account-uuid> <user-uuid> <operator-provenance>` using the existing authorized
+backend DB environment. The command prints a nonsecret registry receipt. Every
+registry change increments its generation; regrant never revives old entries.
+After a new grant, re-login to consent to the newly available test scopes.
+Creation and entry admission recheck live grant, backing session, user,
+entitlement generation/scope and serving origins through transaction commit.
+New logins can manage their user's prior runs, while each entry remains tied to
+the grant that authorized it. Revoking that grant disables its entries; it does
+not automatically delete the run's audit record. Stop owned runs for cleanup.
+
+Authentication independently requires `CAPIR_AUTH_ENABLED=true` and exact
+`CAPIR_AUTH_WEB_ORIGIN` / `CAPIR_AUTH_BACKEND_ORIGIN` on the backend. Configure
+the same public origin pair on Web. Operator test provisioning remains separately
+gated. `--server` takes priority over `CAPIR_SERVER`, then the selected environment;
+it must match the already registered pair in `environments.json` before any
+keyring read or dispatch. Discovery adds no trust. Optional device-code login is
+explicitly unsupported.
+
+The dedicated operator flow remains available. Provisioning prerequisite: an authorized installation provides one
 origin-bound operator credential in the dedicated OS keyring entry (service
 `talent-signal.capir-test-operator`, account
 `capir-test-operator:<backend-origin>|<web-origin>`) or as the ephemeral
@@ -358,9 +414,9 @@ Passwords, tokens and handoff secrets never enter journals, errors, receipts
 or URLs. Retain sanitized evidence only, then stop the run.
 
 The capir backend, registered origins and the server-only Web consumer key
-must be deployed for that exact environment. Legacy `capir auth`/
-`capir sandbox` surfaces keep their own strict-replay semantics and are
-discoverable as unsupported where the server does not implement them; an
+must be deployed for that exact environment. Legacy `capir.v1` records retain
+`refresh_supported=false`; `capir sandbox` remains discoverable as unsupported
+where the server does not implement it; an
 authenticated Web proof does not establish native macOS login acceptance.
 
 ## Internal test workspaces

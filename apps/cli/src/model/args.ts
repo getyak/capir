@@ -9,9 +9,9 @@ const SETS: Record<string, string[]> = {
 const BOOL = new Set(['no-stream', 'human', 'stdin', 'json', 'help', 'remote', 'stream-usage', 'replace', 'default']);
 export function parseModelArgs(argv: string[]): ModelArgs | null {
   let args = argv[0] === '--' ? argv.slice(1) : argv.slice();
-  if (args[0]?.startsWith('--') && !['--env', '--version', '--help'].includes(args[0])) {
+  if (args[0]?.startsWith('--') && !['--env', '--server', '--version', '--help'].includes(args[0])) {
     let index = 0;
-    const valueFlags = new Set(Object.values(SETS).flat().filter(flag => !BOOL.has(flag)));
+    const valueFlags = new Set([...Object.values(SETS).flat().filter(flag => !BOOL.has(flag)), 'env', 'server', 'client-label']);
     while (args[index]?.startsWith('-') && args[index] !== '--') {
       const flag = args[index]!.slice(2);
       index += valueFlags.has(flag) ? 2 : 1;
@@ -30,7 +30,7 @@ export function parseModelArgs(argv: string[]): ModelArgs | null {
   const first = args[0];
   if (first === undefined)
     return { command: 'auto', positionals: [], values: {}, flags: new Set() };
-  if (['auth', 'sandbox', 'help', 'test', '--version', '--help', '-h', '--env'].includes(first))
+  if (['auth', 'sandbox', 'help', 'test', '--version', '--help', '-h', '--env', '--server'].includes(first))
     return null;
   let command: string;
   let tokens: string[];

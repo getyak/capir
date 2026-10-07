@@ -29,6 +29,24 @@ export interface BackendConfig {
     webConsumerKey?: string;
     maxActiveRuns: number;
   } | undefined;
+  /**
+   * Browser-owned CLI authorization (`capir-auth.v2`). Disabled by default and
+   * enabled only through the explicit CAPIR_AUTH_ENABLED gate together with an
+   * exact configured backend/Web origin pair. Discovery never adds trust.
+   */
+  capirAuth?: {
+    enabled: boolean;
+    webOrigin: string;
+    backendOrigin: string;
+    /** One-use authorization-code lifetime (seconds). */
+    codeTtlSeconds: number;
+    /** Opaque access-token lifetime (seconds). */
+    accessTtlSeconds: number;
+    /** Rotating refresh idle deadline (seconds). */
+    refreshIdleTtlSeconds: number;
+    /** Rotating refresh absolute deadline (seconds). */
+    refreshAbsoluteTtlSeconds: number;
+  } | undefined;
   /** Server-side mail transport for account verification (Resend). */
   mailTransport?: { apiKey: string; fromEmail: string };
   /** Base URL used to build email verification links (Web origin). */
@@ -235,6 +253,60 @@ export function loadConfig(): BackendConfig {
     );
   }
 
+  const capirAuthEnabled = parseBoolean(process.env.CAPIR_AUTH_ENABLED, false);
+  const capirAuthWebOrigin = process.env.CAPIR_AUTH_WEB_ORIGIN?.trim();
+  const capirAuthBackendOrigin = process.env.CAPIR_AUTH_BACKEND_ORIGIN?.trim();
+  const capirAuthCodeTtlSeconds = Number(
+    process.env.CAPIR_AUTH_CODE_TTL_SECONDS ?? "60"
+  );
+  const capirAuthAccessTtlSeconds = Number(
+    process.env.CAPIR_AUTH_ACCESS_TTL_SECONDS ?? "900"
+  );
+  const capirAuthRefreshIdleTtlSeconds = Number(
+    process.env.CAPIR_AUTH_REFRESH_IDLE_TTL_SECONDS ?? "604800"
+  );
+  const capirAuthRefreshAbsoluteTtlSeconds = Number(
+    process.env.CAPIR_AUTH_REFRESH_ABSOLUTE_TTL_SECONDS ?? "2592000"
+  );
+  if (
+    !Number.isInteger(capirAuthCodeTtlSeconds) || capirAuthCodeTtlSeconds < 30 || capirAuthCodeTtlSeconds > 300
+  ) {
+    throw new Error("CAPIR_AUTH_CODE_TTL_SECONDS must be an integer between 30 and 300.");
+  }
+  if (
+    !Number.isInteger(capirAuthAccessTtlSeconds) || capirAuthAccessTtlSeconds < 60 || capirAuthAccessTtlSeconds > 3600
+  ) {
+    throw new Error("CAPIR_AUTH_ACCESS_TTL_SECONDS must be an integer between 60 and 3600.");
+  }
+  if (
+    !Number.isInteger(capirAuthRefreshIdleTtlSeconds) || capirAuthRefreshIdleTtlSeconds < 600
+  ) {
+    throw new Error("CAPIR_AUTH_REFRESH_IDLE_TTL_SECONDS must be an integer of at least 600.");
+  }
+  if (
+    !Number.isInteger(capirAuthRefreshAbsoluteTtlSeconds) ||
+    capirAuthRefreshAbsoluteTtlSeconds < capirAuthRefreshIdleTtlSeconds
+  ) {
+    throw new Error(
+      "CAPIR_AUTH_REFRESH_ABSOLUTE_TTL_SECONDS must be an integer at least as large as the idle lifetime.",
+    );
+  }
+  if (capirAuthEnabled && (!capirAuthWebOrigin || !capirAuthBackendOrigin)) {
+    throw new Error(
+      "CAPIR_AUTH_ENABLED requires CAPIR_AUTH_WEB_ORIGIN and CAPIR_AUTH_BACKEND_ORIGIN.",
+    );
+  }
+  for (const [label, value] of [
+    ["CAPIR_AUTH_WEB_ORIGIN", capirAuthWebOrigin],
+    ["CAPIR_AUTH_BACKEND_ORIGIN", capirAuthBackendOrigin],
+  ] as const) {
+    if (value) {
+      const url=new URL(value);
+      if (url.origin!==value || url.username || url.password || (url.protocol!=='https:' && !(url.protocol==='http:' && url.hostname==='127.0.0.1')))
+        throw new Error(`${label} must be an exact HTTPS origin (literal loopback may use HTTP).`);
+    }
+  }
+
   return {
     allowedOrigins: (
       process.env.ALLOWED_ORIGINS ??
@@ -276,6 +348,19 @@ export function loadConfig(): BackendConfig {
         }
       : undefined,
     chatMediaStorage,
+    ...(capirAuthEnabled
+      ? {
+          capirAuth: {
+            enabled: true,
+            webOrigin: capirAuthWebOrigin!,
+            backendOrigin: capirAuthBackendOrigin!,
+            codeTtlSeconds: capirAuthCodeTtlSeconds,
+            accessTtlSeconds: capirAuthAccessTtlSeconds,
+            refreshIdleTtlSeconds: capirAuthRefreshIdleTtlSeconds,
+            refreshAbsoluteTtlSeconds: capirAuthRefreshAbsoluteTtlSeconds,
+          },
+        }
+      : {}),
     ...(mailTransport ? { mailTransport } : {}),
     ...(verificationBaseUrl ? { verificationBaseUrl } : {}),
     ...(tls ? { tls } : {}),
