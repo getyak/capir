@@ -14,6 +14,53 @@ const policy: RuntimeObservationPolicy = {
   authorization_scopes: ["relationship_text", "workspace_conversation"], retention_days: 1, max_content_bytes: 1024 * 1024,
 };
 const context = { run_id: "run-test", workspace_id: "workspace-test", authorization_scope: "relationship_text", source_refs: { kind: "synthetic" as const } };
+const projectID = "10000000-0000-4000-8000-000000000042";
+// A realistic Opik 2.2.45 deletion surface: paged partial project search, the
+// project-scoped batch trace delete, and an asynchronous child cascade. The
+// unimplemented (501) individual span delete is present and must never be used.
+function opikDeleteAPI(options: { projects?: Array<{ id: string; name: string }>; cascadeAfterReads?: number;
+  leaveSpan?: string; traceAbsent?: boolean; failDelete?: boolean } = {}) {
+  const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+  let deletedAtReads: number | null = null;
+  let reads = 0;
+  const cascadeVisible = () => deletedAtReads !== null && reads >= deletedAtReads + (options.cascadeAfterReads ?? 0);
+  const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+    const target = String(url);
+    const path = target.split("/v1/private/").at(-1)!;
+    const method = init?.method ?? "GET";
+    requests.push({ method, path, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+    if (path.startsWith("projects?")) {
+      const query = new URL(target).searchParams;
+      const name = query.get("name") ?? "";
+      const page = Number(query.get("page")), size = Number(query.get("size"));
+      const content = (options.projects ?? []).filter((item) => item.name.toLowerCase().includes(name.toLowerCase()))
+        .map((item) => ({ id: item.id, name: item.name, description: null, created_at: "2026-01-01T00:00:00.000Z",
+          created_by: "synthetic@example.test", last_updated_at: "2026-01-01T00:00:00.000Z",
+          last_updated_by: "synthetic@example.test", visibility: "private" }))
+        .slice((page - 1) * size, page * size);
+      return Response.json({ page, size, total: (options.projects ?? []).length, content });
+    }
+    if (path === "traces/delete" && method === "POST") {
+      if (options.failDelete) return new Response(null, { status: 503 });
+      if (deletedAtReads === null) deletedAtReads = reads;
+      return new Response(null, { status: 204 });
+    }
+    if (method === "GET" && path.startsWith("traces/")) {
+      reads++;
+      return options.traceAbsent || cascadeVisible() ? new Response(null, { status: 404 })
+        : Response.json({ id: path.slice("traces/".length) });
+    }
+    if (method === "GET" && path.startsWith("spans/")) {
+      reads++;
+      const id = path.slice("spans/".length);
+      return !cascadeVisible() || id === options.leaveSpan ? Response.json({ id, trace_id: "synthetic-trace" })
+        : new Response(null, { status: 404 });
+    }
+    if (method === "DELETE" && path.startsWith("spans/")) return new Response(null, { status: 501 });
+    return new Response(null, { status: 500 });
+  }) as typeof fetch;
+  return { fetcher, requests };
+}
 async function observation(): Promise<RuntimeObservation> {
   let value: RuntimeObservation | undefined;
   const session = new RuntimeObservationSession(policy, context, { objective: "synthetic input" }, { enqueue: async (result) => { value = result; } });
@@ -247,11 +294,15 @@ describe("private runtime observation", () => {
     const retain = vi.fn().mockResolvedValue(undefined);
     const { root, outbox } = await setup({ retain, remove }); const value = await observation();
     await outbox.enqueue(value); await outbox.flush(); await outbox.deleteRun(context);
-    expect((await outbox.status()).deletion_pending).toBe(1);
+    const scheduled = (await outbox.status()).receipts[0]!;
+    expect(scheduled.state).toBe("deletion_pending"); expect(scheduled.retry_after).not.toBeNull();
     const disk = await readFile(join(root, `${value.id}.json`), "utf8");
     expect(disk).not.toContain("synthetic message");
     await expect(outbox.enqueue(value)).rejects.toThrow("DELETED");
-    await outbox.flush(); const receipt = (await outbox.status()).receipts[0]!;
+    // The failed delete waits for its persisted retry schedule instead of the
+    // next flush tick, then recovers at the scheduled instant.
+    await outbox.flush(); expect(remove).toHaveBeenCalledTimes(1);
+    await outbox.flush(Date.parse(scheduled.retry_after!)); const receipt = (await outbox.status()).receipts[0]!;
     expect(receipt.state).toBe("deleted"); expect(receipt.deleted_span_ids).toHaveLength(value.spans.length);
     expect(receipt.retained_span_ids).toEqual([]); expect(retain).toHaveBeenCalledTimes(1);
     const resumed = new RuntimeObservationOutbox(root, policy, { retain, remove });
@@ -278,6 +329,12 @@ describe("private runtime observation", () => {
     const value = await observation(); await outbox.enqueue(value);
     await outbox.flush(Date.parse(value.retention_expires_at) + 1);
     expect((await outbox.status()).deleted).toBe(1); expect(remove).toHaveBeenCalledOnce();
+    // Expiry-driven deletion reaches the same durable terminal semantics.
+    const receipt = (await outbox.status()).receipts[0]!;
+    await outbox.flush(Date.parse(value.retention_expires_at) + 2);
+    await outbox.deleteRun(context);
+    expect(JSON.stringify((await outbox.status()).receipts[0]!)).toBe(JSON.stringify(receipt));
+    expect(remove).toHaveBeenCalledOnce();
   });
   it("never reroutes an old outbox to a different private target", async () => {
     const { root, outbox } = await setup(); const value = await observation(); await outbox.enqueue(value);
@@ -291,7 +348,7 @@ describe("private runtime observation", () => {
     try {
       await outbox.enqueue(value);await outbox.flush();await outbox.deleteRun(context);
       const expanded=new RuntimeObservationOutbox(root,{...policy,source_workspace_ids:[...policy.source_workspace_ids,"new-account"]},{retain,remove});
-      await expanded.flush();
+      await expanded.flush(Date.parse((await outbox.status()).receipts[0]!.retry_after!));
       expect((await expanded.status()).deleted).toBe(1);
       await expanded.deleteRun(context);await expanded.flush();
       expect(retain).toHaveBeenCalledOnce();
@@ -341,26 +398,244 @@ describe("private runtime observation", () => {
     await expect(new PrivateOpikRuntimeTransport(policy, undefined, corrupted).retain(value)).rejects.toThrow("READBACK_MISMATCH");
     const root = stored.get(value.spans[0]!.id)!; expect(root.usage).toBeUndefined();
   });
-  it("verifies trace deletion cascades to every known child without using unsupported span deletion", async () => {
-    const value = await observation(); let traceDeleted = false, leaveChild = false;
-    const requests: Array<{ url: string; method: string | undefined }> = [];
-    const fetcher = vi.fn(async (url, init) => {
-      requests.push({ url: String(url), method: init?.method });
-      if (init?.method === "DELETE") {
-        if (String(url).includes("/spans/")) return new Response(null, { status: 501 });
-        traceDeleted = true; return new Response(null, { status: 204 });
-      }
-      if (leaveChild && String(url).includes("/spans/")) return Response.json({ id: value.spans[0]!.id });
-      return traceDeleted ? new Response(null, { status: 404 }) : Response.json({ id: value.id });
-    }) as typeof fetch;
+  it("keeps completed deletion terminal across repeated flush, deletion and reload", async () => {
+    const retain = vi.fn(), remove = vi.fn();
+    const { root, outbox } = await setup({ retain, remove });
+    const value = await observation(); await outbox.enqueue(value); await outbox.flush();
+    await outbox.deleteRun(context);
+    const receipt = (await outbox.status()).receipts[0]!;
+    expect(receipt.state).toBe("deleted"); expect(receipt.retry_streak).toBe(0); expect(receipt.retry_after).toBeNull();
+    await outbox.flush(); await outbox.flush();
+    await outbox.deleteRun(context); await outbox.deleteRun(context, true);
+    // The receipt and its historical attempts survive byte-identical.
+    expect(JSON.stringify((await outbox.status()).receipts[0]!)).toBe(JSON.stringify(receipt));
+    expect(retain).toHaveBeenCalledTimes(1); expect(remove).toHaveBeenCalledTimes(1);
+    const reloaded = new RuntimeObservationOutbox(root, policy, { retain: vi.fn(), remove: vi.fn() });
+    await reloaded.flush(); await reloaded.deleteRun(context); await reloaded.flush();
+    expect(JSON.stringify((await reloaded.status()).receipts[0]!)).toBe(JSON.stringify(receipt));
+    // The tombstone still blocks every late attempt and resume.
+    await expect(reloaded.enqueue(await observation())).rejects.toThrow("DELETED");
+  });
+  it("acquires a terminal receipt for orphan tombstones without entries", async () => {
+    const remove = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+    const { root, outbox } = await setup({ retain: async () => {}, remove });
+    const value = await observation(); await outbox.enqueue(value); await outbox.flush();
+    await outbox.deleteRun(context, true);
+    // A crash between the tombstone and receipt writes leaves an orphan tombstone.
+    await fs.unlink(join(root, `${value.id}.json`));
+    expect((await outbox.status()).receipts).toEqual([]);
+    await outbox.flush();
+    const waiting = (await outbox.status()).receipts[0]!;
+    expect(waiting.state).toBe("deletion_pending"); expect(waiting.retry_after).not.toBeNull();
+    await outbox.flush(); expect(remove).toHaveBeenCalledTimes(1);
+    await outbox.flush(Date.parse(waiting.retry_after!));
+    const done = (await outbox.status()).receipts[0]!;
+    expect(done.state).toBe("deleted"); expect(done.deleted_span_ids).toEqual(value.spans.map((span) => span.id));
+    expect(done.retry_streak).toBe(0); expect(done.retry_after).toBeNull();
+    await outbox.flush(); expect(remove).toHaveBeenCalledTimes(2);
+  });
+  it("migrates pre-scheduling receipts and keeps historical attempts out of the retry delay", async () => {
+    const remove = vi.fn();
+    const { root, outbox } = await setup({ retain: async () => {}, remove });
+    const value = await observation(); await outbox.enqueue(value); await outbox.flush();
+    await outbox.deleteRun(context, true);
+    const path = join(root, `${value.id}.json`);
+    const legacy = JSON.parse(await readFile(path, "utf8")) as { receipt: Record<string, unknown> };
+    delete legacy.receipt.retry_streak; delete legacy.receipt.retry_after;
+    legacy.receipt.attempts = 103_000;
+    await writeFile(path, JSON.stringify(legacy));
+    const now = Date.now() + 60_000;
+    remove.mockRejectedValueOnce(new Error("offline"));
+    await outbox.flush(now);
+    const failed = (await outbox.status()).receipts[0]!;
+    expect(failed.state).toBe("deletion_pending"); expect(failed.attempts).toBe(103_001);
+    // The fresh retry streak, not the 103k historical attempts, drives the delay.
+    expect(failed.retry_streak).toBe(1);
+    expect(failed.retry_after).toBe(new Date(now + 5_000).toISOString());
+    remove.mockResolvedValue(undefined);
+    await outbox.flush(now + 4_999); expect(remove).toHaveBeenCalledTimes(1);
+    await outbox.flush(now + 5_000);
+    const done = (await outbox.status()).receipts[0]!;
+    expect(done.state).toBe("deleted"); expect(done.attempts).toBe(103_002);
+    expect(done.retry_streak).toBe(0); expect(done.retry_after).toBeNull();
+  });
+  it("backs off failed deletions by retry streak with a bounded persisted schedule", async () => {
+    const remove = vi.fn();
+    const { root, outbox } = await setup({ retain: async () => {}, remove });
+    const value = await observation(); await outbox.enqueue(value); await outbox.flush();
+    await outbox.deleteRun(context, true);
+    const path = join(root, `${value.id}.json`);
+    const t0 = Date.now() + 60_000;
+    remove.mockRejectedValue(new Error("offline"));
+    await outbox.flush(t0);
+    expect((await outbox.status()).receipts[0]!.retry_after).toBe(new Date(t0 + 5_000).toISOString());
+    await outbox.flush(t0 + 5_000);
+    expect((await outbox.status()).receipts[0]!.retry_after).toBe(new Date(t0 + 15_000).toISOString());
+    expect(remove).toHaveBeenCalledTimes(2);
+    // Even a runaway streak can only ever wait the bounded ceiling.
+    const long = JSON.parse(await readFile(path, "utf8")) as { receipt: Record<string, unknown> };
+    long.receipt.retry_streak = 1_000_000;
+    await writeFile(path, JSON.stringify(long));
+    await outbox.flush(t0 + 15_000);
+    expect((await outbox.status()).receipts[0]!.retry_after).toBe(new Date(t0 + 315_000).toISOString());
+    expect(remove).toHaveBeenCalledTimes(3);
+    // Recovery clears the schedule; the terminal receipt then costs zero transport.
+    remove.mockResolvedValue(undefined);
+    await outbox.flush(t0 + 315_000);
+    const done = (await outbox.status()).receipts[0]!;
+    expect(done.state).toBe("deleted"); expect(done.retry_streak).toBe(0); expect(done.retry_after).toBeNull();
+    await outbox.flush(t0 + 2_000_000);
+    expect(remove).toHaveBeenCalledTimes(4);
+  });
+  it("reopens a completed deletion only for genuinely new known spans", async () => {
+    const remove = vi.fn(); const { root, outbox } = await setup({ retain: async () => {}, remove });
+    const value = await observation(); await outbox.enqueue(value); await outbox.flush();
+    await outbox.deleteRun(context);
+    expect(remove).toHaveBeenCalledTimes(1);
+    // Without new known spans the completed deletion never reopens.
+    await outbox.deleteRun(context); await outbox.flush();
+    expect((await outbox.status()).receipts[0]!.state).toBe("deleted");
+    expect(remove).toHaveBeenCalledTimes(1);
+    // Recovered or legacy state can surface a genuinely new recorded child.
+    const tombstonePath = join(root, `${value.id}.json.tombstone`);
+    const tombstone = JSON.parse(await readFile(tombstonePath, "utf8")) as { span_ids: string[] };
+    tombstone.span_ids.push(observationID("recovered child span"));
+    await writeFile(tombstonePath, JSON.stringify(tombstone));
+    await outbox.deleteRun(context, true);
+    expect((await outbox.status()).receipts[0]!.state).toBe("deletion_pending");
+    await outbox.flush();
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(remove.mock.calls[1]?.[1]).toEqual(tombstone.span_ids);
+    const done = (await outbox.status()).receipts[0]!;
+    expect(done.state).toBe("deleted"); expect(done.deleted_span_ids).toEqual(tombstone.span_ids);
+    await outbox.deleteRun(context); await outbox.flush();
+    expect(remove).toHaveBeenCalledTimes(2);
+  });
+  it("never steals a same-namespace lock on age alone", async () => {
+    const { root, outbox } = await setup(); const value = await observation(); await outbox.enqueue(value);
+    await writeFile(join(root, `${value.id}.json.lock`), JSON.stringify({ pid: process.pid, namespace: hostname(),
+      created_at: "2020-01-01T00:00:00.000Z" }));
+    await outbox.flush();
+    expect((await outbox.status()).spooled).toBe(1);
+    expect((await outbox.status()).retained).toBe(0);
+  });
+  it("deletes through the exact project-scoped batch delete and verifies every recorded child", async () => {
+    const value = await observation();
+    const { fetcher, requests } = opikDeleteAPI({ projects: [
+      { id: projectID, name: policy.project },
+      { id: "20000000-0000-4000-8000-000000000043", name: `${policy.project}-child` },
+      { id: "20000000-0000-4000-8000-000000000044", name: `prefix-${policy.project}` }] });
     const transport = new PrivateOpikRuntimeTransport(policy, undefined, fetcher);
     await transport.remove(value.id, value.spans.map((span) => span.id));
-    expect(requests.some(({ url, method }) => url.includes("/spans/") && method === "DELETE")).toBe(false);
-    leaveChild = true;
-    await expect(transport.remove(value.id, value.spans.map((span) => span.id))).rejects.toThrow("DELETE_UNVERIFIED");
+    // Exactly one batch delete against the exact name's UUID: the partial name
+    // homonyms are never selected, and the unsupported span delete is unused.
+    expect(requests.filter(({ method }) => method === "POST")).toEqual([
+      { method: "POST", path: "traces/delete", body: { ids: [value.id], project_id: projectID } }]);
+    expect(requests.some(({ method }) => method === "DELETE")).toBe(false);
+    const reads = requests.filter(({ method }) => method === "GET").map(({ path }) => path);
+    expect(reads[0]).toBe(`projects?name=${encodeURIComponent(policy.project)}&page=1&size=100`);
+    expect(reads).toContain(`traces/${value.id}`);
+    for (const span of value.spans) expect(reads).toContain(`spans/${span.id}`);
+  });
+  it("removes orphan children through the project cascade an individual delete would skip", async () => {
+    const value = await observation();
+    const { fetcher, requests } = opikDeleteAPI({ projects: [{ id: projectID, name: policy.project }],
+      traceAbsent: true, cascadeAfterReads: 1 });
+    const transport = new PrivateOpikRuntimeTransport(policy, undefined, fetcher);
+    await transport.remove(value.id, value.spans.map((span) => span.id));
+    // The batch delete keeps its explicit project even with the trace already
+    // absent, so the unconditional TracesDeleted cascade reaches orphan children.
+    expect(requests.find(({ path }) => path === "traces/delete")?.body).toEqual({ ids: [value.id], project_id: projectID });
+    expect(requests.some(({ method }) => method === "DELETE")).toBe(false);
+  });
+  it("fails closed on missing, ambiguous or malformed project identity before any batch delete", async () => {
+    const value = await observation(); const spanIDs = value.spans.map((span) => span.id);
+    const paginated = Array.from({ length: 1050 }, (_, index) => ({
+      id: `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      name: index === 0 ? policy.project : `${policy.project}-${index}` }));
+    for (const projects of [
+      [{ id: projectID, name: `${policy.project}-child` }],
+      [{ id: projectID, name: policy.project }, { id: "20000000-0000-4000-8000-000000000043", name: policy.project }],
+      [{ id: "not-a-uuid", name: policy.project }],
+      // Bounded pagination cannot prove a single exact name across 10 full pages.
+      paginated,
+    ]) {
+      const { fetcher, requests } = opikDeleteAPI({ projects });
+      const transport = new PrivateOpikRuntimeTransport(policy, undefined, fetcher);
+      await expect(transport.remove(value.id, spanIDs)).rejects.toThrow("OPIK_RUNTIME_PROJECT_UNRESOLVED");
+      expect(requests.some(({ path }) => path === "traces/delete")).toBe(false);
+    }
+  });
+  it("keeps unverified, orphaned and unknown deletion results pending", async () => {
+    const value = await observation(); const spanIDs = value.spans.map((span) => span.id);
+    // The cascade is asynchronous: a still visible trace stays unverified until
+    // a later read proves the absence, and nothing is guessed as deleted.
+    const eventual = opikDeleteAPI({ projects: [{ id: projectID, name: policy.project }], cascadeAfterReads: 2 });
+    const transport = new PrivateOpikRuntimeTransport(policy, undefined, eventual.fetcher);
+    await expect(transport.remove(value.id, spanIDs)).rejects.toThrow("DELETE_UNVERIFIED");
+    await expect(transport.remove(value.id, spanIDs)).resolves.toBeUndefined();
+    // A child that never cascades keeps the whole deletion unverified.
+    const orphan = opikDeleteAPI({ projects: [{ id: projectID, name: policy.project }], leaveSpan: spanIDs[1]! });
+    await expect(new PrivateOpikRuntimeTransport(policy, undefined, orphan.fetcher).remove(value.id, spanIDs)).rejects.toThrow("DELETE_UNVERIFIED");
+    // Remote failures stay unknown and pending; none of them reads back absent.
+    const refused = opikDeleteAPI({ projects: [{ id: projectID, name: policy.project }], failDelete: true });
+    await expect(new PrivateOpikRuntimeTransport(policy, undefined, refused.fetcher).remove(value.id, spanIDs)).rejects.toThrow("OPIK_RUNTIME_HTTP_503");
+    const dead = (async () => { throw new Error("network down"); }) as typeof fetch;
+    await expect(new PrivateOpikRuntimeTransport(policy, undefined, dead).remove(value.id, spanIDs)).rejects.toThrow("network down");
   });
 });
 
+
+it.each(["traces/", "spans/"].flatMap(target => ["malformed", "null", "empty"].map(kind => ({ target, kind }))))(
+  "keeps $target $kind readbacks pending instead of declaring remote evidence deleted", async ({ target, kind }) => {
+    const value = await observation();
+    const api = opikDeleteAPI({ projects: [{ id: projectID, name: policy.project }] });
+    const fetcher = vi.fn(async (url, init) => {
+      if (init?.method === "GET" && String(url).includes(`/v1/private/${target}`)) {
+        if (kind === "malformed") return new Response("upstream response truncated", { status: 200 });
+        if (kind === "null") return Response.json(null);
+        return new Response(null, { status: 204 });
+      }
+      return api.fetcher(url, init);
+    }) as typeof fetch;
+    const transport = new PrivateOpikRuntimeTransport(policy, undefined, fetcher);
+    const { root, outbox } = await setup({ retain: async () => {}, remove: (...args) => transport.remove(...args) });
+    try {
+      await outbox.enqueue(value); await outbox.flush(); await outbox.deleteRun(context);
+      const failed = (await outbox.status()).receipts[0]!;
+      expect(failed.state).toBe("deletion_pending");
+      expect(failed.error_code).toBe("OPIK_RUNTIME_DELETE_RETRY_REQUIRED");
+      expect(failed.deleted_span_ids).toEqual([]);
+      const count = vi.mocked(fetcher).mock.calls.length;
+      await outbox.flush();
+      expect(vi.mocked(fetcher).mock.calls).toHaveLength(count);
+      expect((await outbox.status()).receipts[0]!.attempts).toBe(failed.attempts);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
+it("waits the full retry delay after a slow failure, including after reload", async () => {
+  const remove = vi.fn();
+  const { root, outbox } = await setup({ retain: async () => {}, remove });
+  const value = await observation(); await outbox.enqueue(value); await outbox.flush();
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  remove.mockImplementationOnce(async () => {
+    clock.mockReturnValue(now + 10_000);
+    throw new Error("synthetic timeout");
+  }).mockResolvedValue(undefined);
+  try {
+    await outbox.deleteRun(context, true); await outbox.flush(now);
+    const failed = (await outbox.status()).receipts[0]!;
+    expect(failed.retry_after).toBe(new Date(now + 15_000).toISOString());
+    const reloaded = new RuntimeObservationOutbox(root, policy, { retain: async () => {}, remove });
+    await reloaded.flush(); await reloaded.flush(now + 14_999);
+    expect(remove).toHaveBeenCalledOnce();
+    expect((await reloaded.status()).receipts[0]!.attempts).toBe(failed.attempts);
+    await reloaded.flush(now + 15_000);
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect((await reloaded.status()).receipts[0]!.state).toBe("deleted");
+  } finally { clock.mockRestore(); await fs.rm(root, { recursive: true, force: true }); }
+});
 
 it("accounts repeated SDK messages once, distinguishes tool rejection and never invents model request timing", async () => {
   let retained: RuntimeObservation | undefined;
