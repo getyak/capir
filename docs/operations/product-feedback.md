@@ -205,6 +205,17 @@ must return GET 404 before the receipt becomes `deleted`. A missing, ambiguous
 or unresolvable project fails closed, and unknown remote results are never
 reported as deleted.
 
+For incident readback, inspect each governed outbox root, including the
+`deployment-probes` child directory. Product-run projection derives exactly
+`<runtime-project>-product-runs` while keeping the same endpoint and workspace;
+verify each receipt at its frozen target rather than retargeting it to the base
+project. Require nonempty receipt/trace cohorts and HTTP 404 for all recorded
+traces and spans, discarding response bodies. Compare a fixed terminal cohort's
+attempt counts and update times across at least two background intervals;
+legitimate newly completed deletions must not be confused with churn in the
+existing cohort. Endpoint health and a partial-project audit do not prove
+complete deletion.
+
 Exporter locks never move across process namespaces and never expire by age
 alone: a namespace mismatch is not proof of death, and a foreign or unproven
 owner is left in place even when it looks stale. Recovering proven dead
