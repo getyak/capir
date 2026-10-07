@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
 import { describe, expect, it } from "vitest";
 import { PeopleDirectoryApp } from "./people-directory-app";
+import { PeopleDirectorySearch } from "./people-directory-search";
 
 const person: PersonDirectoryItem = {
   id: "person-a", display_label: "林知遥", context_count: 1,
@@ -14,6 +15,15 @@ const person: PersonDirectoryItem = {
 const props = { error: null, people: [], query: "", returnSessionId: null, sessionRecoveryHref: null };
 
 describe("people directory states", () => {
+  it("clears a committed filter without dropping the originating conversation", () => {
+    const filtered = renderToStaticMarkup(createElement(PeopleDirectorySearch, { query: "林", returnSessionId: "session-a" }));
+    expect(filtered).toContain('aria-label="清除人物搜索"');
+    expect(filtered).toContain('href="/workspace/people?session=session-a"');
+    expect(filtered).toContain('name="session"');
+    expect(filtered).toContain('value="session-a"');
+    const unfiltered = renderToStaticMarkup(createElement(PeopleDirectorySearch, { query: "", returnSessionId: "session-a" }));
+    expect(unfiltered).not.toContain('aria-label="清除人物搜索"');
+  });
   it("distinguishes unavailable data from an empty directory", () => {
     const unavailable = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, error: "暂时无法连接" }));
     expect(unavailable).toContain("暂不可用");

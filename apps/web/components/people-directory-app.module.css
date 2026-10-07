@@ -394,7 +394,8 @@
   outline-offset: 2px;
 }
 
-.search button {
+.search button,
+.search .clearSearch {
   align-items: center;
   background: transparent;
   border: 0;
@@ -404,23 +405,26 @@
   display: inline-flex;
   flex: 0 0 auto;
   justify-content: center;
-  min-height: 32px;
-  min-width: 32px;
+  min-height: 44px;
+  min-width: 44px;
 }
 
-.search button:hover {
+.search button:hover,
+.search .clearSearch:hover {
   background: var(--surface-muted);
   color: var(--ink);
 }
 
-.search button:active {
+.search button:active,
+.search .clearSearch:active {
   background: var(--surface-strong);
 }
 
 .personRow:focus-visible,
 .createPerson:focus-visible,
 .empty > a:focus-visible,
-.search button:focus-visible {
+.search button:focus-visible,
+.search .clearSearch:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
@@ -445,11 +449,6 @@
 }
 
 @media (max-width: 760px) {
-  .search button {
-    min-height: 44px;
-    min-width: 44px;
-  }
-
   .rowAvatar {
     left: 6px;
     top: 13px;

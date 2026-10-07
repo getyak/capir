@@ -1,16 +1,12 @@
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
-import {
-  AddressBook,
-  ArrowRight,
-  MagnifyingGlass,
-} from "@phosphor-icons/react/dist/ssr";
+import { AddressBook } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
-import Form from "next/form";
 
 import styles from "./people-directory-app.module.css";
 import { withReturnSession } from "./session-return-navigation";
 import { PeopleDirectoryList } from "./people-directory-list";
 import { WorkspaceDisconnectedState } from "./workspace-disconnected-state";
+import { PeopleDirectorySearch } from "./people-directory-search";
 
 type Props = {
   error: string | null;
@@ -55,24 +51,7 @@ export function PeopleDirectoryApp({
           </header>
 
           <div className={styles.listTools}>
-            <Form action="/workspace/people" className={styles.search} scroll={false}>
-              <MagnifyingGlass aria-hidden="true" size={20} />
-              <input
-                aria-label="按姓名或已确认联系方式搜索人物"
-                defaultValue={query}
-                key={query}
-                maxLength={160}
-                name="query"
-                placeholder="按姓名、邮箱或电话查找…"
-                type="search"
-              />
-              {returnSessionId ? (
-                <input name="session" type="hidden" value={returnSessionId} />
-              ) : null}
-              <button aria-label="搜索人物" type="submit">
-                <ArrowRight aria-hidden="true" size={15} />
-              </button>
-            </Form>
+            <PeopleDirectorySearch query={query} returnSessionId={returnSessionId} />
             <span aria-live="polite">{error ? "暂不可用" : `${people.length} 位${query ? "匹配人物" : "人物"}`}</span>
           </div>
 
