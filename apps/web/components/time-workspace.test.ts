@@ -196,6 +196,15 @@ async function toggleVisibility(state: "visible" | "hidden") {
   await act(async () => document.dispatchEvent(new Event("visibilitychange")));
 }
 describe("review continuity", () => {
+  it("renders the actual range response as readable prose without remote assets", async () => {
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/review") ? reviewPayload({body: "## 今日回顾\n\n确认 **时间**。\n\n1. 核对来源\n\n![tracking](https://example.com/pixel)"}) : feedOf([admittedSource]));
+    await render(); await askWith("回顾");
+    expect(host.querySelector("article h3")?.textContent).toBe("REVIEW-ALPHA");
+    expect(host.querySelector("article strong")?.textContent).toBe("时间");
+    expect(host.querySelector("article ol li")?.textContent).toContain("核对来源");
+    expect(host.querySelector("article img")).toBeNull();
+  });
+
   afterEach(() => { vi.useRealTimers(); Reflect.deleteProperty(document, "visibilityState"); });
 
   it("places one named collapsed review disclosure before the growing feed in DOM order", async () => {

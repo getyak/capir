@@ -74,7 +74,7 @@
 .review form button { justify-self: end; }
 .reviewResult { border-top: 1px solid var(--line-soft); font-size: var(--workspace-body-size); line-height: 1.9; margin-top: 20px; padding-top: 15px; }
 .reviewResult h3 { font-size: var(--workspace-body-size); font-weight: 600; margin: 10px 0; }
-.reviewBody { overflow-wrap: anywhere; white-space: pre-wrap; }
+.reviewBody { overflow-wrap: anywhere; }
 .reviewResult details { margin: 16px 0; }
 .reviewResult summary { cursor: pointer; }
 .reviewResult ol { padding-left: 18px; }
