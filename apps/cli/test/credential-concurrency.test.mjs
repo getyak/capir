@@ -168,6 +168,7 @@ async function losingLogin({ timeoutSeconds = 20, onLogout }) {
   const result = await runCli(["auth", "login", "--env", "t", "--timeout", String(timeoutSeconds)], {
     env: { CAPIR_CONFIG_DIR: directory },
     fetchImpl,
+    authProtocol:"capir.v1",
     credentialStore: async () => store,
     credentialTxn: async () => txn,
     openBrowser: async (url) => {
@@ -429,7 +430,8 @@ describe("origin-pair credential mutation boundary", () => {
       {
         env: { CAPIR_CONFIG_DIR: configDir },
         fetchImpl,
-        credentialStore: async () => entry,
+        authProtocol:"capir.v1",
+    credentialStore: async () => entry,
         openBrowser: consentFor(letter),
         interactive: true,
         sleep: async () => {},

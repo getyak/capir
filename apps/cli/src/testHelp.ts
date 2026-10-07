@@ -137,7 +137,7 @@ const CREATE_ERRORS = [
   {
     code: "CAPIR_TEST_OPERATOR_CREDENTIAL_MISSING",
     exit_code: 4,
-    meaning: "The provisioning prerequisite is not installed for this origin pair; nothing was allocated.",
+    meaning: "Log in with an entitled user or configure a dedicated operator credential for this origin pair; nothing was allocated.",
   },
   {
     code: "CAPIR_TEST_INTENT_CONFLICT",
@@ -313,7 +313,7 @@ function helpPayload(path: TestHelpPath): Record<string, unknown> {
 function humanCreate(): string {
   const counts = TEST_PRESET_COUNTS.daily;
   return [
-    "capir test create - create one expiring, isolated test account (no prior login).",
+    "capir test create - create one expiring, isolated test account.",
     "",
     "Usage",
     "  capir test create --env <name> [options]",
@@ -328,6 +328,10 @@ function humanCreate(): string {
     "  --request-id <uuid>  resume the SAME recorded create; the original credential is reused",
     "  --open web           open a fresh isolated browser context after the run is ready",
     "  --json | --human     machine envelope (default) | readable text",
+    "",
+    "Authorization",
+    "  Run capir auth login --env <name> with a test-entitled account.",
+    "  Dedicated CAPIR_TEST_OPERATOR_TOKEN remains supported for operator automation.",
     "",
     "Defaults",
     `  preset daily seeds ${counts.contacts} contacts, ${counts.observations} observations and ${counts.tasks} tasks;`,

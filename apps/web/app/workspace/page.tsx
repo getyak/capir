@@ -124,6 +124,12 @@ export default async function WorkspacePage({
       try {
         await client.getAgentSession(draftSessionId, AbortSignal.timeout(8_000));
       } catch (error) {
+        // A stopped/revoked test entry can outlive its backend session in the
+        // browser cookie. Reuse the existing reauthentication flow instead of
+        // presenting a server error or trusting the stale draft capability.
+        if (error instanceof TalentSignalHttpError && error.status === 401) {
+          redirect("/login?reason=backend_session_expired&callbackUrl=%2Fworkspace");
+        }
         if (!(error instanceof TalentSignalHttpError) || error.status !== 404) throw error;
         // An absent locator only grants create/admit authority, never Memory access.
         return <WorkspaceNewConversation accountId={current.backendAccountId}

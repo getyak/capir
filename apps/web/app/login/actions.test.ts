@@ -35,6 +35,7 @@ vi.mock("next-auth", () => {
   return { AuthError, CredentialsSignin };
 });
 
+import { clearTestWorkspaceSession } from "@/lib/server/testWorkspaceSession";
 import { TalentSignalHttpError } from "@talent-signal/contracts";
 import { CredentialsSignin } from "next-auth";
 import { redirect } from "next/navigation";
@@ -72,10 +73,24 @@ function formOf(entries: Record<string, string>) {
 
 beforeEach(() => {
   signInMock.mockReset();
+  vi.mocked(clearTestWorkspaceSession).mockReset();
+  vi.mocked(redirect).mockReset();
   registerBackendAccountMock.mockReset();
 });
 
 describe("login action failure contract", () => {
+  it("clears a stale test selection only after a successful replacement login", async () => {
+    signInMock.mockResolvedValue("/onboarding?callbackUrl=%2Fworkspace");
+    await signInWithPasswordAccount(initialState, formOf({identifier:"proof@example.invalid",password:"synthetic-password",redirectTo:"/workspace"}));
+    expect(clearTestWorkspaceSession).toHaveBeenCalledTimes(1);
+    expect(signInMock.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(clearTestWorkspaceSession).mock.invocationCallOrder[0]!);
+    expect(redirect).toHaveBeenCalledWith("/onboarding?callbackUrl=%2Fworkspace");
+    vi.mocked(clearTestWorkspaceSession).mockClear();
+    signInMock.mockRejectedValue(new ServiceCredentialsError());
+    await signInWithPasswordAccount(initialState,formOf({identifier:"proof@example.invalid",password:"synthetic-password"}));
+    expect(clearTestWorkspaceSession).not.toHaveBeenCalled();
+  });
+
   it("keeps the identifier and stores a retryable outage state", async () => {
     signInMock.mockRejectedValue(new ServiceCredentialsError());
     const state = await signInWithPasswordAccount(

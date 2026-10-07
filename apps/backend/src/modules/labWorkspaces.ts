@@ -164,6 +164,8 @@ export class LabWorkspaceService {
     if(bytes.length!==32||bytes.toString("base64url")!==request.access_token)throw new ApiError(400,"LAB_WORKSPACE_TOKEN_INVALID","The entry credential must encode exactly 32 random bytes.");
     try {return await inTransaction(this.pool,async client=>{
       const parentExpiry=await this.ownerSession(client,auth),w=await this.row(client,auth,id,true);
+      if ((await client.query("SELECT 1 FROM capir_test_runs WHERE workspace_id=$1 AND owner_kind='user_grant'",[id])).rowCount)
+        throw new ApiError(403,"CAPIR_TEST_GRANT_REQUIRED","Use the grant-scoped CLI handoff or test password login for this run.");
       const hash=sha256(request.access_token);
       const previous=(await client.query<EntryRow>("SELECT * FROM lab_test_workspace_entries WHERE id=$1",[request.id])).rows[0];
       if(previous){if(previous.workspace_id!==w.id||previous.token_hash!==hash)conflict();return this.describeEntry(client,w,previous);}
@@ -194,8 +196,12 @@ export class LabWorkspaceService {
     });
   }
 
-  private async beginStop(id:string,stopId:string,reason:"manual"|"expired",auth?:AuthContext):Promise<void> {
+  private async beginStop(id:string,stopId:string,reason:"manual"|"expired",auth?:AuthContext,beforeStop?: (client: PoolClient) => Promise<void>):Promise<void> {
     await inTransaction(this.pool,async client=>{
+      // Authority recheck first, before any workspace lock: a user-grant stop
+      // must fail (and change nothing) when its grant or entitlement was
+      // withdrawn after route admission.
+      if (beforeStop) await beforeStop(client);
       const admitted=auth?await this.row(client,auth,id):(await client.query<WorkspaceRow>("SELECT * FROM lab_test_workspaces WHERE id=$1",[id])).rows[0];
       if(!admitted||admitted.state!=="active"||(reason==="expired"&&admitted.expires_at.getTime()>Date.now()))return;
       // Publish stop intent before waiting for product writes' workspace SHARE
@@ -283,8 +289,8 @@ export class LabWorkspaceService {
   }
   /** Operator-owned run stop: access is revoked before verified cleanup. The
    * caller has already verified exact operator ownership of the run. */
-  async stopOperatorRun(id:string,stopId:string):Promise<void> {
-    await this.beginStop(id,stopId,"manual");await this.clean(id);
+  async stopOperatorRun(id:string,stopId:string,beforeStop?: (client: PoolClient) => Promise<void>):Promise<void> {
+    await this.beginStop(id,stopId,"manual",undefined,beforeStop);await this.clean(id);
   }
   async sweep():Promise<void> {
     const rows=(await this.pool.query<{id:string}>(`SELECT id FROM lab_test_workspaces

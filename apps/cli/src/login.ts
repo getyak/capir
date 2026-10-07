@@ -12,6 +12,8 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { CapirCliError, EXIT } from "./errors.js";
 import type { CapirEnvironment } from "./config.js";
 import { CapirBackendClient } from "./http.js";
+import { CapirAuthV2Client, serializeAuthRecord, usableCredential, parseAuthRecord } from "./authV2.js";
+import {runAuthLogout} from "./auth.js";
 import type { CredentialStore, CredentialTxn } from "./keyring.js";
 
 const secret = () => randomBytes(32).toString("base64url");
@@ -19,6 +21,7 @@ const secret = () => randomBytes(32).toString("base64url");
 export interface LoginDeps {
   openBrowser(url: string): Promise<void>;
   interactive: boolean;
+  onProgress?: (message:string) => void;
 }
 
 interface CallbackOutcome {
@@ -63,6 +66,7 @@ export async function runAuthLogin(
     clientLabel: string;
     timeoutSeconds: number;
     noninteractive: boolean;
+    protocolV2?: boolean;
   },
   dependencies: LoginDeps & {
     fetchImpl: typeof fetch;
@@ -70,19 +74,6 @@ export async function runAuthLogin(
     txn: CredentialTxn;
   },
 ): Promise<Record<string, unknown>> {
-  if (options.noninteractive || !dependencies.interactive) {
-    throw new CapirCliError(
-      "CAPIR_LOGIN_NONINTERACTIVE",
-      EXIT.INFRASTRUCTURE,
-      "auth login requires interactive browser consent and fails promptly in noninteractive contexts. Use a preprovisioned CAPIR_TOKEN for automation.",
-    );
-  }
-  const client = new CapirBackendClient(options.environment.backendOrigin, dependencies.fetchImpl);
-
-  const state = secret();
-  const codeVerifier = secret();
-  const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
-
   const controller = new AbortController();
   const deadlineAt = Date.now() + options.timeoutSeconds * 1000;
   let deadlineError: CapirCliError | null = null;
@@ -117,18 +108,63 @@ export async function runAuthLogin(
     return deadlineError;
   };
 
+  // Observe early cancellation while native keyring operations settle.
+  void cancellation.catch(() => {});
+  const requestOptions = () => ({signal:controller.signal,timeoutMs:Math.max(1,deadlineAt-Date.now())});
+  try {
+  if (options.protocolV2) {
+    const metadata = await new CapirAuthV2Client(options.environment.backendOrigin, dependencies.fetchImpl).discovery(requestOptions());
+    if (!metadata.enabled || metadata.backend_origin !== options.environment.backendOrigin || metadata.web_origin !== options.environment.webOrigin)
+      throw new CapirCliError("CAPIR_AUTH_UNAVAILABLE", EXIT.INFRASTRUCTURE, "Browser authorization is unavailable for this configured origin pair.");
+    const prior = await dependencies.store.get();
+    if (prior) {
+      const record=parseAuthRecord(prior,options.environment);
+      if (!record) {
+        if(options.noninteractive || !dependencies.interactive) throw new CapirCliError("CAPIR_LOGIN_NONINTERACTIVE",EXIT.INFRASTRUCTURE,"Browser consent is required to upgrade this legacy record; run auth login interactively.");
+        // Explicit login intent upgrades an obsolete single-token record.
+        // Revoke if resolvable; confirmed unknown token is cleared only by CAS.
+        await runAuthLogout(options.environment,{fetchImpl:dependencies.fetchImpl,store:dependencies.store,txn:dependencies.txn,token:prior,protocolV2:true,requestOptions:requestOptions()});
+      } else {
+        try {
+          const current = await usableCredential(options.environment, dependencies.store, dependencies.fetchImpl, requestOptions());
+          const verified=await new CapirAuthV2Client(options.environment.backendOrigin, dependencies.fetchImpl, current.token).statusV2(requestOptions());
+          const terminal=expired(); if(terminal) throw terminal;
+          return { reused: true, identity:verified.identity, grant:verified.grant, environment:options.environment.name, credential_store:dependencies.store.kind, authority:current.authority };
+        } catch(error) {
+          if (!(error instanceof CapirCliError) || !['CAPIR_CREDENTIAL_EXPIRED','CAPIR_CREDENTIAL_INACTIVE','CAPIR_GRANT_REVOKED','CAPIR_REFRESH_EXPIRED'].includes(error.code)) throw error;
+          if(options.noninteractive || !dependencies.interactive) throw new CapirCliError("CAPIR_LOGIN_NONINTERACTIVE",EXIT.INFRASTRUCTURE,"Run auth login interactively to renew this authorization.");
+          await runAuthLogout(options.environment,{fetchImpl:dependencies.fetchImpl,store:dependencies.store,txn:dependencies.txn,token:prior,protocolV2:true,requestOptions:requestOptions()});
+        }
+      }
+    }
+  }
+  const preflightTerminal=expired(); if(preflightTerminal) throw preflightTerminal;
+  if (options.noninteractive || !dependencies.interactive) {
+    throw new CapirCliError(
+      "CAPIR_LOGIN_NONINTERACTIVE",
+      EXIT.INFRASTRUCTURE,
+      "auth login requires interactive browser consent and fails promptly in noninteractive contexts. Use a preprovisioned CAPIR_TOKEN for automation.",
+    );
+  }
+  const client = new CapirBackendClient(options.environment.backendOrigin, dependencies.fetchImpl);
+
+  const state = secret();
+  const codeVerifier = secret();
+  const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
+
+
   // A native keyring write may have completed even if its adapter rejects.
   // Observe the exact scoped entry and remove only this newly minted token.
   // The removal runs inside the origin-pair credential boundary, so it can
   // never delete a credential another login committed in the meantime.
-  const cleanupMintedGrant = async (token: string): Promise<{
+  const cleanupMintedGrant = async (token: string, stored = token, refreshToken?: string): Promise<{
     localMintedAbsent: boolean;
     remoteRevoked: boolean;
   }> => {
     let localMintedAbsent = false;
     let remoteRevoked = false;
     try {
-      const removal = await dependencies.txn.removeIfMatch(token);
+      const removal = await dependencies.txn.removeIfMatch(stored);
       // "preserved_newer" and "already_absent" both prove this minted token is
       // not persisted; only "unverified" keeps cleanup unconfirmed.
       localMintedAbsent = removal !== "unverified";
@@ -139,7 +175,9 @@ export async function runAuthLogin(
     let revokeTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        client.withToken(token).logout({ timeoutMs: 2_000, signal: revokeDeadline }),
+        options.protocolV2
+          ? new CapirAuthV2Client(options.environment.backendOrigin, dependencies.fetchImpl, token).logoutV2(refreshToken,{signal:revokeDeadline,timeoutMs:2000})
+          : client.withToken(token).logout({ timeoutMs: 2_000, signal: revokeDeadline }),
         new Promise<never>((_resolve, reject) => {
           revokeTimer = setTimeout(() => reject(new Error("revoke deadline")), 2_000);
         }),
@@ -154,7 +192,6 @@ export async function runAuthLogin(
   };
 
   let callbackPort = 0;
-  try {
   // Fail fast on a pre-existing credential before opening consent windows.
   // The authoritative recheck happens at commit time below, inside the
   // cross-process mutation boundary.
@@ -187,11 +224,11 @@ export async function runAuthLogin(
       if (verdict.kind === "invalid") {
         // Invalid attempts never complete the flow; the listener keeps waiting
         // for its own validated callback until timeout or cancellation.
-        response.writeHead(400, { "content-type": "text/plain", "cache-control": "no-store" });
+        response.writeHead(400, { "content-type": "text/plain", "cache-control": "no-store", "referrer-policy":"no-referrer" });
         response.end("Invalid capir callback; the CLI keeps waiting for its own callback.\n");
         return;
       }
-      response.writeHead(200, { "content-type": "text/html", "cache-control": "no-store" });
+      response.writeHead(200, { "content-type": "text/html", "cache-control": "no-store", "referrer-policy":"no-referrer" });
       response.end(
         '<!doctype html><meta charset="utf-8"><title>capir</title><p>You can close this window and return to the terminal.</p>',
       );
@@ -227,6 +264,7 @@ export async function runAuthLogin(
       const redirectUri = `http://127.0.0.1:${address.port}/capir/callback`;
       const authorizeUrl = new URL("/capir/authorize", options.environment.webOrigin);
       authorizeUrl.search = new URLSearchParams({
+        ...(options.protocolV2 ? {schema_version:"capir-auth.v2"} : {}),
         redirect_uri: redirectUri,
         state,
         code_challenge: codeChallenge,
@@ -235,6 +273,7 @@ export async function runAuthLogin(
         backend_origin: options.environment.backendOrigin,
         client_label: options.clientLabel,
       }).toString();
+      dependencies.onProgress?.("请在浏览器确认 CLI 授权；按 Ctrl+C 取消。\n");
       dependencies.openBrowser(authorizeUrl.toString()).catch((error: unknown) => {
         finish(() =>
           reject(
@@ -258,7 +297,9 @@ export async function runAuthLogin(
   }
 
   // Exchange the single code on the configured backend with the PKCE verifier.
-  const exchanged = await Promise.race([client.exchange({
+  const exchangeClient = options.protocolV2 ? new CapirAuthV2Client(options.environment.backendOrigin, dependencies.fetchImpl) : client;
+  const exchange = options.protocolV2 ? (body: unknown, opts: {signal:AbortSignal}) => (exchangeClient as CapirAuthV2Client).exchangeV2(body, opts) : client.exchange.bind(client);
+  const exchanged = await Promise.race([exchange({
     code: outcome.code,
     code_verifier: codeVerifier,
     state,
@@ -266,6 +307,19 @@ export async function runAuthLogin(
     web_origin: options.environment.webOrigin,
     backend_origin: options.environment.backendOrigin,
   }, { signal: controller.signal }), cancellation]);
+  let verifiedIdentity:import("@talent-signal/contracts").CapirAuthV2StatusResponse['identity']=null;
+  if (options.protocolV2) {
+    try {
+      const verified=await Promise.race([new CapirAuthV2Client(options.environment.backendOrigin,dependencies.fetchImpl,exchanged.access_token).statusV2({signal:controller.signal,timeoutMs:Math.max(1,deadlineAt-Date.now())}),cancellation]);
+      if(verified.state!=='active' || verified.grant?.id!==exchanged.grant.id || !verified.identity) throw new CapirCliError('CAPIR_LOGIN_UNVERIFIED',EXIT.INFRASTRUCTURE,'The new grant could not be verified; log in again.');
+      verifiedIdentity=verified.identity;
+    } catch(error) {
+      const cleanup=await cleanupMintedGrant(exchanged.access_token,exchanged.access_token,'refresh_token' in exchanged ? String(exchanged.refresh_token) : undefined);
+      const terminal=expired();
+      throw new CapirCliError(terminal?.code ?? 'CAPIR_LOGIN_UNVERIFIED',terminal?.exitCode ?? EXIT.INFRASTRUCTURE,terminal?.message ?? 'The login could not be verified; run auth login again.',{clientState:{remote_revoked:cleanup.remoteRevoked,local_minted_credential_absent:cleanup.localMintedAbsent}});
+    }
+  }
+  const stored = options.protocolV2 ? serializeAuthRecord(options.environment, exchanged as import("@talent-signal/contracts").CapirAuthExchangeResponse, verifiedIdentity) : exchanged.access_token;
   let writeError: unknown;
   let commit: "committed" | "existing_preserved" | null = null;
   if (!expired()) {
@@ -274,7 +328,7 @@ export async function runAuthLogin(
       // never overwrite a credential another login completed first. The keyring
       // write is awaited to settlement (it cannot be aborted), so no credential
       // can appear after a timeout or SIGINT result was printed.
-      commit = await dependencies.txn.commitIfAbsent(exchanged.access_token);
+      commit = await dependencies.txn.commitIfAbsent(stored);
     } catch (error) {
       writeError = error;
     }
@@ -282,7 +336,7 @@ export async function runAuthLogin(
   const late = expired();
   const lostRace = commit === "existing_preserved";
   if (writeError || late || lostRace) {
-    const cleanup = await cleanupMintedGrant(exchanged.access_token);
+    const cleanup = await cleanupMintedGrant(exchanged.access_token, stored, "refresh_token" in exchanged ? String(exchanged.refresh_token) : undefined);
     const cleanupState = {
       local_minted_credential_absent: cleanup.localMintedAbsent,
       remote_revoked: cleanup.remoteRevoked,
@@ -315,9 +369,14 @@ export async function runAuthLogin(
   }
   return {
     grant: exchanged.grant,
+    ...(verifiedIdentity ? {identity:verifiedIdentity} : {}),
     credential_store: dependencies.store.kind,
     environment: options.environment.name,
   };
+  } catch(error) {
+    const terminal=expired();
+    if(terminal && !(error instanceof CapirCliError && error.code===terminal.code)) throw terminal;
+    throw error;
   } finally {
     clearTimeout(timer);
     process.removeListener("SIGINT", onSignal);

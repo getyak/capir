@@ -783,7 +783,7 @@ export async function buildApp(
   registerSystemHealthRoutes(app, pool, authenticate);
   registerRuntimeManifest(app, config);
   registerLoadedRuntimeConfiguration(app, config, authenticate, remoteChatProvider?.loadedTaskConfiguration, deploymentExposure);
-  registerCapirTestWorkspaceRoutes(app, pool, config, chatMediaStorage, authenticate);
+  registerCapirTestWorkspaceRoutes(app, pool, config, chatMediaStorage, authenticate, deploymentExposure?.workspaceIds);
 
   const labProviders = dependencies.labProviders ?? labModelProviders(remoteChatProvider);
   registerDesktopCaptureContext(app, authenticate, remoteChatProvider, labProviders, config.internalLabEnabled === true);
