@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {after,it} from 'node:test';
 import {runCli} from '../dist/run.js';
 import {runAuthLogin} from '../dist/login.js';
+import {runAuthLogout} from '../dist/auth.js';
 import {authV2Status,usableCredential,serializeAuthRecord} from '../dist/authV2.js';
 import {createCredentialTxn} from '../dist/keyring.js';
 import {writeEnvironment} from './helpers.mjs';
@@ -18,6 +19,45 @@ function store(value=null){return {kind:'keyring',value,writes:0,async get(){ret
 const response=v=>Response.json(v);
 it('status does not rotate or write; network failure is unverified',async()=>{const c=credentials(true),s=store(serializeAuthRecord(environment,c));let paths=[];
  const status=await authV2Status(environment,s,async url=>{paths.push(new URL(url).pathname);return response({schema_version:'capir-auth.v2',state:'expired',grant:c.grant,identity});});assert.equal(status.state,'expired');assert.equal(s.writes,0);assert.deepEqual(paths,['/v1/capir/auth/status']);assert.equal((await authV2Status(environment,s,async()=>{throw Error('offline')})).state,'unverified');assert.equal(s.writes,0);});
+it('invalid and legacy status require reauthorization without network or keyring writes', async () => {
+ const c = credentials();
+ const foreign = JSON.stringify({...JSON.parse(serializeAuthRecord(environment,c)),web_origin:'https://foreign.invalid'});
+ for (const raw of ['{broken',foreign,secret()]) {
+  const s = store(raw);
+  const status = await authV2Status(environment,s,async()=>{assert.fail('Locally invalid or legacy material must not be dispatched');});
+  assert.equal(status.state,'reauth_required');
+  assert.equal(status.reason,raw.startsWith('{')?'credential_invalid':'legacy_credential');
+  assert.match(status.next_action,/capir auth login --env v2/);
+  assert.equal(s.value,raw);assert.equal(s.writes,0);
+ }
+});
+it('invalid logout clears only the exact record and never claims a remote revoke', async () => {
+ const dir=mkdtempSync(join(tmpdir(),'capir-invalid-v2-'));dirs.push(dir);
+ const raw='{broken',s=store(raw),txn=createCredentialTxn(s,join(dir,'mutex.sqlite'));
+ const fetchImpl=async()=>{assert.fail('Invalid material must not be dispatched');};
+ const result=await runAuthLogout(environment,{store:s,txn,token:raw,protocolV2:true,fetchImpl});
+ assert.equal(s.value,null);assert.equal(result.local_credential_removed,true);
+ assert.equal(result.remote_revoked,false);assert.equal(result.remote_status,'unverified');
+ assert.equal(result.next_action,environment.webOrigin+'/workspace/settings/cli');
+ const newer=serializeAuthRecord(environment,credentials());s.value=newer;
+ const stale=await runAuthLogout(environment,{store:s,txn,token:raw,protocolV2:true,fetchImpl});
+ assert.equal(stale.local_credential_state,'preserved_newer');assert.equal(s.value,newer);
+ s.value=raw;s.delete=async()=>false;
+ const uncertain=await runAuthLogout(environment,{store:s,txn,token:raw,protocolV2:true,fetchImpl});
+ assert.equal(uncertain.local_credential_state,'unverified');assert.equal(uncertain.local_credential_removed,false);assert.equal(s.value,raw);
+});
+it('human auth recovery distinguishes invalid local cleanup from remote revocation and upgrades legacy status',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'capir-invalid-human-v2-'));dirs.push(dir);writeEnvironment(dir,environment.name,environment.backendOrigin,environment.webOrigin);
+ const s=store('{broken'),deps={env:{CAPIR_CONFIG_DIR:dir},credentialStore:()=>s,credentialTxn:()=>createCredentialTxn(s,join(dir,'mutex.sqlite')),fetchImpl:async()=>assert.fail('No network for invalid/legacy status or invalid logout'),interactive:true,openBrowser:async()=>{},sleep:async()=>{}};
+ const invalid=await runCli(['auth','status','--env','v2','--human'],deps);
+ assert.equal(invalid.exitCode,0);assert.match(invalid.output,/需要重新授权/);assert.match(invalid.output,/auth logout --env v2/);
+ const logout=await runCli(['auth','logout','--env','v2','--human'],deps);
+ assert.equal(logout.exitCode,0);assert.match(logout.output,/撤销：尚未确认/);assert.match(logout.output,/本机凭据：已移除/);assert.match(logout.output,/workspace\/settings\/cli/);
+ const absent=await runCli(['auth','status','--env','v2','--json'],deps);assert.equal(JSON.parse(absent.output).state,'missing');
+ s.value=secret();
+ const legacy=await runCli(['auth','status','--env','v2','--human'],deps);
+ assert.equal(legacy.exitCode,0);assert.match(legacy.output,/下一步：capir auth login --env v2/);assert.doesNotMatch(legacy.output,/重试：/);
+});
 it('commits refresh intent before dispatch and refuses response-loss replay',async()=>{const c=credentials(true),s=store(serializeAuthRecord(environment,c));let refreshCalls=0;
  await assert.rejects(usableCredential(environment,s,async url=>{assert.match(String(url),/refresh$/);refreshCalls++;assert.equal(JSON.parse(s.value).refresh_inflight,true);throw Error('lost response');}),{code:'CAPIR_TRANSPORT'});
  await assert.rejects(usableCredential(environment,s,async()=>{refreshCalls++;throw Error('must not retry');}),{code:'CAPIR_REFRESH_UNCERTAIN'});assert.equal(refreshCalls,1);});

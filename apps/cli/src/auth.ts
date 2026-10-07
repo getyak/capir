@@ -30,7 +30,21 @@ export async function runAuthLogout(
   environment: CapirEnvironment,
   deps: { fetchImpl: FetchLike; store: CredentialStore; txn: CredentialTxn; token: string; protocolV2?: boolean; requestOptions?:{signal?:AbortSignal;timeoutMs?:number} },
 ): Promise<Record<string, unknown>> {
-  const record = deps.store.kind === "keyring" ? parseAuthRecord(deps.token, environment) : null;
+  let record;
+  try {
+    record = deps.store.kind === "keyring" ? parseAuthRecord(deps.token, environment) : null;
+  } catch (error) {
+    if (!(error instanceof CapirCliError) || error.code !== "CAPIR_CREDENTIAL_INVALID") throw error;
+    // Invalid material cannot safely prove a remote grant. Clear only this
+    // exact local record, never dispatch it or claim remote revocation.
+    const removal = await deps.txn.removeIfMatch(deps.token);
+    return {
+      remote_revoked: false, remote_status: "unverified",
+      local_credential_state: removal, local_credential_removed: removal === "removed",
+      credential_source: "keyring", environment: environment.name,
+      next_action: `${environment.webOrigin}/workspace/settings/cli`,
+    };
+  }
   const client = new CapirBackendClient(environment.backendOrigin, deps.fetchImpl, deps.token);
   if (record) {
     // Refresh is unnecessary even after access expiry. Retain the exact record

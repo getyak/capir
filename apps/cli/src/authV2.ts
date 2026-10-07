@@ -52,10 +52,18 @@ export class CapirAuthV2Client extends CapirBackendClient {
 export async function authV2Status(environment: CapirEnvironment, store: CredentialStore, fetchImpl: FetchLike): Promise<Record<string, unknown>> {
   const source={credential_source:store.kind === 'environment' ? 'CAPIR_TOKEN' : 'keyring',backend_origin:environment.backendOrigin,web_origin:environment.webOrigin};
   const raw = await store.get();
-  if (!raw) return { ...source,state:'missing', environment:environment.name, next_action:'capir auth login' };
-  const record = store.kind === 'keyring' ? parseAuthRecord(raw, environment) : null;
+  if (!raw) return { ...source,state:'missing', environment:environment.name, next_action:'capir auth login --env '+environment.name };
+  let record: AuthRecord | null;
+  try { record = store.kind === 'keyring' ? parseAuthRecord(raw, environment) : null; }
+  catch (error) {
+    if (!(error instanceof CapirCliError) || error.code !== 'CAPIR_CREDENTIAL_INVALID') throw error;
+    return {...source,state:'reauth_required', reason:'credential_invalid', environment:environment.name,
+      next_action:'capir auth logout --env '+environment.name+', then capir auth login --env '+environment.name};
+  }
+  if (store.kind === 'keyring' && !record) return {...source,state:'reauth_required', reason:'legacy_credential',
+    environment:environment.name, next_action:'capir auth login --env '+environment.name};
   const token = record?.credentials.access_token ?? raw;
-  if (record?.refresh_inflight) return {...source,state:'reauth_required', environment:environment.name, next_action:'capir auth logout, then capir auth login'};
+  if (record?.refresh_inflight) return {...source,state:'reauth_required', environment:environment.name, next_action:'capir auth logout --env '+environment.name+', then capir auth login --env '+environment.name};
   try {
     const status = await new CapirAuthV2Client(environment.backendOrigin, fetchImpl, token).statusV2();
     const {schema_version:_version,...projection}=status;

@@ -354,6 +354,11 @@ refresh hashes and revokes the whole family if one is replayed.
 
 Status distinguishes missing, active, expired, revoked and unverified. During a
 transport failure cached identity is explicitly **last verified**, never current.
+Legacy records report **reauth required** with a browser-login action rather
+than retrying v2 status. Invalid records also require reauthorization; logout
+can remove the exact invalid local record without sending it to a server.
+Because it cannot prove remote revocation, the result explicitly directs the
+user to check the Web CLI authorization list. Concurrent newer logins are kept.
 Logout can prove the grant with refresh material after access expiry, without
 rotating first; an uncertain revoke preserves the exact record for retry and
 cannot erase a newer login. `CAPIR_TOKEN` is ephemeral: it is never persisted,
