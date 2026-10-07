@@ -8,3 +8,5 @@
 .page :is(button,select,input:not([type=checkbox])) { min-height: 44px; }
 .page .refresh button { min-width: 44px; }
 @media (prefers-reduced-motion: reduce) { .page *, .page *::before, .page *::after { animation: none !important; transition: none !important; } }
+
+@media(max-width:680px) { .toolbar { flex-wrap: wrap; gap: 0; } .refresh { justify-content: flex-end; flex: 1 1 100%; padding: 8px 0; } }
