@@ -25,6 +25,13 @@ import { resolveProductPrompt } from "./promptRegistry.js";
 import { CLAUDE_SDK_VERSION } from "./claudeSdkVersion.js";
 import type { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToolResult } from "./types.js";
 
+/** Host status for a genuine pending card, not invented model prose or a saved event. */
+function calendarReviewText(objective: string): string {
+  return /\p{Script=Han}/u.test(objective)
+    ? "日历草案已准备好，请在卡片中审核；尚未创建日历事件。"
+    : "Calendar draft is ready for review in the card. No calendar event has been created.";
+}
+
 export const CLAUDE_NATURAL_OUTPUT_GUIDANCE = "For this SDK execution, respond with natural prose, not a JSON object or a code fence. Structured data is supplied only through product tools. When context.session_title_requested is true, start the final response with exactly one metadata line in the form <session_title>concise title</session_title>, followed by a blank line and the natural prose reply. The title is for a person scanning Sessions weeks later: use the user's language, name the concrete topic or task, prefer verb plus object, keep it on one line and within 32 characters, and never use generic labels such as Reply, Answer, Hello, 回复, 回答, or 你好. Do not emit this metadata line when session_title_requested is false. Never claim a contact, memory or calendar write without a successful tool receipt. Use only tools supplied in this Run. If contact_workspace or its search/read operation tools are supplied and the user asks about a named contact, first search that name from the current message using the supplied contact search tool; a name is sufficient for a read-only lookup, even though it is not sufficient to create a contact. Read a uniquely grounded match so the product can continue in its relationship scope. A successful read completes this routing step: briefly acknowledge the found contact and stop; the product obtains relationship evidence in the scoped continuation. Do not infer missing records from the directory header or keep searching for an unavailable Memory tool. Ask for another identity clue only after the lookup is empty or ambiguous. Missing relationship Memory in an unscoped conversation is not a reason to skip this directory lookup or claim no contact access. If read_relationship_memory is supplied, it retrieves the current governed product snapshot independently of past Session dialogue. Preserve each block's status and source provenance. Cite relationship evidence through cite_evidence before answering factual relationship questions. Complete the source reads and citation selection before composing the final answer; essential conclusions must appear in that final answer, not only in tool prefaces. When asked to recall an existing fact, state it with its source status and stop; do not turn recall into unsolicited planning or offer unavailable write capabilities. For recollection, lead with what the record says, explicitly attributed to that record rather than asserted as a confirmed event. An unconfirmed source report can still answer what was recorded: do not lead with the absence of confirmed facts, repeat that caveat, expose internal status labels such as proposed, or suggest verifying the record unless a material ambiguity prevents answering. Source IDs do not belong in the prose.";
 
 /** Workspace routing has no scoped evidence-reading tools. Keep that unrelated
@@ -231,12 +238,12 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
         memory_inventory: request.context_blocks.map(block => ({ type: block.type, status: block.status })),
         allowed_citation_ids: request.allowed_citation_ids, response_preference_available: Boolean(request.responsePreference),
         assistant_service_preference: responsePreferenceContext(request.responsePreference) }),
-      ...(request.calendarContext ? { preparationReady: () => Boolean(calendar.draft()) } : {}),
+      ...(request.calendarContext ? { preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard } : {}),
       effort: "medium", budget: { ...DEFAULT_AGENT_BUDGET, maxDurationMs: 60_000 }, assertCurrent,
     }, abort.signal);
     await assertCurrent();
     const parsedOutput = splitFirstTurnSessionTitle(result.text, request.objective);
-    const body = parsedOutput.body;
+    const body = parsedOutput.body.trim() || !calendar.draft() ? parsedOutput.body : calendarReviewText(request.objective);
     if ((!body && !calendar.draft()) || body.length > 16_000) throw new Error("CLAUDE_CHAT_ANSWER_INVALID");
     // No citation receipt means the host cannot label prose as a grounded answer.
     const kind = request.mode !== "unscoped_conversation" && allowed.size > 0 && !citations.length ? "clarification" : "answer";
@@ -333,7 +340,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
     const outcome = await this.execute(this.configuration, { ...((request.continuation && userImages.length === 0) ? { continuation: request.continuation } : {}), ...(trusted ? { observation: trusted } : {}), objective: request.objective,
       ...(request.messageID ? { messageID: request.messageID } : {}),
       ...(request.steering ? { steering: request.steering } : {}),
-      ...(request.calendarContext && request.outputMode !== "json" ? { preparationReady: () => Boolean(calendar.draft()) } : {}),
+      ...(request.calendarContext && request.outputMode !== "json" ? { preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard } : {}),
       ...(request.onToolCompletion ? { onToolCompletion: request.onToolCompletion } : {}),
       ...(onText ? { onText } : {}),
       ...(userImages.length > 0 ? { images: userImages } : {}),
@@ -365,11 +372,9 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
         toolCompletions: outcome.toolCompletions, sessionID: outcome.sessionID, terminalReason: outcome.terminalReason };
     }
     const parsedOutput = splitFirstTurnSessionTitle(outcome.text, request.objective);
-    const body = parsedOutput.body;
-    // Empty assistant text is legal when real work completed: genuine tool
-    // receipts carry the execution record and nothing is fabricated to fill
-    // the answer.
-    // Empty prose is valid; execution truth remains in the run receipt.
+    const body = parsedOutput.body.trim() || !calendar.draft() ? parsedOutput.body : calendarReviewText(request.objective);
+    // A genuine calendar card gets host status text to satisfy the response
+    // contract. Other empty prose keeps its existing behavior and receipts.
     return { ...(calendar.draft() ? { calendarDraft: calendar.draft()! } : {}),
       ...(sessionTitleRequested ? { sessionTitle: parsedOutput.title } : {}),
       structuredOutput: receipt ?? { outcome: searched && body.trim() ? "clarification" : "reply",

@@ -1,3 +1,4 @@
+import { ChatResponseBlockSchema } from "@talent-signal/contracts";
 import { createServer } from "node:http";
 import { access } from "node:fs/promises";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -12,10 +13,10 @@ const config = claudeHarnessConfiguration({ ANTHROPIC_API_KEY: "synthetic-only",
 const id = "11111111-1111-4111-8111-111111111111";
 const objective = "Synthetic meeting on 2026-10-18 from 08:00 to 09:00 in Shanghai. Prepare only a draft.";
 const calendarContext = { sourceRequestID: id, referenceTime: "2026-10-07T00:00:00Z", timeZone: "Asia/Shanghai" };
-const calendarInput = { title: "Synthetic meeting", starts_at: "2026-10-18T08:00:00+08:00", ends_at: "2026-10-18T09:00:00+08:00", time_zone: "Asia/Shanghai", source_excerpt: objective };
+const calendarInput = { title: "Synthetic meeting", starts_at: "2026-10-18T08:00:00+08:00", ends_at: "2026-10-18T09:00:00+08:00", time_zone: "Asia/Shanghai", source_excerpt: objective, finish_preparation: true };
 function request(overrides: Partial<ClaudeHarnessRequest> = {}): ClaudeHarnessRequest {
   const calendar = calendarDraftCapability(calendarContext, objective);
-  return { objective, systemPrompt: "Synthetic local test", tools: calendar.tools, preparationReady: () => Boolean(calendar.draft()),
+  return { objective, systemPrompt: "Synthetic local test", tools: calendar.tools, preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard,
     budget: { maxTurns: 8, maxToolCalls: 8, maxDurationMs: 30_000, maxTaskTokens: 4000, maxEstimatedUsd: 1 }, assertCurrent: vi.fn(async () => {}), ...overrides };
 }
 const result = (overrides = {}) => ({ type: "result", subtype: "success", result: "", is_error: false, terminal_reason: "hook_stopped",
@@ -56,6 +57,29 @@ describe("host-validated preparation terminal", () => {
       expect(await batch(options, kind === "child" ? { agent_id: "child" } : {})).toEqual({});
       yield result({ terminal_reason: "completed", result: "Clarify" });
     }), null);
+  });
+
+  it("continues a multi-goal task when staging does not explicitly finish preparation", async () => {
+    await runClaudeHarness(config, request(), new AbortController().signal, sdk(async function* (options) {
+      await stage(options, { ...calendarInput, finish_preparation: false });
+      expect(await batch(options)).toEqual({});
+      yield result({ terminal_reason: "completed", result: "Other requested work finished" });
+    }), null);
+  });
+
+  it("discards a staged draft when original steering supersedes it", async () => {
+    const calendar = calendarDraftCapability(calendarContext, objective);
+    const feed = { nextBatchAtSafePoint: vi.fn(async () => ({ messages: [{ messageID: id, acceptedAt: "2026-10-07T00:01:00Z", text: "Cancel" }] })) };
+    await runClaudeHarness(config, request({ tools: calendar.tools, preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard, steering: feed }),
+      new AbortController().signal, sdk(async function* (options) {
+        await stage(options); expect(calendar.draft()).toBeDefined();
+        await batch(options); expect(calendar.draft()).toBeUndefined();
+        expect(calendar.preparationReady()).toBe(false);
+        expect((await stage(options, { ...calendarInput, title: "Updated synthetic draft", finish_preparation: false })).isError).toBe(false);
+        expect(calendar.draft()?.title).toBe("Updated synthetic draft");
+        expect(await batch(options)).not.toHaveProperty("continue", false);
+        yield result({ terminal_reason: "completed" });
+      }), null);
   });
 
   it("does not stop solely because a host closure is ready without primary execution", async () => {
@@ -132,7 +156,7 @@ describe("host-validated preparation terminal", () => {
     }), null);
   });
 
-  it("supports the answer adapter's empty prose with a valid card and leaves JSON adapter unchanged", async () => {
+  it("supports the answer adapter's host status for empty prose with a valid card and leaves JSON adapter unchanged", async () => {
     const provider = new ClaudeChatProvider(config, async (_configuration, input) => {
       if (!input.preparationReady) return { text: '{"outcome":"reply","title":"Reply","body":"Synthetic"}', structuredOutput: null,
         sessionID: "synthetic", inputTokens: 20, outputTokens: 5, estimatedUsd: .01, turns: 2, toolCalls: 0,
@@ -144,7 +168,8 @@ describe("host-validated preparation terminal", () => {
         toolCompletions: [], reportedModels: [], terminalReason: "hook_stopped", permissionDenials: [] };
     });
     const answer = await provider.answer({ objective, calendarContext, context_blocks: [], allowed_citation_ids: [] });
-    expect(answer).toMatchObject({ body: "", calendarDraft: { status: "needs_review", external_effect: "none" } });
+    expect(answer.body.length).toBeGreaterThanOrEqual(ChatResponseBlockSchema.properties.body.minLength!);
+    expect(answer).toMatchObject({ body: expect.stringContaining("No calendar event has been created"), calendarDraft: { status: "needs_review", external_effect: "none" } });
     const output = await provider.run({ runID: id, objective, systemPrompt: "Synthetic", outputMode: "json", calendarContext,
       scopeSummary: { kind: "workspace_conversation", workspaceID: id, sessionID: null, currentPersonID: null, currentRelationshipContextID: null },
       toolManifest: [], budget: request().budget }, async () => ({ ok: true, callID: "unused", name: "unused" }), new AbortController().signal);
@@ -191,7 +216,8 @@ describe("host-validated preparation terminal", () => {
       expect(output).toMatchObject({ terminalReason: "hook_stopped", turns: 2, inputTokens: 20, outputTokens: 5,
         calendarDraft: { status: "needs_review", external_effect: "none", source_request_id: id, source_excerpt: objective } });
       expect(output.toolCompletions?.map(tool => tool.name)).toEqual(["stage_calendar_draft"]);
-      expect(output.structuredOutput).toMatchObject({ body: "" });
+      expect(output.structuredOutput).toMatchObject({ body: expect.stringContaining("No calendar event has been created") });
+      expect((output.structuredOutput as { body: string }).body.length).toBeGreaterThanOrEqual(ChatResponseBlockSchema.properties.body.minLength!);
       await expect(access(directory)).rejects.toThrow();
     } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   }, 45_000);

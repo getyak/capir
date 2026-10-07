@@ -143,8 +143,10 @@ export interface ClaudeHarnessRequest {
    */
   steering?: HarnessSteeringFeed;
   onToolCompletion?: (receipt: HarnessToolCompletion) => void;
-  /** Host-only validated preparation state; never inferred from model prose. */
+  /** Host-owned gate: validates prepared state AND an explicit task-finish choice. */
   preparationReady?: () => boolean;
+  /** New original input invalidates prepared output before any later display. */
+  onPreparationSuperseded?: () => void;
   systemPrompt: string;
   context?: string;
   images?: readonly AgentProviderInputPart[];
@@ -427,6 +429,8 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     if (batch.messages.some(message => message.images?.length)) {
       throw new Error("CLAUDE_HARNESS_IMAGE_STEERING_NOT_ADMITTED");
     }
+    preparationSuperseded = true;
+    request.onPreparationSuperseded?.();
     pendingSteering = batch;
     // Original human input is scoped task context. It creates no new grants
     // and cannot turn generated artifacts into approval for external writes.
@@ -664,7 +668,6 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
             const context = await steeringContext(ready);
             if (context) {
               // The old draft cannot terminate a task with newly admitted originals.
-              if (ready) preparationSuperseded = true;
               return { hookSpecificOutput: { hookEventName: "PostToolBatch", additionalContext: context } };
             }
             if (ready) {
