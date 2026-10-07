@@ -1,0 +1,127 @@
+{
+  "origin": "https://smile-m4-minimac-mini.tail25e61f.ts.net:10443",
+  "phase": "live",
+  "timezone": "Asia/Shanghai",
+  "results": [
+    {
+      "name": "today desktop",
+      "passed": true,
+      "width": 1440,
+      "scrollWidth": 1440,
+      "height": 1000,
+      "scrollHeight": 1000
+    },
+    {
+      "name": "native disclosure keyboard",
+      "passed": true
+    },
+    {
+      "name": "one count with twelve contacts",
+      "passed": true
+    },
+    {
+      "name": "search focus visible",
+      "passed": true
+    },
+    {
+      "name": "search exact result",
+      "passed": true
+    },
+    {
+      "name": "people no-result desktop",
+      "passed": true,
+      "width": 1440,
+      "scrollWidth": 1440,
+      "height": 1000,
+      "scrollHeight": 1000
+    },
+    {
+      "name": "clear search restores directory",
+      "passed": true
+    },
+    {
+      "name": "person destination reload",
+      "passed": true
+    },
+    {
+      "name": "session retrieval row",
+      "passed": true
+    },
+    {
+      "name": "people narrow 390",
+      "passed": true,
+      "width": 390,
+      "scrollWidth": 390,
+      "height": 844,
+      "scrollHeight": 2179
+    },
+    {
+      "name": "today narrow 390",
+      "passed": true,
+      "width": 390,
+      "scrollWidth": 390,
+      "height": 844,
+      "scrollHeight": 1110
+    },
+    {
+      "name": "sessions narrow 390",
+      "passed": true,
+      "width": 390,
+      "scrollWidth": 390,
+      "height": 844,
+      "scrollHeight": 844
+    },
+    {
+      "name": "people narrow 320",
+      "passed": true,
+      "width": 320,
+      "scrollWidth": 320,
+      "height": 640,
+      "scrollHeight": 2179
+    },
+    {
+      "name": "today narrow 320",
+      "passed": true,
+      "width": 320,
+      "scrollWidth": 320,
+      "height": 640,
+      "scrollHeight": 1150
+    },
+    {
+      "name": "sessions narrow 320",
+      "passed": true,
+      "width": 320,
+      "scrollWidth": 320,
+      "height": 640,
+      "scrollHeight": 640
+    },
+    {
+      "name": "people dark reduced motion",
+      "passed": true,
+      "width": 1440,
+      "scrollWidth": 1440,
+      "height": 1000,
+      "scrollHeight": 1408
+    },
+    {
+      "name": "today dark reduced motion",
+      "passed": true,
+      "width": 1440,
+      "scrollWidth": 1440,
+      "height": 1000,
+      "scrollHeight": 1000
+    },
+    {
+      "name": "sessions dark reduced motion",
+      "passed": true,
+      "width": 1440,
+      "scrollWidth": 1440,
+      "height": 1000,
+      "scrollHeight": 1000
+    },
+    {
+      "name": "no uncaught browser errors",
+      "passed": true
+    }
+  ]
+}
