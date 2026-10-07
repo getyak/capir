@@ -20,16 +20,16 @@ const memory: AgentMemoryItem = {
     source_session_id: "synthetic-source-session", source_message_id: "synthetic-source-message" }],
 };
 
-async function answer(page: AgentMemoryPage | null, inspect: (request: ClaudeHarnessRequest) => Promise<void>, assertCurrent = vi.fn(async () => {})) {
+async function answer(page: AgentMemoryPage | null, inspect: (request: ClaudeHarnessRequest) => Promise<void>, assertCurrent = vi.fn(async () => {}), allowed: string[] = []) {
   const recall = vi.fn(async () => page!);
   const stage = vi.fn(async () => null);
   const execute = vi.fn(async (_configuration, request: ClaudeHarnessRequest) => { await inspect(request); return outcome; });
-  await new ClaudeChatProvider(configuration, execute).answer({
+  const response = await new ClaudeChatProvider(configuration, execute).answer({
     objective: "What responsibilities and discussion did I retain?", prompt_snapshot: bundledPrompt("assistant/relationship"),
-    context_blocks: [identity], allowed_citation_ids: [], assertCurrent,
+    context_blocks: [identity], allowed_citation_ids: allowed, assertCurrent,
     ...(page ? { memoryReview: { recall, stage } } : {}),
   });
-  return { recall, stage, assertCurrent };
+  return { recall, stage, assertCurrent, response };
 }
 
 function reader(request: ClaudeHarnessRequest) {
@@ -41,6 +41,36 @@ function readJson(result: Awaited<ReturnType<ReturnType<typeof reader>["execute"
 }
 
 describe("relationship domain Memory beside the Wiki snapshot", () => {
+  it("answers retained Memory without citing unrelated allowed Wiki fragments", async () => {
+    const result = await answer({ items: [memory], has_more: false }, async request => {
+      await reader(request).execute({}, new AbortController().signal);
+      const rejected = await request.tools.find(tool => tool.name === "cite_evidence")!
+        .execute({ source_ids: [memory.id] }, new AbortController().signal);
+      expect(rejected.isError).toBe(true);
+    }, undefined, ["unrelated-wiki-fragment"]);
+    expect(result.response.kind).toBe("answer");
+    expect(result.response.citation_ids).toEqual([]);
+  });
+
+  it.each(["empty", "unread", "unavailable"])("keeps the citation classification when accepted Memory is %s", async state => {
+    const page = state === "unavailable" ? null : { items: state === "empty" ? [] : [memory], has_more: false };
+    const result = await answer(page, async request => {
+      if (state !== "unread") await reader(request).execute({}, new AbortController().signal);
+    }, undefined, ["unrelated-wiki-fragment"]);
+    expect(result.response.kind).toBe("clarification");
+    expect(result.response.citation_ids).toEqual([]);
+  });
+
+  it("records a successful later domain recall page without inventing Wiki citations", async () => {
+    const result = await answer({ items: [memory], has_more: false }, async request => {
+      await request.tools.find(tool => tool.name === "memory_review")!
+        .execute({ operation: "recall", scope: "person", cursor: "synthetic-next" }, new AbortController().signal);
+    }, undefined, ["unrelated-wiki-fragment"]);
+    expect(result.response.kind).toBe("answer");
+    expect(result.recall).toHaveBeenCalledExactlyOnceWith({ scope: "person", cursor: "synthetic-next" });
+    expect(result.response.citation_ids).toEqual([]);
+  });
+
   it("returns both accepted scopes when the filtered Wiki has no matching blocks, without promoting statements", async () => {
     const relationship = { ...memory, id: "synthetic-relationship-memory", scope: "relationship" as const,
       display_text: "The user reports a future discussion.", time_status: "future" as const };
@@ -82,6 +112,18 @@ describe("relationship domain Memory beside the Wiki snapshot", () => {
       await expect(reader(request).execute({}, new AbortController().signal))
         .rejects.toThrow("CLAUDE_CHAT_RELATIONSHIP_MEMORY_SCOPE_INVALID");
     });
+  });
+
+  it("does not let a failed recall satisfy the accepted Memory receipt", async () => {
+    const execute = vi.fn(async (_configuration, request: ClaudeHarnessRequest) => {
+      await expect(reader(request).execute({}, new AbortController().signal)).rejects.toThrow("synthetic-recall-unavailable");
+      return outcome;
+    });
+    const response = await new ClaudeChatProvider(configuration, execute).answer({ objective: "Recall", context_blocks: [identity],
+      allowed_citation_ids: ["unrelated-wiki-fragment"],
+      memoryReview: { recall: async () => { throw new Error("synthetic-recall-unavailable"); }, stage: async () => null } });
+    expect(response.kind).toBe("clarification");
+    expect(response.citation_ids).toEqual([]);
   });
 
   it("does not turn a failed domain recall into an empty success", async () => {
