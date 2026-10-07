@@ -140,6 +140,28 @@ describe("avatar editing through the rendered controls", () => {
     expect(readback().getAttribute("data-avatar-style")).toBe("initials");
   });
 
+  it("keeps keyboard focus on the stable preview when crop controls replace and then disappear", async () => {
+    const bitmap = { width: 400, height: 300, close: vi.fn() } as unknown as ImageBitmap;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => bitmap));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      clearRect() {}, drawImage() {},
+    } as unknown as CanvasRenderingContext2D);
+    await render(); await click("编辑 张伟 的头像");
+    const body = document.querySelector<HTMLElement>("[role='region'][aria-label='头像预览与显示设置']")!;
+    const input = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    Object.defineProperty(input, "files", { value: [new File(["synthetic raster"], "synthetic.png", { type: "image/png" })] });
+    await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); await Promise.resolve(); });
+    expect(document.querySelector("[aria-label='调整头像图片']")).not.toBeNull();
+    expect(document.activeElement).toBe(body);
+    body.scrollTop = 120;
+    await click("取消裁切");
+    expect(document.querySelector("[aria-label='调整头像图片']")).toBeNull();
+    expect(document.activeElement).toBe(body);
+    expect(body.scrollTop).toBe(0);
+    expect(readback().getAttribute("data-avatar-style")).toBe("initials");
+    expect(bitmap.close).toHaveBeenCalledOnce();
+  });
+
   it("discards a decoded upload that finishes after the dialog was closed", async () => {
     let finish!: (bitmap: ImageBitmap) => void;
     const bitmap = { width: 400, height: 400, close: vi.fn() } as unknown as ImageBitmap;
