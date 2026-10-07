@@ -33,6 +33,7 @@ import { clearAllPendingSessionDrafts } from "./session-workbench/session-draft-
 import { clearAllPendingMeetingDraftIntents } from "@/lib/meeting-draft-pending";
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { AvatarEditor } from "./avatar-editor";
+import { Popover, PopoverTrigger, PopoverContent } from "./ui/popover";
 import styles from "./workspace-shell.module.css";
 
 const noopSubscribe = () => () => {};
@@ -152,10 +153,9 @@ export function WorkspaceAccountMenu({
   /** Opaque binding to the rendered account, member and session. */
   usageBinding?: string | null;
 }) {
-  const menu = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
   const hosted = useDesktopChrome() !== null;
   const popover = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLElement>(null);
   const scopeKey = usageBinding;
   const [usageScope, setUsageScope] = useState<{
     key: string | null;
@@ -175,9 +175,18 @@ export function WorkspaceAccountMenu({
     clearAllPendingSessionDrafts();
   }
 
-  function close(returnFocus = false) {
-    if (menu.current) menu.current.open = false;
-    if (returnFocus) trigger.current?.focus();
+  function close() {
+    setOpen(false);
+  }
+
+  function changeOpen(next: boolean) {
+    setOpen(next);
+    if (!next || injectedUsage) return;
+    // Start only on opening; scope changes never project a stale count.
+    if (usageScope && usageScope.key === scopeKey) usageScope.store.refresh();
+    else setUsageScope({ key: scopeKey, store: createWeeklyUsageStore(
+      (signal) => fetchWeeklyUsage(signal, usageBinding),
+    ) });
   }
 
   function moveFocus(key: "ArrowDown" | "ArrowUp" | "End" | "Home") {
@@ -202,128 +211,110 @@ export function WorkspaceAccountMenu({
 
   useEffect(() => () => usageScope?.store.dispose(), [usageScope]);
 
-  useEffect(() => {
-    const closeFromOutside = (event: Event) => {
-      const target = event.target;
-      if (target instanceof Element && target.closest("[data-avatar-editor]")) return;
-      if (
-        menu.current?.open &&
-        target instanceof Node &&
-        !menu.current.contains(target)
-      ) {
-        close();
-      }
-    };
-    document.addEventListener("pointerdown", closeFromOutside);
-    document.addEventListener("focusin", closeFromOutside);
-    return () => {
-      document.removeEventListener("pointerdown", closeFromOutside);
-      document.removeEventListener("focusin", closeFromOutside);
-    };
-  }, []);
-
   return (
     <WorkspaceFooterStrip>
-    <details
-      className={styles.accountMenu}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          const submenu = popover.current?.querySelector<HTMLDetailsElement>("details[open]");
-          if (submenu) {
-            submenu.open = false;
-            submenu.querySelector("summary")?.focus();
-          } else close(true);
-        } else if (
-          menu.current?.open &&
-          ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
-        ) {
-          event.preventDefault();
-          moveFocus(event.key as "ArrowDown" | "ArrowUp" | "End" | "Home");
-        }
-      }}
-      onToggle={(event) => {
-        if (!(event.currentTarget as HTMLDetailsElement).open) return;
-        // The weekly usage read starts with this menu open, per current scope.
-        if (!injectedUsage) {
-          if (usageScope && usageScope.key === scopeKey) usageScope.store.refresh();
-          else setUsageScope({ key: scopeKey, store: createWeeklyUsageStore(
-            (signal) => fetchWeeklyUsage(signal, usageBinding),
-          ) });
-        }
-      }}
-      ref={menu}
-    >
-      <summary
-        aria-label={accountMenuLabel(identity)}
-        className={styles.accountTrigger}
-        ref={trigger}
-      >
-        <PersonDirectoryAvatar id="self" self label={accountName} url={avatarUrl} className={styles.avatar} dataSize="account" />
-        <span className={styles.accountName}>
-          <strong>{displayName}</strong>
-          <small>{workspaceLabel}</small>
-        </span>
-        <CaretDown aria-hidden="true" className={styles.accountChevron} size={12} />
-      </summary>
-      <div aria-label="账号与空间操作" className={styles.accountPopover} ref={popover}>
-        <span className={styles.accountSummary}>
-          <AvatarEditor id="self" self label={accountName} url={avatarUrl} size={44} />
-          <span>
-            <strong>{displayName}</strong>
-            <small>{workspaceLabel}</small>
-          </span>
-        </span>
-        <DesktopUpdateBanner onNavigate={() => close()} />
-        <hr />
-        <WeeklyUsageRow store={usageStore} />
-        <a aria-label="在手机上使用 capri" href="/download" onClick={() => close()}>
-          <DeviceMobile aria-hidden="true" size={16} />
-          <span>移动端 capri</span>
-        </a>
-        <details className={styles.accountSubmenu}>
-          <summary aria-label="帮助与支持">
-            <Lifebuoy aria-hidden="true" size={16} />
-            <span>帮助与支持</span>
-            <CaretRight aria-hidden="true" className={styles.submenuCaret} size={12} />
-          </summary>
-          <div className={styles.submenuPanel}>
-            <a href={hosted ? "talentsignal-desktop://settings" : "/workspace/settings/diagnostics"} onClick={() => close()}>
-              <span>{hosted ? "此 Mac 设置与检测" : "系统检测"}</span>
+      <div className={styles.accountMenu}>
+        <Popover open={open} onOpenChange={changeOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              data-slot="account-trigger"
+              aria-label={accountMenuLabel(identity)}
+              className={styles.accountTrigger}
+            >
+              <PersonDirectoryAvatar id="self" self label={accountName} url={avatarUrl} className={styles.avatar} dataSize="account" />
+              <span className={styles.accountName}>
+                <strong>{displayName}</strong>
+                <small>{workspaceLabel}</small>
+              </span>
+              <CaretDown aria-hidden="true" className={styles.accountChevron} size={12} />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent
+            aria-label="账号与空间操作"
+            className={styles.accountPopover}
+            side="top"
+            ref={popover}
+            onEscapeKeyDown={(event) => {
+              const submenu = popover.current?.querySelector<HTMLDetailsElement>("details[open]");
+              if (!submenu) return;
+              event.preventDefault();
+              submenu.open = false;
+              submenu.querySelector("summary")?.focus();
+            }}
+            onInteractOutside={(event) => {
+              // The avatar modal owns its own dismissal and restores its trigger.
+              const target = event.detail.originalEvent.target;
+              if (target instanceof Element && target.closest("[data-avatar-editor]")) event.preventDefault();
+            }}
+            onKeyDown={(event) => {
+              if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+              const target = event.target;
+              if (target instanceof Element && target.closest("input,textarea,select,[contenteditable=true]")) return;
+              if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+                event.preventDefault();
+                moveFocus(event.key as "ArrowDown" | "ArrowUp" | "End" | "Home");
+              }
+            }}
+          >
+            <span className={styles.accountSummary}>
+              <AvatarEditor id="self" self label={accountName} url={avatarUrl} size={44} />
+              <span>
+                <strong>{displayName}</strong>
+                <small>{workspaceLabel}</small>
+              </span>
+            </span>
+            <DesktopUpdateBanner onNavigate={() => close()} />
+            <hr />
+            <WeeklyUsageRow store={usageStore} />
+            <a aria-label="在手机上使用 capri" href="/download" onClick={() => close()}>
+              <DeviceMobile aria-hidden="true" size={16} />
+              <span>移动端 capri</span>
             </a>
-            <a href="/workspace/settings" onClick={() => close()}>
-              <span>工作区设置</span>
-            </a>
-            <SupportEmailEntry subject="capri 支持" onNavigate={() => close()}>
-              <span>邮件联系支持 ↗</span>
-            </SupportEmailEntry>
-          </div>
-        </details>
-        <hr />
-        <DesktopAccountLink onClick={() => close()} />
-        <DesktopAccountNotice />
-        <DesktopDeviceSettingsLink onClick={() => close()} />
-        <span className={styles.accountMetaRow}>
-          <Globe aria-hidden="true" size={16} />
-          <span>语言</span>
-          <strong>简体中文</strong>
-        </span>
-        <ThemeToggle label="切换工作区明暗主题" showValue variant="row" />
-        <hr />
-        {fixtureWorkspace ? (
-          <span className={styles.accountMetaRow}>
-            <span>工作区</span>
-            <strong>合成测试空间</strong>
-          </span>
-        ) : null}
-        <form action={signOutAction} onSubmit={clearPendingLocalIntents}>
-          <button type="submit">
-            <SignOut aria-hidden="true" size={16} />
-            <span>退出登录</span>
-          </button>
-        </form>
+            <details className={styles.accountSubmenu}>
+              <summary aria-label="帮助与支持">
+                <Lifebuoy aria-hidden="true" size={16} />
+                <span>帮助与支持</span>
+                <CaretRight aria-hidden="true" className={styles.submenuCaret} size={12} />
+              </summary>
+              <div className={styles.submenuPanel}>
+                <a href={hosted ? "talentsignal-desktop://settings" : "/workspace/settings/diagnostics"} onClick={() => close()}>
+                  <span>{hosted ? "此 Mac 设置与检测" : "系统检测"}</span>
+                </a>
+                <a href="/workspace/settings" onClick={() => close()}>
+                  <span>工作区设置</span>
+                </a>
+                <SupportEmailEntry subject="capri 支持" onNavigate={() => close()}>
+                  <span>邮件联系支持 ↗</span>
+                </SupportEmailEntry>
+              </div>
+            </details>
+            <hr />
+            <DesktopAccountLink onClick={() => close()} />
+            <DesktopAccountNotice />
+            <DesktopDeviceSettingsLink onClick={() => close()} />
+            <span className={styles.accountMetaRow}>
+              <Globe aria-hidden="true" size={16} />
+              <span>语言</span>
+              <strong>简体中文</strong>
+            </span>
+            <ThemeToggle label="切换工作区明暗主题" showValue variant="row" />
+            <hr />
+            {fixtureWorkspace ? (
+              <span className={styles.accountMetaRow}>
+                <span>工作区</span>
+                <strong>合成测试空间</strong>
+              </span>
+            ) : null}
+            <form action={signOutAction} onSubmit={clearPendingLocalIntents}>
+              <button type="submit">
+                <SignOut aria-hidden="true" size={16} />
+                <span>退出登录</span>
+              </button>
+            </form>
+          </PopoverContent>
+        </Popover>
       </div>
-    </details>
     </WorkspaceFooterStrip>
   );
 }

@@ -77,13 +77,6 @@ describe("persistent workspace shell", () => {
     expect(navigation).toContain("COLLAPSED_KEY");
     expect(navigation).toContain('data-mobile={route.mobile ? "true" : "false"}');
     expect(accountMenu).toContain("onClick={() => close()}");
-    expect(accountMenu).toContain('event.key === "Escape"');
-    expect(accountMenu).toContain("current === -1");
-    expect(accountMenu).toContain('key === "ArrowUp" ? items.length - 1 : 0');
-    expect(accountMenu).toContain("close(true)");
-    expect(accountMenu).toContain("trigger.current?.focus()");
-    expect(accountMenu).toContain('document.addEventListener("pointerdown"');
-    expect(accountMenu).toContain('document.addEventListener("focusin"');
     expect(accountMenu).toContain('"ArrowDown", "ArrowUp", "Home", "End"');
     expect(accountMenu).toContain("moveFocus(event.key");
     expect(accountMenu).toContain("signOutAction");

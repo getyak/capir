@@ -33,8 +33,8 @@
 .close { position: absolute; top: 8px; right: 8px; }
 .overlay[data-state="open"] { animation: veil-in 160ms ease-out; }
 .overlay[data-state="closed"] { animation: veil-out 120ms ease-in; }
-.content[data-state="open"] { animation: surface-in 180ms var(--ease-out); }
-.content[data-state="closed"] { animation: veil-out 120ms ease-in; }
+.content[data-state="open"], .popover[data-state="open"] { animation: surface-in 180ms var(--ease-out); }
+.content[data-state="closed"], .popover[data-state="closed"] { animation: veil-out 120ms ease-in; }
 @keyframes veil-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes veil-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes surface-in {
@@ -42,5 +42,15 @@
   to { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .overlay[data-state], .content[data-state] { animation: none; }
+  .overlay[data-state], .content[data-state], .popover[data-state] { animation: none; }
+}
+
+.popover {
+  z-index: 50;
+  border: 1px solid var(--line);
+  border-radius: var(--card-radius);
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+  transform-origin: var(--radix-popover-content-transform-origin);
 }

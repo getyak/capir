@@ -4,6 +4,7 @@ import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { DesktopAccountLink, DesktopDeviceSettingsLink, desktopVersion } from "./desktop-chrome";
 import { WorkspaceAccountMenu, WeeklyUsageRow } from "./workspace-account-menu";
+import { AvatarPreferencesProvider } from "./avatar-preferences-provider";
 import { WorkspaceDownloadEntry, WorkspaceFooterStrip } from "./workspace-footer";
 import type { WeeklyUsageStore, WeeklyUsageView } from "@/lib/weekly-usage";
 import type { WeeklyUsageResponse } from "@talent-signal/contracts";
@@ -23,6 +24,19 @@ async function render(node: ReactNode) {
   root = createRoot(host);
   await act(async () => root!.render(node));
   return host;
+}
+
+async function openAccount(host: HTMLElement) {
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>("[data-slot='account-trigger']")?.click();
+  });
+  const content = document.querySelector<HTMLElement>("[aria-label='账号与空间操作']");
+  expect(content).not.toBeNull();
+  return content!;
+}
+
+async function renderAccount(props: Parameters<typeof WorkspaceAccountMenu>[0]) {
+  return openAccount(await render(createElement(WorkspaceAccountMenu, props)));
 }
 
 async function showDesktop(state: Record<string, unknown> | null) {
@@ -72,9 +86,9 @@ function manualStore(view: WeeklyUsageView): WeeklyUsageStore & { set: (v: Weekl
 
 describe("native desktop chrome", () => {
   it("gates support mail on host capability and gives old hosts a usable copy fallback", async () => {
-    const host = await render(createElement(WorkspaceAccountMenu, {
+    const host = await renderAccount({
       accountName: "Synthetic User", workspaceName: null, signOutAction: () => {},
-    }));
+    });
     const copy = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: copy } });
     await showDesktop({ protocolVersion: 1, availableVersion: null });
@@ -109,9 +123,9 @@ describe("native desktop chrome", () => {
   });
 
   it("offers both account and device entries in the avatar menu without ambiguity", async () => {
-    const host = await render(createElement(WorkspaceAccountMenu, {
+    const host = await renderAccount({
       accountName: "Synthetic User", workspaceName: "Fixture Workspace", signOutAction: () => {},
-    }));
+    });
     const accountLinks = () =>
       Array.from(host.querySelectorAll("a[aria-label^='账号与偏好']"));
     const deviceLinks = () => host.querySelectorAll("a[href='talentsignal-desktop://settings']");
@@ -144,15 +158,15 @@ describe("native desktop chrome", () => {
   });
 
   it("keeps menu utilities on real routes: mobile entry, support diagnostics and site contact", async () => {
-    const host = await render(createElement(WorkspaceAccountMenu, {
+    const host = await renderAccount({
       accountName: "Synthetic User", workspaceName: null, signOutAction: () => {},
-    }));
+    });
     const mobile = host.querySelector("a[href='/download']");
     expect(mobile?.textContent).toContain("移动端 capri");
     expect(mobile?.getAttribute("aria-label")).toContain("手机");
     const support = host.querySelector("summary[aria-label='帮助与支持']");
     const supportLinks = Array.from(
-      host.querySelectorAll("details details a"),
+      host.querySelectorAll("details a"),
       (link) => link.getAttribute("href"),
     );
     expect(support?.textContent).toContain("帮助与支持");
@@ -256,10 +270,10 @@ describe("workspace footer strip", () => {
   });
 
   it("puts an explicit install/restart banner at the top of the avatar popover", async () => {
-    const host = await render(createElement(WorkspaceAccountMenu, {
+    const host = await renderAccount({
       accountName: "Synthetic User", workspaceName: null, signOutAction: () => {},
-    }));
-    const popover = host.querySelector("[aria-label='账号与空间操作']");
+    });
+    const popover = host;
     await showDesktop({
       protocolVersion: 1, availableVersion: "0.2.0 (12)", phase: "available",
       offerID: "b75e9546-2b27-4ee6-bdb2-bcb11f882652",
@@ -330,10 +344,85 @@ describe("weekly usage row", () => {
     const menu = (accountName: string, store: WeeklyUsageStore | null) =>
       createElement(WorkspaceAccountMenu, { accountName, workspaceName: null, signOutAction: () => {}, usage: store });
     await act(async () => root!.render(menu("Account A", stale)));
-    expect(host.textContent).toContain("99");
+    const popover = await openAccount(host);
+    expect(popover.textContent).toContain("99");
     // Switching account scope must not keep the old account's count visible.
     await act(async () => root!.render(menu("Account B", null)));
-    expect(host.textContent).not.toContain("99");
-    expect(host.textContent).toContain("读取中…");
+    expect(popover.textContent).not.toContain("99");
+    expect(popover.textContent).toContain("读取中…");
+  });
+});
+
+describe("account popover keyboard", () => {
+  it("collapses help before closing the surface and restores its real trigger", async () => {
+    const host = await render(createElement(WorkspaceAccountMenu, {
+      accountName: "Synthetic User", workspaceName: null, signOutAction: () => {},
+      usage: manualStore({ status: "ready", usage: usageResponse(12) }),
+    }));
+    const trigger = host.querySelector<HTMLButtonElement>("[data-slot='account-trigger']")!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector("[aria-label='账号与空间操作']")).toBeNull();
+    const content = await openAccount(host);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    const help = content.querySelector<HTMLDetailsElement>("details")!;
+    const summary = help.querySelector<HTMLElement>("summary")!;
+    await act(async () => { help.open = true; summary.focus(); });
+    await act(async () => summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(help.open).toBe(false);
+    expect(document.activeElement).toBe(summary);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    // FocusScope restores focus after its unmount task, not during dispatch.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("moves among available controls without entering collapsed help", async () => {
+    const host = await render(createElement(WorkspaceAccountMenu, {
+      accountName: "Synthetic User", workspaceName: null, signOutAction: () => {},
+      usage: manualStore({ status: "ready", usage: usageResponse(12) }),
+    }));
+    const content = await openAccount(host);
+    const usage = content.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    const help = content.querySelector<HTMLElement>("summary")!;
+    await act(async () => {
+      help.focus();
+      help.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    });
+    expect(document.activeElement?.textContent).toContain("账号与偏好");
+    await act(async () => content.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true })));
+    expect(document.activeElement).toBe(usage);
+    await act(async () => content.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
+    expect(document.activeElement?.textContent).toContain("退出登录");
+  });
+});
+
+describe("account avatar modal layering", () => {
+  it("keeps the account surface through avatar editing and returns focus in two steps", async () => {
+    const host = await render(createElement(AvatarPreferencesProvider, { scope: "popover-test", children:
+      createElement(WorkspaceAccountMenu, {
+        accountName: "Synthetic User", workspaceName: null, signOutAction: () => {},
+        usage: manualStore({ status: "ready", usage: usageResponse(12) }),
+      }),
+    }));
+    const content = await openAccount(host);
+    const avatar = content.querySelector<HTMLButtonElement>("[aria-label='编辑我的头像']")!;
+    await act(async () => {
+      avatar.click();
+      await import("./avatar-editor-dialog");
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    const editor = document.querySelector<HTMLElement>("[data-avatar-editor][role='dialog']")!;
+    expect(editor).not.toBeNull();
+    expect(content.getAttribute("data-state")).toBe("open");
+    await act(async () => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(document.querySelector("[data-avatar-editor][role='dialog']")).toBeNull();
+    expect(content.getAttribute("data-state")).toBe("open");
+    expect(document.activeElement).toBe(avatar);
+    await act(async () => avatar.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(document.activeElement).toBe(host.querySelector("[data-slot='account-trigger']"));
   });
 });
