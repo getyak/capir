@@ -52,7 +52,10 @@ function openBrowser(url: string): Promise<void> {
     });
     child.once("spawn", () => {
       child.unref();
-      resolve();
+    });
+    child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error("The browser opener did not complete successfully."));
     });
     child.once("error", reject);
   });

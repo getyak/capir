@@ -334,6 +334,12 @@ CLI. Manage the current account's CLI grants at **Settings → Account → CLI
 authorizations** (`/workspace/settings/cli`). Test identities cannot authorize a
 CLI or manage a real account's grants.
 
+If the system cannot open the browser, the CLI prints the current authorization
+link for the user to open in a browser on the same machine. The original
+loopback callback, login deadline and Ctrl+C cancellation remain active; the
+link contains no access token, refresh token or PKCE verifier. A late opener
+failure after completed authorization does not print an expired link.
+
 A successful `capir-auth.v2` login stores one versioned record in the OS keyring
 (service `talent-signal.capir`, account `capir:<backend-origin>|<web-origin>`).
 It includes origin pair, grant/scope/expiry, access and refresh credentials and
@@ -348,6 +354,11 @@ refresh hashes and revokes the whole family if one is replayed.
 
 Status distinguishes missing, active, expired, revoked and unverified. During a
 transport failure cached identity is explicitly **last verified**, never current.
+Legacy records report **reauth required** with a browser-login action rather
+than retrying v2 status. Invalid records also require reauthorization; logout
+can remove the exact invalid local record without sending it to a server.
+Because it cannot prove remote revocation, the result explicitly directs the
+user to check the Web CLI authorization list. Concurrent newer logins are kept.
 Logout can prove the grant with refresh material after access expiry, without
 rotating first; an uncertain revoke preserves the exact record for retry and
 cannot erase a newer login. `CAPIR_TOKEN` is ephemeral: it is never persisted,
