@@ -334,6 +334,12 @@ CLI. Manage the current account's CLI grants at **Settings → Account → CLI
 authorizations** (`/workspace/settings/cli`). Test identities cannot authorize a
 CLI or manage a real account's grants.
 
+If the system cannot open the browser, the CLI prints the current authorization
+link for the user to open in a browser on the same machine. The original
+loopback callback, login deadline and Ctrl+C cancellation remain active; the
+link contains no access token, refresh token or PKCE verifier. A late opener
+failure after completed authorization does not print an expired link.
+
 A successful `capir-auth.v2` login stores one versioned record in the OS keyring
 (service `talent-signal.capir`, account `capir:<backend-origin>|<web-origin>`).
 It includes origin pair, grant/scope/expiry, access and refresh credentials and

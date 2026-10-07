@@ -275,6 +275,12 @@ export async function runAuthLogin(
       }).toString();
       dependencies.onProgress?.("请在浏览器确认 CLI 授权；按 Ctrl+C 取消。\n");
       dependencies.openBrowser(authorizeUrl.toString()).catch((error: unknown) => {
+        if (options.protocolV2 && dependencies.onProgress && !settled && !controller.signal.aborted) {
+          // This short-lived request contains only state and public PKCE data.
+          // Keep the local callback alive for manual same-machine completion.
+          dependencies.onProgress(`无法自动打开浏览器，请在本机浏览器打开：\n${authorizeUrl.toString()}\n按 Ctrl+C 取消。\n`);
+          return;
+        }
         finish(() =>
           reject(
             new CapirCliError(

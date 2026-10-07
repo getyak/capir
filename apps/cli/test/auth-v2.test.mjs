@@ -58,3 +58,17 @@ it('post-mint timeout preserves failed remote-revoke evidence without persisting
  await assert.rejects(runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:0.15,noninteractive:false,protocolV2:true},{store:s,txn:createCredentialTxn(s,join(dir,'mutex.sqlite')),interactive:true,fetchImpl,openBrowser:async url=>{const consent=new URL(url),callback=new URL(consent.searchParams.get('redirect_uri'));callback.searchParams.set('state',consent.searchParams.get('state'));callback.searchParams.set('code',secret());await fetch(callback);}}),error=>{assert.equal(error.code,'CAPIR_LOGIN_TIMEOUT');assert.deepEqual(error.clientState,{remote_revoked:false,local_minted_credential_absent:true});return true;});
  assert.equal(revoked,1);assert.equal(s.value,null);
 });
+
+it('browser opener failure exposes a public manual URL and keeps the same loopback request alive',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'capir-manual-v2-'));dirs.push(dir);const s=store(),c=credentials();let manual;
+ const fetchImpl=async(url)=>{const path=new URL(url).pathname;
+ if(path.endsWith('/capabilities'))return response({schema_version:'capir-auth.v2',enabled:true,capabilities:Object.fromEntries(['auth.authorize','auth.exchange','auth.refresh','auth.status','auth.logout','auth.grants'].map(k=>[k,'supported'])),device_auth:'unsupported',scopes:c.grant.scopes,backend_origin:environment.backendOrigin,web_origin:environment.webOrigin,lifetimes:{code_seconds:60,access_seconds:900,refresh_idle_seconds:604800,refresh_absolute_seconds:2592000},unsupported:['device_auth']});
+ if(path.endsWith('/exchange'))return response(c);
+ if(path.endsWith('/status'))return response({schema_version:'capir-auth.v2',state:'active',grant:c.grant,identity});throw Error('Unexpected dispatch');};
+ const result=await runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:2,noninteractive:false,protocolV2:true},{store:s,txn:createCredentialTxn(s,join(dir,'mutex.sqlite')),interactive:true,fetchImpl,openBrowser:async()=>{throw Error('Opener unavailable');},onProgress:message=>{const line=message.split('\n').find(v=>v.startsWith('http://'));if(!line)return;manual=new URL(line);assert.equal(manual.origin,environment.webOrigin);for(const key of ['access_token','refresh_token','code_verifier','code'])assert.equal(manual.searchParams.has(key),false);const callback=new URL(manual.searchParams.get('redirect_uri'));callback.searchParams.set('state',manual.searchParams.get('state'));callback.searchParams.set('code',secret());void fetch(callback);}});
+ assert.ok(manual);assert.equal(result.grant.id,c.grant.id);assert.equal(JSON.parse(s.value).credentials.access_token,c.access_token);
+ const lateStore=store(),messages=[];
+ await runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:2,noninteractive:false,protocolV2:true},{store:lateStore,txn:createCredentialTxn(lateStore,join(dir,'late-mutex.sqlite')),interactive:true,fetchImpl,onProgress:m=>messages.push(m),openBrowser:async url=>{const consent=new URL(url),callback=new URL(consent.searchParams.get('redirect_uri'));callback.searchParams.set('state',consent.searchParams.get('state'));callback.searchParams.set('code',secret());await fetch(callback);throw Error('Late opener exit');}});
+ assert.equal(messages.some(message=>message.includes('/capir/authorize?')),false);
+ assert.equal(JSON.parse(lateStore.value).credentials.access_token,c.access_token);
+});
