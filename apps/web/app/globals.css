@@ -1,6 +1,25 @@
 @import "tailwindcss";
 @import "@talent-signal/workspace-ui/theme.css";
 
+/* shadcn semantic utilities resolve against the host theme; they do not
+   redefine the legacy --muted text color or the product's brand --accent. */
+@theme inline {
+  --color-background: var(--surface);
+  --color-foreground: var(--ink);
+  --color-primary: var(--ink);
+  --color-primary-foreground: var(--surface);
+  --color-secondary: var(--surface-muted);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--surface-muted);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--surface-muted);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--error);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--focus);
+}
+
 :root {
   --background: #f4f3ef;
   --background-deep: #e8e6df;

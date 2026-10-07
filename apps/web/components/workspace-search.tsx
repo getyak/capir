@@ -29,6 +29,8 @@ import {
   subscribeWorkspaceRefresh,
 } from "@/lib/workspace-refresh";
 import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./workspace-session-request";
+import { Button } from "./ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "./ui/dialog";
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import styles from "./workspace-shell.module.css";
 
@@ -202,7 +204,7 @@ export function useWorkspaceSearchSources(binding: string | null, enabled: boole
 /**
  * One real global search surface over the authorized People directory and the
  * account's Session directory. It reads existing endpoints, keeps keyboard
- * semantics native and never claims a result the backend did not return.
+ * and modal semantics accessible and never claims a result the backend did not return.
  */
 export function WorkspaceGlobalSearchDialog({
   binding,
@@ -213,28 +215,32 @@ export function WorkspaceGlobalSearchDialog({
   label?: string;
   presentation?: "icon" | "field" | "rail";
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
+  const dialog = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const { people, sessions, loading, failed, retry } = useWorkspaceSearchSources(
-    binding,
-    open,
-  );
-  const results = searchWorkspaceResults({ people, sessions, query });
-
-  const show = useCallback(() => {
-    const element = dialog.current;
-    if (!element || element.open) return;
-    setOpen(true);
-    element.showModal();
-    setQuery("");
-    window.requestAnimationFrame(() => input.current?.focus());
+  const changeOpen = useCallback((next: boolean) => {
+    if (next) setQuery("");
+    setOpen(next);
   }, []);
+  const show = useCallback(() => {
+    if (!open) changeOpen(true);
+  }, [open, changeOpen]);
+  const close = useCallback(() => changeOpen(false), [changeOpen]);
 
-  const close = useCallback(() => {
-    dialog.current?.close();
+  useEffect(() => {
+    // Radix listens for Escape at document capture. Register before opening
+    // its layer so IME Escape keeps its native candidate-cancellation default
+    // without dismissing the search beneath it.
+    function preserveComposition(event: KeyboardEvent) {
+      if (event.key === "Escape" && (event.isComposing || event.keyCode === 229)
+        && dialog.current?.contains(event.target as Node | null)) {
+        event.stopImmediatePropagation();
+      }
+    }
+    document.addEventListener("keydown", preserveComposition, true);
+    return () => document.removeEventListener("keydown", preserveComposition, true);
   }, []);
 
   useEffect(() => {
@@ -259,48 +265,36 @@ export function WorkspaceGlobalSearchDialog({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [show]);
 
-  const hasQuery = query.normalize("NFKC").trim().length > 0;
-
   return (
-    <>
-      <button
-        aria-label={label}
-        className={
-          presentation === "field"
-            ? styles.searchTrigger
-            : presentation === "rail"
-              ? styles.railControl
-              : styles.iconButton
-        }
-        onClick={show}
-        ref={trigger}
-        title={`${label} · ⌘K / Ctrl+K`}
-        type="button"
-      >
-        <MagnifyingGlass aria-hidden="true" size={17} />
-        {presentation === "field" && <><span>搜索人物或对话</span><kbd>⌘K</kbd></>}
-      </button>
-      <dialog
-        aria-label="搜索人物与对话"
-        className={styles.searchDialog}
-        onClose={() => {
-          // Native close events are queued. Ignore an older close if the user
-          // has already reopened search, or its authorized directory disappears.
-          if (dialog.current?.open) return;
-          setOpen(false);
-          setQuery("");
-          trigger.current?.focus();
+    <Dialog open={open} onOpenChange={changeOpen}>
+      <DialogTrigger asChild>
+        <button
+          aria-label={label}
+          className={
+            presentation === "field"
+              ? styles.searchTrigger
+              : presentation === "rail"
+                ? styles.railControl
+                : styles.iconButton
+          }
+          ref={trigger}
+          title={`${label} · ⌘K / Ctrl+K`}
+          type="button"
+        >
+          <MagnifyingGlass aria-hidden="true" size={17} />
+          {presentation === "field" && <><span>搜索人物或对话</span><kbd>⌘K</kbd></>}
+        </button>
+      </DialogTrigger>
+      <DialogContent
+        layout="search"
+        showCloseButton={false}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          input.current?.focus();
         }}
         ref={dialog}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-          if (event.key === "Escape") {
-            // A search input's native Escape clears its text before cancelling
-            // the dialog. The visible shortcut promises one step back.
-            event.preventDefault();
-            close();
-            return;
-          }
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
           const links = Array.from(dialog.current?.querySelectorAll<HTMLAnchorElement>("[data-search-result]") ?? []);
           if (!links.length) return;
@@ -313,6 +307,8 @@ export function WorkspaceGlobalSearchDialog({
           links[next]?.scrollIntoView({ block: "nearest" });
         }}
       >
+        <DialogTitle className="sr-only">搜索人物与对话</DialogTitle>
+        <DialogDescription className="sr-only">搜索当前账号的人物和对话；使用方向键选择，Enter 打开，Esc 关闭。</DialogDescription>
         <div className={styles.searchDialogHeader}>
           <MagnifyingGlass aria-hidden="true" size={17} />
           <input
@@ -324,15 +320,31 @@ export function WorkspaceGlobalSearchDialog({
             type="search"
             value={query}
           />
-          <button
-            aria-label="关闭搜索"
-            className={`${styles.iconButton} ${styles.searchClose}`}
-            onClick={close}
-            type="button"
-          >
-            <X aria-hidden="true" size={16} />
-          </button>
+          <DialogClose asChild>
+            <Button aria-label="关闭搜索" variant="ghost" size="icon">
+              <X aria-hidden="true" size={16} />
+            </Button>
+          </DialogClose>
         </div>
+        <WorkspaceSearchResults binding={binding} query={query} close={close} />
+        <p className={styles.searchHint}>↑ ↓ 选择 · Enter 打开 · Esc 关闭</p>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Keep the authorized projection mounted for the surface's short exit fade,
+// rather than flashing an empty state as soon as controlled open becomes false.
+// Radix Presence unmounts it after the animation; scope/expiry still fail closed.
+function WorkspaceSearchResults({ binding, query, close }: {
+  binding: string | null;
+  query: string;
+  close: () => void;
+}) {
+  const { people, sessions, loading, failed, retry } = useWorkspaceSearchSources(binding, true);
+  const results = searchWorkspaceResults({ people, sessions, query });
+  const hasQuery = query.normalize("NFKC").trim().length > 0;
+  return (
         <div className={styles.searchResults}>
           {!hasQuery ? (
             <p className={styles.searchEmpty}>
@@ -345,7 +357,7 @@ export function WorkspaceGlobalSearchDialog({
           ) : failed ? (
             <div className={styles.searchEmpty} role="alert">
               <p>暂时无法读取人物与对话。请重试，已保存的内容不会丢失。</p>
-              <button className={styles.searchRetry} onClick={retry} type="button">重新载入</button>
+              <Button variant="outline" className="mt-3" onClick={retry}>重新载入</Button>
             </div>
           ) : results.total === 0 ? (
             <p className={styles.searchEmpty} role="status">没有找到“{query.trim()}”。试试姓名的一部分或机构名称。</p>
@@ -394,8 +406,5 @@ export function WorkspaceGlobalSearchDialog({
             </>
           )}
         </div>
-        <p className={styles.searchHint}>↑ ↓ 选择 · Enter 打开 · Esc 关闭</p>
-      </dialog>
-    </>
   );
 }

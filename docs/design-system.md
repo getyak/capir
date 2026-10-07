@@ -1,5 +1,4 @@
 # Design system
-
 > Quiet relational intelligence for evidence-first relationships.
 ## Design thesis
 
@@ -204,6 +203,7 @@ Avoid:
 - animated confidence or candidate ranking;
 - hiding critical evidence behind novelty interactions.
 
+Web uses React/Tailwind and owned shadcn-style Radix primitives in `apps/web/components/ui/`, configured by `apps/web/components.json`. Reuse project tokens and Phosphor icons. `Button` supplies variants and 44px targets; `Dialog` supplies themed portals, modal focus, accessible title/description, Escape dismissal and trigger restoration. Entrances use brief opacity and at most 4px movement; reduced motion removes animation. Preserve native IME cancellation, account-scoped reads, real failure/retry states and focus through refresh when migrating consumers. A shared primitive does not establish complete page migration.
 ## State language
 
 The design must distinguish:
