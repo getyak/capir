@@ -5324,7 +5324,7 @@ p {
   font-weight: 730;
 }
 
-.context-resource-composer input:not([type="checkbox"]),
+.context-resource-composer input:not([type="checkbox"]):not(.sr-only),
 .context-resource-composer textarea,
 .context-resource-composer select {
   background: var(--background);

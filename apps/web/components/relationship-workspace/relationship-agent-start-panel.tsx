@@ -81,16 +81,19 @@ export function RelationshipAgentStartPanel({
       className="context-chat context-chat--standalone"
       id="relationship-chat"
       data-has-conversation={turns.length > 0 || createOpen || Boolean(identityResolutionCase)}
+      data-creating={createOpen || undefined}
     >
       <div className="context-agent-heading">
         <span>
           <ChatCircleDots aria-hidden="true" size={18} weight="duotone" />
         </span>
         <div>
-          <p>关系智能助理</p>
-          <strong id="relationship-chat-title">
-            从一条消息开始。
-          </strong>
+          <p>{createOpen ? "人物与关系" : "关系智能助理"}</p>
+          {createOpen ? (
+            <h1 id="relationship-chat-title">新建联系人</h1>
+          ) : (
+            <strong id="relationship-chat-title">从一条消息开始。</strong>
+          )}
         </div>
       </div>
       <div className="context-agent-thread" ref={startContent} tabIndex={-1}>
@@ -123,7 +126,7 @@ export function RelationshipAgentStartPanel({
         )}
       </div>
       {busy ? <p role="status">正在准备回复…</p> : null}
-      <form
+      {!createOpen ? <form
         className="context-chat__composer context-chat__composer--start"
         onSubmit={(event) => {
           event.preventDefault();
@@ -186,7 +189,7 @@ export function RelationshipAgentStartPanel({
             />
           )}
         </div>
-      </form>
+      </form> : null}
     </aside>
   );
 }

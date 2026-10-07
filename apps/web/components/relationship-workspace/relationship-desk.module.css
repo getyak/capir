@@ -15,9 +15,8 @@
   min-width: 0;
 }
 
-/* Unscoped start panel: a bounded panel above the onboarding column instead of
-   a viewport-fixed sidebar. */
-.desk:global(.relationship-desk) > :global(.context-chat--standalone) {
+/* Unscoped start panel stays in the main content flow. */
+.desk:global(.relationship-desk) :global(.context-chat--standalone) {
   border: 1px solid var(--line);
   border-radius: 16px;
   box-shadow: var(--shadow-object);
@@ -28,6 +27,18 @@
   max-width: 760px;
   position: static;
   width: min(100% - 40px, 760px);
+}
+
+/* Creation owns one form; the page scrolls without a competing composer. */
+.desk:global(.relationship-desk) :global(.context-chat--standalone)[data-creating] :global(.context-agent-thread) {
+  max-height: none;
+  overflow: visible;
+}
+.desk:global(.relationship-desk) :global(.context-chat--standalone)[data-creating] :global(.context-agent-heading) h1 {
+  font-size: 1.25rem;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  margin: 0;
 }
 
 .desk:global(.relationship-desk) :global(.context-page) {
