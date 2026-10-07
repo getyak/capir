@@ -188,6 +188,101 @@ describe("time workspace routes", () => {
     expect(mocked.put).not.toHaveBeenCalled();
   });
 
+  it.each([0, 1])("preserves explicit reminder choices at revision %i", async (revision) => {
+    for (const reminder of [null, 0, 5, 15, 30, 60]) {
+      const payload = {
+        expected_revision: revision,
+        idempotency_key: "55555555-5555-4555-8555-555555555555",
+        title: "Synthetic schedule",
+        note: "No external invitation",
+        kind: "meeting",
+        person_id: null,
+        starts_at: "2026-10-07T09:00:00.000Z",
+        ends_at: "2026-10-07T09:30:00.000Z",
+        time_zone: "Asia/Shanghai",
+        all_day: false,
+        status: "planned",
+        reminder_minutes: reminder,
+      };
+      mocked.put.mockResolvedValueOnce({
+        contract_version: CONTRACT_VERSION,
+        schedule: {
+          id: "44444444-4444-4444-8444-444444444444",
+          revision: revision + 1,
+          last_operation_id: payload.idempotency_key,
+          created_at: payload.starts_at,
+          updated_at: payload.starts_at,
+          content_available: true,
+          authority: "user_authored",
+          external_effect: "none",
+          person_label: null,
+          ...payload,
+        },
+      });
+      const response = await app.inject({
+        method: "PUT",
+        url: "/v1/time/schedules/44444444-4444-4444-8444-444444444444",
+        headers: { "x-test-account": "account-a", "x-test-user": "user-a" },
+        payload,
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(mocked.put.mock.calls.at(-1)?.[3]).toEqual(payload);
+    }
+  });
+
+  it.each([
+    { reminder_minutes: "0" },
+    { reminder_minutes: false },
+    { reminder_minutes: 10 },
+    { expected_revision: "0" },
+    { all_day: "false" },
+    { person_id: "not-a-uuid" },
+    { starts_at: "2026-10-07" },
+    { unexpected: "must not be stripped" },
+  ])("rejects malformed choices without changing the request: %j", async (invalid) => {
+    const before = mocked.put.mock.calls.length;
+    const response = await app.inject({
+      method: "PUT",
+      url: "/v1/time/schedules/44444444-4444-4444-8444-444444444444",
+      headers: { "x-test-account": "account-a", "x-test-user": "user-a" },
+      payload: {
+        expected_revision: 0,
+        idempotency_key: "55555555-5555-4555-8555-555555555555",
+        title: "Synthetic schedule", note: "", kind: "meeting", person_id: null,
+        starts_at: "2026-10-07T09:00:00.000Z", ends_at: "2026-10-07T09:30:00.000Z",
+        time_zone: "Asia/Shanghai", all_day: false, status: "planned", reminder_minutes: null,
+        ...invalid,
+      },
+    });
+    expect(response.statusCode, response.body).toBe(400);
+    expect(mocked.put.mock.calls.length).toBe(before);
+  });
+
+  it("keeps path validation on the application compiler", async () => {
+    const response = await app.inject({
+      method: "PUT", url: "/v1/time/schedules/not-a-uuid",
+      headers: { "x-test-account": "account-a" }, payload: {},
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("still authenticates before committing a valid schedule", async () => {
+    const before = mocked.put.mock.calls.length;
+    const response = await app.inject({
+      method: "PUT",
+      url: "/v1/time/schedules/44444444-4444-4444-8444-444444444444",
+      payload: {
+        expected_revision: 0,
+        idempotency_key: "55555555-5555-4555-8555-555555555555",
+        title: "Synthetic schedule", note: "", kind: "meeting", person_id: null,
+        starts_at: "2026-10-07T09:00:00.000Z", ends_at: "2026-10-07T09:30:00.000Z",
+        time_zone: "Asia/Shanghai", all_day: false, status: "planned", reminder_minutes: null,
+      },
+    });
+    expect(response.statusCode, response.body).toBe(401);
+    expect(mocked.put.mock.calls.length).toBe(before);
+  });
+
   it("rate limits range review per account and user", async () => {
     for (let index = 0; index < 6; index += 1) {
       const response = await app.inject({

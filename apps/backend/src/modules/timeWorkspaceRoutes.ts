@@ -1,4 +1,5 @@
-import { Type } from "@sinclair/typebox";
+import { Type, FormatRegistry } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import {
   ErrorResponseSchema,
   TimeActivityKindSchema,
@@ -13,10 +14,11 @@ import {
   type TimeScheduleDeleteRequest,
   type TimeScheduleMutationRequest,
 } from "@talent-signal/contracts";
-import type { FastifyInstance, preHandlerHookHandler } from "fastify";
+import type { FastifyInstance, FastifySchema, FastifySchemaCompiler, preHandlerHookHandler } from "fastify";
 import type { Pool } from "pg";
 
 import { registerRecurringJob } from "../lib/recurringJob.js";
+import { ApiError } from "../lib/apiError.js";
 import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
 import { listTimeActivities } from "./timeActivities.js";
 import { reviewTimeRange } from "./timeReview.js";
@@ -60,6 +62,31 @@ const ScheduleParamsSchema = Type.Object(
   { id: Type.String({ format: "uuid" }) },
   { additionalProperties: false },
 );
+
+// Keep explicit nulls intact: Ajv's default coercion changes the reminder
+// union's null branch into 0 (a start-time alarm) before reaching that branch.
+// Match the non-mutating validator used by conversation queue mutations.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+if (!FormatRegistry.Has("uuid")) FormatRegistry.Set("uuid", (value) => UUID.test(value));
+if (!FormatRegistry.Has("date-time")) {
+  FormatRegistry.Set("date-time", (value) =>
+    DATE_TIME.test(value) && Number.isFinite(Date.parse(value)),
+  );
+}
+
+function scheduleValidatorCompiler(app: FastifyInstance): FastifySchemaCompiler<FastifySchema> {
+  return (routeSchema) => {
+    if (routeSchema.httpPart === "body") {
+      return (data) => Value.Check(TimeScheduleMutationRequestSchema, data)
+        ? { value: data }
+        : { error: new ApiError(400, "REQUEST_VALIDATION_FAILED", "The schedule does not match its bounded contract.") };
+    }
+    const fallback = app.validatorCompiler;
+    if (!fallback) throw new Error("TIME_SCHEDULE_VALIDATOR_UNAVAILABLE");
+    return fallback(routeSchema);
+  };
+}
 
 export function registerTimeWorkspaceRoutes(
   app: FastifyInstance,
@@ -121,6 +148,7 @@ export function registerTimeWorkspaceRoutes(
     "/v1/time/schedules/:id",
     {
       ...common,
+      validatorCompiler: scheduleValidatorCompiler(app),
       schema: {
         ...common.schema,
         params: ScheduleParamsSchema,
