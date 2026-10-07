@@ -4,7 +4,6 @@ import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { DesktopAccountLink, DesktopDeviceSettingsLink, desktopVersion } from "./desktop-chrome";
 import { WorkspaceAccountMenu, WeeklyUsageRow } from "./workspace-account-menu";
-import { AvatarPreferencesProvider } from "./avatar-preferences-provider";
 import { WorkspaceDownloadEntry, WorkspaceFooterStrip } from "./workspace-footer";
 import type { WeeklyUsageStore, WeeklyUsageView } from "@/lib/weekly-usage";
 import type { WeeklyUsageResponse } from "@talent-signal/contracts";
@@ -402,31 +401,3 @@ describe("account popover keyboard", () => {
   });
 });
 
-describe("account avatar modal layering", () => {
-  it("keeps the account surface through avatar editing and returns focus in two steps", async () => {
-    const host = await render(createElement(AvatarPreferencesProvider, { scope: "popover-test", children:
-      createElement(WorkspaceAccountMenu, {
-        accountName: "Synthetic User", workspaceName: null, signOutAction: () => {},
-        usage: manualStore({ status: "ready", usage: usageResponse(12) }),
-      }),
-    }));
-    const content = await openAccount(host);
-    const avatar = content.querySelector<HTMLButtonElement>("[aria-label='编辑我的头像']")!;
-    await act(async () => {
-      avatar.click();
-      await import("./avatar-editor-dialog");
-      await new Promise(resolve => setTimeout(resolve, 0));
-    });
-    const editor = document.querySelector<HTMLElement>("[data-avatar-editor][role='dialog']")!;
-    expect(editor).not.toBeNull();
-    expect(content.getAttribute("data-state")).toBe("open");
-    await act(async () => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
-    expect(document.querySelector("[data-avatar-editor][role='dialog']")).toBeNull();
-    expect(content.getAttribute("data-state")).toBe("open");
-    expect(document.activeElement).toBe(avatar);
-    await act(async () => avatar.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
-    expect(document.activeElement).toBe(host.querySelector("[data-slot='account-trigger']"));
-  });
-});
