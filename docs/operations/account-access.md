@@ -460,6 +460,10 @@ the active-entry limit (`LAB_WORKSPACE_ENTRY_LIMIT`). Sign out before discarding
 an owned context, or stop the owned run for complete cleanup. Keep any saved
 browser state private in the registered temporary artifact, never in permanent
 evidence; do not reset credentials or widen authority to bypass an entry limit.
+Web explains a verified entry limit as a test-space recovery prerequisite:
+leave an existing session, then deliberately retry. It does not describe that
+limit as an account-service outage. Failed account feedback receives focus and
+is revealed when off-screen, preserving the entered form values.
 
 Credentials: a generated password is printed exactly once through the
 dedicated success projection and kept in a run-specific OS keyring item for
