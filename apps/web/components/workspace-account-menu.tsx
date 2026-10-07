@@ -242,6 +242,12 @@ export function WorkspaceAccountMenu({
             side="top"
             ref={popover}
             onEscapeKeyDown={(event) => {
+              // During a fast modal mount our capture listener can still be
+              // registered. Escape belongs to the editor, never its parent.
+              if (event.target instanceof Element && event.target.closest("[data-avatar-editor]")) {
+                event.preventDefault();
+                return;
+              }
               const submenu = popover.current?.querySelector<HTMLDetailsElement>("details[open]");
               if (!submenu) return;
               event.preventDefault();

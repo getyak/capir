@@ -36,13 +36,15 @@ export default function AvatarEditorDialog({ request, onClose }: { request: Avat
   const [cropVersion, setCropVersion] = useState(0);
   const uploadVersion = useRef(0);
   const saveAbort = useRef<AbortController | null>(null);
+  const dismissed = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const busy = reading || saving;
   useEffect(() => () => { uploadVersion.current++; saveAbort.current?.abort(); }, []);
   useEffect(() => () => bitmap?.close(), [bitmap]);
 
   function close() {
-    if (saving) return;
+    if (saving || dismissed.current) return;
+    dismissed.current = true;
     uploadVersion.current++;
     onClose();
   }
@@ -97,7 +99,16 @@ export default function AvatarEditorDialog({ request, onClose }: { request: Avat
     <Dialog.Portal>
       <Dialog.Overlay data-avatar-editor="" className={styles.overlay} />
       <Dialog.Content data-avatar-editor="" className={`${styles.dialog} ts-workspace-theme quiet-workspace`}
-        onKeyDown={event => event.stopPropagation()}
+        onKeyDown={event => {
+          event.stopPropagation();
+          // Focus can arrive before Radix registers this as the highest layer.
+          // The parent may consume that Escape to protect its own surface;
+          // the focused editor still owns dismissal. close() is idempotent.
+          if (event.key === "Escape" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+            event.preventDefault();
+            close();
+          }
+        }}
         onEscapeKeyDown={event => { if (saving) event.preventDefault(); }}
         onInteractOutside={event => { if (saving) event.preventDefault(); }}
         onCloseAutoFocus={event => {
