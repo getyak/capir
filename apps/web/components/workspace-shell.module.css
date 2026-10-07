@@ -874,6 +874,13 @@
   outline: none;
 }
 
+/* A command surface has one dismissal control. Keep the native search field
+   semantics without a second, unlabeled platform X beside the close button. */
+.searchDialogHeader input::-webkit-search-cancel-button {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 .searchResults {
   display: grid;
   gap: 4px;
