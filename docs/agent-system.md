@@ -172,13 +172,13 @@ working context. Web reads, turns, and preference writes bind the initiating log
 forwarding its credential; stale tabs cannot act under a replacement account.
 Clients verify a matching readback before displaying a saved setting.
 
-Calendar preparation is a typed draft with a host reference clock, explicit
-client timezone and literal user source. The Agent cannot execute it. Clients
-keep source text separate from editable title/time: Web exports an ICS for
-calendar-app review; iOS requires an exact confirmation before EventKit writes.
-The native client persists a write claim before execution. Unknown outcomes
-survive reconstruction and cannot silently retry creation. Saved UI uses the
-actual event receipt, including reviewed fields, rather than the original draft.
+Calendar preparation is a typed, human-reviewed draft with a host reference clock, client timezone and literal user source. The Agent cannot execute it. Natural chat
+may end after a validated draft, an explicit whole-task finish choice and the full tool batch; source, cancellation,
+budget and genuine SDK usage checks remain. New original steering continues the Run
+discards old prepared output and disables early stopping. Failed tools or unrequested hook stops never confirm preparation.
+Clients separate source text from editable title/time: Web exports ICS for calendar-app
+review; iOS requires exact confirmation before EventKit writes and persists a write claim.
+Unknown outcomes survive reconstruction and cannot silently retry creation. Saved UI uses the actual event receipt, including reviewed fields, rather than the original draft.
 
 ## Memory and Agent Wiki
 
