@@ -980,6 +980,12 @@
     padding-bottom: calc(78px + env(safe-area-inset-bottom, 0px));
   }
 
+  /* Bottom navigation already reserves space in the shell. Short pages
+     should fit the remaining viewport instead of adding a blank scroll. */
+  .workspace {
+    min-height: calc(100dvh - 78px - env(safe-area-inset-bottom, 0px));
+  }
+
   .sidebar {
     align-items: center;
     backdrop-filter: blur(24px) saturate(145%);

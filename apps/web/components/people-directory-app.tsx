@@ -37,7 +37,7 @@ export function PeopleDirectoryApp({
               <p>
                 {error
                   ? "目录暂时不可用；已保存的联系人资料不会改变。"
-                  : `${people.length} 位${query ? "匹配联系人" : "联系人"} · 每段关系保留自己的上下文`}
+                  : "每段关系保留自己的上下文。"}
                 {returnSessionId
                   ? " 这次选择会保留原对话入口，但不会自动改变对话范围。"
                   : ""}
@@ -131,9 +131,6 @@ export function PeopleDirectoryApp({
               <PeopleDirectoryList people={people} returnSessionId={returnSessionId} />
             </>
           )}
-          <p className={styles.directoryNote}>
-            每位联系人保留独立身份，资料只在对应关系情境中使用。
-          </p>
         </div>
       </main>
     </div>

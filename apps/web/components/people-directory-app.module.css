@@ -11,11 +11,11 @@
 
 .shell {
   background: var(--background);
-  min-height: 100%;
+  min-height: 0;
 }
 
 .main {
-  min-height: 100%;
+  min-height: 0;
 }
 
 .page {
@@ -23,7 +23,7 @@
   flex-direction: column;
   margin: 0 auto;
   max-width: 1040px;
-  min-height: calc(100svh - 58px);
+  min-height: 0;
   padding: 40px 40px 72px;
 }
 
@@ -32,7 +32,7 @@
   display: flex;
   gap: 24px;
   justify-content: space-between;
-  margin-bottom: 28px;
+  margin-bottom: 24px;
 }
 
 .pageHeading h1 {
@@ -44,8 +44,8 @@
 
 .pageHeading p {
   color: var(--muted);
-  font-size: var(--workspace-meta-size);
-  line-height: 1.55;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: 1.6;
   margin-top: 8px;
   max-width: 52ch;
 }
@@ -70,14 +70,18 @@
   color: var(--ink);
 }
 
+.createPerson:active {
+  background: var(--surface-strong);
+}
+
 .listTools {
   align-items: center;
   color: var(--muted);
   display: flex;
-  font-size: var(--workspace-meta-size);
+  font-size: var(--ts-type-meta, 0.8125rem);
   gap: 20px;
   justify-content: space-between;
-  margin-bottom: 26px;
+  margin-bottom: 20px;
 }
 
 .search {
@@ -151,6 +155,11 @@
 
 .personRow:hover {
   background: color-mix(in srgb, var(--surface-muted) 62%, transparent);
+}
+
+/* Immediate press feedback lives on the row background; never a transform. */
+.personRow:active {
+  background: color-mix(in srgb, var(--surface-muted) 92%, transparent);
 }
 
 .personIdentity {
@@ -237,14 +246,6 @@
   opacity: 1;
 }
 
-.directoryNote {
-  color: var(--muted);
-  font-size: var(--workspace-meta-size);
-  line-height: 1.55;
-  margin: auto 0 0;
-  padding-top: 28px;
-}
-
 .empty {
   align-items: center;
   background: var(--surface);
@@ -299,6 +300,10 @@
 
 .empty > a:hover {
   background: var(--surface-muted);
+}
+
+.empty > a:active {
+  background: var(--surface-strong);
 }
 
 .disconnectedState {
@@ -384,6 +389,7 @@
 }
 
 .search:focus-within {
+  border-color: var(--line-strong);
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -405,6 +411,10 @@
 .search button:hover {
   background: var(--surface-muted);
   color: var(--ink);
+}
+
+.search button:active {
+  background: var(--surface-strong);
 }
 
 .personRow:focus-visible,
