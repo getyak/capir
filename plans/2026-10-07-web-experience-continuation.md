@@ -48,3 +48,7 @@ Resume: after approved cleanup or externally freed space, rerun guard, confirm f
 
 ## Final handoff checkpoint
 Final runtime code commit29e77e62 includes narrow toolbar wrapping and non-breaking filter labels; deployed code remains61828661. Prepared inactive8b074d3d has reusable dependencies, but a release for29e77e62 must be created from its clean committed source after storage is restored. Initial narrow CSS preview passed4 widths; additional label styling is not claimed as authenticated live verification. Final61828661 launchd restart and HTTPS login pass. Unsigned onboarding reaches ordinary login without false expiry. The synthetic run is deleted and credential removed. Formal evidence credential scan passes. Browser and guarded-temp cleanup receipts follow. No outstanding external writes or native tests. This plan remains incomplete solely with the explicit release/quality deductions above; do not report full-product excellence.
+
+
+## Global cleanup authorization and release resumption
+The user explicitly authorized autonomous cleanup of verified completed, reproducible artifacts across all projects. The authoritative preference is now in the global Codex AGENTS.md. Previous permission-pending checkpoints are historical and superseded. Current free space is 33 GiB; inspected Daypage artifacts contain unfinished-task evidence and remain protected. Resume the committed monitor fix without deleting unrelated evidence. Confirm the free-byte floor again immediately before building.
