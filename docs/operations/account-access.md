@@ -454,6 +454,13 @@ derived from the canonical run readback — never from a cookie or account name.
 Expired, stopped, rotated or revoked runs deny new sign-ins and existing
 sessions before cleanup; there is no real-account fallback.
 
+For browser QA, reuse the owned authenticated context across cases. Closing a
+browser does not revoke its test entry: repeated password sign-ins can exhaust
+the active-entry limit (`LAB_WORKSPACE_ENTRY_LIMIT`). Sign out before discarding
+an owned context, or stop the owned run for complete cleanup. Keep any saved
+browser state private in the registered temporary artifact, never in permanent
+evidence; do not reset credentials or widen authority to bypass an entry limit.
+
 Credentials: a generated password is printed exactly once through the
 dedicated success projection and kept in a run-specific OS keyring item for
 exact replay until stop or expiry; supplied passwords are never echoed.
