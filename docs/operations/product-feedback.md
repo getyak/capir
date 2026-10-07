@@ -190,6 +190,41 @@ after account-scope changes. Orphan tombstones and old full-content exports stil
 require the original frozen policy; never rewrite their policy to resend them.
 See the [incident evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-25-conversation-diagnostics/README.md).
 
+Deletion is durable and terminal. A `deleted` receipt keeps its tombstone,
+attempt count and recorded span ids and is never reprocessed: repeated flushes,
+repeated deletions and process reloads issue zero transport requests, while the
+tombstone keeps blocking late attempts and resumes. Only genuinely new known
+recorded spans reopen a completed deletion. A failed deletion — including an
+unverified remote readback — stays `deletion_pending` on a persisted bounded
+retry schedule (retry streak, 5 seconds doubling to a 5-minute ceiling), never
+by historical attempt count, and success clears the retry metadata. Tombstones
+without a receipt acquire one before their first attempt. Deletion resolves the
+exact configured project name through a bounded exact-match project search and
+uses the project-scoped batch trace delete; the trace and every recorded child
+must return GET 404 before the receipt becomes `deleted`. A missing, ambiguous
+or unresolvable project fails closed, and unknown remote results are never
+reported as deleted.
+
+Exporter locks never move across process namespaces and never expire by age
+alone: a namespace mismatch is not proof of death, and a foreign or unproven
+owner is left in place even when it looks stale. Recovering proven dead
+old-container locks is a serialized deployment step: verify that the lock's
+writer namespace is absent from the Docker container inventory for the mounted
+volume, then remove only that exact owner's lock file. No code path steals a
+lock on time alone. Use the operator helper from the clean deployment checkout:
+
+```sh
+node scripts/deploy/recover-runtime-observation-locks.mjs talent-signal-testflight-local-api-1 --dry-run
+node scripts/deploy/recover-runtime-observation-locks.mjs talent-signal-testflight-local-api-1 --apply
+```
+
+The helper freezes owner records before rechecking Docker identity, validates the
+owned volume, and preserves replacements, symlinks and unknown owners. It emits
+only aggregate counts and fixed failures, never container environment values.
+An existing `.operator-recovery.guard` fails closed; inspect the interrupted
+operation before removing that guard. Its counterexamples run in
+[`repository CI tests`](../../scripts/ci/recover-runtime-observation-locks.test.mjs).
+
 ## Verification
 
 See [GET-23 delivery evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-09-get-23/plan.md). Focused
