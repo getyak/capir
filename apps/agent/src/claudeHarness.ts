@@ -143,6 +143,8 @@ export interface ClaudeHarnessRequest {
    */
   steering?: HarnessSteeringFeed;
   onToolCompletion?: (receipt: HarnessToolCompletion) => void;
+  /** Host-only validated preparation state; never inferred from model prose. */
+  preparationReady?: () => boolean;
   systemPrompt: string;
   context?: string;
   images?: readonly AgentProviderInputPart[];
@@ -220,6 +222,7 @@ const INTERRUPTION_CODES = new Set([
   "WORKSPACE_CONVERSATION_TIMEOUT",
   "CLAUDE_HARNESS_TIMEOUT", "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED", "CLAUDE_HARNESS_TOOL_BUDGET",
   "CLAUDE_HARNESS_SESSION_INVALIDATED", "CLAUDE_HARNESS_SESSION_MIRROR_FAILED", "CLAUDE_HARNESS_SESSION_ID_MISMATCH",
+  "CLAUDE_HARNESS_PREPARATION_STOP_NOT_REQUESTED",
   "CLAUDE_HARNESS_RESULT_MISSING", "HARNESS_SOURCE_CHANGED", "HARNESS_SESSION_BUSY", "HARNESS_SESSION_UNAVAILABLE",
   "HARNESS_SESSION_BATCH_LIMIT", "HARNESS_SESSION_ENTRY_CONFLICT", "HARNESS_SESSION_ENTRY_LIMIT",
   "HARNESS_SESSION_MIRROR_EMPTY", "HARNESS_SESSION_SIZE_LIMIT", "USER_CANCELLED",
@@ -395,6 +398,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   let toolCalls = 0;
   // Genuine completed product-tool receipts only: name and time, in order.
   const toolCompletions: HarnessToolCompletion[] = [];
+  let preparationStopped = false;
+  let preparationSuperseded = false;
+  let primaryToolCompleted = false;
+  let preparationToolFailed = false;
   let pendingSteering: HarnessSteeringBatch | null = null;
   let acknowledging: Promise<void> | null = null;
   const acknowledgeSteering = async () => {
@@ -482,7 +489,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
           return errorContent("TOOL_BUDGET_EXHAUSTED");
         }
         const parsed = entry.schema.safeParse(input);
-        if (!parsed.success) return errorContent("TOOL_INPUT_INVALID");
+        if (!parsed.success) { preparationToolFailed = true; return errorContent("TOOL_INPUT_INVALID"); }
         const execute = async () => {
           const result = await entry.execute(parsed.data, controller.signal);
           if (continuation && result.content.some(block => block.type === "image")) {
@@ -508,11 +515,13 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         try {
           const result = await observedExecute();
           const rejected = typeof result === "object" && result !== null && (result as { isError?: boolean }).isError === true;
+          if (rejected) preparationToolFailed = true;
           await recordProductEvent(entry.name, "tool", parsed.data, result,
             { read_only: entry.readOnly, is_error: rejected }, { startedAt, finishedAt: new Date().toISOString(),
               failed: rejected, secrets: captureSecrets });
           return result;
         } catch (error) {
+          preparationToolFailed = true;
           await recordProductEvent(entry.name, "tool", parsed.data, undefined, { read_only: entry.readOnly },
             { startedAt, finishedAt: new Date().toISOString(), failed: true, secrets: captureSecrets });
           throw error;
@@ -547,6 +556,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         } catch { childInputValid = false; }
       }
       const allow = permitted && delegated && validInput && childInputValid;
+      if (!allow) preparationToolFailed = true;
       if (!allow) denials.push(permitted && delegated && (!validInput || !childInputValid) ? "TOOL_INPUT_INVALID" : "TOOL_NOT_AUTHORIZED");
       return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: allow ? "allow" : "deny",
         // Product completion depends on child receipts. Keep child execution
@@ -629,6 +639,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         controller.signal.throwIfAborted();
         await assertCurrent();
         const entry = request.tools.find(tool => `${HARNESS_MCP_PREFIX}${tool.name}` === input.tool_name);
+        if (entry && !input.agent_id) primaryToolCompleted = true;
         if (entry && (!input.agent_id || subagents.some(agent => agent.name === input.agent_type && agent.tools.includes(entry.name)))) {
           // Authentic execution readback: name and completion time only. The
           // arguments, tool results and agent details stay out of this record.
@@ -641,12 +652,37 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
             agentID: input.agent_id ?? null, agentType: input.agent_type ?? null });
         }
         return {};
-      }] }], ...(request.steering ? {
+      }] }], ...(request.steering || request.preparationReady ? {
         PostToolBatch: [{ hooks: [async input => {
           if (input.hook_event_name !== "PostToolBatch" || input.agent_id) return {};
-          const context = await steeringContext(false);
-          return context ? { hookSpecificOutput: { hookEventName: "PostToolBatch", additionalContext: context } } : {};
+          try {
+            controller.signal.throwIfAborted();
+            await assertCurrent();
+            assertBudget();
+            const ready = !request.outputSchema && primaryToolCompleted && !preparationToolFailed
+              && !preparationSuperseded && request.preparationReady?.() === true;
+            const context = await steeringContext(ready);
+            if (context) {
+              // The old draft cannot terminate a task with newly admitted originals.
+              if (ready) preparationSuperseded = true;
+              return { hookSpecificOutput: { hookEventName: "PostToolBatch", additionalContext: context } };
+            }
+            if (ready) {
+              await assertCurrent();
+              assertBudget();
+              preparationStopped = true;
+              // Stop after the entire batch, before another model call.
+              // https://code.claude.com/docs/en/hooks#posttoolbatch
+              return { continue: false, stopReason: "Host-validated preparation is ready for human review." };
+            }
+            return {};
+          } catch (error) {
+            // SDK hook errors alone may be non-fatal. Source/lease loss must abort.
+            controller.abort(error);
+            throw error;
+          }
         }] }],
+      } : {}), ...(request.steering ? {
         Stop: [{ hooks: [async input => {
           if (input.hook_event_name !== "Stop" || input.agent_id) return {};
           const context = await steeringContext(true);
@@ -762,6 +798,9 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     if (!result) throw new Error("CLAUDE_HARNESS_RESULT_MISSING");
     if (result.subtype !== "success") throw new Error("CLAUDE_HARNESS_RESULT_INVALID");
     if (continuation && result.session_id !== continuation.sessionID) throw new Error("CLAUDE_HARNESS_SESSION_ID_MISMATCH");
+    if (request.preparationReady && result.terminal_reason === "hook_stopped" && !preparationStopped) {
+      throw new Error("CLAUDE_HARNESS_PREPARATION_STOP_NOT_REQUESTED");
+    }
     const counts = observedCounts();
     if (result.result && !streamedText && !request.outputSchema) request.onText?.(result.result);
     completedOutput = { text: result.result, structuredOutput: result.structured_output ?? null,

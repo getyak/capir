@@ -231,12 +231,13 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
         memory_inventory: request.context_blocks.map(block => ({ type: block.type, status: block.status })),
         allowed_citation_ids: request.allowed_citation_ids, response_preference_available: Boolean(request.responsePreference),
         assistant_service_preference: responsePreferenceContext(request.responsePreference) }),
+      ...(request.calendarContext ? { preparationReady: () => Boolean(calendar.draft()) } : {}),
       effort: "medium", budget: { ...DEFAULT_AGENT_BUDGET, maxDurationMs: 60_000 }, assertCurrent,
     }, abort.signal);
     await assertCurrent();
     const parsedOutput = splitFirstTurnSessionTitle(result.text, request.objective);
     const body = parsedOutput.body;
-    if (!body || body.length > 16_000) throw new Error("CLAUDE_CHAT_ANSWER_INVALID");
+    if ((!body && !calendar.draft()) || body.length > 16_000) throw new Error("CLAUDE_CHAT_ANSWER_INVALID");
     // No citation receipt means the host cannot label prose as a grounded answer.
     const kind = request.mode !== "unscoped_conversation" && allowed.size > 0 && !citations.length ? "clarification" : "answer";
     return { kind, title: /\p{Script=Han}/u.test(request.objective) ? "回复" : "Reply", body,
@@ -332,6 +333,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
     const outcome = await this.execute(this.configuration, { ...((request.continuation && userImages.length === 0) ? { continuation: request.continuation } : {}), ...(trusted ? { observation: trusted } : {}), objective: request.objective,
       ...(request.messageID ? { messageID: request.messageID } : {}),
       ...(request.steering ? { steering: request.steering } : {}),
+      ...(request.calendarContext && request.outputMode !== "json" ? { preparationReady: () => Boolean(calendar.draft()) } : {}),
       ...(request.onToolCompletion ? { onToolCompletion: request.onToolCompletion } : {}),
       ...(onText ? { onText } : {}),
       ...(userImages.length > 0 ? { images: userImages } : {}),
