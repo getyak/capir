@@ -1323,7 +1323,15 @@ export function RelationshipResourceComposer({
                   : `${selectedResource.fragments.length} 个可定位片段`}
               </span>
             </div>
-            <div className={`context-resource-review__actions ${styles.reviewActions}`}>
+            <div
+              className={`context-resource-review__actions ${styles.reviewActions}`}
+              onFocusCapture={(event) => {
+                const target = event.target;
+                if (target instanceof HTMLButtonElement && target.matches(":focus-visible")) {
+                  target.scrollIntoView({ block: "nearest", behavior: "instant" });
+                }
+              }}
+            >
               <button
                 aria-expanded={identityCorrectionOpen}
                 className="context-text-button"

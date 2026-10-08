@@ -88,3 +88,27 @@ it("does not apply obsolete public-source research errors or leave the new sourc
   expect(host.textContent).not.toContain("Obsolete public-source status");
   expect(host.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
 });
+
+it("reveals review actions when keyboard focus reaches them", async () => {
+  await activate("a");
+  vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear();
+  const matches = HTMLElement.prototype.matches;
+  vi.spyOn(HTMLElement.prototype, "matches").mockImplementation(function (this: HTMLElement, selector: string) {
+    return selector === ":focus-visible" || matches.call(this, selector);
+  });
+  const action = host.querySelector<HTMLButtonElement>(".context-resource-review__actions button")!;
+  await act(async () => action.focus());
+  expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledExactlyOnceWith({block:"nearest", behavior:"instant"});
+});
+
+it("does not request action scrolling for pointer focus", async () => {
+  await activate("a");
+  vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear();
+  const matches = HTMLElement.prototype.matches;
+  vi.spyOn(HTMLElement.prototype, "matches").mockImplementation(function (this: HTMLElement, selector: string) {
+    return selector === ":focus-visible" ? false : matches.call(this, selector);
+  });
+  const action = host.querySelector<HTMLButtonElement>(".context-resource-review__actions button")!;
+  await act(async () => action.focus());
+  expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+});
