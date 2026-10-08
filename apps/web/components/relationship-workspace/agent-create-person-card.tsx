@@ -1712,6 +1712,7 @@ export function AgentCreatePersonCard({
               if (event.currentTarget.matches(":focus-visible")) {
                 event.currentTarget.scrollIntoView({
                   block: "nearest",
+                  behavior: "instant",
                   inline: "nearest",
                 });
               }
