@@ -59,3 +59,9 @@ why.
 For framework-managed interaction, trace the branch selected by the actual
 runtime configuration before relying on source behavior; verify focus and
 scroll on the real surface rather than assuming another available branch runs.
+
+For browser focus, scroll, and motion checks, allow the actual user-triggered
+transition to settle within a bounded observation window before judging final
+visibility. Immediate geometry is an intermediate observation. Do not inject
+application scroll or focus to turn a failed acceptance into a pass; preserve
+failed samples and distinguish harness corrections from production fixes.
