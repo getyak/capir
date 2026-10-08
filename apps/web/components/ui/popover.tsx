@@ -8,7 +8,19 @@ import { cn } from "@/lib/utils";
 import styles from "./primitives.module.css";
 
 const Popover = PopoverPrimitive.Root;
-const PopoverTrigger = PopoverPrimitive.Trigger;
+const subscribeToReadiness = () => () => {};
+const clientReady = () => true;
+const serverReady = () => false;
+const PopoverTrigger = React.forwardRef<
+  React.ElementRef<typeof PopoverPrimitive.Trigger>,
+  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Trigger>
+>(({ disabled, ...props }, ref) => {
+  const ready = React.useSyncExternalStore(subscribeToReadiness, clientReady, serverReady);
+  // Server-painted controls must not promise an action before their handler
+  // is attached. Native disabled semantics cover that brief hydration window.
+  return <PopoverPrimitive.Trigger ref={ref} {...props} disabled={disabled || !ready} />;
+});
+PopoverTrigger.displayName = "PopoverTrigger";
 const PopoverAnchor = PopoverPrimitive.Anchor;
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
