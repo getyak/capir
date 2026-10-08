@@ -238,6 +238,9 @@ describe("time workspace routes", () => {
     { all_day: "false" },
     { person_id: "not-a-uuid" },
     { starts_at: "2026-10-07" },
+    { starts_at: "2026-02-30T09:00:00.000Z" },
+    { ends_at: "2026-02-30T10:00:00.000Z" },
+    { starts_at: "2026-10-07T24:00:00.000Z" },
     { unexpected: "must not be stripped" },
   ])("rejects malformed choices without changing the request: %j", async (invalid) => {
     const before = mocked.put.mock.calls.length;

@@ -1,14 +1,15 @@
 .overlay.overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  /* Above workspace chrome/popovers, below the avatar modal (220). */
+  z-index: 150;
   /* An overlay is translucent chrome, not an opaque workspace surface. */
   background: color-mix(in srgb, var(--ink) 18%, transparent);
 }
 .content {
   position: fixed;
   inset: 50% auto auto 50%;
-  z-index: 50;
+  z-index: 150;
   translate: -50% -50%;
   display: flex;
   flex-direction: column;

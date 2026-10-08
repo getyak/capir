@@ -27,7 +27,7 @@ import {
   getTimeSchedule,
   putTimeSchedule,
 } from "./timeSchedules.js";
-import { assertQueryTimeScope } from "./timeWorkspaceShared.js";
+import { assertQueryTimeScope, isValidCalendarDay } from "./timeWorkspaceShared.js";
 
 interface TimeActivitiesQuery {
   from: string;
@@ -67,7 +67,7 @@ const ScheduleParamsSchema = Type.Object(
 // union's null branch into 0 (a start-time alarm) before reaching that branch.
 // Match the non-mutating validator used by conversation queue mutations.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const DATE_TIME = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 if (!FormatRegistry.Has("uuid")) FormatRegistry.Set("uuid", (value) => UUID.test(value));
 if (!FormatRegistry.Has("date-time")) {
   FormatRegistry.Set("date-time", (value) =>
@@ -75,10 +75,15 @@ if (!FormatRegistry.Has("date-time")) {
   );
 }
 
+function isScheduleDateTime(value: string): boolean {
+  return DATE_TIME.test(value) && isValidCalendarDay(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
+}
+
 function scheduleValidatorCompiler(app: FastifyInstance): FastifySchemaCompiler<FastifySchema> {
   return (routeSchema) => {
     if (routeSchema.httpPart === "body") {
       return (data) => Value.Check(TimeScheduleMutationRequestSchema, data)
+        && isScheduleDateTime(data.starts_at) && isScheduleDateTime(data.ends_at)
         ? { value: data }
         : { error: new ApiError(400, "REQUEST_VALIDATION_FAILED", "The schedule does not match its bounded contract.") };
     }
