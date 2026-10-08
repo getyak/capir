@@ -89,7 +89,12 @@ export function loadRelationshipResourceList(
   return request;
 }
 
-export function RelationshipResourceComposer({
+/** Relationship changes retire the complete ephemeral reader and its drafts. */
+export function RelationshipResourceComposer(props: Parameters<typeof ScopedRelationshipResourceComposer>[0]) {
+  return <ScopedRelationshipResourceComposer key={JSON.stringify([props.personId, props.relationshipContextId])} {...props} />;
+}
+
+function ScopedRelationshipResourceComposer({
   personId,
   relationshipContextId,
   scopeLabel,
@@ -543,6 +548,8 @@ export function RelationshipResourceComposer({
   }
 
   async function refreshResearchStatus(seedResourceId?: string, isCurrent = () => true) {
+    const version = sourceReadVersion.current;
+    const current = () => version === sourceReadVersion.current && isCurrent();
     const resourceId =
       seedResourceId ?? selectedResource?.resource.id;
     if (!resourceId) {
@@ -552,16 +559,16 @@ export function RelationshipResourceComposer({
     setError("");
     try {
       const result = await loadLatestResearch(resourceId);
-      if (isCurrent()) setResearchResult(result);
+      if (current()) setResearchResult(result);
     } catch (caught) {
-      if (isCurrent()) setError(
+      if (current()) setError(
         caught instanceof Error
           ? caught.message
           : "无法恢复此前的公开研究状态。",
       );
       throw caught;
     } finally {
-      if (isCurrent()) setBusyOperation(null);
+      if (current()) setBusyOperation(null);
     }
   }
 
@@ -1922,7 +1929,7 @@ export function RelationshipResourceComposer({
                   }
                   onClick={() =>
                     void (researchResult?.status === "running"
-                      ? refreshResearchStatus()
+                      ? refreshResearchStatus().catch(() => undefined)
                       : researchSelectedResource())
                   }
                   type="button"
