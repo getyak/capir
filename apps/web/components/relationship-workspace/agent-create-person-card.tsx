@@ -41,7 +41,6 @@ import {
 } from "@/components/workspace-session-request";
 import { matchesTypeBox } from "@/lib/typebox-validation";
 import type { AgentContactDraft } from "@/lib/agent-contact-intake";
-import styles from "./agent-create-person-card.module.css";
 
 // Every resource POST keeps its own stable request identity: the request ID
 // (server idempotency) and the client-attested observation time travel
@@ -1707,15 +1706,7 @@ export function AgentCreatePersonCard({
             </button>
           ) : null}
           <button
-            className={`context-primary-button context-primary-button--compact ${styles.primaryAction}`}
-            onFocus={(event) => {
-              if (event.currentTarget.matches(":focus-visible")) {
-                event.currentTarget.scrollIntoView({
-                  block: "nearest",
-                  inline: "nearest",
-                });
-              }
-            }}
+            className="context-primary-button context-primary-button--compact"
             disabled={
               busy ||
               requestTracked ||
