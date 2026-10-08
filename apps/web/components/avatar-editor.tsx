@@ -8,6 +8,7 @@ import { AvatarPreferenceConflictError, withAvatarStorageLock, type AvatarSnapsh
 import { useAvatarEditor, useAvatarPreferences } from "./avatar-preferences-provider";
 import { IdentityAvatar } from "./identity-avatar";
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
+import { useClientReady } from "./ui/use-client-ready";
 import styles from "./avatar-editor.module.css";
 
 const choices: { value: AvatarStyle; label: string }[] = [
@@ -19,7 +20,8 @@ export function AvatarEditor({ id, label, url, self = false, size = 72, shape, c
   shape?: "circle" | "squircle"; className?: string; triggerLabel?: string;
 }) {
   const openEditor = useAvatarEditor();
-  return <button type="button" className={`${styles.trigger} ${className ?? ""}`} disabled={!openEditor}
+  const ready = useClientReady();
+  return <button type="button" className={`${styles.trigger} ${className ?? ""}`} disabled={!openEditor || !ready}
     data-compact={size <= 40} data-labelled={Boolean(triggerLabel)} aria-haspopup="dialog" aria-label={self ? "编辑我的头像" : `编辑 ${label} 的头像`}
     onClick={event => openEditor?.({ id, label, url, self }, event.currentTarget)}>
     <PersonDirectoryAvatar id={id} label={label} url={url} self={self} size={size} shape={shape} />

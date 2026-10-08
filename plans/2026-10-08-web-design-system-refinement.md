@@ -1,6 +1,9 @@
-# Web experience refinement — closed at13:00
+# Web experience refinement — resumed after13:00
 
-## Outcome and final runtime
+## Current continuation
+After the13:00 closure, the human explicitly requested “持续”. New scope is authorized without a new deadline. Fresh quiet hourly heartbeat talent-signal-web is configured; configuration is not proof of future execution. Current batch owns only evidence-led Web refinement in this attached worktree, protecting concurrent primary source and the latest accepted resident. Formal continuation evidence: continued-oct08 under the existing artifact root. No new runtime change is accepted yet. Settled account/Person review saved18 frames with final opacity1, no page/console errors or API mutation, across desktop/narrow/short-landscape/light/dark/reduced motion. Official Figma remains Starter-quota blocked; relay target read failed. Two fresh first Person-avatar clicks failed to open; failures preserved. Current bounded fix shares Popover's client-readiness hook with AvatarEditor so server-painted controls are natively disabled until their own client initialization.20 tests/4 matched files, scoped lint, bare typecheck and docs pass; nested-account focus regression and clean live build/first-click/crop proof remain pending.
+
+## Historical13:00 outcome and runtime
 The human extended the original October8 11:00 time-box through13:00 Asia/Shanghai. New scope stopped at13:00. The app deleted only web-13 at the cutoff; independent configuration readback confirms absence and six other automation configurations remain unchanged. This closes the authorized time-box; the full premium-product objective remains incomplete.
 
 Accepted resident:9fff3fbc2c265faf86353c719d1391c2a74a5071, buildO-Ay-zP23B3AOb80JUy9Z, under Library/Application Support/Talent Signal/web/releases. It is built from clean committed source, activated with exact held-lock CAS, and independently read back on real authenticated Web surfaces. Own restart20973→21750 preserves that revision/provider200. HTTPS login200, six exact served JS/CSS assets and favicon match before/after restart. Latest meaningful Person read290ms; this is a measured sample, not a general startup SLA. Backend and other tasks' dirty primary Web/macOS source are unchanged. Retain emitted current/rollback builds and source.
