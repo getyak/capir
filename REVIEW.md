@@ -64,6 +64,8 @@ For browser focus, scroll, and motion checks, allow the actual user-triggered
 transition to settle within a bounded observation window before judging final
 visibility. Bound font readiness and animation promises themselves; wait on
 animations relevant to the transition and record unrelated animation state
-separately. Immediate geometry is an intermediate observation. Do not inject
+separately. Immediate geometry is an intermediate observation. For fixed
+browser chrome, compare the full target bounds with the actual covering region;
+a center hit alone does not establish complete visibility. Do not inject
 application scroll or focus to turn a failed acceptance into a pass; preserve
 failed samples and distinguish harness corrections from production fixes.
