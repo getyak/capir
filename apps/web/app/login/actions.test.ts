@@ -57,6 +57,10 @@ class ServiceCredentialsError extends CredentialsSignin {
   code = "service_unavailable";
 }
 
+class TestWorkspaceLimitError extends CredentialsSignin {
+  code = "test_workspace_session_limit";
+}
+
 class RateLimitedCredentialsError extends CredentialsSignin {
   code = "rate_limited";
 }
@@ -113,6 +117,22 @@ describe("login action failure contract", () => {
         redirectTo: "/onboarding?callbackUrl=%2Fworkspace%2Fpursuits%2F42",
       }),
     );
+  });
+
+  it("keeps the Lab limit recoverable without replacing identity or retrying automatically", async () => {
+    signInMock.mockRejectedValue(new TestWorkspaceLimitError());
+    const state = await signInWithPasswordAccount(
+      initialState,
+      formOf({ identifier: "synthetic-feedback", password: "synthetic-password", redirectTo: "/workspace/people" }),
+    );
+    expect(state.code).toBe("test_workspace_session_limit");
+    expect(state.error).toContain("会话上限");
+    expect(state.values).toEqual({ identifier: "synthetic-feedback" });
+    expect(state.retryable).toBe(false);
+    expect(signInMock).toHaveBeenCalledOnce();
+    expect(clearTestWorkspaceSession).not.toHaveBeenCalled();
+    expect(redirect).not.toHaveBeenCalled();
+    expect(JSON.stringify(state)).not.toContain("synthetic-password");
   });
 
   it("reports a rate limit without retrying automatically", async () => {

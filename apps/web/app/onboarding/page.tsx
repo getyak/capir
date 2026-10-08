@@ -9,7 +9,8 @@ import { authenticatedBackendClient, readBackendSessionClaims } from "@/lib/serv
 import { workspaceSessionsBinding } from "@/lib/server/workspaceSessions";
 import { safeRedirectTarget } from "@/lib/auth-config";
 import { withAuthRequestTimeout } from "@/lib/auth-request-timeout";
-import { backendSessionIsExpired } from "@/lib/backend-session";
+import { backendSessionIsExpired, isBackendSessionExpiredError } from "@/lib/backend-session";
+import { auth } from "@/auth";
 import styles from "@/app/login/login.module.css";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +22,13 @@ export default async function OnboardingPage({ searchParams }: {
   const requested = safeRedirectTarget(parameters.callbackUrl);
   const callbackUrl = /^\/(?:onboarding|login)(?:[/?#]|$)/.test(requested) ? "/workspace" : requested;
   const edit = parameters.edit === "true";
-  const claims = await readBackendSessionClaims().catch(() => null);
+  const claims = await readBackendSessionClaims().catch((error) => {
+    if (isBackendSessionExpiredError(error)) redirect(`/login?reason=backend_session_expired&callbackUrl=${encodeURIComponent(callbackUrl)}`);
+    throw error;
+  });
+  if (!claims && !(await auth())?.user) {
+    redirect(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
+  }
   if (!claims || backendSessionIsExpired(claims.backendExpiresAt)) {
     // The backend-bound session failed or expired even though the primary
     // auth session may still exist. Send the EXISTING recovery reason so the
@@ -32,7 +39,10 @@ export default async function OnboardingPage({ searchParams }: {
   }
   const data = await (async () => {
     try { const client = await authenticatedBackendClient(); return client ? await withAuthRequestTimeout(signal => client.accountOnboarding(signal), { timeoutMs: 5_000 }) : null; }
-    catch { return null; }
+    catch (error) {
+      if (isBackendSessionExpiredError(error)) redirect(`/login?reason=backend_session_expired&callbackUrl=${encodeURIComponent(callbackUrl)}`);
+      return null;
+    }
   })();
   if (data && (data.account_id !== claims.backendAccountId || data.user_id !== claims.backendUserId)) redirect("/login?reason=backend_session_expired");
   if (data && data.status !== "pending" && !edit) redirect(callbackUrl);

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
 import { describe, expect, it } from "vitest";
 import { PeopleDirectoryApp } from "./people-directory-app";
+import { PeopleDirectorySearch } from "./people-directory-search";
 
 const person: PersonDirectoryItem = {
   id: "person-a", display_label: "林知遥", context_count: 1,
@@ -14,6 +15,15 @@ const person: PersonDirectoryItem = {
 const props = { error: null, people: [], query: "", returnSessionId: null, sessionRecoveryHref: null };
 
 describe("people directory states", () => {
+  it("clears a committed filter without dropping the originating conversation", () => {
+    const filtered = renderToStaticMarkup(createElement(PeopleDirectorySearch, { query: "林", returnSessionId: "session-a" }));
+    expect(filtered).toContain('aria-label="清除人物搜索"');
+    expect(filtered).toContain('href="/workspace/people?session=session-a"');
+    expect(filtered).toContain('name="session"');
+    expect(filtered).toContain('value="session-a"');
+    const unfiltered = renderToStaticMarkup(createElement(PeopleDirectorySearch, { query: "", returnSessionId: "session-a" }));
+    expect(unfiltered).not.toContain('aria-label="清除人物搜索"');
+  });
   it("distinguishes unavailable data from an empty directory", () => {
     const unavailable = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, error: "暂时无法连接" }));
     expect(unavailable).toContain("暂不可用");
@@ -23,9 +33,10 @@ describe("people directory states", () => {
     expect(unavailable).not.toContain("还没有人物");
     const empty = renderToStaticMarkup(createElement(PeopleDirectoryApp, props));
     expect(empty).toContain("0 位人物");
-    expect(empty).toContain("0 位联系人 · 每段关系保留自己的上下文");
+    expect(empty).toContain("每段关系保留自己的上下文。");
+    expect(empty).not.toContain("0 位联系人");
     expect(empty).toContain("添加第一位联系人");
-    expect(empty).toContain("每位联系人保留独立身份，资料只在对应关系情境中使用。");
+    expect(empty).not.toContain("每位联系人保留独立身份，资料只在对应关系情境中使用。");
   });
   it("keeps historical identity and relationship scope explicit", () => {
     const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, people: [person], query: "林", returnSessionId: "session-a" }));
@@ -33,8 +44,10 @@ describe("people directory states", () => {
     expect(html).toContain("项目沟通");
     expect(html).toContain("关系情境与资料");
     expect(html).toContain("1 位匹配人物");
-    expect(html).toContain("1 位匹配联系人 · 每段关系保留自己的上下文");
-    expect(html).toContain("/workspace/people/person-a?session=session-a");
+    expect(html.match(/\d+ 位/g)).toHaveLength(1);
+    expect(html).not.toContain("1 位匹配联系人");
+    expect(html).toContain("这次选择会保留原对话入口，但不会自动改变对话范围。");
+    expect(html).toContain("/workspace/people/person-a?directory_query=%E6%9E%97&amp;session=session-a");
     expect(html).toContain("项目沟通");
     expect(html).toContain('name="session"');
     expect(html).toContain('value="session-a"');
@@ -48,4 +61,36 @@ describe("people directory states", () => {
     expect(html).toContain('referrerPolicy="no-referrer"');
     expect(html).toContain('loading="lazy"');
   });
+});
+
+describe("people directory return location", () => {
+  const uuid = "7258d22f-42e3-4d40-ba4d-683a0cc76f7d";
+  const anchor = `person-${uuid}`;
+  const avatar: PersonDirectoryItem["avatar"] = {
+    url: "https://example.test/avatar.png", source_profile_url: "https://example.test/profile",
+    source_platform: "fixture", retrieved_at: "2026-09-20T08:00:00Z", confirmed_at: "2026-09-20T08:00:00Z",
+  };
+
+  it("puts the stable entry ID on the focusable Person Link and keeps the avatar a separate target", () => {
+    const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, {
+      ...props, people: [{ ...person, id: uuid, avatar }], query: "林", returnSessionId: "session-a",
+    }));
+    expect(html).toContain(`id="${anchor}"`);
+    expect(html).toContain(`href="/workspace/people/${uuid}?directory_query=%E6%9E%97&amp;session=session-a"`);
+    const rowLink = html.match(new RegExp(`<a[^>]*id="${anchor}"[^>]*>([\\s\\S]*?)</a>`));
+    expect(rowLink).not.toBeNull();
+    expect(rowLink?.[1]).not.toContain("avatar.png");
+    expect(rowLink?.[1]).not.toContain("<button");
+    expect(html.indexOf("avatar.png")).toBeLessThan(html.indexOf(`id="${anchor}"`));
+  });
+
+  it("creates no unvalidated fragment target for arbitrary Person ids", () => {
+    const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, {
+      ...props, people: [person], query: "林", returnSessionId: "session-a",
+    }));
+    expect(html).not.toContain('id="person-');
+    expect(html).not.toContain("#person-");
+    expect(html).toContain('href="/workspace/people/person-a?directory_query=%E6%9E%97&amp;session=session-a"');
+  });
+
 });

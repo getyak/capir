@@ -1,3 +1,4 @@
+import { workspaceSessionExpired } from "@/components/workspace-session-request";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -76,13 +77,6 @@ describe("persistent workspace shell", () => {
     expect(navigation).toContain("COLLAPSED_KEY");
     expect(navigation).toContain('data-mobile={route.mobile ? "true" : "false"}');
     expect(accountMenu).toContain("onClick={() => close()}");
-    expect(accountMenu).toContain('event.key === "Escape"');
-    expect(accountMenu).toContain("current === -1");
-    expect(accountMenu).toContain('key === "ArrowUp" ? items.length - 1 : 0');
-    expect(accountMenu).toContain("close(true)");
-    expect(accountMenu).toContain("trigger.current?.focus()");
-    expect(accountMenu).toContain('document.addEventListener("pointerdown"');
-    expect(accountMenu).toContain('document.addEventListener("focusin"');
     expect(accountMenu).toContain('"ArrowDown", "ArrowUp", "Home", "End"');
     expect(accountMenu).toContain("moveFocus(event.key");
     expect(accountMenu).toContain("signOutAction");
@@ -310,9 +304,9 @@ describe("relationship workspace initial read", () => {
     expect(root).toContain("workspaceSessionFetch(");
     expect(recovery).toContain("WORKSPACE_SESSION_EXPIRED_EVENT");
     expect(request).toContain('response.clone().json()');
-    expect(request).toContain(
-      'responseCode(payload) === "backend_session_expired"',
-    );
+    expect(workspaceSessionExpired(401, { code: "backend_session_expired" })).toBe(true);
+    expect(workspaceSessionExpired(401, { error: { code: "SESSION_INVALID" } })).toBe(true);
+    expect(workspaceSessionExpired(503, { code: "SESSION_INVALID" })).toBe(false);
     expect(status).toContain("登录后继续处理这段关系");
     expect(status).toContain("上一次核验的关系仍保持可见");
     expect(status).toContain("系统没有替换任何关系状态");

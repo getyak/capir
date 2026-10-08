@@ -106,6 +106,10 @@ class AccountServiceCredentialsError extends CredentialsSignin {
   code = "service_unavailable";
 }
 
+class TestWorkspaceSessionLimitCredentialsError extends CredentialsSignin {
+  code = "test_workspace_session_limit";
+}
+
 class RateLimitedCredentialsError extends CredentialsSignin {
   code = "rate_limited";
 }
@@ -208,6 +212,13 @@ function buildProviders(appleCredentials: AppleCredentials): Provider[] {
             (error.status === 429 || error.code === "RATE_LIMITED")
           ) {
             throw new RateLimitedCredentialsError();
+          }
+          if (
+            error instanceof TalentSignalHttpError &&
+            error.status === 409 &&
+            error.code === "LAB_WORKSPACE_ENTRY_LIMIT"
+          ) {
+            throw new TestWorkspaceSessionLimitCredentialsError();
           }
           throw new AccountServiceCredentialsError();
         }

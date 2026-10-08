@@ -165,6 +165,16 @@ real authenticated backend workspace; `false` selects the legacy synthetic
 demo. Verify a protected business page after login, not just the login response.
 Never write credentials into a LaunchAgent or source checkout.
 
+Before each host production build, apply the local storage guard. Check actual
+free bytes again after dependency preparation; a printed audit warning is not
+a gate and an unrelated log warning must not be mistaken for sufficient space.
+When local policy requires 30 GiB, stop below that threshold. Do not chain an
+unchecked audit and build. Follow the global artifact-cleanup policy: independently
+verify that a task is complete and its output is reproducible before removing
+registered artifacts, including completed work from other projects. Preserve
+formal evidence, source, active tasks, databases, and live and immediate rollback
+releases. Ask only when those safeguards cannot be established.
+
 Build each approved revision in a clean detached worktree under
 `~/Library/Application Support/Talent Signal/web/releases/<revision>`:
 

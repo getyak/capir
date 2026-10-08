@@ -29,8 +29,8 @@ const fixture = () => ({
     { id: "opinion", scope: "self", display_text: "我觉得这次讨论很有帮助", statement_kind: "user_opinion", speaker: null },
   ],
 });
-async function render(id = personId, session: string | undefined = sessionId) {
-  return renderToStaticMarkup(await PersonMemoryPage({ params: Promise.resolve({ id }), searchParams: Promise.resolve({ session }) }));
+async function render(id = personId, session: string | undefined = sessionId, directory_query?: string | string[]) {
+  return renderToStaticMarkup(await PersonMemoryPage({ params: Promise.resolve({ id }), searchParams: Promise.resolve({ session, directory_query }) }));
 }
 
 beforeEach(() => {
@@ -42,6 +42,26 @@ beforeEach(() => {
 });
 
 describe("saved Person destination", () => {
+  it.each(["loaded", "invalid", "unavailable"])("preserves the directory search through the %s destination without adding it to relationship authority", async (state) => {
+    if (state === "unavailable") loadPersonMemory.mockRejectedValue(new Error("unavailable"));
+    const html = await render(state === "invalid" ? "bad" : personId, sessionId, "  林 & 陈  ");
+    expect(html).toContain(`/workspace/people?query=%E6%9E%97+%26+%E9%99%88&amp;session=${sessionId}`);
+    if (state === "loaded") {
+      expect(html).toContain(`/workspace?person=${personId}&amp;context=${contextId}&amp;session=${sessionId}`);
+      expect(mint).toHaveBeenCalledWith(expect.anything(), { purpose: "people", personId });
+    }
+  });
+
+  it("keeps the filtered destination through login recovery without reading private data", async () => {
+    auth.mockResolvedValue(null);
+    const expected = `/workspace/people/${personId}?directory_query=%E6%9E%97&amp;session=${sessionId}`.replace("&amp;", "&");
+    await expect(render(personId, sessionId, "林")).rejects.toMatchObject({
+      digest: expect.stringContaining(`/login?callbackUrl=${encodeURIComponent(expected)}`),
+    });
+    expect(loadPersonMemory).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+  });
+
   it("keeps saved scopes and source/opinion distinctions while preserving return navigation", async () => {
     const html = await render();
     for (const text of ["陈知远", "我们之间", "关于对方", "关于我", "我们通过读书会认识", "来源陈述", "用户观点", "已保存事实"]) expect(html).toContain(text);

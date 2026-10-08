@@ -310,10 +310,10 @@ export function StartRelationshipPanel({
   return (
     <section className="context-start">
       <div className="context-start__intro">
-        <p className="eyebrow">首个受治理来源</p>
+        <p className="eyebrow">添加第一份背景资料</p>
         <h2>选择人物、关系与来源。</h2>
         <p>
-          身份由你决定；提取结果与来源声明保持为独立的审阅状态。
+          先确认是谁，再添加资料。提取的内容会留给你核对。
         </p>
       </div>
 

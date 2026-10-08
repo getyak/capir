@@ -45,6 +45,7 @@
 .switchMode button:disabled { opacity:.5; cursor:wait; }
 .error { padding:12px 14px; border-left:2px solid var(--error); background:color-mix(in srgb,var(--error) 5%,transparent); color:var(--error); font-size:14px; line-height:1.6; margin:0 0 18px; }
 .error p { margin:0; }
+.error:focus-visible { outline:2px solid var(--error); outline-offset:4px; }
 .fields>.error { margin:0; }
 .error .textButton { color:var(--error); padding-left:0; }
 .privacy { margin:20px 0 0; padding-top:18px; border-top:1px solid var(--line); text-align:center; color:var(--muted-strong); font-size:12px; line-height:1.8; }
