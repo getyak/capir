@@ -17,6 +17,8 @@ import { AgentTurnThread } from "./agent-turn-thread";
 import type { AgentContactDraft } from "@/lib/agent-contact-intake";
 import type { WorkspaceChatTurn } from "./use-workspace-chat";
 import { AgentVoiceInput } from "./agent-voice-input";
+import { cn } from "@/lib/utils";
+import styles from "./relationship-agent-start-panel.module.css";
 
 export function RelationshipAgentStartPanel({
   busy = false,
@@ -67,9 +69,9 @@ export function RelationshipAgentStartPanel({
     if (!createOpen || identityResolutionCase) return;
     const frame = window.requestAnimationFrame(() => {
       const content = startContent.current;
-      content?.scrollIntoView({ block: "center" });
       const input = content?.querySelector<HTMLInputElement>("input:not(:disabled)");
       const target = input?.getClientRects().length ? input : content;
+      target?.scrollIntoView({ block: "nearest", behavior: "instant" });
       target?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
@@ -96,7 +98,11 @@ export function RelationshipAgentStartPanel({
           )}
         </div>
       </div>
-      <div className="context-agent-thread" ref={startContent} tabIndex={-1}>
+      <div
+        className={cn("context-agent-thread", createOpen && styles.entryThread)}
+        ref={startContent}
+        tabIndex={-1}
+      >
         {identityResolutionCase ? (
           <AgentIdentityReviewCard
             identityCase={identityResolutionCase}

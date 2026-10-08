@@ -1,0 +1,8 @@
+/* The mobile shell and relationship bar stay above entry; the global
+   navigation stays below it. Scroll the field, not the long form. */
+@media (max-width: 760px) {
+  .entryThread input {
+    scroll-margin-block-start: 128px;
+    scroll-margin-block-end: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+}
