@@ -1305,9 +1305,9 @@ export function RelationshipResourceComposer({
       </div>
 
       {selectedResource ? (
-        <div className="context-resource-review">
-          <header>
-            <div>
+        <div className={`context-resource-review ${styles.review}`}>
+          <header className={styles.reviewHeader}>
+            <div className={styles.reviewTitle}>
               <p className="eyebrow">依据审阅</p>
               <h3 className={styles.readingTarget} ref={reviewTitleRef} tabIndex={-1}>
                 {selectedResource.resource.display_name}
@@ -1323,7 +1323,7 @@ export function RelationshipResourceComposer({
                   : `${selectedResource.fragments.length} 个可定位片段`}
               </span>
             </div>
-            <div className="context-resource-review__actions">
+            <div className={`context-resource-review__actions ${styles.reviewActions}`}>
               <button
                 aria-expanded={identityCorrectionOpen}
                 className="context-text-button"

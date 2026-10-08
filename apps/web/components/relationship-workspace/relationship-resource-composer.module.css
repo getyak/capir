@@ -4,6 +4,19 @@
 }
 
 @media (max-width: 760px) {
+  .review > .reviewHeader {
+    padding-right: 0;
+    row-gap: 12px;
+  }
+
+  .reviewTitle {
+    padding-right: 52px;
+  }
+
+  .reviewActions svg {
+    flex-shrink: 0;
+  }
+
   .readingTarget {
     scroll-margin-block-start: 128px;
     scroll-margin-block-end: calc(84px + env(safe-area-inset-bottom, 0px));
