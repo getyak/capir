@@ -62,6 +62,17 @@ it("never focuses a matching target outside this list", async () => {
   expect(document.activeElement).toBe(document.body);
 });
 
+it("resolves the target inside this list even when a retained surface has the same ID", async () => {
+  window.location.hash = entry;
+  const external = document.createElement("a");
+  external.id = entry;
+  external.href = "/outside";
+  document.body.append(external);
+  const link = await render();
+  expect(document.activeElement).toBe(link);
+  expect(document.activeElement).not.toBe(external);
+});
+
 it("does not focus the hidden directory while another route is active", async () => {
   window.location.hash = entry;
   route.pathname = "/workspace/people/another";

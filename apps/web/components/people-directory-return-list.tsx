@@ -16,11 +16,11 @@ export function PeopleDirectoryReturnList({ children, className }: {
     const hash = window.location.hash.slice(1);
     const entryId = personDirectoryEntryId(hash.slice("person-".length));
     if (hash !== entryId || document.activeElement !== document.body) return;
-    const target = document.getElementById(hash);
+    const target = list.current?.querySelector<HTMLAnchorElement>(`a[id="${entryId}"]`);
     // Next's active scroll handler handles the fragment position but leaves
     // focus untouched. Restore only this list's named return, once per route
     // entry, without overriding a control the user has already focused.
-    if (target instanceof HTMLAnchorElement && list.current?.contains(target)) {
+    if (target instanceof HTMLAnchorElement) {
       target.focus({ preventScroll: true });
     }
   }, [pathname]);
