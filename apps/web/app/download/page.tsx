@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { SiteFooter } from "@/components/site-footer";
+import { SupportEmailEntry } from "@/components/support-email-entry";
 import { SiteHeader } from "@/components/site-header";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
 import { siteConfig } from "@/lib/site";
 import { DeveloperSetup } from "./setup";
-import { MACOS_DOWNLOAD_HREF, MACOS_CHECKSUM_HREF, MACOS_RELEASES_HREF, MACOS_DISTRIBUTION_DOC_HREF, MACOS_VERSION, requestAccessHref } from "./release";
+import { MACOS_DOWNLOAD_HREF, MACOS_CHECKSUM_HREF, MACOS_RELEASES_HREF, MACOS_DISTRIBUTION_DOC_HREF, MACOS_VERSION } from "./release";
 import styles from "./download.module.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -39,7 +40,7 @@ export default async function DownloadPage() {
         </article>
         <article className={styles.entry}>
           <EntryIcon kind="phone" /><div><h2>iPhone</h2><p>{en ? "Invited TestFlight preview" : "TestFlight 受邀预览"}</p></div>
-          <a className={styles.secondary} href={requestAccessHref(locale)}>{en ? "Request invite" : "申请邀请"}<span aria-hidden="true">↗</span></a>
+          <SupportEmailEntry className={styles.secondary} subject={en ? "Request capri access" : "申请使用 capri"}>{en ? "Request invite" : "申请邀请"}<span aria-hidden="true">↗</span></SupportEmailEntry>
         </article>
         <article className={styles.entry}>
           <EntryIcon kind="web" /><div><h2>Web</h2><p>{en ? "Your browser · no installation" : "浏览器访问 · 无需安装"}</p></div>
@@ -62,7 +63,7 @@ export default async function DownloadPage() {
       <div className={styles.installLinks}><a href={MACOS_CHECKSUM_HREF}>{en ? "SHA-256 checksums" : "SHA-256 校验清单"} ↗</a><a href={MACOS_RELEASES_HREF}>{en ? "All releases" : "所有发布版本"} ↗</a><a href={MACOS_DISTRIBUTION_DOC_HREF}>{en ? "Installation guide" : "完整安装说明"} ↗</a></div>
     </section>
     <DeveloperSetup locale={locale} />
-    <section className={styles.help} aria-labelledby="help-title"><div><p className={styles.kicker}>{en ? "A LITTLE HELP" : "需要一点帮助"}</p><h2 id="help-title">{en ? "An easier start." : "让开始，更顺手。"}</h2><a className={styles.textLink} href={`mailto:${siteConfig.email}`}>{siteConfig.email} ↗</a></div><div className={styles.faqs}>
+    <section className={styles.help} aria-labelledby="help-title"><div><p className={styles.kicker}>{en ? "A LITTLE HELP" : "需要一点帮助"}</p><h2 id="help-title">{en ? "An easier start." : "让开始，更顺手。"}</h2><SupportEmailEntry className={styles.textLink}>{siteConfig.email} ↗</SupportEmailEntry></div><div className={styles.faqs}>
       {[
         [en ? "How do I install on iPhone?" : "如何在 iPhone 上安装？", en ? "Request access above. After receiving an invitation, install through TestFlight. There is no public App Store or TestFlight link yet." : "先通过上方入口申请邀请。收到邀请后，通过 TestFlight 安装；目前没有公开的 App Store 或 TestFlight 安装链接。"],
         [en ? "Do the apps share the same account?" : "各端使用同一个账号吗？", en ? "Sign in to the same workspace with your account. Each platform releases independently; hosted features depend on your workspace." : "使用自己的账号登录同一个工作区。各端独立发布，实际功能取决于你连接的工作区。"],
