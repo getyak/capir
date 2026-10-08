@@ -34,6 +34,7 @@ export interface ParsedArgs {
   /** Resolved offline help topic for `help ...` and `--help` paths. */
   helpPath?: string;
   environment?: string;
+  server?: string;
   /** auth login */
   clientLabel: string;
   timeoutSeconds: number;
@@ -194,6 +195,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
         parsed.preset = value;
         i = next;
         break;
+      }
+      case "--server": {
+        const [value, next] = flagValue(rest, i, "--server");
+        parsed.server = value; i = next; break;
       }
       case "--env": {
         const [value, next] = flagValue(rest, i, "--env");
@@ -369,7 +374,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
     return command;
   };
   if (first === "auth") {
-    if (second === "login") parsed.command = "auth login";
+    if (parsed.help) { parsed.command="help"; parsed.helpPath=second ? `auth ${second}` : "auth"; return parsed; }
+    if (second === "login") { parsed.command = "auth login"; if (!parsed.suppliedFlags?.includes("--timeout")) parsed.timeoutSeconds=300; }
     else if (second === "status") parsed.command = "auth status";
     else if (second === "logout") parsed.command = "auth logout";
     else
@@ -411,7 +417,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
 /** Post-parse policy gates run before any side effect or dispatch. */
 export function validateRequestShape(args: ParsedArgs): void {
-  const common = ["--env", "--human", "--help", "-h", "--version"];
+  const common = ["--env", "--server", "--json", "--human", "--help", "-h", "--version"];
   const allowed: Record<CommandName, string[]> = {
     help: [...common, "--json"],
     "auth login": [...common, "--client-label", "--timeout", "--noninteractive"],

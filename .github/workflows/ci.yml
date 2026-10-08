@@ -376,15 +376,16 @@ jobs:
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runAccountManagementEvaluation.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/accountSettingsIsolation.integration.test.ts src/modules/accountSettingsHttp.integration.test.ts
 
-      - name: Verify capir test provisioning with PostgreSQL
+      - name: Verify capir authorization and test provisioning with PostgreSQL
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
           CAPIR_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/capir_test_ci
+          CAPIR_AUTH_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/capir_test_ci
           CAPIR_TEST_MEDIA_DIRECTORY: ${{ github.workspace }}/build/capir-test-media
         run: |
           pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE capir_test_ci'); } finally { await pool.end(); }"
           DATABASE_URL="$CAPIR_TEST_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
-          pnpm --filter @talent-signal/backend exec vitest run src/modules/capirTests.integration.test.ts src/modules/capirTestClient.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism --maxWorkers=1 src/modules/capirAuth.integration.test.ts src/modules/capirTests.integration.test.ts src/modules/capirTestClient.test.ts
 
       - name: Exercise saved regression lifecycle with a synthetic provider
         env:

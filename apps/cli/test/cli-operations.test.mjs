@@ -89,6 +89,7 @@ function dependencies({ directory, fetchImpl, store, spawnRunner }) {
   return {
     env: { CAPIR_CONFIG_DIR: directory },
     fetchImpl,
+    authProtocol:"capir.v1",
     credentialStore: async () => store,
     // Explicit unit adapter: the credential mutex stays inside this test's
     // scratch directory. Production wiring (canonical per-OS-user root,

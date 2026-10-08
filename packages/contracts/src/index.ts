@@ -41,3 +41,7 @@ export * from "./memorySchemas.js";
 // client compatibility only; the current server does not implement them and
 // capability discovery must list those scopes as unavailable.
 export * from "./capirSchemas.js";
+// Explicit v2 browser-owned CLI authorization contract (rotating refresh,
+// grant management, user test entitlement scopes). Negotiated separately from
+// the legacy capir.v1 surface above.
+export * from "./capirAuthSchemas.js";

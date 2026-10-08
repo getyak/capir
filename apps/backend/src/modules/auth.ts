@@ -927,7 +927,7 @@ export function createAuthGuard(pool: Pool, deploymentWorkspaceIds?: readonly st
          AND users.status = 'active'
          AND ${labWorkspaceSessionActiveSQL}
          AND ${operatorLabDeploymentActiveSQL}`,
-      [sha256(accessToken), deployment.enabled, deployment.webOrigin, deployment.backendOrigin],
+      [sha256(accessToken), deployment.enabled, deployment.webOrigin, deployment.backendOrigin, deployment.userAuthEnabled === true],
     );
     const auth = result.rows[0];
     if (!auth) {

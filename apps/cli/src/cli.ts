@@ -52,7 +52,10 @@ function openBrowser(url: string): Promise<void> {
     });
     child.once("spawn", () => {
       child.unref();
-      resolve();
+    });
+    child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error("The browser opener did not complete successfully."));
     });
     child.once("error", reject);
   });
@@ -88,7 +91,7 @@ async function testRunPasswordStore(account: string): Promise<RunPasswordStore> 
 const UPDATE_NOTICE_VALUE_FLAGS = new Set([
   "profile", "model", "system", "max-tokens", "timeout", "provider",
   "base-url", "api-key-env", "auth", "token-limit-field", "system-role",
-  "env", "client-label", "username", "password", "expires-in", "preset",
+  "env", "server", "client-label", "username", "password", "expires-in", "preset",
   "request-id", "open", "receipt-dir", "wait", "role", "scenario",
   "model-policy", "duration-hours", "surface",
 ]);
@@ -125,6 +128,7 @@ const dependencies = {
   testOperatorStore,
   testRunPasswordStore,
   openBrowser,
+  onAuthProgress:(message:string)=>{process.stderr.write(message);},
   interactive: Boolean(
     (process.stdin.isTTY && process.stdout.isTTY) || process.env.CAPIR_BROWSER_OPEN,
   ),

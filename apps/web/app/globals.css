@@ -15500,3 +15500,13 @@ article[data-state="unresolved"]
 .context-workspace--embedded[data-has-scope="false"] .context-resource-composer__text {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* Distribution pages carry real install actions, not the marketing demo finale. */
+.site-footer__base[data-distribution] p:last-child {
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: 0;
+  max-width: none;
+  order: 0;
+}

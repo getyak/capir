@@ -19,6 +19,10 @@ import { ApiError } from "../lib/apiError.js";
 import { sha256 } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
 import {
+  assertUserTestAuthorityLocked,
+  type CapirUserTestAuthority,
+} from "./capirAuth.js";
+import {
   CAPIR_TEST_DAILY_COUNTS,
   capirTestPreset,
   capirTestPresets,
@@ -74,6 +78,13 @@ export interface CapirTestPrincipal {
   webOrigin: string;
   backendOrigin: string;
   maxActiveRuns: number;
+  /**
+   * Real-user provenance for a scoped user grant. Present only when the
+   * caller presented a CLI grant with an active server-owned test
+   * entitlement; operator provisioning never carries this authority and no
+   * ordinary AuthContext is ever fabricated for the operator flow.
+   */
+  userGrant?: CapirUserTestAuthority;
 }
 
 interface LockedPrincipalRow {
@@ -298,10 +309,94 @@ export function capirTestWebConsumerAuthorized(
   return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
 }
 
+/**
+ * Internal per-user provisioner mapping for user-grant runs.
+ *
+ * The row exists only with explicit real-user provenance (source
+ * `user_grant`, the mapped owner account/user) and has no credential at all:
+ * it can never be resolved as an operator credential and never yields an
+ * ordinary AuthContext. It is stable across re-login so a user can still
+ * manage prior runs, while each run records the exact grant lineage that
+ * authorized it.
+ */
+export async function ensureUserTestProvisioner(
+  pool: Pool,
+  config: BackendConfig,
+  authority: CapirUserTestAuthority,
+  scope:string,
+): Promise<CapirTestPrincipal> {
+  const settings = config.capirTests;
+  if (!settings?.webOrigin || !settings.backendOrigin) {
+    disabled();
+  }
+  if (
+    authority.webOrigin !== settings.webOrigin ||
+    authority.backendOrigin !== settings.backendOrigin
+  ) {
+    throw new ApiError(
+      403,
+      "CAPIR_TEST_ORIGIN_DENIED",
+      "This CLI grant is scoped to an exact registered origin pair.",
+    );
+  }
+  return inTransaction(pool,async client=>{
+  await assertUserTestAuthorityLocked(client,authority,scope);
+  await client.query(
+    `INSERT INTO capir_test_provisioners(
+       id, label, generation, state, web_origin, backend_origin, max_active_runs,
+       source, owner_account_id, owner_user_id
+     ) VALUES ($1, $2, 1, 'enabled', $3, $4, $5, 'user_grant', $6, $7)
+     ON CONFLICT (owner_account_id, owner_user_id, web_origin, backend_origin) WHERE source = 'user_grant' DO NOTHING`,
+    [
+      randomUUID(),
+      `capir-user-${authority.userId.slice(0, 8)}-${randomUUID().slice(0, 8)}`,
+      settings.webOrigin,
+      settings.backendOrigin,
+      settings.maxActiveRuns,
+      authority.accountId,
+      authority.userId,
+    ],
+  );
+  const row = (
+    await client.query<{
+      id: string;
+      label: string;
+      generation: number;
+      state: "enabled" | "revoked";
+      web_origin: string;
+      backend_origin: string;
+      max_active_runs: number;
+    }>(
+      `SELECT id, label, generation, state, web_origin, backend_origin, max_active_runs
+         FROM capir_test_provisioners
+        WHERE source = 'user_grant' AND owner_account_id = $1 AND owner_user_id = $2 AND web_origin=$3 AND backend_origin=$4`,
+      [authority.accountId, authority.userId,authority.webOrigin,authority.backendOrigin],
+    )
+  ).rows[0];
+  if (!row) {
+    throw new ApiError(
+      403,
+      "CAPIR_TEST_ENTITLEMENT_REQUIRED",
+      "This account's test run mapping is not available.",
+    );
+  }
+  return {
+    id: row.id,
+    label: row.label,
+    generation: row.generation,
+    state: row.state,
+    webOrigin: row.web_origin,
+    backendOrigin: row.backend_origin,
+    maxActiveRuns: row.max_active_runs,
+    userGrant: authority,
+  };
+  });
+}
+
 export class CapirTestsService {
   constructor(
     readonly pool: Pool,
-    private readonly config: BackendConfig,
+    readonly config: BackendConfig,
     private readonly storage: ChatMediaStorage,
     private readonly labWorkspaces: LabWorkspaceService,
   ) {}
@@ -404,6 +499,12 @@ export class CapirTestsService {
     const email = EMAIL_SHAPE.test(handle) ? handle : `${handle}${LAB_EMAIL_DOMAIN}`;
     try {
       await inTransaction(this.pool, async (client) => {
+        // Locked-write authority recheck through commit: the grant, the real
+        // user and the server-owned test entitlement must all still admit this
+        // exact scope and origin pair.
+        if (principal.userGrant) {
+          await assertUserTestAuthorityLocked(client, principal.userGrant, "test.create");
+        }
         const locked = (
           await client.query<LockedPrincipalRow>(
             `SELECT id, label, generation, state, web_origin, backend_origin, max_active_runs
@@ -493,8 +594,19 @@ export class CapirTestsService {
           `INSERT INTO lab_test_workspaces(
              id, owner_account_id, owner_user_id, owner_principal_id,
              target_account_id, target_user_id, duration_hours, expires_at, media_scope_hash
-           ) VALUES ($1, NULL, NULL, $2, $3, $4, $5::integer, now() + $5::integer * interval '1 hour', $6)`,
-          [runId, principal.id, accountId, userId, request.duration_hours, this.storage.labScopeID],
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7::integer, now() + $7::integer * interval '1 hour', $8)`,
+          [
+            runId,
+            // Ownership lineage: operator runs stay operator-owned; user-grant
+            // runs are owned by the mapped real user and record their grant.
+            principal.userGrant?.accountId ?? null,
+            principal.userGrant?.userId ?? null,
+            principal.userGrant ? null : principal.id,
+            accountId,
+            userId,
+            request.duration_hours,
+            this.storage.labScopeID,
+          ],
         );
         const emptyBaseline = (
           await client.query("SELECT 1 FROM harness_source_generations WHERE account_id=$1 AND generation=0", [accountId])
@@ -522,8 +634,9 @@ export class CapirTestsService {
           `INSERT INTO capir_test_runs(
              id, request_id, principal_id, principal_generation, workspace_id,
              account_id, user_id, username, requested_username, email, preset, preset_version,
-             preset_digest, counts, web_origin, backend_origin
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16)`,
+             preset_digest, counts, web_origin, backend_origin,
+             owner_kind, owner_account_id, owner_user_id, owner_grant_id
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16, $17, $18, $19, $20)`,
           [
             runId,
             request.request_id,
@@ -541,6 +654,10 @@ export class CapirTestsService {
             JSON.stringify(counts),
             principal.webOrigin,
             principal.backendOrigin,
+            principal.userGrant ? "user_grant" : "operator",
+            principal.userGrant?.accountId ?? null,
+            principal.userGrant?.userId ?? null,
+            principal.userGrant?.grantId ?? null,
           ],
         );
       });
@@ -615,8 +732,18 @@ export class CapirTestsService {
     this.assertPrincipalActive(principal);
     const run = await this.ownedRun(this.pool, principal, id);
     // Access is revoked before verified cleanup; local deletion and pending
-    // external broker effects remain distinct in the run readback.
-    await this.labWorkspaces.stopOperatorRun(run.workspace_id, request.request_id);
+    // external broker effects remain distinct in the run readback. A user
+    // grant re-checks its live grant + entitlement inside the stop
+    // transaction so a late withdrawal still disables this write.
+    await this.labWorkspaces.stopOperatorRun(
+      run.workspace_id,
+      request.request_id,
+      async (client) => {
+        if (principal.userGrant) {
+          await assertUserTestAuthorityLocked(client, principal.userGrant, "test.stop");
+        }
+      },
+    );
     return this.status(principal, id);
   }
 
@@ -638,8 +765,10 @@ export class CapirTestsService {
             AND EXISTS (
               SELECT 1 FROM lab_test_workspace_entries e
                WHERE e.workspace_id = w.id AND e.session_id = $3
-                 AND e.owner_principal_id = r.principal_id
-                 AND e.principal_generation = r.principal_generation
+                 AND ((e.owner_principal_id = r.principal_id
+                       AND e.principal_generation = r.principal_generation)
+                      OR (r.owner_kind = 'user_grant'
+                          AND EXISTS (SELECT 1 FROM capir_auth_grants g WHERE g.backing_session_id=e.owner_session_id AND g.account_id=r.owner_account_id AND g.user_id=r.owner_user_id)))
                  AND e.revoked_at IS NULL AND e.expires_at > clock_timestamp())`,
         [auth.accountId, auth.userId, auth.sessionId],
       )
@@ -691,6 +820,10 @@ export class CapirTestsService {
     const secret = randomBytes(32).toString("base64url");
     const handoffId = randomUUID();
     return inTransaction(this.pool, async (client) => {
+      // Locked-write authority recheck through commit for scoped user grants.
+      if (principal.userGrant) {
+        await assertUserTestAuthorityLocked(client, principal.userGrant, "test.handoff");
+      }
       const run = await this.ownedRun(client, principal, id);
       if (runState(run) !== "ready") {
         throw new ApiError(410, "LAB_TEST_WORKSPACE_CLOSED", "This test workspace is closed or being cleaned up.");
@@ -716,8 +849,8 @@ export class CapirTestsService {
       await client.query(
         `INSERT INTO capir_test_handoffs(
            id, request_id, run_id, account_id, user_id, secret_hash,
-           web_origin, backend_origin, expires_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           web_origin, backend_origin, expires_at, authorizing_grant_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           handoffId,
           request.request_id,
@@ -728,6 +861,7 @@ export class CapirTestsService {
           run.web_origin,
           run.backend_origin,
           expiresAt,
+          principal.userGrant?.grantId ?? null,
         ],
       );
       return {
@@ -757,7 +891,7 @@ export class CapirTestsService {
       // verified cleanup wipe cannot deadlock with a live exchange.
       const row = (
         await client.query<{
-          id: string; web_origin: string; backend_origin: string; consumed_at: Date | null; expires_at: Date;
+          id: string; authorizing_grant_id:string|null; web_origin: string; backend_origin: string; consumed_at: Date | null; expires_at: Date;
           run_id: string; account_id: string; user_id: string; username: string; email: string;
           principal_generation: number; workspace_id: string;
           workspace_state: "active" | "deleting" | "deleted";
@@ -765,7 +899,7 @@ export class CapirTestsService {
           principal_generation_current: number | null;
           principal_web_origin: string | null; principal_backend_origin: string | null;
         }>(
-          `SELECT h.id, h.web_origin, h.backend_origin, h.consumed_at, h.expires_at,
+          `SELECT h.id, h.authorizing_grant_id, h.web_origin, h.backend_origin, h.consumed_at, h.expires_at,
                   r.id AS run_id, r.account_id, r.user_id, r.username, r.email,
                   r.principal_generation, r.workspace_id,
                   w.state AS workspace_state,
@@ -815,6 +949,7 @@ export class CapirTestsService {
           username: row.username,
         },
         "capir-test-web",
+        row.authorizing_grant_id ?? undefined,
       );
       const consumed = (
         await client.query(

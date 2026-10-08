@@ -91,3 +91,8 @@ it("admits the exact private test-entry POST before a workspace session exists",
     expect(proxy(new NextRequest("https://example.test/api/capir/test-entry", { method })).status).toBe(401);
   }
 });
+
+ it.each(['/api/capir/authorize','/api/capir/grants/revoke'])('preserves session-sealed CLI POST %s',path=>{
+ expect(proxy(new NextRequest('https://example.test'+path,{method:'POST'})).headers.get('x-middleware-next')).toBe('1');
+ expect(proxy(new NextRequest('https://example.test'+path+'-other',{method:'POST'})).status).toBe(401);
+ });
