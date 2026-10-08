@@ -181,3 +181,35 @@ it("does not request action scrolling for pointer focus", async () => {
   await act(async () => action.focus());
   expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
 });
+
+for (const decision of ["authorization", "deletion"] as const) {
+  it(`returns ${decision} cancellation to its own trigger without a source mutation`, async () => {
+    await activate("a");
+    const named = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
+      .find((node) => node.textContent?.trim() === label)!;
+    const trigger = named(decision === "authorization" ? "撤销访问" : "删除来源");
+    trigger.focus();
+    await act(async () => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    if (decision === "authorization") {
+      const reason = host.querySelector<HTMLTextAreaElement>(".context-identity-correction textarea")!;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+      setter.call(reason, "Synthetic cancellation only");
+      await act(async () => reason.dispatchEvent(new Event("input", { bubbles: true })));
+    }
+    const cancel = named(decision === "authorization" ? "取消" : "保留来源");
+    cancel.focus();
+    const calls = fetcher.mock.calls.length;
+    await act(async () => cancel.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector(decision === "authorization" ? ".context-identity-correction" : ".context-resource-review__delete")).toBeNull();
+    expect(fetcher).toHaveBeenCalledTimes(calls);
+    expect(title()?.textContent).toContain("Source a");
+    if (decision === "authorization") {
+      await act(async () => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+      expect(host.querySelector<HTMLTextAreaElement>(".context-identity-correction textarea")?.value).toBe("");
+      expect(named("撤销并更新关系记录").disabled).toBe(true);
+    }
+  });
+}

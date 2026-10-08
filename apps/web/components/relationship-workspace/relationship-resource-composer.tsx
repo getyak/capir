@@ -27,7 +27,7 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FocusEvent } from "react";
 import styles from "./relationship-resource-composer.module.css";
 
 import type { ConversationTranscriptMessage } from "@/lib/conversation-transcript";
@@ -117,6 +117,14 @@ export function RelationshipResourceComposer({
   onScreenshot: () => void;
 }) {
   const reviewTitleRef = useRef<HTMLHeadingElement | null>(null);
+  const sourceAuthorizationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const deleteResourceTriggerRef = useRef<HTMLButtonElement | null>(null);
+  function revealDecisionControl(event: FocusEvent<HTMLElement>) {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.matches("button:focus-visible, input:focus-visible, textarea:focus-visible")) {
+      target.scrollIntoView({ block: "nearest", behavior: "instant" });
+    }
+  }
   const sourceReadVersion = useRef(0);
   const readingTriggerRef = useRef<HTMLButtonElement | null>(null);
   const pendingReadingRef = useRef<{
@@ -1349,6 +1357,7 @@ export function RelationshipResourceComposer({
               </button>
               <button
                 aria-expanded={sourceAuthorizationOpen}
+                ref={sourceAuthorizationTriggerRef}
                 className="context-text-button"
                 onClick={() => {
                   setDeleteResourceConfirm(false);
@@ -1377,6 +1386,8 @@ export function RelationshipResourceComposer({
                     : "恢复访问"}
               </button>
               <button
+                aria-expanded={deleteResourceConfirm}
+                ref={deleteResourceTriggerRef}
                 className="context-text-button"
                 onClick={() => {
                   setSourceAuthorizationOpen(false);
@@ -1419,7 +1430,10 @@ export function RelationshipResourceComposer({
             </div>
           </header>
           {sourceAuthorizationOpen ? (
-            <section className="context-identity-correction">
+            <section
+              className={`context-identity-correction ${styles.decision}`}
+              onFocusCapture={revealDecisionControl}
+            >
               <header>
                 <div>
                   <p className="eyebrow">来源授权</p>
@@ -1498,6 +1512,11 @@ export function RelationshipResourceComposer({
                 <button
                   className="context-secondary-button"
                   onClick={() => {
+                    const trigger = sourceAuthorizationTriggerRef.current;
+                    if (trigger?.isConnected) {
+                      trigger.scrollIntoView({ block: "nearest", behavior: "instant" });
+                      trigger.focus({ preventScroll: true });
+                    }
                     setSourceAuthorizationOpen(false);
                     resetSourceAuthorizationDecision();
                   }}
@@ -1539,13 +1558,23 @@ export function RelationshipResourceComposer({
             </section>
           ) : null}
           {deleteResourceConfirm ? (
-            <div className="context-resource-review__delete">
+            <div
+              className={`context-resource-review__delete ${styles.decision}`}
+              onFocusCapture={revealDecisionControl}
+            >
               <p>
                 这会删除此来源及由它发现的资料，并撤回依赖它的关系记录与对话快照。此操作不能恢复。
               </p>
               <button
                 className="context-secondary-button"
-                onClick={() => setDeleteResourceConfirm(false)}
+                onClick={() => {
+                  const trigger = deleteResourceTriggerRef.current;
+                  if (trigger?.isConnected) {
+                    trigger.scrollIntoView({ block: "nearest", behavior: "instant" });
+                    trigger.focus({ preventScroll: true });
+                  }
+                  setDeleteResourceConfirm(false);
+                }}
                 type="button"
               >
                 保留来源
