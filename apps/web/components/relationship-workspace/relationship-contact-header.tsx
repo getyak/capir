@@ -13,7 +13,7 @@ import {
   LinkedinLogo,
   LinkSimple,
   Phone,
-  Plus,
+  FolderOpen,
   WechatLogo,
 } from "@phosphor-icons/react";
 
@@ -154,8 +154,8 @@ export function RelationshipContactHeader({
           ) : null}
           {onReviewSources ? (
             <button onClick={onReviewSources} type="button">
-              <Plus aria-hidden="true" size={17} />
-              补充资料
+              <FolderOpen aria-hidden="true" size={17} />
+              资料与来源
             </button>
           ) : null}
         </div>
