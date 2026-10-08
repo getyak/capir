@@ -89,6 +89,75 @@ it("does not apply obsolete public-source research errors or leave the new sourc
   expect(host.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(false);
 });
 
+const research = (id: string) => ({
+  contract_version: CONTRACT_VERSION, task_id: "11111111-1111-4111-8111-111111111111",
+  seed_resource_id: id, status: "running" as const,
+  authorization_scope: "Explicit synthetic public-source reading fixture",
+  pages: [], warnings: [], created_at: "2026-10-08T08:00:00Z", completed_at: null,
+});
+async function pendingManualRead() {
+  const pending = deferred(); let reads = 0;
+  fetcher.mockImplementation((url: string) => {
+    if (url.includes("/research?")) return ++reads === 1 ? Promise.resolve(Response.json(research("a"))) : pending.promise;
+    const id = new URL(url, "http://local").searchParams.get("resource_id")!;
+    const value = detail(id);
+    return Promise.resolve(Response.json(id === "a" ? {...value, resource: {...value.resource, kind: "public_url", source_locator: "https://example.invalid/source"}} : value));
+  });
+  await activate("a");
+  const manual = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((n) => n.textContent?.includes("检查研究状态"))!;
+  expect(manual).toBeTruthy(); expect(manual.disabled).toBe(false);
+  await act(async () => manual.dispatchEvent(new MouseEvent("click", {bubbles: true})));
+  expect(reads).toBe(2); return pending;
+}
+for (const action of ["switch", "close", "context"] as const) {
+  for (const outcome of ["success", "error"] as const) {
+    it(`ignores an old manual research ${outcome} after ${action}`, async () => {
+      const pending = await pendingManualRead();
+      if (action === "switch") await activate("b");
+      else if (action === "close") {
+        const close = host.querySelector<HTMLButtonElement>('[aria-label="关闭依据审阅"]')!;
+        await act(async () => close.dispatchEvent(new MouseEvent("click", {bubbles: true})));
+      } else {
+        fetcher.mockImplementation((url: string) => url.includes("/research?") ? pending.promise : Promise.resolve(Response.json({resources: items})));
+        await act(async () => root.render(createElement(RelationshipResourceComposer, {...props, relationshipContextId: "context-b"})));
+      }
+      await act(async () => pending.resolve(outcome === "error"
+        ? Response.json({message: "Obsolete manual research result"}, {status: 503})
+        : Response.json({...research("a"), warnings: ["Obsolete manual research result"]})));
+      expect(host.textContent).not.toContain("Obsolete manual research result");
+      expect(host.textContent).not.toContain("研究仍在运行");
+      if (action === "switch") expect(title()?.textContent).toContain("Source b");
+      else expect(title()).toBeNull();
+      expect(host.textContent).not.toContain("正在检查持久任务");
+    });
+  }
+}
+it("reports a current manual research failure without an unhandled rejection and permits retry", async () => {
+  const pending = await pendingManualRead();
+  await act(async () => pending.resolve(Response.json({message: "Current manual read unavailable"}, {status: 503})));
+  expect(title()?.textContent).toContain("Source a"); expect(host.textContent).toContain("Current manual read unavailable");
+  const manual = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((n) => n.textContent?.includes("检查研究状态"))!;
+  expect(manual.disabled).toBe(false);
+  fetcher.mockResolvedValueOnce(Response.json({...research("a"), status: "completed", completed_at: "2026-10-08T08:01:00Z"}));
+  await act(async () => manual.dispatchEvent(new MouseEvent("click", {bubbles: true})));
+  expect(host.textContent).not.toContain("Current manual read unavailable"); expect(host.textContent).toContain("0 个公开页面");
+});
+it("retains the newer source's pending status operation when an old manual read settles", async () => {
+  const old = await pendingManualRead(), current = deferred();
+  fetcher.mockImplementation((url: string) => {
+    if (url.includes("/research?")) return current.promise;
+    const value = detail("b");
+    return Promise.resolve(Response.json({...value, resource: {...value.resource, kind: "public_url", source_locator: "https://example.invalid/new-source"}}));
+  });
+  await activate("b"); expect(title()?.textContent).toContain("Source b");
+  expect(host.querySelector<HTMLSelectElement>(".context-research-approval select")!.disabled).toBe(true);
+  await act(async () => old.resolve(Response.json({...research("a"), warnings: ["Obsolete manual warning"]})));
+  expect(host.textContent).not.toContain("Obsolete manual warning");
+  expect(host.querySelector<HTMLSelectElement>(".context-research-approval select")!.disabled).toBe(true);
+  await act(async () => current.resolve(Response.json(null)));
+  expect(host.querySelector<HTMLSelectElement>(".context-research-approval select")!.disabled).toBe(false);
+});
+
 it("reveals review actions when keyboard focus reaches them", async () => {
   await activate("a");
   vi.mocked(HTMLElement.prototype.scrollIntoView).mockClear();
