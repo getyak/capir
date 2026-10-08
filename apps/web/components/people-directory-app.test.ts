@@ -47,7 +47,7 @@ describe("people directory states", () => {
     expect(html.match(/\d+ 位/g)).toHaveLength(1);
     expect(html).not.toContain("1 位匹配联系人");
     expect(html).toContain("这次选择会保留原对话入口，但不会自动改变对话范围。");
-    expect(html).toContain("/workspace/people/person-a?session=session-a");
+    expect(html).toContain("/workspace/people/person-a?directory_query=%E6%9E%97&amp;session=session-a");
     expect(html).toContain("项目沟通");
     expect(html).toContain('name="session"');
     expect(html).toContain('value="session-a"');

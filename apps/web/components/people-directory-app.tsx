@@ -107,7 +107,7 @@ export function PeopleDirectoryApp({
                 <span>关系情境与资料</span>
                 <span>更新</span>
               </div>
-              <PeopleDirectoryList people={people} returnSessionId={returnSessionId} />
+              <PeopleDirectoryList people={people} query={query} returnSessionId={returnSessionId} />
             </>
           )}
         </div>
