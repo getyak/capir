@@ -18,7 +18,7 @@ export function SupportEmailEntry({ children, subject, onNavigate, className }: 
     return <a className={className} href={`mailto:${siteConfig.email}${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`}
       onClick={host ? undefined : onNavigate}>{children}</a>;
   }
-  return <span className={[styles.supportEmailFallback, className].filter(Boolean).join(" ")}>
+  return <span className={styles.supportEmailFallback}>
     <button className={styles.supportEmailButton} type="button" onClick={async () => {
       try { await navigator.clipboard.writeText(siteConfig.email); setCopied(true); }
       catch { setCopied(false); }

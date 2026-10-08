@@ -26,7 +26,7 @@ describe("download email entry compatibility", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     const element = await render();
     expect(element.querySelector("a")).toBeNull();
-    expect(element.querySelector("span")?.className).toContain("download-action");
+    expect(element.querySelector("span")?.className).not.toContain("download-action");
     await act(async () => element.querySelector("button")!.click());
     expect(writeText).toHaveBeenCalledWith(siteConfig.email);
     expect(element.textContent).toContain("已复制支持邮箱");

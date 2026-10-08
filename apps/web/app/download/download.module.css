@@ -11,6 +11,8 @@
 .heroNote { color: var(--muted); font-size: 12px; margin: 11px 0 0; }
 .entries { border-top: 1px solid var(--line-strong); }
 .entry { display: grid; grid-template-columns: 28px 1fr auto; gap: 16px; align-items: center; padding: 23px 0; border-bottom: 1px solid var(--line); }
+.entry > span { max-width: 150px; }
+.entry > span button { min-height: 44px; }
 .entry > svg { color: var(--muted-strong); }
 .entry h2 { font-size: 18px; font-weight: 600; margin: 0 0 5px; display: flex; align-items: center; gap: 10px; }
 .entry p { color: var(--muted-strong); font-size: 12px; margin: 0; line-height: 1.6; }
