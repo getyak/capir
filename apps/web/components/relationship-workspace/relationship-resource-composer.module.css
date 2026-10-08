@@ -1,0 +1,11 @@
+.readingTarget {
+  scroll-margin-block-start: 96px;
+  scroll-margin-block-end: 16px;
+}
+
+@media (max-width: 760px) {
+  .readingTarget {
+    scroll-margin-block-start: 128px;
+    scroll-margin-block-end: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+}

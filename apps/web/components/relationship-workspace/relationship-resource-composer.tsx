@@ -28,6 +28,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
+import styles from "./relationship-resource-composer.module.css";
 
 import type { ConversationTranscriptMessage } from "@/lib/conversation-transcript";
 import { ConversationTranscriptComposer } from "./conversation-transcript-composer";
@@ -115,6 +116,13 @@ export function RelationshipResourceComposer({
   onReviewCapture: (captureId: string) => void | Promise<void>;
   onScreenshot: () => void;
 }) {
+  const reviewTitleRef = useRef<HTMLHeadingElement | null>(null);
+  const sourceReadVersion = useRef(0);
+  const readingTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const pendingReadingRef = useRef<{
+    resource: RelationshipResourceDetail;
+    trigger: HTMLButtonElement;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const requestIdRef = useRef<string | null>(null);
   const requestCapturedAtRef = useRef<string | null>(null);
@@ -144,6 +152,24 @@ export function RelationshipResourceComposer({
   >([]);
   const [selectedResource, setSelectedResource] =
     useState<RelationshipResourceDetail | null>(null);
+  useEffect(() => {
+    const pending = pendingReadingRef.current;
+    pendingReadingRef.current = null;
+    if (
+      !pending || pending.resource !== selectedResource ||
+      !pending.trigger.isConnected || document.activeElement !== pending.trigger
+    ) return;
+    const title = reviewTitleRef.current;
+    title?.scrollIntoView({ block: "start", behavior: "instant" });
+    title?.focus({ preventScroll: true });
+  }, [selectedResource]);
+
+  useEffect(() => () => {
+    sourceReadVersion.current += 1;
+    pendingReadingRef.current = null;
+    readingTriggerRef.current = null;
+  }, [personId, relationshipContextId]);
+
   const [claimEdits, setClaimEdits] = useState<Record<string, string>>({});
   const [resourceLoading, setResourceLoading] = useState(true);
   const [deleteResourceConfirm, setDeleteResourceConfirm] =
@@ -410,7 +436,10 @@ export function RelationshipResourceComposer({
     };
   }, [personId, relationshipContextId]);
 
-  async function openResource(resourceId: string) {
+  async function openResource(resourceId: string, trigger?: HTMLButtonElement) {
+    const version = ++sourceReadVersion.current;
+    pendingReadingRef.current = null;
+    setBusyOperation((current) => current === "正在读取研究状态…" ? null : current);
     setError("");
     try {
       const response = await relationshipIntegrationFetch(
@@ -428,6 +457,11 @@ export function RelationshipResourceComposer({
             ? payload.message
             : "无法打开来源依据。",
         );
+      }
+      if (version !== sourceReadVersion.current) return;
+      if (trigger) {
+        readingTriggerRef.current = trigger;
+        pendingReadingRef.current = { resource: payload, trigger };
       }
       setSelectedResource(payload);
       setClaimEdits(
@@ -451,9 +485,9 @@ export function RelationshipResourceComposer({
         payload.resource.source_locator
       ) {
         try {
-          await refreshResearchStatus(payload.resource.id);
+          await refreshResearchStatus(payload.resource.id, () => version === sourceReadVersion.current);
         } catch (caught) {
-          setError(
+          if (version === sourceReadVersion.current) setError(
             caught instanceof Error
               ? caught.message
               : "来源已打开，但无法恢复此前的研究状态。",
@@ -461,7 +495,7 @@ export function RelationshipResourceComposer({
         }
       }
     } catch (caught) {
-      setError(
+      if (version === sourceReadVersion.current) setError(
         caught instanceof Error
           ? caught.message
           : "无法打开来源依据。",
@@ -500,7 +534,7 @@ export function RelationshipResourceComposer({
     );
   }
 
-  async function refreshResearchStatus(seedResourceId?: string) {
+  async function refreshResearchStatus(seedResourceId?: string, isCurrent = () => true) {
     const resourceId =
       seedResourceId ?? selectedResource?.resource.id;
     if (!resourceId) {
@@ -509,16 +543,17 @@ export function RelationshipResourceComposer({
     setBusyOperation("正在读取研究状态…");
     setError("");
     try {
-      setResearchResult(await loadLatestResearch(resourceId));
+      const result = await loadLatestResearch(resourceId);
+      if (isCurrent()) setResearchResult(result);
     } catch (caught) {
-      setError(
+      if (isCurrent()) setError(
         caught instanceof Error
           ? caught.message
           : "无法恢复此前的公开研究状态。",
       );
       throw caught;
     } finally {
-      setBusyOperation(null);
+      if (isCurrent()) setBusyOperation(null);
     }
   }
 
@@ -1212,7 +1247,8 @@ export function RelationshipResourceComposer({
               <button
                 data-state={resource.processing_state}
                 key={resource.id}
-                onClick={() => void openResource(resource.id)}
+                className={styles.readingTarget}
+                onClick={(event) => void openResource(resource.id, event.currentTarget)}
                 type="button"
               >
                 <span>
@@ -1273,7 +1309,9 @@ export function RelationshipResourceComposer({
           <header>
             <div>
               <p className="eyebrow">依据审阅</p>
-              <h3>{selectedResource.resource.display_name}</h3>
+              <h3 className={styles.readingTarget} ref={reviewTitleRef} tabIndex={-1}>
+                {selectedResource.resource.display_name}
+              </h3>
               <span>
                 {resourceKindLabel(selectedResource.resource.kind)} ·{" "}
                 {selectedResource.resource.source_authorization_state !==
@@ -1346,6 +1384,15 @@ export function RelationshipResourceComposer({
                 aria-label="关闭依据审阅"
                 className="context-icon-button"
                 onClick={() => {
+                  sourceReadVersion.current += 1;
+                  pendingReadingRef.current = null;
+                  setBusyOperation((current) => current === "正在读取研究状态…" ? null : current);
+                  const trigger = readingTriggerRef.current;
+                  readingTriggerRef.current = null;
+                  if (trigger?.isConnected) {
+                    trigger.scrollIntoView({ block: "nearest", behavior: "instant" });
+                    trigger.focus({ preventScroll: true });
+                  }
                   setSelectedResource(null);
                   setClaimEdits({});
                   setDeleteResourceConfirm(false);
