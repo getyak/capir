@@ -175,11 +175,13 @@ export default function AvatarEditorDialog({ request, onClose }: { request: Avat
             {conflict ? <button className={styles.secondary} type="button" disabled={busy} onClick={loadLatest}>载入最新设置</button> : null}
           </div> : null}
         </div>
-        <footer className={styles.footer}>
+        {/* The crop owns its apply/cancel actions. Show the avatar save stage
+            again only after the crop has been applied or cancelled. */}
+        {!bitmap && <footer className={styles.footer}>
           <button className={styles.textButton} type="button" disabled={busy || !!bitmap} onClick={() => setDraft({ style: "auto" })}>恢复默认</button>
           <div><Dialog.Close className={styles.secondary} disabled={saving}>取消</Dialog.Close>
             <button className={styles.primary} type="button" disabled={busy || !!bitmap || conflict} onClick={() => void save()}>{saving ? "正在保存…" : "保存头像"}</button></div>
-        </footer>
+        </footer>}
       </Dialog.Content>
     </Dialog.Portal>
   </Dialog.Root>;

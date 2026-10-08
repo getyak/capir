@@ -152,10 +152,13 @@ describe("avatar editing through the rendered controls", () => {
     Object.defineProperty(input, "files", { value: [new File(["synthetic raster"], "synthetic.png", { type: "image/png" })] });
     await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); await Promise.resolve(); });
     expect(document.querySelector("[aria-label='调整头像图片']")).not.toBeNull();
+    expect(button("使用这张图片")).toBeTruthy();
+    expect(button("保存头像")).toBeUndefined();
     expect(document.activeElement).toBe(body);
     body.scrollTop = 120;
     await click("取消裁切");
     expect(document.querySelector("[aria-label='调整头像图片']")).toBeNull();
+    expect(button("保存头像").disabled).toBe(false);
     expect(document.activeElement).toBe(body);
     expect(body.scrollTop).toBe(0);
     expect(readback().getAttribute("data-avatar-style")).toBe("initials");
