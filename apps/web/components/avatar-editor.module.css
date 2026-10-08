@@ -4,6 +4,8 @@
 .trigger:disabled .camera { display: none; }
 .trigger[data-compact="true"] .camera { width: 18px; height: 18px; right: -2px; bottom: -1px; border-width: 1px; opacity: 0; }
 .trigger[data-compact="true"]:is(:hover, :focus-visible) .camera { opacity: 1; }
+/* A touch user can distinguish avatar editing from the adjacent person link. */
+@media (hover: none) and (pointer: coarse) { .trigger[data-compact="true"]:not(:disabled) .camera { opacity: 1; } }
 .trigger:focus-visible, .dialog button:focus-visible, .settings button:focus-visible { outline: 2px solid var(--accent, #ab4c35); outline-offset: 4px; }
 .overlay { position: fixed; inset: 0; z-index: 220; background: rgb(20 18 15 / 32%); }
 .dialog { --avatar-dialog-inset: 24px; position: fixed; z-index: 221; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; padding: 0; border: 1px solid var(--line, #e7e1d8); border-radius: 20px; background: var(--surface, #fffdf9); color: var(--ink, #302b26); box-shadow: 0 24px 80px rgb(0 0 0 / 16%); }

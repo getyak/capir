@@ -253,6 +253,12 @@
   opacity: 1;
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .personMeta svg {
+    opacity: 1;
+  }
+}
+
 .empty {
   align-items: center;
   background: var(--surface);
