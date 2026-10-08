@@ -10,7 +10,7 @@ import {
 import { BrandMark } from "./brand-mark";
 import { useMarketingLocale } from "./marketing/locale-provider";
 
-export function SiteFooter() {
+export function SiteFooter({ distribution = false }: { distribution?: boolean }) {
   const locale = useMarketingLocale();
   const c = marketingCopy(locale);
   return (
@@ -36,9 +36,9 @@ export function SiteFooter() {
               </Link>
             ))}
             <Link href={relationshipDemoHref}>{c.demo}</Link>
-            <a href="https://github.com/getyak/talent-signal/blob/main/docs/operations/macos-distribution.md">
-              {locale === "en" ? "Download for macOS" : "下载 macOS 客户端"}
-            </a>
+            <Link href="/download">
+              {locale === "en" ? "Download and connect" : "下载与连接"}
+            </Link>
           </div>
           <div>
             <p className="footer-heading">{c.nav[2]}</p>
@@ -55,9 +55,9 @@ export function SiteFooter() {
           </div>
         </nav>
       </div>
-      <div className="shell site-footer__base">
+      <div className="shell site-footer__base" data-distribution={distribution || undefined}>
         <p>© {new Date().getFullYear()} {siteConfig.name}</p>
-        <p>{c.prototype}</p>
+        <p>{distribution ? (locale === "en" ? "Independent releases · verifiable installation sources" : "各端独立发布 · 安装来源可核查") : c.prototype}</p>
       </div>
     </footer>
   );
