@@ -1,3 +1,7 @@
+.primaryAction {
+  scroll-margin-block-end: 16px;
+}
+
 /* Leave keyboard focus above the fixed mobile navigation. */
 @media (max-width: 760px) {
   .primaryAction {
