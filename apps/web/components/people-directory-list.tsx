@@ -2,8 +2,9 @@ import type { PersonDirectoryItem } from "@talent-signal/contracts";
 import { ArrowRight } from "@phosphor-icons/react/dist/ssr/ArrowRight";
 import Link from "next/link";
 import { AvatarEditor } from "./avatar-editor";
-import { personMemoryHref } from "./people-directory-navigation";
+import { personDirectoryEntryId, personMemoryHref } from "./people-directory-navigation";
 import styles from "./people-directory-app.module.css";
+import { PeopleDirectoryReturnList } from "./people-directory-return-list";
 
 type ListProps = { people: PersonDirectoryItem[]; query: string; returnSessionId: string | null };
 
@@ -59,6 +60,7 @@ function PersonRow({ person, query, returnSessionId }: { person: PersonDirectory
     <Link
       className={styles.personRow}
       href={personMemoryHref(person.id, query, returnSessionId)}
+      id={personDirectoryEntryId(person.id) ?? undefined}
     >
       <span className={styles.personIdentity}>
         <span className={styles.personName}>
@@ -85,7 +87,7 @@ function PersonRow({ person, query, returnSessionId }: { person: PersonDirectory
 }
 
 export function PeopleDirectoryList(props: ListProps) {
-  return <ol className={styles.peopleList} aria-label="联系人列表">
+  return <PeopleDirectoryReturnList className={styles.peopleList}>
     {props.people.map(person => <li key={person.id}><PersonRow person={person} query={props.query} returnSessionId={props.returnSessionId} /></li>)}
-  </ol>;
+  </PeopleDirectoryReturnList>;
 }

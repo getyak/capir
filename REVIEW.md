@@ -55,3 +55,7 @@ Prefer direct evidence:
 
 If the result cannot be directly verified, state what remains uncertain and
 why.
+
+For framework-managed interaction, trace the branch selected by the actual
+runtime configuration before relying on source behavior; verify focus and
+scroll on the real surface rather than assuming another available branch runs.

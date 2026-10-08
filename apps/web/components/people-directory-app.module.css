@@ -147,6 +147,7 @@
   border-bottom: 1px solid var(--line-soft);
 }
 
+/* Leave room for the fixed header and bottom navigation on hash returns. */
 .personRow {
   align-items: center;
   color: var(--ink);
@@ -156,6 +157,8 @@
   column-gap: 16px;
   min-height: 83px;
   padding: 15px 12px;
+  scroll-margin-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  scroll-margin-top: 24px;
   text-decoration: none;
   transition: background 140ms var(--ease-out);
 }

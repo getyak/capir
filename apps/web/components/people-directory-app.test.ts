@@ -62,3 +62,35 @@ describe("people directory states", () => {
     expect(html).toContain('loading="lazy"');
   });
 });
+
+describe("people directory return location", () => {
+  const uuid = "7258d22f-42e3-4d40-ba4d-683a0cc76f7d";
+  const anchor = `person-${uuid}`;
+  const avatar: PersonDirectoryItem["avatar"] = {
+    url: "https://example.test/avatar.png", source_profile_url: "https://example.test/profile",
+    source_platform: "fixture", retrieved_at: "2026-09-20T08:00:00Z", confirmed_at: "2026-09-20T08:00:00Z",
+  };
+
+  it("puts the stable entry ID on the focusable Person Link and keeps the avatar a separate target", () => {
+    const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, {
+      ...props, people: [{ ...person, id: uuid, avatar }], query: "林", returnSessionId: "session-a",
+    }));
+    expect(html).toContain(`id="${anchor}"`);
+    expect(html).toContain(`href="/workspace/people/${uuid}?directory_query=%E6%9E%97&amp;session=session-a"`);
+    const rowLink = html.match(new RegExp(`<a[^>]*id="${anchor}"[^>]*>([\\s\\S]*?)</a>`));
+    expect(rowLink).not.toBeNull();
+    expect(rowLink?.[1]).not.toContain("avatar.png");
+    expect(rowLink?.[1]).not.toContain("<button");
+    expect(html.indexOf("avatar.png")).toBeLessThan(html.indexOf(`id="${anchor}"`));
+  });
+
+  it("creates no unvalidated fragment target for arbitrary Person ids", () => {
+    const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, {
+      ...props, people: [person], query: "林", returnSessionId: "session-a",
+    }));
+    expect(html).not.toContain('id="person-');
+    expect(html).not.toContain("#person-");
+    expect(html).toContain('href="/workspace/people/person-a?directory_query=%E6%9E%97&amp;session=session-a"');
+  });
+
+});
