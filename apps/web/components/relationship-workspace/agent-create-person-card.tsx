@@ -543,7 +543,7 @@ export function AgentCreatePersonCard({
             throw new Error(
               "message" in payload && payload.message
                 ? payload.message
-                : "无法检查现有人才。",
+                : "无法检查现有人物。",
             );
           }
           return payload.people;
@@ -920,7 +920,7 @@ export function AgentCreatePersonCard({
     if (!ready) {
       setError(
         lookupState === "error"
-          ? "创建新身份前，请先检查现有人才。"
+          ? "创建新人物前，请先检查现有人物。"
           : "请选择人物、关系背景和首个来源。",
       );
       return;
@@ -1324,7 +1324,7 @@ export function AgentCreatePersonCard({
         ) : lookupState === "error" ? (
           <div className="context-agent-identity-error">
             <p>
-              无法检查现有人才，已暂停创建新身份。
+              无法检查现有人物，已暂停创建新人物。
             </p>
             <button
               className="context-secondary-button"
@@ -1515,7 +1515,7 @@ export function AgentCreatePersonCard({
           </div>
         ) : (
           <p>
-            没有现有人才匹配所提供的姓名或已确认身份线索，可以创建新身份。
+            没有找到匹配姓名或已确认身份线索的现有人物，可以创建新人物。
           </p>
         )}
         {!editsLocked &&
@@ -1640,7 +1640,7 @@ export function AgentCreatePersonCard({
               setContextLabel(event.target.value);
               resetDraftRequests();
             }}
-            placeholder="例如：产品副总裁寻访"
+            placeholder="例如：合作项目 · 首次沟通"
             value={contextLabel}
           />
         </label>
