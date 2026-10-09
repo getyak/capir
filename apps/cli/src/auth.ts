@@ -7,6 +7,7 @@
  * the exact configured origin pair. An ephemeral CAPIR_TOKEN is never
  * persisted or deleted by login/logout.
  */
+import { CapirAuthV2Client, parseAuthRecord } from "./authV2.js";
 import { CapirCliError, EXIT } from "./errors.js";
 import type { CapirEnvironment } from "./config.js";
 import { CapirBackendClient, type FetchLike } from "./http.js";
@@ -27,12 +28,34 @@ export async function runAuthStatus(
 
 export async function runAuthLogout(
   environment: CapirEnvironment,
-  deps: { fetchImpl: FetchLike; store: CredentialStore; txn: CredentialTxn; token: string },
+  deps: { fetchImpl: FetchLike; store: CredentialStore; txn: CredentialTxn; token: string; protocolV2?: boolean; requestOptions?:{signal?:AbortSignal;timeoutMs?:number} },
 ): Promise<Record<string, unknown>> {
+  let record;
+  try {
+    record = deps.store.kind === "keyring" ? parseAuthRecord(deps.token, environment) : null;
+  } catch (error) {
+    if (!(error instanceof CapirCliError) || error.code !== "CAPIR_CREDENTIAL_INVALID") throw error;
+    // Invalid material cannot safely prove a remote grant. Clear only this
+    // exact local record, never dispatch it or claim remote revocation.
+    const removal = await deps.txn.removeIfMatch(deps.token);
+    return {
+      remote_revoked: false, remote_status: "unverified",
+      local_credential_state: removal, local_credential_removed: removal === "removed",
+      credential_source: "keyring", environment: environment.name,
+      next_action: `${environment.webOrigin}/workspace/settings/cli`,
+    };
+  }
   const client = new CapirBackendClient(environment.backendOrigin, deps.fetchImpl, deps.token);
+  if (record) {
+    // Refresh is unnecessary even after access expiry. Retain the exact record
+    // on every failed revoke; an uncertain rotation can still prove its family.
+    const result = await new CapirAuthV2Client(environment.backendOrigin, deps.fetchImpl, record.credentials.access_token).logoutV2(record.credentials.refresh_token,deps.requestOptions);
+    const removal = await deps.txn.removeIfMatch(deps.token);
+    return {remote_revoked:true, revoked_grant_id:result.revoked_grant_id, local_credential_state:removal, local_credential_removed:removal === "removed", environment:environment.name};
+  }
   if (deps.store.kind === "environment") {
     // Ephemeral token: revoke its grant remotely, never touch the keyring.
-    const result = await client.logout();
+    const result = deps.protocolV2 ? await new CapirAuthV2Client(environment.backendOrigin,deps.fetchImpl,deps.token).logoutV2(undefined,deps.requestOptions) : await client.logout(deps.requestOptions);
     return {
       remote_revoked: true,
       revoked_grant_id: result.revoked_grant_id,
@@ -43,7 +66,7 @@ export async function runAuthLogout(
   }
   let remote: { revoked: boolean; revoked_grant_id?: string; status: string };
   try {
-    const result = await client.logout();
+    const result = deps.protocolV2 ? await new CapirAuthV2Client(environment.backendOrigin,deps.fetchImpl,deps.token).logoutV2(undefined,deps.requestOptions) : await client.logout(deps.requestOptions);
     remote = { revoked: true, revoked_grant_id: result.revoked_grant_id, status: "revoked" };
   } catch (error) {
     const code = error instanceof CapirCliError ? error.code : "";

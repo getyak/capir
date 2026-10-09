@@ -46,22 +46,23 @@ afterEach(async () => {
 });
 
 describe("rendered workspace directory continuity", () => {
-  it("ignores a queued close event delivered after search has already reopened", async () => {
+  it("reopens search cleanly and preserves the new query through directory refresh", async () => {
     await act(async () => root.render(createElement(WorkspaceGlobalSearchDialog, { binding: "a" })));
-    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="搜索"]')!.click());
-    const dialog = host.querySelector<HTMLDialogElement>("dialog")!;
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="搜索"]')!;
+    await act(async () => trigger.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="关闭搜索"]')!.click());
+    await act(async () => trigger.click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     const input = dialog.querySelector<HTMLInputElement>("input")!;
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
     await act(async () => {
       setValue.call(input, "合成人物");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    expect(dialog.open).toBe(true);
     expect(dialog.querySelector("[data-search-result]")?.textContent).toContain("合成人物");
-    // HTMLDialogElement queues close asynchronously. It can arrive after a
-    // subsequent showModal(), when this currently-open dialog must stay active.
-    await act(async () => dialog.dispatchEvent(new Event("close")));
+    await act(async () => invalidateWorkspaceDirectory(undefined, "revalidate"));
     expect(input.value).toBe("合成人物");
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
     expect(dialog.querySelector("[data-search-result]")?.textContent).toContain("合成人物");
   });
 

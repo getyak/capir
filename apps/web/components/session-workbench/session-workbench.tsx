@@ -1,5 +1,7 @@
 "use client";
 
+import { forgetSessionOrganization } from "@/lib/workspace-session-organization";
+
 import {
   Copy,
   ArrowUp,
@@ -256,6 +258,10 @@ function LegacySessionWorkbench({
   // Late completions are fenced by the scope generation and the mounted scope.
   const detailIdentity = state.detail.session_id;
   useEffect(() => {
+    if (state.detail.state !== "active") forgetSessionOrganization(storageScope, state.detail.session_id);
+  }, [state.detail.state, state.detail.session_id, storageScope]);
+
+  useEffect(() => {
     if (state.detail.state !== "active" || !storageScope) return;
     let disposed = false;
     const unsubscribe = subscribeWorkspaceRefresh(storageScope, (_reason, generation) => {
@@ -467,6 +473,7 @@ function LegacySessionWorkbench({
           throw new Error(payload.message || "保存失败。");
         }
         if (payload.detail.state !== "active") {
+          forgetSessionOrganization(storageScope, payload.detail.session_id);
           if (saveAttemptRef.current === request) saveAttemptRef.current = null;
           pendingDraftRef.current = null;
           foreignPendingRef.current = false;
@@ -510,7 +517,7 @@ function LegacySessionWorkbench({
         }
       }
     },
-    [clearDurableDraft, commitState],
+    [clearDurableDraft, commitState, storageScope],
   );
 
   const persist = useCallback(
@@ -978,7 +985,7 @@ function LegacySessionWorkbench({
                         return (
                           <article key={block.id}>
                             {title ? <h3>{title}</h3> : null}
-                            <ConversationResponse lead={!title}>{block.body}</ConversationResponse>
+                            <ConversationResponse foldable={block.kind === "answer" && !block.requires_user_decision} lead={!title}>{block.body}</ConversationResponse>
                             <ConversationProvenance sources={block.public_source_refs} />
                           </article>
                         );

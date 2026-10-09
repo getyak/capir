@@ -60,6 +60,7 @@ interface RawEnvironment {
 export function resolveEnvironment(
   name: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  server?: string,
 ): CapirEnvironment {
   if (!name) {
     throw invalidArgument(
@@ -104,5 +105,8 @@ export function resolveEnvironment(
     typeof selected.web_origin === "string" ? selected.web_origin : "",
     `web_origin of environment "${name}"`,
   );
+  const override = server ?? env.CAPIR_SERVER?.trim();
+  if (override && validateOrigin(override, "server") !== backendOrigin)
+    throw invalidArgument("CAPIR_SERVER_UNREGISTERED", "The server override must match the selected environment's registered backend/Web pair; configure environments.json first.");
   return { name, backendOrigin, webOrigin };
 }

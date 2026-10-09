@@ -91,7 +91,7 @@ export function renderGlobalHelp(): string {
     "  capir doctor                offline model and runtime diagnostics",
     "  capir auth login|status|logout   scoped Web-consent grants (OS keyring)",
     "  capir sandbox start|status|stop   strict-replay sandboxes",
-    "  capir test create|status|stop     expiring isolated test accounts (no prior login)",
+    "  capir test create|status|stop     expiring isolated test accounts",
     "  capir update [--check|--rollback] managed standalone releases (offline help)",
     "  capir help [command]        offline help; --json renders the stable schema",
     "",

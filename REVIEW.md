@@ -55,3 +55,17 @@ Prefer direct evidence:
 
 If the result cannot be directly verified, state what remains uncertain and
 why.
+
+For framework-managed interaction, trace the branch selected by the actual
+runtime configuration before relying on source behavior; verify focus and
+scroll on the real surface rather than assuming another available branch runs.
+
+For browser focus, scroll, and motion checks, allow the actual user-triggered
+transition to settle within a bounded observation window before judging final
+visibility. Bound font readiness and animation promises themselves; wait on
+animations relevant to the transition and record unrelated animation state
+separately. Immediate geometry is an intermediate observation. For fixed
+browser chrome, compare the full target bounds with the actual covering region;
+a center hit alone does not establish complete visibility. Do not inject
+application scroll or focus to turn a failed acceptance into a pass; preserve
+failed samples and distinguish harness corrections from production fixes.

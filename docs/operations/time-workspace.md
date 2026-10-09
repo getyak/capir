@@ -69,6 +69,12 @@ coverage statement. Source text cannot grant execution authority. The host
 revalidates full admitted metadata during model context reads and after completion, rejecting stale results. A 32,000-character metadata budget bounds model input; truncated reviews list only the sources actually provided and remain explicitly incomplete.
 Provider failure remains unavailable; it does not create a synthetic successful
 review. Results are not written into long-term Memory or a new Session.
+The Web keeps a completed review in tab memory across automatic refresh, with
+an explicit stale and unverified label. Account/scope changes clear it. A
+complete read proving removal, or any admitted-source metadata change, clears
+the whole generated prose; hiding just a citation cannot withdraw its old text.
+Partial pagination cannot establish absence. Failed regeneration preserves the
+previous answer with its original question and stale label.
 
 ## Verification
 

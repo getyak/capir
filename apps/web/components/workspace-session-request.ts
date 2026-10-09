@@ -26,7 +26,9 @@ export function workspaceSessionExpired(
   status: number,
   payload: unknown,
 ): boolean {
-  return status === 401 && responseCode(payload) === "backend_session_expired";
+  const code = responseCode(payload);
+  return status === 401 && typeof code === "string" &&
+    ["backend_session_expired", "SESSION_INVALID", "SESSION_EXPIRED", "AUTHENTICATION_REQUIRED"].includes(code);
 }
 
 export async function workspaceSessionFetch(
@@ -66,13 +68,14 @@ export async function workspaceSessionFetch(
   }
   // Any 401 on the scoped workspace API must not leave a cached private
   // snapshot available. Discard first so live readers fail closed; the
-  // specific backend_session_expired code additionally starts recovery.
+  // recognized credential-loss codes additionally start recovery.
   if (local && target) {
     invalidateWorkspaceDirectory(undefined, "discard");
   }
   try {
     const payload = (await response.clone().json()) as unknown;
     if (
+      local &&
       workspaceSessionExpired(response.status, payload) &&
       typeof window !== "undefined"
     ) {

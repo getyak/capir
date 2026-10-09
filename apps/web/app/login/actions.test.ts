@@ -35,6 +35,7 @@ vi.mock("next-auth", () => {
   return { AuthError, CredentialsSignin };
 });
 
+import { clearTestWorkspaceSession } from "@/lib/server/testWorkspaceSession";
 import { TalentSignalHttpError } from "@talent-signal/contracts";
 import { CredentialsSignin } from "next-auth";
 import { redirect } from "next/navigation";
@@ -56,6 +57,10 @@ class ServiceCredentialsError extends CredentialsSignin {
   code = "service_unavailable";
 }
 
+class TestWorkspaceLimitError extends CredentialsSignin {
+  code = "test_workspace_session_limit";
+}
+
 class RateLimitedCredentialsError extends CredentialsSignin {
   code = "rate_limited";
 }
@@ -72,10 +77,24 @@ function formOf(entries: Record<string, string>) {
 
 beforeEach(() => {
   signInMock.mockReset();
+  vi.mocked(clearTestWorkspaceSession).mockReset();
+  vi.mocked(redirect).mockReset();
   registerBackendAccountMock.mockReset();
 });
 
 describe("login action failure contract", () => {
+  it("clears a stale test selection only after a successful replacement login", async () => {
+    signInMock.mockResolvedValue("/onboarding?callbackUrl=%2Fworkspace");
+    await signInWithPasswordAccount(initialState, formOf({identifier:"proof@example.invalid",password:"synthetic-password",redirectTo:"/workspace"}));
+    expect(clearTestWorkspaceSession).toHaveBeenCalledTimes(1);
+    expect(signInMock.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(clearTestWorkspaceSession).mock.invocationCallOrder[0]!);
+    expect(redirect).toHaveBeenCalledWith("/onboarding?callbackUrl=%2Fworkspace");
+    vi.mocked(clearTestWorkspaceSession).mockClear();
+    signInMock.mockRejectedValue(new ServiceCredentialsError());
+    await signInWithPasswordAccount(initialState,formOf({identifier:"proof@example.invalid",password:"synthetic-password"}));
+    expect(clearTestWorkspaceSession).not.toHaveBeenCalled();
+  });
+
   it("keeps the identifier and stores a retryable outage state", async () => {
     signInMock.mockRejectedValue(new ServiceCredentialsError());
     const state = await signInWithPasswordAccount(
@@ -98,6 +117,22 @@ describe("login action failure contract", () => {
         redirectTo: "/onboarding?callbackUrl=%2Fworkspace%2Fpursuits%2F42",
       }),
     );
+  });
+
+  it("keeps the Lab limit recoverable without replacing identity or retrying automatically", async () => {
+    signInMock.mockRejectedValue(new TestWorkspaceLimitError());
+    const state = await signInWithPasswordAccount(
+      initialState,
+      formOf({ identifier: "synthetic-feedback", password: "synthetic-password", redirectTo: "/workspace/people" }),
+    );
+    expect(state.code).toBe("test_workspace_session_limit");
+    expect(state.error).toContain("会话上限");
+    expect(state.values).toEqual({ identifier: "synthetic-feedback" });
+    expect(state.retryable).toBe(false);
+    expect(signInMock).toHaveBeenCalledOnce();
+    expect(clearTestWorkspaceSession).not.toHaveBeenCalled();
+    expect(redirect).not.toHaveBeenCalled();
+    expect(JSON.stringify(state)).not.toContain("synthetic-password");
   });
 
   it("reports a rate limit without retrying automatically", async () => {

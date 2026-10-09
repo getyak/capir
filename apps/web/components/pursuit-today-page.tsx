@@ -265,12 +265,12 @@ function AgentComposer({
     }
   }
 
-  const disabledReason =
-    item.evidenceState === "unavailable"
-      ? "来源权限不可用，因此新的运行无法引用它。"
-      : "该目标尚未关联经过审阅且获得授权的采集内容。";
   const successfulResult =
     result?.status === "proposal_staged" || result?.status === "no_action";
+
+  // The composer only exists for an eligible item with a reviewed, authorized
+  // capture; anything else is explained by the ordinary no-evidence note.
+  if (!item.agentContext) return null;
 
   return (
     <section className={styles.agent} aria-labelledby="agent-composer-title">
@@ -289,38 +289,29 @@ function AgentComposer({
         <ShieldCheck aria-label="仅供审阅；无外部效果" size={20} />
       </header>
 
-      {item.agentContext ? (
-        <>
-          <label htmlFor={`objective-${item.pursuitId}`}>运行目标</label>
-          <textarea
-            id={`objective-${item.pursuitId}`}
-            maxLength={1_000}
-            onChange={(event) => setObjective(event.target.value)}
-            rows={3}
-            value={objective}
-          />
-          <div className={styles.agentActions}>
-            <p>
-              读取 {item.agentContext.evidenceRefs.length} 条准确证据片段。输出只会是提案或无需行动。
-            </p>
-            <button
-              disabled={
-                submitting || Boolean(sessionRecoveryHref) || !objective.trim()
-              }
-              onClick={runAgent}
-              type="button"
-            >
-              {submitting ? "正在执行边界检查…" : "运行有边界的智能助理"}
-              {!submitting && <ArrowRight aria-hidden="true" size={16} />}
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className={styles.agentUnavailable}>
-          <WarningCircle aria-hidden="true" size={19} />
-          <p>{disabledReason}</p>
-        </div>
-      )}
+      <label htmlFor={`objective-${item.pursuitId}`}>运行目标</label>
+      <textarea
+        id={`objective-${item.pursuitId}`}
+        maxLength={1_000}
+        onChange={(event) => setObjective(event.target.value)}
+        rows={3}
+        value={objective}
+      />
+      <div className={styles.agentActions}>
+        <p>
+          读取 {item.agentContext.evidenceRefs.length} 条准确证据片段。输出只会是提案或无需行动。
+        </p>
+        <button
+          disabled={
+            submitting || Boolean(sessionRecoveryHref) || !objective.trim()
+          }
+          onClick={runAgent}
+          type="button"
+        >
+          {submitting ? "正在执行边界检查…" : "运行有边界的智能助理"}
+          {!submitting && <ArrowRight aria-hidden="true" size={16} />}
+        </button>
+      </div>
 
       {error ? (
         <div className={styles.runError} role="alert">
@@ -367,6 +358,15 @@ function AgentComposer({
   );
 }
 
+function evidenceAuthorityNote(item: PursuitTodayItem): string {
+  // The authority distinction stays exact: an unavailable source is a
+  // permission problem, anything else simply lacks a reviewed, authorized
+  // capture to quote.
+  return item.evidenceState === "unavailable"
+    ? "来源权限不可用，因此新的运行无法引用它。"
+    : "该目标尚未关联经过审阅且获得授权的采集内容。";
+}
+
 function FocusItem({
   item,
   providerMode,
@@ -376,13 +376,12 @@ function FocusItem({
   providerMode: Props["providerMode"];
   sessionRecoveryHref: string | null;
 }) {
-  const footerMeta = [
+  const metaLine = [
     item.action ? `负责人：${item.action.owner}` : null,
     `目标 ${formatDate(item.targetDate)}`,
-    evidenceCopy[item.evidenceState],
-    `修订版本 ${item.revision}`,
-    "打开此视图不会改变任何状态。",
   ].filter((part): part is string => Boolean(part));
+  const evidenceFlagged =
+    item.evidenceState === "unavailable" || item.evidenceState === "partial";
   return (
     <article
       className={styles.focus}
@@ -437,6 +436,34 @@ function FocusItem({
         </div>
       ) : null}
 
+      <p className={styles.focusMeta}>
+        <span>{metaLine.join(" · ")}</span>
+        <span
+          className={evidenceFlagged ? styles.evidenceFlag : styles.evidenceQuiet}
+          data-evidence-state={item.evidenceState}
+        >
+          {evidenceFlagged ? <WarningCircle aria-hidden="true" size={15} /> : null}
+          {evidenceCopy[item.evidenceState]}
+        </span>
+      </p>
+
+      <details className={styles.focusDetails}>
+        <summary>来源与记录</summary>
+        <div>
+          <p>
+            证据来源：
+            {item.agentContext
+              ? `已审阅且获授权的采集内容 · ${item.agentContext.evidenceRefs.length} 条准确证据片段。`
+              : "此视图没有可引用的已授权采集内容。"}
+          </p>
+          <p>修订版本 {item.revision}。打开此视图不会改变任何状态。</p>
+        </div>
+      </details>
+
+      {item.attentionKind !== "review" && !item.agentContext ? (
+        <p className={styles.evidenceNote}>{evidenceAuthorityNote(item)}</p>
+      ) : null}
+
       <div className={styles.focusLink}>
         <Link href={pursuitHref(item)}>
           {item.attentionKind === "review" &&
@@ -447,9 +474,7 @@ function FocusItem({
         </Link>
       </div>
 
-      <p className={styles.focusFooter}>{footerMeta.join(" · ")}</p>
-
-      {item.attentionKind !== "review" ? (
+      {item.attentionKind !== "review" && item.agentContext ? (
         <AgentComposer
           item={item}
           providerMode={providerMode}

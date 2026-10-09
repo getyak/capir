@@ -69,3 +69,10 @@
 
 .quiet-workspace { --workspace-brand-image: url("/brand/symbol.svg"); }
 :root[data-theme="dark"] .quiet-workspace { --workspace-brand-image: url("/brand/symbol-reverse.svg"); }
+
+html[data-desktop-surface="workspace"]:has(.quiet-workspace),
+html[data-desktop-surface="workspace"]:has(.quiet-workspace) body { background: transparent; }
+.quiet-workspace { --accent: var(--ink); --accent-strong: var(--ink); --focus: var(--ink); }
+
+.quiet-workspace :focus-visible { outline-color: var(--ink); }
+@media (forced-colors: active) { .quiet-workspace :focus-visible { outline-color: Highlight; } }

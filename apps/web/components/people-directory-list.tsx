@@ -2,10 +2,11 @@ import type { PersonDirectoryItem } from "@talent-signal/contracts";
 import { ArrowRight } from "@phosphor-icons/react/dist/ssr/ArrowRight";
 import Link from "next/link";
 import { AvatarEditor } from "./avatar-editor";
-import { withReturnSession } from "./session-return-navigation";
+import { personDirectoryEntryId, personMemoryHref } from "./people-directory-navigation";
 import styles from "./people-directory-app.module.css";
+import { PeopleDirectoryReturnList } from "./people-directory-return-list";
 
-type ListProps = { people: PersonDirectoryItem[]; returnSessionId: string | null };
+type ListProps = { people: PersonDirectoryItem[]; query: string; returnSessionId: string | null };
 
 function formatActivity(value: string) {
   const date = new Date(value);
@@ -19,18 +20,6 @@ function formatActivity(value: string) {
     ...(includeYear ? { year: "numeric" } : {}),
     timeZone: "UTC",
   }).format(date);
-}
-
-function relationshipHref(
-  person: PersonDirectoryItem,
-  returnSessionId: string | null,
-) {
-  // The production person-only route retains the person id even when no
-  // relationship context exists; existing contexts link from that page.
-  return withReturnSession(
-    `/workspace/people/${encodeURIComponent(person.id)}`,
-    returnSessionId,
-  );
 }
 
 function identityHandleLabel(type: string) {
@@ -63,14 +52,15 @@ function personChange(person: PersonDirectoryItem) {
   return "暂无已确认的来源";
 }
 
-function PersonRow({ person, returnSessionId }: { person: PersonDirectoryItem; returnSessionId: string | null }) {
+function PersonRow({ person, query, returnSessionId }: { person: PersonDirectoryItem; query: string; returnSessionId: string | null }) {
   const match = person.identity_matches[0];
   const context = person.contexts[0];
   return <>
     <div className={styles.rowAvatar}><AvatarEditor id={person.id} label={person.display_label} url={person.avatar?.url} size={40} /></div>
     <Link
       className={styles.personRow}
-      href={relationshipHref(person, returnSessionId)}
+      href={personMemoryHref(person.id, query, returnSessionId)}
+      id={personDirectoryEntryId(person.id) ?? undefined}
     >
       <span className={styles.personIdentity}>
         <span className={styles.personName}>
@@ -97,7 +87,7 @@ function PersonRow({ person, returnSessionId }: { person: PersonDirectoryItem; r
 }
 
 export function PeopleDirectoryList(props: ListProps) {
-  return <ol className={styles.peopleList} aria-label="联系人列表">
-    {props.people.map(person => <li key={person.id}><PersonRow person={person} returnSessionId={props.returnSessionId} /></li>)}
-  </ol>;
+  return <PeopleDirectoryReturnList className={styles.peopleList}>
+    {props.people.map(person => <li key={person.id}><PersonRow person={person} query={props.query} returnSessionId={props.returnSessionId} /></li>)}
+  </PeopleDirectoryReturnList>;
 }

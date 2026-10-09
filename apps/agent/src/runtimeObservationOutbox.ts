@@ -15,6 +15,8 @@ export interface RuntimeObservationReceipt {
   project: string;
   state: "pending" | "retained" | "deletion_pending" | "deleted";
   attempts: number;
+  retry_streak: number;
+  retry_after: string | null;
   updated_at: string;
   retention_expires_at: string;
   retained_span_ids: string[];
@@ -26,6 +28,21 @@ interface Entry {
   observation: RuntimeObservation | null;
   previous_observations?: RuntimeObservation[];
   receipt: RuntimeObservationReceipt;
+}
+type StoredReceipt = Omit<RuntimeObservationReceipt, "retry_streak" | "retry_after">
+  & { retry_streak?: number; retry_after?: string | null };
+type StoredEntry = Omit<Entry, "receipt"> & { receipt: StoredReceipt };
+// Failed deletions retry on a persisted schedule instead of every flush tick.
+// The delay follows only the consecutive retry streak (5s doubling to a
+// 5-minute ceiling), never the historical attempt count, so a receipt carrying
+// 100k past attempts still recovers within one bounded step once the target is
+// healthy again. Successful deletion clears the retry metadata. Export retries
+// stay eager per flush: the 30-second background cadence already bounds them and
+// a restart must recover an offline export promptly.
+const DELETE_RETRY_BASE_MS = 5_000;
+const DELETE_RETRY_MAX_MS = 300_000;
+function deleteRetryDelayMs(streak: number): number {
+  return Math.min(DELETE_RETRY_BASE_MS * 2 ** Math.min(Math.max(streak, 1) - 1, 16), DELETE_RETRY_MAX_MS);
 }
 interface Tombstone { trace_id: string; span_ids: string[]; created_at: string; policy_digest: string; }
 export interface RuntimeObservationTransport {
@@ -48,6 +65,14 @@ export class PrivateOpikRuntimeTransport implements RuntimeObservationTransport 
     if (response.status === 404 && method === "GET") return null;
     if (response.status === 404 && method === "DELETE") return null;
     if (!response.ok) throw new Error(`OPIK_RUNTIME_HTTP_${response.status}`);
+    // Only a GET 404 proves absence. A successful but malformed/null/empty
+    // readback is unknown and must never create a permanent deleted receipt.
+    if (method === "GET") {
+      if (response.status === 204) throw new Error("OPIK_RUNTIME_READBACK_INVALID");
+      const value: unknown = await response.json().catch(() => { throw new Error("OPIK_RUNTIME_READBACK_INVALID"); });
+      if (value === null) throw new Error("OPIK_RUNTIME_READBACK_INVALID");
+      return value;
+    }
     return response.status === 204 ? null : response.json().catch(() => null);
   }
   async retain(observation: RuntimeObservation): Promise<void> {
@@ -109,17 +134,57 @@ export class PrivateOpikRuntimeTransport implements RuntimeObservationTransport 
     }
   }
   async remove(traceID: string, spanIDs: readonly string[]): Promise<void> {
-    // Opik 2.2.45 returns 501 for individual span deletion. Delete the owned
-    // trace and verify its cascade for every locally recorded child explicitly.
-    await this.request(`traces/${traceID}`, "DELETE");
+    // DELETE spans/{id} is unimplemented (501) on the pinned Opik 2.2.45, and
+    // DELETE traces/{id} resolves owning projects from the live trace, silently
+    // skipping orphan children whose trace row is already gone. POST traces/delete
+    // with an explicit project id posts TracesDeleted unconditionally, so its
+    // cascade also removes those children: deletion must use exactly that route.
+    await this.request("traces/delete", "POST", { ids: [traceID], project_id: await this.resolveProjectID() });
+    // The cascade is asynchronous and remote state is never guessed: the trace
+    // and every locally recorded child must read back absent. A still visible or
+    // unknown result stays unverified and the durable queue keeps it pending.
     if (await this.request(`traces/${traceID}`) !== null) throw new Error("OPIK_RUNTIME_DELETE_UNVERIFIED");
     for (const id of spanIDs) if (await this.request(`spans/${id}`) !== null) throw new Error("OPIK_RUNTIME_DELETE_UNVERIFIED");
+  }
+  // The configured project name is resolved fresh before every deletion and
+  // never cached: GET projects is a partial case-insensitive search, so only an
+  // exact single name carrying a valid UUID may become the batch delete target.
+  // Missing, ambiguous, malformed, or over-bound listings fail closed and the
+  // deletion retries on its persisted schedule. Never widen to project deletion.
+  private async resolveProjectID(): Promise<string> {
+    const target = this.policy.project;
+    const exact: Array<{ id?: unknown }> = [];
+    for (let page = 1; page <= 10; page++) {
+      const result = await this.request(`projects?name=${encodeURIComponent(target)}&page=${page}&size=100`) as { content?: unknown } | null;
+      const content = Array.isArray(result?.content) ? result.content as unknown[] : null;
+      if (!content) throw new Error("OPIK_RUNTIME_PROJECT_UNRESOLVED");
+      for (const item of content) {
+        const project = item as { id?: unknown; name?: unknown };
+        if (project?.name === target) exact.push(project);
+      }
+      if (exact.length > 1) throw new Error("OPIK_RUNTIME_PROJECT_UNRESOLVED");
+      if (content.length < 100) break;
+      if (page === 10) throw new Error("OPIK_RUNTIME_PROJECT_UNRESOLVED");
+    }
+    const id = exact[0]?.id;
+    if (typeof id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(id)) {
+      throw new Error("OPIK_RUNTIME_PROJECT_UNRESOLVED");
+    }
+    return id;
   }
 }
 
 async function readJSON<T>(path: string): Promise<T | null> {
   try { return JSON.parse(await fs.readFile(path, "utf8")) as T; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+async function readEntry(path: string): Promise<Entry | null> {
+  const stored = await readJSON<StoredEntry>(path);
+  if (!stored) return null;
+  // Receipts written before durable retry scheduling migrate on read: the
+  // historical attempts stay authoritative and the retry streak starts fresh.
+  return { ...stored, receipt: { ...stored.receipt,
+    retry_streak: stored.receipt.retry_streak ?? 0, retry_after: stored.receipt.retry_after ?? null } };
 }
 async function atomicJSON(path: string, value: unknown): Promise<void> {
   const temp = `${path}.${randomUUID()}.tmp`;
@@ -164,6 +229,9 @@ async function acquireProcessLock(path: string, depth = 0): Promise<() => Promis
         // The current hard-link protocol can only publish complete records.
         // Empty/malformed files are pre-protocol crash residue, not active locks.
         let dead = !previous.owner;
+        // A namespace mismatch is not proof of death: never steal a foreign
+        // lock and never steal on age alone. Proven dead old-container locks
+        // are reclaimed operationally under an exact-owner fence.
         if (previous.owner && previous.owner.namespace !== owner.namespace) throw new Error("RUNTIME_OBSERVATION_BUSY");
         if (previous.owner && Number.isInteger(previous.owner.pid) && previous.owner.pid > 0) {
           if (previous.owner.pid === process.pid && previous.owner.process_started_at !== undefined
@@ -246,7 +314,7 @@ export class RuntimeObservationOutbox {
       if (await readJSON(this.tombstonePath(id))) { await fs.unlink(path); continue; }
       const observation = RuntimeObservationSchema.parse(await readJSON(path));
       if (observationHash(observation.policy) !== observationHash(this.policy)) throw new Error("OPIK_RUNTIME_TARGET_MISMATCH");
-      const existing = await readJSON<Entry>(this.path(id));
+      const existing = await readEntry(this.path(id));
       const previous = existing ? this.observations(existing) : [];
       if (existing?.observation) {
         const old = existing.observation;
@@ -262,7 +330,8 @@ export class RuntimeObservationOutbox {
       await atomicJSON(this.path(id), { observation, previous_observations: previous, receipt: {
         schema_version: "runtime-observation-receipt.v1", trace_id: id,
         endpoint: this.policy.endpoint, workspace: this.policy.workspace, project: this.policy.project,
-        state: "pending", attempts: existing?.receipt.attempts ?? 0, updated_at: new Date().toISOString(),
+        state: "pending", attempts: existing?.receipt.attempts ?? 0, retry_streak: existing?.receipt.retry_streak ?? 0,
+        retry_after: existing?.receipt.retry_after ?? null, updated_at: new Date().toISOString(),
         retention_expires_at: existing?.receipt.retention_expires_at ?? observation.retention_expires_at, retained_span_ids: existing?.receipt.retained_span_ids ?? [],
         deleted_span_ids: [], content_states: states, error_code: null,
       } satisfies RuntimeObservationReceipt });
@@ -286,7 +355,7 @@ export class RuntimeObservationOutbox {
     if (!this.policy.source_workspace_ids.includes(context.workspace_id)) throw new Error("RUNTIME_OBSERVATION_SCOPE_DENIED");
     const id = observationID(`${context.workspace_id}:${context.run_id}`);
     await this.locked(id, async () => {
-      let entry = await readJSON<Entry>(this.path(id));
+      let entry = await readEntry(this.path(id));
       const existing = await readJSON<Tombstone>(this.tombstonePath(id));
       if ((entry && (entry.receipt.endpoint !== this.policy.endpoint || entry.receipt.workspace !== this.policy.workspace
         || entry.receipt.project !== this.policy.project)) || (existing && !entry && existing.policy_digest !== observationHash(this.policy))) {
@@ -294,6 +363,19 @@ export class RuntimeObservationOutbox {
       }
       const spanIDs = [...new Set([...(existing?.span_ids ?? []), ...(entry ? this.observations(entry).flatMap((item) => item.spans.map((span) => span.id)) : []),
         ...(entry?.receipt.retained_span_ids ?? [])])];
+      if (entry?.receipt.state === "deleted") {
+        const cleaned = new Set(entry.receipt.deleted_span_ids);
+        // A completed deletion stays terminal across repeated deletion: the
+        // receipt and attempts survive and no transport request is issued. Only
+        // genuinely new known spans reopen cleanup, as a fresh obligation.
+        if (spanIDs.every((span) => cleaned.has(span))) {
+          if (!existing) await atomicJSON(this.tombstonePath(id), { trace_id: id, span_ids: [...cleaned],
+            created_at: entry.receipt.updated_at, policy_digest: observationHash(this.policy) });
+          await this.purgeContentFiles(id, true);
+          return;
+        }
+        entry.receipt.retry_streak = 0; entry.receipt.retry_after = null;
+      }
       // Pending attempts have never crossed the exporter boundary. Deletion does
       // not need to parse or merge them, including a malformed/oversized attempt.
       await atomicJSON(this.tombstonePath(id), { trace_id: id, span_ids: spanIDs, created_at: existing?.created_at ?? new Date().toISOString(), policy_digest: observationHash(this.policy) });
@@ -301,6 +383,7 @@ export class RuntimeObservationOutbox {
       if (!entry) entry = { observation: null, previous_observations: [], receipt: {
         schema_version: "runtime-observation-receipt.v1", trace_id: id, endpoint: this.policy.endpoint,
         workspace: this.policy.workspace, project: this.policy.project, state: "deletion_pending", attempts: 0,
+        retry_streak: 0, retry_after: null,
         updated_at: new Date().toISOString(), retention_expires_at: new Date().toISOString(),
         retained_span_ids: [], deleted_span_ids: [], content_states: {}, error_code: null,
       } };
@@ -316,10 +399,11 @@ export class RuntimeObservationOutbox {
   async flush(now = Date.now()): Promise<void> {
     await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
     const files = await fs.readdir(this.root);
+    const strays = new Set(files.filter((name) => name.endsWith(".pending") || name.endsWith(".tmp")).map((name) => name.slice(0, 36)));
     const failures: unknown[] = [];
     for (const id of [...new Set(files.filter((name) => name.endsWith(".json") || name.endsWith(".json.tombstone") || name.endsWith(".pending") || name.endsWith(".tmp")).map((name) => name.slice(0, 36)))]) {
       try { await this.locked(id, async () => {
-        let entry = await readJSON<Entry>(this.path(id));
+        let entry = await readEntry(this.path(id));
         let tombstone = await readJSON<Tombstone>(this.tombstonePath(id));
         if (entry && (entry.receipt.endpoint !== this.policy.endpoint || entry.receipt.workspace !== this.policy.workspace
           || entry.receipt.project !== this.policy.project)) throw new Error("OPIK_RUNTIME_TARGET_MISMATCH");
@@ -327,12 +411,24 @@ export class RuntimeObservationOutbox {
         // changes cannot cancel an existing cleanup obligation; content export
         // still requires its original complete policy. Orphan tombstones stay strict.
         if (tombstone && !entry && tombstone.policy_digest !== observationHash(this.policy)) throw new Error("OPIK_RUNTIME_TARGET_MISMATCH");
+        // A completed deletion is terminal: repeated flushes preserve the
+        // receipt and its attempt count and cross the transport zero times.
+        // Only a tombstone carrying genuinely new known spans reopens cleanup.
+        if (entry?.receipt.state === "deleted") {
+          const cleaned = new Set(entry.receipt.deleted_span_ids);
+          if (!(tombstone?.span_ids ?? []).some((span) => !cleaned.has(span))) {
+            if (!tombstone) await this.locked(id, () => atomicJSON(this.tombstonePath(id), { trace_id: id, span_ids: [...cleaned],
+              created_at: entry!.receipt.updated_at, policy_digest: observationHash(this.policy) }), true);
+            if (strays.has(id)) await this.locked(id, () => this.purgeContentFiles(id, true), true);
+            return;
+          }
+        }
         if (!tombstone && (!entry || Date.parse(entry.receipt.retention_expires_at) > now)) {
           await this.locked(id, async () => {
             await this.purgeContentFiles(id, false);
             await this.mergePending(id);
           }, true);
-          entry = await readJSON<Entry>(this.path(id));
+          entry = await readEntry(this.path(id));
         }
         if (entry && Date.parse(entry.receipt.retention_expires_at) <= now && !tombstone) {
           tombstone = { trace_id: id, span_ids: [...new Set([...this.observations(entry).flatMap((item) => item.spans.map((span) => span.id)), ...entry.receipt.retained_span_ids])],
@@ -349,16 +445,32 @@ export class RuntimeObservationOutbox {
             if (!(await this.sourceAvailable(observation))) { await this.deleteRun(this.context(observation), true); break; }
           }
           tombstone = await readJSON<Tombstone>(this.tombstonePath(id));
-          if (tombstone) entry = await readJSON<Entry>(this.path(id));
+          if (tombstone) entry = await readEntry(this.path(id));
         }
         if (!tombstone && entry?.receipt.state !== "pending") return;
+        // An orphan tombstone acquires its durable receipt before the attempt,
+        // so even a crash window ends in a terminal record, never endless rework.
+        if (tombstone && !entry) {
+          entry = { observation: null, previous_observations: [], receipt: {
+            schema_version: "runtime-observation-receipt.v1", trace_id: id, endpoint: this.policy.endpoint,
+            workspace: this.policy.workspace, project: this.policy.project, state: "deletion_pending", attempts: 0,
+            retry_streak: 0, retry_after: null,
+            updated_at: new Date(now).toISOString(), retention_expires_at: new Date(now).toISOString(),
+            retained_span_ids: [], deleted_span_ids: [], content_states: {}, error_code: null } };
+          await this.locked(id, () => atomicJSON(this.path(id), entry), true);
+        }
+        // A failed deletion waits for its persisted retry schedule instead of
+        // re-crossing the transport on every flush tick. Waiting entries issue
+        // zero transport requests and keep their receipt attempts untouched.
+        if (tombstone && entry?.receipt.retry_after && Date.parse(entry.receipt.retry_after) > now) return;
         if (entry) { entry.receipt.attempts++; entry.receipt.updated_at = new Date(now).toISOString(); }
         try {
           if (tombstone) {
             await this.locked(id, () => this.purgeContentFiles(id, true), true);
             await this.transport.remove(id, tombstone.span_ids);
             if (entry) { entry.observation = null; entry.previous_observations = []; entry.receipt.state = "deleted";
-              entry.receipt.deleted_span_ids = tombstone.span_ids; entry.receipt.retained_span_ids = []; }
+              entry.receipt.deleted_span_ids = tombstone.span_ids; entry.receipt.retained_span_ids = [];
+              entry.receipt.retry_streak = 0; entry.receipt.retry_after = null; }
           } else if (entry?.observation) {
             for (const observation of this.observations(entry)) {
               if (await readJSON(this.tombstonePath(id))) break;
@@ -376,7 +488,10 @@ export class RuntimeObservationOutbox {
           if (entry) entry.receipt.error_code = null;
         } catch {
           if (entry) { entry.receipt.state = tombstone ? "deletion_pending" : "pending";
-            entry.receipt.error_code = tombstone ? "OPIK_RUNTIME_DELETE_RETRY_REQUIRED" : "OPIK_RUNTIME_EXPORT_RETRY_REQUIRED"; }
+            entry.receipt.error_code = tombstone ? "OPIK_RUNTIME_DELETE_RETRY_REQUIRED" : "OPIK_RUNTIME_EXPORT_RETRY_REQUIRED";
+            if (tombstone) { entry.receipt.retry_streak += 1;
+              // Slow failures must still wait the full delay after completion.
+              entry.receipt.retry_after = new Date(Math.max(now, Date.now()) + deleteRetryDelayMs(entry.receipt.retry_streak)).toISOString(); } }
         }
         if (entry) {
           if (tombstone) await this.locked(id, () => atomicJSON(this.path(id), entry), true);
@@ -392,7 +507,7 @@ export class RuntimeObservationOutbox {
     await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
     const receipts: RuntimeObservationReceipt[] = [];
     for (const name of (await fs.readdir(this.root)).filter((name) => name.endsWith(".json"))) {
-      const entry = await readJSON<Entry>(join(this.root, name)); if (entry) receipts.push(entry.receipt);
+      const entry = await readEntry(join(this.root, name)); if (entry) receipts.push(entry.receipt);
     }
     const names = await fs.readdir(this.root);
     return { spooled: names.filter((name) => name.endsWith(".pending")).length,

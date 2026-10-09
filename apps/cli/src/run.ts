@@ -32,6 +32,8 @@ import { machineHelpPayload, renderGlobalHelp, USAGE } from "./help.js";
 import { renderUpdateHelp, UPDATE_HELP_PATHS } from "./updateHelp.js";
 import { runUpdateCommand, type UpdateMode } from "./update/command.js";
 import { runAuthLogin } from "./login.js";
+import { authV2Status, usableCredential } from "./authV2.js";
+import { environmentTokenStore } from "./keyring.js";
 import { runAuthLogout, runAuthStatus } from "./auth.js";
 import {
   runSandboxStart,
@@ -56,6 +58,9 @@ import type { RunnerLaunchMessage, RunnerReceipt } from "./runner.js";
 
 export interface RunDependencies {
   env: NodeJS.ProcessEnv;
+  /** Explicit legacy protocol adapter for existing embedded v1 clients.
+   * The shipped binary always negotiates v2; no network-error fallback. */
+  authProtocol?: "capir.v1" | "capir-auth.v2";
   fetchImpl: FetchLike;
   credentialStore(environment: CapirEnvironment): Promise<CredentialStore> | CredentialStore;
   /** Origin-pair credential mutation boundary; built around credentialStore by default. */
@@ -74,6 +79,7 @@ export interface RunDependencies {
   readStdin?: () => Promise<string>;
   openBrowser(url: string): Promise<void>;
   interactive: boolean;
+  onAuthProgress?: (message:string) => void;
   sleep(ms: number): Promise<void>;
   spawnRunner?: (
     message: RunnerLaunchMessage,
@@ -106,7 +112,7 @@ function commandLabel(argv: string[]): string {
   const VALUE_FLAGS = new Set([
     "profile", "model", "system", "max-tokens", "timeout", "provider",
     "base-url", "api-key-env", "auth", "token-limit-field", "system-role",
-    "env", "client-label", "username", "password", "expires-in", "preset",
+    "env", "server", "client-label", "username", "password", "expires-in", "preset",
     "request-id", "open", "receipt-dir", "wait", "role", "scenario",
     "model-policy", "duration-hours", "surface",
   ]);
@@ -152,7 +158,7 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
     const args = parseArgs(argv);
     // The update family defaults to readable text; `--json` opts into the
     // stable envelope. Every other command keeps its JSON-default contract.
-    human = args.command === "update" ? !args.json : args.human;
+    human = args.command === "update" ? !args.json : args.human || (args.command.startsWith("auth ") && dependencies.interactive && !args.json && dependencies.authProtocol !== "capir.v1");
     if (args.version) {
       return finish(
         successEnvelope("capir", { version: readVersion(), usage_summary: USAGE.summary }),
@@ -192,7 +198,7 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
           : JSON.stringify(successEnvelope(updateCommandLabel(args.updateMode), result.payload)),
       };
     }
-    const environment = resolveEnvironment(args.environment, env);
+    const environment = resolveEnvironment(args.environment, env, args.server);
 
     if (
       args.command === "test create" ||
@@ -236,6 +242,7 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
               clientLabel: args.clientLabel,
               timeoutSeconds: args.timeoutSeconds,
               noninteractive: args.noninteractive,
+              protocolV2:dependencies.authProtocol !== "capir.v1",
             },
             {
               fetchImpl: dependencies.fetchImpl,
@@ -243,6 +250,7 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
               txn,
               openBrowser: dependencies.openBrowser,
               interactive: dependencies.interactive,
+              ...(dependencies.onAuthProgress ? {onProgress:dependencies.onAuthProgress} : {}),
             },
           ),
         ),
@@ -250,6 +258,7 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
       );
     }
 
+    if (args.command === "auth status" && dependencies.authProtocol !== "capir.v1") return finish(successEnvelope("auth status", await authV2Status(environment, store, dependencies.fetchImpl)), human);
     const token = await store.get();
     if (!token) {
       throw new CapirCliError(
@@ -259,15 +268,7 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
       );
     }
 
-    if (args.command === "auth status") {
-      return finish(
-        successEnvelope(
-          "auth status",
-          await runAuthStatus(environment, { fetchImpl: dependencies.fetchImpl, store, token }),
-        ),
-        human,
-      );
-    }
+    if (args.command === "auth status") return finish(successEnvelope("auth status", await runAuthStatus(environment,{fetchImpl:dependencies.fetchImpl,store,token})),human);
     if (args.command === "auth logout") {
       return finish(
         successEnvelope(
@@ -277,6 +278,7 @@ export async function runCli(argv: string[], dependencies: RunDependencies): Pro
             store,
             txn,
             token,
+            protocolV2:dependencies.authProtocol !== "capir.v1",
           }),
         ),
         human,
@@ -310,13 +312,31 @@ function updateCommandLabel(mode: string): string {
 function renderHelp(path: string, format: "human" | "json"): string {
   return UPDATE_HELP_PATHS.includes(path as (typeof UPDATE_HELP_PATHS)[number])
     ? renderUpdateHelp(path, format)
+    : path.startsWith("auth") ? (format === "json" ? JSON.stringify({command:path, usage:`capir ${path} --env <name> [--server <registered-origin>]`, notes:["Login reuses a verified credential; otherwise opens browser consent.", "Status is read-only. Logout revokes this grant and its derived test entries.", "OS keyring only; CAPIR_TOKEN stays ephemeral."]}) : `capir ${path} --env <name> [--server <registered-origin>]\nLogin reuses a verified credential. Status is read-only; logout revokes it.\n`)
     : renderTestHelp(path, format);
+}
+
+function renderAuthHuman(envelope: SuccessEnvelope): string {
+  const value=envelope as unknown as Record<string,unknown>;
+  const identity=value.identity as {user_email?:string;account_slug?:string}|undefined;
+  const grant=value.grant as {scopes?:string[];access_expires_at?:string}|undefined;
+  const environment=String(value.environment??'');
+  const origin=String(value.backend_origin??(grant as {backend_origin?:string}|undefined)?.backend_origin??'');
+  const source=String(value.credential_source??value.credential_store??'keyring');
+  if(value.command==='auth logout') return `CLI 授权撤销：${value.remote_revoked?'已确认':value.remote_status==='unverified'?'尚未确认':'已不可用'}\n环境：${environment}\n本机凭据：${value.local_credential_state==='preserved_newer'?'已保留较新的登录':value.local_credential_state==='unverified'?'移除尚未确认，请重试退出':value.credential_source==='CAPIR_TOKEN'?'来自 CAPIR_TOKEN；请在调用环境中移除':'已移除'}\n`+
+    (value.remote_status==='unverified' ? `检查远端授权：${String(value.next_action)}\n` : '');
+  const labels:Record<string,string>={active:'已登录',expired:'凭据已到期',revoked:'授权已撤销',missing:'尚未登录',unverified:'暂时无法验证登录',reauth_required:'需要重新授权'};
+  const state=String(value.state??'active');
+  return `${labels[state]??state}${identity?.user_email ? ' '+identity.user_email : ''}${value.reused?'（已复用）':''}\n环境：${environment}${origin ? " · "+origin : ""}${identity?.account_slug?' / '+identity.account_slug:''}\n`+
+    `凭据来源：${source==='CAPIR_TOKEN'?'CAPIR_TOKEN（环境变量）':'系统钥匙串'}\n`+
+    (grant?.scopes ? `权限：${grant.scopes.join(', ')} · 访问凭据到期 ${grant.access_expires_at??''}\n` : '')+
+    (typeof value.next_action === 'string' ? `下一步：${value.next_action}\n` : state==='active' ? `下一步：capir ${grant?.scopes?.includes('test.create')?'test create':'auth status'} --env ${environment}\n` : state==='unverified' ? `重试：capir auth status --env ${environment}\n` : `下一步：capir ${state==='missing'?'auth login':'auth logout'} --env ${environment}\n`);
 }
 
 function finish(envelope: SuccessEnvelope, human: boolean): RunResult {
   return {
     exitCode: EXIT.SUCCESS,
-    output: human ? renderHuman(envelope) : JSON.stringify(envelope),
+    output: human ? (envelope.command.startsWith("auth ") ? renderAuthHuman(envelope) : renderHuman(envelope)) : JSON.stringify(envelope),
   };
 }
 
@@ -350,11 +370,21 @@ async function runTestCommand(
   environment: CapirEnvironment,
   dependencies: RunDependencies,
 ): Promise<TestCommandResult> {
-  const operatorStore =
-    (await dependencies.testOperatorStore?.(environment)) ?? missingCredentialStore();
+  let operatorStore: CredentialStore;
+  let authority: string | undefined;
+  // Only an explicit operator credential chooses the operator path. A present
+  // user grant's denial must never fall through to an operator keyring item.
+  const userStore = await dependencies.credentialStore(environment);
+  const hasUser = !dependencies.env.CAPIR_TEST_OPERATOR_TOKEN?.trim() && await userStore.get();
+  if (hasUser) {
+    const credential = await usableCredential(environment, userStore, dependencies.fetchImpl);
+    operatorStore = environmentTokenStore(credential.token);
+    authority = credential.authority;
+  } else operatorStore = (await dependencies.testOperatorStore?.(environment)) ?? missingCredentialStore();
   const journal = dependencies.journal ?? new OperationJournal(configDirectory(dependencies.env));
   const deps: TestDeps = {
     operatorStore,
+    ...(authority ? {authority} : {}),
     runPasswordStore: async (account) =>
       (await dependencies.testRunPasswordStore?.(account)) ?? createRunPasswordStore(null, account),
     journal,

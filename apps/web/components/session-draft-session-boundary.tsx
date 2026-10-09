@@ -1,5 +1,6 @@
 "use client";
 
+import { clearAllSessionOrganization } from "@/lib/workspace-session-organization";
 import { useEffect } from "react";
 
 import {
@@ -14,7 +15,10 @@ export function SessionDraftSessionBoundary({
 }) {
   useEffect(() => {
     if (storageScope) prunePendingSessionDrafts(storageScope);
-    else clearAllPendingSessionDrafts();
+    else {
+      clearAllPendingSessionDrafts();
+      clearAllSessionOrganization();
+    }
   }, [storageScope]);
   return null;
 }

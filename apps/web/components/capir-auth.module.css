@@ -1,0 +1,12 @@
+.actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+.actions button { min-height: 44px; padding: 10px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
+.actions button:first-child { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.actions button:disabled { cursor: wait; opacity: .6; }
+.actions button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.actions p { flex-basis: 100%; margin: 0; }
+.manager { max-width: 760px; margin: 0 auto; padding: clamp(24px, 5vw, 48px); color: var(--ink); }
+.manager h1 { margin: 0 0 12px; font-size: 28px; letter-spacing: -.04em; }
+.list { display: grid; gap: 16px; padding: 0; list-style: none; }
+.card { padding: 24px; border: 1px solid var(--line); border-radius: 16px; overflow-wrap: anywhere; }
+.card h2 { margin: 0 0 12px; font-size: 18px; }
+.card p { font-size: 14px; line-height: 1.6; }

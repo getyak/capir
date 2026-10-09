@@ -11,7 +11,7 @@ export type RecentSession = {
 };
 
 /** Reject unbound responses and exclude unavailable records before rendering titles. */
-export function recentSessionRows(payload: unknown, binding: string, now = Date.now()): RecentSession[] | null {
+export function recentSessionRows(payload: unknown, binding: string, now = Date.now(), limit = 8): RecentSession[] | null {
   if (!payload || typeof payload !== "object" || !("session_version" in payload) || payload.session_version !== binding || !("sessions" in payload) || !Array.isArray(payload.sessions)) return null;
   const rows: RecentSession[] = [];
   for (const row of payload.sessions) {
@@ -25,7 +25,9 @@ export function recentSessionRows(payload: unknown, binding: string, now = Date.
       personId: typeof row.person_id === "string" && row.person_id ? row.person_id : null,
       personLabel: typeof row.person_label === "string" ? row.person_label : "",
     });
-    if (rows.length === 8) break;
+    // Local organization may read a wider window so pinned rows survive the
+    // eight-row presentation cap; ordinary callers keep the eight-row default.
+    if (rows.length >= Math.max(1, Math.min(200, limit))) break;
   }
   return rows;
 }

@@ -172,13 +172,13 @@ working context. Web reads, turns, and preference writes bind the initiating log
 forwarding its credential; stale tabs cannot act under a replacement account.
 Clients verify a matching readback before displaying a saved setting.
 
-Calendar preparation is a typed draft with a host reference clock, explicit
-client timezone and literal user source. The Agent cannot execute it. Clients
-keep source text separate from editable title/time: Web exports an ICS for
-calendar-app review; iOS requires an exact confirmation before EventKit writes.
-The native client persists a write claim before execution. Unknown outcomes
-survive reconstruction and cannot silently retry creation. Saved UI uses the
-actual event receipt, including reviewed fields, rather than the original draft.
+Calendar preparation is a typed, human-reviewed draft with a host reference clock, client timezone and literal user source. The Agent cannot execute it. Natural chat
+may end after a validated draft, an explicit whole-task finish choice and the full tool batch; source, cancellation,
+budget and genuine SDK usage checks remain. New original steering continues the Run
+discards old prepared output and disables early stopping. Failed tools or unrequested hook stops never confirm preparation.
+Clients separate source text from editable title/time: Web exports ICS for calendar-app
+review; iOS requires exact confirmation before EventKit writes and persists a write claim.
+Unknown outcomes survive reconstruction and cannot silently retry creation. Saved UI uses the actual event receipt, including reviewed fields, rather than the original draft.
 
 ## Memory and Agent Wiki
 
@@ -214,9 +214,9 @@ evidence; whole-Wiki prompts and vector similarity alone are insufficient.
 
 Private workspace turns preload bounded self memory with provenance, time,
 conflicts and versions; scoped recall pages recover omitted detail and excerpts.
-Partial or unavailable context is explicit. Business views never receive self
-content or coverage. Memory data stays separate from verified service settings;
-source guards apply before loading and before accepting an answer.
+Business views never receive self content or coverage. Current person/relationship
+Memory pages accompany Wiki reads; empty snapshots do not establish absence.
+Preserve attribution and explicit page coverage, including unavailable self context. A successful nonempty domain read supports recollection without unrelated Wiki citations; it does not verify statements or prose. Memory stays separate from service settings; source guards apply before reads and answer acceptance.
 
 Each run reads an immutable knowledge snapshot, whether exposed through a
 service or an Agent-readable file bundle. A provider session, compacted chat,

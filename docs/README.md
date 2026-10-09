@@ -79,6 +79,10 @@ updated.
   compares the mobile relationship workspace with adjacent products and records
   the current row-swipe, long-press, dismissal, motion, and navigation-gesture
   decision.
+- [Local work batch analysis and merge record](research/local-work-merge-analysis-2026-10-09.md):
+  records the 2026-10-09 repository divergence, per-stream boundaries and
+  safety review, and the supersession decisions taken when merging the macOS
+  material, session-organization and conversation-delivery work into `main`.
 
 ## Operations and evaluation
 

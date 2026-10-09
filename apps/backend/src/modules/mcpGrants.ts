@@ -175,11 +175,11 @@ export async function createMcpClientGrant(
       await client.query<McpGrantRow>(
         `INSERT INTO mcp_client_grants(
            account_id, id, created_by_user_id, name, token_hash, token_hint,
-           scopes, expires_at, creation_idempotency_key
+           scopes, expires_at, creation_idempotency_key, issuing_lab_session_id
          )
          VALUES (
            $1, $2, $3, $4, $5, $6, $7::text[],
-           clock_timestamp() + ($8::integer * interval '1 day'), $9
+           clock_timestamp() + ($8::integer * interval '1 day'), $9, $10
          )
          ON CONFLICT (account_id, created_by_user_id, creation_idempotency_key)
          DO NOTHING
@@ -194,6 +194,7 @@ export async function createMcpClientGrant(
           scopes,
           input.expires_in_days,
           input.idempotency_key,
+          auth.userKind === "lab_human" ? auth.sessionId : null,
         ],
       )
     ).rows[0];
@@ -379,12 +380,13 @@ export async function resolveMcpGrant(
              SELECT 1 FROM sessions
              WHERE sessions.account_id = users.account_id
                AND sessions.user_id = users.id
+               AND (mcp_client_grants.issuing_lab_session_id IS NULL OR sessions.id=mcp_client_grants.issuing_lab_session_id)
                AND ${labWorkspaceSessionActiveSQL}
                AND ${operatorLabDeploymentActiveSQL}
            )
          )`,
       [sha256(token), authority.operatorTestDeployment?.enabled === true,
-        authority.operatorTestDeployment?.webOrigin ?? null, authority.operatorTestDeployment?.backendOrigin ?? null],
+        authority.operatorTestDeployment?.webOrigin ?? null, authority.operatorTestDeployment?.backendOrigin ?? null, authority.operatorTestDeployment?.userAuthEnabled === true],
     )
   ).rows[0];
   if (!row) return null;

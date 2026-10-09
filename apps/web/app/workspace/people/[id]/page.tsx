@@ -6,6 +6,7 @@ import { ArrowLeft, CaretRight } from "@phosphor-icons/react/dist/ssr";
 import { auth } from "@/auth";
 import { MemoryReviewCard } from "@/components/memory-review/memory-review-card";
 import { AvatarEditor } from "@/components/avatar-editor";
+import { peopleDirectoryHref, personDirectoryEntryId, personMemoryHref, readPeopleDirectoryQuery } from "@/components/people-directory-navigation";
 import {
   validReturnSessionId,
   withReturnSession,
@@ -28,9 +29,6 @@ export const metadata: Metadata = {
   title: "人物 · capri",
 };
 
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 const SCOPE_LABELS: Record<string, string> = {
   self: "关于我",
   person: "关于对方",
@@ -42,11 +40,14 @@ export default async function PersonMemoryPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ session?: string }>;
+  searchParams: Promise<{ session?: string; directory_query?: string | string[] }>;
 }) {
   const { id } = await params;
-  const returnSessionId = validReturnSessionId((await searchParams).session);
-  const href = withReturnSession(`/workspace/people/${id}`, returnSessionId);
+  const parameters = await searchParams;
+  const returnSessionId = validReturnSessionId(parameters.session);
+  const directoryQuery = readPeopleDirectoryQuery(parameters.directory_query);
+  const href = personMemoryHref(id, directoryQuery, returnSessionId);
+  const directoryHref = peopleDirectoryHref(directoryQuery, returnSessionId);
   const session = await auth();
   if (!session?.user) {
     redirect(`/login?callbackUrl=${encodeURIComponent(href)}`);
@@ -54,7 +55,7 @@ export default async function PersonMemoryPage({
   if (!isIntegrationMode()) {
     redirect("/workspace");
   }
-  if (!UUID.test(id)) {
+  if (!personDirectoryEntryId(id)) {
     return (
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.state} aria-labelledby="person-invalid">
@@ -64,7 +65,7 @@ export default async function PersonMemoryPage({
           <p className={styles.stateText}>这个人物标识无效。</p>
           <Link
             className={styles.backLink}
-            href={withReturnSession("/workspace/people", returnSessionId)}
+            href={directoryHref}
           >
             <ArrowLeft aria-hidden="true" size={16} />
             返回人物目录
@@ -106,7 +107,7 @@ export default async function PersonMemoryPage({
           </p>
           <Link
             className={styles.backLink}
-            href={withReturnSession("/workspace/people", returnSessionId)}
+            href={directoryHref}
           >
             <ArrowLeft aria-hidden="true" size={16} />
             返回人物目录
@@ -117,6 +118,14 @@ export default async function PersonMemoryPage({
   }
 
   const { person, proposals, items } = data;
+  // The successful return targets the actual loaded Person entry so the
+  // directory resumes at that Person. No canonical Person return (or none
+  // loaded) keeps the link ordinary.
+  const personEntryHref = peopleDirectoryHref(
+    directoryQuery,
+    returnSessionId,
+    person?.id ?? null,
+  );
   const grouped = new Map<string, typeof items>();
   for (const item of items) {
     const list = grouped.get(item.scope) ?? [];
@@ -187,7 +196,7 @@ export default async function PersonMemoryPage({
           )}
           <Link
             className={styles.backLink}
-            href={withReturnSession("/workspace/people", returnSessionId)}
+            href={personEntryHref}
           >
             <ArrowLeft aria-hidden="true" size={16} />
             返回人物目录

@@ -77,7 +77,7 @@ export async function readHarnessRunArtifact(database:DatabaseClient,auth:AuthCo
     WHERE a.id=$1 AND a.account_id=$2 AND a.user_id=$3 AND m.task_id=$4 AND harness_run_artifact_available(a.id)`,
   [artifactID,auth.accountId,auth.userId,taskID])).rows[0];
   if(!row||hash(row.content)!==row.content_hash)throw unavailable();
-  await assertHarnessLabAuthority(database,auth);
+  await assertHarnessLabAuthority(database,auth,"recheck");
   if(!(await database.query<{available:boolean}>("SELECT harness_run_artifact_available($1) AS available",[row.id])).rows[0]?.available)throw unavailable();
   return row;
 }

@@ -3,6 +3,7 @@ export type AuthFailureMode = "register" | "sign-in";
 export type AuthFailureCode =
   | "invalid_credentials"
   | "service_unavailable"
+  | "test_workspace_session_limit"
   | "rate_limited"
   | "account_exists"
   | "invalid_input"
@@ -23,6 +24,10 @@ const authFailureMessages: Record<
   service_unavailable: {
     register: "账号服务暂时不可用，请稍后重试。",
     "sign-in": "账号服务暂时不可用，请稍后重试。",
+  },
+  test_workspace_session_limit: {
+    register: "暂未确认账号是否创建成功，请先尝试登录。",
+    "sign-in": "这个测试空间已达到会话上限。请在已有会话中退出登录后重试。",
   },
   rate_limited: {
     register: "尝试次数过多，请稍候再试。",
@@ -63,6 +68,8 @@ export function authFailureCodeFromCredentialsCode(
       return "rate_limited";
     case "service_unavailable":
       return mode === "register" ? "registration_result_unknown" : "service_unavailable";
+    case "test_workspace_session_limit":
+      return mode === "register" ? "registration_result_unknown" : "test_workspace_session_limit";
     case "account_exists":
       return mode === "register" ? "account_exists" : "invalid_credentials";
     case "credentials":

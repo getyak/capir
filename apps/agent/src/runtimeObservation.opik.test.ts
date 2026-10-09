@@ -59,7 +59,9 @@ it.skipIf(!process.env.GET11_OPIK_RUNTIME_PROOF_PATH)("reads back private synthe
   expect(sharedAsk.retained_span_ids).toHaveLength(2);
   await outbox.deleteRun(context);
   await outbox.deleteRun(imageContext);
-  await vi.waitFor(async () => { await outbox.flush(); expect((await outbox.status()).deleted).toBe(2); }, { timeout: 30_000, interval: 500 });
+  // The deletion may wait on an asynchronous cascade and its persisted retry
+  // schedule (5s doubling to a 5-minute ceiling) before readback proves absence.
+  await vi.waitFor(async () => { await outbox.flush(); expect((await outbox.status()).deleted).toBe(2); }, { timeout: 120_000, interval: 500 });
   expect(await readFile(join(root, `${attempts[0]!.id}.json`), "utf8")).not.toContain("Synthetic business content");
   await writeFile(process.env.GET11_OPIK_RUNTIME_PROOF_PATH!, JSON.stringify({ captured_at: new Date().toISOString(),
     endpoint: policy.endpoint, project: policy.project, synthetic_only: true, paid_model_calls: 0,

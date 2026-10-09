@@ -5,6 +5,12 @@
     <uncompressed_cache_size>8388608</uncompressed_cache_size>
     <background_pool_size>13</background_pool_size>
     <background_schedule_pool_size>16</background_schedule_pool_size>
+    <!-- Warning-level file logging, rotating at 10 MB with 3 archives. -->
+    <logger>
+        <level>warning</level>
+        <size>10M</size>
+        <count>3</count>
+    </logger>
     <query_log remove="1"/>
     <query_thread_log remove="1"/>
     <query_views_log remove="1"/>

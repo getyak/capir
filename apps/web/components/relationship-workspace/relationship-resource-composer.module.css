@@ -1,0 +1,40 @@
+.readingTarget,
+.reviewActions > button,
+.decision :is(button, input, textarea) {
+  scroll-margin-block-start: 96px;
+  scroll-margin-block-end: 16px;
+}
+
+@media (max-width: 760px) {
+  .review > .reviewHeader {
+    padding-right: 0;
+    row-gap: 12px;
+  }
+
+  .reviewTitle {
+    padding-right: 52px;
+  }
+
+  .decision button {
+    min-height: 44px;
+  }
+
+  .reviewActions svg {
+    flex-shrink: 0;
+  }
+
+  .readingTarget,
+  .reviewActions > button,
+  .decision :is(button, input, textarea) {
+    scroll-margin-block-start: 128px;
+    scroll-margin-block-end: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (max-width: 760px) and (max-height: 450px) {
+  /* Account for the shell's own scroll padding in short windows. */
+  .reviewActions > button,
+  .decision :is(button, input, textarea) {
+    scroll-margin-block-start: 40px;
+  }
+}

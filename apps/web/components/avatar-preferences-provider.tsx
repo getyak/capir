@@ -24,6 +24,18 @@ function BoundAvatarPreferences({ scope, children }: { scope: string; children: 
     setEditing({ ...target, trigger, expected: store.getSnapshot().people[target.self ? "self" : `person:${target.id}`] });
   }, [store]);
   useEffect(() => {
+    // Install before opening any editor: Radix owns document-capture Escape.
+    // IME cancellation must keep its native default and leave the draft open.
+    const preserveComposition = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && (event.isComposing || event.keyCode === 229)
+        && event.target instanceof Element && event.target.closest("[data-avatar-editor][role=dialog]")) {
+        event.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener("keydown", preserveComposition, true);
+    return () => document.removeEventListener("keydown", preserveComposition, true);
+  }, []);
+  useEffect(() => {
     const onStorage = (event: StorageEvent) => { if (event.key === null || event.key === store.key) store.refresh(); };
     const refresh = () => store.refresh();
     window.addEventListener("storage", onStorage);

@@ -28,7 +28,8 @@ import { registerConversationQueueRoutes } from "./conversationQueueRoutes.js";
 import { ApiError } from "../lib/apiError.js";
 import { subscribeConversationQueueLive, type ConversationQueueLivePreview } from "./conversationQueueLive.js";
 import { assertConversationQueueOwnedClaim, closeConversationQueueSteeringIntake, refreshConversationQueueLease } from "./conversationQueueState.js";
-import { persistConversationQueueCompletion } from "./conversationQueueCompletion.js";
+import { persistConversationQueueCompletion, type ConversationQueueExecutionResult } from "./conversationQueueCompletion.js";
+import { beginQueueRunMonitoring, completeQueueRunMonitoring, reconcileRecoveredQueueRunMonitoring } from "./conversationQueueMonitoring.js";
 import { executeUnscopedChatTask } from "./unscopedChat.js";
 import { getAgentSession, readAgentSessionConversation } from "./agentSessions.js";
 import { mutateAgentSession } from "./agentSessions.js";
@@ -263,6 +264,23 @@ async function queueState(sessionId: string, accountId: string) {
     await pool!.query<{ paused: boolean; revision: number }>(
       "SELECT paused,revision FROM conversation_queue_state WHERE account_id=$1 AND session_id=$2",
       [accountId, sessionId],
+    )
+  ).rows[0];
+}
+
+async function productRunRow(id: string) {
+  return (
+    await pool!.query<{
+      id: string;
+      status: string;
+      task_id: string | null;
+      finished_at: Date | null;
+      input: unknown;
+      output: unknown;
+      objective: string;
+    }>(
+      "SELECT id,status,task_id,finished_at,input,output,objective FROM product_runs WHERE id=$1",
+      [id],
     )
   ).rows[0];
 }
@@ -2259,6 +2277,433 @@ suite("queue attempt monitoring", () => {
       expect(logger.info.mock.calls.some(call=>call[1]==="conversation reply linked to monitoring")).toBe(false);
       expect(logger.warn.mock.calls.some(call=>call[0].failure_code==="MONITORING_BINDING_UNAVAILABLE")).toBe(true);
     } finally {query.mockRestore();await runner.close();await removeProofAccount(seeded.accountId);}
+  });
+});
+
+/**
+ * Lease recovery keeps one status authority: the canonical queue row. Its
+ * terminal truth (interrupted/cancelled, failed with a stored result as
+ * partial) reconciles the recovered attempt's monitoring record, fenced to the
+ * exact account/session/entry/run/lease generation and the same product run
+ * owner, metadata only. These disposable-database proofs skip without an
+ * isolated local database.
+ */
+suite("recovered run monitoring reconciliation", () => {
+  it("preserves an unknown canonical finish instead of inventing a recovery timestamp", async () => {
+    const seeded = await seedSession();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId,
+        message_id: randomUUID(), objective: "synthetic unknown terminal time",
+      });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "unknown-finish-proof",
+      }))!;
+      await beginQueueRunMonitoring(pool!, claimed, silentLogger);
+      // A legal historical terminal row without a recorded finish is unknown;
+      // projection must not turn the time it happens to run into that finish.
+      await pool!.query(
+        "UPDATE conversation_queue_entries SET status='interrupted',completed_at=NULL,lease_owner=NULL WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, claimed.entryId],
+      );
+      await reconcileRecoveredQueueRunMonitoring(pool!, claimed, silentLogger);
+      expect((await productRunRow(claimed.runId))!).toMatchObject({
+        status: "interrupted", finished_at: null, task_id: null,
+      });
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("marks a crashed attempt's monitoring terminal when recovery finalizes the entry", async () => {
+    const seeded = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId,
+        message_id: randomUUID(), objective: "崩溃后的监控对账",
+      });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "crashed-monitor-worker",
+      }))!;
+      // The crashed worker's monitor opened the attempt's product run and never settled it.
+      await beginQueueRunMonitoring(pool!, claimed, silentLogger);
+      await pool!.query(
+        "UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, claimed.entryId],
+      );
+      const runner = new ConversationQueueRunner({
+        pool: pool!, provider, logger: silentLogger, workerId: "recovery-monitor-runner", pollIntervalMs: 10,
+      });
+      await runner.recover();
+      const entry = (await entryRow(seeded.sessionId, seeded.accountId))[0]!;
+      expect(entry.status).toBe("interrupted");
+      const completedAt = (await pool!.query<{ completed_at: Date }>(
+        "SELECT completed_at FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, claimed.entryId],
+      )).rows[0]!;
+      const run = (await productRunRow(claimed.runId))!;
+      expect(run.status).toBe("interrupted");
+      expect(run.task_id).toBeNull();
+      // The canonical queue completion time is the finish time, and no body was written.
+      expect(run.finished_at!.getTime()).toBe(completedAt.completed_at.getTime());
+      expect(run).toMatchObject({ objective: "", input: null, output: null });
+      expect((await pool!.query("SELECT id FROM product_run_spans WHERE run_id=$1", [claimed.runId])).rowCount).toBe(0);
+      // Repeating the reconciliation for the recovered generation is inert.
+      const settledAt = run.finished_at!.getTime();
+      await reconcileRecoveredQueueRunMonitoring(
+        pool!, { ...claimed, leaseGeneration: entry.lease_generation }, silentLogger,
+      );
+      const again = (await productRunRow(claimed.runId))!;
+      expect(again.status).toBe("interrupted");
+      expect(again.finished_at!.getTime()).toBe(settledAt);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("settles a recovered stop's monitoring to cancelled after its history persists", async () => {
+    const seeded = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId,
+        message_id: randomUUID(), objective: "崩溃后遗留的停止请求",
+      });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "stop-crashed-worker",
+      }))!;
+      await beginQueueRunMonitoring(pool!, claimed, silentLogger);
+      await commitUnpublishedStop(seeded.sessionId, seeded.accountId);
+      await pool!.query(
+        "UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, claimed.entryId],
+      );
+      const runner = new ConversationQueueRunner({
+        pool: pool!, provider, logger: silentLogger, workerId: "stop-recovery-runner", pollIntervalMs: 10,
+      });
+      await runner.recover();
+      expect((await entryRow(seeded.sessionId, seeded.accountId))[0]?.status).toBe("cancelled");
+      const completedAt = (await pool!.query<{ completed_at: Date }>(
+        "SELECT completed_at FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, claimed.entryId],
+      )).rows[0]!;
+      const run = (await productRunRow(claimed.runId))!;
+      expect(run.status).toBe("cancelled");
+      expect(run.finished_at!.getTime()).toBe(completedAt.completed_at.getTime());
+      expect(run).toMatchObject({ task_id: null, objective: "", input: null, output: null });
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("never marks a false terminal when recovered stop persistence fails, then settles intact", async () => {
+    const seeded = await seedSession();
+    const messageId = randomUUID();
+    let rejectSave = true;
+    const failingPool = {
+      query: pool!.query.bind(pool),
+      connect: async () => {
+        const client = await pool!.connect();
+        return {
+          query: (sql: string, values?: unknown[]) => {
+            if (rejectSave && sql.includes("INSERT INTO agent_sessions(")) {
+              throw new Error("SYNTHETIC_HISTORY_SAVE_FAILURE");
+            }
+            return client.query(sql, values);
+          },
+          release: () => client.release(),
+        };
+      },
+    } as unknown as Pool;
+    const runner = new ConversationQueueRunner({ pool: failingPool, provider: null, logger: silentLogger });
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId, message_id: messageId,
+        objective: "历史保存失败时不得伪造终态",
+      });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "stop-history-crashed-worker",
+      }))!;
+      await beginQueueRunMonitoring(pool!, claimed, silentLogger);
+      await commitUnpublishedStop(seeded.sessionId, seeded.accountId);
+      const expireLease = () => pool!.query(
+        "UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, claimed.entryId],
+      );
+      await expireLease();
+      await runner.recover();
+      // Without the persisted stop history the queue keeps running, and so does
+      // the monitoring record: no false terminal either way.
+      expect((await entryRow(seeded.sessionId, seeded.accountId))[0]).toMatchObject({
+        status: "running", cancel_requested: true,
+      });
+      expect((await productRunRow(claimed.runId))!).toMatchObject({ status: "running", finished_at: null });
+      rejectSave = false;
+      await expireLease();
+      await runner.recover();
+      expect((await entryRow(seeded.sessionId, seeded.accountId))[0]?.status).toBe("cancelled");
+      expect((await productRunRow(claimed.runId))!.status).toBe("cancelled");
+    } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
+  });
+
+  it("fences stale recovery writes against a retried run, lease generation and identity", async () => {
+    const seeded = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId,
+        message_id: randomUUID(), objective: "重试不得被旧写入覆盖",
+      });
+      const claimed1 = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "stale-monitor-worker",
+      }))!;
+      await beginQueueRunMonitoring(pool!, claimed1, silentLogger);
+      await pool!.query(
+        "UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, claimed1.entryId],
+      );
+      const reclaimed = (await reclaimStaleConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId,
+        entryId: claimed1.entryId, workerId: "recovery-worker",
+      }))!;
+      expect(reclaimed.runId).toBe(claimed1.runId);
+      const finalized = await finalizeConversationQueueEntry(pool!, {
+        fence: {
+          accountId: reclaimed.accountId, sessionId: reclaimed.sessionId, entryId: reclaimed.entryId,
+          runId: reclaimed.runId, leaseOwner: reclaimed.leaseOwner, leaseGeneration: reclaimed.leaseGeneration,
+        },
+        status: "interrupted", failureCode: "RUNNER_INTERRUPTED",
+      });
+      expect(finalized.applied).toBe(true);
+      const attempt1 = { ...claimed1, leaseGeneration: reclaimed.leaseGeneration };
+      // A wrong account, session, run or generation never reaches the product row.
+      await reconcileRecoveredQueueRunMonitoring(pool!, { ...attempt1, accountId: randomUUID() }, silentLogger);
+      await reconcileRecoveredQueueRunMonitoring(pool!, { ...attempt1, sessionId: randomUUID() }, silentLogger);
+      await reconcileRecoveredQueueRunMonitoring(pool!, { ...attempt1, runId: randomUUID() }, silentLogger);
+      await reconcileRecoveredQueueRunMonitoring(pool!, { ...attempt1, leaseGeneration: attempt1.leaseGeneration + 5 }, silentLogger);
+      expect((await productRunRow(claimed1.runId))!).toMatchObject({ status: "running", finished_at: null });
+      await reconcileRecoveredQueueRunMonitoring(pool!, attempt1, silentLogger);
+      const settledFirst = (await productRunRow(claimed1.runId))!;
+      expect(settledFirst.status).toBe("interrupted");
+
+      // The explicit retry starts a fresh attempt with its own run and generation.
+      const queued = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+        kind: "retry", queue_entry_id: queued.queued[0]!.queue_entry_id,
+        expected_revision: queued.revision, idempotency_key: randomUUID(),
+      });
+      const continued = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+        kind: "continue", expected_revision: continued.revision, idempotency_key: randomUUID(),
+      });
+      const claimed2 = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "retry-monitor-worker",
+      }))!;
+      expect(claimed2.runId).not.toBe(claimed1.runId);
+      expect(claimed2.leaseGeneration).toBeGreaterThan(reclaimed.leaseGeneration);
+      await beginQueueRunMonitoring(pool!, claimed2, silentLogger);
+      // Stale writes for the old attempt or generation never overwrite the new run.
+      await reconcileRecoveredQueueRunMonitoring(pool!, attempt1, silentLogger);
+      await reconcileRecoveredQueueRunMonitoring(pool!, { ...attempt1, runId: claimed2.runId }, silentLogger);
+      await reconcileRecoveredQueueRunMonitoring(
+        pool!, { ...attempt1, runId: claimed2.runId, leaseGeneration: claimed2.leaseGeneration - 1 }, silentLogger,
+      );
+      // The running attempt is not terminal truth and stays untouched.
+      await reconcileRecoveredQueueRunMonitoring(pool!, claimed2, silentLogger);
+      expect((await productRunRow(claimed2.runId))!).toMatchObject({ status: "running", finished_at: null });
+      expect(await productRunRow(claimed1.runId)).toEqual(settledFirst);
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it.each(["expired", "deleted"] as const)(
+    "leaves a %s product run to retention instead of resurrecting it",
+    async (kind) => {
+      const seeded = await seedSession();
+      const provider = new ScriptedConversationProvider();
+      try {
+        await admitConversationQueueEntry(pool!, seeded.auth, {
+          idempotency_key: randomUUID(), session_id: seeded.sessionId,
+          message_id: randomUUID(), objective: "过期或删除的诊断记录",
+        });
+        const claimed = (await claimNextConversationQueueEntry(pool!, {
+          accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "retention-crashed-worker",
+        }))!;
+        await beginQueueRunMonitoring(pool!, claimed, silentLogger);
+        if (kind === "expired") {
+          await pool!.query("UPDATE product_runs SET expires_at=now()-interval '1 second' WHERE id=$1", [claimed.runId]);
+        } else {
+          await pool!.query("DELETE FROM product_runs WHERE id=$1", [claimed.runId]);
+        }
+        await pool!.query(
+          "UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2",
+          [seeded.accountId, claimed.entryId],
+        );
+        const runner = new ConversationQueueRunner({
+          pool: pool!, provider, logger: silentLogger, workerId: "retention-recovery-runner", pollIntervalMs: 10,
+        });
+        await runner.recover();
+        // Queue truth still reaches its terminal state...
+        expect((await entryRow(seeded.sessionId, seeded.accountId))[0]?.status).toBe("interrupted");
+        const rows = (await pool!.query<{ status: string; finished_at: Date | null }>(
+          "SELECT status,finished_at FROM product_runs WHERE id=$1", [claimed.runId],
+        )).rows;
+        if (kind === "expired") {
+          // ...while an expired record is left to retention untouched.
+          expect(rows[0]).toMatchObject({ status: "running", finished_at: null });
+        } else {
+          // A deleted record is never resurrected.
+          expect(rows).toHaveLength(0);
+        }
+      } finally { await removeProofAccount(seeded.accountId); }
+    },
+  );
+
+  it("never demotes a monitoring record that canonical completion already bound", async () => {
+    const seeded = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId,
+        message_id: randomUUID(), objective: "已完成绑定不得被降级",
+      });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "completed-bind-worker",
+      }))!;
+      await beginQueueRunMonitoring(pool!, claimed, silentLogger);
+      // Canonical completion/output linkage owns the completed state.
+      await completeQueueRunMonitoring(pool!, claimed, {
+        body: {
+          contract_version: "2026-01-01.1", task_id: claimed.runId, disposition: "answer",
+          blocks: [], external_effects: [], created_at: new Date().toISOString(),
+        },
+        conversationMessageIDs: [claimed.messageId], previousTaskIDs: [], conversationSources: [],
+        remoteStatus: "completed",
+        audit: { providerID: null, model: null, providerRequestID: null, prompt: null, contactAgentEventKind: null },
+        images: [],
+      } as unknown as ConversationQueueExecutionResult, silentLogger);
+      const linked = (await productRunRow(claimed.runId))!;
+      expect(linked).toMatchObject({ status: "completed", task_id: claimed.runId });
+      await pool!.query(
+        "UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, claimed.entryId],
+      );
+      const runner = new ConversationQueueRunner({
+        pool: pool!, provider, logger: silentLogger, workerId: "completed-recovery-runner", pollIntervalMs: 10,
+      });
+      await runner.recover();
+      const entry = (await entryRow(seeded.sessionId, seeded.accountId))[0]!;
+      expect(entry.status).toBe("interrupted");
+      await reconcileRecoveredQueueRunMonitoring(
+        pool!, { ...claimed, leaseGeneration: entry.lease_generation }, silentLogger,
+      );
+      const immune = (await productRunRow(claimed.runId))!;
+      expect(immune).toMatchObject({ status: "completed", task_id: claimed.runId });
+      expect(immune.finished_at!.getTime()).toBe(linked.finished_at!.getTime());
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
+
+  it("reconciles rejected stored-result recovery without restoring a withdrawn Session", async () => {
+    const seeded = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    const runner = new ConversationQueueRunner({ pool: pool!, provider, logger: silentLogger });
+    try {
+      const messageId = randomUUID();
+      const objective = "Synthetic withdrawn-source recovery";
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId, message_id: messageId, objective,
+      });
+      const claimed = (await claimNextConversationQueueEntry(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId, workerId: "withdrawn-source-worker",
+      }))!;
+      await beginQueueRunMonitoring(pool!, claimed, silentLogger);
+      const execution = await executeUnscopedChatTask({
+        request: { idempotency_key: `conversation-queue:${claimed.entryId}`, session_id: seeded.sessionId, message_id: messageId, objective },
+        provider, database: pool!, auth: seeded.auth, images: [],
+      });
+      const result: ConversationQueueExecutionResult = {
+        body: execution.body, conversationMessageIDs: execution.conversationMessageIDs,
+        previousTaskIDs: execution.previousTaskIDs, conversationSources: execution.conversationSources ?? [],
+        remoteStatus: execution.remoteStatus, images: [],
+        audit: { providerID: null, model: null, providerRequestID: null, prompt: null, contactAgentEventKind: null },
+      };
+      await recordConversationQueueResult(pool!, claimed, result);
+      // Inject the same withdrawn-source shape required by the canonical
+      // Session tombstone constraint; never leave a deleted source body.
+      await pool!.query("UPDATE agent_sessions SET payload=NULL,deleted_at=now() WHERE account_id=$1 AND id=$2", [seeded.accountId, seeded.sessionId]);
+      await pool!.query("UPDATE conversation_queue_entries SET lease_expires_at=now()-interval '1 second' WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed.entryId]);
+      const calls = provider.calls.length;
+      await runner.recover();
+      const entry = (await entryRow(seeded.sessionId, seeded.accountId))[0]!;
+      expect(entry).toMatchObject({ status: "failed", failure_code: "SOURCE_REVOKED" });
+      expect(entry.result).toBeNull();
+      const run = (await productRunRow(claimed.runId))!;
+      expect(run).toMatchObject({ status: "failed", task_id: null, objective: "", input: null, output: null });
+      const canonical = (await pool!.query<{ completed_at: Date }>("SELECT completed_at FROM conversation_queue_entries WHERE account_id=$1 AND id=$2", [seeded.accountId, claimed.entryId])).rows[0]!;
+      expect(run.finished_at!.getTime()).toBe(canonical.completed_at.getTime());
+      const session = (await pool!.query<{ deleted_at: Date | null; payload: AgentSessionPayload | null }>("SELECT deleted_at,payload FROM agent_sessions WHERE account_id=$1 AND id=$2", [seeded.accountId, seeded.sessionId])).rows[0]!;
+      expect(session.deleted_at).not.toBeNull();
+      expect(session.payload).toBeNull();
+      expect(provider.calls).toHaveLength(calls);
+    } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
+  });
+
+  it("projects a stored failed result as partial and completes the same attempt on persistence replay", async () => {
+    const seeded = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    provider.postGateDeltas = ["重放后的完整回答"];
+    // Corrupt the Session payload after provider success so persistence fails once.
+    provider.onBeforeReturn = async () => {
+      await pool!.query(
+        "UPDATE agent_sessions SET payload='{\"turns\":[]}'::jsonb,revision=revision+1 WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, seeded.sessionId],
+      );
+    };
+    const runner = await startRunner(provider);
+    try {
+      const messageId = randomUUID();
+      const admitted = await admitConversationQueueEntry(pool!, seeded.auth, {
+        idempotency_key: randomUUID(), session_id: seeded.sessionId,
+        message_id: messageId, objective: "持久化失败后仅重放结果",
+      });
+      await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.failure_code === "PERSISTENCE_PENDING");
+      const failed = (await entryRow(seeded.sessionId, seeded.accountId))[0]!;
+      expect(failed.result).not.toBeNull();
+      const runId = failed.run_id!;
+      // The stored result settles as partial and is never inferred completed.
+      await waitFor(async () => (await productRunRow(runId))?.status === "partial");
+      const completedAt = (await pool!.query<{ completed_at: Date }>(
+        "SELECT completed_at FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, admitted.response.queue_entry_id],
+      )).rows[0]!;
+      await reconcileRecoveredQueueRunMonitoring(pool!, {
+        accountId: seeded.accountId, sessionId: seeded.sessionId,
+        entryId: admitted.response.queue_entry_id, messageId, runId,
+        attempt: 1, createdByUserId: seeded.userId, leaseGeneration: failed.lease_generation,
+      }, silentLogger);
+      const projected = (await productRunRow(runId))!;
+      expect(projected).toMatchObject({ status: "partial", task_id: null });
+      expect(projected.finished_at!.getTime()).toBe(completedAt.completed_at.getTime());
+      // Restore a valid Session payload and retry: only persistence replays.
+      const now = new Date().toISOString();
+      await pool!.query(
+        "UPDATE agent_sessions SET payload=$3::jsonb,revision=revision+1 WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, seeded.sessionId, JSON.stringify({
+          id: seeded.sessionId, scopeKind: "unresolved_intent", personDisplayLabel: "",
+          contextDisplayLabel: "", title: "", turns: [], isUnread: false, updatedAt: now, createdAt: now,
+        })],
+      );
+      const pending = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+        kind: "retry", queue_entry_id: pending.queued[0]!.queue_entry_id,
+        expected_revision: pending.revision, idempotency_key: randomUUID(),
+      });
+      const continued = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+        kind: "continue", expected_revision: continued.revision, idempotency_key: randomUUID(),
+      });
+      await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "completed");
+      expect(provider.calls).toHaveLength(1);
+      // The replay binds the original attempt's monitoring without a model call.
+      await waitFor(async () => (await productRunRow(runId))?.status === "completed");
+      const completedRun = (await productRunRow(runId))!;
+      expect(completedRun).toMatchObject({ status: "completed", task_id: runId });
+      expect(JSON.stringify(completedRun.output)).toContain("重放后的完整回答");
+    } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
   });
 });
 

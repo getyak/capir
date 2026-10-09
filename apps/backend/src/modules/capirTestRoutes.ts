@@ -27,9 +27,12 @@ import {
   CapirTestsService,
   capirTestWebConsumerAuthorized,
   ensureCapirTestProvisioningPrincipal,
+  ensureUserTestProvisioner,
   resolveCapirTestProvisioningPrincipal,
   type CapirTestPrincipal,
 } from "./capirTests.js";
+import { registerCapirAuthRoutes } from "../routes/capirAuthRoutes.js";
+import { CapirAuthService } from "./capirAuth.js";
 
 /** Compose both workspace ownership forms through one shared lifecycle. */
 export function registerCapirTestWorkspaceRoutes(
@@ -38,10 +41,17 @@ export function registerCapirTestWorkspaceRoutes(
   config: BackendConfig,
   storage: ChatMediaStorage,
   authenticate: preHandlerHookHandler,
+  deploymentWorkspaceIds?:readonly string[],
 ): void {
+  const capirAuth=registerCapirAuthRoutes(app,pool,config,authenticate,deploymentWorkspaceIds);
   const workspaces = new LabWorkspaceService(pool, storage, config.sessionTtlSeconds);
   registerLabWorkspaceRoutes(app, workspaces, authenticate, config.internalLabEnabled === true);
-  registerCapirTestRoutes(app, new CapirTestsService(pool, config, storage, workspaces), authenticate);
+  registerCapirTestRoutes(
+    app,
+    new CapirTestsService(pool, config, storage, workspaces),
+    authenticate,
+    capirAuth,
+  );
 }
 
 /**
@@ -56,6 +66,7 @@ export function registerCapirTestRoutes(
   app: FastifyInstance,
   service: CapirTestsService,
   authenticate: preHandlerHookHandler,
+  capirAuth?: CapirAuthService,
 ): void {
   const principals = new WeakMap<FastifyRequest, CapirTestPrincipal>();
   const responseErrors = { "4xx": ErrorResponseSchema, "5xx": ErrorResponseSchema };
@@ -68,44 +79,7 @@ export function registerCapirTestRoutes(
     }
   };
 
-  const principalAuth: preHandlerHookHandler = async (request) => {
-    const authorization = request.headers.authorization;
-    if (!authorization?.startsWith("Bearer ")) {
-      throw new ApiError(401, "CAPIR_TEST_PROVISIONING_REQUIRED", "A test-provisioning credential is required.");
-    }
-    const principal = await resolveCapirTestProvisioningPrincipal(
-      service.pool,
-      authorization.slice("Bearer ".length),
-    );
-    if (!principal || principal.state !== "enabled") {
-      throw new ApiError(401, "CAPIR_TEST_PROVISIONING_REQUIRED", "A test-provisioning credential is required.");
-    }
-    // This API instance serves exactly its configured origin pair. A principal
-    // row with arbitrary origins can never authorize requests here just
-    // because the caller echoes them in a header.
-    const settings = service.settings;
-    if (
-      !settings?.webOrigin ||
-      !settings.backendOrigin ||
-      principal.webOrigin !== settings.webOrigin ||
-      principal.backendOrigin !== settings.backendOrigin
-    ) {
-      throw new ApiError(
-        403,
-        "CAPIR_TEST_ORIGIN_DENIED",
-        "This provisioning principal is scoped to an exact registered origin pair.",
-      );
-    }
-    const backendOrigin = request.headers["x-capir-backend-origin"];
-    if (backendOrigin !== principal.backendOrigin) {
-      throw new ApiError(
-        403,
-        "CAPIR_TEST_ORIGIN_DENIED",
-        "This provisioning principal is scoped to an exact registered origin pair.",
-      );
-    }
-    principals.set(request, principal);
-  };
+
 
   const webConsumer: preHandlerHookHandler = async (request) => {
     const settings = service.settings;
@@ -126,6 +100,61 @@ export function registerCapirTestRoutes(
       throw new ApiError(401, "CAPIR_TEST_PROVISIONING_REQUIRED", "A test-provisioning credential is required.");
     }
     return found;
+  };
+
+  /**
+   * Explicit test-credential resolution: a dedicated operator credential when
+   * the caller presents one, otherwise a scoped logged-in user grant whose
+   * server-owned test entitlement is checked here and again in every locked
+   * write. A present but denied user credential never falls back to the
+   * operator namespace.
+   */
+  const admission = (scope: string): preHandlerHookHandler => async (request) => {
+    const authorization = request.headers.authorization;
+    if (!authorization?.startsWith("Bearer ")) {
+      throw new ApiError(401, "CAPIR_TEST_PROVISIONING_REQUIRED", "A test-provisioning credential is required.");
+    }
+    const token = authorization.slice("Bearer ".length);
+    const operator = await resolveCapirTestProvisioningPrincipal(service.pool, token);
+    if (operator) {
+      if (operator.state !== "enabled") {
+        throw new ApiError(401, "CAPIR_TEST_PROVISIONING_REQUIRED", "A test-provisioning credential is required.");
+      }
+      const settings = service.settings;
+      if (
+        !settings?.webOrigin ||
+        !settings.backendOrigin ||
+        operator.webOrigin !== settings.webOrigin ||
+        operator.backendOrigin !== settings.backendOrigin
+      ) {
+        throw new ApiError(
+          403,
+          "CAPIR_TEST_ORIGIN_DENIED",
+          "This provisioning principal is scoped to an exact registered origin pair.",
+        );
+      }
+      const backendOrigin = request.headers["x-capir-backend-origin"];
+      if (backendOrigin !== operator.backendOrigin) {
+        throw new ApiError(
+          403,
+          "CAPIR_TEST_ORIGIN_DENIED",
+          "This provisioning principal is scoped to an exact registered origin pair.",
+        );
+      }
+      principals.set(request, operator);
+      return;
+    }
+    if (!capirAuth) {
+      throw new ApiError(401, "CAPIR_TEST_PROVISIONING_REQUIRED", "A test-provisioning credential is required.");
+    }
+    const backendOrigin = request.headers["x-capir-backend-origin"];
+    const webOrigin = request.headers["x-capir-web-origin"];
+    const grant = await capirAuth.admitGrantToken(token, {
+      backendOrigin: typeof backendOrigin === "string" ? backendOrigin : undefined,
+      webOrigin: typeof webOrigin === "string" ? webOrigin : undefined,
+    });
+    const authority = await capirAuth.requireTestScope(grant, scope);
+    principals.set(request, await ensureUserTestProvisioner(service.pool, service.config, authority, scope));
   };
 
   const params = Type.Object({ id: Type.String({ format: "uuid" }) }, { additionalProperties: false });
@@ -163,7 +192,7 @@ export function registerCapirTestRoutes(
   app.post<{ Body: CapirTestCreateRequest }>(
     "/v1/capir/tests",
     {
-      preHandler: [gate, principalAuth],
+      preHandler: [gate, admission("test.create")],
       config: rate,
       schema: {
         body: CapirTestCreateRequestSchema,
@@ -181,7 +210,7 @@ export function registerCapirTestRoutes(
 
   app.get<{ Params: { id: string } }>(
     "/v1/capir/tests/:id",
-    { preHandler: [gate, principalAuth], config: rate, schema: { params, response: runResponse } },
+    { preHandler: [gate, admission("test.status")], config: rate, schema: { params, response: runResponse } },
     async (request, reply) => {
       reply.header("cache-control", "no-store");
       return {
@@ -194,7 +223,7 @@ export function registerCapirTestRoutes(
   app.post<{ Params: { id: string }; Body: CapirTestStopRequest }>(
     "/v1/capir/tests/:id/stop",
     {
-      preHandler: [gate, principalAuth],
+      preHandler: [gate, admission("test.stop")],
       config: rate,
       schema: { params, body: CapirTestStopRequestSchema, response: runResponse },
     },
@@ -210,7 +239,7 @@ export function registerCapirTestRoutes(
   app.post<{ Params: { id: string }; Body: CapirTestHandoffRequest }>(
     "/v1/capir/tests/:id/handoffs",
     {
-      preHandler: [gate, principalAuth],
+      preHandler: [gate, admission("test.handoff")],
       config: rate,
       schema: {
         params,

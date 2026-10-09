@@ -38,7 +38,7 @@ export function RelationshipOnboarding({
           onScreenshot={onScreenshot}
         />
         <aside
-          aria-label="从受治理来源到持续更新的 Wiki"
+          aria-label="从背景资料到关系记录"
           className="context-onboarding__artifact"
         >
           <div>
@@ -60,8 +60,8 @@ export function RelationshipOnboarding({
           <div>
             <span>03</span>
             <p>
-              <strong>编译 Wiki</strong>
-              每个任务视图都由证据治理
+              <strong>整理关系记录</strong>
+              随时核对来源，再决定下一步
             </p>
           </div>
         </aside>

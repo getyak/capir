@@ -114,8 +114,13 @@ export async function signInWithPasswordAccount(
     await signIn("password-account", {
       ...parsed.data,
       mode: "sign-in",
+      redirect: false,
       redirectTo: onboardingStartTarget(formData.get("redirectTo")),
     });
+    // A deliberately completed login replaces the primary identity. Clear
+    // the old identity-bound test selection only after authentication succeeds.
+    await clearTestWorkspaceSession();
+    redirect(onboardingStartTarget(formData.get("redirectTo")));
   } catch (error) {
     if (error instanceof AuthError) {
       const code = authFailureCodeFromCredentialsCode(

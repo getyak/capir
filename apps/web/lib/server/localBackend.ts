@@ -57,6 +57,7 @@ import {
 } from "../screenshot-capture";
 import { verifyScreenshotAnalysisReceipt } from "./screenshot-analysis-receipt";
 import { authenticatedBackendClient as signedInBackendClient } from "./backendAuth";
+import { BackendSessionExpiredError, isBackendSessionExpiredError } from "../backend-session";
 
 const LOCAL_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const UUID =
@@ -112,8 +113,13 @@ async function readWorkspace(
 async function authenticatedClient(clientLabel: string) {
   const signedIn = await signedInBackendClient();
   if (signedIn) {
-    const session = await signedIn.currentSession();
-    return { client: signedIn, session };
+    try {
+      const session = await signedIn.currentSession();
+      return { client: signedIn, session };
+    } catch (error) {
+      if (isBackendSessionExpiredError(error)) throw new BackendSessionExpiredError();
+      throw error;
+    }
   }
   const client = new TalentSignalClient(backendBaseUrl());
   const session = await client.login({

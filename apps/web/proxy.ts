@@ -16,6 +16,9 @@ export function proxy(request: NextRequest) {
     || path === "/api/desktop-auth" || path.startsWith("/api/desktop-auth/")
     // A test session is established here, so the exact POST carries its own
     // one-use proof, origin and consumer checks before any workspace exists.
+    // Session-sealed, primary-account CLI consent/revoke owns its own CSRF
+    // boundary; a workspace selector header is neither needed nor accepted.
+    || (request.method === "POST" && ["/api/capir/authorize", "/api/capir/grants/revoke"].includes(path))
     || (path === "/api/capir/test-entry" && request.method === "POST")
     || ["/api/auth", "/api/browser-extension", "/api/dev"].some(
       prefix => path === prefix || path.startsWith(`${prefix}/`),

@@ -19,6 +19,8 @@ vi.mock("@/components/workspace-search", () => ({
 
 import { ComposerAddMenu } from "@/components/new-conversation-add-menu";
 import { WORKSPACE_SLASH_COMMANDS } from "@/lib/workspace-composer";
+import { AvatarPreferencesProvider } from "./avatar-preferences-provider";
+import { createAvatarStore } from "@/lib/avatar-preferences";
 
 const PEOPLE_PAYLOAD = {
   people: [
@@ -269,6 +271,33 @@ describe("composer add menu actions", () => {
     expect(props.onNavigate).toHaveBeenCalledWith(
       "/workspace?person=11111111-1111-4111-8111-111111111111&context=22222222-2222-4222-8222-222222222222",
     );
+  });
+
+  it("keeps person display preferences consistent when another tab changes an avatar", async () => {
+    const store = createAvatarStore("composer-avatar-parity", () => localStorage);
+    store.clear();
+    store.save("person:11111111-1111-4111-8111-111111111111", { style: "glass" });
+    try {
+      await render((p) => (
+        <AvatarPreferencesProvider scope="composer-avatar-parity">
+          <ComposerAddMenu {...p} />
+        </AvatarPreferencesProvider>
+      ));
+      await openMenu();
+      await act(async () => { rowByLabel("查找人物").click(); });
+      await flushFrame();
+      const selected = () => rowByLabel("陈晨").querySelector("[data-avatar-style]");
+      expect(selected()?.getAttribute("data-avatar-style")).toBe("glass");
+      expect(rowByLabel("林一").querySelector("[data-avatar-style]")?.getAttribute("data-avatar-style")).toBe("initials");
+      await act(async () => {
+        store.save("person:11111111-1111-4111-8111-111111111111", { style: "shapes" });
+        window.dispatchEvent(new StorageEvent("storage", { key: store.key }));
+      });
+      expect(selected()?.getAttribute("data-avatar-style")).toBe("shapes");
+      expect(rowByLabel("林一").querySelector("[data-avatar-style]")?.getAttribute("data-avatar-style")).toBe("initials");
+    } finally {
+      store.clear();
+    }
   });
 
   it("offers the local file row only when a real handler is wired", async () => {

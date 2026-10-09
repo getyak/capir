@@ -1,6 +1,25 @@
 @import "tailwindcss";
 @import "@talent-signal/workspace-ui/theme.css";
 
+/* shadcn semantic utilities resolve against the host theme; they do not
+   redefine the legacy --muted text color or the product's brand --accent. */
+@theme inline {
+  --color-background: var(--surface);
+  --color-foreground: var(--ink);
+  --color-primary: var(--ink);
+  --color-primary-foreground: var(--surface);
+  --color-secondary: var(--surface-muted);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--surface-muted);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--surface-muted);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--error);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--focus);
+}
+
 :root {
   --background: #f4f3ef;
   --background-deep: #e8e6df;
@@ -5324,7 +5343,7 @@ p {
   font-weight: 730;
 }
 
-.context-resource-composer input:not([type="checkbox"]),
+.context-resource-composer input:not([type="checkbox"]):not(.sr-only),
 .context-resource-composer textarea,
 .context-resource-composer select {
   background: var(--background);
@@ -15499,4 +15518,14 @@ article[data-state="unresolved"]
 }
 .context-workspace--embedded[data-has-scope="false"] .context-resource-composer__text {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* Distribution pages carry real install actions, not the marketing demo finale. */
+.site-footer__base[data-distribution] p:last-child {
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.6;
+  letter-spacing: 0;
+  max-width: none;
+  order: 0;
 }

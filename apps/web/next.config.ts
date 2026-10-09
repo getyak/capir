@@ -13,7 +13,7 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   distDir: process.env.TALENT_SIGNAL_NEXT_DIST_DIR || ".next",
   // Auth callback URLs carry temporary proofs; never mirror their queries to the terminal.
-  logging: { incomingRequests: { ignore: [/\/desktop-auth(?:\/|\?|$)/, /\/login\?/, /\/api\/auth\//] } },
+  logging: { incomingRequests: { ignore: [/\/desktop-auth(?:\/|\?|$)/, /\/capir\/authorize(?:\/|\?|$)/, /\/login\?/, /\/api\/auth\//] } },
   allowedDevOrigins: ["127.0.0.1"],
   experimental: {
     // Inline conversation images arrive as base64 JSON: 30,000,000 binary
@@ -46,6 +46,8 @@ const nextConfig: NextConfig = {
         source: "/(.*)",
         headers: securityHeaders,
       },
+      {source:"/capir/authorize",headers:[{key:"Referrer-Policy",value:"no-referrer"},{key:"Cache-Control",value:"private, no-store"}]},
+      {source:"/workspace/settings/cli",headers:[{key:"Referrer-Policy",value:"no-referrer"},{key:"Cache-Control",value:"private, no-store"}]},
       {
         source: "/desktop-auth/:path*",
         // Origin-only referrers hide attempt/state while preserving the exact

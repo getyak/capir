@@ -27,7 +27,7 @@ export function AgentTurnThread({
           <p className={userMessageClassName}>{turn.objective}</p>
           {turn.response.blocks.map((block) => (
             <div key={block.id}>
-              <ConversationResponse>{block.body}</ConversationResponse>
+              <ConversationResponse foldable={block.kind === "answer" && !block.requires_user_decision}>{block.body}</ConversationResponse>
               {block.calendar_draft?.source_request_id ===
               turn.response.task_id ? (
                 <MeetingDraftHandoff

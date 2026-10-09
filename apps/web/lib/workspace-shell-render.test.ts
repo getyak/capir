@@ -78,7 +78,10 @@ describe("quiet workspace shell render", () => {
     expect(html).toContain("Synthetic Recruiter");
     expect(html).toContain("Alpha 寻访测试");
     expect(html).toContain(">SR<");
-    expect(html).toContain("账号与空间操作");
+    expect(html).toContain('data-slot="account-trigger"');
+    expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("账号与空间操作");
     expect(html).toContain("child");
   });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRight, Check } from "@phosphor-icons/react";
-import { useActionState, useId, useState, type ReactNode } from "react";
+import { useActionState, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { registerPasswordAccount, signInWithPasswordAccount, type SignInState } from "@/app/login/actions";
 import { OAuthPendingContext } from "./oauth-submit";
@@ -36,6 +36,16 @@ export function AccountAccessForm({ callbackUrl, registrationEnabled, initialMod
   const sent = register && Boolean(state.sent) && showSent;
   const [showError, setShowError] = useState(true);
   const error = showError ? state.error : "";
+  const feedbackRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const feedback = feedbackRef.current;
+    if (!error || !feedback) return;
+    feedback.focus({ preventScroll: true });
+    const bounds = feedback.getBoundingClientRect();
+    if (bounds.top < 0 || bounds.bottom > window.innerHeight) {
+      feedback.scrollIntoView({ block: "center", behavior: "instant" });
+    }
+  }, [error, state]);
   function switchMode() {
     if (pending) return;
     setShowSent(true);
@@ -85,7 +95,7 @@ export function AccountAccessForm({ callbackUrl, registrationEnabled, initialMod
               {password.length >= 8 ? "长度符合要求" : "至少 8 个字符，支持长密码与粘贴"}
             </p>}
           </div>
-          {error && <div className={styles.error} role="alert" id={errorId}>
+          {error && <div ref={feedbackRef} className={styles.error} role="alert" id={errorId} tabIndex={-1}>
             <p>{error}</p>
             {state.code === "registration_result_unknown" || state.code === "account_exists" ?
               <button type="button" className={styles.textButton} onClick={switchMode}>尝试登录 <ArrowRight size={14} aria-hidden="true" /></button> : null}

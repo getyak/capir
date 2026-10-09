@@ -62,6 +62,7 @@ export type TestPreset = "daily" | "empty";
 
 export interface TestDeps {
   operatorStore: CredentialStore;
+  authority?: string;
   runPasswordStore(account: string): Promise<RunPasswordStore> | RunPasswordStore;
   journal: OperationJournal;
   readStdin(): Promise<string>;
@@ -433,7 +434,7 @@ export async function runTestCreate(
 
   const preset = args.preset as TestPreset;
   const username = canonicalUsername(args.username);
-  const operatorFingerprint = operatorCredentialFingerprint(operatorKey);
+  const operatorFingerprint = operatorCredentialFingerprint(deps.authority ?? operatorKey);
   const credentialIdentity =
     args.password !== undefined || args.passwordStdin ? "supplied" : "generated";
   // ONE planned request id end to end: journal, keyring namespace, dispatch,
@@ -458,7 +459,7 @@ export async function runTestCreate(
   );
 
   const account = runPasswordAccount({
-    operatorCredential: operatorKey,
+    operatorCredential: deps.authority ?? operatorKey,
     backendOrigin: environment.backendOrigin,
     webOrigin: environment.webOrigin,
     requestId,
@@ -712,7 +713,7 @@ export async function runTestStop(
     deps.journal,
     KIND_STOP,
     environment,
-    { run_id: runId, operator_fingerprint: operatorCredentialFingerprint(operatorKey) },
+    { run_id: runId, operator_fingerprint: operatorCredentialFingerprint(deps.authority ?? operatorKey) },
     args.requestId,
     runId,
   );
@@ -779,7 +780,7 @@ async function pruneLocalRunCredential(
 ): Promise<boolean> {
   const store = await deps.runPasswordStore(
     runPasswordAccount({
-      operatorCredential: operatorKey,
+      operatorCredential: deps.authority ?? operatorKey,
       backendOrigin: environment.backendOrigin,
       webOrigin: environment.webOrigin,
       requestId: run.request_id,

@@ -636,6 +636,7 @@ export function SettingsWorkspace({
               </section>
             )
           ) : null}
+          {section === "account" ? <p><Link href="/workspace/settings/cli">CLI 授权 · 查看与撤销</Link></p> : null}
           {section === "appearance" ? <AppearancePane sessionVersion={sessionVersion} /> : null}
           {section === "connections" ? <ConnectionsPane workspaceName={workspaceName} /> : null}
           {section === "versions" ? (

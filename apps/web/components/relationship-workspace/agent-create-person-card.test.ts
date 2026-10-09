@@ -218,7 +218,7 @@ async function clickPrimary() {
 async function fillCreateDraft() {
   await type('input[placeholder="例如：陈雅宁"]', NAME);
   await type('input[placeholder="邮箱、电话、LinkedIn 网址或 wechat:ID"]', CLUE);
-  await type('input[placeholder="例如：产品副总裁寻访"]', CONTEXT);
+  await type('input[placeholder="例如：合作项目 · 首次沟通"]', CONTEXT);
   await type(
     'textarea[placeholder="粘贴由你提供、可说明为何创建此关系的备注。"]',
     NOTE,
@@ -495,7 +495,7 @@ describe("create-contact resource request identity", () => {
     });
     await render();
     await type('input[placeholder="例如：陈雅宁"]', NAME);
-    await type('input[placeholder="例如：产品副总裁寻访"]', CONTEXT);
+    await type('input[placeholder="例如：合作项目 · 首次沟通"]', CONTEXT);
     await type(
       'textarea[placeholder="粘贴由你提供、可说明为何创建此关系的备注。"]',
       NOTE,
@@ -590,7 +590,7 @@ describe("partial-success clue recovery", () => {
     ).toBe(true);
     expect(
       host.querySelector<HTMLInputElement>(
-        'input[placeholder="例如：产品副总裁寻访"]',
+        'input[placeholder="例如：合作项目 · 首次沟通"]',
       )!.disabled,
     ).toBe(true);
     expect(
@@ -729,7 +729,7 @@ describe("lost-response recovery", () => {
     ).toBe(true);
     expect(
       host.querySelector<HTMLInputElement>(
-        'input[placeholder="例如：产品副总裁寻访"]',
+        'input[placeholder="例如：合作项目 · 首次沟通"]',
       )!.disabled,
     ).toBe(true);
     expect(
@@ -896,7 +896,7 @@ describe("lost-response recovery", () => {
     });
     await render();
     await type('input[placeholder="例如：陈雅宁"]', NAME);
-    await type('input[placeholder="例如：产品副总裁寻访"]', CONTEXT);
+    await type('input[placeholder="例如：合作项目 · 首次沟通"]', CONTEXT);
     await type(
       'textarea[placeholder="粘贴由你提供、可说明为何创建此关系的备注。"]',
       NOTE,

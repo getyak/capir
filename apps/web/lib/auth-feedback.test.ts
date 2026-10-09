@@ -52,4 +52,15 @@ describe("auth failure feedback", () => {
       authFailureCodeFromCredentialsCode("account_exists", "sign-in"),
     ).toBe("invalid_credentials");
   });
+
+  it("explains a test-session limit with an explicit recovery prerequisite", () => {
+    expect(authFailureCodeFromCredentialsCode("test_workspace_session_limit", "sign-in")).toBe("test_workspace_session_limit");
+    expect(authFailureCodeFromCredentialsCode("test_workspace_session_limit", "register")).toBe("registration_result_unknown");
+    expect(authFailureIsRetryable("test_workspace_session_limit")).toBe(false);
+    const message = authFailureMessage("test_workspace_session_limit", "sign-in");
+    expect(message).toContain("会话上限");
+    expect(message).toContain("退出登录后重试");
+    expect(message).not.toContain("服务");
+    expect(message).not.toContain("LAB_");
+  });
 });

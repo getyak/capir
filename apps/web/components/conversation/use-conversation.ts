@@ -5,6 +5,7 @@ import { subscribeWorkspaceRefresh, workspaceRefreshGeneration } from "@/lib/wor
 import type {
   ConversationImageManifest,
   ConversationImageUpload,
+  ConversationQueueEntry,
   ConversationQueueMutationRequest,
   ConversationQueuePreview,
   ConversationQueueSnapshot,
@@ -24,6 +25,8 @@ import {
   type DurableConversationImage,
 } from "@/lib/conversation-image-store";
 import { clearConversationImageStore } from "@/lib/conversation-image-lifecycle";
+import { forgetSessionOrganization } from "@/lib/workspace-session-organization";
+import { sameConversationImages, unresolvedConversationCount } from "./conversation-feedback";
 
 type Options = { entryCapability?: string | null; bootstrap?: string | null; id: string | null; scope: string; chatBinding: string; detailBinding: string; initial?: SessionDetail; onAdmitted?: (id: string) => void };
 class RequestError extends Error { constructor(message: string, readonly status: number, readonly code?: string) { super(message); } }
@@ -64,6 +67,18 @@ export function useConversation(options: Options) {
   const [unavailable, setUnavailable] = useState(initial ? initial.state !== "active" : false);
   const [draftConflict, setDraftConflict] = useState(false);
   const [mutating, setMutating] = useState(false);
+  // Synchronous stream state: frames in one network chunk can precede the next
+  // React render, so the accepted preview is kept in a ref as well as state and
+  // a completion frame can retain text from the preceding preview.
+  const previewRef = useRef<ConversationQueuePreview | null>(null);
+  // Observed Stop intent per run, and the outcome of the run that left the
+  // active slot, so a stopped turn is never reported as a completed readback.
+  const stopObserved = useRef(new Set<string>());
+  const readbackTimers = useRef<number[]>([]);
+  const [handoffEntries, setHandoffEntries] = useState<Record<string, ConversationQueueEntry>>({});
+  const [handoffPreviews, setHandoffPreviews] = useState<Record<string, ConversationQueuePreview>>({});
+  const [runOutcome, setRunOutcome] = useState<Record<string, "completed" | "stopped">>({});
+  const [readbackStalled, setReadbackStalled] = useState<string[]>([]);
   const local = useRef(messages); const draftRef = useRef(draft); const detailRef = useRef(detail);
   const attachmentsRef = useRef<ConversationAttachment[]>([]);
   const snapshotRef = useRef(snapshot); const lifecycle = useRef<AbortController | null>(null);
@@ -79,6 +94,11 @@ export function useConversation(options: Options) {
   const prepareChain = useRef<Promise<void>>(Promise.resolve());
   const admitted = useRef(options.onAdmitted);
   useEffect(() => { admitted.current = options.onAdmitted; }, [options.onAdmitted]);
+  // A validated deleted or expired Session retracts its local organization
+  // flags: no archived/pinned projection survives its own record.
+  useEffect(() => {
+    if (options.initial?.session_id === id && options.initial.state !== "active" && id) forgetSessionOrganization(scope, id);
+  }, [options.initial?.session_id, options.initial?.state, id, scope]);
   const expiry = () => conversationExpiry(detailRef.current?.expires_at);
   const queueUrl = `/api/workspace-sessions/${id}/conversation-queue`;
   // The mounted lifecycle controller is the single identity for this
@@ -87,10 +107,18 @@ export function useConversation(options: Options) {
     controller !== null && lifecycle.current === controller && !controller.signal.aborted, []);
 
   const storeMessages = useCallback((next: LocalMessage[]) => { local.current = next; setMessages(next); }, []);
-  const reconcile = useCallback((server: ConversationQueueSnapshot | null, history: SessionDetail | null) => {
+  // Canonical history is the only handoff that retires a local outbox row.
+  // Until its turn exists — carrying the same ordered image manifests — the
+  // exact message identity and its local attachment bytes are the durable
+  // evidence of what was sent. A server active/queued row only represents the
+  // message for rendering; it never deletes the outbox evidence early.
+  const reconcile = useCallback((_server: ConversationQueueSnapshot | null, history: SessionDetail | null) => {
     if (!id) return;
-    const known = new Set([...(server?.queued ?? []).map(item => item.message_id), ...(server?.active ? [server.active.message_id] : []), ...(history?.turns ?? []).flatMap(sessionHumanMessages).map(turn => turn.id)]);
-    const remaining = local.current.filter(message => { if (!known.has(message.id)) return true; removeConversationMessage(scope, id, message.id); void removeConversationImages(scope, id, message.id); return false; });
+    const settled = new Set((history?.turns ?? []).flatMap(sessionHumanMessages).filter(human => {
+      const message = local.current.find(item => item.id === human.id);
+      return Boolean(message) && sameConversationImages(message?.images, human.images);
+    }).map(human => human.id));
+    const remaining = local.current.filter(message => { if (!settled.has(message.id)) return true; removeConversationMessage(scope, id, message.id); void removeConversationImages(scope, id, message.id); return false; });
     if (remaining.length !== local.current.length) storeMessages(remaining);
   }, [id, scope, storeMessages]);
 
@@ -115,7 +143,12 @@ export function useConversation(options: Options) {
       setDraftConflict(true);
     }
     detailRef.current = next; setDetail(next); reconcile(snapshotRef.current, next);
-    if (next.state !== "active") { clearConversationLocal(scope, id!); clearConversationImageStore(scope, id!); storeMessages([]); setPreview(null); setUnavailable(true); }
+    // Settled history owns each message; the handoff rows and their previews
+    // retire with it, one message at a time.
+    const settled = new Set(next.turns.map(turn => turn.id));
+    setHandoffEntries(previous => Object.fromEntries(Object.entries(previous).filter(([messageId]) => !settled.has(messageId))));
+    setHandoffPreviews(previous => Object.fromEntries(Object.entries(previous).filter(([messageId]) => !settled.has(messageId))));
+    if (next.state !== "active") { forgetSessionOrganization(scope, id!); clearConversationLocal(scope, id!); clearConversationImageStore(scope, id!); storeMessages([]); setPreview(null); previewRef.current = null; setHandoffEntries({}); setHandoffPreviews({}); setUnavailable(true); }
   }
   async function refreshDetail(generation?: number) {
     if (!id) return;
@@ -163,11 +196,64 @@ export function useConversation(options: Options) {
       return;
     }
     if (error instanceof RequestError && (error.status === 401 || error.status === 403 || error.status === 410 || error.code === "session_stale")) {
-      setUnavailable(true); setPreview(null); setDetail(null); setDraft(""); storeMessages([]); clearAttachments(); if (id) { clearConversationLocal(scope, id); clearConversationImageStore(scope, id); }
+      setUnavailable(true); setPreview(null); previewRef.current = null; setDetail(null); setDraft(""); storeMessages([]); setHandoffEntries({}); setHandoffPreviews({}); clearAttachments(); if (id) { clearConversationLocal(scope, id); clearConversationImageStore(scope, id); }
     }
   }
   function updateMessage(id: string, update: Partial<LocalMessage>) {
     storeMessages(local.current.map(message => { if (message.id !== id) return message; const next = { ...message, ...update }; writeConversationMessage(scope, options.id!, next); return next; }));
+  }
+  // Minimal bounded passive readback after a settled run leaves the active
+  // slot: GET only, never a POST and never a new authorization, and only while
+  // this mounted lifecycle owns the conversation.
+  function scheduleReadback(messageId: string) {
+    const controller = lifecycle.current;
+    const arm = (delay: number, final: boolean) => {
+      const timer = window.setTimeout(() => {
+        readbackTimers.current = readbackTimers.current.filter(entry => entry !== timer);
+        if (!stillCurrent(controller) || detailRef.current?.turns.some(turn => turn.id === messageId)) return;
+        // A stalled readback stays recoverable: the identity is retained and
+        // the surface exposes the passive refresh.
+        if (final) { setReadbackStalled(current => current.includes(messageId) ? current : [...current, messageId]); return; }
+        void refreshDetail().catch(() => { /* Keep the retained row recoverable. */ });
+      }, delay);
+      readbackTimers.current.push(timer);
+    };
+    arm(2_000, false); arm(6_000, false); arm(12_000, true);
+  }
+  function commitSnapshot(next: ConversationQueueSnapshot) {
+    const accepted = acceptConversationSnapshot(snapshotRef.current, next, id!);
+    if (!accepted || accepted !== next) return;
+    const previous = snapshotRef.current;
+    snapshotRef.current = next; setSnapshot(next);
+    const entries = [next.active, ...(next.queued ?? [])].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+    for (const entry of entries) {
+      if (entry.cancel_requested && entry.run_id) stopObserved.current.add(entry.run_id);
+      // The same-ID server row is the authoritative receipt for a lost POST
+      // response: reconcile the unknown delivery without any resend.
+      const message = local.current.find(item => item.id === entry.message_id);
+      if (message?.delivery === "unknown") updateMessage(entry.message_id, { delivery: "accepted", error: undefined });
+    }
+    // Observe the completed-event handoff: the active slot can empty before the
+    // canonical history read succeeds. Remember the outcome so the surface can
+    // show readback pending — or the truthful stopped state — instead of a
+    // blank transcript.
+    const previousActive = previous?.active?.message_id ?? null;
+    const stillListed = next.active?.message_id === previousActive || (next.queued ?? []).some(entry => entry.message_id === previousActive);
+    if (previousActive && !stillListed && !detailRef.current?.turns.some(turn => turn.id === previousActive)) {
+      const outcome = previous?.active?.run_id && stopObserved.current.has(previous.active.run_id) ? "stopped" : "completed";
+      setHandoffEntries(current => ({ ...current, [previousActive]: previous!.active! }));
+      const visible = previewRef.current;
+      if (visible?.run_id === previous?.active?.run_id) setHandoffPreviews(current => ({ ...current, [previousActive]: visible! }));
+      setRunOutcome(current => ({ ...current, [previousActive]: outcome }));
+      scheduleReadback(previousActive);
+    }
+    if (next.active) {
+      const messageId = next.active.message_id;
+      setHandoffEntries(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== messageId)));
+      setHandoffPreviews(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== messageId)));
+      if (previous?.active?.run_id !== next.active.run_id) setReadbackStalled(current => current.filter(key => key !== messageId));
+    }
+    reconcile(next, detailRef.current);
   }
   function handoffWhenSettled() {
     if (sender.current || mutationBusy.current || lifecycle.current?.signal.aborted || !pendingHandoff.current) return;
@@ -265,7 +351,7 @@ export function useConversation(options: Options) {
       storeMessages([...own.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
     }
     window.addEventListener("storage", changed);
-    return () => { loaded.current = false; controller.abort(); prepareGeneration.current += 1; pendingPreparations.current = 0; preparingRef.current = false; clearAttachments(); window.removeEventListener("storage", changed); };
+    return () => { loaded.current = false; controller.abort(); for (const timer of readbackTimers.current) window.clearTimeout(timer); readbackTimers.current = []; prepareGeneration.current += 1; pendingPreparations.current = 0; preparingRef.current = false; clearAttachments(); window.removeEventListener("storage", changed); };
     // The binding identifies this entire mounted conversation. Never migrate live state between accounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, scope, chatBinding, detailBinding]);
@@ -297,11 +383,21 @@ export function useConversation(options: Options) {
                 if (frame.event === "snapshot") {
                   const next = acceptConversationSnapshot(snapshotRef.current, frame.data as ConversationQueueSnapshot, id!);
                   if (!next) continue;
-                  snapshotRef.current = next; setSnapshot(next); reconcile(next, detailRef.current);
-                  setPreview(previous => next.preview ? acceptConversationPreview(previous, next.preview, next) : previous?.run_id === next.active?.run_id ? previous : null);
+                  commitSnapshot(next);
+                  const previousPreview = previewRef.current;
+                  const acceptedPreview = next.preview ? acceptConversationPreview(previousPreview, next.preview, next) : previousPreview?.run_id === next.active?.run_id ? previousPreview : null;
+                  previewRef.current = acceptedPreview;
+                  setPreview(acceptedPreview);
                   void refreshDetail().catch(caught => { if (current()) refuse(caught); });
-                } else if (frame.event === "preview") setPreview(previous => acceptConversationPreview(previous, frame.data as ConversationQueuePreview, snapshotRef.current));
-                else if (frame.event === "unavailable") { setPreview(null); throw new RequestError("这段对话已不可用，请重新打开。", 410); }
+                } else if (frame.event === "preview") {
+                  // Frames in one network chunk can precede the next React
+                  // render. Keep the accepted stream state synchronous so a
+                  // completion frame retains text from the preceding preview.
+                  const acceptedPreview = acceptConversationPreview(previewRef.current, frame.data as ConversationQueuePreview, snapshotRef.current);
+                  previewRef.current = acceptedPreview;
+                  setPreview(acceptedPreview);
+                }
+                else if (frame.event === "unavailable") { setPreview(null); previewRef.current = null; throw new RequestError("这段对话已不可用，请重新打开。", 410); }
               }
             }
           } finally { await reader.cancel().catch(() => {}); }
@@ -397,7 +493,7 @@ export function useConversation(options: Options) {
     const objective = draftRef.current.trim();
     const capturedDraftValue = draftRef.current;
     const capturedAttachments = attachmentsRef.current.slice();
-    if (!ready || !id || unavailable || preparingRef.current || (!objective && capturedAttachments.length === 0) || capturedDraftValue.length > 1000 || local.current.length + (snapshotRef.current?.queued.length ?? 0) + (snapshotRef.current?.active ? 1 : 0) >= 50) return false;
+    if (!ready || !id || unavailable || preparingRef.current || (!objective && capturedAttachments.length === 0) || capturedDraftValue.length > 1000 || unresolvedConversationCount(local.current, snapshotRef.current) >= 50) return false;
     const controller = lifecycle.current;
     if (!controller) return false;
     // Single-flight from before the first await: a second Enter cannot create
@@ -436,16 +532,26 @@ export function useConversation(options: Options) {
   }
 
   async function retryDelivery(message: LocalMessage) {
-    // First reconcile a lost receipt. Only an explicit retry can repeat its stable admission.
+    // First reconcile a lost receipt with an owner-authorized queue read. Only
+    // an explicit retry can repeat its stable admission — and never when the
+    // same-ID server row already owns the message.
+    let confirmed = false;
     try {
       const response = await request(queueUrl);
       const next = await response.json() as ConversationQueueSnapshot;
-      snapshotRef.current = next; setSnapshot(next); await refreshDetail(); reconcile(next, detailRef.current);
-      if (!local.current.some(item => item.id === message.id)) {
-        setServerExists(true); pendingHandoff.current = id; handoffWhenSettled();
-      }
+      commitSnapshot(next);
+      const owns = (source: ConversationQueueSnapshot | null | undefined) => Boolean(
+        source?.active?.message_id === message.id
+        || (source?.queued ?? []).some(item => item.message_id === message.id),
+      );
+      confirmed = owns(next) || owns(snapshotRef.current)
+        || Boolean((detailRef.current?.turns ?? []).some(turn => turn.id === message.id));
+      if (confirmed) { setServerExists(true); pendingHandoff.current = id; handoffWhenSettled(); }
+      await refreshDetail();
+      confirmed ||= Boolean(detailRef.current?.turns.some(turn => turn.id === message.id));
     }
     catch (caught) { if (caught instanceof RequestError && caught.status !== 404) { refuse(caught); if ([401, 403, 410].includes(caught.status)) return; } }
+    if (confirmed) return;
     if (local.current.some(item => item.id === message.id)) updateMessage(message.id, { delivery: "pending", receiptUncertain: message.receiptUncertain ?? message.delivery === "unknown", error: undefined });
   }
   function discardRejectedDelivery(messageId: string) {
@@ -468,14 +574,14 @@ export function useConversation(options: Options) {
         // Rebase only a rejected CAS and only while the same run still owns it.
         if (input.kind !== "stop" || !(caught instanceof RequestError) || caught.status !== 409) throw caught;
         const latest = await (await request(queueUrl)).json() as ConversationQueueSnapshot;
-        snapshotRef.current = latest; setSnapshot(latest);
+        commitSnapshot(latest);
         if (latest.active?.run_id !== input.run_id) return true;
         response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: latest.revision, idempotency_key: operation }) });
       }
-      const body = await response.json(); snapshotRef.current = body.snapshot; setSnapshot(body.snapshot); reconcile(body.snapshot, detailRef.current); return true;
+      const body = await response.json(); commitSnapshot(body.snapshot); return true;
     } catch (caught) {
       refuse(caught); setError(caught instanceof RequestError && caught.status === 409 ? "队列刚刚有变化，已更新。请核对后再操作。" : "操作结果尚未确认，已保留内容。请核对队列后重试。");
-      try { const response = await request(queueUrl); const next = await response.json(); snapshotRef.current = next; setSnapshot(next); } catch { /* Keep the last known state. */ }
+      try { const response = await request(queueUrl); const next = await response.json(); commitSnapshot(next); } catch { /* Keep the last known state. */ }
       return false;
     } finally { mutationBusy.current = false; if (!lifecycle.current?.signal.aborted) { setMutating(false); handoffWhenSettled(); } }
   }
@@ -514,5 +620,5 @@ export function useConversation(options: Options) {
     try { const response = await request(`/api/workspace-sessions/${id}`, { method: "DELETE", body: JSON.stringify({ expected_revision: detailRef.current.revision, idempotency_key: crypto.randomUUID() }) }, detailBinding); const body = await response.json(); applyDetail(body.detail); return true; }
     catch (caught) { setError(caught instanceof Error ? caught.message : "删除尚未确认，请重试。"); await refreshDetail().catch(() => {}); return false; }
   }
-  return { entryCapability, detail, draft, messages, attachments, preparing, submitting, snapshot, preview, connection, error, ready, unavailable, draftConflict, mutating, addFiles, removeAttachment, changeDraft, submit, retryDelivery, discardRejectedDelivery, mutate, keepDraft, remove, refreshDetail };
+  return { entryCapability, detail, draft, messages, attachments, preparing, submitting, snapshot, preview, connection, error, ready, unavailable, draftConflict, mutating, handoffEntries, handoffPreviews, runOutcome, readbackStalled, addFiles, removeAttachment, changeDraft, submit, retryDelivery, discardRejectedDelivery, mutate, keepDraft, remove, refreshDetail };
 }

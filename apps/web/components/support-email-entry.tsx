@@ -6,15 +6,16 @@ import { useDesktopChrome } from "./desktop-chrome";
 import styles from "./workspace-shell.module.css";
 
 /** Older hosts cancel mailto. Give them a usable address rather than a dead link. */
-export function SupportEmailEntry({ children, subject, onNavigate }: {
+export function SupportEmailEntry({ children, subject, onNavigate, className }: {
   children: ReactNode;
+  className?: string;
   subject?: string;
   onNavigate?: () => void;
 }) {
   const host = useDesktopChrome();
   const [copied, setCopied] = useState(false);
   if (!host || host.supportMailHandoff) {
-    return <a href={`mailto:${siteConfig.email}${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`}
+    return <a className={className} href={`mailto:${siteConfig.email}${subject ? `?subject=${encodeURIComponent(subject)}` : ""}`}
       onClick={host ? undefined : onNavigate}>{children}</a>;
   }
   return <span className={styles.supportEmailFallback}>

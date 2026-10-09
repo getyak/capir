@@ -11,7 +11,8 @@ import {
 } from "@/lib/conversation-execution";
 import type { LegacyConversationRecovery } from "@/lib/conversation-legacy";
 import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
-import type { ConversationImageManifest, MemoryProposalItem } from "@talent-signal/contracts";
+import type { ConversationImageManifest, ConversationQueueEntry, MemoryProposalItem } from "@talent-signal/contracts";
+import type { LocalMessage } from "@/lib/conversation-local";
 import { WorkspaceComposer } from "../workspace-composer";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { conversationNearBottom } from "../session-workbench/session-presentation";
@@ -23,6 +24,8 @@ import { useConversationAxis } from "./use-conversation-axis";
 import { usePreviewPacing } from "./use-preview-pacing";
 import { useRunMilestones } from "./use-run-milestones";
 import { sessionHumanMessages, sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
+import { createAnswerSeamRegistry } from "./answer-seam";
+import { conversationWorkStatus, unresolvedConversationCount, type ConversationWorkStatus } from "./conversation-feedback";
 import { SessionRuntime } from "./session-runtime";
 import { usePersonContextPanel } from "../person-context-panel";
 import styles from "./queued-conversation.module.css";
@@ -143,20 +146,74 @@ export function QueuedConversation(props: Props) {
     return () => { current = false; };
   }, [active?.message_id, milestones]);
   const imageCount = chat.attachments.length;
-  const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && queued.length + chat.messages.length + (active ? 1 : 0) < 50;
+  const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && unresolvedConversationCount(chat.messages, chat.snapshot) < 50;
   const acceptsSteering = Boolean(active?.accepts_steering && !active.cancel_requested);
   const activeVisible = active && !turns.some(turn => turn.id === active.message_id);
   const paused = chat.snapshot?.paused ?? false;
-  const hasContent = Boolean(turns.length || chat.messages.length || active || queued.length);
+  const hasContent = Boolean(turns.length || chat.messages.length || active || queued.length || Object.keys(chat.handoffEntries).length);
+  // Display-only one-shot completion attention: only runs actually watched
+  // finishing may sweep once. History loaded later never claims it.
+  const attention = useMemo(() => createAnswerSeamRegistry({ scope: props.scope, sessionId: id ?? "" }), [props.scope, id]);
+  const activeMessageId = active?.message_id ?? null;
+  useEffect(() => {
+    if (id && activeMessageId) attention.observe(activeMessageId);
+  }, [id, activeMessageId, attention]);
   const personLabel = chat.detail?.person_label ?? props.initialDetail?.person_label ?? "";
   const personId = (chat.detail ?? props.initialDetail)?.person_id ?? null;
   const personContextPanel = usePersonContextPanel();
   const contextLabel = chat.detail?.context_label ?? props.initialDetail?.context_label ?? "";
   const scopeLabel = personLabel && contextLabel ? `${personLabel} · ${contextLabel}` : personLabel || contextLabel || "未绑定联系人或关系情境";
   const status = chat.unavailable ? "这段对话已不可用" : chat.connection === "reconnecting" && hasContent ? "连接恢复中，消息已保留" : active?.cancel_requested ? "正在停止…" : active ? (conversationStageLabel(forming?.stage ?? active.stage) ?? "正在处理") : paused ? "已暂停，可继续发送到队列" : queued.length ? `${queued.length} 条消息等待处理` : "";
+  // Canonical history owns a settled message. Until then the local outbox row
+  // (or its observed server entry) is the only truthful representation; rows
+  // already projected from history, the active run or the queue are hidden
+  // here instead of deleting their evidence early.
+  const settledIds = useMemo(() => new Set(turns.flatMap(sessionHumanMessages).map((human) => human.id)), [turns]);
+  const representedIds = useMemo(() => new Set([
+    ...settledIds,
+    ...queued.map((entry) => entry.message_id),
+    ...(activeMessageId ? [activeMessageId] : []),
+  ]), [settledIds, queued, activeMessageId]);
+  const outboxRows = useMemo(() => {
+    const messages = new Map<string, LocalMessage & { previewText?: string }>(chat.messages.map(message => [message.id, message]));
+    for (const entry of Object.values(chat.handoffEntries)) {
+      // The observed server entry owns edits and source timestamps, even when
+      // the user reopened this run without any local outbox row.
+      const local = messages.get(entry.message_id);
+      messages.set(entry.message_id, { ...local, id: entry.message_id, objective: entry.objective, images: entry.images, createdAt: entry.created_at, delivery: "accepted", expiresAt: local?.expiresAt ?? Date.parse(chat.detail?.expires_at ?? ""), receiptUncertain: false, previewText: chat.handoffPreviews[entry.message_id]?.text });
+    }
+    return [...messages.values()].filter(message => !representedIds.has(message.id));
+  }, [chat.messages, chat.handoffEntries, chat.handoffPreviews, chat.detail?.expires_at, representedIds]);
   const projectedMessages = useMemo(() => sessionMessages({
     turns, active: activeVisible ? active : null, preview: forming, milestones, queued, milestonesByMessage: milestoneRecords,
-  }), [turns, activeVisible, active, forming, milestones, queued, milestoneRecords]);
+    handoff: outboxRows.map((message) => ({
+      messageId: message.id,
+      objective: message.objective,
+      images: message.images,
+      createdAt: message.createdAt,
+      previewText: message.previewText,
+    })),
+  }), [turns, activeVisible, active, forming, milestones, queued, milestoneRecords, outboxRows]);
+  const workByMessageId = useMemo(() => {
+    const map: Record<string, ConversationWorkStatus> = {};
+    const compute = (messageId: string, delivery: LocalMessage["delivery"], error: string | undefined, hasImages: boolean, entry: ConversationQueueEntry | null, entrySlot: "active" | "queued" | null) => {
+      map[messageId] = conversationWorkStatus({
+        delivery, error, settled: settledIds.has(messageId), entry, entrySlot,
+        paused, connection: chat.connection,
+        stage: forming?.stage ?? active?.stage ?? null,
+        outcome: chat.runOutcome[messageId] ?? null,
+        readbackStalled: chat.readbackStalled.includes(messageId),
+        hasImages,
+      });
+    };
+    for (const message of outboxRows) {
+      const isActive = active?.message_id === message.id;
+      const entry = (isActive ? active : queued.find((item) => item.message_id === message.id) ?? chat.handoffEntries[message.id]) ?? null;
+      const slot = isActive ? "active" : queued.some((item) => item.message_id === message.id) ? "queued" : null;
+      compute(message.id, message.delivery, message.error, Boolean(message.images?.length), entry, slot);
+    }
+    return map;
+  }, [outboxRows, chat.connection, chat.runOutcome, chat.readbackStalled, settledIds, paused, forming, active, queued, chat.handoffEntries]);
   const sourceImagesByMessageId = useMemo(() => Object.fromEntries(
     turns.flatMap(sessionHumanMessages).map((turn) => [turn.id, turn.images ?? []]),
   ), [turns]);
@@ -170,6 +227,15 @@ export function QueuedConversation(props: Props) {
     scope: props.scope,
     sessionId: chat.detail?.session_id ?? id ?? "",
     status,
+    attention,
+    workByMessageId,
+    recoveryActions: (messageId: string) => {
+      const work = workByMessageId[messageId];
+      const message = chat.messages.find(item => item.id === messageId);
+      if (work?.recover === "check" && message) return <><button onClick={() => void chat.retryDelivery(message)}>核对并重试</button>{message.delivery === "rejected" ? <button onClick={() => chat.discardRejectedDelivery(message.id)}>移除</button> : null}</>;
+      if (work?.recover === "refresh") return <button onClick={() => void chat.refreshDetail().catch(() => {})}>刷新</button>;
+      return null;
+    },
     sourceImagesByMessageId,
     sourceTextByMessageId,
     onCardComment: (item: MemoryProposalItem) => {
@@ -235,7 +301,6 @@ export function QueuedConversation(props: Props) {
           ? <Fragment key={message.id}><SessionSendTime at={(message as { createdAt?: unknown }).createdAt}/><SessionUserMessage context={renderContext}/></Fragment>
           : <SessionAssistantMessage key={message.id} context={renderContext}/>}</ThreadPrimitive.Messages>
         {props.meetingLinks?.filter(meeting=>!turns.some(turn=>turn.response.meetingDraft?.id===meeting.id)).map(meeting=><section key={meeting.id} className="context-calendar-draft-handoff" aria-label="日历草稿核对入口"><strong>{meeting.title}</strong><a href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>核对日历草稿 →</a></section>)}
-        {chat.messages.map(message => <Fragment key={message.id}><SessionSendTime at={message.createdAt}/><article className={styles.localTurn} data-delivery={message.delivery}><div className={styles.userRow}><div className={styles.userMessage}>{displayText(message.objective, message.images)}{message.images?.length ? <ConversationImageStrip binding={props.chatBinding} images={message.images} local messageId={message.id} scope={props.scope} sessionId={id ?? ""}/> : null}</div></div>{message.delivery === "accepted" ? null : <div className={styles.delivery}>{message.delivery === "unknown" || message.delivery === "rejected" ? <>{message.error || "送达结果尚未确认，请核对后重试。"}<button onClick={() => void chat.retryDelivery(message)}>核对并重试</button>{message.delivery === "rejected" && <button onClick={() => chat.discardRejectedDelivery(message.id)}>移除</button>}</> : message.delivery === "pending" ? "等待送达" : "正在送达…"}</div>}</article></Fragment>)}
       </div>
     </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>

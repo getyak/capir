@@ -74,7 +74,7 @@ export function createHarnessContinuationFactory(client: PoolClient, probePool: 
       let appendFailure: unknown;
       const assertCurrent = async (fence = false) => {
         if (finished) throw unavailable();
-        await assertHarnessLabAuthority(probePool, auth);
+        await assertHarnessLabAuthority(probePool, auth, "recheck");
         // An independent autocommit statement notices a pending source writer
         // without retaining a read lock or rolling back concurrent product SQL.
         // Pool starvation fails closed; a late queued query is read-only and its

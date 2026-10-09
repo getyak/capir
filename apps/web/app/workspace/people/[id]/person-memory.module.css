@@ -107,7 +107,7 @@
   justify-content: space-between;
   margin-right: auto;
   min-height: 44px;
-  padding: 0 17px;
+  padding: 8px 17px;
   text-decoration: none;
   transition: background 140ms var(--ease-out);
   width: fit-content;

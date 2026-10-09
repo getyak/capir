@@ -1,3 +1,4 @@
+import { workspaceSessionExpired } from "@/components/workspace-session-request";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -33,7 +34,8 @@ describe("persistent workspace shell", () => {
     expect(sessionBoundary).toContain(
       "if (storageScope) prunePendingSessionDrafts(storageScope)",
     );
-    expect(sessionBoundary).toContain("else clearAllPendingSessionDrafts()");
+    expect(sessionBoundary).toContain("clearAllPendingSessionDrafts()");
+    expect(sessionBoundary).toContain("clearAllSessionOrganization()");
     expect(layout).toContain("fixtureWorkspace");
     expect(layout).toContain(
       "合成测试工作台——仅含评测数据，不是真实招聘记录",
@@ -76,13 +78,6 @@ describe("persistent workspace shell", () => {
     expect(navigation).toContain("COLLAPSED_KEY");
     expect(navigation).toContain('data-mobile={route.mobile ? "true" : "false"}');
     expect(accountMenu).toContain("onClick={() => close()}");
-    expect(accountMenu).toContain('event.key === "Escape"');
-    expect(accountMenu).toContain("current === -1");
-    expect(accountMenu).toContain('key === "ArrowUp" ? items.length - 1 : 0');
-    expect(accountMenu).toContain("close(true)");
-    expect(accountMenu).toContain("trigger.current?.focus()");
-    expect(accountMenu).toContain('document.addEventListener("pointerdown"');
-    expect(accountMenu).toContain('document.addEventListener("focusin"');
     expect(accountMenu).toContain('"ArrowDown", "ArrowUp", "Home", "End"');
     expect(accountMenu).toContain("moveFocus(event.key");
     expect(accountMenu).toContain("signOutAction");
@@ -172,7 +167,10 @@ describe("persistent workspace shell", () => {
     expect(canvas).not.toContain("window.localStorage");
     expect(canvas).toContain("今天想推进什么？");
     expect(canvas).toContain("new-conversation-objective");
+    // The shell column tracks the shared sidebar width variable (248px expanded
+    // / 72px rail) without ever swapping the DOM between row and column.
     expect(shellStyles).toContain("grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr)");
+    expect(shellStyles).toContain("--workspace-sidebar-width: var(--ts-rail-width, 72px)");
     expect(shellStyles).toContain("height: 58px");
   });
 
@@ -310,9 +308,9 @@ describe("relationship workspace initial read", () => {
     expect(root).toContain("workspaceSessionFetch(");
     expect(recovery).toContain("WORKSPACE_SESSION_EXPIRED_EVENT");
     expect(request).toContain('response.clone().json()');
-    expect(request).toContain(
-      'responseCode(payload) === "backend_session_expired"',
-    );
+    expect(workspaceSessionExpired(401, { code: "backend_session_expired" })).toBe(true);
+    expect(workspaceSessionExpired(401, { error: { code: "SESSION_INVALID" } })).toBe(true);
+    expect(workspaceSessionExpired(503, { code: "SESSION_INVALID" })).toBe(false);
     expect(status).toContain("登录后继续处理这段关系");
     expect(status).toContain("上一次核验的关系仍保持可见");
     expect(status).toContain("系统没有替换任何关系状态");

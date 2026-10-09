@@ -871,24 +871,7 @@ export function RelationshipWorkspaceApp({
         <p className="sr-only" aria-live="polite" role="status">
           {announcement}
         </p>
-        {!activeScope ? (
-          <RelationshipAgentStartPanel
-            busy={relationshipAgent.workspaceChat.busy}
-            turns={relationshipAgent.workspaceChat.turns}
-            contactDraft={relationshipAgent.contactDraft}
-            createOpen={relationshipAgent.createOpen}
-            identityResolutionCase={identityResolutionCase}
-            objective={relationshipAgent.objective}
-            onAsk={() => void relationshipAgent.ask()}
-            onCancelCreate={cancelAgentCreate}
-            onCaseUpdated={handleIdentityCaseUpdated}
-            onCommitted={handleInitialResourcesCommitted}
-            onDeferred={(caseId) => void handleIdentityReviewCreated(caseId)}
-            onObjectiveChange={relationshipAgent.setObjective}
-            onResolved={handleIdentityCaseResolved}
-            onScreenshot={() => setCaptureOpen(true)}
-          />
-        ) : null}
+
 
         <main className="context-main" id="main-content" tabIndex={-1}>
           <header className="context-topbar">
@@ -948,12 +931,33 @@ export function RelationshipWorkspaceApp({
             sessionRecoveryHref={sessionRecoveryHref}
           />
 
+          {!activeScope ? (
+            <RelationshipAgentStartPanel
+              busy={relationshipAgent.workspaceChat.busy}
+              turns={relationshipAgent.workspaceChat.turns}
+              contactDraft={relationshipAgent.contactDraft}
+              createOpen={relationshipAgent.createOpen}
+              identityResolutionCase={identityResolutionCase}
+              objective={relationshipAgent.objective}
+              onAsk={() => void relationshipAgent.ask()}
+              onCancelCreate={cancelAgentCreate}
+              onCaseUpdated={handleIdentityCaseUpdated}
+              onCommitted={handleInitialResourcesCommitted}
+              onDeferred={(caseId) => void handleIdentityReviewCreated(caseId)}
+              onObjectiveChange={relationshipAgent.setObjective}
+              onResolved={handleIdentityCaseResolved}
+              onScreenshot={() => setCaptureOpen(true)}
+            />
+          ) : null}
+
           {!workspace && !relationshipScope ? (
+            relationshipAgent.createOpen ? null : (
             <RelationshipOnboarding
               deletionSummary={deletionSummary}
               onCommitted={handleInitialResourcesCommitted}
               onScreenshot={() => setCaptureOpen(true)}
             />
+            )
           ) : !workspace && relationshipScope ? (
             <div
               className="context-page context-page--resource-only"

@@ -207,7 +207,11 @@ describe("McpDirectoryPanel", () => {
     await act(async () => root.render(createElement(McpDirectoryPanel, { sessionVersion: SESSION_VERSION })));
     await flush();
     await act(async () => button("添加连接").click());
-    await flush();
+    await vi.waitFor(async () => {
+      await flush();
+      expect(fetcher.mock.calls.filter((call) => String(call[0]).includes("/interactions/propose-connection"))).toHaveLength(1);
+      expect(mount.textContent).toContain("连接表单");
+    }, { timeout: 2_000, interval: 10 });
     const stageCall = fetcher.mock.calls.find((call) =>
       String(call[0]).includes("/interactions/propose-connection"),
     )!;
@@ -229,7 +233,12 @@ describe("McpDirectoryPanel", () => {
     expect(mount.textContent).toContain("只读标注（不构成授权）");
     // The second tool's button stages the second tool, not the first.
     await act(async () => button("提交精确调用请求（list_libraries）").click());
-    await flush();
+    await vi.waitFor(async () => {
+      await flush();
+      expect(fetcher.mock.calls.filter((call) => String(call[0]).includes("/interactions/propose-call"))).toHaveLength(1);
+      expect(mount.textContent).toContain("工具调用确认");
+      expect(button("提交精确调用请求（lookup）").disabled).toBe(false);
+    }, { timeout: 2_000, interval: 10 });
     const call = fetcher.mock.calls.find((item) =>
       String(item[0]).includes("/interactions/propose-call"),
     )!;
@@ -244,7 +253,11 @@ describe("McpDirectoryPanel", () => {
 
     // A fresh deliberate call gets a fresh bounded idempotency key.
     await act(async () => button("提交精确调用请求（lookup）").click());
-    await flush();
+    await vi.waitFor(async () => {
+      await flush();
+      expect(fetcher.mock.calls.filter((call) => String(call[0]).includes("/interactions/propose-call"))).toHaveLength(2);
+      expect(button("提交精确调用请求（lookup）").disabled).toBe(false);
+    }, { timeout: 2_000, interval: 10 });
     const calls = fetcher.mock.calls.filter((item) =>
       String(item[0]).includes("/interactions/propose-call"),
     );

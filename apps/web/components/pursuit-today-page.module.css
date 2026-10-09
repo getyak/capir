@@ -9,7 +9,7 @@
 
 .pageShell {
   background: var(--background);
-  min-height: 100svh;
+  min-height: 0;
 }
 
 .main {
@@ -186,7 +186,7 @@
   font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 500;
   gap: 8px;
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 16px;
   text-decoration: none;
   transition: opacity 140ms var(--ease-out);
@@ -196,11 +196,72 @@
   opacity: 0.88;
 }
 
-.focusFooter {
+.focusMeta {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--workspace-meta-size);
+  gap: 6px 14px;
+  line-height: 1.54;
+  margin: -4px 0 0;
+}
+
+.evidenceQuiet,
+.evidenceFlag {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+}
+
+/* Unresolved evidence stays a visible warning, never folded away. */
+.evidenceFlag {
+  color: var(--warning);
+  font-weight: 500;
+}
+
+.focusDetails {
+  margin: -4px 0 0;
+}
+
+.focusDetails summary {
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--workspace-meta-size);
+  line-height: 1.54;
+  width: fit-content;
+}
+
+.focusDetails summary:hover {
+  color: var(--ink);
+}
+
+.focusDetails summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.focusDetails > div {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.focusDetails p {
   color: var(--muted);
   font-size: var(--workspace-meta-size);
   line-height: 1.54;
+  margin: 0;
+}
+
+/* One concise, ordinary explanation where an eligible run is missing. */
+.evidenceNote {
+  color: var(--muted);
+  font-size: var(--workspace-meta-size);
+  line-height: 1.55;
   margin: -4px 0 0;
+  max-width: 62ch;
 }
 
 /* ── Agent composer (quiet bounded panel) ────────────────────────────── */
@@ -313,7 +374,6 @@
   opacity: 0.55;
 }
 
-.agentUnavailable,
 .runError,
 .runStopped,
 .runResult {
@@ -323,13 +383,6 @@
   gap: 11px;
   margin-top: 16px;
   padding: 13px 14px;
-}
-
-.agentUnavailable {
-  background: var(--surface-muted);
-  color: var(--muted);
-  font-size: var(--workspace-meta-size);
-  line-height: 1.5;
 }
 
 .runError {
@@ -559,7 +612,7 @@
   font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 500;
   margin-top: 0;
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 16px;
   text-decoration: none;
 }
