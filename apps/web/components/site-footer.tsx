@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { siteConfig } from "@/lib/site";
 import {
   marketingCopy,
   marketingNavigation,
@@ -9,7 +10,7 @@ import {
 import { BrandMark } from "./brand-mark";
 import { useMarketingLocale } from "./marketing/locale-provider";
 
-export function SiteFooter() {
+export function SiteFooter({ distribution = false }: { distribution?: boolean }) {
   const locale = useMarketingLocale();
   const c = marketingCopy(locale);
   return (
@@ -18,7 +19,7 @@ export function SiteFooter() {
         <div className="site-footer__brand">
           <BrandMark
             label={
-              locale === "en" ? "Talent Signal home" : "Talent Signal 首页"
+              locale === "en" ? `${siteConfig.name} home` : `${siteConfig.name} 首页`
             }
           />
           <p>{c.footer}</p>
@@ -35,9 +36,9 @@ export function SiteFooter() {
               </Link>
             ))}
             <Link href={relationshipDemoHref}>{c.demo}</Link>
-            <a href="https://github.com/getyak/talent-signal/blob/main/docs/operations/macos-distribution.md">
-              {locale === "en" ? "Download for macOS" : "下载 macOS 客户端"}
-            </a>
+            <Link href="/download">
+              {locale === "en" ? "Download and connect" : "下载与连接"}
+            </Link>
           </div>
           <div>
             <p className="footer-heading">{c.nav[2]}</p>
@@ -54,9 +55,9 @@ export function SiteFooter() {
           </div>
         </nav>
       </div>
-      <div className="shell site-footer__base">
-        <p>© {new Date().getFullYear()} Talent Signal</p>
-        <p>{c.prototype}</p>
+      <div className="shell site-footer__base" data-distribution={distribution || undefined}>
+        <p>© {new Date().getFullYear()} {siteConfig.name}</p>
+        <p>{distribution ? (locale === "en" ? "Independent releases · verifiable installation sources" : "各端独立发布 · 安装来源可核查") : c.prototype}</p>
       </div>
     </footer>
   );

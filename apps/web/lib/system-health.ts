@@ -95,7 +95,7 @@ export function unavailableSystemHealth(
     status: "unavailable",
     observed_at: observedAt.toISOString(),
     components: [
-      { id: "web", label: "Talent Signal Web", kind: "service", required: true, status: "healthy", duration_ms: null, detail_code: "request_completed" },
+      { id: "web", label: "capri Web", kind: "service", required: true, status: "healthy", duration_ms: null, detail_code: "request_completed" },
       { id: "backend", label: "Backend API", kind: "service", required: true, status: "unavailable", duration_ms: null, detail_code: "dependency_unreachable" },
       { id: "database", label: "PostgreSQL", kind: "database", required: true, status: "unknown", duration_ms: null, detail_code: "not_observed" },
       { id: "migrations", label: "Database schema", kind: "schema", required: true, status: "unknown", duration_ms: null, detail_code: "not_observed" },

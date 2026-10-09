@@ -129,7 +129,7 @@ function PrivateConversationRoom({ binding, accountId }: { binding: string; acco
         follows.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64; setAway(!follows.current);
       }}><div className={styles.messages}>{turns.map(turn => <article key={turn.id} className={styles.turn}>
         <div className={styles.user}><span className={styles.srOnly}>你：</span>{turn.prompt}</div>
-        <div className={styles.answer}><div className={styles.answerName}><Ghost size={15} weight="fill" aria-hidden="true"/>Talent Signal</div>
+        <div className={styles.answer}><div className={styles.answerName}><Ghost size={15} weight="fill" aria-hidden="true"/>capri</div>
           {turn.answer ? <ConversationResponse foldable={turn.status === "complete"}>{turn.answer}</ConversationResponse> : turn.status === "pending" ? <span className={styles.waiting} role="status">正在思考<span aria-hidden="true">···</span></span> : null}
           {turn.status === "pending" && turn.answer && <span className={styles.cursor} aria-hidden="true"/>}
           {turn.status === "stopped" && <p className={styles.turnStatus}>已停止，以上内容尚未完成。</p>}
@@ -152,7 +152,7 @@ function PrivateConversationRoom({ binding, accountId }: { binding: string; acco
           </div>
         </form>
         <details className={styles.privacyDetails}><summary><Info size={14} aria-hidden="true"/>隐私对话如何处理内容</summary>
-          <p>内容只在当前页面临时显示，不保存到 Talent Signal 会话历史、人物记忆或内容评测日志。关闭、刷新或离开后无法恢复，普通对话的草稿会保留。</p>
+          <p>内容只在当前页面临时显示，不保存到 capri 会话历史、人物记忆或内容评测日志。关闭、刷新或离开后无法恢复，普通对话的草稿会保留。</p>
           <p>发送后，内容与本次最近的部分对话会交给已配置的模型服务处理；该服务的保留规则仍然适用。此处只讨论文字，不读取人物资料，也不执行资料、日程或外部操作。</p>
         </details>
       </div>

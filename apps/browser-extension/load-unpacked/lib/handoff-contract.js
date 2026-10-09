@@ -217,7 +217,7 @@ export function sessionCopy(status, body = {}) {
       workspace_label:
         typeof body.workspace_label === "string"
           ? body.workspace_label
-          : "Local Talent Signal",
+          : "Local capri",
       session_version:
         typeof body.session_version === "string"
           ? body.session_version

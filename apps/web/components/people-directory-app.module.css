@@ -11,11 +11,11 @@
 
 .shell {
   background: var(--background);
-  min-height: 100%;
+  min-height: 0;
 }
 
 .main {
-  min-height: 100%;
+  min-height: 0;
 }
 
 .page {
@@ -23,7 +23,7 @@
   flex-direction: column;
   margin: 0 auto;
   max-width: 1040px;
-  min-height: calc(100svh - 58px);
+  min-height: 0;
   padding: 40px 40px 72px;
 }
 
@@ -32,7 +32,7 @@
   display: flex;
   gap: 24px;
   justify-content: space-between;
-  margin-bottom: 28px;
+  margin-bottom: 24px;
 }
 
 .pageHeading h1 {
@@ -44,8 +44,8 @@
 
 .pageHeading p {
   color: var(--muted);
-  font-size: var(--workspace-meta-size);
-  line-height: 1.55;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: 1.6;
   margin-top: 8px;
   max-width: 52ch;
 }
@@ -70,14 +70,18 @@
   color: var(--ink);
 }
 
+.createPerson:active {
+  background: var(--surface-strong);
+}
+
 .listTools {
   align-items: center;
   color: var(--muted);
   display: flex;
-  font-size: var(--workspace-meta-size);
+  font-size: var(--ts-type-meta, 0.8125rem);
   gap: 20px;
   justify-content: space-between;
-  margin-bottom: 26px;
+  margin-bottom: 20px;
 }
 
 .search {
@@ -112,6 +116,13 @@
   color: var(--muted);
 }
 
+/* The committed-filter action owns clearing here; retain native draft clearing
+ * before submission rather than presenting two different X actions together. */
+.search[data-filter-active] input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
 .tableHeader {
   border-bottom: 1px solid var(--line-soft);
   color: var(--muted);
@@ -136,6 +147,7 @@
   border-bottom: 1px solid var(--line-soft);
 }
 
+/* Leave room for the fixed header and bottom navigation on hash returns. */
 .personRow {
   align-items: center;
   color: var(--ink);
@@ -145,12 +157,19 @@
   column-gap: 16px;
   min-height: 83px;
   padding: 15px 12px;
+  scroll-margin-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  scroll-margin-top: 24px;
   text-decoration: none;
   transition: background 140ms var(--ease-out);
 }
 
 .personRow:hover {
   background: color-mix(in srgb, var(--surface-muted) 62%, transparent);
+}
+
+/* Immediate press feedback lives on the row background; never a transform. */
+.personRow:active {
+  background: color-mix(in srgb, var(--surface-muted) 92%, transparent);
 }
 
 .personIdentity {
@@ -237,12 +256,10 @@
   opacity: 1;
 }
 
-.directoryNote {
-  color: var(--muted);
-  font-size: var(--workspace-meta-size);
-  line-height: 1.55;
-  margin: auto 0 0;
-  padding-top: 28px;
+@media (hover: none) and (pointer: coarse) {
+  .personMeta svg {
+    opacity: 1;
+  }
 }
 
 .empty {
@@ -299,6 +316,10 @@
 
 .empty > a:hover {
   background: var(--surface-muted);
+}
+
+.empty > a:active {
+  background: var(--surface-strong);
 }
 
 .disconnectedState {
@@ -384,11 +405,13 @@
 }
 
 .search:focus-within {
+  border-color: var(--line-strong);
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
-.search button {
+.search button,
+.search .clearSearch {
   align-items: center;
   background: transparent;
   border: 0;
@@ -398,19 +421,26 @@
   display: inline-flex;
   flex: 0 0 auto;
   justify-content: center;
-  min-height: 32px;
-  min-width: 32px;
+  min-height: 44px;
+  min-width: 44px;
 }
 
-.search button:hover {
+.search button:hover,
+.search .clearSearch:hover {
   background: var(--surface-muted);
   color: var(--ink);
+}
+
+.search button:active,
+.search .clearSearch:active {
+  background: var(--surface-strong);
 }
 
 .personRow:focus-visible,
 .createPerson:focus-visible,
 .empty > a:focus-visible,
-.search button:focus-visible {
+.search button:focus-visible,
+.search .clearSearch:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
@@ -435,11 +465,6 @@
 }
 
 @media (max-width: 760px) {
-  .search button {
-    min-height: 44px;
-    min-width: 44px;
-  }
-
   .rowAvatar {
     left: 6px;
     top: 13px;

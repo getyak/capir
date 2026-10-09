@@ -15,7 +15,7 @@ contact does not prove organizational movement. The public Challenger Customer
 work focuses attention on customer stakeholders who can help colleagues examine
 change and build internal consensus.
 
-Talent Signal must translate this carefully. The useful unit is observed
+capri must translate this carefully. The useful unit is observed
 consensus-building behavior in a named initiative, not a fixed person type.
 Group progress is demonstrated by customer actions and resolved disagreements,
 not by the seller's activity or relationship sentiment.
@@ -36,7 +36,7 @@ not by the seller's activity or relationship sentiment.
 and focused on the difference between accessible contacts and organizational
 action.
 
-For Talent Signal:
+For capri:
 
 - Name the stakeholder and the exact behavior.
 - Show where two criteria or priorities conflict.

@@ -10,6 +10,16 @@ export function proxy(request: NextRequest) {
     // The published MCP endpoint uses its own scoped bearer token and never a
     // browser login cookie, so it is deliberately outside the workspace guard.
     || path === "/api/mcp"
+    // Browser-owned macOS login (ADR 0022) runs before any workspace session
+    // exists: anonymous grant preparation and proof-bound exchange/cancel
+    // carry their own bounded authentication and never an account header.
+    || path === "/api/desktop-auth" || path.startsWith("/api/desktop-auth/")
+    // A test session is established here, so the exact POST carries its own
+    // one-use proof, origin and consumer checks before any workspace exists.
+    // Session-sealed, primary-account CLI consent/revoke owns its own CSRF
+    // boundary; a workspace selector header is neither needed nor accepted.
+    || (request.method === "POST" && ["/api/capir/authorize", "/api/capir/grants/revoke"].includes(path))
+    || (path === "/api/capir/test-entry" && request.method === "POST")
     || ["/api/auth", "/api/browser-extension", "/api/dev"].some(
       prefix => path === prefix || path.startsWith(`${prefix}/`),
     );

@@ -3,7 +3,7 @@
 ## Purpose
 
 Integrate another system only when it advances the evidence-to-action loop
-without silently widening access to candidate data or bypassing review.
+without silently widening access to person and relationship data or bypassing review.
 
 ## Integration classes
 
@@ -20,7 +20,7 @@ protected queue and opens only when a concrete decision is blocked. One-press sc
 personal Shortcut that chains the system `Take Screenshot` action into that
 image action; a required-image App Shortcut alone would still ask the user for
 input. Only the user can assign the personal Shortcut to the Action Button in
-system Settings. Talent Signal cannot capture another app's screen or inspect
+system Settings. capri cannot capture another app's screen or inspect
 or change that mapping. The screenshot choice authorizes purpose-bound
 processing, reversible proposals, and source attachment when one current
 confirmed identity clue resolves to one person with one existing relationship
@@ -50,12 +50,12 @@ Sign in with Apple is an account-entry adapter. The iOS client requests a
 nonce-bound identity assertion; the backend verifies it and owns account
 binding, session issuance, replay prevention, and revocation. Apple profile
 fields may be available only on the first authorization and are not evidence
-about any candidate relationship. Sign-out revokes the server session when
+about any relationship. Sign-out revokes the server session when
 reachable, always clears the protected device credential, and returns to the
 account boundary so a prior workspace cannot remain visible.
 
 Calendar is an outbound device projection, not an intake source or a second
-record. Talent Signal persists the user-confirmed event and its projection
+record. capri persists the user-confirmed event and its projection
 state before requesting write-only access and adding one event to the system
 default calendar. It does not import, browse, mirror, or listen to Apple
 Calendar. After the user separately reviews an edit to an already linked event,
@@ -64,11 +64,11 @@ update that exact event, and read it back to verify the result; it never scans
 the surrounding calendar or creates a replacement when the identifier is
 missing. Turning off default sync keeps new events local but does not override
 an explicit reviewed update to an already linked event. A denied or failed
-write leaves the Talent Signal event intact. Each reviewed edit retains an
+write leaves the capri event intact. Each reviewed edit retains an
 append-only operation receipt with its before/after values, intended projection,
 and observed EventKit outcome; an interrupted result remains unknown until the
 user reconciles it. An edit or deletion made directly in Apple Calendar does
-not mutate Talent Signal truth.
+not mutate capri truth.
 
 ### Shared services
 
@@ -78,7 +78,7 @@ outcome, and audit state.
 ### MCP extensions
 
 Extensions distinguish connecting an external server from granting a client
-access to Talent Signal. Saving a server address grants no execution authority:
+access to capri. Saving a server address grants no execution authority:
 verified connectivity establishes bounded capability discovery only. Remote tool
 descriptions and read-only annotations are untrusted declarations, not permission.
 
@@ -87,7 +87,13 @@ explicit read scopes. Browser sessions and provider credentials are never
 exported as client credentials. Member suspension or role changes revoke prior
 grants permanently; reinstatement does not restore them. Published projections
 exclude raw evidence, conversations, contact handles and external writes.
-Transport support and deployment configuration live in the
+Remote tool calls need one exact, single-use human approval bound to the
+original discovered input schema; resolved results re-enter the same
+conversation as durable receipts with provenance and never become confirmed
+relationship evidence. Optional Nango-mediated OAuth binds a server-generated
+connect request to the approved endpoint and account identity; without
+configuration OAuth is explicitly unavailable. Transport support and
+deployment configuration live in the
 [MCP operations guide](operations/mcp-extensions.md).
 
 ### Model providers
@@ -120,7 +126,7 @@ merge, message, schedule, publish, or return an external effect.
 
 Public search is admitted separately from model processing and private
 evidence. A search provider receives only a query formed inside an explicitly
-authorized company/market research Run. Talent Signal normalizes provider
+authorized company/market research Run. capri normalizes provider
 results, fetches only same-Run result handles through its own guarded HTTPS
 boundary, and preserves cited output only as a draft artifact.
 
@@ -165,14 +171,14 @@ carry same-Run source identities, and retain no publication or external-effect
 authority. The capability excludes face matching, reverse-face search, private
 accounts or cookies, contact details, background checks, protected/sensitive
 traits, candidate scoring or ranking, and acceptance prediction. Binding a
-result to a Talent Signal Person remains a separate human identity decision.
+result to a capri Person remains a separate human identity decision.
 That decision starts from a visible review card, never from provider output
 alone. The client may propose a short card headline, but the user can edit
 or omit it and must still choose an exact existing Person or explicitly create
 a new one. Provider biography text remains review-only and is not copied into
 the confirmed Person projection. Public-source avatars remain link-only for
 TikHub because its terms
-do not grant Talent Signal display or storage rights and source-platform terms
+do not grant capri display or storage rights and source-platform terms
 still apply. A future avatar write requires a provider display license or
 profile-owner consent, not user confirmation alone. The backend accepts a
 reviewed card only on a governed contact record whose HTTPS profile URL and
@@ -235,8 +241,8 @@ production path.
 ## n8n
 
 n8n is appropriate for connector prototypes, design-partner workflows, and
-operations automation. It should invoke Talent Signal's governed interfaces and
-must not own candidate truth, approval, or Agent lifecycle.
+operations automation. It should invoke capri's governed interfaces and
+must not own relationship truth, approval, or Agent lifecycle.
 
 ## Reconsider when
 

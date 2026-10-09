@@ -84,6 +84,10 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     /// Set only when the OS refuses to open the default browser for account
     /// settings. Device controls stay available; the view offers a retry.
     @Published var browserLaunchFailure: String?
+    /// Set when the workspace intercepts the Web /login route: the native app
+    /// owns the signed-out browser-login surface and Web never paints its
+    /// password, registration or provider forms inside this window.
+    @Published var signedOut = false
     var openSettings: (() -> Void)? {
         didSet { flushPendingSettingsOpen() }
     }
@@ -96,14 +100,18 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private var lastWorkbenchURL: URL?
     private var isRestoringWorkbench = false
     private var pendingSettingsOpen = false
+    private let storeSelection: LoginStoreSelection?
+    private var retired = false
+    private var storeObservation: AnyCancellable?
     private let accountBrowser: AccountSettingsBrowser
 
     /// The exact configuration every workbench web view is built from. Kept as a
     /// factory so the settings paint guard and the per-origin data store cannot
     /// drift from what the app actually runs.
-    static func configuration(for origin: WorkspaceOrigin) -> WKWebViewConfiguration {
+    static func configuration(for origin: WorkspaceOrigin) -> WKWebViewConfiguration? {
+        guard let store = origin.dataStoreIdentifier else { return nil }
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: origin.dataStoreIdentifier)
+        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: store)
         configuration.userContentController = WKUserContentController()
         // Account settings may never paint inside the app, including on a
         // client-side route change that bypasses the navigation delegate.
@@ -125,12 +133,29 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     init(origin: WorkspaceOrigin, initialURL: URL? = nil,
          accountBrowser: AccountSettingsBrowser? = nil) {
         self.origin = origin
+        self.storeSelection = try? LoginStoreRegistry.shared.selection(for: origin.url.absoluteString)
         // Optional default keeps the main-actor singleton out of the default
         // argument expression, which is evaluated in a nonisolated context.
         self.accountBrowser = accountBrowser ?? .shared
-        let configuration = Self.configuration(for: origin)
+        let configuration = Self.configuration(for: origin) ?? WKWebViewConfiguration()
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
+        guard origin.dataStoreIdentifier != nil else {
+            // Corrupted store registry or failed persistence write: refuse the
+            // surface truthfully instead of loading into an unowned store.
+            loading = false
+            signedOut = true
+            return
+        }
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 TalentSignalMac/1"
+        storeObservation = LoginStoreRegistry.shared.changes.sink { [weak self] selection in
+            guard let self, selection.origin == self.origin.url.absoluteString,
+                  selection.storeIdentifier != self.storeSelection?.storeIdentifier else { return }
+            self.retire()
+        }
+        if storeSelection?.unresolved == true {
+            signedOut = true; loading = false
+        }
         _ = DesktopUpdateClickBridge(controller: configuration.userContentController) { [weak self] url, frame in
             guard let self,
                   case .installUpdate(let offerID) = DesktopChromeAction.resolve(
@@ -177,10 +202,35 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             return
         }
         #endif
-        webView.load(entry)
+        if !signedOut { webView.load(entry) }
+    }
+
+    func retire() {
+        retired = true; webView.stopLoading(); webView.navigationDelegate = nil
+        webView.uiDelegate = nil; navigationObservation = nil; locationObservation = nil
+        updateObservation = nil; webView.configuration.userContentController.removeAllScriptMessageHandlers()
+    }
+
+    /// Window closure does not revoke ownership or destroy the live host. A
+    /// retained SwiftUI scene can reopen during browser login; endpoint/store
+    /// replacement still retires the old host permanently.
+    func retireIfOwnershipChanged(to configuredOrigin: WorkspaceOrigin?) {
+        guard configuredOrigin == origin, let storeSelection,
+              LoginStoreRegistry.shared.isCurrent(storeSelection) else {
+            retire(); return
+        }
+    }
+
+    var loginReturnTarget: URL? { lastWorkbenchURL }
+    func completeBrowserLogin(returnTarget: URL?) {
+        guard !retired, let storeSelection, LoginStoreRegistry.shared.isCurrent(storeSelection),
+              !LoginStoreRegistry.shared.hasUnresolvedLogin(for: origin.url.absoluteString) else { return }
+        signedOut = false; failure = nil; loading = true
+        webView.load(URLRequest(url: returnTarget ?? origin.entryURL))
     }
 
     func navigate(_ destination: WorkspaceDestination) {
+        guard !retired, !signedOut else { return }
         if destination == .settings { requestSettingsOpen(); return }
         webView.load(URLRequest(url: destination.url(in: origin)))
     }
@@ -218,7 +268,10 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     /// same-document back navigation, preserving unsent state where the Web app
     /// keeps it in memory.
     private func observeWorkbenchLocationForSettingsTransition() {
-        guard let url = webView.url else { return }
+        guard !retired, let url = webView.url else { return }
+        if origin.contains(url), url.path == "/login" {
+            signedOut = true; loading = false; webView.stopLoading(); return
+        }
         guard let transition = WorkspaceSurfacePolicy.workbenchSettingsTransition(
             from: lastWorkbenchURL, to: url, origin: origin) else {
             if WorkspaceSurfacePolicy.isTrackableWorkbenchURL(url, origin: origin) {
@@ -271,7 +324,16 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard let url = action.request.url else { decisionHandler(.cancel); return }
+        guard !retired, let selection = storeSelection, LoginStoreRegistry.shared.isCurrent(selection),
+              let url = action.request.url else { decisionHandler(.cancel); return }
+        if WorkspaceSupportHandoff.allows(url,
+            sourceIsTrusted: action.sourceFrame.request.url.map(origin.contains) == true,
+            mainFrame: action.sourceFrame.isMainFrame && action.targetFrame?.isMainFrame != false,
+            userActivated: action.navigationType == .linkActivated) {
+            externalURL = url
+            decisionHandler(.cancel)
+            return
+        }
         if url.scheme == "talentsignal-desktop" {
             if let command = DesktopChromeAction.resolve(url, source: action.sourceFrame.request.url,
                                                         origin: origin, mainFrame: action.sourceFrame.isMainFrame,
@@ -309,6 +371,14 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             // device window: `/workspace/settings` is account management, so it
             // opens the default browser instead. Cancelling the navigation also
             // leaves the conversation and its unsent draft untouched.
+            if mainFrame, targetsMainFrame, url.path == "/login" {
+                // Native owns the signed-out entry (ADR 0022): intercept the
+                // actual /login route and publish the native browser-login UI,
+                // so no Web login form can paint inside the app.
+                signedOut = true; loading = false
+                decisionHandler(.cancel)
+                return
+            }
             if mainFrame, targetsMainFrame, WorkspaceSurfacePolicy.isSettingsOwned(url) {
                 requestAccountSettings(WorkspaceSurfacePolicy.WorkbenchSettingsTransition
                     .accountDestination(forSettingsURL: url))
@@ -360,7 +430,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         panel.message = "保存后请在日历应用中核对并确认导入。"
         panel.allowedContentTypes = [UTType(filenameExtension: "ics") ?? .data]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = "Talent Signal-\(UUID().uuidString.prefix(8)).ics"
+        panel.nameFieldStringValue = "capri-\(UUID().uuidString.prefix(8)).ics"
         panel.beginSheetModal(for: window) { [weak self] result in
             guard result == .OK, let url = panel.url else {
                 self?.calendarDownloads.remove(ObjectIdentifier(download))
@@ -451,7 +521,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             completionHandler(false); return
         }
         let alert = NSAlert()
-        alert.messageText = "工作区确认 · \(origin.url.host ?? "Talent Signal")"
+        alert.messageText = "工作区确认 · \(origin.url.host ?? "capri")"
         alert.informativeText = message
         alert.addButton(withTitle: "确认")
         alert.addButton(withTitle: "取消")
@@ -464,7 +534,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             completionHandler(); return
         }
         let alert = NSAlert()
-        alert.messageText = "工作区 · \(origin.url.host ?? "Talent Signal")"
+        alert.messageText = "工作区 · \(origin.url.host ?? "capri")"
         alert.informativeText = message
         alert.addButton(withTitle: "好")
         alert.beginSheetModal(for: window) { _ in completionHandler() }
@@ -494,6 +564,7 @@ struct WorkspaceWebSurface: NSViewRepresentable {
 
 private struct ConnectedQuietWorkspace: View {
     @ObservedObject private var navigation = WorkspaceNavigation.shared
+    @ObservedObject var login: DesktopBrowserLoginCoordinator
     @StateObject private var browser: WorkspaceBrowser
     @Environment(\.openWindow) private var openWindow
     @AppStorage("workspace.desktop.zoom") private var zoom = 1.0
@@ -501,9 +572,13 @@ private struct ConnectedQuietWorkspace: View {
     @Environment(\.openSettings) private var openSettings
     @AppStorage("workspace.desktop.floating") private var floating = false
 
-    init(origin: WorkspaceOrigin) { _browser = StateObject(wrappedValue: WorkspaceBrowser(origin: origin)) }
+    init(origin: WorkspaceOrigin, login: DesktopBrowserLoginCoordinator) {
+        self.login = login
+        _browser = StateObject(wrappedValue: WorkspaceBrowser(origin: origin))
+    }
 
     private func consumeDestination() {
+        guard !browser.signedOut else { return }
         if let url = navigation.pendingURL {
             navigation.pendingURL = nil
             // Only the configured origin may be loaded from a handoff.
@@ -520,6 +595,13 @@ private struct ConnectedQuietWorkspace: View {
     var body: some View {
         ZStack(alignment: .top) {
             WorkspaceWebSurface(browser: browser, zoom: zoom)
+            if browser.signedOut {
+                // Native signed-out surface only: the Web login page never
+                // paints inside the workspace window.
+                DesktopBrowserLoginView(origin: browser.origin, returnTarget: browser.loginReturnTarget, coordinator: login)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(TSBrand.canvas)
+            }
             if browser.loading {
                 ProgressView().controlSize(.mini).padding(6)
                     .accessibilityLabel("正在载入工作区").allowsHitTesting(false)
@@ -573,7 +655,19 @@ private struct ConnectedQuietWorkspace: View {
             browser.openSettings = { openSettings() }
             CaptureRuntime.shared.start()
             CaptureRuntime.shared.setOpenWorkspace { openWindow(id: "workspace") }
+            if case .completed = login.phase {
+                // Exchange can finish before the reopened view's phase
+                // observer is attached. Consume the current result as well.
+                browser.completeBrowserLogin(returnTarget: login.returnTarget)
+            } else if browser.signedOut { login.signedOut(in: browser.origin) }
             consumeDestination()
+        }
+        .onDisappear { browser.retireIfOwnershipChanged(to: connection.origin) }
+        .onChange(of: browser.signedOut) { _, signedOut in
+            if signedOut { login.signedOut(in: browser.origin) }
+        }
+        .onChange(of: login.phase) { _, phase in
+            if case .completed = phase { browser.completeBrowserLogin(returnTarget: login.returnTarget); consumeDestination() }
         }
         .onChange(of: connection.inspectorEnabled) { _, enabled in browser.webView.isInspectable = enabled }
         .onChange(of: navigation.pending) { _, _ in consumeDestination() }
@@ -595,7 +689,7 @@ private struct ConnectedQuietWorkspace: View {
                 }.help("工作区操作")
             }
         }
-        .alert("在浏览器中打开？", isPresented: Binding(
+        .alert(browser.externalURL?.scheme == "mailto" ? "在邮件应用中准备草稿？" : "在浏览器中打开？", isPresented: Binding(
             get: { browser.externalURL != nil }, set: { if !$0 { browser.externalURL = nil } }
         )) {
             Button("打开") {
@@ -604,7 +698,9 @@ private struct ConnectedQuietWorkspace: View {
             }
             Button("取消", role: .cancel) { browser.externalURL = nil }
         } message: {
-            Text(browser.externalURL?.host ?? "此链接位于工作区之外。")
+            Text(browser.externalURL?.scheme == "mailto"
+                ? "收件人：hello@talentsignal.ai。打开后由你编辑和发送；不会自动发送邮件。"
+                : browser.externalURL?.host ?? "此链接位于工作区之外。")
         }
     }
 }
@@ -628,11 +724,17 @@ private struct FirstRunWindowFit: NSViewRepresentable {
 
 struct QuietWorkspaceView: View {
     @ObservedObject private var connection = WorkspaceConnection.shared
+    @StateObject private var login = DesktopBrowserLoginCoordinator.shared
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
+        Group {
         if let origin = connection.origin {
-            ConnectedQuietWorkspace(origin: origin).id(origin.url)
+            ConnectedQuietWorkspace(origin: origin, login: login)
+                // Retire the whole WebKit host when the store epoch changes:
+                // a deliberate new primary login never leaves a stale host
+                // signed in or bound to the previous store.
+                .id("\(origin.url.absoluteString)-\(connection.storeEpoch)")
                 .toolbar {
                     ToolbarItem {
                         Button("设置", systemImage: "slider.horizontal.3") { openSettings() }
@@ -651,5 +753,6 @@ struct QuietWorkspaceView: View {
             .background(TSBrand.canvas)
             .background(FirstRunWindowFit())
         }
+        }.onChange(of: connection.origin) { _, _ in login.originChanged() }
     }
 }

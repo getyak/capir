@@ -1,4 +1,4 @@
 interface:
-  display_name: "Talent Signal Design"
-  short_description: "Design calm, evidence-first recruiter product surfaces."
-  default_prompt: "Use $design-talent-signal to design or review a Talent Signal product surface."
+  display_name: "capri Design"
+  short_description: "Design calm, evidence-first personal-Agent product surfaces."
+  default_prompt: "Use $design-talent-signal to design or review a capri product surface."

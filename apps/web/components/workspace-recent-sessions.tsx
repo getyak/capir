@@ -1,10 +1,13 @@
 "use client";
 
-import { CaretRight, ClockCounterClockwise, PushPin } from "@phosphor-icons/react";
+import { CaretRight, ClockCounterClockwise, Plus, PushPin } from "@phosphor-icons/react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useId, useState } from "react";
 
+import {
+  WORKSPACE_NEW_CONVERSATION_EVENT,
+} from "@/lib/workspace-navigation";
 import {
   recentSessionRows,
 } from "@/lib/workspace-recent-sessions";
@@ -12,6 +15,7 @@ import {
   organizeSessionRows,
   useSessionOrganization,
 } from "@/lib/workspace-session-organization";
+import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { useWorkspaceDirectory } from "./workspace-search";
 import { WorkspaceListRow, useArrivalRegistry } from "./workspace-list-motion";
 import {
@@ -34,6 +38,7 @@ export function WorkspaceRecentSessions({
   storageScope?: string | null;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
   const listId = useId();
@@ -63,26 +68,48 @@ export function WorkspaceRecentSessions({
     };
   }
 
+  // Same flow as the former rail control: a mounted Home canvas resets to a
+  // fresh conversation in place; otherwise a fresh server id bypasses retained
+  // draft locators. https://nextjs.org/docs/app/api-reference/functions/use-router
+  function startNewConversation() {
+    const unhandled = window.dispatchEvent(
+      new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }),
+    );
+    if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}`);
+  }
+
   return (
     <section aria-label="最近对话" className={styles.group}>
-      {empty ? (
-        <Link aria-label="打开对话记录" className={styles.historyHeader} data-empty="true" href="/workspace/sessions">
-          <ClockCounterClockwise aria-hidden="true" size={16} />
-          <span>对话记录</span>
-          <CaretRight aria-hidden="true" size={12} />
-        </Link>
-      ) : (
+      <div className={styles.historyBar}>
+        {empty ? (
+          <Link aria-label="打开对话记录" className={styles.historyHeader} data-empty="true" href="/workspace/sessions">
+            <ClockCounterClockwise aria-hidden="true" size={16} />
+            <span>对话记录</span>
+            <CaretRight aria-hidden="true" size={12} />
+          </Link>
+        ) : (
+          <button
+            aria-controls={listId}
+            aria-expanded={expanded}
+            className={`${styles.groupTitle} ${styles.historyDisclosure}`}
+            onClick={() => setExpanded((value) => !value)}
+            type="button"
+          >
+            <span>最近对话</span>
+            <CaretRight aria-hidden="true" className={styles.personCaret} size={12} />
+          </button>
+        )}
         <button
-          aria-controls={listId}
-          aria-expanded={expanded}
-          className={`${styles.groupTitle} ${styles.historyDisclosure}`}
-          onClick={() => setExpanded((value) => !value)}
+          aria-label="开始新对话"
+          className={styles.newConversation}
+          onClick={startNewConversation}
+          title="开始新对话"
           type="button"
         >
-          <span>最近对话</span>
-          <CaretRight aria-hidden="true" className={styles.personCaret} size={12} />
+          <Plus aria-hidden="true" size={14} />
+          <span>新对话</span>
         </button>
-      )}
+      </div>
       {snapshot.pendingInMemory ? (
         <p className={styles.orgNotice} role="status">
           本机存储不可用 · 归档与置顶仅在本页保留
@@ -109,12 +136,13 @@ export function WorkspaceRecentSessions({
                         href={`/workspace/sessions/${row.id}`}
                         title={row.title}
                       >
-                        <span
-                          aria-hidden="true"
-                          className={styles.sessionDot}
-                          data-unread={row.unread ? "true" : "false"}
-                        />
-                        <span>{row.title}</span>
+                        {row.personId ? (
+                          <PersonDirectoryAvatar className={styles.avatar} dataSize="small" id={row.personId} label={row.personLabel || row.title} />
+                        ) : (
+                          /* Sessions without a person reuse the brand mark; no fixture faces. */
+                          <span aria-hidden="true" className={styles.sessionMark} />
+                        )}
+                        <span className={styles.sessionTitle}>{row.title}</span>
                         {snapshot.entries[row.id]?.pinned ? (
                           <small>
                             <PushPin aria-hidden="true" size={10} weight="fill" />
@@ -163,7 +191,12 @@ export function WorkspaceRecentSessions({
                         href={`/workspace/sessions/${row.id}`}
                         title={row.title}
                       >
-                        <span>{row.title}</span>
+                        {row.personId ? (
+                          <PersonDirectoryAvatar className={styles.avatar} dataSize="small" id={row.personId} label={row.personLabel || row.title} />
+                        ) : (
+                          <span aria-hidden="true" className={styles.sessionMark} />
+                        )}
+                        <span className={styles.sessionTitle}>{row.title}</span>
                       </Link>
                     </WorkspaceSessionRow>
                   </li>

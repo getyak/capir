@@ -58,7 +58,7 @@ final class CaptureWebSessionIntegrationTests: XCTestCase {
             .domain: "127.0.0.1", .path: "/", .name: proof.cookieName,
             .value: proof.cookieValue, .expires: Date().addingTimeInterval(3600),
         ]))
-        let store = WKWebsiteDataStore(forIdentifier: origin.dataStoreIdentifier).httpCookieStore
+        let store = WKWebsiteDataStore(forIdentifier: try XCTUnwrap(origin.dataStoreIdentifier)).httpCookieStore
         await withCheckedContinuation { continuation in
             store.setCookie(cookie) { continuation.resume() }
         }
@@ -131,7 +131,7 @@ final class CaptureWebSessionIntegrationTests: XCTestCase {
             .domain: "127.0.0.1", .path: "/", .name: proof.cookieName,
             .value: proof.cookieValue, .expires: Date().addingTimeInterval(3600),
         ]))
-        let cookieStore = WKWebsiteDataStore(forIdentifier: origin.dataStoreIdentifier).httpCookieStore
+        let cookieStore = WKWebsiteDataStore(forIdentifier: try XCTUnwrap(origin.dataStoreIdentifier)).httpCookieStore
         await withCheckedContinuation { continuation in
             cookieStore.setCookie(cookie) { continuation.resume() }
         }

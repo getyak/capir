@@ -57,6 +57,7 @@ export type MemoryReviewCardProps = {
   sourceImages?: readonly ConversationImageManifest[];
   sourceMessageId?: string | null;
   sourceText?: string;
+  onDecisionState?: (state: "pending" | "resolved" | "unknown") => void;
 };
 
 const PREVIEW_LIMIT = 4;
@@ -643,6 +644,12 @@ function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
     entryCapability: props.entryCapability ?? null,
     sessionId: props.sessionId ?? null,
   });
+  const onDecisionState = props.onDecisionState;
+  useEffect(() => {
+    const state = ["receipt", "undone", "dismissed", "processed", "undoing"].includes(controller.phase) ? "resolved"
+      : controller.phase === "review" || controller.phase === "saving" ? "pending" : "unknown";
+    onDecisionState?.(state);
+  }, [controller.phase, onDecisionState]);
   const openReview = controller.open;
   useEffect(() => { void openReview(); }, [openReview, props.binding, props.proposal.proposal_id, props.proposal.revision]);
   return <SessionMemoryCards controller={controller} onComment={props.onCommentItem}

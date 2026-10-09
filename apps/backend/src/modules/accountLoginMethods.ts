@@ -189,8 +189,8 @@ async function loadContext(
     `SELECT settings_revision, retired_at FROM accounts WHERE id = $1 FOR ${write ? "UPDATE" : "SHARE"}`,
     [auth.accountId],
   );
-  const user = await client.query<{ profile_revision: number; status: string }>(
-    `SELECT profile_revision, status FROM users
+  const user = await client.query<{ profile_revision: number; status: string; kind: string }>(
+    `SELECT profile_revision, status, kind FROM users
      WHERE account_id = $1 AND id = $2 FOR UPDATE`,
     [auth.accountId, auth.userId],
   );
@@ -204,6 +204,9 @@ async function loadContext(
   const userRow = user.rows[0];
   if (!accountRow || !userRow || userRow.status !== "active" || !session.rowCount) {
     throw new ApiError(401, "SESSION_INVALID", "Sign in again to change sign-in methods.");
+  }
+  if (userRow.kind === "lab_human") {
+    throw new ApiError(403, "TEST_ACCOUNT_READ_ONLY", "Return to your account to manage sign-in methods.");
   }
   if (accountRow.retired_at !== null) {
     throw new ApiError(
@@ -507,7 +510,7 @@ async function completeLink(
         throw new ApiError(
           409,
           "LOGIN_METHOD_EMAIL_CONFLICT",
-          "This provider email belongs to another Talent Signal account. Email equality grants no access; the credential is unchanged.",
+          "This provider email belongs to another capri account. Email equality grants no access; the credential is unchanged.",
         );
       }
       throw error;
@@ -529,7 +532,7 @@ async function completeLink(
       throw new ApiError(
         409,
         "LOGIN_METHOD_CONFLICT",
-        "This provider account is already connected to another Talent Signal account. Authenticated recovery explains the exact conflict; nothing was merged.",
+        "This provider account is already connected to another capri account. Authenticated recovery explains the exact conflict; nothing was merged.",
       );
     }
     // Reassertion with a newly verified address follows the same arbitration

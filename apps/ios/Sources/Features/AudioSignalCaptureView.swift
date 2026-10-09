@@ -217,7 +217,7 @@ struct AudioSignalCaptureView: View {
                     .foregroundStyle(Color.tsInk)
                 Text(
                     appLanguage.text(
-                        "Keep Talent Signal in the foreground. Leaving the app stops and seals the local payload."
+                        "Keep capri in the foreground. Leaving the app stops and seals the local payload."
                     )
                 )
                     .font(.subheadline)

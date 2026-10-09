@@ -680,7 +680,7 @@ enum SharedCaptureInboxError: LocalizedError {
         case let .deletionRollbackConflict(path):
             return "Shared capture deletion could not roll back because \(path) already exists. Both copies were retained for recovery."
         case let .deletionAlreadyInProgress(id):
-            return "Shared capture \(id.uuidString) already has a protected deletion in progress. Relaunch Talent Signal to reconcile it before retrying."
+            return "Shared capture \(id.uuidString) already has a protected deletion in progress. Relaunch capri to reconcile it before retrying."
         }
     }
 }

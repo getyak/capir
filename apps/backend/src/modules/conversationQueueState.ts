@@ -6,12 +6,14 @@ import {
   type ConversationQueueEntry,
   type ConversationQueueEntryStatus,
   type ConversationQueueSnapshot,
+  type McpHumanResult,
 } from "@talent-signal/contracts";
 import type { Pool, PoolClient } from "pg";
 
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
+import { assertAccountActive } from "./accountIdentity.js";
 import { assertSessionForChat } from "./agentSessionSources.js";
 import { readConversationMessageImageManifests } from "./conversationMessageImages.js";
 import { publishConversationQueueChanged } from "./conversationQueueLive.js";
@@ -28,6 +30,7 @@ const ACTIVE_STATUSES: ConversationQueueEntryStatus[] = [
 ];
 
 export interface ConversationQueueEntryRow {
+  host_result: unknown;
   account_id: string;
   session_id: string;
   id: string;
@@ -50,6 +53,10 @@ export interface ConversationQueueEntryRow {
   cancel_requested: boolean;
   failure_code: string | null;
   images_hash: string | null;
+  steer_group_entry_id: string | null;
+  steer_state: "awaiting" | "dispatching" | "delivered" | "unsupported";
+  steer_delivered_at: Date | null;
+  steer_closed_at: Date | null;
   result: unknown;
   result_recorded_at: Date | null;
   lineage_recorded_at: Date | null;
@@ -85,6 +92,8 @@ export class ConversationQueueLeaseLostError extends Error {
 
 export interface ClaimedConversationQueueEntry {
   accountId: string;
+  /** Host-only typed MCP human result; never a user-authored claim. */
+  hostResult: import("@talent-signal/contracts").McpHumanResult | null;
   sessionId: string;
   authSessionId: string | null;
   entryId: string;
@@ -100,6 +109,8 @@ export interface ClaimedConversationQueueEntry {
   hasResult: boolean;
   /** Original accepted timestamp; canonical user turns must preserve it. */
   acceptedAt: string;
+  /** Canonical run start: when this attempt claimed the entry. */
+  claimedAt: string;
 }
 
 function iso(value: Date | string): string {
@@ -113,6 +124,7 @@ export function asNumber(value: string | number): number {
 function toEntry(
   row: ConversationQueueEntryRow,
   images: ConversationImageManifest[] | undefined,
+  steerRunId?: string | null,
 ): ConversationQueueEntry {
   return {
     queue_entry_id: row.id,
@@ -120,14 +132,24 @@ function toEntry(
     sequence: asNumber(row.sequence),
     status: row.status,
     objective: row.objective ?? "",
+    ...(row.host_result ? { host_result: row.host_result as McpHumanResult } : {}),
     ...(images && images.length > 0 ? { images } : {}),
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
+    started_at: row.claimed_at ? iso(row.claimed_at) : null,
     revision: row.revision,
     run_id: row.run_id,
     stage: row.stage,
     cancel_requested: row.cancel_requested,
     failure_code: row.failure_code,
+    accepts_steering: row.status === "running" && !row.cancel_requested && row.steer_closed_at === null && row.result === null,
+    ...(row.steer_group_entry_id
+      ? {
+          steer_delivered: row.steer_state === "delivered",
+          steer_state: row.steer_state,
+          ...(steerRunId ? { steers_run_id: steerRunId } : {}),
+        }
+      : {}),
   };
 }
 
@@ -233,10 +255,13 @@ export async function readConversationQueueSnapshot(
   await assertConversationQueueContextCurrent(client, auth, sessionId);
   const state = await readConversationQueueState(client, auth.accountId, sessionId);
   const rows = (
-    await client.query<ConversationQueueEntryRow>(
-      `SELECT * FROM conversation_queue_entries
-       WHERE account_id=$1 AND session_id=$2 AND status = ANY($3::text[])
-       ORDER BY sequence`,
+    await client.query<ConversationQueueEntryRow & { steer_run_id: string | null }>(
+      `SELECT e.*, leader.run_id AS steer_run_id
+       FROM conversation_queue_entries e
+       LEFT JOIN conversation_queue_entries leader
+         ON leader.account_id=e.account_id AND leader.id=e.steer_group_entry_id
+       WHERE e.account_id=$1 AND e.session_id=$2 AND e.status = ANY($3::text[])
+       ORDER BY e.sequence`,
       [auth.accountId, sessionId, ACTIVE_STATUSES],
     )
   ).rows;
@@ -245,7 +270,7 @@ export async function readConversationQueueSnapshot(
     auth.accountId,
     rows.map((row) => row.id),
   );
-  const entries = rows.map((row) => toEntry(row, manifests.get(row.id)));
+  const entries = rows.map((row) => toEntry(row, manifests.get(row.id), row.steer_run_id));
   return {
     contract_version: CONTRACT_VERSION,
     session_id: sessionId,
@@ -266,7 +291,8 @@ export async function listRunnableConversationQueueSessions(
        FROM conversation_queue_state s
        WHERE s.paused=false
          AND EXISTS (SELECT 1 FROM conversation_queue_entries e
-           WHERE e.account_id=s.account_id AND e.session_id=s.session_id AND e.status='queued')
+           WHERE e.account_id=s.account_id AND e.session_id=s.session_id
+             AND e.status='queued' AND e.steer_group_entry_id IS NULL)
          AND NOT EXISTS (SELECT 1 FROM conversation_queue_entries e
            WHERE e.account_id=s.account_id AND e.session_id=s.session_id AND e.status='running')
        ORDER BY s.updated_at
@@ -278,7 +304,7 @@ export async function listRunnableConversationQueueSessions(
 
 export async function claimNextConversationQueueEntry(
   pool: Pool,
-  input: { accountId: string; sessionId: string; workerId: string },
+  input: { accountId: string; sessionId: string; workerId: string; acceptsSteering?: boolean },
 ): Promise<ClaimedConversationQueueEntry | null> {
   const claimed = await inTransaction(pool, async (client) => {
     await lockConversationQueueSession(client, input.sessionId);
@@ -294,7 +320,7 @@ export async function claimNextConversationQueueEntry(
     const next = (
       await client.query<ConversationQueueEntryRow>(
         `SELECT * FROM conversation_queue_entries
-         WHERE account_id=$1 AND session_id=$2 AND status='queued'
+         WHERE account_id=$1 AND session_id=$2 AND status='queued' AND steer_group_entry_id IS NULL
          ORDER BY sequence LIMIT 1 FOR UPDATE SKIP LOCKED`,
         [input.accountId, input.sessionId],
       )
@@ -307,7 +333,7 @@ export async function claimNextConversationQueueEntry(
         `UPDATE conversation_queue_entries
          SET status='running', run_id=$3, lease_owner=$4, lease_generation=$5,
              lease_expires_at=now()+($6::int * interval '1 millisecond'),
-             attempt=attempt+1, revision=revision+1, claimed_at=now(), updated_at=now(), cancel_requested=false, cancel_auto_continue=false
+             attempt=attempt+1, revision=revision+1, claimed_at=now(), updated_at=now(), cancel_requested=false, cancel_auto_continue=false, steer_closed_at=CASE WHEN $7::boolean THEN NULL ELSE now() END
          WHERE account_id=$1 AND id=$2 AND status='queued'
          RETURNING *`,
         [
@@ -317,6 +343,7 @@ export async function claimNextConversationQueueEntry(
           input.workerId,
           generation,
           CONVERSATION_QUEUE_LEASE_MS,
+          input.acceptsSteering === true,
         ],
       )
     ).rows[0];
@@ -324,6 +351,9 @@ export async function claimNextConversationQueueEntry(
     await bumpConversationQueueState(client, input.accountId, input.sessionId);
     return {
       accountId: updated.account_id,
+      hostResult: updated.host_result
+        ? (updated.host_result as import("@talent-signal/contracts").McpHumanResult)
+        : null,
       sessionId: updated.session_id,
       authSessionId: updated.auth_session_id,
       entryId: updated.id,
@@ -338,6 +368,7 @@ export async function claimNextConversationQueueEntry(
       leaseGeneration: generation,
       hasResult: updated.result !== null,
       acceptedAt: updated.created_at.toISOString(),
+      claimedAt: (updated.claimed_at ?? updated.created_at).toISOString(),
     } satisfies ClaimedConversationQueueEntry;
   });
   if (claimed) publishConversationQueueChanged(claimed.accountId, claimed.sessionId);
@@ -372,20 +403,26 @@ export async function refreshConversationQueueLease(
   pool: Pool,
   fence: ConversationQueueRunFence,
 ): Promise<{ cancelRequested: boolean } | null> {
-  const row = (
-    await pool.query<{ cancel_requested: boolean }>(
-      `UPDATE conversation_queue_entries
-       SET lease_expires_at=now()+($6::int * interval '1 millisecond'), updated_at=now()
-       WHERE ${fencePredicateAllowCancel(1)}
-       RETURNING cancel_requested`,
-      [...fenceValues(fence), CONVERSATION_QUEUE_LEASE_MS],
-    )
-  ).rows[0];
-  return row ? { cancelRequested: row.cancel_requested } : null;
+  return inTransaction(pool, async (client) => {
+    // MCP staging holds the account fence before the queue claim. Acquire the
+    // retirement fence first too; taking the queue row before its write trigger
+    // waits on the account would deadlock with staging's claim revalidation.
+    await assertAccountActive(client, fence.accountId);
+    const row = (
+      await client.query<{ cancel_requested: boolean }>(
+        `UPDATE conversation_queue_entries
+         SET lease_expires_at=now()+($6::int * interval '1 millisecond'), updated_at=now()
+         WHERE ${fencePredicateAllowCancel(1)}
+         RETURNING cancel_requested`,
+        [...fenceValues(fence), CONVERSATION_QUEUE_LEASE_MS],
+      )
+    ).rows[0];
+    return row ? { cancelRequested: row.cancel_requested } : null;
+  });
 }
 
 export async function assertConversationQueueOwnedClaim(
-  pool: Pool,
+  pool: DatabaseClient,
   fence: ConversationQueueRunFence,
   options: { allowCancelRequested?: boolean } = {},
 ): Promise<{ cancelRequested: boolean }> {
@@ -444,6 +481,244 @@ export async function readConversationQueueResult(
 }
 
 /**
+ * The live run whose steering intake is still open, if any. A message
+ * admitted while this row exists steers that run; anything admitted after the
+ * intake durably closed (or after the run recorded its result, stopped, or
+ * lost its lease) is the next task. The status check deliberately ignores
+ * lease staleness: a stalled run keeps its steering group together so
+ * recovery and explicit retry can re-deliver it instead of splitting the
+ * user's intent.
+ */
+export async function readConversationQueueSteeringLeader(
+  client: DatabaseClient,
+  accountId: string,
+  sessionId: string,
+): Promise<{ entryId: string; runId: string | null } | null> {
+  const row = (
+    await client.query<{ id: string; run_id: string | null }>(
+      `SELECT id, run_id FROM conversation_queue_entries
+       WHERE account_id=$1 AND session_id=$2 AND status='running'
+         AND cancel_requested=false AND result IS NULL AND steer_closed_at IS NULL
+       LIMIT 1`,
+      [accountId, sessionId],
+    )
+  ).rows[0];
+  return row ? { entryId: row.id, runId: row.run_id } : null;
+}
+
+/** Open intake only after the runner has selected a steering-capable provider.
+ * A claimed but unresolved/unsupported run never advertises steering authority.
+ */
+export async function openConversationQueueSteeringIntake(
+  pool: Pool,
+  fence: ConversationQueueRunFence,
+): Promise<void> {
+  await inTransaction(pool, async (client) => {
+    await lockConversationQueueSession(client, fence.sessionId);
+    const opened = await client.query(
+      `UPDATE conversation_queue_entries SET steer_closed_at=NULL, revision=revision+1, updated_at=now()
+       WHERE ${fencePredicate(1)} AND result IS NULL`, fenceValues(fence),
+    );
+    if (opened.rowCount !== 1) throw new ConversationQueueLeaseLostError();
+    await bumpConversationQueueState(client, fence.accountId, fence.sessionId);
+  });
+  publishConversationQueueChanged(fence.accountId, fence.sessionId);
+}
+
+export interface ConversationQueueSteeringMember {
+  entryId: string;
+  messageId: string;
+  objective: string;
+  /** Original accepted timestamp; never rewritten for the fold. */
+  acceptedAt: string;
+  steerState: "awaiting" | "dispatching" | "delivered" | "unsupported";
+}
+
+/** Ordered steering members of one run, read under its live fence. */
+export async function readConversationQueueSteeringMembers(
+  pool: Pool,
+  fence: ConversationQueueRunFence,
+  options: { state?: "awaiting" | "dispatching" | "delivered" | "unsupported" } = {},
+): Promise<ConversationQueueSteeringMember[]> {
+  const rows = (
+    await pool.query<{
+      id: string;
+      message_id: string;
+      objective: string | null;
+      created_at: Date;
+      steer_state: "awaiting" | "dispatching" | "delivered" | "unsupported";
+    }>(
+      `SELECT m.id, m.message_id, m.objective, m.created_at, m.steer_state
+       FROM conversation_queue_entries m
+       JOIN conversation_queue_entries l
+         ON l.account_id=m.account_id AND l.id=m.steer_group_entry_id
+       WHERE m.account_id=$1 AND m.steer_group_entry_id=$2
+         AND l.run_id=$3 AND l.lease_owner=$4 AND l.lease_generation=$5
+         AND l.status='running' AND l.lease_expires_at>now()
+         AND m.steer_state = COALESCE($6, m.steer_state)
+       ORDER BY m.sequence`,
+      [fence.accountId, fence.entryId, fence.runId, fence.leaseOwner, fence.leaseGeneration,
+        options.state ?? null],
+    )
+  ).rows;
+  return rows
+    .filter((row) => row.objective !== null)
+    .map((row) => ({
+      entryId: row.id,
+      messageId: row.message_id,
+      objective: row.objective!,
+      acceptedAt: row.created_at.toISOString(),
+      steerState: row.steer_state,
+    }));
+}
+
+/**
+ * Record one delivered steering batch under the run's lease fence and return
+ * exactly the rows the model receives. Delivery is idempotent per message: a
+ * replayed attempt cannot double-deliver, and a stale worker's write fails the
+ * fence instead of folding anything. Reading the text back from the fenced
+ * write guarantees the folded turn records precisely what was delivered.
+ */
+export async function claimConversationQueueSteeringMembers(
+  pool: Pool,
+  fence: ConversationQueueRunFence,
+  entryIds: string[],
+): Promise<ConversationQueueSteeringMember[]> {
+  if (entryIds.length === 0) return [];
+  return inTransaction(pool, async (client) => {
+    await lockConversationQueueSession(client, fence.sessionId);
+    const leader = await client.query(
+      `SELECT id FROM conversation_queue_entries WHERE ${fencePredicate(1)} FOR UPDATE`,
+      fenceValues(fence),
+    );
+    if (leader.rowCount !== 1) throw new ConversationQueueLeaseLostError();
+    const updated = await client.query<{
+      id: string;
+      message_id: string;
+      objective: string | null;
+      created_at: Date;
+      steer_state: "awaiting" | "dispatching" | "delivered" | "unsupported";
+    }>(
+      `UPDATE conversation_queue_entries
+       SET steer_state='dispatching', updated_at=now(), revision=revision+1
+       WHERE account_id=$1 AND steer_group_entry_id=$2 AND id=ANY($3::uuid[]) AND steer_state='awaiting'
+       RETURNING id, message_id, objective, created_at, steer_state`,
+      [fence.accountId, fence.entryId, entryIds],
+    );
+    return updated.rows
+      .filter((row) => row.objective !== null)
+      .map((row) => ({
+        entryId: row.id,
+        messageId: row.message_id,
+        objective: row.objective!,
+        acceptedAt: row.created_at.toISOString(),
+        steerState: row.steer_state,
+      }))
+      .sort((a, b) => entryIds.indexOf(a.entryId) - entryIds.indexOf(b.entryId));
+  });
+}
+
+/** A primary model-consumption observation acknowledges one frozen batch. */
+export async function acknowledgeConversationQueueSteeringMembers(
+  pool: Pool, fence: ConversationQueueRunFence, entryIds: string[],
+): Promise<void> {
+  if (!entryIds.length) return;
+  await inTransaction(pool, async client => {
+    await lockConversationQueueSession(client, fence.sessionId);
+    const leader = await client.query(
+      `SELECT id FROM conversation_queue_entries WHERE ${fencePredicate(1)} FOR UPDATE`, fenceValues(fence));
+    if (leader.rowCount !== 1) throw new ConversationQueueLeaseLostError();
+    const updated = await client.query(
+      `UPDATE conversation_queue_entries
+       SET steer_state='delivered', steer_delivered_at=now(), updated_at=now(), revision=revision+1
+       WHERE account_id=$1 AND steer_group_entry_id=$2 AND id=ANY($3::uuid[])
+         AND steer_state='dispatching' RETURNING id`,
+      [fence.accountId, fence.entryId, entryIds],
+    );
+    if (updated.rowCount !== entryIds.length) throw new ConversationQueueLeaseLostError();
+  });
+  publishConversationQueueChanged(fence.accountId, fence.sessionId);
+}
+
+/**
+ * Explicit safe response for an unsupported image steering batch: the
+ * messages are marked unsupported (never silently dropped or half-folded)
+ * and re-queue as the next task with their images at finalize.
+ */
+export async function markConversationQueueSteeringUnsupported(
+  pool: Pool,
+  fence: ConversationQueueRunFence,
+  entryIds: string[],
+  failureCode: string,
+): Promise<void> {
+  if (entryIds.length === 0) return;
+  await inTransaction(pool, async (client) => {
+    await lockConversationQueueSession(client, fence.sessionId);
+    const leader = await client.query(
+      `SELECT id FROM conversation_queue_entries WHERE ${fencePredicate(1)} FOR UPDATE`,
+      fenceValues(fence),
+    );
+    if (leader.rowCount !== 1) throw new ConversationQueueLeaseLostError();
+    await client.query(
+      `UPDATE conversation_queue_entries
+       SET steer_state='unsupported', failure_code=$4, updated_at=now(), revision=revision+1
+       WHERE account_id=$1 AND steer_group_entry_id=$2 AND id=ANY($3::uuid[]) AND steer_state='awaiting'
+         AND steer_delivered_at IS NULL`,
+      [fence.accountId, fence.entryId, entryIds, failureCode],
+    );
+  });
+}
+
+/**
+ * Durably close this run's steering intake under the session advisory lock,
+ * but only while no message is still awaiting delivery. The conditional
+ * write is the same linearization point admission reads, so an accepted
+ * steering message is always processed by this run and only a message
+ * admitted after closure becomes the next task.
+ */
+export async function closeConversationQueueSteeringIntake(
+  pool: Pool,
+  fence: ConversationQueueRunFence,
+  options: { force?: boolean } = {},
+): Promise<boolean> {
+  return inTransaction(pool, async (client) => {
+    await lockConversationQueueSession(client, fence.sessionId);
+    // Already-closed intake still needs a live owned claim. In particular,
+    // force-close must not detach a successor worker's members after selection.
+    await assertConversationQueueOwnedClaim(client, fence);
+    const updated = await client.query(
+      `UPDATE conversation_queue_entries
+       SET steer_closed_at=now(), updated_at=now(), revision=revision+1
+       WHERE ${fencePredicate(1)} AND steer_closed_at IS NULL
+         AND ($6::boolean OR NOT EXISTS (
+           SELECT 1 FROM conversation_queue_entries m
+           WHERE m.account_id=$1 AND m.steer_group_entry_id=$2 AND m.steer_state IN ('awaiting','dispatching')
+         ))
+       RETURNING id`,
+      [...fenceValues(fence), options.force === true],
+    );
+    if (options.force) {
+      // A dynamic selector can choose a provider without live steering. Input
+      // accepted during selection remains whole, explicitly as the next task.
+      await client.query(
+        `UPDATE conversation_queue_entries SET steer_group_entry_id=NULL, steer_state='awaiting',
+          failure_code='STEER_PROVIDER_UNSUPPORTED', revision=revision+1, updated_at=now()
+         WHERE account_id=$1 AND steer_group_entry_id=$2 AND steer_state='awaiting'`,
+        [fence.accountId, fence.entryId],
+      );
+      await bumpConversationQueueState(client, fence.accountId, fence.sessionId);
+    }
+    if (updated.rowCount === 1) return true;
+    const current = await client.query<{ steer_closed_at: Date | null }>(
+      `SELECT steer_closed_at FROM conversation_queue_entries
+       WHERE ${fencePredicate(1)}`,
+      fenceValues(fence),
+    );
+    return current.rows[0]?.steer_closed_at != null;
+  });
+}
+
+/**
  * Finalize a run. `completed` requires an un-cancelled, still-live fence; if a
  * stop or refusal won the race the caller must finalize the truthful state
  * instead. Failed/interrupted states pause the queue; completion never clears a
@@ -499,6 +774,40 @@ export async function finalizeConversationQueueEntry(
     }
     const autoContinue =
       input.status === "cancelled" && (updated.rows[0]?.prior_cancel_auto_continue ?? false);
+    // GET-128 steering group shared fate. Delivered messages were processed
+    // inside this run and fold into its single canonical turn, so they take
+    // the run's terminal state and the same scrub. Messages that never
+    // reached the model are never given fabricated history: after a normal
+    // completion or an explicit stop they re-queue as the next task, while a
+    // failure or interruption keeps them with the group so one explicit retry
+    // re-runs and re-delivers the whole steering intent.
+    const leaderId = fence.entryId;
+    if (input.status === "completed" || input.status === "cancelled") {
+      await client.query(
+        `UPDATE conversation_queue_entries
+         SET status=$3, content_state='scrubbed', objective=NULL, stage=NULL, failure_code=NULL,
+             steer_group_entry_id=NULL, steer_state='awaiting', steer_delivered_at=NULL,
+             completed_at=now(), updated_at=now(), revision=revision+1
+         WHERE account_id=$1 AND steer_group_entry_id=$2 AND steer_state='delivered'`,
+        [fence.accountId, leaderId, input.status],
+      );
+      await client.query(
+        `UPDATE conversation_queue_entries
+         SET steer_group_entry_id=NULL, steer_state='awaiting', steer_delivered_at=NULL,
+             failure_code=CASE WHEN steer_state='unsupported' THEN failure_code ELSE NULL END,
+             updated_at=now(), revision=revision+1
+         WHERE account_id=$1 AND steer_group_entry_id=$2 AND steer_state<>'delivered'`,
+        [fence.accountId, leaderId],
+      );
+    } else {
+      await client.query(
+        `UPDATE conversation_queue_entries
+         SET status=$3, content_state='retained', stage=NULL, failure_code=COALESCE(failure_code,$4),
+             completed_at=now(), updated_at=now(), revision=revision+1
+         WHERE account_id=$1 AND steer_group_entry_id=$2`,
+        [fence.accountId, leaderId, input.status, input.failureCode ?? null],
+      );
+    }
     await bumpConversationQueueState(
       client,
       fence.accountId,
@@ -561,6 +870,9 @@ export async function reclaimStaleConversationQueueEntry(
     await bumpConversationQueueState(client, input.accountId, input.sessionId);
     return {
       accountId: updated.account_id,
+      hostResult: updated.host_result
+        ? (updated.host_result as import("@talent-signal/contracts").McpHumanResult)
+        : null,
       sessionId: updated.session_id,
       authSessionId: updated.auth_session_id,
       entryId: updated.id,
@@ -575,6 +887,7 @@ export async function reclaimStaleConversationQueueEntry(
       leaseGeneration: updated.lease_generation,
       hasResult: updated.result !== null,
       acceptedAt: updated.created_at.toISOString(),
+      claimedAt: (updated.claimed_at ?? updated.created_at).toISOString(),
     } satisfies ClaimedConversationQueueEntry;
   });
   if (claimed) publishConversationQueueChanged(claimed.accountId, claimed.sessionId);

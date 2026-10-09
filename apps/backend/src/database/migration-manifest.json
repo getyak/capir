@@ -89,6 +89,18 @@
     "081_meeting_image_evidence",
     "082_conversation_queue_prioritize",
     "083_account_identity_ownership",
-    "084_secondary_email_ownership"
+    "084_secondary_email_ownership",
+    "085_conversation_queue_steering",
+    "086_desktop_browser_login",
+    "088_username_email_alias",
+    "089_mcp_interactions",
+    "090_mcp_continuation_outbox",
+    "091_mcp_oauth_cleanup",
+    "092_mcp_oauth_cleanup_provenance",
+    "093_mcp_oauth_cleanup_attempts_default",
+    "094_mcp_oauth_cleanup_generation",
+    "095_mcp_oauth_cleanup_effects",
+    "096_capir_test_provisioning",
+    "097_capir_auth"
   ]
 }

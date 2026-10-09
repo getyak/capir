@@ -126,7 +126,7 @@ final class CapturePreviewWindowController: NSObject, NSWindowDelegate {
                            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         new.animationBehavior = .none
         new.isReleasedWhenClosed = false
-        new.title = "Talent Signal · 截图预览"
+        new.title = "capri · 截图预览"
         self.coordinator = coordinator
         new.delegate = self
         new.contentViewController = NSHostingController(rootView: CapturePreviewView(coordinator: coordinator) { [weak self] in

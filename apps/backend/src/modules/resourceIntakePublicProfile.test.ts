@@ -133,7 +133,7 @@ describe("reviewed public profile intake boundary", () => {
     }
 
     expect(() => validateResourceRequest(value)).toThrowError(
-      /does not grant Talent Signal display or storage rights/,
+      /does not grant capri display or storage rights/,
     );
   });
 

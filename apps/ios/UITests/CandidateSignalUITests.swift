@@ -869,7 +869,7 @@ final class CandidateSignalUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(actionButtonSettings.exists)
-        XCTAssertFalse(app.staticTexts["Talent Signal"].exists)
+        XCTAssertFalse(app.staticTexts["capri"].exists)
         preserveScreenshot("Quiet workspace menu")
 
         if !actionButtonOnboarding.isHittable {
@@ -884,7 +884,7 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertEqual(systemStep.label, "1. Take Screenshot")
         XCTAssertEqual(systemStep.value as? String, "System action")
         XCTAssertEqual(talentSignalStep.label, "2. Review screenshot")
-        XCTAssertEqual(talentSignalStep.value as? String, "Talent Signal action")
+        XCTAssertEqual(talentSignalStep.value as? String, "capri action")
         XCTAssertTrue(element("shortcut-local-boundary").exists)
         let buildShortcut = element("build-screenshot-shortcut")
         XCTAssertTrue(buildShortcut.exists)
@@ -2990,7 +2990,7 @@ final class CandidateSignalUITests: XCTestCase {
         )
         XCTAssertTrue(primaryActions.firstMatch.waitForExistence(timeout: 10))
         XCTAssertEqual(primaryActions.count, 1)
-        XCTAssertTrue(app.staticTexts["Talent Signal"].exists)
+        XCTAssertTrue(app.staticTexts["capri"].exists)
         XCTAssertTrue(app.staticTexts["Relationships, in context."].exists)
         XCTAssertFalse(app.staticTexts["Create an account"].exists)
         preserveScreenshot("Sign in with Apple entry")
@@ -3606,7 +3606,7 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Revision 1 → 2 · 1 changed field"].exists)
         XCTAssertTrue(
             app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS %@", "Current recruiter · Recorded")
+                NSPredicate(format: "label CONTAINS %@", "Current user · Recorded")
             ).firstMatch.exists
         )
         XCTAssertTrue(
@@ -4261,11 +4261,10 @@ final class CandidateSignalUITests: XCTestCase {
         preserveScreenshot("People cards Chinese dark AX5 reduced motion")
     }
 
-    func testTSCORE01EvidenceFactReviewActionPreviewAndHandoff() {
-        launch(fixtureID: "TS-CORE-01")
+    func testTSCORE01EvidenceFactReviewActionPreviewAndHandoff() throws {
+        try launchRequiringPrivateCorpus(fixtureID: "TS-CORE-01")
 
         XCTAssertTrue(element("fixture-banner").waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Alex Chen"].exists)
         XCTAssertTrue(element("message-m1").exists)
         preserveScreenshot("TS-CORE-01 evidence and proposals")
 
@@ -4287,7 +4286,6 @@ final class CandidateSignalUITests: XCTestCase {
         let actionTitle = app.staticTexts["Prepare one question—locally"]
         XCTAssertTrue(actionTitle.waitForExistence(timeout: 4))
         XCTAssertGreaterThan(actionTitle.frame.minY, 59)
-        XCTAssertTrue(app.staticTexts["client remote-work policy"].exists)
         XCTAssertTrue(
             app.staticTexts[
                 "Prepare a recruiter-owned question for a local handoff. No message, meeting, contact, ATS record, or reminder will be created."
@@ -4307,7 +4305,7 @@ final class CandidateSignalUITests: XCTestCase {
         launch(scenario: "unrelated-image")
 
         XCTAssertTrue(app.staticTexts["Unrelated image selected"].waitForExistence(timeout: 8))
-        XCTAssertFalse(app.staticTexts["Alex Chen"].exists)
+        XCTAssertFalse(element("fixture-banner").exists)
         XCTAssertEqual(app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH 'fact-card-'")).count, 0)
     }
 
@@ -4352,8 +4350,8 @@ final class CandidateSignalUITests: XCTestCase {
         )
     }
 
-    func testProhibitedFitRequestIsRefused() {
-        launch(fixtureID: "TS-BOUND-01")
+    func testProhibitedFitRequestIsRefused() throws {
+        try launchRequiringPrivateCorpus(fixtureID: "TS-BOUND-01")
 
         XCTAssertTrue(app.staticTexts["fit-refusal-message"].waitForExistence(timeout: 8))
         XCTAssertEqual(
@@ -4367,28 +4365,28 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["No external changes"].exists)
     }
 
-    func testStaleActionCannotComplete() {
-        launch(scenario: "stale-preview")
+    func testStaleActionCannotComplete() throws {
+        try launchRequiringPrivateCorpus(scenario: "stale-preview")
 
         XCTAssertTrue(app.staticTexts["This preview is no longer current"].waitForExistence(timeout: 8))
         XCTAssertFalse(app.buttons["complete-handoff"].exists)
         XCTAssertTrue(app.buttons["refresh-stale-preview"].exists)
     }
 
-    func testImportCancellationAndRecovery() {
+    func testImportCancellationAndRecovery() throws {
         app.launchArguments = [
             "--fixture-import-delay-seconds", "10"
         ]
-        launch()
+        try launchRequiringPrivateCorpus()
 
         tapWhenVisible(app.buttons["open-fixture"])
         XCTAssertTrue(element("importing-state").waitForExistence(timeout: 3))
         app.buttons["cancel-import"].tap()
         XCTAssertTrue(app.staticTexts["Opening synthetic fixture was cancelled"].waitForExistence(timeout: 4))
-        XCTAssertFalse(app.staticTexts["Alex Chen"].exists)
+        XCTAssertFalse(element("fixture-banner").exists)
 
         app.buttons["cancelled-recovery"].tap()
-        XCTAssertTrue(app.buttons["open-fixture"].waitForExistence(timeout: 4))
+        XCTAssertTrue(element("fixture-review-tools").waitForExistence(timeout: 4))
     }
 
     func testBackendFailureHasTruthfulRecovery() {
@@ -4396,10 +4394,10 @@ final class CandidateSignalUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Nothing was changed"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["Nothing was changed"].exists)
-        XCTAssertFalse(app.staticTexts["Alex Chen"].exists)
+        XCTAssertFalse(element("fixture-banner").exists)
 
         app.buttons["failed-recovery"].tap()
-        XCTAssertTrue(app.buttons["open-fixture"].waitForExistence(timeout: 4))
+        XCTAssertTrue(element("fixture-review-tools").waitForExistence(timeout: 4))
     }
 
     func testOfflineLocalhostFailureAndRecovery() {
@@ -4409,21 +4407,26 @@ final class CandidateSignalUITests: XCTestCase {
         tapWhenVisible(app.buttons["Configure localhost fixture sync"])
         tapWhenVisible(app.buttons["sync-localhost"])
         XCTAssertTrue(app.staticTexts["Nothing was changed"].waitForExistence(timeout: 8))
-        XCTAssertFalse(app.staticTexts["Alex Chen"].exists)
+        XCTAssertFalse(element("fixture-banner").exists)
 
         app.buttons["failed-recovery"].tap()
-        XCTAssertTrue(app.buttons["open-fixture"].waitForExistence(timeout: 4))
+        XCTAssertTrue(element("fixture-review-tools").waitForExistence(timeout: 4))
     }
 
     @MainActor
     func testLocalhostSyncSuccess() async throws {
-        let endpoint = URL(
-            string: "http://127.0.0.1:8787/evals/candidate-momentum-v1.json"
-        )!
+        let endpoint = try XCTUnwrap(
+            URL(
+                string: testConfiguration(
+                    "TS_IOS_FIXTURE_URL",
+                    fallback: "http://127.0.0.1:8787/candidate-momentum-v1.json"
+                )
+            )
+        )
         guard let (_, response) = try? await URLSession.shared.data(from: endpoint),
               let response = response as? HTTPURLResponse,
               response.statusCode == 200 else {
-            throw XCTSkip("Run with the authorized local fixture server.")
+            throw XCTSkip("Run with the authorized local fixture server serving the private corpus at \(endpoint.absoluteString).")
         }
 
         app.launchArguments = [
@@ -4435,12 +4438,20 @@ final class CandidateSignalUITests: XCTestCase {
         tapWhenVisible(app.buttons["Configure localhost fixture sync"])
         tapWhenVisible(app.buttons["sync-localhost"])
         XCTAssertTrue(element("fixture-banner").waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Alex Chen"].exists)
+        XCTAssertTrue(element("message-m1").exists)
         XCTAssertTrue(
             app.staticTexts.matching(
                 NSPredicate(
                     format: "label CONTAINS %@",
-                    "Read-only localhost sync · 8 synthetic cases · 2026-08-05.1"
+                    "Read-only localhost sync"
+                )
+            ).firstMatch.exists
+        )
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(
+                    format: "label CONTAINS %@",
+                    "synthetic cases"
                 )
             ).firstMatch.exists
         )
@@ -4457,7 +4468,7 @@ final class CandidateSignalUITests: XCTestCase {
         guard let (_, response) = try? await URLSession.shared.data(from: endpoint),
               let response = response as? HTTPURLResponse,
               response.statusCode == 200 else {
-            throw XCTSkip("Run with the authorized local Talent Signal backend.")
+            throw XCTSkip("Run with the authorized local capri backend.")
         }
         guard await canonicalBackendFixtureIsAvailable(at: backendURL) else {
             throw XCTSkip(
@@ -4471,7 +4482,6 @@ final class CandidateSignalUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(element("fixture-banner").waitForExistence(timeout: 30))
-        XCTAssertTrue(app.staticTexts["Alex Chen"].exists)
         XCTAssertTrue(element("message-m1").exists)
         XCTAssertTrue(
             app.staticTexts.matching(
@@ -4575,7 +4585,7 @@ final class CandidateSignalUITests: XCTestCase {
         guard let (_, response) = try? await URLSession.shared.data(from: endpoint),
               let response = response as? HTTPURLResponse,
               response.statusCode == 200 else {
-            throw XCTSkip("Run with the authorized local Talent Signal backend.")
+            throw XCTSkip("Run with the authorized local capri backend.")
         }
 
         let captureSeed = UUID()
@@ -4862,8 +4872,8 @@ final class CandidateSignalUITests: XCTestCase {
         }
     }
 
-    func testBackgroundInterruptionPreservesReviewDecision() {
-        launch(fixtureID: "TS-CORE-01")
+    func testBackgroundInterruptionPreservesReviewDecision() throws {
+        try launchRequiringPrivateCorpus(fixtureID: "TS-CORE-01")
 
         tapWhenVisible(app.buttons["fact-confirm-competing_process-m1"])
         XCTAssertTrue(app.staticTexts["Confirmed locally"].exists)
@@ -5705,6 +5715,7 @@ final class CandidateSignalUITests: XCTestCase {
             UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue
         ]
         app.launch()
+        try requirePrivateFixtureCorpus()
 
         let display = element("lab-effective-display")
         XCTAssertTrue(display.waitForExistence(timeout: 8))
@@ -5921,8 +5932,8 @@ final class CandidateSignalUITests: XCTestCase {
         }
     }
 
-    func testAccessibilityOrderPlacesEvidenceBeforeFactDecision() {
-        launch(fixtureID: "TS-CORE-01")
+    func testAccessibilityOrderPlacesEvidenceBeforeFactDecision() throws {
+        try launchRequiringPrivateCorpus(fixtureID: "TS-CORE-01")
 
         let elements = app.descendants(matching: .any).allElementsBoundByIndex
         let messageIndex = elements.firstIndex { $0.identifier == "message-m1" }
@@ -5941,6 +5952,26 @@ final class CandidateSignalUITests: XCTestCase {
             app.launchArguments += ["--scenario", scenario]
         }
         app.launch()
+    }
+
+    /// The eight-case evaluation corpus is private (GET-134). Dedicated fixture
+    /// journeys explicitly require the optional injected corpus resource and
+    /// skip with a clear reason when it is absent; they never silently claim
+    /// coverage of unavailable cases.
+    private func requirePrivateFixtureCorpus() throws {
+        if element("fixture-corpus-unavailable").waitForExistence(timeout: 3) {
+            throw XCTSkip(
+                "Requires the optional private candidate-momentum corpus resource (Resources/candidate-momentum-v1.json injected from getyak/capir-evals)."
+            )
+        }
+    }
+
+    private func launchRequiringPrivateCorpus(
+        fixtureID: String? = nil,
+        scenario: String? = nil
+    ) throws {
+        launch(fixtureID: fixtureID, scenario: scenario)
+        try requirePrivateFixtureCorpus()
     }
 
     private func assertVisibleAnchor(
@@ -7017,7 +7048,7 @@ final class RelationshipCalendarWorkflowUITests: XCTestCase {
         for _ in 0..<5 where !overlap.isHittable { app.swipeUp() }
         overlap.tap()
         XCTAssertTrue(app.buttons["calendar-prepare-agent"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Overlaps another Talent Signal activity"].exists)
+        XCTAssertTrue(app.staticTexts["Overlaps another capri activity"].exists)
         XCTAssertTrue(app.buttons["calendar-details-disclosure"].exists)
         XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Event time zone")).firstMatch.exists)
         capture("16-overlap-detail")

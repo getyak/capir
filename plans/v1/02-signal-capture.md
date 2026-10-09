@@ -106,13 +106,13 @@ governed server deletion before local payload removal.
 
 Observable proof:
 
-- [runtime evidence](../../docs/evaluations/2026-08-24-v1-prd-02/text-signal-runtime.json)
+- [runtime evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-24-v1-prd-02/text-signal-runtime.json)
   records the canonical capture, Proposal, identity, evidence, and deletion
   readbacks;
-- [saved-local](../../docs/evaluations/2026-08-24-v1-prd-02/ios-text-signal-saved-local.png),
-  [Proposal readback](../../docs/evaluations/2026-08-24-v1-prd-02/ios-text-signal-proposal-readback.png),
-  [offline recovery](../../docs/evaluations/2026-08-24-v1-prd-02/ios-text-signal-offline-recovery.png),
-  and [deletion receipt](../../docs/evaluations/2026-08-24-v1-prd-02/ios-text-signal-deletion-receipt.png)
+- [saved-local](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-24-v1-prd-02/ios-text-signal-saved-local.png),
+  [Proposal readback](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-24-v1-prd-02/ios-text-signal-proposal-readback.png),
+  [offline recovery](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-24-v1-prd-02/ios-text-signal-offline-recovery.png),
+  and [deletion receipt](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-24-v1-prd-02/ios-text-signal-deletion-receipt.png)
   preserve the tested Simulator surfaces;
 - the full iPhone 17 Pro gate passed its Release build, 41 Swift tests, and 19
   UI tests with zero failures and one documented legacy-fixture skip;

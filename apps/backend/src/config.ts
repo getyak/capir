@@ -15,6 +15,38 @@ export interface BackendConfig {
   sessionTtlSeconds: number;
   simulatedAuthEnabled: boolean;
   internalLabEnabled?: boolean;
+  /** Internal test-account provisioning (`capir test create`). Disabled by default. */
+  capirTests?: {
+    enabled: boolean;
+    /** High-entropy operator service credential; only its hash reaches the database. */
+    provisioningKey?: string;
+    /** Operator credential generation; rotation must bump it to revoke live entries. */
+    provisioningGeneration: number;
+    /** Exact registered origin pair for provisioning requests and Web entry. */
+    webOrigin?: string;
+    backendOrigin?: string;
+    /** Trusted Web consumer key for the private one-use handoff exchange. */
+    webConsumerKey?: string;
+    maxActiveRuns: number;
+  } | undefined;
+  /**
+   * Browser-owned CLI authorization (`capir-auth.v2`). Disabled by default and
+   * enabled only through the explicit CAPIR_AUTH_ENABLED gate together with an
+   * exact configured backend/Web origin pair. Discovery never adds trust.
+   */
+  capirAuth?: {
+    enabled: boolean;
+    webOrigin: string;
+    backendOrigin: string;
+    /** One-use authorization-code lifetime (seconds). */
+    codeTtlSeconds: number;
+    /** Opaque access-token lifetime (seconds). */
+    accessTtlSeconds: number;
+    /** Rotating refresh idle deadline (seconds). */
+    refreshIdleTtlSeconds: number;
+    /** Rotating refresh absolute deadline (seconds). */
+    refreshAbsoluteTtlSeconds: number;
+  } | undefined;
   /** Server-side mail transport for account verification (Resend). */
   mailTransport?: { apiKey: string; fromEmail: string };
   /** Base URL used to build email verification links (Web origin). */
@@ -193,6 +225,88 @@ export function loadConfig(): BackendConfig {
       : undefined;
   const verificationBaseUrl = process.env.AUTH_VERIFICATION_BASE_URL?.trim();
 
+  const capirTestsEnabled = parseBoolean(process.env.CAPIR_TESTS_ENABLED, false);
+  const capirProvisioningKey = process.env.CAPIR_TEST_PROVISIONING_KEY?.trim();
+  const capirWebOrigin = process.env.CAPIR_TEST_WEB_ORIGIN?.trim();
+  const capirBackendOrigin = process.env.CAPIR_TEST_BACKEND_ORIGIN?.trim();
+  const capirWebConsumerKey = process.env.CAPIR_TEST_WEB_CONSUMER_KEY?.trim();
+  const capirProvisioningGeneration = Number.parseInt(
+    process.env.CAPIR_TEST_PROVISIONING_GENERATION ?? "1",
+    10,
+  );
+  const capirMaxActiveRuns = Number.parseInt(
+    process.env.CAPIR_TEST_MAX_ACTIVE_RUNS ?? "3",
+    10,
+  );
+  if (!Number.isInteger(capirProvisioningGeneration) || capirProvisioningGeneration < 1) {
+    throw new Error("CAPIR_TEST_PROVISIONING_GENERATION must be a positive integer.");
+  }
+  if (!Number.isInteger(capirMaxActiveRuns) || capirMaxActiveRuns < 1 || capirMaxActiveRuns > 20) {
+    throw new Error("CAPIR_TEST_MAX_ACTIVE_RUNS must be an integer between 1 and 20.");
+  }
+  if (
+    capirTestsEnabled &&
+    (!internalLabEnabled || !capirProvisioningKey || !capirWebOrigin || !capirBackendOrigin)
+  ) {
+    throw new Error(
+      "CAPIR_TESTS_ENABLED requires TALENT_SIGNAL_INTERNAL_LAB_ENABLED, CAPIR_TEST_PROVISIONING_KEY, CAPIR_TEST_WEB_ORIGIN and CAPIR_TEST_BACKEND_ORIGIN.",
+    );
+  }
+
+  const capirAuthEnabled = parseBoolean(process.env.CAPIR_AUTH_ENABLED, false);
+  const capirAuthWebOrigin = process.env.CAPIR_AUTH_WEB_ORIGIN?.trim();
+  const capirAuthBackendOrigin = process.env.CAPIR_AUTH_BACKEND_ORIGIN?.trim();
+  const capirAuthCodeTtlSeconds = Number(
+    process.env.CAPIR_AUTH_CODE_TTL_SECONDS ?? "60"
+  );
+  const capirAuthAccessTtlSeconds = Number(
+    process.env.CAPIR_AUTH_ACCESS_TTL_SECONDS ?? "900"
+  );
+  const capirAuthRefreshIdleTtlSeconds = Number(
+    process.env.CAPIR_AUTH_REFRESH_IDLE_TTL_SECONDS ?? "604800"
+  );
+  const capirAuthRefreshAbsoluteTtlSeconds = Number(
+    process.env.CAPIR_AUTH_REFRESH_ABSOLUTE_TTL_SECONDS ?? "2592000"
+  );
+  if (
+    !Number.isInteger(capirAuthCodeTtlSeconds) || capirAuthCodeTtlSeconds < 30 || capirAuthCodeTtlSeconds > 300
+  ) {
+    throw new Error("CAPIR_AUTH_CODE_TTL_SECONDS must be an integer between 30 and 300.");
+  }
+  if (
+    !Number.isInteger(capirAuthAccessTtlSeconds) || capirAuthAccessTtlSeconds < 60 || capirAuthAccessTtlSeconds > 3600
+  ) {
+    throw new Error("CAPIR_AUTH_ACCESS_TTL_SECONDS must be an integer between 60 and 3600.");
+  }
+  if (
+    !Number.isInteger(capirAuthRefreshIdleTtlSeconds) || capirAuthRefreshIdleTtlSeconds < 600
+  ) {
+    throw new Error("CAPIR_AUTH_REFRESH_IDLE_TTL_SECONDS must be an integer of at least 600.");
+  }
+  if (
+    !Number.isInteger(capirAuthRefreshAbsoluteTtlSeconds) ||
+    capirAuthRefreshAbsoluteTtlSeconds < capirAuthRefreshIdleTtlSeconds
+  ) {
+    throw new Error(
+      "CAPIR_AUTH_REFRESH_ABSOLUTE_TTL_SECONDS must be an integer at least as large as the idle lifetime.",
+    );
+  }
+  if (capirAuthEnabled && (!capirAuthWebOrigin || !capirAuthBackendOrigin)) {
+    throw new Error(
+      "CAPIR_AUTH_ENABLED requires CAPIR_AUTH_WEB_ORIGIN and CAPIR_AUTH_BACKEND_ORIGIN.",
+    );
+  }
+  for (const [label, value] of [
+    ["CAPIR_AUTH_WEB_ORIGIN", capirAuthWebOrigin],
+    ["CAPIR_AUTH_BACKEND_ORIGIN", capirAuthBackendOrigin],
+  ] as const) {
+    if (value) {
+      const url=new URL(value);
+      if (url.origin!==value || url.username || url.password || (url.protocol!=='https:' && !(url.protocol==='http:' && url.hostname==='127.0.0.1')))
+        throw new Error(`${label} must be an exact HTTPS origin (literal loopback may use HTTP).`);
+    }
+  }
+
   return {
     allowedOrigins: (
       process.env.ALLOWED_ORIGINS ??
@@ -222,7 +336,31 @@ export function loadConfig(): BackendConfig {
     ),
     simulatedAuthEnabled,
     internalLabEnabled,
+    capirTests: capirTestsEnabled
+      ? {
+          enabled: true,
+          provisioningGeneration: capirProvisioningGeneration,
+          maxActiveRuns: capirMaxActiveRuns,
+          ...(capirProvisioningKey ? { provisioningKey: capirProvisioningKey } : {}),
+          ...(capirWebOrigin ? { webOrigin: capirWebOrigin } : {}),
+          ...(capirBackendOrigin ? { backendOrigin: capirBackendOrigin } : {}),
+          ...(capirWebConsumerKey ? { webConsumerKey: capirWebConsumerKey } : {}),
+        }
+      : undefined,
     chatMediaStorage,
+    ...(capirAuthEnabled
+      ? {
+          capirAuth: {
+            enabled: true,
+            webOrigin: capirAuthWebOrigin!,
+            backendOrigin: capirAuthBackendOrigin!,
+            codeTtlSeconds: capirAuthCodeTtlSeconds,
+            accessTtlSeconds: capirAuthAccessTtlSeconds,
+            refreshIdleTtlSeconds: capirAuthRefreshIdleTtlSeconds,
+            refreshAbsoluteTtlSeconds: capirAuthRefreshAbsoluteTtlSeconds,
+          },
+        }
+      : {}),
     ...(mailTransport ? { mailTransport } : {}),
     ...(verificationBaseUrl ? { verificationBaseUrl } : {}),
     ...(tls ? { tls } : {}),

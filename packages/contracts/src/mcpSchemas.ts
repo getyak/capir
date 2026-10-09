@@ -1,13 +1,14 @@
 import { Type, type Static } from "@sinclair/typebox";
 
 import { CONTRACT_VERSION } from "./constants.js";
+import { McpAuthModeSchema } from "./mcpInteractionSchemas.js";
 
 /**
  * MCP Extensions contracts.
  *
  * Two directions share one page:
- * - inbound: Talent Signal connects to an external MCP server as a client.
- * - outbound: Talent Signal publishes a scoped, read-only MCP server.
+ * - inbound: capri connects to an external MCP server as a client.
+ * - outbound: capri publishes a scoped, read-only MCP server.
  *
  * Credentials are never part of a read contract. A connection only exposes
  * whether a credential is configured; a client grant only reveals a one-time
@@ -66,6 +67,15 @@ export const McpDiscoveredToolSchema = Type.Object(
     name: Type.String({ minLength: 1, maxLength: 128 }),
     description: Type.String({ maxLength: 2_000 }),
     read_only: Type.Boolean(),
+    /**
+     * The original discovered input schema, retained as bounded inert JSON
+     * text. It drives exact-argument validation and accessible forms; it is
+     * never remote instructions and never grants authority.
+     */
+    input_schema: Type.Union([
+      Type.String({ minLength: 1, maxLength: 20_000 }),
+      Type.Null(),
+    ]),
   },
   { additionalProperties: false },
 );
@@ -76,6 +86,9 @@ export const McpConnectionSchema = Type.Object(
     friendly_name: Type.String({ minLength: 1, maxLength: 80 }),
     server_url: Type.String({ minLength: 1, maxLength: 2_048 }),
     credential_configured: Type.Boolean(),
+    auth_mode: McpAuthModeSchema,
+    /** True when a Nango-mediated OAuth connection is bound. */
+    oauth_connected: Type.Boolean(),
     status: McpConnectionStatusSchema,
     last_checked_at: Type.Union([Timestamp, Type.Null()]),
     last_error_code: McpConnectionErrorCodeSchema,

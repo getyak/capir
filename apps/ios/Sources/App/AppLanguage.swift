@@ -92,11 +92,11 @@ enum AppLanguage: String, CaseIterable, Identifiable {
             )
         case .english:
             return interfaceLanguage.text(
-                "Use English for Talent Signal controls and guidance."
+                "Use English for capri controls and guidance."
             )
         case .simplifiedChinese:
             return interfaceLanguage.text(
-                "Use Simplified Chinese for Talent Signal controls and guidance."
+                "Use Simplified Chinese for capri controls and guidance."
             )
         }
     }

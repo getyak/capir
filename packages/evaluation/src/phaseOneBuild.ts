@@ -23,9 +23,12 @@ export function phaseOneRuntimeBuildDigest(root: string) {
   return digestTrees(root, ["apps/agent/dist", "apps/backend/dist", "packages/contracts/dist", "packages/evaluation/dist"], [".js"]);
 }
 
-/** Includes verifier code and tests as well as runtime source, manifests and the locked dependency graph. */
+/** Includes verifier code and tests as well as runtime source, manifests and the locked dependency graph.
+ * The private evaluation harness is intentionally excluded: product runtime source identity is frozen
+ * independently of the extracted evaluation repository, so a harness-only change cannot re-sign a product
+ * proof and an old signed proof cannot claim validity for changed product source. */
 export function phaseOneImplementationSourceDigest(root: string) {
-  return digestTrees(root, ["apps/agent/src", "apps/backend/src", "apps/eval-runner/src", "apps/eval-runner/optimizer", "packages/contracts/src", "packages/evaluation/src",
-    "apps/agent/package.json", "apps/backend/package.json", "apps/eval-runner/package.json", "packages/contracts/package.json", "packages/evaluation/package.json",
+  return digestTrees(root, ["apps/agent/src", "apps/backend/src", "packages/contracts/src", "packages/evaluation/src",
+    "apps/agent/package.json", "apps/backend/package.json", "packages/contracts/package.json", "packages/evaluation/package.json",
     "pnpm-lock.yaml", ".github/workflows/ci.yml"], [".ts", ".sql", ".json", ".yaml", ".yml", ".py"]);
 }

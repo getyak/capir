@@ -155,7 +155,8 @@ Optional lifecycle diagnostics report fixed phases and elapsed milliseconds only
 they contain no page text. `close_failed` never implies successful disposal, and
 both synchronous and asynchronous diagnostic callback failures are isolated.
 
-Run `scripts/evals/evaluate-isolated-browser.mjs IMAGE_ID OUTPUT.json` after
+Run `harness/scripts/evals/evaluate-isolated-browser.mjs IMAGE_ID OUTPUT.json`
+from the private `capir-evals` checkout after
 building agent-host. It distinguishes synthetic broker tests from a live public
 HTTPS page. `evaluate-browser-product.mjs DATABASE_URL IMAGE_ID OUTPUT.json`
 adds real SDK, product HTTP, Unix socket and PostgreSQL; its search discovery is

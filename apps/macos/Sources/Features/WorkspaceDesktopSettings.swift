@@ -168,6 +168,7 @@ enum WorkspaceSurfacePolicy {
         ["protocolVersion": 1,
          "surface": surface,
          "appVersion": appVersion,
+         "supportMailHandoff": true,
          "availableVersion": presentation.version as Any? ?? NSNull(),
          "phase": presentation.phase.rawValue,
          "offerID": presentation.offerID?.uuidString as Any? ?? NSNull(),

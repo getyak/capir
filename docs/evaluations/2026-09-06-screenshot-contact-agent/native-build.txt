@@ -1,8 +1,0 @@
-Debug iOS Simulator build: passed
-Project: apps/ios/TalentSignal.xcodeproj
-Scheme: TalentSignal
-Destination: generic/platform=iOS Simulator
-Derived data: /tmp/ts-contact-agent-ios-build
-Code signing: disabled for Simulator build
-Localization: 2331 catalog keys; 165 transitional inline calls; 210 raw literals
-No native UI test or TestFlight binary publication claimed.

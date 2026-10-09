@@ -1,5 +1,12 @@
 # macOS material and fluid navigation
 
+> Status 2026-10-09: merged into `main` after a semantic integration with the
+> settled GET-129 compact rail. The local spring rail and floating edge reveal
+> in this plan were superseded by that rail and are not shipped; the material
+> surface, local session organization, reading fold, row motion and completion
+> seam remain. See
+> [`docs/evaluations/2026-10-09-local-code-deep-analysis/`](../docs/evaluations/2026-10-09-local-code-deep-analysis/README.md).
+
 Outcome: the shipping SwiftUI/WKWebView workspace uses native AppKit material,
 quiet grayscale chrome, reversible local session organization, scoped reading
 gestures, and motion that explains position changes.

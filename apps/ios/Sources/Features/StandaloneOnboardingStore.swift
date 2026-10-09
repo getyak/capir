@@ -9,7 +9,7 @@ struct LocalStandaloneAccountClient: StandaloneAccountClient {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return StandaloneAccount(
             id: UUID(),
-            displayName: trimmed.isEmpty ? "Recruiter" : trimmed,
+            displayName: trimmed.isEmpty ? "You" : trimmed,
             isDemo: isDemo
         )
     }

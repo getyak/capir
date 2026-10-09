@@ -4,7 +4,7 @@ Choose the smallest set that covers the decision. `Required` means required when
 
 | Skill | Professional lineage / role | Apply when | Do not ask it to decide |
 |---|---|---|---|
-| `recruiter-workflow-reviewer` | Synthetic boutique-search operator | Any core product or workflow review | Candidate quality or legal compliance |
+| `recruiter-workflow-reviewer` | Synthetic boutique-search operator | Recruiting-specific product or workflow review | Candidate quality or legal compliance |
 | `evidence-safety-reviewer` | Evidence custodian; AESC/privacy/auditable-AI principles | OCR, identity, private data, state, actions, permissions, retention | Product-market fit or legal certification |
 | `mobile-ux-reviewer` | Apple/WCAG-informed mobile craft critic | iOS/responsive screens, flows, recordings, builds | Hidden runtime correctness from screenshots |
 | `selection-science-auditor` | I-O selection and evaluation science | Candidate assessment, rubrics, graders, benchmarks, outcome claims | Unvalidated candidate recommendation |
@@ -18,17 +18,27 @@ Choose the smallest set that covers the decision. `Required` means required when
 
 ## Supporting project skills
 
-- `candidate-signal-analysis` is the system-under-test workflow for extracting explicit facts and proposing reviewable actions. It is not an independent judge of itself.
+- `candidate-signal-analysis` is the recruiting-specific system-under-test workflow for extracting explicit facts and proposing reviewable actions. It is not an independent judge of itself.
 - `design-talent-signal`, when present, checks product-specific visual-system and provenance-state conformance. Use it alongside, not instead of, `mobile-ux-reviewer`.
 
 ## Default panels
 
-### iOS screenshot-to-action release
+### Personal-Agent screenshot continuity release
 
-`recruiter-workflow-reviewer` + `evidence-safety-reviewer` +
-`mobile-ux-reviewer` + `candidate-experience-guardrail`
+`evidence-safety-reviewer` + `mobile-ux-reviewer`, plus a scenario-grounded
+usefulness review against the current Product contract. Use `design-talent-signal`
+for product-specific hierarchy and state conformance. Record the usefulness
+reviewer's actual method and evidence; artifact review cannot prove field value.
 
-Add `selection-science-auditor` when evaluating model/grader quality or when any output approaches candidate assessment.
+Check useful understanding before organization, independent Person/Memory/work
+choices, updated existing work, retrieval, waiting, stop, and source deletion.
+Add `selection-science-auditor` for model/grader or experiment design.
+
+### Recruiting-specific screenshot release
+
+Add `recruiter-workflow-reviewer` and `candidate-experience-guardrail` to the
+personal-Agent panel when the actual flow concerns recruiting. Add
+`selection-science-auditor` when any output approaches candidate assessment.
 
 ### Role/candidate advisory concept
 

@@ -1,0 +1,33 @@
+{
+  "name": "@talent-signal/cli",
+  "version": "0.2.1",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "capir": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "pnpm --filter @talent-signal/contracts build && tsc6 -p tsconfig.build.json",
+    "typecheck": "pnpm --filter @talent-signal/contracts build && tsc6 -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "2.1.0",
+    "@sinclair/typebox": "^0.34.41",
+    "@talent-signal/contracts": "workspace:*",
+    "playwright": "1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "npm:@typescript/typescript6@6.0.2"
+  }
+}

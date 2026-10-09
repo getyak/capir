@@ -14,7 +14,7 @@ Public App Store submission and new invitations are outside this request.
 - Branch: `codex/get-8-retrieval-meetings`; clean base and current remote main:
   `a2eaaeae120bf4747e45f824af3b809e550fb61a`.
 - Latest existing release at intake: `v0.1.62`.
-- [Implementation evidence](../docs/evaluations/2026-09-07-get-8/README.md):
+- [Implementation evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-8/README.md):
   108 focused unit tests, 23 distinct native UI cases, Release Simulator
   compilation, localization and documentation checks passed. All captures use
   synthetic data. Device frame rate remains unmeasured.
@@ -61,7 +61,7 @@ manual tag or duplicate an active release. Follow
 - The automation-owned `v0.1.63` release receipt matches the merged commit,
   exact version/build and successful workflow. The tag target, retained IPA
   digest and downloaded receipt digest match their independent readbacks.
-  [Publication evidence](../docs/evaluations/2026-09-07-get-8/release.md).
+  [Publication evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-8/release.md).
 - [Final read-only access audit](https://github.com/getyak/talent-signal/actions/runs/34108872288)
   passed: `0.1.63 (20260907094527)` is `VALID`, group membership and all-build
   access are enabled, and server access is ready. No relationship or invitation
@@ -75,6 +75,6 @@ manual tag or duplicate an active release. Follow
 
 The requested source was committed, pushed and merged, and the new TestFlight
 version completed Apple processing with verified internal access. The
-[release evidence](../docs/evaluations/2026-09-07-get-8/release.md) is the durable
+[release evidence](https://github.com/getyak/capir-evals/blob/main/evidence/2026-09-07-get-8/release.md) is the durable
 record for this operation. The subsequent evidence-only commit does not change
 the released application or require another version.

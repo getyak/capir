@@ -141,7 +141,7 @@ function assertLabCapability(config: BackendConfig): void {
     throw new ApiError(
       403,
       "LAB_CAPABILITY_DENIED",
-      capability.reason ?? "Talent Signal Lab is unavailable.",
+      capability.reason ?? "capri Lab is unavailable.",
     );
   }
 }

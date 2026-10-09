@@ -1,9 +1,9 @@
 ---
 name: product-adjudicator
-description: Plan, run, validate, and adjudicate multi-lens Talent Signal product evaluations using the project’s recruiter, candidate, search, science, safety, trend, performance, potential, motivation, and mobile UX skills. Use for product critiques, UI or release reviews, feature gates, test plans, competing recommendations, cross-validation, benchmark runs, and final prioritized verdicts where several specialist reviewers should independently score the same frozen artifact.
+description: Plan, run, validate, and adjudicate multi-lens capri product evaluations using scenario-grounded usefulness, evidence safety, and mobile UX review, with domain specialists selected only for their actual context. Use for product critiques, UI or release reviews, feature gates, test plans, competing recommendations, cross-validation, benchmark runs, and final prioritized verdicts where several specialist reviewers should independently score the same frozen artifact.
 ---
 
-# Talent Signal Product Adjudicator
+# capri Product Adjudicator
 
 ## Purpose
 
@@ -27,7 +27,8 @@ Record an artifact ID, type, version/commit/build, scenario, target user, enviro
 
 Use `references/panel-map.md`. Always include:
 
-- `recruiter-workflow-reviewer` for product usefulness;
+- a usefulness review grounded in `../../../docs/product.md` and the frozen
+  user scenario; use `recruiter-workflow-reviewer` only for recruiting work;
 - `evidence-safety-reviewer` for evidence/action paths;
 - `mobile-ux-reviewer` for a mobile or responsive UI;
 - `selection-science-auditor` for candidate assessment or evaluator design.
@@ -77,7 +78,7 @@ Merge duplicates only when they cite the same behavior. Keep distinct impacts an
 
 Apply `references/adjudication-rules.md`:
 
-- safety, privacy, identity, unauthorized write, candidate-harm, and prohibited-assessment vetoes are gates;
+- safety, privacy, identity, unauthorized write, harm to people, and prohibited-assessment vetoes are gates;
 - direct executable evidence outranks unsupported inference;
 - domain ownership outranks panel majority;
 - disagreement remains visible when evidence cannot resolve it;

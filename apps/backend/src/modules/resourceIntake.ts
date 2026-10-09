@@ -116,7 +116,7 @@ export function validateResourceRequest(request: ResourceCaptureRequest): void {
     ) {
       invalidResource(
         "PROPOSED_EXTRACTION_AUTHORITY_INVALID",
-        "Machine-extracted screenshot text must remain proposed until a recruiter reviews it.",
+        "Machine-extracted screenshot text must remain proposed until a human reviews it.",
       );
     }
   }
@@ -202,7 +202,7 @@ export function validateResourceRequest(request: ResourceCaptureRequest): void {
     ) {
       invalidResource(
         "PUBLIC_PROFILE_AVATAR_RIGHTS_UNAVAILABLE",
-        "TikHub does not grant Talent Signal display or storage rights for source-platform avatars.",
+        "TikHub does not grant capri display or storage rights for source-platform avatars.",
       );
     }
     if (
@@ -295,7 +295,7 @@ export function validateResourceRequest(request: ResourceCaptureRequest): void {
     if (invalidNote) {
       invalidResource(
         "PERSONAL_NOTE_AUTHORITY_INVALID",
-        "A personal note must be explicitly reviewed and attributed to the recruiter; it is not candidate testimony.",
+        "A personal note must be explicitly reviewed and attributed to the user; it is not testimony from the other person.",
       );
     }
   }

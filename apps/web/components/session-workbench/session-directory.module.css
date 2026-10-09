@@ -3,15 +3,17 @@
  *
  * The durable detail lives in `session-workbench.module.css`; this module owns
  * only the list surface so the two can evolve without one restyling the other.
- * Rows stay quiet: a title, its real scope/turn/time metadata, and one link.
+ * Page geometry matches the People/Today directory pages; rows stay quiet: a
+ * 15px title, 13px real scope/turn/time metadata, and one link. The unread
+ * badge never pushes a long title out of its row.
  */
 
 .page {
   display: grid;
   margin: 0 auto;
-  max-width: 900px;
+  max-width: 1040px;
   width: 100%;
-  padding: 54px 64px 86px;
+  padding: 40px 40px 72px;
 }
 
 .header {
@@ -19,23 +21,23 @@
   display: flex;
   gap: 24px;
   justify-content: space-between;
-  margin-bottom: 26px;
+  margin-bottom: 24px;
 }
 
 .title {
   color: var(--ink);
-  font-size: var(--workspace-text-page-title, 24px);
-  font-weight: 620;
+  font-size: var(--workspace-title-size);
+  font-weight: 600;
   letter-spacing: 0;
-  line-height: 1.25;
+  line-height: 1.42;
   margin: 0;
 }
 
 .lede {
   color: var(--muted);
-  font-size: 0.8125rem;
-  line-height: 1.65;
-  margin-top: 9px;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: 1.6;
+  margin-top: 8px;
   max-width: 56ch;
 }
 
@@ -47,11 +49,11 @@
   display: inline-flex;
   flex: 0 0 auto;
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 520;
   gap: 7px;
   justify-content: center;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 15px;
   text-decoration: none;
 }
@@ -66,6 +68,10 @@
   background: color-mix(in srgb, var(--ink) 86%, var(--muted));
 }
 
+.primary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 76%, var(--muted));
+}
+
 .secondary {
   background: transparent;
   border: 1px solid var(--line);
@@ -74,6 +80,10 @@
 
 .secondary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--ink) 5%, var(--surface));
+}
+
+.secondary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 10%, var(--surface));
 }
 
 .primary:disabled,
@@ -115,6 +125,11 @@
   background: color-mix(in srgb, var(--hover, var(--surface-muted)) 62%, transparent);
 }
 
+/* Press feedback lands immediately on the row background; never a transform. */
+.row:active {
+  background: color-mix(in srgb, var(--hover, var(--surface-muted)) 92%, transparent);
+}
+
 .rowIcon {
   align-items: center;
   aspect-ratio: 1;
@@ -137,9 +152,14 @@
 .rowTitle {
   align-items: center;
   display: flex;
-  font-size: 0.8125rem;
-  font-weight: 560;
+  font-size: var(--ts-type-body, 0.9375rem);
+  font-weight: 600;
   gap: 8px;
+  min-width: 0;
+}
+
+/* The title truncates inside its own box so the badge never overflows it. */
+.rowTitleText {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -151,14 +171,14 @@
   border-radius: 999px;
   color: var(--ink);
   flex: 0 0 auto;
-  font-size: 0.8125rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   font-weight: 620;
   padding: 2px 8px;
 }
 
 .rowMeta {
   color: var(--muted);
-  font-size: 0.8125rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -216,22 +236,18 @@
 
 @media (max-width: 1100px) {
   .page {
-    padding: 43px 40px 72px;
+    padding: 32px 24px 72px;
   }
 }
 
 @media (max-width: 760px) {
   .page {
-    padding: 28px 20px 96px;
+    padding: 24px 20px 96px;
   }
 
   .header {
     flex-direction: column;
     gap: 14px;
-  }
-
-  .title {
-    font-size: 1.5rem;
   }
 
   .row {
@@ -241,11 +257,6 @@
 
   .row > svg {
     display: none;
-  }
-
-  .primary,
-  .secondary {
-    min-height: 44px;
   }
 }
 

@@ -1,8 +1,6 @@
 # ADR 0021: Primary-login browser-store ownership
 
-Status: accepted for the local candidate; implementation and app-level acceptance
-are required before delivery. This grants no provider, production, preference,
-installed-app or release mutation outside the existing task boundary.
+Status: safety invariants retained by [ADR 0022](0022-browser-owned-macos-login.md), 2026-10-01. The implementation below describes the earlier provider-specific local candidate; browser-owned primary login replaces that machinery while retaining store isolation, durable uncertainty, host retirement and truthful readback. App-level and release acceptance remain required before delivery.
 
 ## Context
 
@@ -304,5 +302,5 @@ unaccepted instead of treating response cancellation as cookie rollback.
 - [WKWebsiteDataStore](https://developer.apple.com/documentation/webkit/wkwebsitedatastore)
 - [ADR0019 system authentication handoff](0019-macos-system-authentication-handoff.md)
 - [ADR0020 credential proof rounds](0020-macos-credential-proof-rounds.md)
-- [Independent store-ownership review](../evaluations/account-sync/login-store-ownership-review.md)
-- [r32 WebKit probe review](../evaluations/account-sync/login-store-boundary-r32-review.md)
+- [Independent store-ownership review](https://github.com/getyak/capir-evals/blob/main/evidence/account-sync/login-store-ownership-review.md)
+- [r32 WebKit probe review](https://github.com/getyak/capir-evals/blob/main/evidence/account-sync/login-store-boundary-r32-review.md)

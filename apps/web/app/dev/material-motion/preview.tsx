@@ -8,7 +8,6 @@ import { WorkspaceListRow } from "@/components/workspace-list-motion";
 import { AnswerBlockFrame } from "@/components/conversation/session-message-parts";
 import { createAnswerSeamRegistry } from "@/components/conversation/answer-seam";
 
-import { WorkspaceSidebarShell } from "@/components/workspace-sidebar";
 import { WorkspaceShellNav } from "@/components/workspace-shell-nav";
 import { WorkspaceAccountMenu } from "@/components/workspace-account-menu";
 import { SessionDirectory, type SessionSummary } from "@/components/session-workbench/session-directory";
@@ -25,7 +24,7 @@ const ANSWER = [
   "先核对试点排期，再确认下一次沟通的时间。正文、出处和需要人决定的事项应保持清晰的层级，不能因为视觉动效而获得新的执行权限。",
   "长回复收起时，只提取原文的开头，不生成额外判断。展开后，应看到与收起前一致的全文。选择文字、横向阅读表格和操作代码区域时，阅读控件不会抢走这些操作。",
   "会话归档仅整理这个设备上的列表，会话本身继续保留。归档后可以进入本机归档视图并恢复；置顶只改变列表顺序。这里不访问真实账号，也不会发送消息或启动 Agent。",
-  "侧栏折叠时，文字逐渐淡出，图标保留固定位置。靠近左侧边缘时，临时展开的侧栏应该浮在内容之上。关闭临时展开后，原有折叠偏好保持不变。",
+  "侧栏折叠与展开沿用工作台既定的紧凑轨道，折叠偏好保存在本机。动画只解释位置变化，不改变任何内容的含义。",
   "动画帮助理解位置变化，但阅读内容不应整列跳动。减少动态效果开启后，应直接显示目标状态，同时保留所有按钮与键盘操作。",
 ].join("\n\n");
 
@@ -37,7 +36,7 @@ export function MaterialMotionPreview({ view }: { view: "first" | "second" }) {
 
   return (
     <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
-      <WorkspaceSidebarShell>
+      <aside aria-label="capri 工作台" className={styles.sidebar}>
         <WorkspaceShellNav binding={null} />
         <div className={styles.sidebarScroll}>
           <span className={styles.groupTitle}>合成导航演练</span>
@@ -53,7 +52,7 @@ export function MaterialMotionPreview({ view }: { view: "first" | "second" }) {
         <div className={styles.account}>
           <WorkspaceAccountMenu accountName="演练账号" workspaceName="合成演练" signOutAction={() => {}} />
         </div>
-      </WorkspaceSidebarShell>
+      </aside>
       <div className={styles.workspace}>
         <div style={{ padding: "20px 32px 0", color: "var(--muted)", fontSize: 13 }}>合成演练 · 不连接账号</div>
         <SessionDirectory storageScope={"a".repeat(64)} renderedAt="2026-10-01T08:00:00.000Z" initialSessions={SESSIONS} initialComplete initialNextCursor={null} sessionVersion={null} initialError={null} sessionRecoveryHref={null} />

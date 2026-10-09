@@ -1571,7 +1571,7 @@ final class AppModel: ObservableObject {
                 bundleRevision: pendingDecision.bundleRevision,
                 proposalID: pendingDecision.proposalID,
                 baseRevision: pendingDecision.baseRevision,
-                reason: "The recruiter reviewed exact evidence, before and proposed values, effect, and authority in Talent Signal for Mac.",
+                reason: "The recruiter reviewed exact evidence, before and proposed values, effect, and authority in capri for Mac.",
                 decisions: decisions
             )))
         } catch {
@@ -1937,9 +1937,9 @@ final class AppModel: ObservableObject {
                 reminderRecoveryNotice = "Recovered the exact reminder draft. Preview its Apple Reminders destination again before approval."
             case .executionPending, .outcomeUnknown:
                 reminderOperationState = .unknown(
-                    "Talent Signal found an unfinished reminder operation after relaunch. Check Apple Reminders before creating anything else."
+                    "capri found an unfinished reminder operation after relaunch. Check Apple Reminders before creating anything else."
                 )
-                reminderRecoveryNotice = "Recovered an unfinished reminder check. Talent Signal will reconcile the original operation instead of retrying it."
+                reminderRecoveryNotice = "Recovered an unfinished reminder check. capri will reconcile the original operation instead of retrying it."
             case .verified:
                 guard let receipt = recovery.receipt else { return }
                 reminderOperationState = .saved(receipt)
@@ -1948,9 +1948,9 @@ final class AppModel: ObservableObject {
                 guard let receipt = recovery.receipt else { return }
                 reminderOperationState = .removalUnknown(
                     receipt,
-                    "Talent Signal found an unfinished reminder removal after relaunch. Check the original reminder before trying again."
+                    "capri found an unfinished reminder removal after relaunch. Check the original reminder before trying again."
                 )
-                reminderRecoveryNotice = "Recovered an unfinished reminder removal. Talent Signal will verify absence before claiming it was removed."
+                reminderRecoveryNotice = "Recovered an unfinished reminder removal. capri will verify absence before claiming it was removed."
             }
         } catch {
             activeReminderRecovery = nil

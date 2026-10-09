@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -25,7 +26,7 @@ struct TalentSignalMacApp: App {
     }
 
     var body: some Scene {
-        Window("Talent Signal", id: "workspace") {
+        Window("capri", id: "workspace") {
             ApplicationZoomContainer(enabled: model.isAccessibilityZoomPreview) {
                 Group {
                     if isQuickPanelPreview {
@@ -48,6 +49,7 @@ struct TalentSignalMacApp: App {
                     }
                     .background(SelectedTextServiceBridge().environmentObject(model))
                     .background(DesktopPetWorkspaceLink())
+                    .background(DesktopBrowserLoginWorkspaceLink())
             }
             .frame(
                 minWidth: isQuickPanelPreview ? 520 : 760,
@@ -100,9 +102,26 @@ struct TalentSignalMacApp: App {
         } label: {
             TSBrandMark(size: 22, monochrome: true)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Talent Signal")
+                .accessibilityLabel("capri")
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Retain only the fixed scene action so a browser approval can restore a
+/// closed workspace window. The login coordinator validates the callback
+/// before invoking this action; this view adds no URL or credential authority.
+private struct DesktopBrowserLoginWorkspaceLink: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onAppear {
+                DesktopBrowserLoginCoordinator.shared.setWorkspacePresenter {
+                    openWindow(id: "workspace")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
     }
 }
 
@@ -129,7 +148,7 @@ private struct TalentSignalCommands: Commands {
     @ObservedObject var model: AppModel
 
     var body: some Commands {
-        CommandMenu("Talent Signal") {
+        CommandMenu("capri") {
             Button("Open Quick Panel") {
                 openWindow(id: "quick-panel")
             }

@@ -2,6 +2,10 @@
 
 ## Status and decision question
 
+> Note 2026-10-09: the capri rebrand landed after this snapshot (#276 and
+> follow-ups); the old-name findings below are dated evidence, not current
+> state.
+
 - Brief ID: `capir-transition-2026-10-02`.
 - Status: draft recommendation; repository assessment complete, product
   implementation not started by this task.
@@ -256,9 +260,11 @@ it is not fresh production runtime evidence.
 - **E2 — configuration:** [site configuration](../apps/web/lib/site.ts), lines
   1–11. Supports old display name, domain, email and request subject.
 - **E3 — code/copy:** [homepage](../apps/web/components/marketing/marketing-home.tsx)
-  and [vision copy](../apps/web/lib/relationship-vision-copy.ts), including lines
-  41 and 108–114. Supports synthetic relationship demonstration and declared
-  vision limitations; no browser rendering was inspected in this task.
+  and `apps/web/lib/relationship-vision-copy.ts` (removed with the capri
+  rebrand in #276), including lines 41 and 108–114. Supports synthetic
+  relationship demonstration and declared vision limitations; no browser
+  rendering was inspected in this task. This observation predates the capri
+  rebrand and is a dated snapshot only.
 - **E4 — operations:** [Account access](../docs/operations/account-access.md),
   “Cross-device synchronization”, “Account onboarding” and “Internal test
   workspaces”. Supports existing contracts; live configuration is unverified.

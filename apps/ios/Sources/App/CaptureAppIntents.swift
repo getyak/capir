@@ -78,7 +78,7 @@ final class CaptureIntentRouter: ObservableObject {
 struct CaptureSignalIntent: AppIntent {
     static let title: LocalizedStringResource = "Capture Signal"
     static let description = IntentDescription(
-        "Open Talent Signal to choose a purpose-bound text, screenshot, or foreground audio capture."
+        "Open capri to choose a purpose-bound text, screenshot, or foreground audio capture."
     )
 
     @available(iOS 26.0, *)
@@ -92,7 +92,7 @@ struct CaptureSignalIntent: AppIntent {
             CaptureIntentRouter.shared.route(to: .hub)
         }
         return .result(
-            dialog: "Talent Signal opened to Capture. Nothing has been recorded or uploaded."
+            dialog: "capri opened to Capture. Nothing has been recorded or uploaded."
         )
     }
 }
@@ -100,7 +100,7 @@ struct CaptureSignalIntent: AppIntent {
 struct RecordSignalIntent: AppIntent {
     static let title: LocalizedStringResource = "Record Signal"
     static let description = IntentDescription(
-        "Open Talent Signal before requesting microphone permission or starting a recording."
+        "Open capri before requesting microphone permission or starting a recording."
     )
 
     @available(iOS 26.0, *)
@@ -114,7 +114,7 @@ struct RecordSignalIntent: AppIntent {
             CaptureIntentRouter.shared.route(to: .foregroundAudio)
         }
         return .result(
-            dialog: "Talent Signal opened for foreground recording. Recording has not started."
+            dialog: "capri opened for foreground recording. Recording has not started."
         )
     }
 }
@@ -199,7 +199,7 @@ struct ImportConversationScreenshotIntent: AppIntent {
         trace.mark("session_enqueued")
         trace.mark("intent_returning")
         return .result(
-            dialog: "Agent Session created. Processing will continue securely; Talent Signal will ask only if a decision is needed."
+            dialog: "Agent Session created. Processing will continue securely; capri will ask only if a decision is needed."
         )
     }
 

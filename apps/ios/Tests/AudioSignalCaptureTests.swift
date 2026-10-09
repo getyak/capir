@@ -59,7 +59,7 @@ final class AudioSignalCaptureTests: XCTestCase {
         XCTAssertEqual(recorder.startCalls, 0)
         XCTAssertEqual(
             store.phase,
-            .failed("Open Talent Signal in the foreground before recording. No recording started.")
+            .failed("Open capri in the foreground before recording. No recording started.")
         )
     }
 
@@ -100,7 +100,7 @@ final class AudioSignalCaptureTests: XCTestCase {
         XCTAssertEqual(recorder.stopCalls, 1)
         XCTAssertEqual(
             store.notice,
-            "Recording stopped because Talent Signal left the foreground. The completed local payload is recoverable."
+            "Recording stopped because capri left the foreground. The completed local payload is recoverable."
         )
     }
 
@@ -306,7 +306,7 @@ final class AudioSignalCaptureTests: XCTestCase {
         XCTAssertEqual(
             store.phase,
             .failed(
-                "Voice input stopped when Talent Signal left the foreground. No audio was sent."
+                "Voice input stopped when capri left the foreground. No audio was sent."
             )
         )
         let transcriptionCalls = await transcriber.callCount
@@ -558,7 +558,7 @@ private final class AudioSignalRecordingSpy: AudioSignalRecordingServing {
             authorization: startedAuthorization ?? .init(
                 basis: "Direct verbal permission",
                 authorizingParty: "Candidate participant",
-                attestedBy: "Current local recruiter",
+                attestedBy: "Current local user",
                 scope: purpose,
                 recordedAt: Date(timeIntervalSince1970: 1_777_777_776)
             ),

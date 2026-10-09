@@ -1,20 +1,19 @@
 "use client";
 
-import { forgetSessionOrganization } from "@/lib/workspace-session-organization";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { subscribeWorkspaceRefresh, workspaceRefreshGeneration } from "@/lib/workspace-refresh";
 import type {
   ConversationImageManifest,
   ConversationImageUpload,
-  ConversationQueueMutationRequest,
   ConversationQueueEntry,
+  ConversationQueueMutationRequest,
   ConversationQueuePreview,
   ConversationQueueSnapshot,
 } from "@talent-signal/contracts";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
+import { sessionHumanMessages } from "@/lib/session-human-messages";
 import { workspaceSessionFetch } from "../workspace-session-request";
 import { validateAttachmentBatch } from "../contact-agent/capture-intake";
-import { sameConversationImages, unresolvedConversationCount } from "./conversation-feedback";
 import { acceptConversationPreview, acceptConversationSnapshot, ConversationFrames } from "@/lib/conversation-stream";
 import { clearConversationLocal, conversationExpiry, readConversationDraft, readConversationMessages, removeConversationMessage, writeConversationDraft, writeConversationMessage, type LocalMessage } from "@/lib/conversation-local";
 import {
@@ -26,6 +25,8 @@ import {
   type DurableConversationImage,
 } from "@/lib/conversation-image-store";
 import { clearConversationImageStore } from "@/lib/conversation-image-lifecycle";
+import { forgetSessionOrganization } from "@/lib/workspace-session-organization";
+import { sameConversationImages, unresolvedConversationCount } from "./conversation-feedback";
 
 type Options = { entryCapability?: string | null; bootstrap?: string | null; id: string | null; scope: string; chatBinding: string; detailBinding: string; initial?: SessionDetail; onAdmitted?: (id: string) => void };
 class RequestError extends Error { constructor(message: string, readonly status: number, readonly code?: string) { super(message); } }
@@ -59,8 +60,6 @@ export function useConversation(options: Options) {
   const [submitting, setSubmitting] = useState(false);
   const [snapshot, setSnapshot] = useState<ConversationQueueSnapshot | null>(null);
   const [preview, setPreview] = useState<ConversationQueuePreview | null>(null);
-  const previewRef = useRef<ConversationQueuePreview | null>(null);
-  const [handoffPreviews, setHandoffPreviews] = useState<Record<string, ConversationQueuePreview>>({});
   const [connection, setConnection] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
@@ -68,6 +67,18 @@ export function useConversation(options: Options) {
   const [unavailable, setUnavailable] = useState(initial ? initial.state !== "active" : false);
   const [draftConflict, setDraftConflict] = useState(false);
   const [mutating, setMutating] = useState(false);
+  // Synchronous stream state: frames in one network chunk can precede the next
+  // React render, so the accepted preview is kept in a ref as well as state and
+  // a completion frame can retain text from the preceding preview.
+  const previewRef = useRef<ConversationQueuePreview | null>(null);
+  // Observed Stop intent per run, and the outcome of the run that left the
+  // active slot, so a stopped turn is never reported as a completed readback.
+  const stopObserved = useRef(new Set<string>());
+  const readbackTimers = useRef<number[]>([]);
+  const [handoffEntries, setHandoffEntries] = useState<Record<string, ConversationQueueEntry>>({});
+  const [handoffPreviews, setHandoffPreviews] = useState<Record<string, ConversationQueuePreview>>({});
+  const [runOutcome, setRunOutcome] = useState<Record<string, "completed" | "stopped">>({});
+  const [readbackStalled, setReadbackStalled] = useState<string[]>([]);
   const local = useRef(messages); const draftRef = useRef(draft); const detailRef = useRef(detail);
   const attachmentsRef = useRef<ConversationAttachment[]>([]);
   const snapshotRef = useRef(snapshot); const lifecycle = useRef<AbortController | null>(null);
@@ -77,21 +88,17 @@ export function useConversation(options: Options) {
   // remote draft triggers the conflict UI before any save can overwrite it.
   const remoteDraftBaseline = useRef(initial?.composer_draft ?? "");
   const mutationBusy = useRef(false); const pendingHandoff = useRef<string | null>(null);
-  const stopObserved = useRef(new Set<string>()); const readbackTimers = useRef<number[]>([]);
-  const [handoffEntries, setHandoffEntries] = useState<Record<string, ConversationQueueEntry>>({});
-  const [runOutcome, setRunOutcome] = useState<Record<string, "completed" | "stopped">>({});
-  const [readbackStalled, setReadbackStalled] = useState<string[]>([]);
   const writer = useRef(""); const draftStamp = useRef(""); const loaded = useRef(false);
   const submitLock = useRef(false); const preparingRef = useRef(false); const prepareGeneration = useRef(0);
   const pendingPreparations = useRef(0);
   const prepareChain = useRef<Promise<void>>(Promise.resolve());
-  useEffect(() => {
-    if (options.initial?.session_id === id && options.initial.state !== "active" && id) {
-      forgetSessionOrganization(scope, id);
-    }
-  }, [options.initial?.session_id, options.initial?.state, id, scope]);
   const admitted = useRef(options.onAdmitted);
   useEffect(() => { admitted.current = options.onAdmitted; }, [options.onAdmitted]);
+  // A validated deleted or expired Session retracts its local organization
+  // flags: no archived/pinned projection survives its own record.
+  useEffect(() => {
+    if (options.initial?.session_id === id && options.initial.state !== "active" && id) forgetSessionOrganization(scope, id);
+  }, [options.initial?.session_id, options.initial?.state, id, scope]);
   const expiry = () => conversationExpiry(detailRef.current?.expires_at);
   const queueUrl = `/api/workspace-sessions/${id}/conversation-queue`;
   // The mounted lifecycle controller is the single identity for this
@@ -103,14 +110,14 @@ export function useConversation(options: Options) {
   // Canonical history is the only handoff that retires a local outbox row.
   // Until its turn exists — carrying the same ordered image manifests — the
   // exact message identity and its local attachment bytes are the durable
-  // evidence of what was sent; renders hide duplicates instead of deleting
-  // them before the canonical history arrives.
-  const reconcile = useCallback((history: SessionDetail | null) => {
+  // evidence of what was sent. A server active/queued row only represents the
+  // message for rendering; it never deletes the outbox evidence early.
+  const reconcile = useCallback((_server: ConversationQueueSnapshot | null, history: SessionDetail | null) => {
     if (!id) return;
-    const settled = new Set((history?.turns ?? []).filter(turn => {
-      const message = local.current.find(item => item.id === turn.id);
-      return Boolean(message) && sameConversationImages(message?.images, turn.images);
-    }).map(turn => turn.id));
+    const settled = new Set((history?.turns ?? []).flatMap(sessionHumanMessages).filter(human => {
+      const message = local.current.find(item => item.id === human.id);
+      return Boolean(message) && sameConversationImages(message?.images, human.images);
+    }).map(human => human.id));
     const remaining = local.current.filter(message => { if (!settled.has(message.id)) return true; removeConversationMessage(scope, id, message.id); void removeConversationImages(scope, id, message.id); return false; });
     if (remaining.length !== local.current.length) storeMessages(remaining);
   }, [id, scope, storeMessages]);
@@ -135,11 +142,13 @@ export function useConversation(options: Options) {
     if (remoteDraft !== remoteDraftBaseline.current && remoteDraft !== draftRef.current) {
       setDraftConflict(true);
     }
-    detailRef.current = next; setDetail(next); reconcile(next);
+    detailRef.current = next; setDetail(next); reconcile(snapshotRef.current, next);
+    // Settled history owns each message; the handoff rows and their previews
+    // retire with it, one message at a time.
     const settled = new Set(next.turns.map(turn => turn.id));
     setHandoffEntries(previous => Object.fromEntries(Object.entries(previous).filter(([messageId]) => !settled.has(messageId))));
     setHandoffPreviews(previous => Object.fromEntries(Object.entries(previous).filter(([messageId]) => !settled.has(messageId))));
-    if (next.state !== "active") { forgetSessionOrganization(scope, id!); clearConversationLocal(scope, id!); clearConversationImageStore(scope, id!); storeMessages([]); setPreview(null); setHandoffPreviews({}); previewRef.current = null; setHandoffEntries({}); setUnavailable(true); }
+    if (next.state !== "active") { forgetSessionOrganization(scope, id!); clearConversationLocal(scope, id!); clearConversationImageStore(scope, id!); storeMessages([]); setPreview(null); previewRef.current = null; setHandoffEntries({}); setHandoffPreviews({}); setUnavailable(true); }
   }
   async function refreshDetail(generation?: number) {
     if (!id) return;
@@ -187,7 +196,7 @@ export function useConversation(options: Options) {
       return;
     }
     if (error instanceof RequestError && (error.status === 401 || error.status === 403 || error.status === 410 || error.code === "session_stale")) {
-      setUnavailable(true); setHandoffEntries({}); setHandoffPreviews({}); previewRef.current = null; setPreview(null); setDetail(null); setDraft(""); storeMessages([]); clearAttachments(); if (id) { clearConversationLocal(scope, id); clearConversationImageStore(scope, id); }
+      setUnavailable(true); setPreview(null); previewRef.current = null; setDetail(null); setDraft(""); storeMessages([]); setHandoffEntries({}); setHandoffPreviews({}); clearAttachments(); if (id) { clearConversationLocal(scope, id); clearConversationImageStore(scope, id); }
     }
   }
   function updateMessage(id: string, update: Partial<LocalMessage>) {
@@ -226,8 +235,8 @@ export function useConversation(options: Options) {
     }
     // Observe the completed-event handoff: the active slot can empty before the
     // canonical history read succeeds. Remember the outcome so the surface can
-    // show saving/readback pending — or the truthful stopped state — instead
-    // of a blank transcript.
+    // show readback pending — or the truthful stopped state — instead of a
+    // blank transcript.
     const previousActive = previous?.active?.message_id ?? null;
     const stillListed = next.active?.message_id === previousActive || (next.queued ?? []).some(entry => entry.message_id === previousActive);
     if (previousActive && !stillListed && !detailRef.current?.turns.some(turn => turn.id === previousActive)) {
@@ -244,7 +253,7 @@ export function useConversation(options: Options) {
       setHandoffPreviews(current => Object.fromEntries(Object.entries(current).filter(([key]) => key !== messageId)));
       if (previous?.active?.run_id !== next.active.run_id) setReadbackStalled(current => current.filter(key => key !== messageId));
     }
-    reconcile(detailRef.current);
+    reconcile(next, detailRef.current);
   }
   function handoffWhenSettled() {
     if (sender.current || mutationBusy.current || lifecycle.current?.signal.aborted || !pendingHandoff.current) return;
@@ -375,20 +384,20 @@ export function useConversation(options: Options) {
                   const next = acceptConversationSnapshot(snapshotRef.current, frame.data as ConversationQueueSnapshot, id!);
                   if (!next) continue;
                   commitSnapshot(next);
-                  const previous = previewRef.current;
-                  const accepted = next.preview ? acceptConversationPreview(previous, next.preview, next) : previous?.run_id === next.active?.run_id ? previous : null;
-                  previewRef.current = accepted;
-                  setPreview(accepted);
+                  const previousPreview = previewRef.current;
+                  const acceptedPreview = next.preview ? acceptConversationPreview(previousPreview, next.preview, next) : previousPreview?.run_id === next.active?.run_id ? previousPreview : null;
+                  previewRef.current = acceptedPreview;
+                  setPreview(acceptedPreview);
                   void refreshDetail().catch(caught => { if (current()) refuse(caught); });
                 } else if (frame.event === "preview") {
                   // Frames in one network chunk can precede the next React
                   // render. Keep the accepted stream state synchronous so a
                   // completion frame retains text from the preceding preview.
-                  const accepted = acceptConversationPreview(previewRef.current, frame.data as ConversationQueuePreview, snapshotRef.current);
-                  previewRef.current = accepted;
-                  setPreview(accepted);
+                  const acceptedPreview = acceptConversationPreview(previewRef.current, frame.data as ConversationQueuePreview, snapshotRef.current);
+                  previewRef.current = acceptedPreview;
+                  setPreview(acceptedPreview);
                 }
-                else if (frame.event === "unavailable") { setPreview(null); throw new RequestError("这段对话已不可用，请重新打开。", 410); }
+                else if (frame.event === "unavailable") { setPreview(null); previewRef.current = null; throw new RequestError("这段对话已不可用，请重新打开。", 410); }
               }
             }
           } finally { await reader.cancel().catch(() => {}); }
@@ -531,9 +540,12 @@ export function useConversation(options: Options) {
       const response = await request(queueUrl);
       const next = await response.json() as ConversationQueueSnapshot;
       commitSnapshot(next);
-      confirmed = Boolean(snapshotRef.current?.active?.message_id === message.id
-        || (snapshotRef.current?.queued ?? []).some(item => item.message_id === message.id)
-        || (detailRef.current?.turns ?? []).some(turn => turn.id === message.id));
+      const owns = (source: ConversationQueueSnapshot | null | undefined) => Boolean(
+        source?.active?.message_id === message.id
+        || (source?.queued ?? []).some(item => item.message_id === message.id),
+      );
+      confirmed = owns(next) || owns(snapshotRef.current)
+        || Boolean((detailRef.current?.turns ?? []).some(turn => turn.id === message.id));
       if (confirmed) { setServerExists(true); pendingHandoff.current = id; handoffWhenSettled(); }
       await refreshDetail();
       confirmed ||= Boolean(detailRef.current?.turns.some(turn => turn.id === message.id));
@@ -552,9 +564,6 @@ export function useConversation(options: Options) {
   }
   async function mutate(input: Omit<ConversationQueueMutationRequest, "expected_revision" | "idempotency_key"> & { objective?: string; queue_entry_id?: string; run_id?: string }) {
     if (mutationBusy.current || !snapshotRef.current) return false;
-    const withdrawnMessageId = input.kind === "withdraw"
-      ? (snapshotRef.current.queued ?? []).find(entry => entry.queue_entry_id === input.queue_entry_id)?.message_id ?? null
-      : null;
     mutationBusy.current = true; setMutating(true); setError("");
     try {
       const operation = crypto.randomUUID();
@@ -569,15 +578,7 @@ export function useConversation(options: Options) {
         if (latest.active?.run_id !== input.run_id) return true;
         response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: latest.revision, idempotency_key: operation }) });
       }
-      const body = await response.json(); commitSnapshot(body.snapshot);
-      if (withdrawnMessageId) {
-        // The reader explicitly removed this queued message; drop the local
-        // copy and its bytes exactly like a definitive rejection removal.
-        removeConversationMessage(scope, id!, withdrawnMessageId);
-        void removeConversationImages(scope, id!, withdrawnMessageId);
-        storeMessages(local.current.filter(message => message.id !== withdrawnMessageId));
-      }
-      return true;
+      const body = await response.json(); commitSnapshot(body.snapshot); return true;
     } catch (caught) {
       refuse(caught); setError(caught instanceof RequestError && caught.status === 409 ? "队列刚刚有变化，已更新。请核对后再操作。" : "操作结果尚未确认，已保留内容。请核对队列后重试。");
       try { const response = await request(queueUrl); const next = await response.json(); commitSnapshot(next); } catch { /* Keep the last known state. */ }

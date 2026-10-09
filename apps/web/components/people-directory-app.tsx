@@ -1,16 +1,12 @@
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
-import {
-  AddressBook,
-  ArrowRight,
-  MagnifyingGlass,
-} from "@phosphor-icons/react/dist/ssr";
+import { AddressBook } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
-import Form from "next/form";
 
 import styles from "./people-directory-app.module.css";
 import { withReturnSession } from "./session-return-navigation";
 import { PeopleDirectoryList } from "./people-directory-list";
 import { WorkspaceDisconnectedState } from "./workspace-disconnected-state";
+import { PeopleDirectorySearch } from "./people-directory-search";
 
 type Props = {
   error: string | null;
@@ -37,7 +33,7 @@ export function PeopleDirectoryApp({
               <p>
                 {error
                   ? "目录暂时不可用；已保存的联系人资料不会改变。"
-                  : `${people.length} 位${query ? "匹配联系人" : "联系人"} · 每段关系保留自己的上下文`}
+                  : "每段关系保留自己的上下文。"}
                 {returnSessionId
                   ? " 这次选择会保留原对话入口，但不会自动改变对话范围。"
                   : ""}
@@ -55,24 +51,7 @@ export function PeopleDirectoryApp({
           </header>
 
           <div className={styles.listTools}>
-            <Form action="/workspace/people" className={styles.search} scroll={false}>
-              <MagnifyingGlass aria-hidden="true" size={20} />
-              <input
-                aria-label="按姓名或已确认联系方式搜索人物"
-                defaultValue={query}
-                key={query}
-                maxLength={160}
-                name="query"
-                placeholder="按姓名、邮箱或电话查找…"
-                type="search"
-              />
-              {returnSessionId ? (
-                <input name="session" type="hidden" value={returnSessionId} />
-              ) : null}
-              <button aria-label="搜索人物" type="submit">
-                <ArrowRight aria-hidden="true" size={15} />
-              </button>
-            </Form>
+            <PeopleDirectorySearch query={query} returnSessionId={returnSessionId} />
             <span aria-live="polite">{error ? "暂不可用" : `${people.length} 位${query ? "匹配人物" : "人物"}`}</span>
           </div>
 
@@ -128,12 +107,9 @@ export function PeopleDirectoryApp({
                 <span>关系情境与资料</span>
                 <span>更新</span>
               </div>
-              <PeopleDirectoryList people={people} returnSessionId={returnSessionId} />
+              <PeopleDirectoryList people={people} query={query} returnSessionId={returnSessionId} />
             </>
           )}
-          <p className={styles.directoryNote}>
-            每位联系人保留独立身份，资料只在对应关系情境中使用。
-          </p>
         </div>
       </main>
     </div>

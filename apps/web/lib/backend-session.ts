@@ -5,7 +5,7 @@ export class BackendSessionExpiredError extends TalentSignalHttpError {
     super(
       401,
       "backend_session_expired",
-      "Your secure workspace session expired. Sign in again to continue.",
+      "登录状态已失效，请重新登录后继续。",
       null,
     );
     this.name = "BackendSessionExpiredError";
@@ -18,7 +18,9 @@ export function isBackendSessionExpiredError(
   return (
     error instanceof BackendSessionExpiredError ||
     (error instanceof TalentSignalHttpError &&
-      error.code === "backend_session_expired") ||
+      (error.code === "backend_session_expired" ||
+        (error.status === 401 &&
+          ["SESSION_INVALID", "SESSION_EXPIRED", "AUTHENTICATION_REQUIRED"].includes(error.code)))) ||
     (error !== null &&
       error !== undefined &&
       typeof error === "object" &&

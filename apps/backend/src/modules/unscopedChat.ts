@@ -70,7 +70,7 @@ export interface UnscopedChatExecution {
   previousTaskIDs: string[];
   remoteStatus: "agent_completed" | "completed" | "disabled" | "fallback";
   /** Bounded operator diagnostic; never a raw provider error or user content. */
-  remoteFailureCode?: "MODEL_RUN_TIMEOUT";
+  remoteFailureCode?: "MODEL_RUN_TIMEOUT" | "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED";
   remoteDiagnostics?: Record<string, string | number | boolean | null>;
   providerResult: RemoteChatAnswerResult | null;
   agentProviderResult: {
@@ -80,6 +80,8 @@ export interface UnscopedChatExecution {
     inputTokens: number;
     outputTokens: number;
     prompt?: import("@talent-signal/agent").PromptReference;
+    /** Genuine tool completions (name/time only) for execution readback. */
+    toolCompletions?: import("@talent-signal/agent").HarnessToolCompletion[];
   } | null;
 }
 
@@ -124,6 +126,10 @@ export async function executeUnscopedChatTask(input: {
   request: UnscopedChatTaskRequest;
   /** Host-owned queue attempt identity; never accepted from the public request. */
   taskID?: string;
+  /** Host-only typed MCP human result; enters the run as host data. */
+  hostResult?: import("@talent-signal/contracts").McpHumanResult | null;
+  /** Live queue run claim; the only host staging authority. */
+  hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
   provider: RemoteChatAnswerProviding | null;
   database?: DatabaseClient;
   probePool?: Pool;
@@ -141,6 +147,9 @@ export async function executeUnscopedChatTask(input: {
   images?: readonly UnscopedChatImage[];
   /** Honest host note about images omitted by the bounded image budget. */
   imageContextNote?: string;
+  /** GET-128 steering: dynamic input for messages accepted while this task runs. */
+  steering?: import("@talent-signal/agent").HarnessSteeringFeed;
+  onToolCompletion?: (receipt: import("@talent-signal/agent").HarnessToolCompletion) => void;
 }): Promise<UnscopedChatExecution> {
   const taskID = input.taskID ?? randomUUID();
   const calendarContext = calendarDraftContextForRequest(taskID, input.request.time_zone, input.referenceTime ?? input.createdAt ?? new Date());
@@ -229,6 +238,8 @@ export async function executeUnscopedChatTask(input: {
         isWorkspaceConversationAgentProvider(input.provider)
       ) {
         const execution = await executeWorkspaceConversationAgent({
+          ...(input.hostResult ? { hostResult: input.hostResult } : {}),
+          ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}),
           database: input.database,
           auth: input.auth,
           objective: effectiveObjective,
@@ -246,6 +257,8 @@ export async function executeUnscopedChatTask(input: {
           ...(input.onVisibleText ? { onVisibleText: input.onVisibleText } : {}),
           ...(input.onProgress ? { onProgress: input.onProgress } : {}),
           ...(input.signal ? { signal: input.signal } : {}),
+          ...(input.steering ? { steering: input.steering } : {}),
+        ...(input.onToolCompletion ? { onToolCompletion: input.onToolCompletion } : {}),
           ...(agentInputParts.length > 0 ? { inputParts: agentInputParts } : {}),
           recordSourcePerson: personID => { sourcePeople.add(personID); },
           ...(observation ? { observation: { ...observation, authorization_scope: "workspace_conversation" } } : {}),
@@ -261,6 +274,9 @@ export async function executeUnscopedChatTask(input: {
           inputTokens: execution.providerResult.inputTokens,
           outputTokens: execution.providerResult.outputTokens,
           ...(execution.providerResult.prompt ? { prompt: execution.providerResult.prompt } : {}),
+          ...(execution.providerResult.toolCompletions
+            ? { toolCompletions: execution.providerResult.toolCompletions }
+            : {}),
         };
         proposedSessionTitle = execution.providerResult.sessionTitle ?? null;
         remoteStatus = "agent_completed";
@@ -290,9 +306,13 @@ export async function executeUnscopedChatTask(input: {
     } catch (error) {
       remoteDiagnostics = conversationRunDiagnostics(error);
       await recordProductEvent("conversation.model.failure", "context", undefined, undefined, remoteDiagnostics, { failed: true });
-      if (input.provider.providerId === "claude-agent-sdk" &&
-        ["WORKSPACE_CONVERSATION_TIMEOUT", "CLAUDE_HARNESS_TIMEOUT"].includes(claudeHarnessInterruptionCode(error))) {
-        remoteFailureCode = "MODEL_RUN_TIMEOUT";
+      if (input.provider.providerId === "claude-agent-sdk") {
+        const interruption = claudeHarnessInterruptionCode(error);
+        if (["WORKSPACE_CONVERSATION_TIMEOUT", "CLAUDE_HARNESS_TIMEOUT"].includes(interruption)) {
+          remoteFailureCode = "MODEL_RUN_TIMEOUT";
+        } else if (interruption === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED") {
+          remoteFailureCode = "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED";
+        }
       }
       providerResult = null;
       agentProviderResult = null;

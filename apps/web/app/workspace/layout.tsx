@@ -12,22 +12,24 @@ import {
   WorkspaceMobileSourcesLink,
   WorkspaceShellNav,
 } from "@/components/workspace-shell-nav";
-import { WorkspaceSidebarShell } from "@/components/workspace-sidebar";
 import { WorkspaceRecentSessions } from "@/components/workspace-recent-sessions";
 import { WorkspaceGlobalSearchDialog } from "@/components/workspace-search";
 import { WorkspaceSidebarPeople } from "@/components/workspace-sidebar-people";
 import { WorkspacePrivacyEntry, WorkspaceRouteHeader } from "@/components/workspace-route-header";
 import { WorkspacePrivacyBoundary } from "@/components/workspace-privacy-boundary";
+import { WorkspaceSessionBoundary } from "@/components/workspace-session-boundary";
 import styles from "@/components/workspace-shell.module.css";
 import {
   readBackendSessionClaims,
   readPrimaryBackendSessionClaims,
 } from "@/lib/server/backendAuth";
+import { loadCapirTestBanner } from "@/lib/server/capir-test-entry";
+import { CapirTestBanner } from "@/components/capir-test-banner";
 import {
   TEST_WORKSPACE_COOKIE,
   testWorkspaceSession,
 } from "@/lib/server/testWorkspaceSession";
-import { backendSessionIsExpired } from "@/lib/backend-session";
+import { backendSessionIsExpired, isBackendSessionExpiredError } from "@/lib/backend-session";
 import { leaveTestWorkspace } from "@/app/workspace/settings/testing/actions";
 import accountStyles from "@/components/account-settings.module.css";
 import { SystemHealthProvider } from "@/components/system-health-provider";
@@ -36,6 +38,7 @@ import { WorkspaceAccountMenu } from "@/components/workspace-account-menu";
 import { MeetingDraftSessionBoundary } from "@/components/meeting-draft-session-boundary";
 import { WorkspaceDirectoryScope } from "@/components/workspace-directory-cache";
 import { SessionDraftSessionBoundary } from "@/components/session-draft-session-boundary";
+import { PersonContextPanelProvider } from "@/components/person-context-panel";
 import {
   workspaceSessionDraftStorageScope,
   workspaceSessionsBinding,
@@ -45,14 +48,18 @@ function AccountControls({
   accountName,
   workspaceName,
   fixtureWorkspace,
+  usageBinding,
 }: {
   accountName: string;
   workspaceName: string | null;
   fixtureWorkspace: boolean;
+  usageBinding: string | null;
 }) {
   return (
     <WorkspaceAccountMenu
       accountName={accountName}
+      key={usageBinding}
+      usageBinding={usageBinding}
       fixtureWorkspace={fixtureWorkspace}
       signOutAction={signOutOfWorkspace}
       workspaceName={workspaceName}
@@ -110,12 +117,19 @@ export default async function WorkspaceLayout({
           currentDisplayName = profile.user.display_name;
           backendAccount.name = profile.workspace.name;
         }
-      } catch { /* Keep authenticated labels available during settings outages. */ }
+      } catch (error) {
+        // Confirmed revocation is different from a settings/network outage.
+        // Do not leave private chrome mounted under an invalid credential.
+        if (isBackendSessionExpiredError(error)) throw error;
+      }
       pendingBinding = workspaceSessionsBinding(claims);
       pendingSessionDraftScope = workspaceSessionDraftStorageScope(claims);
     }
   } catch {
     /* Scope mismatch or unreadable test session: stay unbound. */
+    scope = null;
+    pendingBinding = null;
+    pendingSessionDraftScope = null;
   }
   const hasTestWorkspace = (await cookies()).has(TEST_WORKSPACE_COOKIE);
   if (!scope) {
@@ -147,17 +161,31 @@ export default async function WorkspaceLayout({
     Boolean(testName) || (backendAccount?.slug.startsWith("fixture-") ?? fixtureFallback);
   const workspaceName = backendAccount?.name ?? null;
 
+  // Canonical operator-run banner: derived from the live run readback for
+  // every login method (direct password and private handoff alike), never
+  // from a cookie or account name. Expired/revoked/foreign runs fail closed.
+  let capirBanner = null;
+  try {
+    const claims = await readBackendSessionClaims();
+    if (claims && !backendSessionIsExpired(claims.backendExpiresAt)) {
+      capirBanner = await loadCapirTestBanner(claims);
+    }
+  } catch {
+    capirBanner = null;
+  }
+
 
   return (
-    <WorkspacePrivacyBoundary privateContent={children}>
+    <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
+      <PersonContextPanelProvider binding={pendingBinding}>
       <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
         {pendingBinding ? (
           <MeetingDraftSessionBoundary sessionVersion={pendingBinding} />
         ) : null}
         <SessionDraftSessionBoundary storageScope={pendingSessionDraftScope} />
         <WorkspaceDirectoryScope binding={pendingBinding} />
-        <WorkspaceSidebarShell>
+        <aside aria-label="capri 工作台" className={styles.sidebar}>
           <WorkspaceShellNav binding={pendingBinding} />
           <div className={styles.sidebarScroll}>
             {pendingBinding ? (
@@ -176,20 +204,21 @@ export default async function WorkspaceLayout({
             <AccountControls
               accountName={accountName}
               fixtureWorkspace={fixtureWorkspace}
+              usageBinding={pendingBinding}
               workspaceName={workspaceName}
             />
           </div>
-        </WorkspaceSidebarShell>
+        </aside>
 
         <div className={styles.workspace}>
           <header className={styles.mobileHeader}>
             <Link
-              aria-label="Talent Signal 工作台"
+              aria-label="capri 工作台"
               className={styles.brand}
               href="/workspace"
             >
               <span aria-hidden="true" className={styles.brandMark} />
-              <span className={styles.brandName}>Talent Signal</span>
+              <span className={styles.brandName}>capri</span>
             </Link>
             <div className={styles.mobileAccount}>
               <WorkspaceGlobalSearchDialog binding={pendingBinding} />
@@ -198,6 +227,7 @@ export default async function WorkspaceLayout({
               <AccountControls
                 accountName={accountName}
                 fixtureWorkspace={fixtureWorkspace}
+                usageBinding={pendingBinding}
                 workspaceName={workspaceName}
               />
             </div>
@@ -212,6 +242,7 @@ export default async function WorkspaceLayout({
               key={scope}
             >
               <SystemHealthProvider>
+                <CapirTestBanner banner={capirBanner} />
                 {testName && (
                   <div className={accountStyles.banner} role="status">
                     <span>测试空间 · {testName}</span>
@@ -226,7 +257,8 @@ export default async function WorkspaceLayout({
           </TalentSignalLabShell>
         </div>
       </div>
+      </PersonContextPanelProvider>
       </AvatarPreferencesProvider>
-    </WorkspacePrivacyBoundary>
+    </WorkspacePrivacyBoundary></WorkspaceSessionBoundary>
   );
 }

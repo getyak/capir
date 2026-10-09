@@ -14,7 +14,7 @@ stable, and free of implementation-level detail.
 | Who is it for and what does it do? | [Product](product.md) |
 | What owns truth and where are the boundaries? | [Architecture](architecture.md) |
 | How do agents participate safely? | [Agent system](agent-system.md) |
-| How does one capture become one safe action? | [Capture to action](capture-to-action.md) |
+| How does a screenshot become useful context and continuation? | [Capture to action](capture-to-action.md) |
 | What should the product feel like? | [Design system](design-system.md) |
 | What should be built next? | [Delivery](delivery.md) |
 | Which integrations are allowed? | [Integrations](integrations.md) |
@@ -46,6 +46,9 @@ signals. They should not become parallel architecture specifications.
 
 ## Research
 
+Recruiting-specific studies remain evidence for their named context. They are
+not the default audience or promise of the current personal-Agent direction.
+
 [`research/`](research/) contains evidence, market scans, and external-system
 comparisons. Research may be detailed because it is loaded selectively. It
 does not override canonical project decisions until those decisions are
@@ -57,7 +60,7 @@ updated.
 - [Recruiter discovery and relationship-continuity wedge validation](research/recruiter-discovery-and-wedge-validation.md):
   separates concept feedback from field evidence and defines the bilateral
   recruiter interview and concierge-test protocol.
-- [Talent Signal Agent module blueprint](research/talent-signal-agent-module-blueprint.md):
+- [Agent module blueprint](research/talent-signal-agent-module-blueprint.md):
   maps the current executable control plane to the smallest durable Agent
   runtime proposal without granting models domain or effect authority.
 - [Agent public-web tooling](research/agent-public-web-tooling.md): separates
@@ -91,8 +94,12 @@ updated.
   recovery, calendar handoff and ephemeral Agent range review.
 - [Account and workspace access](operations/account-access.md) explains personal
   ownership, Web settings, fixture credentials, sessions, and isolated test access.
+- [capir CLI reference](operations/capir-cli.md) documents the test-account,
+  model and strict-replay sandbox command surface.
 - [Secret delivery](operations/secrets.md) defines Infisical ownership, local
   injection, workload identity, environment isolation, and rotation.
+- [Owner-operated Nango Auth/Proxy](operations/nango-local.md) defines pinned
+  images, tailnet endpoints, isolated credentials and OAuth recovery.
 - [Prompt operations](operations/opik-prompts.md) explains editing, publishing,
   source imports and bundled releases with Opik version mirroring.
 - [Private Opik improvement](operations/opik-phase-one.md) covers corrections,
@@ -103,8 +110,8 @@ updated.
 - [Internal TestFlight backend on Tailscale](operations/testflight-local-backend.md)
   defines the owner-operated Mac, loopback, tailnet, and no-seed testing
   boundary.
-- [`evaluations/`](evaluations/) contains dated review evidence and generated
-  findings.
+- [Dated review evidence and generated findings](https://github.com/getyak/capir-evals/tree/main/evidence/)
+  live in the private capir-evals repository.
 - Editable architecture sources and rendered diagrams live beside the
   canonical document that explains them.
 

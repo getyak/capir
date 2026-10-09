@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Talent Signal uses agents to extend human judgment, not replace ownership of relationship truth or consequential action.
+capri uses agents to extend human judgment, not replace ownership of relationship truth or consequential action.
 
 ## Architecture
 
-![Talent Signal agent control plane](talent-signal-agent-control-plane.png)
+![capri agent control plane](talent-signal-agent-control-plane.png)
 
 The control plane separates four concerns:
 
@@ -68,7 +68,7 @@ readable nearby text cannot resolve uncertain speaker, time or identity fields.
 
 ## Governed loop
 
-![Talent Signal agent runtime flow](talent-signal-agent-runtime-flow.png)
+![capri agent runtime flow](talent-signal-agent-runtime-flow.png)
 
 1. authorize one immutable objective, Pursuit or subject scope, and budget;
 2. compile the smallest relevant context;
@@ -110,7 +110,7 @@ The model proposes intent. The control plane decides whether a capability exists
 Validate original tool arguments before provider normalization discards unknown fields.
 Repair hints use bounded schema-owned names/codes, never rejected values or unknown keys; diagnostic failures preserve denial. Per-Run SDK observations may omit identical successful state metadata; changed/error state and source evidence remain intact, and tool authority is checked anew.
 
-Fact confirmation, exact-effect approval and destination verification remain independent decisions; passing one never substitutes for another.
+Fact confirmation, exact-effect approval and destination verification remain independent decisions; passing one never substitutes for another. User-owned remote MCP rides `mcp_connections` in this class: staging executes nothing, every call needs the human's exact single-use approval bound to the original input schema regardless of remote read-only hints, and resolved receipts return to the same conversation as provenance, never confirmed relationship evidence.
 
 ## Context engineering
 
@@ -172,13 +172,13 @@ working context. Web reads, turns, and preference writes bind the initiating log
 forwarding its credential; stale tabs cannot act under a replacement account.
 Clients verify a matching readback before displaying a saved setting.
 
-Calendar preparation is a typed draft with a host reference clock, explicit
-client timezone and literal user source. The Agent cannot execute it. Clients
-keep source text separate from editable title/time: Web exports an ICS for
-calendar-app review; iOS requires an exact confirmation before EventKit writes.
-The native client persists a write claim before execution. Unknown outcomes
-survive reconstruction and cannot silently retry creation. Saved UI uses the
-actual event receipt, including reviewed fields, rather than the original draft.
+Calendar preparation is a typed, human-reviewed draft with a host reference clock, client timezone and literal user source. The Agent cannot execute it. Natural chat
+may end after a validated draft, an explicit whole-task finish choice and the full tool batch; source, cancellation,
+budget and genuine SDK usage checks remain. New original steering continues the Run
+discards old prepared output and disables early stopping. Failed tools or unrequested hook stops never confirm preparation.
+Clients separate source text from editable title/time: Web exports ICS for calendar-app
+review; iOS requires exact confirmation before EventKit writes and persists a write claim.
+Unknown outcomes survive reconstruction and cannot silently retry creation. Saved UI uses the actual event receipt, including reviewed fields, rather than the original draft.
 
 ## Memory and Agent Wiki
 
@@ -214,9 +214,9 @@ evidence; whole-Wiki prompts and vector similarity alone are insufficient.
 
 Private workspace turns preload bounded self memory with provenance, time,
 conflicts and versions; scoped recall pages recover omitted detail and excerpts.
-Partial or unavailable context is explicit. Business views never receive self
-content or coverage. Memory data stays separate from verified service settings;
-source guards apply before loading and before accepting an answer.
+Business views never receive self content or coverage. Current person/relationship
+Memory pages accompany Wiki reads; empty snapshots do not establish absence.
+Preserve attribution and explicit page coverage, including unavailable self context. A successful nonempty domain read supports recollection without unrelated Wiki citations; it does not verify statements or prose. Memory stays separate from service settings; source guards apply before reads and answer acceptance.
 
 Each run reads an immutable knowledge snapshot, whether exposed through a
 service or an Agent-readable file bundle. A provider session, compacted chat,
@@ -243,14 +243,14 @@ cannot preselect, collapse records, bind to history, or retry after failure.
 
 ## External agents and channels
 
-Codex, Claude, Cursor, Manus, OpenClaw, and future runtimes should connect through one provider-neutral Talent Signal boundary.
+Codex, Claude, Cursor, Manus, OpenClaw, and future runtimes should connect through one provider-neutral capri boundary.
 
 Initial external abilities are scoped reads, intentional capture, artifacts,
 fact/action proposals, internal attention, and signed review handoffs.
 
 External agents should not directly confirm facts, merge identities, send
 messages, change calendars or contacts, update an ATS, query the production
-database, or obtain a generic browser or shell over candidate data.
+database, or obtain a generic browser or shell over person and relationship data.
 
 Channels such as WeChat are capture and attention surfaces, not tenant
 boundaries or systems of record.

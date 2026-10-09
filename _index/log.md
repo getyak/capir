@@ -49,3 +49,38 @@ digest and the created, updated, or removed pages.
 
 - Source digest: `99e79aa8685010a2`
 - Updated: `docs/research/cloud-screenshot-processing-privacy.md`
+
+## 2026-10-04T06:34:12.596Z
+
+- Source digest: `615d442690114f12`
+- Created: `docs/operations/capir-cli.md`
+
+## 2026-10-04T07:00:56.334Z
+
+- Source digest: `76bce04c5912c293`
+- Updated: `docs/operations/capir-cli.md`
+
+## 2026-10-04T07:33:14.690Z
+
+- Source digest: `2cb0e7ef7d078f27`
+- Updated: `docs/operations/capir-cli.md`
+
+## 2026-10-05T09:39:12.770Z
+
+- Source digest: `8b31dc6f31cd3440`
+- Updated: `docs/operations/capir-cli.md`
+
+## 2026-10-05T09:47:16.411Z
+
+- Source digest: `7428d740cff295e2`
+- Updated: `docs/operations/capir-cli.md`
+
+## 2026-10-05T10:24:35.511Z
+
+- Source digest: `19bc4eaa35777eca`
+- Updated: `docs/operations/capir-cli.md`
+
+## 2026-10-07T10:45:31.055Z
+
+- Source digest: `56a22be4a237b39b`
+- Updated: `docs/operations/capir-cli.md`

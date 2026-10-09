@@ -4,3 +4,6 @@ paths:
       # macos-26 is a current GitHub-hosted label that actionlint 1.7.7
       # predates. Keep every other runner-label check enabled.
       - 'label "macos-26" is unknown'
+      # This standard Intel label also postdates the linter. Keep the free
+      # standard runner instead of substituting a billable larger runner.
+      - 'label "macos-15-intel" is unknown'

@@ -241,7 +241,7 @@ export class OpenRouterAgentProvider implements AgentProvider {
         headers: {
           authorization: `Bearer ${this.apiKey}`,
           "content-type": "application/json",
-          "x-title": "Talent Signal bounded Agent",
+          "x-title": "capri bounded Agent",
           ...(this.referer ? { "http-referer": this.referer } : {}),
         },
         body: JSON.stringify({

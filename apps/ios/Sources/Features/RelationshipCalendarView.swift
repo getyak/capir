@@ -1206,7 +1206,7 @@ struct RelationshipCalendarView: View {
             try activityStore?.save(confirmedActivity)
         } catch {
             calendarNotice = appLanguage.text(
-                "The event could not be saved in Talent Signal. Nothing was added to Apple Calendar."
+                "The event could not be saved in capri. Nothing was added to Apple Calendar."
             )
             return
         }
@@ -1237,7 +1237,7 @@ struct RelationshipCalendarView: View {
             try activityStore?.save(syncingActivity)
         } catch {
             calendarNotice = appLanguage.text(
-                "The sync attempt could not be recorded in Talent Signal. Nothing was added to Apple Calendar."
+                "The sync attempt could not be recorded in capri. Nothing was added to Apple Calendar."
             )
             return
         }
@@ -1255,7 +1255,7 @@ struct RelationshipCalendarView: View {
                 endDate: syncingActivity.endDate,
                 timeZoneIdentifier: syncingActivity.timeZoneIdentifier,
                 evidenceQuote: appLanguage.text(
-                    "User-confirmed Talent Signal calendar event"
+                    "User-confirmed capri calendar event"
                 ),
                 detectedDateText: syncingActivity.startDate.ISO8601Format(),
                 durationWasExplicit: true
@@ -1287,17 +1287,17 @@ struct RelationshipCalendarView: View {
                     .updatingLatestEditAudit(.unknown)
                 calendarNotice = appLanguage.text(
                     syncingActivity.hasLinkedCalendarEvent
-                        ? "The changes are saved in Talent Signal. Apple Calendar returned an uncertain update result; check the linked event before editing again."
-                        : "The event is saved in Talent Signal. Apple Calendar returned an uncertain result; check Apple Calendar before taking any further action.",
+                        ? "The changes are saved in capri. Apple Calendar returned an uncertain update result; check the linked event before editing again."
+                        : "The event is saved in capri. Apple Calendar returned an uncertain result; check Apple Calendar before taking any further action.",
                     zhHans: syncingActivity.hasLinkedCalendarEvent
-                        ? "修改已保存到 Talent Signal，但 Apple 日历的更新结果不确定；再次修改前请先检查已关联日程。"
-                        : "日程已保存到 Talent Signal，但 Apple 日历返回了不确定结果；继续操作前请先检查 Apple 日历。"
+                        ? "修改已保存到 capri，但 Apple 日历的更新结果不确定；再次修改前请先检查已关联日程。"
+                        : "日程已保存到 capri，但 Apple 日历返回了不确定结果；继续操作前请先检查 Apple 日历。"
                 )
             case .failure(.eventNotFound):
                 activities[index] = activities[index]
                     .updatingCalendarSync(.missing)
                     .updatingLatestEditAudit(.missing)
-                calendarNotice = appLanguage.text("The changes are saved in Talent Signal, but the linked Apple Calendar event could not be found. Nothing new was created.")
+                calendarNotice = appLanguage.text("The changes are saved in capri, but the linked Apple Calendar event could not be found. Nothing new was created.")
             case .failure(.permissionDenied):
                 activities[index] = activities[index]
                     .updatingCalendarSync(
@@ -1310,11 +1310,11 @@ struct RelationshipCalendarView: View {
                     )
                 calendarNotice = appLanguage.text(
                     syncingActivity.hasLinkedCalendarEvent
-                        ? "The changes are saved in Talent Signal, but Apple Calendar needs full access to update the linked event. Allow access in Settings, then try again."
-                        : "The event is saved in Talent Signal. Allow Calendar access in Settings before trying again.",
+                        ? "The changes are saved in capri, but Apple Calendar needs full access to update the linked event. Allow access in Settings, then try again."
+                        : "The event is saved in capri. Allow Calendar access in Settings before trying again.",
                     zhHans: syncingActivity.hasLinkedCalendarEvent
-                        ? "修改已保存到 Talent Signal，但更新已关联日程需要 Apple 日历完整访问权限。请在“设置”中允许访问，然后重试。"
-                        : "日程已保存到 Talent Signal。请先在“设置”中允许日历访问，然后重试。"
+                        ? "修改已保存到 capri，但更新已关联日程需要 Apple 日历完整访问权限。请在“设置”中允许访问，然后重试。"
+                        : "日程已保存到 capri。请先在“设置”中允许日历访问，然后重试。"
                 )
             case .failure(.noDefaultCalendar):
                 activities[index] = activities[index]
@@ -1326,7 +1326,7 @@ struct RelationshipCalendarView: View {
                         .failed,
                         failureReason: .noDefaultCalendar
                     )
-                calendarNotice = appLanguage.text("The event is saved in Talent Signal. Choose a default calendar in Apple Calendar, then try again.")
+                calendarNotice = appLanguage.text("The event is saved in capri. Choose a default calendar in Apple Calendar, then try again.")
             case .failure(.unsupportedOS):
                 activities[index] = activities[index]
                     .updatingCalendarSync(
@@ -1337,13 +1337,13 @@ struct RelationshipCalendarView: View {
                         .failed,
                         failureReason: .unsupportedOS
                     )
-                calendarNotice = appLanguage.text("The changes are saved in Talent Signal. This Apple Calendar operation requires iOS 17 or later.")
+                calendarNotice = appLanguage.text("The changes are saved in capri. This Apple Calendar operation requires iOS 17 or later.")
             }
             do {
                 try activityStore?.save(activities[index])
             } catch {
                 calendarNotice = appLanguage.text(
-                    "Calendar sync finished, but its receipt could not be saved in Talent Signal."
+                    "Calendar sync finished, but its receipt could not be saved in capri."
                 )
             }
             // A receipt updates an open detail; it must not reopen a dismissed
@@ -1453,7 +1453,7 @@ struct RelationshipCalendarView: View {
             }
             Section {
                 Text(calendar.timeZone.identifier)
-                Text(appLanguage.text("Only Talent Signal activities are shown."))
+                Text(appLanguage.text("Only capri activities are shown."))
             }
         } label: {
             HStack(spacing: 5) {
@@ -1667,7 +1667,7 @@ struct RelationshipCalendarView: View {
                     ? "No activities in this period" : "No activities for this person in this period"))
                     .font(.headline)
                     .foregroundStyle(Color.tsInk)
-                Text(appLanguage.text("Only Talent Signal activities are shown."))
+                Text(appLanguage.text("Only capri activities are shown."))
                     .font(.subheadline)
                     .foregroundStyle(Color.tsMutedInk)
                 if let next = nextFilteredActivity {
@@ -2228,7 +2228,7 @@ private struct RelationshipCalendarActivityRow: View {
         .buttonStyle(.plain)
         .accessibilityLabel(Text(verbatim:
             "\(activity.personDisplayLabel), \(activity.displayTitle(in: appLanguage)), \(timeRange), \(activity.contextDisplayLabel), \(statusText)"
-                + (hasOverlap ? ", " + appLanguage.text("Overlaps another Talent Signal activity") : "")
+                + (hasOverlap ? ", " + appLanguage.text("Overlaps another capri activity") : "")
         ))
         .accessibilityHint(appLanguage.text("Opens activity details."))
         .accessibilityIdentifier("calendar-activity-\(activity.id)")
@@ -2318,7 +2318,7 @@ private struct RelationshipCalendarActivityRow: View {
                 Text(statusText).font(.caption).foregroundStyle(Color.tsVermilion)
             }
             if hasOverlap {
-                Label(appLanguage.text("Overlaps another Talent Signal activity"), systemImage: "clock.badge.exclamationmark")
+                Label(appLanguage.text("Overlaps another capri activity"), systemImage: "clock.badge.exclamationmark")
                     .font(.caption)
                     .foregroundStyle(Color.tsVermilion)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2357,7 +2357,7 @@ private struct RelationshipCalendarActivityRow: View {
         case .pending: return appLanguage.text("Waiting to sync")
         case .syncing: return appLanguage.text("Syncing one way")
         case .disabled, .synced:
-            return appLanguage.text(activity.source == .talentSignal ? "Saved in Talent Signal" : "Linked relationship activity")
+            return appLanguage.text(activity.source == .talentSignal ? "Saved in capri" : "Linked relationship activity")
         }
     }
 
@@ -2499,7 +2499,7 @@ private struct RelationshipCalendarActivityDetail: View {
                     detailLine(icon: "clock", label: appLanguage.text("When"), value: dateRange)
                         .padding(.top, 14)
                     if hasOverlap {
-                        Label(appLanguage.text("Overlaps another Talent Signal activity"), systemImage: "clock.badge.exclamationmark")
+                        Label(appLanguage.text("Overlaps another capri activity"), systemImage: "clock.badge.exclamationmark")
                             .font(.subheadline).foregroundStyle(Color.tsVermilion)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 12)
@@ -2679,14 +2679,14 @@ private struct RelationshipCalendarActivityDetail: View {
         case .preview:
             return appLanguage.text("Synthetic preview · not in Apple Calendar")
         case .talentSignal:
-            return appLanguage.text("Confirmed in Talent Signal")
+            return appLanguage.text("Confirmed in capri")
         }
     }
 
     private var calendarSyncText: String {
         switch activity.calendarSyncState {
         case .disabled:
-            return appLanguage.text("Off · event stays in Talent Signal")
+            return appLanguage.text("Off · event stays in capri")
         case .pending:
             return appLanguage.text("Waiting to sync")
         case .syncing:
@@ -2700,9 +2700,9 @@ private struct RelationshipCalendarActivityDetail: View {
             case .noDefaultCalendar:
                 return appLanguage.text("Default calendar required · choose one, then retry")
             case .unsupportedOS:
-                return appLanguage.text("Requires iOS 17 or later · event kept in Talent Signal")
+                return appLanguage.text("Requires iOS 17 or later · event kept in capri")
             case nil:
-                return appLanguage.text("Sync failed · event kept in Talent Signal")
+                return appLanguage.text("Sync failed · event kept in capri")
             }
         case .missing:
             return appLanguage.text("Linked event missing · no replacement created")
@@ -2793,7 +2793,7 @@ private struct RelationshipCalendarActivityDetail: View {
     ) -> String {
         switch audit.effect {
         case .localOnly:
-            return appLanguage.text("Talent Signal only")
+            return appLanguage.text("capri only")
         case .create:
             return appLanguage.text("Apple Calendar add")
         case .update:
@@ -3269,12 +3269,12 @@ private struct RelationshipCalendarComposer: View {
             if retriesUnlinkedCalendarAdd(original) {
                 return appLanguage.text("Review the differences before retrying Apple Calendar with the edited details.")
             }
-            return appLanguage.text("This activity has no linked Apple Calendar event; editing changes Talent Signal only.")
+            return appLanguage.text("This activity has no linked Apple Calendar event; editing changes capri only.")
         }
         return appLanguage.text(
             syncsToCalendar
                 ? "Confirm to save here and sync to Apple Calendar."
-                : "Confirm to save in Talent Signal. Calendar sync is off."
+                : "Confirm to save in capri. Calendar sync is off."
         )
     }
 
@@ -3292,8 +3292,8 @@ private struct RelationshipCalendarComposer: View {
         }
         return appLanguage.text(
             syncsToCalendar
-                ? "Saves in Talent Signal, then syncs one way to Apple Calendar."
-                : "Saves in Talent Signal without changing Apple Calendar."
+                ? "Saves in capri, then syncs one way to Apple Calendar."
+                : "Saves in capri without changing Apple Calendar."
         )
     }
 
@@ -3378,7 +3378,7 @@ private struct RelationshipCalendarComposer: View {
         if retriesUnlinkedCalendarAdd(original) {
             return appLanguage.text("Retries one Apple Calendar event")
         }
-        return appLanguage.text("Talent Signal only")
+        return appLanguage.text("capri only")
     }
 
     private func externalEffectDetail(
@@ -3388,12 +3388,12 @@ private struct RelationshipCalendarComposer: View {
             return appLanguage.text("The preview changes in this session. No Calendar permission is requested and nothing is written externally.")
         }
         if original.hasLinkedCalendarEvent {
-            return appLanguage.text("Talent Signal first records this reviewed change, then finds the existing event by its saved identifier and updates that event only. It never creates a replacement.")
+            return appLanguage.text("capri first records this reviewed change, then finds the existing event by its saved identifier and updates that event only. It never creates a replacement.")
         }
         if retriesUnlinkedCalendarAdd(original) {
             return appLanguage.text("The earlier add did not complete. Confirming saves these changes, then retries one Calendar add without changing the relationship.")
         }
-        return appLanguage.text("No linked Apple Calendar event exists, so this edit changes the Talent Signal activity only.")
+        return appLanguage.text("No linked Apple Calendar event exists, so this edit changes the capri activity only.")
     }
 
     private func externalEffectIcon(
@@ -3409,13 +3409,13 @@ private struct RelationshipCalendarComposer: View {
         _ original: RelationshipCalendarActivity
     ) -> String {
         if isPreview {
-            return appLanguage.text("Saves the reviewed changes in Talent Signal without updating an existing Apple Calendar event.")
+            return appLanguage.text("Saves the reviewed changes in capri without updating an existing Apple Calendar event.")
         }
         if retriesUnlinkedCalendarAdd(original) {
             return appLanguage.text("Saves the reviewed changes, then retries adding one Apple Calendar event.")
         }
         if !original.hasLinkedCalendarEvent {
-            return appLanguage.text("Saves the reviewed changes in Talent Signal without changing Apple Calendar.")
+            return appLanguage.text("Saves the reviewed changes in capri without changing Apple Calendar.")
         }
         return appLanguage.text("Saves the reviewed changes, then updates only the linked Apple Calendar event.")
     }

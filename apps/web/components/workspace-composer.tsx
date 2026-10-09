@@ -21,6 +21,7 @@ import {
 } from "@/components/contact-agent/capture-intake";
 import {
   COMPOSER_DISCOVERY_HINT,
+  COMPOSER_SEND_LIMIT,
   composerDescribedBy,
   composerLengthState,
   composerMentionInsertion,
@@ -31,6 +32,17 @@ import {
   resolveComposerKey,
   type SlashCommand,
 } from "@/lib/workspace-composer";
+import {
+  COMPOSER_DOCUMENT_SEPARATOR,
+  composerFileIntakePlan,
+  type ComposerDocumentType,
+} from "@/lib/composer-document";
+import {
+  ComposerDocumentPreview,
+  extractComposerDocumentText,
+  type ComposerDocumentReview,
+} from "./composer-document";
+import { ComposerAddMenu } from "./new-conversation-add-menu";
 import {
   searchSidebarPeople,
   type SidebarPerson,
@@ -55,6 +67,8 @@ export type WorkspaceComposerProps = {
   placeholder: string;
   /** `home` bounds at the send limit; `session` keeps the larger draft limit. */
   variant: "home" | "session";
+  /** Inline controls for the IM canvas; draft limits stay owned by `variant`. */
+  layout?: "stacked" | "inline";
   /** Submission is actually possible right now. */
   canSubmit: boolean;
   /** Suggestions are offered only while the surface can still act. */
@@ -95,6 +109,7 @@ export function WorkspaceComposer({
   maxLength,
   placeholder,
   variant,
+  layout = "stacked",
   canSubmit,
   suggestionsEnabled = true,
   disabled = false,
@@ -117,10 +132,21 @@ export function WorkspaceComposer({
   const mentionNoteId = `${base}-mention`;
   const textarea = useRef<HTMLTextAreaElement>(null);
   const menu = useRef<HTMLDivElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const pickerContext = useRef<{ binding: string | null } | null>(null);
   const pendingCaret = useRef<number | null>(null);
   const dragDepth = useRef(0);
+  const documentRun = useRef<{
+    key: number;
+    controller: AbortController;
+    binding: string | null;
+  } | null>(null);
+  const documentKey = useRef(0);
+  const pendingDocumentInsert = useRef<{ value: string; binding: string | null; excerpt: string } | null>(null);
+  const afterDocumentClose = useRef<() => void>(() => {});
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [documentReview, setDocumentReview] = useState<ComposerDocumentReview | null>(null);
   const [dragging, setDragging] = useState(false);
   const [caret, setCaret] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -183,6 +209,38 @@ export function WorkspaceComposer({
       variant === "home" && maxLength < 1_000 ? maxLength : undefined,
   });
 
+  // Document imports must land inside the send bound on every variant:
+  // Session drafts type to their full manual limit, but an import can never
+  // create an unsendable draft.
+  const sendLimit =
+    variant === "home" && maxLength < COMPOSER_SEND_LIMIT
+      ? maxLength
+      : COMPOSER_SEND_LIMIT;
+  const stageBound = Math.min(maxLength, sendLimit);
+
+  // Cancel any in-flight extraction when the surface context changes or the
+  // composer unmounts: a late result must never touch the draft.
+  useEffect(() => {
+    return () => {
+      documentRun.current?.controller.abort();
+      documentRun.current = null;
+      pickerContext.current = null;
+      pendingDocumentInsert.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    pickerContext.current = null;
+    pendingDocumentInsert.current = null;
+  }, [binding, disabled, readOnly]);
+  useEffect(() => {
+    documentRun.current?.controller.abort();
+    documentRun.current = null;
+    // Intentional synchronous discard: a document preview must never outlive
+    // the binding, disabled or read-only context that authorized it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDocumentReview(null);
+  }, [binding, disabled, readOnly]);
+
   // One height cap shared with CSS; resize also covers a mobile keyboard.
   useLayoutEffect(() => {
     const element = textarea.current;
@@ -190,9 +248,9 @@ export function WorkspaceComposer({
     function resize() {
       if (!element) return;
       const height = window.visualViewport?.height ?? window.innerHeight;
-      const minimum = variant === "session" ? 64 : 82;
-      const limit = Math.max(minimum, Math.min(variant === "session" ? 240 : 320,
-        Math.floor(height * (variant === "session" ? 0.3 : 0.4))));
+      const minimum = layout === "inline" ? 22 : variant === "session" ? 64 : 82;
+      const limit = Math.max(minimum, Math.min(layout === "inline" ? 176 : variant === "session" ? 240 : 320,
+        Math.floor(height * (layout === "inline" ? 0.25 : variant === "session" ? 0.3 : 0.4))));
       element.style.height = "auto";
       element.style.height = `${Math.max(minimum, Math.min(element.scrollHeight, limit))}px`;
       element.style.overflowY = element.scrollHeight > limit ? "auto" : "hidden";
@@ -204,7 +262,7 @@ export function WorkspaceComposer({
       window.removeEventListener("resize", resize);
       window.visualViewport?.removeEventListener("resize", resize);
     };
-  }, [value, variant]);
+  }, [value, variant, layout]);
 
   // Fit the popup into the visible area, away from the sticky header and dock.
   useLayoutEffect(() => {
@@ -354,8 +412,21 @@ export function WorkspaceComposer({
   }
 
   function acceptsFiles(files: File[]) {
-    if (!onFiles || !files.length) return;
-    const result = validateAttachmentBatch([], files);
+    if (!onFiles || disabled || readOnly || !files.length) return;
+    // One atomic decision for picker, drop and paste: images stay the real
+    // attachment path, documents open an explicit text preview, everything
+    // else is rejected locally before any upload.
+    const plan = composerFileIntakePlan(files);
+    if (plan.kind === "reject") {
+      setFileError(plan.message);
+      return;
+    }
+    if (plan.kind === "document") {
+      setFileError(null);
+      openDocument(plan.file, plan.documentType);
+      return;
+    }
+    const result = validateAttachmentBatch([], plan.files);
     if (!result.ok) {
       setFileError(result.error);
       return;
@@ -363,6 +434,135 @@ export function WorkspaceComposer({
     setFileError(null);
     onFiles([...result.accepted]);
   }
+
+  function openDocument(file: File, documentType: ComposerDocumentType) {
+    documentRun.current?.controller.abort();
+    const key = documentKey.current + 1;
+    documentKey.current = key;
+    const controller = new AbortController();
+    documentRun.current = { key, controller, binding };
+    setDocumentReview({
+      key,
+      name: file.name,
+      documentType,
+      text: null,
+      warnings: [],
+      error: null,
+    });
+    void extractComposerDocumentText({
+      file,
+      documentType,
+      binding,
+      signal: controller.signal,
+    })
+      .then((result) => {
+        // A cancelled, superseded or unmounted attempt is dropped whole.
+        if (documentRun.current?.key !== key) return;
+        setDocumentReview(
+          result.ok
+            ? { key, name: file.name, documentType, text: result.text, warnings: result.warnings, error: null }
+            : { key, name: file.name, documentType, text: null, warnings: [], error: result.message },
+        );
+      })
+      .catch(() => {
+        if (documentRun.current?.key !== key) return;
+        setDocumentReview((current) =>
+          current && current.key === key
+            ? { ...current, error: "文档预览未能完成；现有草稿未被修改。" }
+            : current,
+        );
+      });
+  }
+
+  function cancelDocument() {
+    documentRun.current?.controller.abort();
+    documentRun.current = null;
+    setDocumentReview(null);
+  }
+
+  /** Insert staged text at the caret; overflow is reported, never truncated. */
+  function applyStagedText(
+    insert: string,
+    start: number,
+    end: number,
+    overflowMessage: string,
+  ): boolean {
+    const result = insertComposerText({
+      value,
+      start,
+      end,
+      insert,
+      maxLength,
+    });
+    if (!result.inserted) {
+      setFileError(overflowMessage);
+      return false;
+    }
+    setFileError(null);
+    pendingCaret.current = result.caret;
+    setCaret(result.caret);
+    const element = textarea.current;
+    if (element) {
+      element.focus({ preventScroll: true });
+      element.setSelectionRange(start, end);
+      // insertText preserves native undo in Chromium and WebKit; the
+      // controlled value below is the safe fallback.
+      try { document.execCommand("insertText", false, insert); } catch { /* unsupported host */ }
+    }
+    onValueChange(result.value);
+    return true;
+  }
+
+  function stageText(insert: string, overflowMessage: string): boolean {
+    const element = textarea.current;
+    const focused =
+      element && document.activeElement === element ? element : null;
+    const start =
+      focused && typeof focused.selectionStart === "number"
+        ? focused.selectionStart
+        : value.length;
+    const end =
+      focused && typeof focused.selectionEnd === "number"
+        ? focused.selectionEnd
+        : value.length;
+    return applyStagedText(insert, start, end, overflowMessage);
+  }
+
+  /**
+   * Append an imported excerpt after the untouched draft with an explicit
+   * separator. The live surface is revalidated first: a stale preview can
+   * never trim, truncate or replace what the user typed.
+   */
+  function stageDocumentExcerpt(excerpt: string) {
+    if (disabled || readOnly || !excerpt.trim()) return;
+    if (documentRun.current && documentRun.current.binding !== binding) return;
+    const separator = value.length > 0 ? COMPOSER_DOCUMENT_SEPARATOR : "";
+    const insert = separator + excerpt;
+    const overflowMessage = `加入后会超过 ${stageBound} 字上限，草稿未被修改。`;
+    if (value.length + insert.length > stageBound) {
+      // The draft changed under the preview. Keep the preview and the draft
+      // intact; the count line explains the bound.
+      setFileError(overflowMessage);
+      return;
+    }
+    // A modal focus trap owns the excerpt until it unmounts. Stage only the
+    // intent here; insert after its close autofocus event so native undo is
+    // recorded in the composer rather than the preview textarea.
+    pendingDocumentInsert.current = { value, binding, excerpt };
+    cancelDocument();
+  }
+
+  useLayoutEffect(() => {
+    afterDocumentClose.current = () => {
+      const pending = pendingDocumentInsert.current;
+      pendingDocumentInsert.current = null;
+      textarea.current?.focus({ preventScroll: true });
+      if (!pending || !textarea.current || disabled || readOnly || pending.binding !== binding || pending.value !== value) return;
+      const insert = (value.length > 0 ? COMPOSER_DOCUMENT_SEPARATOR : "") + pending.excerpt;
+      if (value.length + insert.length > stageBound) return;
+      applyStagedText(insert, value.length, value.length, `加入后会超过 ${stageBound} 字上限，草稿未被修改。`);
+    };
+  });
 
   function transferHasFiles(transfer: DataTransfer | null): boolean {
     if (!transfer) return false;
@@ -402,7 +602,7 @@ export function WorkspaceComposer({
       if (
         dataTransferHasFileEntries(Array.from(event.dataTransfer?.items ?? []))
       ) {
-        setFileError("暂不支持文件夹，请拖入 PNG、JPEG 或 WebP 图片。");
+        setFileError("暂不支持文件夹。请拖入 PNG、JPEG 或 WebP 图片，或一个 PDF、DOCX、TXT、MD、CSV、JSON 或代码文本文件。");
       }
       return;
     }
@@ -446,8 +646,27 @@ export function WorkspaceComposer({
     menuOpen && trigger?.kind === "mention" ? mentionNoteId : null,
   ]);
 
+  // Surfaces with real file intake get one managed add menu and one hidden,
+  // unrestricted picker here; parents never own another copy. The control
+  // stays visible on disabled surfaces and becomes inert instead of vanishing.
+  const addMenu = onFiles ? (
+    <ComposerAddMenu
+      binding={binding}
+      disabled={disabled || readOnly}
+      onAttachFiles={() => {
+        if (!fileIntake) return;
+        pickerContext.current = { binding };
+        picker.current?.click();
+      }}
+      onInsertText={(insert) =>
+        stageText(insert, `插入后会超过 ${maxLength} 字上限，草稿未被修改。`)
+      }
+      onNavigate={onNavigate}
+    />
+  ) : null;
+
   return (
-    <div className={styles.composer} data-dragging={dragging ? "true" : undefined} data-variant={variant}
+    <div className={styles.composer} data-dragging={dragging ? "true" : undefined} data-variant={variant} data-layout={layout}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) close();
       }}
@@ -458,7 +677,7 @@ export function WorkspaceComposer({
     >
       {dragging && fileIntake ? (
         <div className={styles.dropHint} role="status">
-          松开后添加图片，随消息一起发送
+          松开后添加图片或文档；图片随消息发送，文档先预览文本
         </div>
       ) : null}
       {menuOpen && trigger ? (
@@ -511,6 +730,7 @@ export function WorkspaceComposer({
       <label className="sr-only" htmlFor={id}>
         {label}
       </label>
+      {layout === "inline" ? <div className={styles.inlineLeading}>{addMenu}{footerStart}</div> : null}
       <textarea
         aria-activedescendant={
           menuOpen && items.length ? `${menuId}-option-${highlighted}` : undefined
@@ -558,16 +778,22 @@ export function WorkspaceComposer({
         placeholder={placeholder}
         readOnly={readOnly}
         ref={textarea}
-        rows={rows}
+        rows={layout === "inline" ? 1 : rows}
         value={value}
       />
+      {layout === "inline" ? <div className={styles.inlineTrailing}>{footerEnd}</div> : null}
 
       {pasteError ? <p className={styles.overflow} role="alert">{pasteError}</p> : null}
       {fileError ? <p className={styles.overflow} role="alert">{fileError}</p> : null}
-      <div className={styles.footer}>
+      <div className={styles.footer} data-inline={layout === "inline" ? "true" : undefined}>
         <div className={styles.footerStart}>
-          {footerStart}
-          <span className={styles.hint} id={hintId}>
+          {layout === "stacked" ? (
+            <>
+              {addMenu}
+              {footerStart}
+            </>
+          ) : null}
+          <span className={layout === "inline" ? "sr-only" : styles.hint} id={hintId}>
             {COMPOSER_DISCOVERY_HINT}
           </span>
           {lengthState.message ? (
@@ -585,8 +811,38 @@ export function WorkspaceComposer({
             </span>
           )}
         </div>
-        <div className={styles.footerEnd}>{footerEnd}</div>
+        {layout === "stacked" ? <div className={styles.footerEnd}>{footerEnd}</div> : null}
       </div>
+      {onFiles ? (
+        <input
+          aria-hidden="true"
+          disabled={disabled || readOnly}
+          hidden
+          multiple
+          onChange={(event) => {
+            const files = Array.from(event.target.files ?? []);
+            event.target.value = "";
+            const context = pickerContext.current;
+            pickerContext.current = null;
+            if (context?.binding === binding && files.length) acceptsFiles(files);
+          }}
+          ref={picker}
+          tabIndex={-1}
+          type="file"
+        />
+      ) : null}
+      {documentReview ? (
+        <ComposerDocumentPreview
+          draftLength={value.length}
+          disabled={disabled || readOnly}
+          maxLength={maxLength}
+          onAdd={stageDocumentExcerpt}
+          onCancel={cancelDocument}
+          record={documentReview}
+          restoreFocus={() => afterDocumentClose.current()}
+          sendLimit={sendLimit}
+        />
+      ) : null}
     </div>
   );
 }

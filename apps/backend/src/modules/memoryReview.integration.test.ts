@@ -2947,16 +2947,18 @@ describe.skipIf(!pool)("Memory review integration", () => {
     const proposalId = execution.body.memory_proposal?.proposal_id;
     expect(proposalId).toBeTruthy();
     const first = await open(auth, proposalId!, "chat");
-    expect(first.review.items).toHaveLength(2);
+    expect(first.review.items).toHaveLength(3);
+    const name = first.review.items.find((item) => item.source_excerpt === "陈宇")!;
+    expect(name).toMatchObject({ scope: "person", statement_kind: "source_statement", source_locator: source });
     const contact = await decideMemoryContactOnly(pool!, auth, first.review.review_scope_id, first.review_credential!, {
       idempotency_key: randomUUID(), expected_proposal_revision: first.review.proposal_revision,
       display_label: "陈宇", relationship_context: first.review.relationship_display_label ?? "",
       reason: "Add this contact only",
     });
     expect(contact.receipt.created_person_id).toBeTruthy();
-    expect(contact.remaining_pending_item_count).toBe(2);
+    expect(contact.remaining_pending_item_count).toBe(3);
     const second = await open(auth, proposalId!, "chat");
-    const person = second.review.items.find((item) => item.scope === "person")!;
+    const person = second.review.items.find((item) => item.source_excerpt === "陈宇负责设计系统")!;
     const remembered = await decideMemoryReviewItem(pool!, auth, second.review.review_scope_id, second.review_credential!, {
       idempotency_key: randomUUID(), expected_proposal_revision: second.review.proposal_revision,
       expected_review_revision: second.review.review_revision, item_id: person.id,
@@ -2964,7 +2966,7 @@ describe.skipIf(!pool)("Memory review integration", () => {
       decision: "accept", reason: "Remember this person fact",
     });
     expect(remembered.kind).toBe("committed");
-    expect(remembered.remaining_pending_item_count).toBe(1);
+    expect(remembered.remaining_pending_item_count).toBe(2);
     const third = await open(auth, proposalId!, "chat");
     const self = third.review.items.find((item) => item.scope === "self")!;
     const passed = await decideMemoryReviewItem(pool!, auth, third.review.review_scope_id, third.review_credential!, {
@@ -2974,12 +2976,25 @@ describe.skipIf(!pool)("Memory review integration", () => {
       decision: "skip", reason: "Do not save this preference",
     });
     expect(passed.kind).toBe("skipped");
+    expect(passed.remaining_pending_item_count).toBe(1);
+    // Adding the contact or accepting another fact must not silently save the
+    // host-owned observed name. It remains a separately reviewed sibling.
+    const fourth = await open(auth, proposalId!, "chat");
+    expect(fourth.review.items.map((item) => item.id)).toEqual([name.id]);
+    const named = await decideMemoryReviewItem(pool!, auth, fourth.review.review_scope_id, fourth.review_credential!, {
+      idempotency_key: randomUUID(), expected_proposal_revision: fourth.review.proposal_revision,
+      expected_review_revision: fourth.review.review_revision, item_id: name.id,
+      expected_item_added_revision: name.added_revision, contact_decision: "existing",
+      decision: "accept", reason: "Remember the source-backed observed name",
+    });
+    expect(named.kind).toBe("committed");
+    expect(named.remaining_pending_item_count).toBe(0);
     const stored = await pool!.query<{ id: string; status: string }>(
       "SELECT id,status FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2",
       [auth.accountId, proposalId],
     );
     expect(Object.fromEntries(stored.rows.map((row) => [row.id, row.status]))).toMatchObject({
-      [person.id]: "committed", [self.id]: "skipped",
+      [person.id]: "committed", [self.id]: "skipped", [name.id]: "committed",
     });
   }, 30_000);
 

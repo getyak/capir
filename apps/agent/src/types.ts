@@ -21,6 +21,7 @@ export const PERSON_RESEARCH_AGENT_TOOL_NAMES = [
 export const WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES = [
   "contact_workspace",
   "memory_review",
+  "mcp_connections",
 ] as const;
 
 export const ALL_AGENT_TOOL_NAMES = [
@@ -91,6 +92,8 @@ export interface AgentProviderInputCapabilities {
   text: boolean;
   image: boolean;
   imageUnderstanding: boolean;
+  /** True only for providers that consume `steering` input mid-Run. */
+  steering?: boolean;
 }
 
 export interface AgentRunScope {
@@ -397,6 +400,11 @@ export interface AgentProviderRequest {
   /** Host-observed bounded stage code. Never carries model input or tool arguments. */
   onProgress?: (stage: AgentVisibleProgressStage) => void;
   responsePreference?: import("./responsePreference.js").ResponsePreference;
+  /** Original immutable message identity; preserved on the SDK input frame. */
+  messageID?: string;
+  /** GET-128 steering: dynamic input for messages accepted while this Run is live. */
+  steering?: import("./claudeHarness.js").HarnessSteeringFeed;
+  onToolCompletion?: (receipt: import("./claudeHarness.js").HarnessToolCompletion) => void;
   /** Host-compiled private L2; never included on relationship/business entry. */
   selfMemoryContext?: import("./memoryContext.js").SelfMemoryContext;
   runID: string;
@@ -449,6 +457,8 @@ export interface AgentProviderResult {
   estimatedUsd: number;
   turns: number;
   permissionDenials: string[];
+  /** Genuine tool-completion receipts: name and time only. */
+  toolCompletions?: import("./claudeHarness.js").HarnessToolCompletion[];
   sessionID?: string;
   terminalReason?: string;
 }

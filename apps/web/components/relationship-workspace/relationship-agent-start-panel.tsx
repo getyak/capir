@@ -17,6 +17,8 @@ import { AgentTurnThread } from "./agent-turn-thread";
 import type { AgentContactDraft } from "@/lib/agent-contact-intake";
 import type { WorkspaceChatTurn } from "./use-workspace-chat";
 import { AgentVoiceInput } from "./agent-voice-input";
+import { cn } from "@/lib/utils";
+import styles from "./relationship-agent-start-panel.module.css";
 
 export function RelationshipAgentStartPanel({
   busy = false,
@@ -67,9 +69,9 @@ export function RelationshipAgentStartPanel({
     if (!createOpen || identityResolutionCase) return;
     const frame = window.requestAnimationFrame(() => {
       const content = startContent.current;
-      content?.scrollIntoView({ block: "center" });
       const input = content?.querySelector<HTMLInputElement>("input:not(:disabled)");
       const target = input?.getClientRects().length ? input : content;
+      target?.scrollIntoView({ block: "nearest", behavior: "instant" });
       target?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
@@ -81,19 +83,26 @@ export function RelationshipAgentStartPanel({
       className="context-chat context-chat--standalone"
       id="relationship-chat"
       data-has-conversation={turns.length > 0 || createOpen || Boolean(identityResolutionCase)}
+      data-creating={createOpen || undefined}
     >
       <div className="context-agent-heading">
         <span>
           <ChatCircleDots aria-hidden="true" size={18} weight="duotone" />
         </span>
         <div>
-          <p>关系智能助理</p>
-          <strong id="relationship-chat-title">
-            从一条消息开始。
-          </strong>
+          <p>{createOpen ? "人物与关系" : "关系智能助理"}</p>
+          {createOpen ? (
+            <h1 id="relationship-chat-title">新建联系人</h1>
+          ) : (
+            <strong id="relationship-chat-title">从一条消息开始。</strong>
+          )}
         </div>
       </div>
-      <div className="context-agent-thread" ref={startContent} tabIndex={-1}>
+      <div
+        className={cn("context-agent-thread", createOpen && styles.entryThread)}
+        ref={startContent}
+        tabIndex={-1}
+      >
         {identityResolutionCase ? (
           <AgentIdentityReviewCard
             identityCase={identityResolutionCase}
@@ -123,7 +132,7 @@ export function RelationshipAgentStartPanel({
         )}
       </div>
       {busy ? <p role="status">正在准备回复…</p> : null}
-      <form
+      {!createOpen ? <form
         className="context-chat__composer context-chat__composer--start"
         onSubmit={(event) => {
           event.preventDefault();
@@ -186,7 +195,7 @@ export function RelationshipAgentStartPanel({
             />
           )}
         </div>
-      </form>
+      </form> : null}
     </aside>
   );
 }

@@ -180,8 +180,8 @@ it("shows one truthful work row beneath an accepted message before any SSE state
   const rows = workRows();
   expect(rows).toHaveLength(1);
   expect(rows[0]!.getAttribute("data-phase")).toBe("waiting");
-  // Identity keeps the existing product name and the monochrome brand mark.
-  expect(rows[0]!.textContent).toContain("Talent Signal");
+  // Identity keeps the current product name and the monochrome brand mark.
+  expect(rows[0]!.textContent).toContain("capri");
   expect(rows[0]!.querySelector("[data-work-mark]")).not.toBeNull();
   // Accepted-but-unobserved means waiting for reply status, never running.
   expect(rows[0]!.textContent).toContain("等待回复状态");
@@ -228,7 +228,10 @@ it("replaces the work row with the persisted final answer exactly once", async (
   await renderConversation();
   await act(async () => { emit?.(frame("snapshot", snapshot(5, entry(MID)))); });
   await flush();
-  expect(workRows().some((row) => row.getAttribute("data-phase") === "running")).toBe(true);
+  // While the run is live its execution record owns the status; the compact
+  // work row stays reserved for the unrepresented send and readback states.
+  expect(document.body.textContent).toContain("正在处理");
+  expect(workRows()).toHaveLength(0);
 
   detailBody = () => Response.json({ detail: { ...initialDetail, revision: 5, turns: [turn(MID, "已接收的原位消息")] } });
   await act(async () => { emit?.(frame("snapshot", snapshot(6, null))); });
@@ -240,7 +243,7 @@ it("replaces the work row with the persisted final answer exactly once", async (
   expect(workRows()).toHaveLength(0);
 });
 
-it("keeps the queued supplement work row and its existing queue controls", async () => {
+it("keeps the queued supplement state and its existing queue controls", async () => {
   acceptLocal(MID, "可控补充的下一条");
   await renderConversation();
   await act(async () => {
@@ -250,10 +253,11 @@ it("keeps the queued supplement work row and its existing queue controls", async
   });
   await flush();
 
-  const queuedRow = workRows().find((row) => row.getAttribute("data-phase") === "queued");
-  expect(queuedRow).not.toBeUndefined();
-  expect(queuedRow!.textContent).toContain("排队等待处理");
-  // The editable queue/supplement surface is preserved.
+  // The queued supplement keeps one truthful transcript state without any
+  // duplicate local bubble, and the queue controls stay editable.
+  expect(document.body.textContent).toContain("已排队，等待处理");
+  expect(document.body.textContent).toContain("可控补充的下一条");
+  expect(document.querySelectorAll("[data-user-message]")).toHaveLength(2);
   const queue = document.querySelector("[aria-label='可控补充']");
   expect(queue).not.toBeNull();
   expect(queue?.textContent).toContain("可控补充的下一条");
@@ -269,10 +273,9 @@ it("shows paused and failed queue states without any status animation", async ()
     ], true)));
   });
   await flush();
-  let row = workRows().find((candidate) => candidate.getAttribute("data-phase") === "paused");
-  expect(row).not.toBeUndefined();
-  expect(row!.textContent).toContain("已暂停");
-  expect(row!.getAttribute("data-animate")).toBe("false");
+  // Paused is a fact about the queue, not a running state; nothing pulses.
+  expect(document.body.textContent).toContain("已暂停");
+  expect(document.querySelector("[data-animate='true']")).toBeNull();
 
   await act(async () => {
     emit?.(frame("snapshot", snapshot(6, null, [
@@ -280,10 +283,9 @@ it("shows paused and failed queue states without any status animation", async ()
     ])));
   });
   await flush();
-  row = workRows().find((candidate) => candidate.getAttribute("data-phase") === "failed");
-  expect(row).not.toBeUndefined();
-  expect(row!.textContent).toContain("上次未完成，请重试或移除");
-  expect(row!.getAttribute("data-animate")).toBe("false");
+  // The failure keeps its bounded reason and the existing retry control.
+  expect(document.body.textContent).toContain("上次未完成，请重试或移除");
+  expect(document.querySelector("[data-animate='true']")).toBeNull();
 });
 
 it("reports a stopped run as stopped and never animates it", async () => {
@@ -325,12 +327,12 @@ it("keeps streaming text fully visible with one identity and a small current sta
   });
   await flush();
 
-  // The streaming text stays fully visible and gains the actual run status.
+  // The streaming text stays fully visible and gains the observed run stage.
   expect(document.body.textContent).toContain("正在整理的回复草稿，全部保留。");
-  expect(document.querySelector("[role='status']")?.textContent).toBe("正在回复");
+  expect([...document.querySelectorAll("[role='status']")].some((node) => node.textContent === "正在回复")).toBe(true);
   // One identity label only; the duplicate local user bubble is hidden while
   // the canonical active projection shows the message.
-  expect(document.body.textContent!.split("Talent Signal").length - 1).toBe(1);
+  expect(document.querySelectorAll("[role='img'][aria-label='capri']")).toHaveLength(1);
   expect(document.querySelectorAll("[data-user-message]")).toHaveLength(1);
 });
 

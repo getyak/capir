@@ -1,3 +1,4 @@
+import { TalentSignalHttpError } from "@talent-signal/contracts";
 import { describe, expect, it } from "vitest";
 
 import { reconcileWorkspaceSessionRecoveryHref } from "@/components/use-workspace-session-recovery";
@@ -60,4 +61,21 @@ describe("backend session boundary", () => {
       }),
     ).toBeNull();
   });
+});
+
+it("recognizes canonical revoked credentials without classifying network or permission failure as logout", () => {
+  for (const code of ["SESSION_INVALID", "SESSION_EXPIRED", "AUTHENTICATION_REQUIRED"]) {
+    expect(isBackendSessionExpiredError(new TalentSignalHttpError(401, code, "Unavailable", null))).toBe(true);
+  }
+  expect(isBackendSessionExpiredError(new TalentSignalHttpError(503, "SESSION_INVALID", "Unavailable", null))).toBe(false);
+  expect(isBackendSessionExpiredError(new TalentSignalHttpError(403, "FORBIDDEN", "Unavailable", null))).toBe(false);
+  expect(isBackendSessionExpiredError(new TypeError("Failed to fetch"))).toBe(false);
+});
+
+it("recognizes canonical scoped 401 bodies without hiding unknown errors", async () => {
+  const { workspaceSessionExpired } = await import("@/components/workspace-session-request");
+  expect(workspaceSessionExpired(401, { error: { code: "SESSION_INVALID" } })).toBe(true);
+  expect(workspaceSessionExpired(401, { code: "SESSION_EXPIRED" })).toBe(true);
+  expect(workspaceSessionExpired(503, { code: "SESSION_INVALID" })).toBe(false);
+  expect(workspaceSessionExpired(401, { code: "UNKNOWN" })).toBe(false);
 });

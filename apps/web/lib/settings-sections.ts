@@ -127,7 +127,7 @@ const DESTINATION_SEARCH: readonly SettingsSearchEntry[] = [
   {
     id: "screen-recording-permission",
     title: "屏幕录制权限",
-    description: "由这台 Mac 的 Talent Signal 应用与 macOS 系统设置管理，Web 设置不能授予。",
+    description: "由这台 Mac 的 capri 应用与 macOS 系统设置管理，Web 设置不能授予。",
     href: "/workspace/settings?section=advanced#device-permissions",
     destination: "设置 · 帮助与诊断 · 设备权限",
     scope: "macOS 设备",

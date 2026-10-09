@@ -1,19 +1,26 @@
 /*
  * Quiet Workspace shell.
  *
- * 236 px expanded sidebar / 56 px rail, 58 px route header, near-white canvas
+ * 248 px expanded sidebar / 72 px rail, 58 px route header, near-white canvas
  * with a warm-neutral chrome sidebar. Structure comes from page grouping and
- * typography; borders stay hairline and material stays flat. Reduced motion,
- * dark theme and mobile collapse are handled structurally, not recomposed.
+ * typography; borders stay hairline and material stays flat. Session rows are
+ * one line at 40px with a 24px identity avatar and a full accessible title.
+ * Reduced motion, dark theme and mobile collapse are handled structurally, not
+ * recomposed.
  */
 
 .shell {
+  --workspace-sidebar-width: 248px;
   background: var(--background);
   color: var(--ink);
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr);
   min-height: 100dvh;
   min-width: 320px;
+}
+
+.shell:has(.sidebarState[data-collapsed="true"]) {
+  --workspace-sidebar-width: var(--ts-rail-width, 72px);
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
@@ -25,35 +32,19 @@
   flex-direction: column;
   gap: 0;
   height: 100dvh;
-  margin-right: var(--sidebar-rail-offset, 0px);
   min-width: 0;
   /* Account menus must escape both the expanded sidebar and collapsed rail. */
   overflow: visible;
-  padding: 15px 7px 10px;
+  padding: 12px 12px 10px;
   position: sticky;
   top: 0;
-  width: var(--sidebar-rail-width, 236px);
   z-index: 40;
-}
-
-/* Floating edge-hover reveal: overlays content without reflowing it. */
-.sidebar[data-floating="true"] {
-  border-radius: 0 12px 12px 0;
-  box-shadow: var(--shadow);
-  z-index: 90;
-}
-
-.railRevealStrip {
-  bottom: 0;
-  left: 0;
-  position: fixed;
-  top: 0;
-  width: 12px;
-  z-index: 89;
 }
 
 .shell:has(.sidebarState[data-collapsed="true"]) .sidebar {
   align-items: stretch;
+  padding-left: 8px;
+  padding-right: 8px;
 }
 
 .sidebarState {
@@ -68,7 +59,7 @@
   display: flex;
   flex: 0 0 auto;
   gap: 2px;
-  margin-bottom: 21px;
+  margin-bottom: 14px;
   min-height: 38px;
 }
 
@@ -79,7 +70,7 @@
   display: inline-flex;
   flex: 1 1 auto;
   font-size: 0.875rem;
-  font-weight: 640;
+  font-weight: 500;
   gap: 9px;
   min-width: 0;
   padding: 6px 7px;
@@ -146,7 +137,7 @@
   font-size: 0.875rem;
   font-weight: 500;
   gap: 11px;
-  min-height: 42px;
+  min-height: 40px;
   min-width: 0;
   padding: 0 11px;
   text-decoration: none;
@@ -283,9 +274,10 @@
   color: var(--muted);
   display: flex;
   flex: 0 0 auto;
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   gap: 4px;
   height: 27px;
+  line-height: 1.583;
   margin-top: 13px;
   padding: 0 8px;
 }
@@ -338,21 +330,41 @@
   padding: 0;
 }
 
+/* One-line 40px Session row: 24px identity avatar, single-line title with its
+   full accessible name, no wrap or second line at any text size. */
 .sessionRow {
   align-items: center;
   border-radius: 8px;
   color: var(--muted-strong);
   display: flex;
   font-size: 0.8125rem;
-  gap: 9px;
+  gap: 10px;
   min-height: 40px;
   min-width: 0;
-  padding: 5px 10px;
+  padding: 0 10px;
   position: relative;
   text-decoration: none;
 }
 
-.sessionRow:hover {
+.sessionRow .avatar {
+  flex: 0 0 auto;
+}
+
+.sessionRow .sessionMark {
+  flex: 0 0 24px;
+  height: 24px;
+  width: 24px;
+}
+
+/* Sessions without a person keep the brand mark instead of a fixture face. */
+.sessionMark {
+  background: var(--workspace-brand-image, none) center / contain no-repeat;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.sessionRow:hover,
+.sessionRow[aria-current="page"] {
   background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent));
   color: var(--ink);
 }
@@ -362,7 +374,7 @@
   color: var(--ink);
 }
 
-.sessionRow > span:not(.sessionDot) {
+.sessionRow .sessionTitle {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -374,21 +386,6 @@
   color: var(--muted);
   flex: 0 0 auto;
   font-size: 0.625rem;
-}
-
-.sessionDot {
-  background: transparent;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1.5px var(--line-strong);
-  flex: 0 0 7px;
-  height: 7px;
-  width: 7px;
-}
-
-.sessionDot[data-unread="true"] {
-  /* Ordinary list state stays grayscale; vermilion is consequence-only. */
-  background: var(--ink);
-  box-shadow: none;
 }
 
 .personList {
@@ -559,16 +556,11 @@
   position: relative;
 }
 
-.accountMenu summary {
-  cursor: pointer;
-  list-style: none;
-}
-
-.accountMenu summary::-webkit-details-marker {
-  display: none;
-}
-
 .accountTrigger {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
   align-items: center;
   border-radius: 8px;
   color: var(--muted-strong);
@@ -627,6 +619,7 @@
   padding: 4px 7px;
 }
 
+/* Radix owns anchor positioning and collision avoidance in the body portal. */
 .accountPopover {
   grid-template-columns: minmax(0, 1fr);
   /* Restrained material: elevation and translucency over hard borders. */
@@ -635,21 +628,24 @@
   -webkit-backdrop-filter: blur(20px) saturate(150%);
   border: 0;
   border-radius: 13px;
-  bottom: calc(100% + 8px);
   box-shadow:
     0 18px 48px color-mix(in srgb, var(--ink) 16%, transparent),
     inset 0 1px 0 color-mix(in srgb, var(--surface) 85%, transparent);
   display: grid;
   gap: 2px;
-  left: 0;
-  max-height: min(70dvh, 520px);
-  max-width: calc(100vw - 32px);
+  max-height: min(680px, var(--radix-popover-content-available-height));
+  max-width: min(calc(100vw - 32px), var(--radix-popover-content-available-width));
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 6px;
-  position: absolute;
-  width: 236px;
-  z-index: 100;
+  width: 316px;
+}
+.accountTrigger:focus-visible,
+.accountPopover a:focus-visible,
+.accountPopover form button:focus-visible,
+.accountPopover :global(.theme-toggle--row:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 
 .accountSummary {
@@ -694,7 +690,7 @@
   font: inherit;
   font-size: 0.8125rem;
   gap: 9px;
-  min-height: 38px;
+  min-height: 44px;
   padding: 8px 10px;
   text-align: left;
   text-decoration: none;
@@ -702,7 +698,6 @@
 }
 
 .accountPopover a:hover,
-.accountPopover > span:hover,
 .accountPopover form button:hover {
   background: color-mix(in srgb, var(--ink) 6%, var(--surface));
   color: var(--ink);
@@ -751,7 +746,7 @@
   display: flex;
   font-size: 0.8125rem;
   gap: 9px;
-  min-height: 38px;
+  min-height: 44px;
   padding: 8px 10px;
   text-align: left;
   width: 100%;
@@ -952,16 +947,19 @@
   outline: none;
 }
 
-.searchClose {
-  flex: 0 0 auto;
-  min-height: 44px;
-  min-width: 44px;
+/* A command surface has one dismissal control. Keep the native search field
+   semantics without a second, unlabeled platform X beside the close button. */
+.searchDialogHeader input::-webkit-search-cancel-button {
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .searchResults {
   display: grid;
   gap: 4px;
+  min-height: 0;
   max-height: min(56dvh, 420px);
+  overscroll-behavior: contain;
   overflow-y: auto;
   padding-top: 9px;
 }
@@ -1039,6 +1037,12 @@
   .shell {
     grid-template-columns: minmax(0, 1fr);
     padding-bottom: calc(78px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Bottom navigation already reserves space in the shell. Short pages
+     should fit the remaining viewport instead of adding a blank scroll. */
+  .workspace {
+    min-height: calc(100dvh - 78px - env(safe-area-inset-bottom, 0px));
   }
 
   .sidebar {
@@ -1175,14 +1179,6 @@
     display: none;
   }
 
-  .mobileAccount .accountPopover {
-  grid-template-columns: minmax(0, 1fr);
-    bottom: auto;
-    left: auto;
-    right: 0;
-    top: calc(100% + 6px);
-  }
-
   .routeHeader {
     display: none;
   }
@@ -1217,8 +1213,7 @@
 
 .searchResult .avatar { flex: 0 0 32px; height: 32px; width: 32px; }
 .searchResult:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.searchHint { border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 12px; margin-top: 10px; padding: 12px 8px 0; }
-.searchRetry { background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); cursor: pointer; font: inherit; margin-top: 12px; min-height: 44px; padding: 8px 14px; }
+.searchHint { flex: 0 0 auto; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 12px; margin-top: 10px; padding: 12px 8px 0; }
 
 /* Zoom and short desktop windows keep both direct routes and retrieval reachable. */
 @media (min-width: 761px) and (max-height: 600px) {
@@ -1254,23 +1249,303 @@
 .mobilePrivacyEntry { min-width:44px; min-height:44px; justify-content:center; padding:8px; }
 .mobilePrivacyEntry span { display:none; }
 
-/* Native update attention is quiet, outside the account menu's click target. */
-.accountControls { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.accountControls > .accountMenu { flex: 1; min-width: 0; }
-.desktopUpdate {
-  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  flex: 0 0 auto; min-height: 30px; padding: 0 8px; border-radius: 7px;
-  color: var(--muted-strong); background: color-mix(in srgb, var(--ink) 5%, transparent);
-  font-size: 11px; font-weight: 550; text-decoration: none;
-  transition: background 120ms ease, color 120ms ease;
+/* ── Workspace footer strip ────────────────────────────────────────── */
+
+/* Web keeps the ordinary account row; the hosted workspace shows the compact
+   avatar / Connect apps / download strip with a 44px account target and two
+   8px gaps. */
+ .accountStrip { display:flex; align-items:center; gap:8px; min-width:0; width:100%; }
+.accountStrip > .accountMenu { flex:0 0 44px; min-width:0; }
+.accountStrip .accountTrigger { border-radius:50%; height:44px; justify-content:center; min-height:44px; padding:0; width:44px; }
+.accountStrip .accountTrigger .avatar[data-size="account"] { font-size:11px; height:28px; width:28px; }
+.accountStrip .accountName,.accountStrip .accountChevron { display:none; }
+.accountStrip:has(.footerEntryWrap) .connectPill { width:128px; }
+.connectPill {
+  align-items: center;
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  border-radius: 999px;
+  color: var(--muted-strong);
+  display: inline-flex;
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 500;
+  gap: 8px;
+  height: 40px;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0 12px;
+  text-decoration: none;
+  transition:
+    width 220ms var(--ease-out, ease),
+    padding 220ms var(--ease-out, ease),
+    background 180ms ease,
+    color 180ms ease;
+  min-width: 40px;
+  width: 180px;
 }
-.desktopUpdate:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 10%, transparent); }
-.desktopUpdate:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.connectPill:hover {
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  color: var(--ink);
+}
+.connectPill:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.connectPillLabel { overflow: hidden; white-space: nowrap; max-width: 80px; transition: max-width 220ms var(--ease-out), opacity 160ms ease; }
+.connectPill svg, .footerEntry svg { flex-shrink: 0; }
+
+.footerEntryWrap { display: inline-flex; flex: 0 0 auto; position: relative; }
+.footerEntry {
+  align-items: center;
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  gap: 0;
+  height: 40px;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0;
+  text-decoration: none;
+  transition:
+    width 220ms var(--ease-out, ease),
+    gap 220ms var(--ease-out, ease),
+    background 180ms ease,
+    color 180ms ease;
+  width: 40px;
+}
+.footerEntry:hover {
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  color: var(--ink);
+}
+.footerEntry:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.footerEntry[data-phase="available"], .footerEntry[data-phase="available"]:hover { background: var(--ink); color: var(--surface); }
+.footerEntryLabel { overflow: hidden; white-space: nowrap; max-width: 0; opacity: 0; transition: max-width 220ms var(--ease-out), opacity 160ms ease; }
+
+/* Hover or keyboard focus over the download entry contracts the Connect apps
+   pill to its icon while the entry widens in place: constant strip geometry,
+   no layout shift. Collapsed rails stay icon-only. */
+.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:hover) .connectPill,
+.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-visible) .connectPill,
+.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-within) .connectPill {
+  padding: 0;
+  gap: 0;
+  width: 40px;
+}
+.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:hover) .footerEntry,
+.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-visible) .footerEntry,
+.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-within) .footerEntry {
+  width: 128px;
+  gap: 8px;
+}
+.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .connectPillLabel { max-width: 0; opacity: 0; }
+.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .footerEntryLabel { max-width: 80px; opacity: 1; }
+
+/* Custom tooltip above the entry; no native title tooltip duplicates it. */
+.footerTooltip {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  bottom: calc(100% + 8px);
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--ink) 14%, transparent);
+  color: var(--ink);
+  display: grid;
+  gap: 2px;
+  max-width: 220px;
+  opacity: 0;
+  padding: 8px 11px;
+  pointer-events: auto;
+  position: absolute;
+  right: 0;
+  text-align: left;
+  transform: translateY(4px);
+  transition: opacity 200ms ease, transform 200ms ease;
+  visibility: hidden;
+  width: max-content;
+  z-index: 120;
+}
+.footerTooltip::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 10px; }
+.footerTooltip strong { font-size: 13px; font-weight: 600; }
+.footerTooltip small {
+  color: var(--muted-strong);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+.footerEntryWrap:hover .footerTooltip,
+.footerEntryWrap:focus-within .footerTooltip {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.footerEntryWrap[data-dismissed="true"] .footerTooltip { opacity: 0; visibility: hidden; }
+
+/* Updates-available banner at the top of the avatar popover. */
+.updateBanner {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent, var(--warning, #b4462f)) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent, var(--warning, #b4462f)) 26%, transparent);
+  border-radius: 10px;
+  display: flex;
+  gap: 10px;
+  margin: 2px;
+  padding: 9px 10px;
+}
+.updateBannerText { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.updateBannerText strong { color: var(--ink); font-size: 13px; font-weight: 600; }
+.updateBannerText small { color: var(--muted-strong); font-size: 12px; line-height: 1.5; }
+.updateBanner a {
+  align-items: center;
+  background: var(--ink);
+  border-radius: 8px;
+  color: var(--surface);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 560;
+  min-height: 32px;
+  padding: 0 12px;
+  text-decoration: none;
+  white-space: nowrap;
+  width: auto;
+}
+.updateBanner a:hover { background: var(--ink); color: var(--surface); opacity: 0.9; }
+.updateBanner a:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* Weekly usage row with disclosure; error keeps retry and no fabricated 0. */
+.accountPopover > .usageBlock,
+.accountPopover > .usageBlock:hover {
+  background: transparent;
+  color: var(--muted-strong);
+  cursor: default;
+  display: grid;
+  gap: 2px;
+  min-height: 0;
+  padding: 0;
+  width: 100%;
+}
+.usageRow { align-items: center; display: flex; gap: 8px; min-height: 44px; }
+.usageDisclosure {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 1;
+  font: inherit;
+  font-size: 0.8125rem;
+  gap: 9px;
+  min-height: 44px;
+  min-width: 0;
+  padding: 8px 10px;
+  text-align: left;
+}
+.usageDisclosure:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
+.usageDisclosure:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.usageRow > strong { color: var(--ink); flex: 0 0 auto; font-size: 0.8125rem; font-weight: 560; }
+.usageRow > strong[data-usage-state="loading"],
+.usageRow > strong[data-usage-state="error"] {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.usageCaret { color: var(--muted); transition: transform 180ms ease; }
+.usageRetry {
+  min-width: 44px;
+  min-height: 44px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 6px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.usageDetail {
+  color: var(--muted-strong);
+  display: grid;
+  font-size: 0.75rem;
+  gap: 6px;
+  line-height: 1.6;
+  padding: 2px 12px 10px;
+}
+
+/* Support submenu: real diagnostics and the configured site contact. */
+.accountSubmenu { display: grid; gap: 2px; }
+.accountSubmenu > summary {
+  align-items: center;
+  border-radius: 8px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.8125rem;
+  gap: 9px;
+  list-style: none;
+  min-height: 44px;
+  padding: 8px 10px;
+}
+.accountSubmenu > summary::-webkit-details-marker { display: none; }
+.accountSubmenu > summary:hover {
+  background: color-mix(in srgb, var(--ink) 6%, var(--surface));
+  color: var(--ink);
+}
+.accountSubmenu > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.accountSubmenu > summary > span { flex: 1; min-width: 0; }
+.submenuCaret { color: var(--muted); transition: transform 180ms ease; }
+.accountSubmenu[open] .submenuCaret { transform: rotate(90deg); }
+.submenuPanel { display: grid; gap: 2px; padding-left: 12px; }
+.supportEmailFallback { display: grid; padding: 2px 10px 8px; gap: 2px; }
+.supportEmailFallback small { color: var(--muted-strong); font-size: 11px; user-select: text; }
+.supportEmailButton { border: 0; border-radius: 8px; background: transparent; color: var(--muted-strong); cursor: pointer; font: inherit; font-size: 13px; text-align: left; padding: 8px 0; min-height: 44px; }
+.supportEmailButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .accountPopover kbd { margin-left: auto; font: inherit; font-size: 11px; color: var(--muted); }
-.shell:has(.sidebarState[data-collapsed="true"]) .accountControls { flex-direction: column; }
-.shell:has(.sidebarState[data-collapsed="true"]) .desktopUpdate span { display: none; }
-@media (prefers-reduced-motion: reduce) { .desktopUpdate { transition: none; } }
-@media (max-width: 760px) { .desktopUpdate { min-height: 36px; } }
+.shell:has(.sidebarState[data-collapsed="true"]) .accountStrip,
+.shell:has(.sidebarState[data-collapsed="true"]) .accountStrip[data-hosted="true"] {
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.shell:has(.sidebarState[data-collapsed="true"]) .connectPill,
+.shell:has(.sidebarState[data-collapsed="true"]) .footerEntry {
+  padding: 0;
+  width: 40px;
+}
+.shell:has(.sidebarState[data-collapsed="true"]) .connectPillLabel,
+.shell:has(.sidebarState[data-collapsed="true"]) .footerEntryLabel { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .connectPill,
+  .connectPillLabel,
+  .footerEntryLabel,
+  .footerEntry,
+  .footerTooltip,
+  .usageCaret,
+  .submenuCaret {
+    transition: none;
+  }
+}
+@media (max-width: 760px) {
+  .accountStrip[data-hosted="true"] { width: auto; }
+  .accountStrip[data-hosted="true"] .connectPill,
+  .accountStrip[data-hosted="true"] .footerEntry {
+    height: 44px;
+    padding: 0;
+    width: 44px;
+  }
+  .connectPillLabel,
+  .footerEntryLabel { display: none; }
+}
 
 /* The native settings scene owns its own navigation. Presentation only. */
 :global(html[data-desktop-surface="settings"]) .shell,
@@ -1502,3 +1777,60 @@
 .sessionRowShell:not([data-open="true"]):not([data-dragging="true"]) .sessionRowTray { visibility: hidden; }
 
 .navLink { position: relative; isolation: isolate; }
+.searchTrigger { display:flex; align-items:center; gap:8px; width:100%; height:36px; flex:none; margin:0 0 10px; padding:0 10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface); color:var(--muted); font:inherit; font-size:12px; cursor:pointer; text-align:left; }
+.searchTrigger span { flex:1; }
+.searchTrigger kbd { color:var(--muted); font:inherit; font-size:11px; }
+.searchTrigger:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+
+@media(max-width:760px) { .sidebar .searchTrigger { display:none; } }
+
+/* GET-129 compact composition: measured row/pill geometry, not a second route tree. */
+.brandRow { min-height:36px; margin-bottom:12px; }
+.brand { font-size:18px; line-height:20px; gap:8px; padding:6px 0; }
+.brandMark { height:20px; width:20px; }
+.brandActions .iconButton { height:36px; width:36px; }
+.railRow { align-items:center; display:flex; gap:1.5px; }
+.railControl { align-items:center; background:transparent; border:0; border-radius:18px; color:var(--muted-strong); cursor:pointer; display:inline-flex; flex:0 0 36px; font:inherit; font-size:13px; gap:6px; height:36px; justify-content:center; padding:0; text-decoration:none; transition:background 180ms var(--ease-out),color 180ms var(--ease-out); }
+.railControl:hover { background:var(--hover); color:var(--ink); }
+.railControl[data-selected="true"] { background:var(--surface-selected); color:var(--ink); flex-basis:74px; font-weight:500; }
+.railControlLabel { display:none; line-height:20px; }
+.railControl[data-selected="true"] .railControlLabel { display:inline; }
+.railControl:focus-visible,.newConversation:focus-visible,.personChip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.railCollapsed { display:none; }
+.sidebarScroll { margin-top:20px; }
+.groupTitle { font-size:11px; line-height:18px; padding:0 10px; }
+.historyBar { align-items:center; display:flex; gap:2px; margin-bottom:4px; }
+.historyHeader { flex:1; font-size:11px; min-width:0; }
+.newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; font-size:11px; gap:4px; height:32px; padding:0 6px; }
+.newConversation:hover { background:var(--hover); color:var(--ink); }
+.personChips { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; padding:0 8px; }
+.personChip { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--ink); cursor:pointer; display:flex; font:inherit; font-size:12px; gap:6px; height:32px; width:100%; min-width:0; padding:4px 0; text-align:left; }
+.personChip > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.personChip:hover,.personChip[aria-pressed="true"] { background:var(--surface-selected); }
+.shell:has(.sidebarState[data-collapsed="true"]) .sidebarState { flex:1; min-height:0; }
+.shell:has(.sidebarState[data-collapsed="true"]) :is(.brandRow,.railRow) { display:none; }
+.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { align-items:center; display:flex; flex:1; flex-direction:column; min-height:0; }
+.railCollapsedTop { flex:none; }
+.railSessions { display:flex; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; overflow:auto; scrollbar-width:none; }
+.railSessionAvatar,.railIconLink { align-items:center; border-radius:12px; color:var(--muted-strong); display:flex; flex:none; height:44px; justify-content:center; text-decoration:none; width:44px; }
+.railSessionAvatar[aria-current="page"],.railSessionAvatar:hover,.railIconLink:hover { background:var(--surface-selected); color:var(--ink); }
+.railSessionAvatar .avatar { flex:none; height:28px; width:28px; }
+.railUtility { align-items:center; display:flex; flex-direction:column; gap:8px; margin-top:auto; padding-top:16px; }
+.railUtility .iconButton,.railUtility .railControl { height:44px; width:44px; }
+.shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .connectPill { display:none; }
+.shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .accountTrigger { width:44px; }
+@media(min-width:1001px) { :global(body:has([data-person-context-panel])) .shell { margin-right:336px; } }
+@media(max-width:760px) {
+  .shell:has(.sidebarState[data-collapsed="true"]) { grid-template-columns:minmax(0,1fr); }
+  .shell:has(.sidebarState[data-collapsed="true"]) .sidebar { padding:7px; }
+  .shell .sidebarState { display:block; }
+  .shell .railRow,.shell:has(.sidebarState[data-collapsed="true"]) .railRow { display:grid; gap:5px; grid-template-columns:repeat(4,minmax(44px,1fr)); }
+  .shell .railCollapsed,.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { display:none; }
+  .railRow > button { display:none; }
+  .railControl,.railControl[data-selected="true"] { border-radius:10px; flex-direction:column; font-size:12px; gap:2px; height:44px; min-width:44px; width:100%; }
+  .railControl .railControlLabel { display:inline; }
+  .mobileHeader .accountStrip :is(.connectPill,.footerEntryWrap) { display:none; }
+  .mobileHeader .accountStrip > .accountMenu { flex:none; }
+  .mobileHeader .accountTrigger { width:44px; }
+}
+@media(prefers-reduced-motion:reduce) { .railControl { transition:none; } }

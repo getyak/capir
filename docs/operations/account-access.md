@@ -9,6 +9,14 @@ Settings manages sign-in methods: connecting Apple/Google, setting or changing a
 password, and removing a method. Every change first proves the current identity,
 and at least one usable login method always remains.
 
+## macOS browser sign-in
+
+The Mac primary-login surface offers **Sign in in your browser**; it never collects account passwords, registration fields or provider credentials. The default browser can reuse its valid Web session, then asks the user to confirm the displayed account for this Mac request. Otherwise the ordinary Web login and onboarding flow returns to that confirmation. A matching request hint helps identify the operation being approved. Use the Mac cancel action to stop waiting; closing the browser tab does not notify the app, and pending requests expire after five minutes. Cancelling keeps a usable retry surface.
+
+Browser approval creates a separate, revocable Mac backend session through a short-lived, one-use grant. It does not copy the browser cookie, attach a credential, change the account or grant local capture permission. Browser and Mac sign-outs remain independent. The Mac opens the workspace only after live backend identity readback in its selected WebKit store; seeing a callback or a browser success page alone is insufficient.
+
+Existing healthy Mac sessions reopen directly. An expired session returns to the same browser-only entry. An uncertain exchange offers **Check sign-in result** and deliberate **Sign in again**; recovery does not replay a potentially consumed grant or report cancellation as rollback. A new primary login isolates old late cookie responses in a separate persistent store and preserves quarantined local drafts. [ADR 0022](../decisions/0022-browser-owned-macos-login.md) owns the design and [the active plan](../../plans/2026-10-01-macos-browser-login.md) distinguishes implementation proof, live-provider verification and installed-release acceptance.
+
 ## One account, normalized email ownership
 
 One Talent Signal account is recognized by its primary email; Apple, Google and
@@ -283,10 +291,15 @@ These privileges do not authorize candidate-data collection or external effects.
 
 Only an explicitly simulated, non-production seeded backend provides:
 
+Apply migration `088_username_email_alias` before seeding. Existing handles
+remain valid; an email-shaped username is valid only when it exactly matches
+that user's normalized primary email. Public signup continues to use its
+existing handle format. This does not rename any deployed account.
+
 | Field | Development fixture value |
 | --- | --- |
-| Username | `cubxxw` |
-| Email | `cubxxw@talentsignal.local` |
+| Username | `test@gmail.com` |
+| Email | `test@gmail.com` |
 | Password | `cubxxw` |
 | Workspace / role | `fixture-alpha` / admin |
 
@@ -298,6 +311,171 @@ providers are disabled in production, even if their flags are set.
 
 Other `simulated_human` fixture identities have no password. Use the explicit
 simulated API in local evaluations, or an isolated internal test workspace.
+
+## AI acceptance entry
+
+This page is the single home for capir test-account provisioning and test
+commands. `capir help test create` is the offline entry point and
+[the CLI reference](capir-cli.md) documents the full command surface.
+
+### Autonomous acceptance identities
+
+Prepare authorized synthetic identities before requesting a human login.
+First reuse a valid dedicated acceptance credential through `capir auth`; use
+the default development fixture only on the explicitly seeded development
+backend above. A missing shared-service fixture is not a reason to ask the
+product owner to sign in, reset another account, or run the global seed.
+
+Browser-owned CLI authorization requires a primary identity. `capir test
+create` provisions a restricted `lab_human` identity and disposable data; that
+identity cannot approve a CLI grant. To verify this boundary on a resident
+service, an authorized server operator may provision one new, empty synthetic
+primary fixture in a uniquely named account, using the existing
+`createRealIdentity` transaction and password encoder. Use a reserved
+`example.invalid` address, leave email verification unset, record the task and
+exact account/user IDs, and keep the generated password in the OS keyring or
+process memory. Do not overwrite an existing login, claim mailbox verification,
+mint a substitute browser session, or enable simulated authentication.
+
+Exercise real password sign-in, browser consent, PKCE exchange and keyring
+readback before granting this fixture test entitlement. Verify default denial
+first; then explicitly grant only its own test scopes with the registry command
+below, reauthorize, and use the ordinary CLI for create/status/stop. Confirm
+daily counts and idempotent retry from server readback. Operator credentials
+prepare the fixture; they never replace the human CLI grant under test.
+
+Stop and verify deletion of every owned run before retiring the fixture.
+Revoke its CLI grants, test entitlement and sessions, disable its login, remove
+only its exact temporary keyring items, and read back these states. Retain
+minimal nonsecret provenance/audit receipts; never broadly delete shared
+accounts or discard uncertain cleanup evidence. This procedure tests the
+authorization loop, not public email-verification signup. Request human input
+only when a genuinely necessary external authorization is unavailable.
+
+### Personal CLI authorization
+
+The default personal flow is browser-owned CLI authorization:
+
+```bash
+capir auth login --env staging       # reuses a live credential, otherwise browser consent
+capir auth status --env staging      # read-only; never refreshes
+capir test create --env staging --preset daily --open web
+capir auth logout --env staging      # revokes this grant and its derived entries
+```
+
+Consent shows the primary account, CLI label, exact environment and scopes.
+Login uses S256 PKCE and a literal ephemeral `127.0.0.1` callback. The browser
+session and CLI grant are independent: browser sign-out does not sign out the
+CLI. Manage the current account's CLI grants at **Settings → Account → CLI
+authorizations** (`/workspace/settings/cli`). Test identities cannot authorize a
+CLI or manage a real account's grants.
+
+If the system cannot open the browser, the CLI prints the current authorization
+link for the user to open in a browser on the same machine. The original
+loopback callback, login deadline and Ctrl+C cancellation remain active; the
+link contains no access token, refresh token or PKCE verifier. A late opener
+failure after completed authorization does not print an expired link.
+
+A successful `capir-auth.v2` login stores one versioned record in the OS keyring
+(service `talent-signal.capir`, account `capir:<backend-origin>|<web-origin>`).
+It includes origin pair, grant/scope/expiry, access and refresh credentials and
+last verified identity. There is no plaintext fallback. Access lasts 15 minutes,
+refresh idle lasts 7 days, absolute grant life is 30 days, and the one-use code
+lasts 60 seconds by default; discovery reports server-configured lifetimes.
+Ordinary authorized commands refresh when necessary. Refresh rotation cannot
+widen authority. A durable keyring intent is written before refresh dispatch;
+a lost response or interrupted rotation requires deliberate logout and re-login
+instead of replaying a possibly consumed token. The server retains consumed
+refresh hashes and revokes the whole family if one is replayed.
+
+Status distinguishes missing, active, expired, revoked and unverified. During a
+transport failure cached identity is explicitly **last verified**, never current.
+Legacy records report **reauth required** with a browser-login action rather
+than retrying v2 status. Invalid records also require reauthorization; logout
+can remove the exact invalid local record without sending it to a server.
+Because it cannot prove remote revocation, the result explicitly directs the
+user to check the Web CLI authorization list. Concurrent newer logins are kept.
+Logout can prove the grant with refresh material after access expiry, without
+rotating first; an uncertain revoke preserves the exact record for retry and
+cannot erase a newer login. `CAPIR_TOKEN` is ephemeral: it is never persisted,
+refreshed, combined with another identity or deleted by local logout.
+
+Personal test access is **deny by default**, including administrators. A server
+operator explicitly grants the identified real account/user access through
+`apps/backend/src/database/manageCapirTestEntitlement.ts grant|revoke
+<account-uuid> <user-uuid> <operator-provenance>` using the existing authorized
+backend DB environment. The command prints a nonsecret registry receipt. Every
+registry change increments its generation; regrant never revives old entries.
+After a new grant, re-login to consent to the newly available test scopes.
+Creation and entry admission recheck live grant, backing session, user,
+entitlement generation/scope and serving origins through transaction commit.
+New logins can manage their user's prior runs, while each entry remains tied to
+the grant that authorized it. Revoking that grant disables its entries; it does
+not automatically delete the run's audit record. Stop owned runs for cleanup.
+
+Authentication independently requires `CAPIR_AUTH_ENABLED=true` and exact
+`CAPIR_AUTH_WEB_ORIGIN` / `CAPIR_AUTH_BACKEND_ORIGIN` on the backend. Configure
+the same public origin pair on Web. Operator test provisioning remains separately
+gated. `--server` takes priority over `CAPIR_SERVER`, then the selected environment;
+it must match the already registered pair in `environments.json` before any
+keyring read or dispatch. Discovery adds no trust. Optional device-code login is
+explicitly unsupported.
+
+The dedicated operator flow remains available. Provisioning prerequisite: an authorized installation provides one
+origin-bound operator credential in the dedicated OS keyring entry (service
+`talent-signal.capir-test-operator`, account
+`capir-test-operator:<backend-origin>|<web-origin>`) or as the ephemeral
+`CAPIR_TEST_OPERATOR_TOKEN` environment variable. It is service material,
+distinct from the human `CAPIR_TOKEN`, and it authorizes only its own internal
+test runs. The CLI never asks a human browser login for this flow.
+
+With capir installed and a named environment configured:
+
+```bash
+# 1. Discover the exact create contract (offline, allocates nothing).
+capir help test create
+
+# 2. Create one expiring test account (defaults: daily 12/30/4, 4h).
+capir test create --env local-test --preset daily --open web
+
+# 3. Reuse the returned run id and request id for readback and recovery.
+capir test status <run-id> --env local-test
+capir test create --env local-test --request-id <request-id>   # exact replay
+
+# 4. Stop the owned run and verify cleanup.
+capir test stop <run-id> --env local-test
+```
+
+`--open web` opens a fresh isolated browser context through a one-use private
+handoff; the handoff secret never appears in a URL. Without it, sign in at the
+Web login page with the returned username and password. Both entry paths show
+the same authoritative test-space banner and deadline inside the workspace,
+derived from the canonical run readback — never from a cookie or account name.
+Expired, stopped, rotated or revoked runs deny new sign-ins and existing
+sessions before cleanup; there is no real-account fallback.
+
+For browser QA, reuse the owned authenticated context across cases. Closing a
+browser does not revoke its test entry: repeated password sign-ins can exhaust
+the active-entry limit (`LAB_WORKSPACE_ENTRY_LIMIT`). Sign out before discarding
+an owned context, or stop the owned run for complete cleanup. Keep any saved
+browser state private in the registered temporary artifact, never in permanent
+evidence; do not reset credentials or widen authority to bypass an entry limit.
+Web explains a verified entry limit as a test-space recovery prerequisite:
+leave an existing session, then deliberately retry. It does not describe that
+limit as an account-service outage. Failed account feedback receives focus and
+is revealed when off-screen, preserving the entered form values.
+
+Credentials: a generated password is printed exactly once through the
+dedicated success projection and kept in a run-specific OS keyring item for
+exact replay until stop or expiry; supplied passwords are never echoed.
+Passwords, tokens and handoff secrets never enter journals, errors, receipts
+or URLs. Retain sanitized evidence only, then stop the run.
+
+The capir backend, registered origins and the server-only Web consumer key
+must be deployed for that exact environment. Legacy `capir.v1` records retain
+`refresh_supported=false`; `capir sandbox` remains discoverable as unsupported
+where the server does not implement it; an
+authenticated Web proof does not establish native macOS login acceptance.
 
 ## Internal test workspaces
 
@@ -363,8 +541,11 @@ multiplicity, ambiguous legacy password login, dual-proof freshness, admitted
 late-write retirement fencing, and provider-only first-password/other-provider
 flows. Provider proofs in tests are injected verifier fixtures; they are never
 live Apple or Google evidence. The legacy backfill is separately applied over
-pre-migration fixtures (see `docs/evaluations/account-sync/`), and live provider,
+pre-migration fixtures (see the
+[account-sync evidence](https://github.com/getyak/capir-evals/tree/main/evidence/account-sync)), and live provider,
 delivery and multi-client acceptance remain parent-owned checkpoints.
 
 Credentials for deployed services remain in [Infisical](secrets.md). The Notion
 home contains a short access reference; this document owns operational details.
+
+Mac login routes use aggregate upstream service budgets because the backend sees the first-party Web BFF, not individual browsers. Prepare/consume allow 120 requests per minute per upstream, and proof/result/approval routes allow 240. The current resident deployment is Tailscale-bound; these are availability caps, not per-user abuse protection. Before exposing a public multi-tenant Web ingress, add per-caller edge throttling with deployment-verified client identity. Never accept arbitrary forwarded-IP headers as identity. Auth route access logs must omit query strings; first-party handoff pages send `Referrer-Policy: no-referrer` and are not cached.

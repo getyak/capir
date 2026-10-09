@@ -9,10 +9,14 @@ import { registerAgentSessionRoutes } from "./modules/agentSessionRoutes.js";
 import { registerConversationQueueRoutes } from "./modules/conversationQueueRoutes.js";
 import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.js";
 import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.js";
+import { registerDesktopBrowserLogin } from "./routes/desktopBrowserLogin.js";
+import { postgresDesktopBrowserLoginDb, sweepDesktopBrowserLoginAttempts } from "./modules/desktopBrowserLogin.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
+import { startMcpOAuthCleanupPump } from "./modules/mcpOauthCleanup.js";
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
 import { registerAgentPreferenceRoutes } from "./modules/agentPreferenceRoutes.js";
+import { registerWeeklyUsageRoutes } from "./modules/weeklyUsage.js";
 import { registerMcpExtensionRoutes } from "./modules/mcpRoutes.js";
 import { registerScreenshotContactRoutes } from "./modules/screenshotContactRoutes.js";
 import { registerMemoryReviewRoutes } from "./modules/memoryReviewRoutes.js";
@@ -28,8 +32,7 @@ import { LabTaskTrialService } from "./modules/labTaskTrials.js";
 import { registerLabTaskTrialRoutes } from "./modules/labTaskTrialRoutes.js";
 import { LabFeatureOverrideService } from "./modules/labFeatureOverrides.js";
 import { registerLabFeatureOverrideRoutes } from "./modules/labFeatureOverrideRoutes.js";
-import { LabWorkspaceService } from "./modules/labWorkspaces.js";
-import { registerLabWorkspaceRoutes } from "./modules/labWorkspaceRoutes.js";
+import { registerCapirTestWorkspaceRoutes } from "./modules/capirTestRoutes.js";
 import { LabExperimentJobService } from "./modules/labExperimentJobs.js";
 import { registerLabJobRoutes } from "./modules/labJobRoutes.js";
 import { environmentLabCIVerifier, type LabCIVerifying } from "./modules/labCIVerifier.js";
@@ -751,7 +754,7 @@ export async function buildApp(
   );
 
   registerGoogleAuth(app, pool, config);
-  const authenticate = createAuthGuard(pool, deploymentExposure?.workspaceIds);
+  const authenticate = createAuthGuard(pool, deploymentExposure?.workspaceIds, config);
   registerProductRunMonitoring(app, pool, authenticate);
   registerAccountManagement(app, pool, authenticate, config, dependencies.mail);
   registerAccountOnboarding(app, pool, authenticate);
@@ -765,20 +768,22 @@ export async function buildApp(
   );
   registerConversationQueueRoutes(app, pool, authenticate);
   registerDesktopCaptureReceipt(app, pool, authenticate);
+  registerDesktopBrowserLogin(app, pool, config, authenticate);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);
   registerFeedbackRoutes(app, pool, authenticate);
   const security = [{ bearerSession: [] }];
   registerAgentPreferenceRoutes(app, pool, authenticate, remoteChatProvider?.providerId === "claude-agent-sdk");
+  registerWeeklyUsageRoutes(app, pool, authenticate);
   registerPrivateConversationRoutes(app, authenticate, privateConversationProvider);
   registerMcpExtensionRoutes(app, pool, authenticate, {
     allowedOrigins: [],
     deploymentWorkspaceIds: deploymentExposure?.workspaceIds,
-  });
+  }, config);
   registerSystemHealthRoutes(app, pool, authenticate);
   registerRuntimeManifest(app, config);
   registerLoadedRuntimeConfiguration(app, config, authenticate, remoteChatProvider?.loadedTaskConfiguration, deploymentExposure);
-  registerLabWorkspaceRoutes(app,new LabWorkspaceService(pool,chatMediaStorage,config.sessionTtlSeconds),authenticate,config.internalLabEnabled===true);
+  registerCapirTestWorkspaceRoutes(app, pool, config, chatMediaStorage, authenticate, deploymentExposure?.workspaceIds);
 
   const labProviders = dependencies.labProviders ?? labModelProviders(remoteChatProvider);
   registerDesktopCaptureContext(app, authenticate, remoteChatProvider, labProviders, config.internalLabEnabled === true);
@@ -3126,6 +3131,10 @@ export async function buildApp(
   const conversationQueueSelectProvider: ConversationQueueProviderSelector | undefined =
     config.internalLabEnabled
       ? async (client, input) => {
+          // Host result entries carry the live queue fence, not a login or
+          // session-scoped trial. Keep the SAME configured default adapter;
+          // never fabricate or borrow a UUID to query a human's Lab trial.
+          if (input.authSessionId === null) return { provider: remoteChatProvider };
           const trial = labTrials.taskContext(
             input.auth,
             "unscoped_chat",
@@ -3177,7 +3186,18 @@ export async function buildApp(
       await runSourceLifecycleSweep(pool);
     },
   });
-  app.addHook("preClose", async () => { await conversationQueueRunner.close(); });
+  registerRecurringJob(app, {
+    name: "desktop-browser-login-sweep",
+    intervalMs: config.retentionSweepIntervalMs,
+    run: async () => {
+      await sweepDesktopBrowserLoginAttempts(postgresDesktopBrowserLoginDb(pool));
+    },
+  });
+  // Restart-safe bounded lifecycle pump: broker-cleanup reconciliation runs
+  // even when nobody opens the UI, with no overlap and durable state across
+  // process restarts.
+  const stopMcpOauthCleanup = startMcpOAuthCleanupPump(pool);
+  app.addHook("preClose", async () => { await stopMcpOauthCleanup(); await conversationQueueRunner.close(); });
   app.addHook("onClose", async () => {
     await stopProductProjection();
     await screenshotRunner?.close();

@@ -16,7 +16,7 @@ export const SNAPSHOT_TTL_MINUTES = 5;
 export const TIME_SESSION_RETENTION_DAYS = 30;
 
 export const TIME_COVERAGE_NOTE =
-  "会话活动仅覆盖保留期内的会话（最多 30 天）。设备日历与其他应用不会被导入；此处显示的日程均在 Talent Signal 内创建。";
+  "会话活动仅覆盖保留期内的会话（最多 30 天）。设备日历与其他应用不会被导入；此处显示的日程均在 capri 内创建。";
 
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const UUID_PATTERN =

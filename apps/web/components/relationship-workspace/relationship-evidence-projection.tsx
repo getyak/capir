@@ -108,7 +108,7 @@ export function RelationshipEvidenceProjection({
             </div>
             <div>
               <dt>原始截图</dt>
-              <dd>Talent Signal 不会保存</dd>
+              <dd>capri 不会保存</dd>
             </div>
             <div>
               <dt>留存至</dt>

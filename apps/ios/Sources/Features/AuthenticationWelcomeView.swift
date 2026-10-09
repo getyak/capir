@@ -27,7 +27,7 @@ struct AuthenticationWelcomeView<Content: View>: View {
             ScrollView {
                 VStack(spacing: 0) {
                     HStack {
-                        Text("Talent Signal")
+                        Text("capri")
                             .font(.system(.subheadline, design: .serif).weight(.medium))
                             .frame(minHeight: 44)
                             .contentShape(Rectangle())
@@ -90,7 +90,7 @@ struct AuthenticationWelcomeView<Content: View>: View {
                         .accessibilityIdentifier("welcome-link")
                         .accessibilityHidden(hasEntered)
 
-                        Text(language.text("Every relationship.\nA next chapter."))
+                        Text(language.text("Keep important people.\nPick up unfinished things."))
                             .font(.system(typeSize.isAccessibilitySize ? .title3 : .largeTitle, design: .serif).weight(.regular))
                             .lineLimit(nil)
                             .tracking(-0.9)

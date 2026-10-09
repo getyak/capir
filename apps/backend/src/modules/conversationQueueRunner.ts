@@ -1,4 +1,4 @@
-import { beginQueueRunMonitoring, completeQueueRunMonitoring, queueRunCorrelation } from "./conversationQueueMonitoring.js";
+import { beginQueueRunMonitoring, completeQueueRunMonitoring, queueRunCorrelation, reconcileRecoveredQueueRunMonitoring } from "./conversationQueueMonitoring.js";
 import { conversationRunDiagnostics } from "./conversationRunDiagnostics.js";
 import { randomUUID } from "node:crypto";
 
@@ -9,7 +9,12 @@ import type { Pool } from "pg";
 import type { AuthContext } from "./auth.js";
 import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
 import { readConversationMessageImageManifests, readConversationRunImages } from "./conversationMessageImages.js";
+import {
+  createConversationQueueSteeringFeed,
+  createConversationQueueSteeringSource,
+} from "./conversationQueueSteering.js";
 import { executeUnscopedChatTask } from "./unscopedChat.js";
+import { isWorkspaceConversationAgentProvider } from "./workspaceConversationAgent.js";
 import {
   CONVERSATION_QUEUE_MAX_CONCURRENT_RUNS,
   ConversationQueueLeaseLostError,
@@ -18,6 +23,7 @@ import {
   assertConversationQueueContextCurrent,
   assertConversationQueueOwnedClaim,
   claimNextConversationQueueEntry,
+  openConversationQueueSteeringIntake,
   finalizeConversationQueueEntry,
   listRunnableConversationQueueSessions,
   listStaleRunningConversationQueueEntries,
@@ -60,7 +66,12 @@ export interface ConversationQueueProviderSelection {
 
 export type ConversationQueueProviderSelector = (
   client: Pool,
-  input: { auth: AuthContext; idempotencyKey: string },
+  input: {
+    auth: AuthContext;
+    /** Persisted queue login identity; NULL is a governed host continuation. */
+    authSessionId: string | null;
+    idempotencyKey: string;
+  },
 ) => Promise<ConversationQueueProviderSelection>;
 
 export interface ConversationQueueRunnerOptions {
@@ -91,7 +102,9 @@ class RunAbort extends Error {
 function serializedResult(
   execution: Awaited<ReturnType<typeof executeUnscopedChatTask>>,
   images: ConversationImageManifest[],
+  run: { claimedAt: string },
 ): ConversationQueueExecutionResult {
+  const toolCompletions = execution.agentProviderResult?.toolCompletions ?? [];
   return {
     body: execution.body,
     conversationMessageIDs: execution.conversationMessageIDs,
@@ -99,6 +112,16 @@ function serializedResult(
     conversationSources: execution.conversationSources ?? [],
     remoteStatus: execution.remoteStatus,
     images,
+    // Canonical run bounds and genuine tool completions only; the folded card
+    // reads back authentic execution without arguments, results or prose.
+    execution: {
+      started_at: run.claimedAt,
+      completed_at: new Date().toISOString(),
+      tools: toolCompletions.slice(0, 16).map((completion) => ({
+        name: completion.name,
+        completed_at: completion.completedAt,
+      })),
+    },
     audit: {
       providerID:
         execution.agentProviderResult?.providerID ??
@@ -228,9 +251,13 @@ export class ConversationQueueRunner {
           if (result) {
             const recovered = await this.replayPersistence(auth, reclaimed, result, fence);
             if (recovered) {
+              // Replay can instead settle a raced stop or withdrawn source.
+              // Project only canonical terminal truth; completed and retained
+              // running attempts remain untouched by this fenced statement.
+              await reconcileRecoveredQueueRunMonitoring(this.options.pool, reclaimed, this.options.logger);
               this.options.logger.info(
                 { queue_entry_id: reclaimed.entryId, code: "RESULT_REPLAY" },
-                "conversation queue result was persisted without a new model call",
+                "conversation queue stored-result recovery was handled without a new model call",
               );
               continue;
             }
@@ -249,13 +276,24 @@ export class ConversationQueueRunner {
           const images = await readConversationMessageImageManifests(
             this.options.pool, reclaimed.accountId, [reclaimed.entryId],
           );
-          await this.finalizeCancelled(auth, reclaimed, fence, "", images.get(reclaimed.entryId) ?? []);
+          const cancelled = await this.finalizeCancelled(
+            auth, reclaimed, fence, "", images.get(reclaimed.entryId) ?? [],
+          );
+          // Only the canonical cancelled terminal state reconciles the
+          // attempt's monitoring; a failed stop persistence keeps the queue
+          // running and must leave the product run untouched.
+          if (cancelled) {
+            await reconcileRecoveredQueueRunMonitoring(this.options.pool, reclaimed, this.options.logger);
+          }
           this.options.logger.warn(
             { queue_entry_id: reclaimed.entryId },
             "conversation queue attempted settlement of a recovered stop",
           );
           continue;
         }
+        // The queue's terminal truth now reconciles the crashed attempt's
+        // monitoring; diagnostics stay best-effort and never gate recovery.
+        await reconcileRecoveredQueueRunMonitoring(this.options.pool, reclaimed, this.options.logger);
         this.options.logger.warn(
           { queue_entry_id: reclaimed.entryId },
           "conversation queue recovered an interrupted run and paused its queue",
@@ -319,6 +357,9 @@ export class ConversationQueueRunner {
       accountId,
       sessionId,
       workerId: this.workerId,
+      acceptsSteering: Boolean(this.options.selectProvider) || Boolean(this.options.provider
+        && isWorkspaceConversationAgentProvider(this.options.provider)
+        && this.options.provider.inputCapabilities?.steering === true),
     });
     if (!claimed) return;
     const fence: ConversationQueueRunFence = {
@@ -416,6 +457,7 @@ export class ConversationQueueRunner {
     const controller = new AbortController();
     const filter = createVisibleTextFilter(true);
     let previewText = "";
+    const completedTools: Array<{ name: string; completed_at: string }> = [];
     let previewStage: AgentVisibleProgressStage | null = null;
     let previewSequence = 0;
     let lastFlush = 0;
@@ -440,7 +482,7 @@ export class ConversationQueueRunner {
           await assertConversationQueueContextCurrent(this.options.pool, auth, claimed.sessionId);
           if (previewClosed || controller.signal.aborted) return;
           publishConversationQueuePreview({ accountId: claimed.accountId, sessionId: claimed.sessionId,
-            runId: claimed.runId, messageId: claimed.messageId, text: previewText,
+            runId: claimed.runId, messageId: claimed.messageId, text: previewText, completedTools: [...completedTools],
             stage: previewStage, sequence: ++previewSequence, leaseGeneration: fence.leaseGeneration });
         }
       } catch (error) {
@@ -460,7 +502,7 @@ export class ConversationQueueRunner {
         return;
       }
       lastFlush = now;
-      if (!previewText && !previewStage) return;
+      if (!previewText && !previewStage && !completedTools.length) return;
       void publishCurrentPreview();
     };
     let revocationCode: string | null = null;
@@ -500,6 +542,7 @@ export class ConversationQueueRunner {
         const selection = this.options.selectProvider
           ? await this.options.selectProvider(this.options.pool, {
               auth,
+              authSessionId: claimed.authSessionId,
               idempotencyKey: `conversation-queue:${claimed.entryId}`,
             })
           : { provider: this.options.provider };
@@ -516,7 +559,54 @@ export class ConversationQueueRunner {
         entryImages = runImageContext.images.filter(
           (image) => image.messageId === claimed.messageId,
         );
+        // GET-128 steering: an agent-provider Run that actually consumes
+        // steering input receives messages accepted while it works, delivered
+        // at tool-safe points into THIS task. Any other provider closes intake
+        // at once so later messages are honestly the next task from admission
+        // time, never silently waiting for a dispatch that can never happen.
+        const steeringCapable = isWorkspaceConversationAgentProvider(selection.provider)
+          && selection.provider.inputCapabilities?.steering === true;
+        const steeringSource = createConversationQueueSteeringSource({
+          pool: this.options.pool,
+          auth,
+          fence,
+          sessionId: claimed.sessionId,
+          onLost: (reason) => controller.abort(new RunAbort(reason)),
+          loadImages: async (member) => {
+            const context = await readConversationRunImages(
+              this.options.pool, claimed.accountId, claimed.sessionId, member.entryId,
+            );
+            return context.images
+              .filter((image) => image.messageId === member.messageId)
+              .map((image) => ({
+                kind: "image" as const,
+                artifactID: `conversation-image-${image.messageId}-${image.imageIndex}-${image.manifest.attachment_id}`,
+                mimeType: image.manifest.media_type,
+                byteSize: image.manifest.byte_size,
+                contentHash: image.manifest.content_hash,
+                dataBase64: Buffer.from(image.data).toString("base64"),
+              }));
+          },
+        });
+        const steering = steeringCapable
+          ? createConversationQueueSteeringFeed(steeringSource, {
+              signal: controller.signal,
+              ...(this.options.referenceClock ? { now: this.options.referenceClock } : {}),
+              usedImageCount: runImageContext.images.length,
+              usedImageBytes: runImageContext.images.reduce(
+                (sum, image) => sum + image.manifest.byte_size, 0,
+              ),
+            })
+          : null;
+        if (steering) await openConversationQueueSteeringIntake(this.options.pool, fence);
+        else await steeringSource.closeIntake({ force: true });
         const execution = await executeUnscopedChatTask({
+          hostAuthority: {
+            fence,
+            messageId: claimed.messageId,
+            sessionId: claimed.sessionId,
+          },
+          hostResult: claimed.hostResult,
           taskID: claimed.runId,
           request: {
             idempotency_key: `conversation-queue:${claimed.entryId}`,
@@ -544,7 +634,13 @@ export class ConversationQueueRunner {
           database: this.options.pool,
           probePool: this.options.pool,
           auth,
+          ...(steering ? { steering } : {}),
           ...(this.options.referenceClock ? { referenceTime: this.options.referenceClock() } : {}),
+          onToolCompletion: receipt => {
+            if (controller.signal.aborted || previewClosed) return;
+            if (completedTools.length < 16) completedTools.push({ name: receipt.name, completed_at: receipt.completedAt });
+            flush(false);
+          },
           onVisibleText: (delta) => {
             if (controller.signal.aborted || previewClosed) return;
             const visible = filter.push(delta);
@@ -574,31 +670,39 @@ export class ConversationQueueRunner {
         if (controller.signal.aborted) {
           const reason = (controller.signal.reason as RunAbort | undefined)?.code ?? "ABORTED";
           if (reason === "USER_CANCELLED") {
-            await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages.map((image) => image.manifest));
+            await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages.map((image) => image.manifest), completedTools);
           } else {
-            await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : reason === "LEASE_LOST" ? "LEASE_LOST" : "SOURCE_REVOKED", { auth, claimed, partialText: previewText });
+            await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : reason === "LEASE_LOST" ? "LEASE_LOST" : "SOURCE_REVOKED", { auth, claimed, partialText: previewText, completedTools });
           }
           return;
         }
         if (execution.remoteStatus === "fallback") {
           const failureCode = execution.remoteFailureCode ?? "MODEL_RUN_FAILED";
           this.options.logger.warn(
-            { ...queueRunCorrelation(claimed), ...execution.remoteDiagnostics, failure_code: failureCode },
+            { ...queueRunCorrelation(claimed), failure_code: failureCode,
+              ...execution.remoteDiagnostics, queue_failure_code: failureCode },
             "conversation queue model run did not complete",
           );
-          await this.finalizeRetained(fence, failureCode, { auth, claimed, partialText: previewText });
+          await this.finalizeRetained(fence, failureCode, { auth, claimed, partialText: previewText, completedTools });
           return;
         }
         const result = serializedResult(
           execution,
           entryImages.map((image) => image.manifest),
+          { claimedAt: claimed.claimedAt },
         );
         await recordConversationQueueResult(this.options.pool, fence, result);
         await this.replayPersistence(auth, claimed, result, fence);
       } catch (error) {
         const reason = (controller.signal.reason as RunAbort | undefined)?.code;
         if (error instanceof ConversationQueueLeaseLostError || reason === "LEASE_LOST") {
-          // Another worker owns the entry now; never write a terminal state.
+          // A committed Stop also fails the non-cancel result fence. Distinguish
+          // it from a truly stale worker, including a lost in-process stop event.
+          try {
+            const owned = await assertConversationQueueOwnedClaim(this.options.pool, fence, { allowCancelRequested: true });
+            if (owned.cancelRequested) await this.finalizeCancelled(auth, claimed, fence, previewText,
+              entryImages.map(image => image.manifest), completedTools);
+          } catch { /* A stale/revoked claim never gains cancellation authority. */ }
           return;
         }
         this.options.logger.error(
@@ -606,11 +710,11 @@ export class ConversationQueueRunner {
           "conversation queue run failed",
         );
         if (reason === "USER_CANCELLED") {
-          await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages.map((image) => image.manifest)).catch(() => undefined);
+          await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages.map((image) => image.manifest), completedTools).catch(() => undefined);
         } else if (revocationCode === "SOURCE_REVOKED" || reason === "SOURCE_REVOKED") {
-          await this.finalizeRetained(fence, "SOURCE_REVOKED", { auth, claimed, partialText: previewText }).catch(() => undefined);
+          await this.finalizeRetained(fence, "SOURCE_REVOKED", { auth, claimed, partialText: previewText, completedTools }).catch(() => undefined);
         } else {
-          await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : "RUN_FAILED", { auth, claimed, partialText: previewText }).catch(() => undefined);
+          await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : "RUN_FAILED", { auth, claimed, partialText: previewText, completedTools }).catch(() => undefined);
         }
       } finally {
         previewClosed = true;
@@ -634,7 +738,8 @@ export class ConversationQueueRunner {
     fence: ConversationQueueRunFence,
     partialText: string,
     images: ConversationImageManifest[],
-  ): Promise<void> {
+    tools: Array<{ name: string; completed_at: string }> = [],
+  ): Promise<boolean> {
     try {
       await persistConversationQueueCancellation(this.options.pool, auth, {
         fence,
@@ -645,9 +750,10 @@ export class ConversationQueueRunner {
         images,
         partialText,
         stoppedAt: new Date().toISOString(),
+        execution: { started_at: claimed.claimedAt, completed_at: new Date().toISOString(), tools },
       });
     } catch (error) {
-      if (error instanceof ConversationQueueLeaseLostError) return;
+      if (error instanceof ConversationQueueLeaseLostError) return false;
       // Never scrub the admitted message if its history was not saved. A
       // transient failure can retry on lease recovery; revoked or expired
       // context still cannot receive a partial answer and retains its existing
@@ -656,12 +762,13 @@ export class ConversationQueueRunner {
         { queue_entry_id: claimed.entryId, err: error },
         "conversation queue stop could not persist a partial answer",
       );
-      return;
+      return false;
     }
-    await finalizeConversationQueueEntry(this.options.pool, {
+    const finalized = await finalizeConversationQueueEntry(this.options.pool, {
       fence,
       status: "cancelled",
     }).catch(() => undefined);
+    return finalized?.applied === true || finalized?.effectiveStatus === "cancelled";
   }
 
   private async finalizeRetained(
@@ -671,6 +778,7 @@ export class ConversationQueueRunner {
       auth: AuthContext;
       claimed: ClaimedConversationQueueEntry;
       partialText: string;
+      completedTools?: Array<{ name: string; completed_at: string }>;
     },
   ): Promise<void> {
     const outcome = await finalizeConversationQueueEntry(this.options.pool, {
@@ -700,6 +808,7 @@ export class ConversationQueueRunner {
         images,
         partialText: stop.partialText,
         stoppedAt: new Date().toISOString(),
+        execution: { started_at: stop.claimed.claimedAt, completed_at: new Date().toISOString(), tools: stop.completedTools ?? [] },
       });
     } catch (error) {
       if (!(error instanceof ConversationQueueLeaseLostError)) {

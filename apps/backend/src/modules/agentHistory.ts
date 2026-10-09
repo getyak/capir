@@ -205,7 +205,7 @@ function operationCopy(row: AgentHistoryRow): {
           title: "Identity left unresolved",
           detail: bounded(
             row.identity_decision_reason
-              ? `Recruiter note: ${row.identity_decision_reason}`
+              ? `Review note: ${row.identity_decision_reason}`
               : "The source stayed outside every person Wiki pending stronger identity evidence.",
           ),
         };
@@ -215,8 +215,8 @@ function operationCopy(row: AgentHistoryRow): {
         title: "Source identity resolved",
         detail: bounded(
           row.identity_decision_reason
-            ? `Recruiter basis: ${row.identity_decision_reason}`
-            : "The recruiter selected this person and relationship before the source entered the Wiki.",
+            ? `Decision basis: ${row.identity_decision_reason}`
+            : "The user selected this person and relationship before the source entered the Wiki.",
         ),
       };
     }
@@ -232,7 +232,7 @@ function operationCopy(row: AgentHistoryRow): {
           : "Source moved into this relationship",
         detail: bounded(
           !movedOut && row.correction_reason
-            ? `Recruiter basis: ${row.correction_reason}`
+            ? `Decision basis: ${row.correction_reason}`
             : `${count(metadata.capture_ids_rebound)} governed ${
                 count(metadata.capture_ids_rebound) === 1
                   ? "capture was"
@@ -257,7 +257,7 @@ function operationCopy(row: AgentHistoryRow): {
       const policyDetail = policyVersion
         ? ` Policy ${policyVersion}${
             validityBasis === "human_override"
-              ? `; recruiter override: ${overrideReason ?? "reason unavailable"}`
+              ? `; human override: ${overrideReason ?? "reason unavailable"}`
               : "; default interval"
           }.`
         : "";
@@ -283,7 +283,7 @@ function operationCopy(row: AgentHistoryRow): {
         detail: bounded(
           `${text(metadata.handle_type)?.replaceAll("_", " ") ?? "Identity"} clue ${
             text(metadata.display_hint) ?? "masked"
-          } reached its independent freshness deadline. It remains in history but cannot act as a confirmed match until the recruiter supplies a fresh governed contact source.`,
+          } reached its independent freshness deadline. It remains in history but cannot act as a confirmed match until the user supplies a fresh governed contact source.`,
         ),
       };
     case "identity.people_merged":
@@ -299,7 +299,7 @@ function operationCopy(row: AgentHistoryRow): {
             count(metadata.captures_rebound) === 1
               ? "source was"
               : "sources were"
-          } moved to the retained person with provenance intact. Recruiter basis: ${
+          } moved to the retained person with provenance intact. Decision basis: ${
             text(metadata.reason) ?? "duplicate identity confirmed"
           }`,
         ),
@@ -313,7 +313,7 @@ function operationCopy(row: AgentHistoryRow): {
             count(metadata.affected_relationship_context_ids) === 1
               ? "context was"
               : "contexts were"
-          } restored to the prior person. Recruiter basis: ${
+          } restored to the prior person. Decision basis: ${
             text(metadata.reason) ?? "separate identities confirmed"
           }`,
         ),
@@ -331,7 +331,7 @@ function operationCopy(row: AgentHistoryRow): {
             metadata.states_retracted,
           )} confirmed ${
             count(metadata.states_retracted) === 1 ? "state was" : "states were"
-          } retracted. Recruiter basis: ${
+          } retracted. Decision basis: ${
             text(metadata.reason) ?? "authorization withdrawn"
           }`,
         ),
@@ -347,7 +347,7 @@ function operationCopy(row: AgentHistoryRow): {
               : "captures are"
           } available again; ${count(metadata.claims_reopened)} ${
             count(metadata.claims_reopened) === 1 ? "claim remains" : "claims remain"
-          } pending recruiter review. No prior conclusion or action was restored automatically. Recruiter basis: ${
+          } pending human review. No prior conclusion or action was restored automatically. Decision basis: ${
             text(metadata.reason) ?? "authorization restored"
           }`,
         ),
@@ -373,7 +373,7 @@ function operationCopy(row: AgentHistoryRow): {
                   count(metadata.external_effects_requiring_follow_up) === 1
                     ? "effect requires"
                     : "effects require"
-                } recruiter follow-up.`
+                } user follow-up.`
               : ""
           }`,
         ),

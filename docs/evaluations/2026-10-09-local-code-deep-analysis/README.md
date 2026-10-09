@@ -121,7 +121,7 @@ decides otherwise.
 ## 7. Merge and release readiness
 
 Experimental `git merge-tree --write-tree` of the full local work against
-`origin/main` reports content conflicts in exactly these 13 files:
+`origin/main` reported content conflicts in exactly these 14 files:
 
 ```
 apps/web/app/workspace/layout.tsx
@@ -149,19 +149,42 @@ must be resolved semantically, keeping both sides' behavior, not by picking one
 side. After resolution, the merged tree needs its own full-suite evidence; the
 green results in section 5 describe the pre-merge working tree only.
 
-**Release.** Tags are `v0.1.x`; the next tag after `v0.1.101` is `v0.1.102`
-unless the owner chooses a different scheme. Local source health is not a
-production release: deployed Web is a separate release identity and remains
-unverified by this analysis.
+## 8. Merge resolution record (2026-10-09)
 
-## 8. Limits and unknowns
+The merge was resolved semantically. Two local designs overlapped with newer
+`main` work on the same surfaces; the resolution rule was: keep the newest
+settled design for presentation, keep the local work wherever it adds behavior
+`main` does not have, and record every supersession instead of shipping two
+competing mechanisms.
+
+| Area | Resolution | Why |
+| --- | --- | --- |
+| Sidebar rail and collapse | `main`'s settled GET-129 compact rail (248px/72px, avatar shortcuts) wins; the local spring rail, floating edge reveal (`workspace-sidebar.tsx`, `workspace-rail-preference.ts`) were removed | `main` kept refining the settled rail through `#306`; the local variant was a competing implementation of the same control |
+| Conversation transcript architecture | `main`'s projection wins (execution records, milestones, images, MCP cards, send-time, user bubbles) | 92 commits of newer, feature-complete work the local branch does not have |
+| Outbox delivery semantics | Local work wins and was ported into `main`'s hook: canonical-history settle with same ordered image manifests, bounded passive readback, retained handoff rows, observed Stop outcome, same-ID receipt confirmation without resend, one-shot completion seam, distinct-capacity counting | `main` deleted local outbox rows on queue receipt, which allowed a blank handoff and lost local image bytes before history readback |
+| Send/readback gap presentation | Local `ConversationWorkRow` renders only for messages with no canonical or live representation (waiting, unknown/rejected delivery, readback, stopped) | Fills the exact windows `main` leaves blank without duplicating its execution records |
+| Recent Sessions list | Both: `main`'s person avatars, brand marks, new-conversation action and person rows plus local collapse disclosure, Archive/Pin, arrival motion, sliding selection highlight | Disjoint behaviors on the same rows |
+| macOS material, folding, organization | Local work kept unchanged | No overlap |
+
+Evidence for the merged tree: full Web vitest 267 files / 2091 tests passed,
+Web typecheck passed, ESLint 0 errors (6 pre-existing warnings in untouched
+files), `pnpm docs:check` passed. Four local test files were adapted where the
+presentation moved to `main`'s execution records and the product name moved to
+`capri`; every truthfulness assertion (no false success, no resend, no blank
+handoff, no animation on terminal states, exact message identity) was kept.
+
+## 9. Release
+
+Tags are `v0.1.x`; the owner selected `v0.2.0` for this merged batch. Local
+source health is not a production release: deployed Web is a separate release
+identity and remains unverified by this analysis.
+
+## 10. Limits and unknowns
 
 - Native physical trackpad history gestures, row swipe, pinch, and desktop
   vibrancy with reduce-transparency disabled remain unverified (reported by the
   material motion task and not re-verified here).
 - No iOS simulator run, no macOS application build/XCTest, and no production
   Next build were performed for this analysis.
-- The 13-file merge conflict resolution is unverified work at the time of
-  writing; post-merge checks are the evidence that counts.
 - This analysis never authenticated a real account and must not be cited as
   production acceptance.

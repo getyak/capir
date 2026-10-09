@@ -18,6 +18,10 @@ import {
 } from "@/lib/auth-config";
 import { backendSessionIsExpired } from "@/lib/backend-session";
 import {
+  DesktopAuthRequestError,
+  authorizeDesktopBrowserLogin,
+} from "@/lib/server/desktop-browser-login";
+import {
   AUTH_SESSION_COOKIE,
   authSecret,
   confirmBackendRegistration,
@@ -102,6 +106,10 @@ class AccountServiceCredentialsError extends CredentialsSignin {
   code = "service_unavailable";
 }
 
+class TestWorkspaceSessionLimitCredentialsError extends CredentialsSignin {
+  code = "test_workspace_session_limit";
+}
+
 class RateLimitedCredentialsError extends CredentialsSignin {
   code = "rate_limited";
 }
@@ -143,7 +151,7 @@ function buildProviders(appleCredentials: AppleCredentials): Provider[] {
   const providers: Provider[] = [
     Credentials({
       id: "password-account",
-      name: "Talent Signal account",
+      name: "capri account",
       credentials: {
         mode: { label: "Mode", type: "text" },
         identifier: { label: "Username or email", type: "text" },
@@ -204,6 +212,13 @@ function buildProviders(appleCredentials: AppleCredentials): Provider[] {
             (error.status === 429 || error.code === "RATE_LIMITED")
           ) {
             throw new RateLimitedCredentialsError();
+          }
+          if (
+            error instanceof TalentSignalHttpError &&
+            error.status === 409 &&
+            error.code === "LAB_WORKSPACE_ENTRY_LIMIT"
+          ) {
+            throw new TestWorkspaceSessionLimitCredentialsError();
           }
           throw new AccountServiceCredentialsError();
         }
@@ -291,6 +306,35 @@ function buildProviders(appleCredentials: AppleCredentials): Provider[] {
             return null;
           }
           throw new AccountServiceCredentialsError();
+        }
+      },
+    }),
+  );
+
+  // One generic first-party browser exchange (ADR 0022): the selected
+  // WKWebView context posts its one-use code and PKCE verifier here, and the
+  // authorization runs the backend's atomic consume. The resulting claims are
+  // the ordinary backend session claims; nothing invents a token format.
+  providers.push(
+    Credentials({
+      id: "desktop-browser",
+      name: "Mac 浏览器登录",
+      credentials: {
+        attempt_id: { label: "Attempt", type: "text" },
+        code: { label: "Code", type: "text" },
+        verifier: { label: "Verifier", type: "text" },
+        state: { label: "State", type: "text" },
+      },
+      async authorize(credentials) {
+        try {
+          return await authorizeDesktopBrowserLogin(credentials ?? {});
+        } catch (error) {
+          if (error instanceof DesktopAuthRequestError && error.status >= 500) {
+            throw new AccountServiceCredentialsError();
+          }
+          // A malformed or refused exchange is a failed sign-in, never a
+          // partial session.
+          return null;
         }
       },
     }),
@@ -534,6 +578,7 @@ export function buildAuthConfig(): NextAuthConfig {
           account &&
           (account.provider === "password-account" ||
             account.provider === "email-verification" ||
+            account.provider === "desktop-browser" ||
             account.provider === "google" ||
             account.provider === "apple")
         ) {

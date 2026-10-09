@@ -1,14 +1,14 @@
-# Talent Signal brand
+# capri brand
 
 <div align="center">
 
-<img src="preview.svg" width="760" alt="Talent Signal Held Interval symbol in primary color, ink-only, reverse, and app-icon treatments">
+<img src="preview.svg" width="760" alt="capri Held Interval symbol in primary color, ink-only, reverse, and app-icon treatments">
 
 </div>
 
 ## Held Interval
 
-The Talent Signal mark protects the living interval between people while
+The capri mark protects the living interval between people while
 making one consequential change visible.
 
 - The **ink stroke** holds the relationship field without reducing a person to
@@ -20,6 +20,19 @@ making one consequential change visible.
 
 This is one geometry with controlled material treatments, not a family of
 interchangeable logo ideas.
+
+## Product name and voice
+
+Use lowercase **capri** in user-facing text. The personal Agent helps the user
+carry forward important people and unfinished work from intentionally shared
+conversations. Explain the useful result first, then the scope and state:
+prepared, awaiting review, saved, updated, or stopped. Understanding a message
+does not confirm a fact or authorize an external action.
+
+Keep `capir` as the existing CLI entry and retain established technical keys,
+domains and asset filenames until their own compatibility contract changes.
+Legacy filenames below identify the same approved mark; they are not the public
+product name. Historical brand selection evidence retains its original wording.
 
 ## Approved assets
 
@@ -87,4 +100,4 @@ source parity.
 
 The selection evidence, rejected direction, before-and-after renders, and
 reconsideration signal are retained in the dated
-[brand mark evaluation](../docs/evaluations/2026-08-07-brand-mark-redesign/README.md).
+[brand mark evaluation](https://github.com/getyak/capir-evals/blob/main/evidence/2026-08-07-brand-mark-redesign/README.md).

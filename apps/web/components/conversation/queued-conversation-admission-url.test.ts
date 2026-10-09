@@ -29,6 +29,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { QueuedConversation } from "./queued-conversation";
+import { conversationHome } from "@/lib/conversation-local";
 
 const SESSION = "33333333-3333-4333-8333-333333333333";
 const SCOPE = "a".repeat(64);
@@ -184,4 +185,18 @@ it("never rewrites a duplicated draft_session key", async () => {
   expect(window.location.pathname).toBe("/workspace");
   expect(window.location.search).toBe(search);
   expect(window.location.hash).toBe("#main-content");
+});
+
+it("does not restore an admitted draft locator when bootstrap capability changes", async () => {
+  await renderDraft();
+  await send();
+  expect(conversationHome(SCOPE)).toBeNull();
+  await act(async () => root?.render(createElement(QueuedConversation, {
+    bootstrap: { sessionId: SESSION, capability: "refreshed-synthetic-capability" },
+    chatBinding: "chat-binding", detailBinding: "detail-binding", scope: SCOPE,
+  })));
+  await flush(4);
+  expect(conversationHome(SCOPE)).toBeNull();
+  expect(window.location.pathname).toBe(`/workspace/sessions/${SESSION}`);
+  expect(window.location.search).toBe("");
 });

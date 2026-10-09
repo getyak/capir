@@ -24,7 +24,7 @@ Technology is welcome when it improves the experience: for example, transcriptio
 
 **Observed:** candid, energetic, conversational, warm, occasionally irreverent, visually lively, anti-corporate-bland, willing to challenge leaders directly.
 
-For Talent Signal:
+For capri:
 
 - Say what the user impact is in ordinary words.
 - Name the broken collaboration or avoidance behind the screen.

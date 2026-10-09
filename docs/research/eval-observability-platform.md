@@ -558,7 +558,8 @@ justifies a separate analytics store.
   fingerprints, budgets, tool mediation, and journal sequence; current code.
 - `packages/contracts/src/agentSchemas.ts` — public Agent run and receipt
   contract; current code.
-- `evals/overnight-cross-surface-v1.json` and
+- [overnight-cross-surface-v1.json](https://github.com/getyak/capir-evals/blob/main/evals/overnight-cross-surface-v1.json)
+  (private evaluation corpus) and
   `apps/backend/src/evaluation/runAgentControlPlaneEvaluation.ts` — current
   synthetic and executable evaluation evidence; dated/current implementation.
 - `docs/research/cloud-screenshot-processing-privacy.md` — current research on

@@ -1,0 +1,131 @@
+import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { SessionExecutionCard, SessionRunUpdate, SessionSendTime } from "./session-execution-card";
+
+describe("in-place execution card", () => {
+  it("counts only recorded tool completions and keeps stage observations separate", () => {
+    const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
+      phase: "completed", stage: null,
+      startedAt: "2026-10-01T01:00:00Z", endedAt: "2026-10-01T01:00:08Z",
+      milestones: [{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-10-01T01:00:01Z" }],
+      completedTools: [{ name: "contact_read", completed_at: "2026-10-01T01:00:03Z" }],
+    }));
+    expect(html).toContain("已记录 1 次工具完成");
+    expect(html).toContain('aria-label="工具完成记录"');
+    expect(html).toContain("contact_read");
+    expect(html).not.toContain("已记录 2 次");
+    expect(html).not.toMatch(/%/u);
+  });
+  it("shows observed state and elapsed time without any fabricated percentage", () => {
+    const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
+      phase: "running",
+      stage: "contact_read",
+      startedAt: "2026-09-30T01:00:00.000Z",
+      milestones: [{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-09-30T01:00:01.000Z" }],
+      failureCode: null,
+    }));
+    expect(html).toContain("正在处理");
+    expect(html).toContain("capri");
+    expect(html).toContain('role="status"');
+    expect(html).toContain("正在阅读相关记录");
+    expect(html).toContain("用时");
+    expect(html).toContain("data-elapsed-ms");
+    expect(html).toContain("正在查找相关人物");
+    // No unknown-total percentage anywhere in the execution record.
+    expect(html).not.toMatch(/%/u);
+    expect(html).toContain("<details");
+  });
+
+  it("keeps a pending decision distinct from a completed execution", () => {
+    const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
+      phase: "waiting-review",
+      stage: null,
+      startedAt: "2026-09-30T01:00:00.000Z",
+      endedAt: "2026-09-30T01:00:08.000Z",
+      milestones: [],
+    }));
+    expect(html).toContain("执行完成，待你确认");
+    expect(html).toContain("结束");
+    // A pinned terminal duration never grows while the transcript is reopened.
+    expect(html).toContain("用时 8 秒");
+  });
+
+  it("names failure and interruption with their real code", () => {
+    const failed = renderToStaticMarkup(createElement(SessionExecutionCard, {
+      phase: "failed",
+      stage: null,
+      startedAt: "2026-09-30T01:00:00.000Z",
+      endedAt: "2026-09-30T01:00:03.000Z",
+      milestones: [],
+      failureCode: "MODEL_RUN_TIMEOUT",
+    }));
+    expect(failed).toContain("执行未完成");
+    expect(failed).toContain("MODEL_RUN_TIMEOUT");
+    const interrupted = renderToStaticMarkup(createElement(SessionExecutionCard, {
+      phase: "interrupted",
+      stage: null,
+      startedAt: "2026-09-30T01:00:00.000Z",
+      endedAt: "2026-09-30T01:00:03.000Z",
+      milestones: [],
+    }));
+    expect(interrupted).toContain("执行已中断");
+    expect(interrupted).toContain('data-phase="interrupted"');
+  });
+});
+
+describe("milestone update and per-send time", () => {
+  it("renders the observed updates as ephemeral milestone dialogue", () => {
+    const html = renderToStaticMarkup(createElement(SessionRunUpdate, { updates: ["我先核对两人的沟通记录。", "再看下一步该确认什么。"], stage: "answer", status: "" }));
+    expect(html).toContain("我先核对两人的沟通记录。");
+    expect(html).toContain("再看下一步该确认什么。");
+    expect(html).toContain("data-run-update");
+  });
+
+  it("keeps silence valid without filling dialogue with tool reads", () => {
+    const silent = renderToStaticMarkup(createElement(SessionRunUpdate, { updates: [], stage: "contact_lookup", status: "" }));
+    expect(silent).toBe("");
+    expect(silent).not.toContain("data-run-update");
+    const unknown = renderToStaticMarkup(createElement(SessionRunUpdate, { updates: [], stage: null, status: "正在处理" }));
+    expect(unknown).toBe("");
+  });
+
+  it("formats the centered per-send timestamp from real message time", () => {
+    const now = new Date();
+    const today = renderToStaticMarkup(createElement(SessionSendTime, { at: now.toISOString() }));
+    expect(today).toContain(`今天 ${now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`);
+    expect(today).toContain(`dateTime="${now.toISOString()}"`);
+    const past = renderToStaticMarkup(createElement(SessionSendTime, { at: "2026-09-24T09:46:00.000Z" }));
+    expect(past).toMatch(/\d+月\d+日/u);
+    const previousYear = new Date(now.getFullYear() - 1, 0, 15, 9, 30);
+    const older = renderToStaticMarkup(createElement(SessionSendTime, { at: previousYear }));
+    expect(older).toContain(`${previousYear.getFullYear()}年1月15日`);
+    expect(older).toContain(`dateTime="${previousYear.toISOString()}"`);
+    // No timestamp is invented when the message carries no observed time.
+    expect(renderToStaticMarkup(createElement(SessionSendTime, { at: "not-a-date" }))).toBe("");
+    expect(renderToStaticMarkup(createElement(SessionSendTime, { at: undefined }))).toBe("");
+  });
+});
+
+it("renders a whole forming Markdown draft only inside execution details", () => {
+  const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
+    phase: "running", stage: "answer", startedAt: "2026-10-01T01:00:00Z", milestones: [],
+    draft: "```ts\nconst x = 1;\n```\n\n1. First\n2. Second\n\n| A | B |\n| --- | --- |\n| 1 | 2 |",
+  }));
+  expect(html).toContain("回复草稿，尚未完成");
+  expect(html).toContain("<pre");
+  expect(html).toContain("<ol");
+  expect(html).toContain("<table");
+  expect(html).not.toContain("data-run-update");
+});
+
+it("keeps waiting, stopping and terminal outcomes distinct from active processing", () => {
+  for (const phase of ["queued", "stopping", "failed", "interrupted", "completed"] as const) {
+    const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
+      phase, stage: null, startedAt: "2026-10-05T01:00:00Z", milestones: [],
+      endedAt: phase === "queued" || phase === "stopping" ? null : "2026-10-05T01:00:03Z",
+    }));
+    expect(html).not.toContain("正在处理");
+    expect(html.includes('data-live="true"')).toBe(phase === "queued" || phase === "stopping");
+  }
+});

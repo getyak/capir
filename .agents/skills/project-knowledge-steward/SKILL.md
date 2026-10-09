@@ -1,6 +1,6 @@
 ---
 name: project-knowledge-steward
-description: Maintain Talent Signal's project knowledge system by routing durable learning to AGENTS.md, canonical docs, ADRs, Skills, plans, research, tests, or code while removing duplication and stale implementation detail. Use when updating or reorganizing repository documentation, capturing a retrospective or repeated correction, deciding where new project knowledge belongs, pruning agent context, or improving long-running Codex workflows.
+description: Maintain capri's project knowledge system by routing durable learning to AGENTS.md, canonical docs, ADRs, Skills, plans, research, tests, or code while removing duplication and stale implementation detail. Use when updating or reorganizing repository documentation, capturing a retrospective or repeated correction, deciding where new project knowledge belongs, pruning agent context, or improving long-running Codex workflows.
 ---
 
 # Project Knowledge Steward
@@ -41,6 +41,25 @@ If the insight does not improve a future decision or verification loop, do not
 store it.
 
 ## Maintain the system
+
+### Owner-controlled Notion structure
+
+Before a Notion write, read the destination's existing outline and relevant
+owner-established template. Fill those sections; do not invent headings,
+appendices, folded research, or a replacement information architecture merely
+because additional material is available. A structure change requires the
+owner's explicit choice. Missing structure is an unresolved decision, not an
+invitation to select a generic Skill template.
+
+When the owner requests dialogue examples, store the requested participants
+and raw messages in the named section. Keep source and synthetic-data labels,
+but do not add product presentation advice or interpretation unless requested.
+Preserve the owner's existing wording outside the specified edit.
+
+For bulk reorganization, resolve the affected workspace/project and map pages
+to their existing structures before writing. The three story sections belong
+to the product-user-story page; they are not a universal outline for unrelated
+Notion documents.
 
 1. Search for existing statements and contradictions.
 2. Identify the single authoritative destination.

@@ -57,7 +57,7 @@ describe("quiet workspace shell render", () => {
       await WorkspaceLayout({ children: createElement("main", null, "child") }),
     );
 
-    expect(html).toContain("Talent Signal");
+    expect(html).toContain("capri");
     expect(html).toContain("工作台导航");
     // Direct primary desktop order: new conversation, Today, People, Meetings,
     // Extensions — with no generic "More" disclosure.
@@ -78,7 +78,10 @@ describe("quiet workspace shell render", () => {
     expect(html).toContain("Synthetic Recruiter");
     expect(html).toContain("Alpha 寻访测试");
     expect(html).toContain(">SR<");
-    expect(html).toContain("账号与空间操作");
+    expect(html).toContain('data-slot="account-trigger"');
+    expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("账号与空间操作");
     expect(html).toContain("child");
   });
 
@@ -100,8 +103,8 @@ describe("quiet workspace shell render", () => {
     expect(html).toContain("有什么想一起理清的？");
     // The default composer stays a single attachment/send pair: the person and
     // capture affordances live behind one compact add control, not a strip.
-    expect(html).toContain("添加截图或查找人物");
-    expect(html).toContain('aria-controls="composer-add-panel"');
+    expect(html).toContain("添加文件、工具与提示，或查找人物");
+    expect(html).toMatch(/aria-controls="[^"]+-add-panel"/);
     expect(html).not.toContain("未关联人物");
     expect(html).not.toContain("选择人物");
     expect(html).toContain("queued-conversation-composer");

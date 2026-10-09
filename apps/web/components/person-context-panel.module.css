@@ -1,0 +1,43 @@
+.overlay { background:color-mix(in srgb,var(--ts-ink) 16%,transparent); inset:0; position:fixed; z-index:80; }
+/* The warm drawer chrome fills the edge; its content starts below the 68px
+   conversation header with the same 24px inset as Figma's drawer body. */
+.panel { --panel-width:336px; --panel-top-inset:92px; background:var(--ts-content-surface,#fcfbf7); border-left:1px solid var(--ts-divider,#e2e0d8); color:var(--ts-ink,#171715); height:100dvh; inset:0 0 0 auto; overflow:auto; overscroll-behavior:contain; padding:var(--panel-top-inset) 24px 24px; position:fixed; width:var(--panel-width); z-index:85; animation:enter 220ms var(--ease-out,ease); }
+.panel:focus { outline:none; }
+.top { background:var(--ts-content-surface,#fcfbf7); position:sticky; top:calc(12px - var(--panel-top-inset)); z-index:1; align-items:flex-start; color:var(--ts-chrome-muted,#6a675f); display:flex; justify-content:space-between; min-height:24px; margin-bottom:8px; }
+.top h2 { font-size:14px; font-weight:400; line-height:24px; margin:0; padding-right:44px; }
+/* Cover scrolling text behind the close target's negative top offset. */
+.top::before { background:inherit; content:""; inset:-12px -24px -8px; pointer-events:none; position:absolute; z-index:-1; }
+.close { align-items:center; background:var(--ts-content-surface,#fcfbf7); border:0; border-radius:8px; color:inherit; cursor:pointer; display:flex; height:40px; justify-content:center; position:absolute; right:-12px; top:-10px; width:40px; }
+.close:hover { background:var(--ts-selected-surface); color:var(--ts-ink); }
+.body { display:grid; gap:8px; }
+.identity { align-items:center; display:flex; gap:14px; min-width:0; }
+.identity > div { display:grid; gap:2px; min-width:0; }
+.identity h2 { font-size:20px; font-weight:500; line-height:32px; margin:0; overflow-wrap:anywhere; }
+.identity p { color:var(--ts-chrome-muted); font-size:12px; line-height:20px; margin:0; }
+.metadata { display:grid; font-size:13px; column-gap:12px; grid-auto-rows:minmax(32px,auto); grid-template-columns:60px minmax(0,1fr); line-height:20px; overflow-wrap:anywhere; row-gap:0; }
+.metadata > span { color:var(--ts-chrome-muted); font-size:12px; }
+.metadata > div { display:grid; gap:6px; }
+.memory { border-top:1px solid var(--ts-divider); display:grid; gap:10px; padding-top:8px; }
+.body h3 { font-size:14px; font-weight:500; line-height:24px; margin:0; }
+.memory article { display:grid; gap:2px; }
+.kind { color:var(--ts-chrome-muted); font-size:12px; font-weight:500; line-height:20px; }
+.memory article p { font-size:14px; line-height:24px; margin:0; overflow-wrap:anywhere; }
+.provenance { color:var(--ts-chrome-muted); display:grid; font-size:12px; line-height:20px; text-decoration:none; }
+.provenance:hover { color:var(--ts-ink); }
+.provenance span { font-size:12px; }
+.empty,.state { color:var(--ts-chrome-muted); font-size:13px; line-height:22px; }
+.state { padding-top:16px; }
+.state button { border:1px solid var(--ts-divider); border-radius:8px; background:var(--ts-selected-surface); color:var(--ts-ink); cursor:pointer; font:inherit; padding:8px 16px; }
+.history { display:grid; gap:6px; }
+.history > a { color:inherit; display:grid; font-size:13px; gap:12px; grid-template-columns:68px minmax(0,1fr); line-height:20px; min-height:42px; padding:0; text-decoration:none; }
+.history time,.history small { color:var(--ts-chrome-muted); font-size:12px; }
+.history a div { display:grid; gap:2px; }
+.history a span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.history a:hover span { text-decoration:underline; text-underline-offset:3px; }
+.destination { align-items:center; background:var(--ts-selected-surface); border-radius:8px; color:inherit; display:flex; font-size:13px; gap:8px; min-height:36px; padding:8px 10px; text-decoration:none; }
+.panel :is(a,button):focus-visible { outline:2px solid var(--ts-accent); outline-offset:3px; }
+.panel .close:focus-visible { outline-offset:-3px; }
+@keyframes enter { from { opacity:0; transform:translateX(12px); } to { opacity:1; transform:translateX(0); } }
+@media(min-width:1001px) { .overlay { display:none; } }
+@media(max-width:1000px) { .panel { --panel-top-inset:24px; width:min(100vw,384px); } .close { height:44px; width:44px; } .destination { min-height:44px; } }
+@media(prefers-reduced-motion:reduce) { .panel { animation:none; } }

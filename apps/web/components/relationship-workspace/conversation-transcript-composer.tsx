@@ -169,7 +169,7 @@ export function ConversationTranscriptComposer({
             ))}
           </div>
           <small>
-            只有在文件仅包含对方发言时，才选择“对方”。Talent Signal 绝不会根据措辞或消息顺序猜测说话人。
+            只有在文件仅包含对方发言时，才选择“对方”。capri 绝不会根据措辞或消息顺序猜测说话人。
           </small>
         </fieldset>
         <button

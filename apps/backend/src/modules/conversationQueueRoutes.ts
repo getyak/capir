@@ -115,6 +115,13 @@ export function registerConversationQueueRoutes(
           },
         });
       }
+      if ((request.body as { host_result?: unknown }).host_result !== undefined) {
+        throw new ApiError(
+          422,
+          "CONVERSATION_QUEUE_HOST_RESULT_REFUSED",
+          "Host tool results are written by the governed host path and cannot be submitted by a client.",
+        );
+      }
       const result = await admitConversationQueueEntry(
         pool,
         request.auth,
@@ -283,7 +290,7 @@ export function registerConversationQueueRoutes(
                     ? {
                         run_id: preview.runId,
                         message_id: preview.messageId,
-                        text: preview.text,
+                        text: preview.text, completed_tools: preview.completedTools ?? [],
                         stage: preview.stage,
                         revision: preview.sequence,
                       }
@@ -294,7 +301,7 @@ export function registerConversationQueueRoutes(
             const previewKey = preview ? `${preview.runId}:${preview.sequence}` : "";
             if (preview && previewKey !== lastPreview) {
               lastPreview = previewKey;
-              write(`event: preview\ndata: ${JSON.stringify({ run_id: preview.runId, message_id: preview.messageId, text: preview.text, stage: preview.stage, revision: preview.sequence })}\n\n`);
+              write(`event: preview\ndata: ${JSON.stringify({ run_id: preview.runId, message_id: preview.messageId, text: preview.text, completed_tools: preview.completedTools ?? [], stage: preview.stage, revision: preview.sequence })}\n\n`);
             }
           }
         } catch {

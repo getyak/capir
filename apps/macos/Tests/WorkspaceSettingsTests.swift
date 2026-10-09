@@ -88,6 +88,7 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertEqual(payload["protocolVersion"] as? Int, 1)
         XCTAssertEqual(payload["surface"] as? String, "workspace")
         XCTAssertEqual(payload["appVersion"] as? String, "0.1.0 (29)")
+        XCTAssertEqual(payload["supportMailHandoff"] as? Bool, true)
         XCTAssertEqual(payload["availableVersion"] as? String, "0.2.0")
         XCTAssertEqual(payload["phase"] as? String, "available")
         XCTAssertEqual(payload["progress"] as? Int, 42)
@@ -591,7 +592,7 @@ final class WorkspaceSettingsTests: XCTestCase {
     @MainActor
     func testProductionBrowserInstallsPaintGuardAndMatchesOnlySettingsRoutes() throws {
         let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
-        let configuration = WorkspaceBrowser.configuration(for: origin)
+        let configuration = try XCTUnwrap(WorkspaceBrowser.configuration(for: origin))
         let sources = configuration.userContentController.userScripts.map(\.source)
         XCTAssertTrue(sources.contains(WorkspaceSettingsPaintGuard.scriptSource),
                       "the production workbench must install the settings paint guard")
@@ -618,7 +619,7 @@ final class WorkspaceSettingsTests: XCTestCase {
         let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
         // The exact configuration the app runs, so this proves the shipped
         // guard rather than a test-only script.
-        let configuration = WorkspaceBrowser.configuration(for: origin)
+        let configuration = try XCTUnwrap(WorkspaceBrowser.configuration(for: origin))
         let handler = TestSchemeHandler(body: """
         <!doctype html><meta charset=utf-8><title>workbench</title>
         <body><input id="draft" value=""><p>workbench</p></body>

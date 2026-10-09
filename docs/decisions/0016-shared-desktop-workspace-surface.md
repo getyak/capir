@@ -36,8 +36,7 @@ server fixes do not require distributing a second page implementation. The Mac
 product requires network reachability to the configured HTTPS service; offline
 mode is an honest retry surface. Password authentication, upload, IME, page
 navigation and recovery require rendered validation. System-browser OAuth does
-not transfer a cookie back to WebKit automatically, and is not claimed as a
-verified sign-in flow.
+not transfer a cookie back to WebKit automatically. [ADR 0022](0022-browser-owned-macos-login.md) introduces a browser-owned, one-use grant and independently verified WebKit session installation; it does not share or copy browser cookies.
 
 The isolated local-asset Tauri bridge remains useful for native capability work.
 We rejected attaching it to the remote page, copying prototype mock state into

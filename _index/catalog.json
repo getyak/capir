@@ -1,0 +1,42 @@
+{
+  "schema": "capri-index-catalog.v1",
+  "note": "Search aid for _index/pages/: front matter remains the authoritative metadata. Keep entries sorted by id.",
+  "pages": [
+    {
+      "id": "capir-cli",
+      "title": "capir CLI reference",
+      "status": "published",
+      "language": "en",
+      "target": "docs/operations/capir-cli.md",
+      "source": "_index/pages/capir-cli.md",
+      "intake": "_index/inbox/capir-cli.md"
+    },
+    {
+      "id": "cloud-screenshot-processing-privacy",
+      "title": "Cloud chat screenshot processing privacy, security, and recruiting-AI boundaries",
+      "status": "published",
+      "language": "en",
+      "target": "docs/research/cloud-screenshot-processing-privacy.md",
+      "source": "_index/pages/cloud-screenshot-processing-privacy.md",
+      "intake": "_index/inbox/2026-08-06-cloud-screenshot-processing-privacy-zh.md"
+    },
+    {
+      "id": "recruiter-discovery-and-wedge-validation",
+      "title": "Recruiter discovery and relationship-continuity wedge validation",
+      "status": "published",
+      "language": "en",
+      "target": "docs/research/recruiter-discovery-and-wedge-validation.md",
+      "source": "_index/pages/recruiter-discovery-and-wedge-validation.md",
+      "intake": null
+    },
+    {
+      "id": "wiki-workflow",
+      "title": "Wiki authoring workflow",
+      "status": "published",
+      "language": "en",
+      "target": "docs/wiki-workflow.md",
+      "source": "_index/pages/wiki-workflow.md",
+      "intake": null
+    }
+  ]
+}

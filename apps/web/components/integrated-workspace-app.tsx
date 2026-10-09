@@ -521,10 +521,10 @@ export function IntegratedWorkspaceApp({
           <Link
             className="integration-brand"
             href="/"
-            aria-label="Talent Signal home"
+            aria-label="capri home"
           >
             <span aria-hidden="true">TS</span>
-            <strong>Talent Signal</strong>
+            <strong>capri</strong>
           </Link>
           <div className="integration-mode" role="status">
             <ShieldCheck size={18} weight="duotone" aria-hidden="true" />
@@ -545,7 +545,7 @@ export function IntegratedWorkspaceApp({
 
         <div className="integration-layout">
           <aside className="integration-rail" aria-label="Journey status">
-            <p className="eyebrow">TS-CORE-01 · LOCALHOST</p>
+            <p className="eyebrow">SYNTHETIC REVIEW · LOCALHOST</p>
             <h1>One source. One governed decision.</h1>
             <p>
               Inspect the source, decide each proposed fact, then authorize one

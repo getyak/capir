@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   description: "账号专属的智能助理对话目录。",
   robots: { follow: false, index: false },
-  title: "对话 · Talent Signal",
+  title: "对话 · capri",
 };
 
 export default async function SessionsPage() {

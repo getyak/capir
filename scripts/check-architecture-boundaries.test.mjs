@@ -30,7 +30,7 @@ const fixtureManifests = new Map([
   ["apps/agent/package.json", "@talent-signal/agent"],
   ["apps/agent-host/package.json", "@talent-signal/agent-host"],
   ["apps/backend/package.json", "@talent-signal/backend"],
-  ["apps/eval-runner/package.json", "@talent-signal/eval-runner"],
+  ["apps/cli/package.json", "@talent-signal/cli"],
   ["apps/macos-hybrid/package.json", "@talent-signal/macos-hybrid"],
   ["apps/web/package.json", "@talent-signal/web"],
 ]);
@@ -374,7 +374,7 @@ test("rejects source imports and aliases that bypass workspace manifests", (t) =
     [
       '/// <reference path="../backend/src/config.d.ts" />',
       'import "../backend/src/config.js";',
-      'export { run } from "../eval-runner/src/run.js";',
+      'export { run } from "../agent/src/run.js";',
       'const provider = import("../backend/src/provider.js");',
       'const legacy = require("../backend/src/legacy.js");',
       'const runtimeTarget = "../backend/src/runtime.js";',

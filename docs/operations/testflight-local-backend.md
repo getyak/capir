@@ -52,7 +52,7 @@ transport trust boundary. Verify it with synthetic traffic before admitting
 private data; a loopback proxy can still forward traffic remotely.
  The deployment validator and synthetic
 probe must pass for the selected runtime; configuration alone is not proof.
-See [GET-9 acceptance evidence](../evaluations/get9-harness/README.md) for actual
+See [GET-9 acceptance evidence](https://github.com/getyak/capir-evals/blob/main/evidence/get9-harness/README.md) for actual
 model receipts and the still-open native reliability gate.
 
 The TestFlight Compose boundary differs from synthetic development:
@@ -74,7 +74,12 @@ The TestFlight Compose boundary differs from synthetic development:
 - workspace conversation public research has its own explicit
   `TALENT_SIGNAL_WORKSPACE_PUBLIC_RESEARCH_ENABLED` flag in `staging:/backend`.
   It defaults to false. Enabling it passes the gate into the API container;
-  public search credentials remain in the existing Agent Host sidecar;
+  public search credentials remain in the existing Agent Host sidecar. When
+  enabled, first-contact proposals trigger host-owned bounded search and fetch,
+  independent of the model calling tools. Queries use the observed name and
+  admitted public context; genuine completions appear in the Session Tools
+  record. Both the flag and socket are required. Missing configuration or
+  provider failures produce an explicit research status, never invented context;
 - recruiter dictation has its own admission gate and server-only provider
   credential boundary;
 - Docker logs rotate locally.
@@ -159,6 +164,16 @@ launcher disables default-account quick login and explicitly enables
 real authenticated backend workspace; `false` selects the legacy synthetic
 demo. Verify a protected business page after login, not just the login response.
 Never write credentials into a LaunchAgent or source checkout.
+
+Before each host production build, apply the local storage guard. Check actual
+free bytes again after dependency preparation; a printed audit warning is not
+a gate and an unrelated log warning must not be mistaken for sufficient space.
+When local policy requires 30 GiB, stop below that threshold. Do not chain an
+unchecked audit and build. Follow the global artifact-cleanup policy: independently
+verify that a task is complete and its output is reproducible before removing
+registered artifacts, including completed work from other projects. Preserve
+formal evidence, source, active tasks, databases, and live and immediate rollback
+releases. Ask only when those safeguards cannot be established.
 
 Build each approved revision in a clean detached worktree under
 `~/Library/Application Support/Talent Signal/web/releases/<revision>`:

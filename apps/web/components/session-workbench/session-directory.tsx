@@ -206,7 +206,9 @@ export function SessionDirectory({
           </span>
           <span className={styles.rowBody}>
             <span className={styles.rowTitle}>
-              {sessionDisplayTitle(session.title)}
+              <span className={styles.rowTitleText}>
+                {sessionDisplayTitle(session.title)}
+              </span>
               {snapshot.entries[session.session_id]?.pinned ? (
                 <span className={styles.pinnedChip}>
                   <PushPin aria-hidden="true" size={11} weight="fill" />
@@ -224,7 +226,9 @@ export function SessionDirectory({
                   ? `${session.person_label || "联系人"} · ${session.context_label || "关系情境"}`
                   : session.scope_kind === "identity_review"
                     ? "身份核对"
-                    : "未绑定范围"}
+                    : // The display label is plain; the scope_kind value
+                      // ("unresolved_intent") keeps its own semantics.
+                      "独立对话"}
               {" · "}
               {session.turn_count === 0
                 ? "还没有回复"

@@ -142,21 +142,33 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     private var loadingWaiters: [CheckedContinuation<Void, Error>] = []
     private var loadTimeout: Task<Void, Never>?
     private var activeNavigation: WKNavigation?
+    private let storeSelection: LoginStoreSelection?
+    private var retired = false
     private let contextFence = CaptureContextReadFence()
 
     init(origin: WorkspaceOrigin) {
         self.origin = origin
+        self.storeSelection = try? LoginStoreRegistry.shared.selection(for: origin.url.absoluteString)
         hostURL = origin.url.appendingPathComponent("api/desktop-capture/host")
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: origin.dataStoreIdentifier)
+        if let store = storeSelection?.storeIdentifier {
+            configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: store)
+        } else { configuration.websiteDataStore = .nonPersistent() }
         configuration.userContentController = WKUserContentController()
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         webView.navigationDelegate = self
     }
 
+    func retire() {
+        retired = true; loaded = false; webView.stopLoading(); webView.navigationDelegate = nil
+        finishLoading(.failure(CaptureTransportError.staleOrigin))
+    }
+
     private func assertOrigin() throws {
-        guard WorkspaceConnection.shared.origin == origin else { throw CaptureTransportError.staleOrigin }
+        guard !retired, let storeSelection, LoginStoreRegistry.shared.isCurrent(storeSelection),
+              !LoginStoreRegistry.shared.hasUnresolvedLogin(for: origin.url.absoluteString),
+              WorkspaceConnection.shared.origin == origin else { throw CaptureTransportError.staleOrigin }
         if let current = webView.url, !origin.contains(current) { throw CaptureTransportError.untrustedHost }
     }
 
@@ -196,7 +208,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        decisionHandler(navigationAction.request.url == hostURL ? .allow : .cancel)
+        decisionHandler(!retired && (try? assertOrigin()) != nil && navigationAction.request.url == hostURL ? .allow : .cancel)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

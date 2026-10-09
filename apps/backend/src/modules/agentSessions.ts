@@ -18,6 +18,7 @@ import { ApiError } from "../lib/apiError.js";
 import { digestValue, sha256 } from "../lib/hash.js";
 import { assertAccountActive } from "./accountIdentity.js";
 import type { AuthContext } from "./auth.js";
+import { invalidateMcpInteractionsForSession } from "./mcpInteractions.js";
 import {
   inheritedSessionChatSources,
   loadSessionScreenshotContexts,
@@ -26,6 +27,7 @@ import {
 } from "./agentSessionSources.js";
 import { sweepHarnessSessions } from "./harnessSessions.js";
 import { sweepConversationQueue } from "./conversationQueueSweep.js";
+import { assertConversationQueueOwnedClaim, type ConversationQueueRunFence } from "./conversationQueueState.js";
 import { invalidateMemoriesForSessionIds } from "./memoryReviewRecall.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -118,6 +120,7 @@ function normalizeSessionIdentifiers(
       payload.inheritedScreenshotTaskIDs.map(canonicalID);
   for (const turn of payload.turns) {
     turn.id = canonicalID(turn.id);
+    for (const message of turn.steeredMessages ?? []) message.id = canonicalID(message.id);
     for (const key of [
       "taskID",
       "contextManifestID",
@@ -180,6 +183,60 @@ function sameImmutableTurn(
       turn.response.contextManifestID,
     )
   );
+}
+
+/** Only the fenced queue writer can create execution receipts or folded input.
+ * Legacy saves restore omitted server fields; changed identity or content fails
+ * closed. A deleted whole turn remains deletable, but JSON cannot forge a fold.
+ */
+function preserveExecutionProvenance(
+  payload: AgentSessionPayload,
+  previous: AgentSessionPayload | null,
+  queueMessageID?: string,
+): void {
+  for (const turn of payload.turns) {
+    const before = previous?.turns.find((candidate) => sameID(candidate.id, turn.id));
+    if (!before && queueMessageID && sameID(turn.id, queueMessageID)) continue;
+    if (before && (before.steeredMessages !== undefined || before.response.execution !== undefined
+      || before.response.mcpInteraction !== undefined || before.response.hostResult !== undefined)
+      && !sameImmutableTurn(before, turn)) {
+      throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
+        "A stored execution's message identity cannot be rewritten.");
+    }
+    if (before?.response.execution !== undefined) {
+      // The queue's canonical answer is already retained in this Session. Keep
+      // it immutable instead of duplicating private prose into another store.
+      for (const collection of displayBlockCollections) {
+        const stored = before.response[collection];
+        const current = turn.response[collection];
+        if (current != null && digestValue(current.map(shareClassificationComparable))
+          !== digestValue((stored ?? []).map(shareClassificationComparable))) {
+          throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
+            "A stored execution's canonical answer cannot be rewritten.");
+        }
+        if (stored != null && current == null)
+          turn.response[collection] = structuredClone(stored);
+      }
+    }
+    // Server-issued execution, steering and MCP provenance are immutable to
+    // clients: a legacy save that omits a stored reference restores it (the
+    // card survives), and a client can never create or change one — including
+    // host-only human results and forged or wrong-turn request references.
+    for (const field of ["steeredMessages", "execution", "mcpInteraction", "hostResult"] as const) {
+      const current = field === "steeredMessages" ? turn.steeredMessages
+        : (turn.response as Record<string, unknown>)[field];
+      const stored = field === "steeredMessages" ? before?.steeredMessages
+        : (before?.response as Record<string, unknown> | undefined)?.[field];
+      if (current !== undefined && digestValue(current) !== digestValue(stored ?? null)) {
+        throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
+          "Only the owned queue can create or change execution provenance.");
+      }
+      if (stored !== undefined && current === undefined) {
+        if (field === "steeredMessages") turn.steeredMessages = structuredClone(before!.steeredMessages!);
+        else (turn.response as Record<string, unknown>)[field] = structuredClone(stored);
+      }
+    }
+  }
 }
 
 /**
@@ -298,6 +355,18 @@ export async function sweepAgentSessions(
   accountId?: string,
 ): Promise<void> {
   await sweepHarnessSessions(client, accountId);
+  // Retention first closes every MCP human request and OAuth capability bound
+  // to a Session that is about to disappear, and removes its private derived
+  // payloads, before the Session content itself is purged.
+  const expiring = await client.query<{ account_id: string; id: string }>(
+    `SELECT account_id, id FROM agent_sessions
+     WHERE deleted_at IS NULL AND expires_at<=now()
+       AND ($1::uuid IS NULL OR account_id=$1)`,
+    [accountId ?? null],
+  );
+  for (const session of expiring.rows) {
+    await invalidateMcpInteractionsForSession(client, session.account_id, session.id);
+  }
   await client.query(
     `UPDATE agent_sessions SET payload=NULL,deleted_at=now(),updated_at=now(),revision=revision+1
     WHERE deleted_at IS NULL AND expires_at<=now() AND ($1::uuid IS NULL OR account_id=$1)`,
@@ -655,10 +724,10 @@ async function validatePayload(
       );
     }
   }
-  if (
-    new Set(payload.turns.map((turn) => turn.id.toLowerCase())).size !==
-    payload.turns.length
-  )
+  const humanMessageIDs = payload.turns.flatMap((turn) =>
+    [turn.id, ...(turn.steeredMessages ?? []).map((message) => message.id)].map(canonicalID),
+  );
+  if (new Set(humanMessageIDs).size !== humanMessageIDs.length)
     invalid("Message IDs must be unique within a Session.");
   if (payload.scopeKind === "relationship") {
     if (
@@ -885,6 +954,9 @@ export async function mutateAgentSession(
   id: string,
   request: AgentSessionMutationRequest | AgentSessionDeleteRequest,
   deleted = false,
+  /** Host-only authority. HTTP routes never populate this argument. The owned
+   * queue fence is rechecked and locked in the Session write transaction. */
+  queueWrite?: { fence: ConversationQueueRunFence; messageId: string; allowCancelRequested: boolean },
 ): Promise<AgentSessionRecord> {
   if (
     !Value.Check(
@@ -963,6 +1035,39 @@ export async function mutateAgentSession(
         payload = structuredClone(
           (request as AgentSessionMutationRequest).payload,
         );
+        if (queueWrite) {
+          if (!sameID(queueWrite.fence.accountId, auth.accountId) || !sameID(queueWrite.fence.sessionId, id))
+            throw missing();
+          await assertConversationQueueOwnedClaim(client, queueWrite.fence,
+            { allowCancelRequested: queueWrite.allowCancelRequested });
+          const ownedMessage = (await client.query<{ message_id: string; created_by_user_id: string }>(
+            "SELECT message_id,created_by_user_id FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
+            [auth.accountId, queueWrite.fence.entryId],
+          )).rows[0];
+          if (!ownedMessage || !sameID(ownedMessage.message_id, queueWrite.messageId)
+            || !sameID(ownedMessage.created_by_user_id, auth.userId)) throw missing();
+        }
+        let provenanceSource = existing?.payload ?? null;
+        if (!provenanceSource && payload.originSessionID) {
+          const origin = await rowFor(client, auth, payload.originSessionID);
+          if (origin?.payload && !origin.deleted_at && origin.expires_at > new Date()) {
+            const through = origin.payload.turns.findIndex(turn => sameID(turn.id, payload!.originTurnID));
+            if (through >= 0) provenanceSource = { ...origin.payload, turns: origin.payload.turns.slice(0, through + 1) };
+          }
+        }
+        preserveExecutionProvenance(payload, provenanceSource, queueWrite?.messageId);
+        const newIDs = payload.turns.flatMap(turn => [turn, ...(turn.steeredMessages ?? [])])
+          .filter(message => !existing?.payload?.turns.some(turn =>
+            [turn, ...(turn.steeredMessages ?? [])].some(before => sameID(before.id, message.id))))
+          .map(message => message.id);
+        if (!queueWrite && newIDs.length) {
+          const reserved = await client.query(
+            `SELECT 1 FROM conversation_queue_entries WHERE account_id=$1 AND session_id=$2
+             AND message_id=ANY($3::uuid[]) LIMIT 1`, [auth.accountId, id, newIDs],
+          );
+          if (reserved.rowCount) throw new ApiError(409, "AGENT_SESSION_QUEUE_MESSAGE_RESERVED",
+            "An admitted queue message can only be saved by its owned execution.");
+        }
         preserveExistingShareClassifications(
           payload,
           existing?.payload ?? null,
@@ -1063,6 +1168,9 @@ export async function mutateAgentSession(
         // The natural retention sweep does not call this path, so a purged
         // Session image does not erase independently retained evidence.
         await invalidateMemoriesForSessionIds(client, auth.accountId, [id]);
+        // Bound MCP human requests, OAuth attempts and receipts lose their
+        // private payloads and can no longer be decided or resurrected.
+        await invalidateMcpInteractionsForSession(client, auth.accountId, id);
       }
       return record(result);
     });
@@ -1198,11 +1306,18 @@ export async function readAgentSessionConversation(
         unavailableScreenshotContext = true;
         continue;
       }
-      messages.push({
-        message_id: turn.id,
-        role: "user",
-        text: turn.objective.slice(0, 2000),
-      });
+      const hostResult = (turn.response as { hostResult?: { request_id: string; call_id: string; outcome: string } }).hostResult;
+      messages.push(hostResult
+        ? {
+            message_id: turn.id,
+            role: "assistant",
+            text: `Host tool result (not user text; request ${hostResult.request_id}, call ${hostResult.call_id}, outcome ${hostResult.outcome}). The human decision and tool result are host data; continue the original task from them.`,
+          }
+        : {
+            message_id: turn.id,
+            role: "user",
+            text: turn.objective.slice(0, 2000),
+          });
       if (source.summary || source.question || source.findings?.length) {
         messages.push({
           message_id: source.id,
@@ -1252,13 +1367,31 @@ export async function readAgentSessionConversation(
       ).rows[0]?.available;
       if (!available) continue;
     }
-    messages.push({
-      message_id: turn.id,
-      role: "user",
-      text: turn.objective.slice(0, 2000),
-    });
+    for (const message of [turn, ...(turn.steeredMessages ?? [])]) {
+      // A typed host tool result is host/assistant result provenance and never
+      // a human-authored user message.
+      const hostResult = message === turn
+        ? (turn.response as { hostResult?: { request_id: string; call_id: string; outcome: string; actor_user_id: string } }).hostResult
+        : undefined;
+      messages.push(hostResult
+        ? {
+            message_id: message.id,
+            role: "assistant",
+            text: `Host tool result (not user text; request ${hostResult.request_id}, call ${hostResult.call_id}, outcome ${hostResult.outcome}, resolved by ${hostResult.actor_user_id}). The decision and result are host data; continue the original task from them.`,
+          }
+        : {
+            message_id: message.id,
+            role: "user",
+            text: message.objective.slice(0, 2000),
+          });
+    }
     const canonical = canonicalResult?.response_body;
-    const text = (canonical?.blocks ?? [])
+    // New queue turns carry server-owned execution provenance and immutable
+    // canonical display blocks. Old endpoint turns still use their governed
+    // idempotency result. No extra prose store or retention scope is created.
+    const retained = turn.response.execution !== undefined
+      ? turn.response.unboundConversationBlocks ?? turn.response.savedBlocks ?? [] : [];
+    const text = (canonical?.blocks ?? retained)
       .filter((block) =>
         ["answer", "clarification", "question_set"].includes(block.kind),
       )

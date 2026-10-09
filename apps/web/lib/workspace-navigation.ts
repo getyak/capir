@@ -194,6 +194,75 @@ export function workspaceCaptureIntent(
   };
 }
 
+/**
+ * Compact rail control identity for the settled shared sidebar. The row is
+ * presentation; every href and route predicate still lives in
+ * `WORKSPACE_NAV_ROUTES` above, so mobile placement and the source,
+ * extensions and new-conversation paths never move.
+ */
+export type WorkspaceRailControlId =
+  | "today"
+  | "conversation"
+  | "people"
+  | "meetings"
+  | "search";
+
+/**
+ * Horizontal rail order: today, conversation, people, meetings, then the
+ * scoped global search control. "conversation" is the durable conversation
+ * canvas (`home`), and it also stays selected across Session detail pages.
+ */
+export const WORKSPACE_RAIL_CONTROLS: readonly WorkspaceRailControlId[] = [
+  "today",
+  "conversation",
+  "people",
+  "meetings",
+  "search",
+];
+
+const WORKSPACE_RAIL_ROUTES: Record<
+  Exclude<WorkspaceRailControlId, "search">,
+  WorkspaceNavRouteId
+> = {
+  today: "today",
+  conversation: "home",
+  people: "people",
+  meetings: "meetings",
+};
+
+/** Route link behind a rail control; the search control has no href. */
+export function workspaceRailRoute(
+  control: WorkspaceRailControlId,
+): WorkspaceNavRoute | null {
+  const routeId = WORKSPACE_RAIL_ROUTES[control as Exclude<WorkspaceRailControlId, "search">];
+  return routeId
+    ? WORKSPACE_NAV_ROUTES.find((route) => route.id === routeId) ?? null
+    : null;
+}
+
+/**
+ * The one selected rail control for a pathname. The conversation pill covers
+ * the home canvas and the whole Session family (directory and detail), so an
+ * opened transcript never lights a second destination.
+ */
+export function workspaceRailSelection(
+  pathname: string | null | undefined,
+): Exclude<WorkspaceRailControlId, "search"> | null {
+  if (typeof pathname !== "string") return null;
+  if (
+    isWorkspaceHomePath(pathname) ||
+    workspacePathMatches(pathname, "/workspace/sessions")
+  ) {
+    return "conversation";
+  }
+  for (const control of WORKSPACE_RAIL_CONTROLS) {
+    if (control === "search" || control === "conversation") continue;
+    const route = workspaceRailRoute(control);
+    if (route?.matches(pathname)) return control;
+  }
+  return null;
+}
+
 /** Storage key for the collapsed desktop rail preference. */
 export const WORKSPACE_RAIL_COLLAPSED_KEY =
   "talent-signal:workspace-rail-collapsed";

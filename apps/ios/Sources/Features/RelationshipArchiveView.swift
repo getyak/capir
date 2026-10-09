@@ -294,7 +294,7 @@ struct RelationshipArchiveView: View {
                         )
                     },
                     actorDisplayName: workspaceStore.snapshot?.currentUserName
-                        ?? "Current recruiter"
+                        ?? "Current user"
                 )
             case .agentStudio:
                 RelationshipAgentStudioView(
@@ -4774,7 +4774,7 @@ struct PursuitDetailView: View {
         let actor: String
         if let confirmedBy = pursuit.milestoneAuthority.confirmedByUserID,
            confirmedBy == snapshot?.currentUserID {
-            actor = snapshot?.currentUserName ?? "Current recruiter"
+            actor = snapshot?.currentUserName ?? "Current user"
         } else if pursuit.milestoneAuthority.confirmedByUserID != nil {
             actor = "Workspace member"
         } else {

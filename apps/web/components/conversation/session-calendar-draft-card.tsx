@@ -27,16 +27,22 @@ function savePendingDismiss(key: string, pending: PendingDismiss): boolean {
   } catch { return false; }
 }
 
-export function SessionCalendarDraftCard(props: { draftId: string; binding: string; sessionId: string }) {
+type CardProps = { draftId: string; binding: string; sessionId: string; onDecisionState?: (state: "pending" | "resolved" | "unknown") => void };
+export function SessionCalendarDraftCard(props: CardProps) {
   return <SessionCalendarDraftCardContent key={`${props.binding}:${props.sessionId}:${props.draftId}`} {...props}/>;
 }
 
-function SessionCalendarDraftCardContent({ draftId, binding, sessionId }: { draftId: string; binding: string; sessionId: string }) {
+function SessionCalendarDraftCardContent({ draftId, binding, sessionId, onDecisionState }: CardProps) {
   const [record, setRecord] = useState<MeetingDraftRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dismissPhase, setDismissPhase] = useState<"ready" | "sending" | "unknown" | "dismissed">("ready");
   const [canRetryDismiss, setCanRetryDismiss] = useState(false);
   const key = dismissStorageKey(binding, draftId);
+  useEffect(() => {
+    const state = !record || dismissPhase === "unknown" ? "unknown"
+      : record.status === "needs_review" && record.content_available && dismissPhase !== "dismissed" ? "pending" : "resolved";
+    onDecisionState?.(state);
+  }, [record, dismissPhase, onDecisionState]);
   useEffect(() => {
     const abort = new AbortController();
     void (async () => {
@@ -130,7 +136,7 @@ function SessionCalendarDraftCardContent({ draftId, binding, sessionId }: { draf
         return;
       }
       const payload = (await response.json()) as { draft?: MeetingDraftRecord; session_version?: string };
-      if (payload.session_version !== binding || payload.draft?.id !== draftId || payload.draft.status !== "dismissed") {
+      if (payload.session_version !== binding || payload.draft?.id !== draftId || payload.draft.status !== "dismissed" || payload.draft.origin_session_id !== sessionId) {
         setDismissPhase("unknown");
         return;
       }

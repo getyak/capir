@@ -48,3 +48,18 @@ it.each([undefined, "", " "])("does not send local API requests without a render
   expect(request).not.toHaveBeenCalled();
   expect(expired).toHaveBeenCalledOnce();
 });
+
+it("recovers canonical local credential loss without trusting a foreign 401", async () => {
+  const browser = Object.assign(new EventTarget(), { location: { href: "https://product.test/workspace", origin: "https://product.test" } });
+  vi.stubGlobal("window", browser);
+  vi.stubGlobal("document", { querySelector: () => ({ dataset: { workspaceScope: "account" } }) });
+  const expired = vi.fn();
+  browser.addEventListener("talent-signal:workspace-session-expired", expired);
+  const request = vi.fn<typeof fetch>().mockImplementation(async () => Response.json({ error: { code: "SESSION_INVALID" } }, { status: 401 }));
+  const foreign = await workspaceSessionFetch("https://other.test/api/data", undefined, request);
+  expect(foreign.status).toBe(401);
+  expect(expired).not.toHaveBeenCalled();
+  const local = await workspaceSessionFetch("/api/local-integration/people", undefined, request);
+  expect(await local.json()).toEqual({ error: { code: "SESSION_INVALID" } });
+  expect(expired).toHaveBeenCalledOnce();
+});

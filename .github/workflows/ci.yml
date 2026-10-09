@@ -164,6 +164,7 @@ jobs:
           node --test scripts/verify-secret-environment.test.mjs scripts/infisical/manifest.test.mjs scripts/infisical/migrate.test.mjs scripts/infisical/run.test.mjs
           node --test scripts/macos/release-prerequisites.test.mjs
           node --test scripts/check-architecture-boundaries.test.mjs
+          node --test scripts/check-repository-hygiene.test.mjs scripts/evaluation/*.test.mjs
           node --test scripts/ci/*.test.mjs
           node --test scripts/ios/*.test.mjs
           find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
@@ -195,6 +196,7 @@ jobs:
           node scripts/check-docs.mjs
           node scripts/check-architecture-boundaries.mjs
           node scripts/check-architecture-diagrams.mjs
+          node scripts/check-repository-hygiene.mjs
 
       - name: Verify compiled wiki
         run: |
@@ -244,15 +246,52 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Run candidate momentum Eval
-        run: pnpm eval:core && pnpm eval:relationships:check
-
       - name: Build
         env:
           # Enables production-mode route evaluation in CI only; deployments use
           # their separately managed AUTH_SECRET.
           AUTH_SECRET: ci-build-only-not-a-deployment-secret
         run: pnpm build
+
+  cli:
+    name: CLI quality
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.18.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the capir CLI
+        run: pnpm --filter @talent-signal/cli build
+
+      - name: Test the capir CLI
+        run: pnpm --filter @talent-signal/cli test
+
+      - name: Test the capir release tooling and installer policy
+        run: |
+          node --test scripts/capir/manifest.test.mjs scripts/capir/package-portable.test.mjs scripts/capir/release-policy.test.mjs scripts/capir/publication.test.mjs
+          shellcheck scripts/capir/install.sh
+
+      - name: Test the capir installer bootstrap end to end
+        run: node --test scripts/capir/install.test.mjs
 
   backend:
     name: Backend quality
@@ -297,10 +336,16 @@ jobs:
       - name: Typecheck, test, and build
         run: pnpm backend:ci
 
+      - name: Verify AI entry and isolated default fixture
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+        run: |
+          node --test scripts/ai-workspace-entry.test.mjs
+          node apps/backend/scripts/verify-default-fixture.mjs
+
       - name: Verify Lab regression consumer boundaries
         run: |
-          pnpm --filter @talent-signal/eval-runner typecheck
-          pnpm --filter @talent-signal/eval-runner exec vitest run src/labRegression.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run src/evaluation/labRegressionConsumer.test.ts
 
       - name: Verify screenshot and Session authority with PostgreSQL
         env:
@@ -318,6 +363,7 @@ jobs:
           pnpm --filter @talent-signal/backend exec vitest run src/modules/conversationQueue.integration.test.ts src/modules/conversationQueueStream.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/timeActivities.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/memoryReview.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism src/modules/mcpInteractions.integration.test.ts src/modules/mcpConversation.integration.test.ts src/modules/mcpOauthCleanup.integration.test.ts
 
       - name: Verify account authority and isolated workspace cleanup
         env:
@@ -330,6 +376,17 @@ jobs:
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runAccountManagementEvaluation.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/accountSettingsIsolation.integration.test.ts src/modules/accountSettingsHttp.integration.test.ts
 
+      - name: Verify capir authorization and test provisioning with PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          CAPIR_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/capir_test_ci
+          CAPIR_AUTH_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/capir_test_ci
+          CAPIR_TEST_MEDIA_DIRECTORY: ${{ github.workspace }}/build/capir-test-media
+        run: |
+          pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE capir_test_ci'); } finally { await pool.end(); }"
+          DATABASE_URL="$CAPIR_TEST_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
+          pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism --maxWorkers=1 src/modules/capirAuth.integration.test.ts src/modules/capirTests.integration.test.ts src/modules/capirTestClient.test.ts
+
       - name: Exercise saved regression lifecycle with a synthetic provider
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
@@ -341,7 +398,7 @@ jobs:
           pnpm --filter @talent-signal/backend seed
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runLabRegressionEvaluation.ts
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runLabCIVerificationEvaluation.ts
-          pnpm --filter @talent-signal/eval-runner exec tsx src/cli.ts lab-regression \
+          pnpm --filter @talent-signal/backend exec tsx src/evaluation/consumeLabRegressionCommand.ts \
             --bundle "$LAB_REGRESSION_PROOF_OUTPUT_DIR/bundle.json" \
             --run "$LAB_REGRESSION_PROOF_OUTPUT_DIR/run.json" \
             --output "$GITHUB_WORKSPACE/build/lab-regression-report.json"
@@ -379,7 +436,7 @@ jobs:
           test -n "$LAB_RUN_ID"
           test -n "$LAB_BACKEND_ORIGIN"
           test -n "$TS_LAB_EVALUATION_TOKEN"
-          pnpm --filter @talent-signal/eval-runner exec tsx src/cli.ts lab-regression \
+          pnpm --filter @talent-signal/backend exec tsx src/evaluation/consumeLabRegressionCommand.ts \
             --backend "$LAB_BACKEND_ORIGIN" --regression-id "$LAB_CASE_ID" --run-id "$LAB_RUN_ID" \
             --output "$GITHUB_WORKSPACE/build/lab-selected-regression/lab-regression-report.json"
 
@@ -420,17 +477,14 @@ jobs:
 
       - name: Verify frozen execution, budgets, replay and release boundaries
         run: |
-          pnpm --filter @talent-signal/eval-runner typecheck
+          pnpm --filter @talent-signal/evaluation typecheck
           pnpm --filter @talent-signal/evaluation test
+          pnpm --filter @talent-signal/evaluation build
           pnpm --filter @talent-signal/agent exec vitest run src/runtimeObservation.test.ts
-          pnpm --filter @talent-signal/eval-runner exec vitest run src --maxWorkers=2
-          pnpm --filter @talent-signal/eval-runner p0
-          pnpm eval:proof
-          python3 -m unittest discover -s apps/eval-runner/optimizer -p '*_test.py'
 
       - name: Record what this credential-free job proves
         run: |
-          node --input-type=module -e 'import fs from "node:fs"; fs.mkdirSync("build", {recursive:true}); fs.writeFileSync("build/phase-one-ci.json", JSON.stringify({schemaVersion:"phase-one-ci-proof.v1", execution_integrity:"pass", deterministic_boundary:"pass", semantic_quality:"not_run", release_conditions:"not_run", providerKind:"deterministic_fake", releaseAuthority:"none", revision:process.env.GITHUB_SHA}));'
+          node --input-type=module -e 'import fs from "node:fs"; fs.mkdirSync("build", {recursive:true}); fs.writeFileSync("build/phase-one-ci.json", JSON.stringify({schemaVersion:"phase-one-ci-proof.v1", execution_integrity:"pass", deterministic_boundary:"pass", semantic_quality:"not_run", release_conditions:"not_run", private_case_evaluations:"not_run", private_semantic_evaluations:"not_run", private_release_evaluations:"not_run", private_evaluation_scope:"getyak/capir-evals private CI, not this public job", providerKind:"deterministic_fake", releaseAuthority:"none", revision:process.env.GITHUB_SHA}));'
 
       - name: Preserve control-plane verification status
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -535,7 +589,7 @@ jobs:
 
   required:
     name: CI required
-    needs: [changes, repository, web, backend, phase-one, ios, macos-hybrid]
+    needs: [changes, repository, web, cli, backend, phase-one, ios, macos-hybrid]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -544,6 +598,7 @@ jobs:
       DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
       REPOSITORY_RESULT: ${{ needs.repository.result }}
       WEB_RESULT: ${{ needs.web.result }}
+      CLI_RESULT: ${{ needs.cli.result }}
       BACKEND_RESULT: ${{ needs.backend.result }}
       PHASE_ONE_RESULT: ${{ needs.phase-one.result }}
       IOS_RESULT: ${{ needs.ios.result }}
@@ -570,11 +625,12 @@ jobs:
           # Quality jobs may be intentionally skipped only for an automatic
           # documentation-only change. Every other scope requires success.
           if [ "$DOCS_ONLY" = "true" ]; then
-            for result in "$WEB_RESULT" "$BACKEND_RESULT" "$PHASE_ONE_RESULT"; do
+            for result in "$WEB_RESULT" "$CLI_RESULT" "$BACKEND_RESULT" "$PHASE_ONE_RESULT"; do
               test "$result" = "success" || test "$result" = "skipped"
             done
           else
             test "$WEB_RESULT" = "success"
+            test "$CLI_RESULT" = "success"
             test "$BACKEND_RESULT" = "success"
             test "$PHASE_ONE_RESULT" = "success"
           fi

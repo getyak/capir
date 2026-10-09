@@ -9,7 +9,6 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
 
-import { WorkspaceShellNav } from "./workspace-shell-nav";
 import { WorkspaceRecentSessions } from "./workspace-recent-sessions";
 import { resetSessionOrganizationStores, sessionOrganizationStore } from "@/lib/workspace-session-organization";
 
@@ -101,22 +100,37 @@ describe("one shared sliding selection highlight", () => {
     expect(host!.querySelector('[data-arrival="true"]')).toBeNull();
   });
 
-  it("keeps exactly one highlight in the primary navigation and moves it with the route", () => {
-    mount(createElement(WorkspaceShellNav, { binding: null }));
+  it("keeps exactly one highlight in the recent Session list and moves it with the route", () => {
+    route.pathname = `/workspace/sessions/${SESSION_A}`;
+    mount(
+      createElement(WorkspaceRecentSessions, {
+        binding: "binding",
+        storageScope: "c".repeat(64),
+      }),
+    );
+    act(() => {
+      // Expand the group (it starts collapsed in current HEAD behavior).
+      host!.querySelector<HTMLButtonElement>("button[aria-controls]")!.click();
+    });
     let marks = selectionMarks();
     expect(marks).toHaveLength(1);
     const firstRow = marks[0]!.closest("a")!;
-    expect(firstRow.getAttribute("href")).toBe("/workspace");
+    expect(firstRow.getAttribute("href")).toBe(`/workspace/sessions/${SESSION_A}`);
     expect(firstRow.getAttribute("aria-current")).toBe("page");
 
+    route.pathname = `/workspace/sessions/${SESSION_B}`;
     act(() => {
-      route.pathname = "/workspace/people";
-      root!.render(createElement(WorkspaceShellNav, { binding: null }));
+      root!.render(
+        createElement(WorkspaceRecentSessions, {
+          binding: "binding",
+          storageScope: "c".repeat(64),
+        }),
+      );
     });
     marks = selectionMarks();
     expect(marks).toHaveLength(1);
     const secondRow = marks[0]!.closest("a")!;
-    expect(secondRow.getAttribute("href")).toBe("/workspace/people");
+    expect(secondRow.getAttribute("href")).toBe(`/workspace/sessions/${SESSION_B}`);
     expect(secondRow.getAttribute("aria-current")).toBe("page");
     // The previous row keeps link semantics without a stale current surface.
     expect(firstRow.getAttribute("aria-current")).toBeNull();

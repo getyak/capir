@@ -59,6 +59,14 @@ Method belongs here, not in foundational product prose.
 Research preserves evidence and uncertainty. Evaluations preserve dated
 observations. Both may be detailed because they are loaded only when needed.
 
+The evaluation corpus, historical evaluation evidence, and the evaluation
+harness live in the private `getyak/capir-evals` repository; the product keeps
+only the [evaluations index](../evals/README.md). Product prose links to
+extracted artifacts through their private repository paths and never replaces
+removed historical evidence with fabricated stub receipts. New evaluation
+output goes to ignored `output/evaluation/` or the private `runs/` directory,
+never into tracked documentation.
+
 Neither becomes product truth merely by existing.
 
 ### Plans and temporary state

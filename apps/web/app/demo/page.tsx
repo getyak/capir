@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "在线产品演示",
   description:
-    "使用本地规则，或主动选择私密 AI，体验 Talent Signal 的候选人对话审阅。",
+    "使用本地规则，或主动选择私密 AI，体验 capri 的候选人对话审阅。",
   alternates: {
     canonical: "/demo",
   },

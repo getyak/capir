@@ -27,11 +27,12 @@ import {
   Warning,
   X,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FocusEvent } from "react";
+import styles from "./relationship-resource-composer.module.css";
 
 import type { ConversationTranscriptMessage } from "@/lib/conversation-transcript";
 import { ConversationTranscriptComposer } from "./conversation-transcript-composer";
-import { fieldLabel, formatDate, reviewLabel, resourceKindLabel, resourceStateLabel } from "./relationship-display";
+import { fieldLabel, formatDate, reviewLabel, resourceKindLabel, resourceStateLabel, fragmentLocationLabel, fragmentReviewLabel, fragmentAttributionLabel } from "./relationship-display";
 import {
   relationshipIntegrationFetch,
   relationshipIntegrationSessionExpired,
@@ -88,7 +89,12 @@ export function loadRelationshipResourceList(
   return request;
 }
 
-export function RelationshipResourceComposer({
+/** Relationship changes retire the complete ephemeral reader and its drafts. */
+export function RelationshipResourceComposer(props: Parameters<typeof ScopedRelationshipResourceComposer>[0]) {
+  return <ScopedRelationshipResourceComposer key={JSON.stringify([props.personId, props.relationshipContextId])} {...props} />;
+}
+
+function ScopedRelationshipResourceComposer({
   personId,
   relationshipContextId,
   scopeLabel,
@@ -115,6 +121,21 @@ export function RelationshipResourceComposer({
   onReviewCapture: (captureId: string) => void | Promise<void>;
   onScreenshot: () => void;
 }) {
+  const reviewTitleRef = useRef<HTMLHeadingElement | null>(null);
+  const sourceAuthorizationTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const deleteResourceTriggerRef = useRef<HTMLButtonElement | null>(null);
+  function revealDecisionControl(event: FocusEvent<HTMLElement>) {
+    const target = event.target;
+    if (target instanceof HTMLElement && target.matches("button:focus-visible, input:focus-visible, textarea:focus-visible")) {
+      target.scrollIntoView({ block: "nearest", behavior: "instant" });
+    }
+  }
+  const sourceReadVersion = useRef(0);
+  const readingTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const pendingReadingRef = useRef<{
+    resource: RelationshipResourceDetail;
+    trigger: HTMLButtonElement;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const requestIdRef = useRef<string | null>(null);
   const requestCapturedAtRef = useRef<string | null>(null);
@@ -131,7 +152,8 @@ export function RelationshipResourceComposer({
     "resume" | "document"
   >("resume");
   const [saveDiscoveredLinks, setSaveDiscoveredLinks] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busyOperation, setBusyOperation] = useState<string | null>(null);
+  const busy = busyOperation !== null;
   const [error, setError] = useState("");
   const [receipt, setReceipt] = useState<{
     resources: number;
@@ -143,6 +165,24 @@ export function RelationshipResourceComposer({
   >([]);
   const [selectedResource, setSelectedResource] =
     useState<RelationshipResourceDetail | null>(null);
+  useEffect(() => {
+    const pending = pendingReadingRef.current;
+    pendingReadingRef.current = null;
+    if (
+      !pending || pending.resource !== selectedResource ||
+      !pending.trigger.isConnected || document.activeElement !== pending.trigger
+    ) return;
+    const title = reviewTitleRef.current;
+    title?.scrollIntoView({ block: "start", behavior: "instant" });
+    title?.focus({ preventScroll: true });
+  }, [selectedResource]);
+
+  useEffect(() => () => {
+    sourceReadVersion.current += 1;
+    pendingReadingRef.current = null;
+    readingTriggerRef.current = null;
+  }, [personId, relationshipContextId]);
+
   const [claimEdits, setClaimEdits] = useState<Record<string, string>>({});
   const [resourceLoading, setResourceLoading] = useState(true);
   const [deleteResourceConfirm, setDeleteResourceConfirm] =
@@ -295,7 +335,7 @@ export function RelationshipResourceComposer({
       return;
     }
 
-    setBusy(true);
+    setBusyOperation("正在更正身份…");
     setError("");
     identityCorrectionRequestRef.current ??= crypto.randomUUID();
     try {
@@ -357,7 +397,7 @@ export function RelationshipResourceComposer({
           : "无法更正来源身份。",
       );
     } finally {
-      setBusy(false);
+      setBusyOperation(null);
     }
   }
 
@@ -409,7 +449,10 @@ export function RelationshipResourceComposer({
     };
   }, [personId, relationshipContextId]);
 
-  async function openResource(resourceId: string) {
+  async function openResource(resourceId: string, trigger?: HTMLButtonElement) {
+    const version = ++sourceReadVersion.current;
+    pendingReadingRef.current = null;
+    setBusyOperation((current) => current === "正在读取研究状态…" ? null : current);
     setError("");
     try {
       const response = await relationshipIntegrationFetch(
@@ -427,6 +470,11 @@ export function RelationshipResourceComposer({
             ? payload.message
             : "无法打开来源依据。",
         );
+      }
+      if (version !== sourceReadVersion.current) return;
+      if (trigger) {
+        readingTriggerRef.current = trigger;
+        pendingReadingRef.current = { resource: payload, trigger };
       }
       setSelectedResource(payload);
       setClaimEdits(
@@ -450,9 +498,9 @@ export function RelationshipResourceComposer({
         payload.resource.source_locator
       ) {
         try {
-          await refreshResearchStatus(payload.resource.id);
+          await refreshResearchStatus(payload.resource.id, () => version === sourceReadVersion.current);
         } catch (caught) {
-          setError(
+          if (version === sourceReadVersion.current) setError(
             caught instanceof Error
               ? caught.message
               : "来源已打开，但无法恢复此前的研究状态。",
@@ -460,7 +508,7 @@ export function RelationshipResourceComposer({
         }
       }
     } catch (caught) {
-      setError(
+      if (version === sourceReadVersion.current) setError(
         caught instanceof Error
           ? caught.message
           : "无法打开来源依据。",
@@ -499,25 +547,28 @@ export function RelationshipResourceComposer({
     );
   }
 
-  async function refreshResearchStatus(seedResourceId?: string) {
+  async function refreshResearchStatus(seedResourceId?: string, isCurrent = () => true) {
+    const version = sourceReadVersion.current;
+    const current = () => version === sourceReadVersion.current && isCurrent();
     const resourceId =
       seedResourceId ?? selectedResource?.resource.id;
     if (!resourceId) {
       return;
     }
-    setBusy(true);
+    setBusyOperation("正在读取研究状态…");
     setError("");
     try {
-      setResearchResult(await loadLatestResearch(resourceId));
+      const result = await loadLatestResearch(resourceId);
+      if (current()) setResearchResult(result);
     } catch (caught) {
-      setError(
+      if (current()) setError(
         caught instanceof Error
           ? caught.message
           : "无法恢复此前的公开研究状态。",
       );
       throw caught;
     } finally {
-      setBusy(false);
+      if (current()) setBusyOperation(null);
     }
   }
 
@@ -538,7 +589,7 @@ export function RelationshipResourceComposer({
       setError("已保存的公开网址无效。")
       return;
     }
-    setBusy(true);
+    setBusyOperation("正在查阅公开资料…");
     setError("");
     setResearchResult(null);
     try {
@@ -582,7 +633,7 @@ export function RelationshipResourceComposer({
           : "无法完成有边界的公开研究。",
       );
     } finally {
-      setBusy(false);
+      setBusyOperation(null);
     }
   }
 
@@ -591,7 +642,7 @@ export function RelationshipResourceComposer({
     currentStatus: "proposed" | "reviewed" | "rejected",
     decision: "reviewed" | "rejected",
   ) {
-    setBusy(true);
+    setBusyOperation("正在保存提取审阅…");
     setError("");
     try {
       const response = await relationshipIntegrationFetch(
@@ -630,7 +681,7 @@ export function RelationshipResourceComposer({
           : "无法保存依据审阅。",
       );
     } finally {
-      setBusy(false);
+      setBusyOperation(null);
     }
   }
 
@@ -647,7 +698,7 @@ export function RelationshipResourceComposer({
       return;
     }
     const resourceId = selectedResource.resource.id;
-    setBusy(true);
+    setBusyOperation("正在保存事实决定…");
     setError("");
     try {
       const response = await relationshipIntegrationFetch(
@@ -683,7 +734,7 @@ export function RelationshipResourceComposer({
           : "无法保存事实决定。",
       );
     } finally {
-      setBusy(false);
+      setBusyOperation(null);
     }
   }
 
@@ -691,7 +742,7 @@ export function RelationshipResourceComposer({
     if (!selectedResource) {
       return;
     }
-    setBusy(true);
+    setBusyOperation("正在删除来源…");
     setError("");
     try {
       const response = await relationshipIntegrationFetch(
@@ -708,7 +759,7 @@ export function RelationshipResourceComposer({
       };
       if (!response.ok) {
         throw new Error(
-          payload.message ?? "无法删除受治理来源。",
+          payload.message ?? "无法删除来源。",
         );
       }
       setSelectedResource(null);
@@ -716,10 +767,10 @@ export function RelationshipResourceComposer({
       const relationshipRemoved =
         !payload.compilation && !payload.compilation_error;
       const announcement = payload.compilation?.status === "published"
-        ? "来源谱系已删除，关系 Wiki 已根据剩余受治理来源重建。"
+        ? "来源及相关内容已删除，关系记录已按剩余来源更新。"
         : payload.compilation_error
-          ? `Source lineage deleted. Wiki recompilation needs attention: ${payload.compilation_error}`
-          : "来源谱系已删除，没有活跃关系保留。";
+          ? `来源已删除，关系记录暂未更新：${payload.compilation_error}`
+          : "来源及相关内容已删除，此关系已无可用记录。";
       if (relationshipRemoved) {
         onEvidenceChanged(announcement, true);
         return;
@@ -730,10 +781,10 @@ export function RelationshipResourceComposer({
       setError(
         caught instanceof Error
           ? caught.message
-          : "无法删除受治理来源。",
+          : "无法删除来源。",
       );
     } finally {
-      setBusy(false);
+      setBusyOperation(null);
     }
   }
 
@@ -761,7 +812,7 @@ export function RelationshipResourceComposer({
       authorizationExpiresAt = parsedExpiry.toISOString();
     }
     const resourceId = selectedResource.resource.id;
-    setBusy(true);
+    setBusyOperation("正在更新来源授权…");
     setError("");
     sourceAuthorizationRequestRef.current ??= crypto.randomUUID();
     try {
@@ -808,14 +859,14 @@ export function RelationshipResourceComposer({
       const authorizationMessage =
         payload.decision === "revoke"
           ? payload.compilation
-            ? `来源访问权限已撤销。已撤回 ${payload.states_retracted} 项确认状态，并使用仍获授权的来源重新构建关系 Wiki。`
-            : `来源访问权限已撤销。Wiki 重新编译需要关注：${
+            ? `来源访问权限已撤销。已撤回 ${payload.states_retracted} 项确认状态，并使用仍获授权的来源更新关系记录。`
+            : `来源访问权限已撤销。关系记录暂未更新：${
                 payload.compilation_error ??
                 "没有可发布的已授权关系记忆"
               }`
           : payload.compilation
             ? `来源访问权限已恢复，可供审阅。共有 ${payload.claims_reopened} 项声明待处理；此前的结论或行动均未自动恢复。`
-            : `来源访问权限已恢复，可供审阅。Wiki 重新编译需要关注：${
+            : `来源访问权限已恢复，可供审阅。关系记录暂未更新：${
                 payload.compilation_error ??
                 "恢复的依据仍需审阅"
               }`;
@@ -829,7 +880,7 @@ export function RelationshipResourceComposer({
           : "无法更改来源授权。",
       );
     } finally {
-      setBusy(false);
+      setBusyOperation(null);
     }
   }
 
@@ -866,7 +917,7 @@ export function RelationshipResourceComposer({
       setError("无法保留来源观察时间。")
       return;
     }
-    setBusy(true);
+    setBusyOperation("正在保存资料…");
     setError("");
     try {
       let response: Response;
@@ -948,7 +999,7 @@ export function RelationshipResourceComposer({
           : "无法附加背景。",
       );
     } finally {
-      setBusy(false);
+      setBusyOperation(null);
     }
   }
 
@@ -1192,7 +1243,7 @@ export function RelationshipResourceComposer({
           ) : (
             <Plus aria-hidden="true" size={17} />
           )}
-          {busy ? "正在附加来源" : "附加到人物"}
+          {busyOperation === "正在保存资料…" ? busyOperation : "附加到人物"}
         </button>
       </footer>
 
@@ -1211,7 +1262,8 @@ export function RelationshipResourceComposer({
               <button
                 data-state={resource.processing_state}
                 key={resource.id}
-                onClick={() => void openResource(resource.id)}
+                className={styles.readingTarget}
+                onClick={(event) => void openResource(resource.id, event.currentTarget)}
                 type="button"
               >
                 <span>
@@ -1268,11 +1320,13 @@ export function RelationshipResourceComposer({
       </div>
 
       {selectedResource ? (
-        <div className="context-resource-review">
-          <header>
-            <div>
+        <div className={`context-resource-review ${styles.review}`}>
+          <header className={styles.reviewHeader}>
+            <div className={styles.reviewTitle}>
               <p className="eyebrow">依据审阅</p>
-              <h3>{selectedResource.resource.display_name}</h3>
+              <h3 className={styles.readingTarget} ref={reviewTitleRef} tabIndex={-1}>
+                {selectedResource.resource.display_name}
+              </h3>
               <span>
                 {resourceKindLabel(selectedResource.resource.kind)} ·{" "}
                 {selectedResource.resource.source_authorization_state !==
@@ -1284,7 +1338,15 @@ export function RelationshipResourceComposer({
                   : `${selectedResource.fragments.length} 个可定位片段`}
               </span>
             </div>
-            <div className="context-resource-review__actions">
+            <div
+              className={`context-resource-review__actions ${styles.reviewActions}`}
+              onFocusCapture={(event) => {
+                const target = event.target;
+                if (target instanceof HTMLButtonElement && target.matches(":focus-visible")) {
+                  target.scrollIntoView({ block: "nearest", behavior: "instant" });
+                }
+              }}
+            >
               <button
                 aria-expanded={identityCorrectionOpen}
                 className="context-text-button"
@@ -1302,6 +1364,7 @@ export function RelationshipResourceComposer({
               </button>
               <button
                 aria-expanded={sourceAuthorizationOpen}
+                ref={sourceAuthorizationTriggerRef}
                 className="context-text-button"
                 onClick={() => {
                   setDeleteResourceConfirm(false);
@@ -1330,6 +1393,8 @@ export function RelationshipResourceComposer({
                     : "恢复访问"}
               </button>
               <button
+                aria-expanded={deleteResourceConfirm}
+                ref={deleteResourceTriggerRef}
                 className="context-text-button"
                 onClick={() => {
                   setSourceAuthorizationOpen(false);
@@ -1345,6 +1410,15 @@ export function RelationshipResourceComposer({
                 aria-label="关闭依据审阅"
                 className="context-icon-button"
                 onClick={() => {
+                  sourceReadVersion.current += 1;
+                  pendingReadingRef.current = null;
+                  setBusyOperation((current) => current === "正在读取研究状态…" ? null : current);
+                  const trigger = readingTriggerRef.current;
+                  readingTriggerRef.current = null;
+                  if (trigger?.isConnected) {
+                    trigger.scrollIntoView({ block: "nearest", behavior: "instant" });
+                    trigger.focus({ preventScroll: true });
+                  }
                   setSelectedResource(null);
                   setClaimEdits({});
                   setDeleteResourceConfirm(false);
@@ -1363,7 +1437,10 @@ export function RelationshipResourceComposer({
             </div>
           </header>
           {sourceAuthorizationOpen ? (
-            <section className="context-identity-correction">
+            <section
+              className={`context-identity-correction ${styles.decision}`}
+              onFocusCapture={revealDecisionControl}
+            >
               <header>
                 <div>
                   <p className="eyebrow">来源授权</p>
@@ -1387,7 +1464,7 @@ export function RelationshipResourceComposer({
               <p>
                 {selectedResource.resource
                   .source_authorization_state === "authorized"
-                  ? "撤销访问会隐藏依据、撤回依赖事实与待处理行动，并根据剩余已授权来源重建 Wiki。受治理来源不会被删除，因此之后可以恢复访问。"
+                  ? "撤销访问会隐藏依据、撤回依赖事实与待处理行动，并根据剩余已授权来源更新关系记录。来源不会被删除，因此之后可以恢复访问。"
                   : selectedResource.resource
                         .source_authorization_state === "expired"
                     ? "续期授权会重新显示受治理依据，但所有来源衍生声明都需重新由你审阅。此前事实、批准和行动保持撤回。"
@@ -1434,7 +1511,7 @@ export function RelationshipResourceComposer({
                     value={sourceAuthorizationExpiresAt}
                   />
                   <small>
-                    这会治理依据的使用，与原始文件保留时长相互独立。
+                    这决定来源能否继续作为依据，不会改变原始文件的保留时长。
                   </small>
                 </label>
               ) : null}
@@ -1442,6 +1519,11 @@ export function RelationshipResourceComposer({
                 <button
                   className="context-secondary-button"
                   onClick={() => {
+                    const trigger = sourceAuthorizationTriggerRef.current;
+                    if (trigger?.isConnected) {
+                      trigger.scrollIntoView({ block: "nearest", behavior: "instant" });
+                      trigger.focus({ preventScroll: true });
+                    }
                     setSourceAuthorizationOpen(false);
                     resetSourceAuthorizationDecision();
                   }}
@@ -1473,7 +1555,7 @@ export function RelationshipResourceComposer({
                   ) : null}
                   {selectedResource.resource
                     .source_authorization_state === "authorized"
-                    ? "撤销并重建 Wiki"
+                    ? "撤销并更新关系记录"
                     : selectedResource.resource
                           .source_authorization_state === "expired"
                       ? "续期并返回审阅"
@@ -1483,13 +1565,23 @@ export function RelationshipResourceComposer({
             </section>
           ) : null}
           {deleteResourceConfirm ? (
-            <div className="context-resource-review__delete">
+            <div
+              className={`context-resource-review__delete ${styles.decision}`}
+              onFocusCapture={revealDecisionControl}
+            >
               <p>
-                这会撤回此来源、由其发现的来源，以及所有依赖的 Wiki 或聊天快照。
+                这会删除此来源及由它发现的资料，并撤回依赖它的关系记录与对话快照。此操作不能恢复。
               </p>
               <button
                 className="context-secondary-button"
-                onClick={() => setDeleteResourceConfirm(false)}
+                onClick={() => {
+                  const trigger = deleteResourceTriggerRef.current;
+                  if (trigger?.isConnected) {
+                    trigger.scrollIntoView({ block: "nearest", behavior: "instant" });
+                    trigger.focus({ preventScroll: true });
+                  }
+                  setDeleteResourceConfirm(false);
+                }}
                 type="button"
               >
                 保留来源
@@ -1500,7 +1592,7 @@ export function RelationshipResourceComposer({
                 onClick={() => void deleteSelectedResource()}
                 type="button"
               >
-                删除受治理谱系
+                {busyOperation === "正在删除来源…" ? busyOperation : "删除来源及相关内容"}
               </button>
             </div>
           ) : null}
@@ -1700,7 +1792,7 @@ export function RelationshipResourceComposer({
                     ) : (
                       <ArrowRight aria-hidden="true" size={16} />
                     )}
-                    移动来源谱系
+                    移动来源及相关资料
                   </button>
                 </div>
               </footer>
@@ -1722,7 +1814,7 @@ export function RelationshipResourceComposer({
                       ).hostname
                     }
                   </strong>
-                  。每个检索页面都会以拟议依据返回，并保留网址、检索时间、新鲜度与删除谱系。
+                  。每个检索页面都会以拟议依据返回，并保留网址、检索时间与相关资料的删除范围。
                 </p>
               </div>
               <div className="context-research-approval__scope">
@@ -1837,7 +1929,7 @@ export function RelationshipResourceComposer({
                   }
                   onClick={() =>
                     void (researchResult?.status === "running"
-                      ? refreshResearchStatus()
+                      ? refreshResearchStatus().catch(() => undefined)
                       : researchSelectedResource())
                   }
                   type="button"
@@ -2048,17 +2140,19 @@ export function RelationshipResourceComposer({
               >
                 <header>
                   <span>
-                    {fragment.locator.kind.replaceAll("_", " ")} ·{" "}
+                    {fragmentLocationLabel(fragment.locator.kind)} ·{" "}
                     {fragment.sequence + 1}
                   </span>
-                  <i>{fragment.review_status}</i>
+                  <i>{fragmentReviewLabel(fragment.review_status)}</i>
                 </header>
                 <pre>{fragment.text}</pre>
                 <p>
-                  {fragment.attribution.actor_kind.replaceAll("_", " ")} ·{" "}
-                  attribution {fragment.attribution.status} ·{" "}
-                  {fragment.parser.name} {fragment.parser.version}
+                  {fragmentAttributionLabel(fragment.attribution.actor_kind, fragment.attribution.status)}
                 </p>
+                <details>
+                  <summary>查看提取信息</summary>
+                  <p>提取方式：{fragment.parser.name} · {fragment.parser.version}</p>
+                </details>
                 {fragment.review_status === "proposed" ? (
                   <footer>
                     <button

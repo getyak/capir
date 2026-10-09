@@ -7,6 +7,15 @@ const input = { title: "与陈夏会谈", starts_at: "2026-09-10T15:00:00+08:00"
 const signal = new AbortController().signal;
 
 describe("review-only calendar capability", () => {
+  it("binds a supplemental exact quote to its original message without granting an external action", async () => {
+    const messageID = "20000000-0000-4000-8000-000000000002";
+    const capability = calendarDraftCapability({ ...context,
+      resolveMessageExcerpt: excerpt => objective.includes(excerpt) ? { messageID, text: objective } : false,
+    }, "initial unrelated task");
+    expect((await capability.tools[0]!.execute(input, signal)).isError).toBe(false);
+    expect(capability.draft()).toMatchObject({ source_message_id: messageID,
+      source_request_id: context.sourceRequestID, source_excerpt: input.source_excerpt, external_effect: "none" });
+  });
   it("admits only one of concurrent image drafts and preserves its image receipt", async () => {
     let release!:()=>void;
     const barrier=new Promise<void>(resolve=>{release=resolve;});

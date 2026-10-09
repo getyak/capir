@@ -1,6 +1,16 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Prepare the next conversation": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "准备下一次交流"
+          }
+        }
+      }
+    },
     "Apple sign-in could not finish. Check your Apple Account in Settings, then try again.": {
       "localizations": {
         "zh-Hans": {
@@ -672,12 +682,12 @@
         }
       }
     },
-    "Only Talent Signal activities are shown.": {
+    "Only capri activities are shown.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这里只显示 Talent Signal 中的日程。"
+            "value": "这里只显示 capri 中的日程。"
           }
         }
       }
@@ -762,7 +772,7 @@
         }
       }
     },
-    "Overlaps another Talent Signal activity": {
+    "Overlaps another capri activity": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
@@ -1272,12 +1282,12 @@
         }
       }
     },
-    "Open Talent Signal Lab": {
+    "Open capri Lab": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "打开 Talent Signal Lab"
+            "value": "打开 capri Lab"
           }
         }
       }
@@ -1522,12 +1532,12 @@
         }
       }
     },
-    "Talent Signal Lab": {
+    "capri Lab": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal Lab"
+            "value": "capri Lab"
           }
         }
       }
@@ -2722,12 +2732,12 @@
         }
       }
     },
-    "After you stop, this temporary recording is sent to Doubao for transcription. The words stay editable here and are not sent to the Agent until you tap Send. Talent Signal deletes its temporary audio after the response; provider handling follows your service agreement.": {
+    "After you stop, this temporary recording is sent to Doubao for transcription. The words stay editable here and are not sent to the Agent until you tap Send. capri deletes its temporary audio after the response; provider handling follows your service agreement.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "停止录音后，这段临时音频会发送给豆包进行转写。文字会先留在输入框中供你编辑，只有点击发送后才会交给 Agent。Talent Signal 会在收到响应后删除本地临时音频；服务商如何处理数据以你的服务协议为准。"
+            "value": "停止录音后，这段临时音频会发送给豆包进行转写。文字会先留在输入框中供你编辑，只有点击发送后才会交给 Agent。capri 会在收到响应后删除本地临时音频；服务商如何处理数据以你的服务协议为准。"
           }
         }
       }
@@ -2942,22 +2952,22 @@
         }
       }
     },
-    "Apple Calendar returned from Save, but Talent Signal could not read the exact event back. Check Apple Calendar before trying again.": {
+    "Apple Calendar returned from Save, but capri could not read the exact event back. Check Apple Calendar before trying again.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Apple 日历已从“保存”返回，但 Talent Signal 无法回读该事件。请先在 Apple 日历中确认，再尝试其他操作。"
+            "value": "Apple 日历已从“保存”返回，但 capri 无法回读该事件。请先在 Apple 日历中确认，再尝试其他操作。"
           }
         }
       }
     },
-    "Apple Calendar shows the final title and time before saving. Talent Signal does not read the rest of your calendar.": {
+    "Apple Calendar shows the final title and time before saving. capri does not read the rest of your calendar.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Apple 日历会在保存前显示最终标题与时间。Talent Signal 不会读取你的其他日历内容。"
+            "value": "Apple 日历会在保存前显示最终标题与时间。capri 不会读取你的其他日历内容。"
           }
         }
       }
@@ -3322,12 +3332,12 @@
         }
       }
     },
-    "Calendar sync finished, but its receipt could not be saved in Talent Signal.": {
+    "Calendar sync finished, but its receipt could not be saved in capri.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "日历同步已完成，但同步回执无法保存到 Talent Signal。"
+            "value": "日历同步已完成，但同步回执无法保存到 capri。"
           }
         }
       }
@@ -3412,12 +3422,12 @@
         }
       }
     },
-    "Candidate names, quoted evidence, and source-authored content stay in their original language.": {
+    "Person names, quoted evidence, and source-authored content stay in their original language.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "候选人姓名、引用证据与来源原文会保留其原始语言。"
+            "value": "人物姓名、引用证据与来源原文会保留其原始语言。"
           }
         }
       }
@@ -3862,22 +3872,22 @@
         }
       }
     },
-    "Choose Talent Signal, then select Capture Signal, Record Signal, or Review screenshot.": {
+    "Choose capri, then select Capture Signal, Record Signal, or Review screenshot.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "选择 Talent Signal，然后选择记录 Signal、录制 Signal 或审阅截图。"
+            "value": "选择 capri，然后选择记录 Signal、录制 Signal 或审阅截图。"
           }
         }
       }
     },
-    "Choose Talent Signal, then select the capture or review shortcut you want.": {
+    "Choose capri, then select the capture or review shortcut you want.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "选择 Talent Signal，再选择需要的记录或审阅快捷指令。"
+            "value": "选择 capri，再选择需要的记录或审阅快捷指令。"
           }
         }
       }
@@ -4212,12 +4222,12 @@
         }
       }
     },
-    "Confirm to save in Talent Signal. Calendar sync is off.": {
+    "Confirm to save in capri. Calendar sync is off.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "确认后保存到 Talent Signal；日历同步已关闭。"
+            "value": "确认后保存到 capri；日历同步已关闭。"
           }
         }
       }
@@ -4252,12 +4262,12 @@
         }
       }
     },
-    "Confirmed in Talent Signal": {
+    "Confirmed in capri": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已在 Talent Signal 中确认"
+            "value": "已在 capri 中确认"
           }
         }
       }
@@ -4642,7 +4652,7 @@
         }
       }
     },
-    "Current recruiter": {
+    "Current user": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
@@ -5462,12 +5472,12 @@
         }
       }
     },
-    "Give Talent Signal one place to listen": {
+    "Give capri one place to listen": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "先给 Talent Signal 一个倾听入口"
+            "value": "先给 capri 一个倾听入口"
           }
         }
       }
@@ -5972,22 +5982,22 @@
         }
       }
     },
-    "Keep Talent Signal in the foreground to use voice input.": {
+    "Keep capri in the foreground to use voice input.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "使用语音输入时，请让 Talent Signal 保持在前台。"
+            "value": "使用语音输入时，请让 capri 保持在前台。"
           }
         }
       }
     },
-    "Keep Talent Signal in the foreground. Leaving the app stops and seals the local payload.": {
+    "Keep capri in the foreground. Leaving the app stops and seals the local payload.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "请让 Talent Signal 保持在前台；离开应用会停止录音并封存本地内容。"
+            "value": "请让 capri 保持在前台；离开应用会停止录音并封存本地内容。"
           }
         }
       }
@@ -6592,12 +6602,12 @@
         }
       }
     },
-    "No candidate data is stored in this synthetic preview. Nothing shown here has execution authority.": {
+    "No personal data is stored in this synthetic preview. Nothing shown here has execution authority.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "此合成预览不会存储候选人数据，所显示内容均不具备执行权限。"
+            "value": "此合成预览不会存储个人数据，所显示内容均不具备执行权限。"
           }
         }
       }
@@ -7048,12 +7058,12 @@
         }
       }
     },
-    "Off · event stays in Talent Signal": {
+    "Off · event stays in capri": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已关闭 · 日程保留在 Talent Signal"
+            "value": "已关闭 · 日程保留在 capri"
           }
         }
       }
@@ -7098,12 +7108,12 @@
         }
       }
     },
-    "One exact source has not completed its current recruiter review. Your question is still in the composer. Review the source below; a new Ask will still require a separate tap.": {
+    "One exact source has not completed its current user review. Your question is still in the composer. Review the source below; a new Ask will still require a separate tap.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "有一条精确来源尚未完成当前招聘顾问审阅。你的问题仍保留在输入框；请先审阅下方来源，之后仍需由你再次点击发送。"
+            "value": "有一条精确来源尚未完成当前用户审阅。你的问题仍保留在输入框；请先审阅下方来源，之后仍需由你再次点击发送。"
           }
         }
       }
@@ -7408,42 +7418,42 @@
         }
       }
     },
-    "Open Talent Signal": {
+    "Open capri": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "打开 Talent Signal"
+            "value": "打开 capri"
           }
         }
       }
     },
-    "Open Talent Signal menu": {
+    "Open capri menu": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "打开 Talent Signal 菜单"
+            "value": "打开 capri 菜单"
           }
         }
       }
     },
-    "Open Talent Signal to reconcile": {
+    "Open capri to reconcile": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "打开 Talent Signal 核对结果"
+            "value": "打开 capri 核对结果"
           }
         }
       }
     },
-    "Open Talent Signal to resolve": {
+    "Open capri to resolve": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "打开 Talent Signal 处理问题"
+            "value": "打开 capri 处理问题"
           }
         }
       }
@@ -9338,12 +9348,12 @@
         }
       }
     },
-    "Review what Talent Signal understood": {
+    "Review what capri understood": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "审阅 Talent Signal 的理解"
+            "value": "审阅 capri 的理解"
           }
         }
       }
@@ -9558,22 +9568,22 @@
         }
       }
     },
-    "Saved in Talent Signal": {
+    "Saved in capri": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已保存到 Talent Signal"
+            "value": "已保存到 capri"
           }
         }
       }
     },
-    "Saved in Talent Signal · Calendar sync failed": {
+    "Saved in capri · Calendar sync failed": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已保存到 Talent Signal · 日历同步失败"
+            "value": "已保存到 capri · 日历同步失败"
           }
         }
       }
@@ -9658,22 +9668,22 @@
         }
       }
     },
-    "Saves in Talent Signal without changing Apple Calendar.": {
+    "Saves in capri without changing Apple Calendar.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "保存到 Talent Signal，不更改 Apple 日历。"
+            "value": "保存到 capri，不更改 Apple 日历。"
           }
         }
       }
     },
-    "Saves in Talent Signal, then syncs one way to Apple Calendar.": {
+    "Saves in capri, then syncs one way to Apple Calendar.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "先保存到 Talent Signal，再单向同步到 Apple 日历。"
+            "value": "先保存到 capri，再单向同步到 Apple 日历。"
           }
         }
       }
@@ -10298,12 +10308,12 @@
         }
       }
     },
-    "Sync failed · event kept in Talent Signal": {
+    "Sync failed · event kept in capri": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "同步失败 · 日程仍保留在 Talent Signal"
+            "value": "同步失败 · 日程仍保留在 capri"
           }
         }
       }
@@ -10388,12 +10398,12 @@
         }
       }
     },
-    "Talent Signal Agent": {
+    "capri Agent": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal Agent"
+            "value": "capri Agent"
           }
         }
       }
@@ -10408,52 +10418,52 @@
         }
       }
     },
-    "Talent Signal Agent. This update needs review. No outcome assumed.": {
+    "capri Agent. This update needs review. No outcome assumed.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal Agent。此更新需要审阅，尚未假定任何结果。"
+            "value": "capri Agent。此更新需要审阅，尚未假定任何结果。"
           }
         }
       }
     },
-    "Talent Signal can project confirmed events out, but does not import calendar truth back in.": {
+    "capri can project confirmed events out, but does not import calendar truth back in.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 可以把已确认事件投射到外部，但不会把日历内容反向导入为事实。"
+            "value": "capri 可以把已确认事件投射到外部，但不会把日历内容反向导入为事实。"
           }
         }
       }
     },
-    "Talent Signal offers focused shortcuts for capture, review, and retrieval. Choosing one never confirms a fact or sends anything.": {
+    "capri offers focused shortcuts for capture, review, and retrieval. Choosing one never confirms a fact or sends anything.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 提供聚焦于记录、审阅与找回的快捷指令；选择任一项都不会确认事实或发送内容。"
+            "value": "capri 提供聚焦于记录、审阅与找回的快捷指令；选择任一项都不会确认事实或发送内容。"
           }
         }
       }
     },
-    "Talent Signal offers three focused shortcuts. Choosing one never confirms a fact or sends anything.": {
+    "capri offers three focused shortcuts. Choosing one never confirms a fact or sends anything.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 提供三个聚焦的快捷指令；选择任一项都不会确认事实或发送内容。"
+            "value": "capri 提供三个聚焦的快捷指令；选择任一项都不会确认事实或发送内容。"
           }
         }
       }
     },
-    "Talent Signal saves the event first, then syncs it one way. It never imports or rechecks Apple Calendar events.": {
+    "capri saves the event first, then syncs it one way. It never imports or rechecks Apple Calendar events.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 会先保存日程，再单向同步；不会导入或回读 Apple 日历中的日程。"
+            "value": "capri 会先保存日程，再单向同步；不会导入或回读 Apple 日历中的日程。"
           }
         }
       }
@@ -10628,52 +10638,52 @@
         }
       }
     },
-    "The event could not be saved in Talent Signal. Nothing was added to Apple Calendar.": {
+    "The event could not be saved in capri. Nothing was added to Apple Calendar.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "日程无法保存到 Talent Signal，Apple 日历也未发生更改。"
+            "value": "日程无法保存到 capri，Apple 日历也未发生更改。"
           }
         }
       }
     },
-    "The event is saved in Talent Signal.": {
+    "The event is saved in capri.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "日程已保存到 Talent Signal。"
+            "value": "日程已保存到 capri。"
           }
         }
       }
     },
-    "The event is saved in Talent Signal. Apple Calendar returned an uncertain result; check Apple Calendar before taking any further action.": {
+    "The event is saved in capri. Apple Calendar returned an uncertain result; check Apple Calendar before taking any further action.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "日程已保存到 Talent Signal，但 Apple 日历返回了不确定的结果；继续操作前，请先检查 Apple 日历。"
+            "value": "日程已保存到 capri，但 Apple 日历返回了不确定的结果；继续操作前，请先检查 Apple 日历。"
           }
         }
       }
     },
-    "The event is saved in Talent Signal. Apple Calendar sync failed; open the event to try again.": {
+    "The event is saved in capri. Apple Calendar sync failed; open the event to try again.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "日程已保存到 Talent Signal，但 Apple 日历同步失败；请打开日程后重试。"
+            "value": "日程已保存到 capri，但 Apple 日历同步失败；请打开日程后重试。"
           }
         }
       }
     },
-    "The event is verified in Apple Calendar, but its Talent Signal link could not be saved on this device.": {
+    "The event is verified in Apple Calendar, but its capri link could not be saved on this device.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "该事件已在 Apple 日历中验证，但无法在此设备上保存其 Talent Signal 关联。"
+            "value": "该事件已在 Apple 日历中验证，但无法在此设备上保存其 capri 关联。"
           }
         }
       }
@@ -10698,12 +10708,12 @@
         }
       }
     },
-    "The Live Activity exposes phase and attention only. Candidate details and consequential controls stay inside Talent Signal.": {
+    "The Live Activity exposes phase and attention only. Person details and consequential controls stay inside capri.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "实时活动只展示阶段与是否需要关注；候选人详情和有后果的控制项留在 Talent Signal 应用内。"
+            "value": "实时活动只展示阶段与是否需要关注；人物详情和有后果的控制项留在 capri 应用内。"
           }
         }
       }
@@ -10818,12 +10828,12 @@
         }
       }
     },
-    "The reviewed evidence remains unresolved and cannot change any person Wiki until a recruiter resolves identity.": {
+    "The reviewed evidence remains unresolved and cannot change any person Wiki until you resolve identity.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已审阅证据保持待核对；在招聘顾问解决身份前，它不会更改任何人物 Wiki。"
+            "value": "已审阅证据保持待核对；在你解决身份前，它不会更改任何人物 Wiki。"
           }
         }
       }
@@ -10928,12 +10938,12 @@
         }
       }
     },
-    "The sync attempt could not be recorded in Talent Signal. Nothing was added to Apple Calendar.": {
+    "The sync attempt could not be recorded in capri. Nothing was added to Apple Calendar.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "同步尝试无法记录到 Talent Signal，Apple 日历未发生更改。"
+            "value": "同步尝试无法记录到 capri，Apple 日历未发生更改。"
           }
         }
       }
@@ -11068,12 +11078,12 @@
         }
       }
     },
-    "This records a new recruiter review. It does not send the saved question or perform any external action.": {
+    "This records a new user review. It does not send the saved question or perform any external action.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这会记录一次新的招聘顾问审阅，不会自动发送已保留的问题，也不会执行任何外部操作。"
+            "value": "这会记录一次新的用户审阅，不会自动发送已保留的问题，也不会执行任何外部操作。"
           }
         }
       }
@@ -11268,12 +11278,12 @@
         }
       }
     },
-    "Turning sync off keeps new confirmed events in Talent Signal without changing Apple Calendar.": {
+    "Turning sync off keeps new confirmed events in capri without changing Apple Calendar.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "关闭同步后，新确认的日程会保留在 Talent Signal，不会更改 Apple 日历。"
+            "value": "关闭同步后，新确认的日程会保留在 capri，不会更改 Apple 日历。"
           }
         }
       }
@@ -11448,12 +11458,12 @@
         }
       }
     },
-    "Use English for Talent Signal controls and guidance.": {
+    "Use English for capri controls and guidance.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 的控件与引导使用英文。"
+            "value": "capri 的控件与引导使用英文。"
           }
         }
       }
@@ -11488,12 +11498,12 @@
         }
       }
     },
-    "Use Simplified Chinese for Talent Signal controls and guidance.": {
+    "Use Simplified Chinese for capri controls and guidance.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 的控件与引导使用简体中文。"
+            "value": "capri 的控件与引导使用简体中文。"
           }
         }
       }
@@ -11578,12 +11588,12 @@
         }
       }
     },
-    "User-confirmed Talent Signal calendar event": {
+    "User-confirmed capri calendar event": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "用户已确认的 Talent Signal 日程"
+            "value": "用户已确认的 capri 日程"
           }
         }
       }
@@ -11638,12 +11648,12 @@
         }
       }
     },
-    "Voice input stopped when Talent Signal left the foreground. No audio was sent.": {
+    "Voice input stopped when capri left the foreground. No audio was sent.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 离开前台时，语音输入已停止；没有发送任何音频。"
+            "value": "capri 离开前台时，语音输入已停止；没有发送任何音频。"
           }
         }
       }
@@ -12768,12 +12778,12 @@
         }
       }
     },
-    "Only mapped fields are held in this review. The selected raw file is not stored by Talent Signal.": {
+    "Only mapped fields are held in this review. The selected raw file is not stored by capri.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "本次审阅只保留已映射字段。Talent Signal 不会存储所选原始文件。"
+            "value": "本次审阅只保留已映射字段。capri 不会存储所选原始文件。"
           }
         }
       }
@@ -12938,12 +12948,12 @@
         }
       }
     },
-    "This is an identity reference only. Talent Signal will not sign in, sync, or publish through it.": {
+    "This is an identity reference only. capri will not sign in, sync, or publish through it.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "这只是一条身份引用。Talent Signal 不会通过它登录、同步或发布。"
+            "value": "这只是一条身份引用。capri 不会通过它登录、同步或发布。"
           }
         }
       }
@@ -13238,12 +13248,12 @@
         }
       }
     },
-    "Only you can assign it in Settings. Talent Signal cannot read or change the Action Button binding.": {
+    "Only you can assign it in Settings. capri cannot read or change the Action Button binding.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "只有你能在系统设置中完成绑定。Talent Signal 无法读取或更改操作按钮的绑定。"
+            "value": "只有你能在系统设置中完成绑定。capri 无法读取或更改操作按钮的绑定。"
           }
         }
       }
@@ -13318,12 +13328,12 @@
         }
       }
     },
-    "Saved locally in Talent Signal. Nothing was uploaded or confirmed.": {
+    "Saved locally in capri. Nothing was uploaded or confirmed.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已在 Talent Signal 本地保存；没有上传或确认任何内容。"
+            "value": "已在 capri 本地保存；没有上传或确认任何内容。"
           }
         }
       }
@@ -13398,12 +13408,12 @@
         }
       }
     },
-    "Shortcuts opens your existing shortcuts and Talent Signal app actions.": {
+    "Shortcuts opens your existing shortcuts and capri app actions.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "“快捷指令”会打开你现有的快捷指令和 Talent Signal App 操作。"
+            "value": "“快捷指令”会打开你现有的快捷指令和 capri App 操作。"
           }
         }
       }
@@ -13438,32 +13448,32 @@
         }
       }
     },
-    "Talent Signal action": {
+    "capri action": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 操作"
+            "value": "capri 操作"
           }
         }
       }
     },
-    "Talent Signal received a screenshot through Shortcuts. It remains on this iPhone until you review or delete it.": {
+    "capri received a screenshot through Shortcuts. It remains on this iPhone until you review or delete it.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 已通过快捷指令收到截图；在你审阅或删除前，它会保留在这台 iPhone 上。"
+            "value": "capri 已通过快捷指令收到截图；在你审阅或删除前，它会保留在这台 iPhone 上。"
           }
         }
       }
     },
-    "Talent Signal received a screenshot through Shortcuts. It stays in the local review queue until you review or delete it.": {
+    "capri received a screenshot through Shortcuts. It stays in the local review queue until you review or delete it.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 已通过快捷指令收到截图；在你审阅或删除前，它会留在本地审阅队列中。"
+            "value": "capri 已通过快捷指令收到截图；在你审阅或删除前，它会留在本地审阅队列中。"
           }
         }
       }
@@ -13478,12 +13488,12 @@
         }
       }
     },
-    "The button saves locally. Reviewed text is sent only after you tap Save and check identity; no candidate fact or external action is confirmed automatically.": {
+    "The button saves locally. Reviewed text is sent only after you tap Save and check identity; no person fact or external action is confirmed automatically.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "按钮只会在本地保存。只有在你轻点“保存并核对身份”后，审阅后的文字才会发送；候选人事实与外部操作都不会被自动确认。"
+            "value": "按钮只会在本地保存。只有在你轻点“保存并核对身份”后，审阅后的文字才会发送；人物事实与外部操作都不会被自动确认。"
           }
         }
       }
@@ -13508,12 +13518,12 @@
         }
       }
     },
-    "Your assignment is noted. Talent Signal will verify its own capture path when the first screenshot arrives.": {
+    "Your assignment is noted. capri will verify its own capture path when the first screenshot arrives.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "已记录你的绑定确认。第一张截图到达后，Talent Signal 会验证自己负责的接收链路。"
+            "value": "已记录你的绑定确认。第一张截图到达后，capri 会验证自己负责的接收链路。"
           }
         }
       }
@@ -25111,12 +25121,12 @@
         }
       }
     },
-    "Talent Signal Research": {
+    "capri Research": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 研究"
+            "value": "capri 研究"
           }
         }
       }
@@ -25251,12 +25261,12 @@
         }
       }
     },
-    "This update needs review. No outcome assumed. Open Talent Signal.": {
+    "This update needs review. No outcome assumed. Open capri.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "本次更新需要检查，尚未确认结果。请打开 Talent Signal。"
+            "value": "本次更新需要检查，尚未确认结果。请打开 capri。"
           }
         }
       }
@@ -25351,12 +25361,12 @@
         }
       }
     },
-    "No candidate facts can be confirmed from unknown-speaker text. Keep this source for review.": {
+    "No person facts can be confirmed from unknown-speaker text. Keep this source for review.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "说话人不明确的文字不能成为候选人事实，可以继续保存待审。"
+            "value": "说话人不明确的文字不能成为人物事实，可以继续保存待审。"
           }
         }
       }
@@ -27107,12 +27117,12 @@
         }
       }
     },
-    "When available, provisional words appear on device while you speak. After you stop, the temporary recording goes to Doubao to create an editable draft. Nothing is sent to Agent until you tap Send. Talent Signal deletes its temporary audio after transcription; provider handling follows your service agreement.": {
+    "When available, provisional words appear on device while you speak. After you stop, the temporary recording goes to Doubao to create an editable draft. Nothing is sent to Agent until you tap Send. capri deletes its temporary audio after transcription; provider handling follows your service agreement.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "设备支持时，说话过程中会在本机显示临时文字。停止后，临时录音会交给豆包生成可编辑草稿；点击发送前，不会向 Agent 提交任何文字。转写完成后 Talent Signal 会删除临时音频，服务商按你的服务协议处理。"
+            "value": "设备支持时，说话过程中会在本机显示临时文字。停止后，临时录音会交给豆包生成可编辑草稿；点击发送前，不会向 Agent 提交任何文字。转写完成后 capri 会删除临时音频，服务商按你的服务协议处理。"
           }
         }
       }
@@ -27257,42 +27267,42 @@
         }
       }
     },
-    "Talent Signal Agent is preparing a response.": {
+    "capri Agent is preparing a response.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal Agent 正在准备回复。"
+            "value": "capri Agent 正在准备回复。"
           }
         }
       }
     },
-    "Talent Signal Agent response is ready to review.": {
+    "capri Agent response is ready to review.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal Agent 的回复已可查看。"
+            "value": "capri Agent 的回复已可查看。"
           }
         }
       }
     },
-    "Talent Signal Agent did not connect. Open the protected Session to retry.": {
+    "capri Agent did not connect. Open the protected Session to retry.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal Agent 未能连接。打开受保护的会话后重试。"
+            "value": "capri Agent 未能连接。打开受保护的会话后重试。"
           }
         }
       }
     },
-    "Talent Signal Agent response is delayed. Open the protected Session to check or retry.": {
+    "capri Agent response is delayed. Open the protected Session to check or retry.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal Agent 的回复延迟了。打开受保护的会话查看或重试。"
+            "value": "capri Agent 的回复延迟了。打开受保护的会话查看或重试。"
           }
         }
       }
@@ -27327,32 +27337,32 @@
         }
       }
     },
-    "The changes are saved in Talent Signal, but the linked Apple Calendar event could not be found. Nothing new was created.": {
+    "The changes are saved in capri, but the linked Apple Calendar event could not be found. Nothing new was created.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "修改已保存到 Talent Signal，但找不到已关联的 Apple 日历日程；没有新建任何日程。"
+            "value": "修改已保存到 capri，但找不到已关联的 Apple 日历日程；没有新建任何日程。"
           }
         }
       }
     },
-    "The event is saved in Talent Signal. Choose a default calendar in Apple Calendar, then try again.": {
+    "The event is saved in capri. Choose a default calendar in Apple Calendar, then try again.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "日程已保存到 Talent Signal。请先在 Apple 日历中选择默认日历，然后重试。"
+            "value": "日程已保存到 capri。请先在 Apple 日历中选择默认日历，然后重试。"
           }
         }
       }
     },
-    "The changes are saved in Talent Signal. This Apple Calendar operation requires iOS 17 or later.": {
+    "The changes are saved in capri. This Apple Calendar operation requires iOS 17 or later.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "修改已保存到 Talent Signal。此 Apple 日历操作需要 iOS 17 或更高版本。"
+            "value": "修改已保存到 capri。此 Apple 日历操作需要 iOS 17 或更高版本。"
           }
         }
       }
@@ -27497,12 +27507,12 @@
         }
       }
     },
-    "Requires iOS 17 or later · event kept in Talent Signal": {
+    "Requires iOS 17 or later · event kept in capri": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "需要 iOS 17 或更高版本 · 日程保留在 Talent Signal"
+            "value": "需要 iOS 17 或更高版本 · 日程保留在 capri"
           }
         }
       }
@@ -27567,12 +27577,12 @@
         }
       }
     },
-    "This activity has no linked Apple Calendar event; editing changes Talent Signal only.": {
+    "This activity has no linked Apple Calendar event; editing changes capri only.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "此日程没有关联的 Apple 日历日程；修改只会保存到 Talent Signal。"
+            "value": "此日程没有关联的 Apple 日历日程；修改只会保存到 capri。"
           }
         }
       }
@@ -27637,12 +27647,12 @@
         }
       }
     },
-    "Talent Signal only": {
+    "capri only": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "仅 Talent Signal"
+            "value": "仅 capri"
           }
         }
       }
@@ -27657,12 +27667,12 @@
         }
       }
     },
-    "Talent Signal first records this reviewed change, then finds the existing event by its saved identifier and updates that event only. It never creates a replacement.": {
+    "capri first records this reviewed change, then finds the existing event by its saved identifier and updates that event only. It never creates a replacement.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Talent Signal 会先记录这次已审阅的修改，再通过已保存的标识符查找现有日程，并只更新这一条；不会新建替代日程。"
+            "value": "capri 会先记录这次已审阅的修改，再通过已保存的标识符查找现有日程，并只更新这一条；不会新建替代日程。"
           }
         }
       }
@@ -27677,17 +27687,17 @@
         }
       }
     },
-    "No linked Apple Calendar event exists, so this edit changes the Talent Signal activity only.": {
+    "No linked Apple Calendar event exists, so this edit changes the capri activity only.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "当前没有关联的 Apple 日历日程，因此此次修改只会更新 Talent Signal 日程。"
+            "value": "当前没有关联的 Apple 日历日程，因此此次修改只会更新 capri 日程。"
           }
         }
       }
     },
-    "Saves the reviewed changes in Talent Signal without updating an existing Apple Calendar event.": {
+    "Saves the reviewed changes in capri without updating an existing Apple Calendar event.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
@@ -27707,7 +27717,7 @@
         }
       }
     },
-    "Saves the reviewed changes in Talent Signal without changing Apple Calendar.": {
+    "Saves the reviewed changes in capri without changing Apple Calendar.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
@@ -27737,22 +27747,22 @@
         }
       }
     },
-    "New events sync outbound after confirmation. Talent Signal never imports or browses Apple Calendar; after you review an edit to a linked event, it reads only that saved identifier to update and verify that event.": {
+    "New events sync outbound after confirmation. capri never imports or browses Apple Calendar; after you review an edit to a linked event, it reads only that saved identifier to update and verify that event.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "新日程会在确认后单向同步。Talent Signal 不会导入或浏览 Apple 日历；修改已关联日程时，只会在你审阅后通过已保存的标识符读取、更新并验证那一条日程。"
+            "value": "新日程会在确认后单向同步。capri 不会导入或浏览 Apple 日历；修改已关联日程时，只会在你审阅后通过已保存的标识符读取、更新并验证那一条日程。"
           }
         }
       }
     },
-    "Turning sync off keeps new events in Talent Signal. A reviewed edit to an already linked event still updates that event only.": {
+    "Turning sync off keeps new events in capri. A reviewed edit to an already linked event still updates that event only.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "关闭同步后，新日程只保留在 Talent Signal；已关联日程经你审阅确认的修改，仍只会更新对应的那一条日程。"
+            "value": "关闭同步后，新日程只保留在 capri；已关联日程经你审阅确认的修改，仍只会更新对应的那一条日程。"
           }
         }
       }
@@ -28383,12 +28393,12 @@
         }
       }
     },
-    "Every relationship.\nA next chapter.": {
+    "Keep important people.\nPick up unfinished things.": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "让每一段关系，\n都有新的可能。"
+            "value": "接住重要的人，\n接着未完的事。"
           }
         }
       }
@@ -30835,6 +30845,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "关于此应用"
+          }
+        }
+      }
+    },
+    "Evaluation cases are unavailable in this build. Device-owned capture and live review remain available.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本暂无评估案例。仍可使用本机采集和实时审核。"
+          }
+        }
+      }
+    },
+    "The synthetic evaluation corpus is not bundled in this build.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本未包含合成评估案例。"
           }
         }
       }

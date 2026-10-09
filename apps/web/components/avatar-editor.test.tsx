@@ -55,6 +55,50 @@ describe("avatar editing through the rendered controls", () => {
     expect(readback().textContent).toBe("伟");
   });
 
+  it.each([{ isComposing: true }, { keyCode: 229 }])("preserves native IME Escape and the unsaved draft (%j)", async composition => {
+    await render(); await click("编辑 张伟 的头像"); await click("几何");
+    const editor = document.querySelector<HTMLElement>("[data-avatar-editor][role='dialog']")!;
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...composition });
+    await act(async () => editor.dispatchEvent(escape));
+    expect(escape.defaultPrevented).toBe(false);
+    expect(editor.isConnected).toBe(true);
+    expect(button("几何").getAttribute("aria-pressed")).toBe("true");
+    expect(readback().getAttribute("data-avatar-style")).toBe("initials");
+    await act(async () => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(document.querySelector("[data-avatar-editor][role='dialog']")).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(host.querySelector("[aria-haspopup='dialog']")));
+  });
+
+  it("keeps a pending storage save open even before document Escape registration", async () => {
+    const previous = Object.getOwnPropertyDescriptor(navigator, "locks");
+    let finish!: () => void;
+    Object.defineProperty(navigator, "locks", { configurable: true, value: {
+      request: (_key: string, _options: unknown, change: () => unknown) => new Promise(resolve => {
+        finish = () => resolve(change());
+      }),
+    } });
+    try {
+      await render();
+      const subscribe = document.addEventListener.bind(document);
+      vi.spyOn(document, "addEventListener").mockImplementation((type, listener, options) => {
+        if (type === "keydown" && typeof options === "object" && options.capture) return;
+        subscribe(type, listener, options);
+      });
+      await click("编辑 张伟 的头像"); await click("几何"); await click("保存头像");
+      const editor = document.querySelector<HTMLElement>("[data-avatar-editor][role='dialog']")!;
+      expect(button("正在保存…").disabled).toBe(true);
+      await act(async () => editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+      expect(editor.isConnected).toBe(true);
+      expect(readback().getAttribute("data-avatar-style")).toBe("initials");
+      await act(async () => { finish(); await Promise.resolve(); });
+      expect(document.querySelector("[data-avatar-editor][role='dialog']")).toBeNull();
+      expect(readback().getAttribute("data-avatar-style")).toBe("shapes");
+    } finally {
+      if (previous) Object.defineProperty(navigator, "locks", previous);
+      else Reflect.deleteProperty(navigator, "locks");
+    }
+  });
+
   it("keeps the editor open and old avatar visible when storage rejects a save", async () => {
     await render(); await click("编辑 张伟 的头像"); await click("柔光");
     const storage = window.localStorage;
@@ -94,6 +138,31 @@ describe("avatar editing through the rendered controls", () => {
     expect(button("保存头像").disabled).toBe(true);
     await click("载入最新设置"); await click("姓名"); await click("保存头像");
     expect(readback().getAttribute("data-avatar-style")).toBe("initials");
+  });
+
+  it("keeps keyboard focus on the stable preview when crop controls replace and then disappear", async () => {
+    const bitmap = { width: 400, height: 300, close: vi.fn() } as unknown as ImageBitmap;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => bitmap));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      clearRect() {}, drawImage() {},
+    } as unknown as CanvasRenderingContext2D);
+    await render(); await click("编辑 张伟 的头像");
+    const body = document.querySelector<HTMLElement>("[role='region'][aria-label='头像预览与显示设置']")!;
+    const input = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    Object.defineProperty(input, "files", { value: [new File(["synthetic raster"], "synthetic.png", { type: "image/png" })] });
+    await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); await Promise.resolve(); });
+    expect(document.querySelector("[aria-label='调整头像图片']")).not.toBeNull();
+    expect(button("使用这张图片")).toBeTruthy();
+    expect(button("保存头像")).toBeUndefined();
+    expect(document.activeElement).toBe(body);
+    body.scrollTop = 120;
+    await click("取消裁切");
+    expect(document.querySelector("[aria-label='调整头像图片']")).toBeNull();
+    expect(button("保存头像").disabled).toBe(false);
+    expect(document.activeElement).toBe(body);
+    expect(body.scrollTop).toBe(0);
+    expect(readback().getAttribute("data-avatar-style")).toBe("initials");
+    expect(bitmap.close).toHaveBeenCalledOnce();
   });
 
   it("discards a decoded upload that finishes after the dialog was closed", async () => {
