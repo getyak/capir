@@ -41,7 +41,7 @@ work through [`REVIEW.md`](REVIEW.md).
 1. Define one outcome, its boundary, and observable completion evidence.
 2. Inspect existing state, expose important unknowns, and preserve unrelated
    user changes.
-3. Deliver the smallest complete slice that can test the direction.
+3. Deliver the smallest complete slice that can test the direction; changes affecting Web or backend runtime (including shared code, Agent code, prompts, configuration, and migrations) authorize and require deploying every affected existing resident service from clean committed source after applicable checks, following `docs/operations/testflight-local-backend.md`, and verifying its live revision and changed behavior before completion; report deployment blockers as incomplete work.
 4. Verify the state that matters from the real surface; an edit, build, model
    response, or connector call is not proof by itself.
 5. Re-plan when evidence invalidates the approach, then route durable learning
