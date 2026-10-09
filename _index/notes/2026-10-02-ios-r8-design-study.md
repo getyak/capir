@@ -55,7 +55,7 @@ The desktop Figma presentation was actually clicked through Today → Sessions �
 
 Structural readback confirms 17 frames at 390 × 844, 12 components, 298 text nodes, 77 instances, 72 reaction-bearing targets, and a vertical Sessions viewport. The only image fill in the delivered section/library is the existing 56 × 56 synthetic portrait; the interface is not a flattened screenshot. The three sampled source frames remain 390 × 844. Full source immutability is supported by the scoped mutation scripts, not asserted merely from these dimensions.
 
-[Final audit](../../plans/local/ios-figma-refresh-2026-10-02/final-audit.json) contains screen IDs, fonts, image bounds, original-frame checks, and reaction readbacks. [Task plan](../../plans/local/ios-figma-refresh-2026-10-02/plan.md) contains execution scope. Visual exports and the simulator recording are local delivery artifacts outside the repository at `/Users/cubxxw/.codex/visualizations/2026/10/02/01a0fbbd-8c2c-7003-a62a-f0beac861075/ios-refresh/`.
+Final audit `plans/local/ios-figma-refresh-2026-10-02/final-audit.json` contains screen IDs, fonts, image bounds, original-frame checks, and reaction readbacks. Task plan `plans/local/ios-figma-refresh-2026-10-02/plan.md` contains execution scope. Both are local delivery artifacts kept outside version control, like the visual exports and the simulator recording at `/Users/cubxxw/.codex/visualizations/2026/10/02/01a0fbbd-8c2c-7003-a62a-f0beac861075/ios-refresh/`.
 
 Only the allowed Primary iPhone was used. The simulator session was released and the device shut down because this task started it. The owned temporary artifact directory was removed after preserving the recording and screenshot. No other task's artifacts or simulator data were removed.
 
