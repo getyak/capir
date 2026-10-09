@@ -47,7 +47,8 @@ outside this task.
   journey. Browser overrides were reset after testing.
 - Final source checks: 19 focused files / 136 tests passed, Web typecheck passed,
   scoped ESLint and documentation/architecture checks passed. Evidence and limits are recorded in the dated
-  [evaluation](../docs/evaluations/2026-10-05-capir-message-feedback/README.md).
+  evaluation evidence `evidence/2026-10-05-capir-message-feedback/` in the private
+  [capir-evals](https://github.com/getyak/capir-evals/tree/main/evidence) repository.
 - Owned browser tabs and the local preview server were closed. The registered
   temporary test artifact was removed after preserving sanitized evidence.
 

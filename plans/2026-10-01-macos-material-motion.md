@@ -5,7 +5,7 @@
 > in this plan were superseded by that rail and are not shipped; the material
 > surface, local session organization, reading fold, row motion and completion
 > seam remain. See
-> [`docs/evaluations/2026-10-09-local-code-deep-analysis/`](../docs/evaluations/2026-10-09-local-code-deep-analysis/README.md).
+> [`docs/research/local-work-merge-analysis-2026-10-09.md`](../docs/research/local-work-merge-analysis-2026-10-09.md).
 
 Outcome: the shipping SwiftUI/WKWebView workspace uses native AppKit material,
 quiet grayscale chrome, reversible local session organization, scoped reading
