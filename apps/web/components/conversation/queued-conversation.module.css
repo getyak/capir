@@ -53,6 +53,15 @@
 .executionMilestones time { color:var(--muted); font-variant-numeric:tabular-nums; }
 .executionFailure { color:var(--accent-strong,var(--accent)); }
 .forming { position:relative; }.cursor { width:5px; height:5px; display:inline-block; border-radius:50%; background:var(--muted); animation:breathe 1.8s ease-in-out infinite; margin-top:3px; }.waiting { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:14px; min-height:30px; }.pulse { width:6px; height:6px; border-radius:50%; background:#81936c; animation:breathe 1.8s ease-in-out infinite; }.runMeta { display:flex; gap:10px; font-size:13px; color:var(--muted); margin-top:9px; min-height:16px; }.delivery { display:flex; justify-content:flex-end; align-items:center; gap:5px; color:var(--muted); font-size:13px; margin-top:8px; }.delivery button,.notice button { background:none; color:inherit; text-decoration:underline; border:0; padding:5px; cursor:pointer; }
+
+/* One compact truthful work row beneath an accepted message. */
+.workRow { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:8px; min-height:30px; color:var(--muted); font-size:13px; line-height:20px; }
+.workLabel { display:flex; align-items:center; gap:6px; flex:none; font-weight:500; }
+.workRow .mark { width:16px; height:16px; }
+.workStatus { min-width:0; overflow-wrap:anywhere; }
+.workRow .pulse { flex:none; }
+.workRow button { background:none; color:inherit; text-decoration:underline; border:0; padding:5px; cursor:pointer; font:inherit; font-size:13px; }
+.formingStatus { display:block; margin-top:7px; color:var(--muted); font-size:12px; line-height:18px; }
 .canvas[data-empty="true"] { justify-content:center; padding-bottom:32px; overflow:auto; }
 .canvas[data-empty="true"] .transcript { flex:0 0 auto; overflow:visible; padding:0 32px; scrollbar-gutter:auto; }
 .canvas[data-empty="true"] .content { max-width:680px; }
@@ -155,6 +164,29 @@
 .composerImageHint { margin:0 8px 6px; color:var(--muted); font-size:11px; }
 @media(max-width:640px) { .imageExpand,.imageRetry { min-height:44px; } .imageButton,.imagePlaceholder { width:84px; height:84px; } .images[data-layout="single"] { width:240px; } .images[data-layout="folded"] .imageItem { margin-left:-52px; } .imageNav[data-side="previous"] { left:8px; } .imageNav[data-side="next"] { right:8px; } .imageZoom { min-width:60px; } .imageZoom,.imageControl,.imageClose { min-height:44px; } .imageControl { width:44px; } .imageClose { width:44px; } .imageMeta { bottom:max(12px,env(safe-area-inset-bottom)); } }
 .imageRetry { margin-top:6px; border:0; background:none; color:var(--ink); text-decoration:underline; font-size:11px; padding:4px 0; cursor:pointer; }
+
+/* Brief one-shot seam for an observed run that just completed or needs review.
+   Vermilion is reserved for this consequence seam; it plays exactly once. */
+.answerSeam { position: relative; }
+.answerSeam[data-seam="new"]::before {
+  background: linear-gradient(90deg, transparent, var(--ts-accent, #c94735), transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--ts-accent, #c94735) 45%, transparent);
+  border-radius: 2px;
+  content: "";
+  inset: -8px auto auto 0;
+  height: 2px;
+  position: absolute;
+  width: 22%;
+  animation: seam-flash 700ms ease-out 1 both;
+}
+@keyframes seam-flash { from { opacity: 0; transform: translateX(0); } 20% { opacity: 1; } to { opacity: 0; transform: translateX(350%); } }
+@media (prefers-reduced-motion: reduce) {
+  .answerSeam[data-seam="new"]::before { animation-duration: 1ms; }
+}
+@media (prefers-reduced-transparency: reduce) { .answerSeam[data-seam="new"]::before { opacity: 1; } }
+@media (forced-colors: active) { .answerSeam[data-seam="new"]::before { background: Highlight; } }
+
+.mark, .welcomeMark { filter: grayscale(1); }
 .imageRetry:active { opacity:.7; }
 
 .semanticBubble { width:fit-content; max-width:620px; box-sizing:border-box; padding:12px 16px; border-radius:14px; background:var(--workspace-agent-bubble); margin:0 0 8px; }

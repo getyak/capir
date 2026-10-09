@@ -267,3 +267,67 @@
     transition: none;
   }
 }
+
+/* Swipeable local organization rows sit on the page canvas. */
+.list {
+  --session-row-surface: var(--background);
+}
+
+.pinnedChip {
+  align-items: center;
+  color: var(--muted-strong);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.8125rem;
+  font-weight: 560;
+  gap: 3px;
+  padding: 2px 6px;
+}
+
+.orgNotice {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  margin: 10px 0 0;
+}
+
+.archivedSection {
+  margin: 18px 0 0;
+}
+
+.archivedToggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 0.8125rem;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.archivedToggle:hover {
+  background: color-mix(in srgb, var(--hover, var(--surface-muted)) 62%, transparent);
+  color: var(--ink);
+}
+
+.archivedToggle > span {
+  flex: 1;
+}
+
+.archivedCaretOpen {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .archivedCaretOpen,
+  .row {
+    transition: none;
+  }
+}

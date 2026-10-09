@@ -132,6 +132,16 @@ describe("Session message projection", () => {
     const execution = (pending[1]!.content as Array<{ name?: string; data?: unknown }>).find((part) => part.name === "talent-signal.execution")!.data as Record<string, unknown>;
     expect(execution.phase).toBe("stopping");
   });
+
+  it("pins the in-flight work marker to its exact message identity", () => {
+    // Without a run or preview the handoff marker carries no forming text, so
+    // the surface renders exactly one compact work row for this message id.
+    const messages = sessionMessages({ turns: [], active: null, preview: null, handoff: [{ messageId: MESSAGE, objective: "请继续", createdAt: "2026-09-29T01:00:00.000Z" }] });
+    const data = (messages[1]!.content as Array<{ name?: string; data?: Record<string, unknown> }>)[0]!;
+    expect(data.name).toBe("talent-signal.work-row");
+    expect(data.data?.messageId).toBe(MESSAGE);
+    expect(data.data?.text).toBe("");
+  });
 });
 
 it("keeps one execution identity when a queued message fails without producing an answer", () => {

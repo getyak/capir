@@ -25,6 +25,7 @@ import {
   type WeeklyUsageStore,
   type WeeklyUsageView,
 } from "@/lib/weekly-usage";
+import { clearAllSessionOrganization } from "@/lib/workspace-session-organization";
 import { SupportEmailEntry } from "./support-email-entry";
 import { DesktopAccountLink, DesktopAccountNotice, DesktopDeviceSettingsLink, DesktopUpdateBanner, useDesktopChrome } from "./desktop-chrome";
 import { WorkspaceFooterStrip } from "./workspace-footer";
@@ -179,6 +180,9 @@ export function WorkspaceAccountMenu({
     clearAllPendingMeetingDraftIntents();
     // One partitioned store also removes any unsent conversation canvas intent.
     clearAllPendingSessionDrafts();
+    // Local list organization (archive/pin) leaves with the same boundary, so
+    // no account can inherit another's local projection on this browser.
+    clearAllSessionOrganization();
   }
 
   function close() {

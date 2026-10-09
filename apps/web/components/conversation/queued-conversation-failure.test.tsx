@@ -11,6 +11,7 @@ vi.mock("./use-conversation", () => ({ useConversation: () => ({
   ready: true, messages: [], attachments: [], draft: "", detail: null,
   preview: null, connection: "connected", error: null, entryCapability: null,
   unavailable: false, preparing: false, submitting: false, mutating: false,
+  handoffEntries: {}, handoffPreviews: {}, runOutcome: {}, readbackStalled: [],
   snapshot: { active: null, paused: true, queued: [{ queue_entry_id: "entry", message_id: "message",
     objective: "", status: "failed", failure_code: state.code,
     images: [{ attachment_id: "image", file_name: "synthetic.png", media_type: "image/png", byte_size: 12, content_hash: "a".repeat(64) }] }] },

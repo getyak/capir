@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { MessagePrimitive } from "@assistant-ui/react";
 import type {
   ConversationImageManifest,
@@ -26,6 +26,9 @@ import { SessionCalendarDraftCard } from "./session-calendar-draft-card";
 import { McpRequestCard } from "../mcp/mcp-request-card";
 import { sessionHumanMessages } from "@/lib/session-human-messages";
 export { sessionHumanMessages } from "@/lib/session-human-messages";
+import type { AnswerSeamRegistry } from "./answer-seam";
+import { ConversationWorkRow } from "./conversation-feedback-row";
+import type { ConversationWorkStatus } from "./conversation-feedback";
 import styles from "./queued-conversation.module.css";
 
 export type SessionDataPart = {
@@ -39,6 +42,16 @@ export type SessionProjectedMessage = {
   role: "user" | "assistant";
   content: Array<SessionDataPart | SessionTextPart>;
   createdAt: Date;
+};
+
+/** A local outbox or just-left-active message whose canonical turn has not
+ * been read back yet. It keeps one truthful work row in the transcript. */
+export type SessionHandoffRow = {
+  messageId: string;
+  objective: string;
+  images?: readonly ConversationImageManifest[];
+  createdAt: string;
+  previewText?: string;
 };
 
 const EXECUTION_PHASES = new Set<ConversationExecutionPhase>([
@@ -98,6 +111,7 @@ export function sessionMessages(input: {
   milestones?: readonly ConversationExecutionMilestone[];
   milestonesByMessage?: Readonly<Record<string, readonly ConversationExecutionMilestone[]>>;
   queued?: readonly ConversationQueueEntry[];
+  handoff?: readonly SessionHandoffRow[];
 }): SessionProjectedMessage[] {
   const messages: SessionProjectedMessage[] = [];
   const committed = new Set(input.turns.flatMap(turn => sessionHumanMessages(turn).map(message => message.id)));
@@ -112,7 +126,7 @@ export function sessionMessages(input: {
     messages.push({ id: `${human.id}:user`, role: "user", content: userContent, createdAt: new Date(human.createdAt) });
     }
     const content: SessionProjectedMessage["content"] = sessionTurnBlocks(turn.response).map((block) => ({
-      type: "data", name: "talent-signal.answer-block", data: { block },
+      type: "data", name: "talent-signal.answer-block", data: { block, messageId: turn.id },
     }));
     if (turn.response.memoryProposal) content.push({
       type: "data", name: "talent-signal.memory",
@@ -177,6 +191,10 @@ export function sessionMessages(input: {
     messages.push({ id: `${turn.id}:assistant`, role: "assistant", content, createdAt: new Date(turn.response.createdAt) });
   }
   const active = input.active;
+  // Synthesized in-flight rows stay in one ordered stream with their request:
+  // each entry keeps its user and assistant halves together and earlier
+  // observed work can never jump below a newer request.
+  const groups: Array<{ at: number; messages: SessionProjectedMessage[] }> = [];
   if (active && !committed.has(active.message_id)) {
     const userContent: SessionProjectedMessage["content"] = [];
     if (active.objective) userContent.push({ type: "text", text: active.objective });
@@ -184,9 +202,10 @@ export function sessionMessages(input: {
       type: "data", name: "talent-signal.user-images",
       data: { messageId: active.message_id, images: active.images, local: false },
     });
-    if (!active.host_result) messages.push({ id: `${active.message_id}:user`, role: "user", content: userContent, createdAt: new Date(active.created_at) });
+    const pair: SessionProjectedMessage[] = [];
+    if (!active.host_result) pair.push({ id: `${active.message_id}:user`, role: "user", content: userContent, createdAt: new Date(active.created_at) });
     const preview = input.preview?.run_id === active.run_id ? input.preview : null;
-    messages.push({
+    pair.push({
       id: `${active.message_id}:assistant`, role: "assistant",
       content: [
         ...(active.host_result ? [{ type: "data" as const, name: "talent-signal.mcp-human-result", data: { version: 1, messageId: active.message_id, result: active.host_result } }] : []),
@@ -205,15 +224,17 @@ export function sessionMessages(input: {
       ],
       createdAt: new Date(active.updated_at),
     });
+    groups.push({ at: Date.parse(active.created_at) || 0, messages: pair });
   }
   for (const entry of input.queued ?? []) {
     if (committed.has(entry.message_id) || entry.message_id === active?.message_id) continue;
     const content: SessionProjectedMessage["content"] = [];
     if (entry.objective) content.push({ type: "text", text: entry.objective });
     if (entry.images?.length) content.push({ type: "data", name: "talent-signal.user-images", data: { messageId: entry.message_id, images: entry.images, local: false } });
-    if (!entry.host_result) messages.push({ id: `${entry.message_id}:user`, role: "user", content, createdAt: new Date(entry.created_at) });
-    if (active?.run_id && entry.steers_run_id === active.run_id && entry.steer_state !== "unsupported") continue;
-    messages.push({ id: `${entry.message_id}:assistant`, role: "assistant", content: [
+    const pair: SessionProjectedMessage[] = [];
+    if (!entry.host_result) pair.push({ id: `${entry.message_id}:user`, role: "user", content, createdAt: new Date(entry.created_at) });
+    if (active?.run_id && entry.steers_run_id === active.run_id && entry.steer_state !== "unsupported") { groups.push({ at: Date.parse(entry.created_at) || 0, messages: pair }); continue; }
+    pair.push({ id: `${entry.message_id}:assistant`, role: "assistant", content: [
       ...(entry.host_result ? [{ type: "data" as const, name: "talent-signal.mcp-human-result", data: { version: 1, messageId: entry.message_id, result: entry.host_result } }] : []),
       { type: "data", name: "talent-signal.execution", data: {
       phase: conversationExecutionPhase({ entry, readbackComplete: false, awaitingDecision: false }),
@@ -222,7 +243,25 @@ export function sessionMessages(input: {
       endedAt: entry.status === "queued" || entry.status === "running" ? null : entry.updated_at,
       failureCode: entry.failure_code, milestones: input.milestonesByMessage?.[entry.message_id] ?? [],
     } }], createdAt: new Date(entry.updated_at) });
+    groups.push({ at: Date.parse(entry.created_at) || 0, messages: pair });
   }
+  for (const row of input.handoff ?? []) {
+    if (committed.has(row.messageId) || row.messageId === active?.message_id) continue;
+    const userContent: SessionProjectedMessage["content"] = [];
+    if (row.objective) userContent.push({ type: "text", text: row.objective });
+    if (row.images?.length) userContent.push({ type: "data", name: "talent-signal.user-images", data: { messageId: row.messageId, images: row.images, local: true } });
+    groups.push({
+      at: Date.parse(row.createdAt) || 0,
+      messages: [
+        { id: `${row.messageId}:user`, role: "user", content: userContent, createdAt: new Date(row.createdAt) },
+        // The work row is the observed readback/stopped/failed state of this
+        // exact message; it never fabricates the pending final answer.
+        { id: `${row.messageId}:assistant`, role: "assistant", content: [{ type: "data", name: "talent-signal.work-row", data: { messageId: row.messageId, text: row.previewText ?? "" } }], createdAt: new Date(row.createdAt) },
+      ],
+    });
+  }
+  groups.sort((left, right) => left.at - right.at);
+  for (const group of groups) messages.push(...group.messages);
   return messages;
 }
 
@@ -235,9 +274,75 @@ type RenderContext = {
   status: string;
   sourceImagesByMessageId: Record<string, readonly ConversationImageManifest[]>;
   sourceTextByMessageId: Record<string, string>;
+  /** Display-only one-shot completion attention for watched runs. */
+  attention?: AnswerSeamRegistry;
+  /** Observed work state per message, for the readback/handoff rows. */
+  workByMessageId?: Record<string, ConversationWorkStatus>;
+  recoveryActions?: (messageId: string) => ReactNode;
   onDecisionState?: (key: string, state: DecisionState) => void;
   onCardComment?: (item: MemoryProposalItem) => void;
 };
+
+const SEAM_VISIBLE_MS = 700;
+
+/**
+ * One persisted answer block with its provenance.
+ *
+ * A block whose run was actually watched finishing claims one short vermilion
+ * seam sweep; history loaded later never plays it. Completed answer text may
+ * fold into an extractive preview, but decisions and proposals always stay
+ * visible and the full text returns on expansion.
+ */
+export function AnswerBlockFrame({
+  block,
+  messageId,
+  sessionId,
+  attention,
+}: {
+  block: {
+    id: string;
+    title: string | null;
+    body: string;
+    status: string;
+    kind?: string;
+    requires_user_decision?: boolean;
+    public_source_refs?: ReadonlyArray<{ display_name: string }> | null;
+  };
+  messageId: string;
+  sessionId: string;
+  attention?: AnswerSeamRegistry;
+}) {
+  const [seam, setSeam] = useState<"idle" | "playing" | "done">("idle");
+  const eligible = useRef(false);
+  useEffect(() => {
+    if (attention?.claim(messageId, block.status, block.requires_user_decision) === "seam") eligible.current = true;
+    if (!eligible.current) return;
+    // Defer external event delivery until commit. Strict Mode may tear down
+    // this effect before delivery; eligibility survives that teardown once.
+    let current = true;
+    queueMicrotask(() => {
+      if (!current) return;
+      eligible.current = false;
+      setSeam("playing");
+    });
+    return () => { current = false; };
+  }, [attention, sessionId, messageId, block.id, block.status, block.requires_user_decision]);
+  useEffect(() => {
+    if (seam !== "playing") return;
+    const timer = window.setTimeout(() => setSeam("done"), SEAM_VISIBLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [seam]);
+  const title = typeof block.title === "string" ? sessionBlockTitle(block.title) : null;
+  return (
+    <div className={styles.answerSeam} data-seam={seam === "playing" ? "new" : undefined}>
+      <div className={styles.semanticBubble}>
+        {title && <h3>{title}</h3>}
+        <ConversationResponse foldable={block.kind === "answer" && block.requires_user_decision === false} lead={!title}>{block.body}</ConversationResponse>
+      </div>
+      <ConversationProvenance sources={block.public_source_refs}/>
+    </div>
+  );
+}
 
 function dataRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -261,16 +366,35 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
   const data = dataRecord(raw);
   if (!data) return <span>这项内容暂时无法显示。</span>;
   if (name === "talent-signal.user-images" && Array.isArray(data.images) && typeof data.messageId === "string") {
+    // A local outbox row reads its bytes from the local store; canonical rows
+    // use the server-manifest path.
     return <ConversationImageStrip binding={context.binding} images={data.images as ConversationImageManifest[]}
-      local={false} messageId={data.messageId} scope={context.scope} sessionId={context.sessionId}/>;
+      local={data.local === true} messageId={data.messageId} scope={context.scope} sessionId={context.sessionId}/>;
   }
   if (name === "talent-signal.answer-block") {
     const block = dataRecord(data.block);
     if (!block || typeof block.body !== "string") return <span>这段回复暂时无法显示。</span>;
     if (!block.body.trim()) return null; // Silence retains execution, without a fabricated dialogue bubble.
-    const title = typeof block.title === "string" ? sessionBlockTitle(block.title) : null;
-    return <div><div className={styles.semanticBubble}>{title && <h3>{title}</h3>}<ConversationResponse lead={!title}>{block.body}</ConversationResponse></div>
-      <ConversationProvenance sources={Array.isArray(block.public_source_refs) ? block.public_source_refs as never : undefined}/></div>;
+    return <AnswerBlockFrame block={{
+      id: typeof block.id === "string" ? block.id : "",
+      title: typeof block.title === "string" ? block.title : null,
+      body: block.body,
+      status: typeof block.status === "string" ? block.status : "",
+      kind: typeof block.kind === "string" ? block.kind : "",
+      requires_user_decision: block.requires_user_decision !== false,
+      public_source_refs: Array.isArray(block.public_source_refs) ? block.public_source_refs as never : undefined,
+    }} messageId={typeof data.messageId === "string" ? data.messageId : ""} sessionId={context.sessionId} attention={context.attention}/>;
+  }
+  if (name === "talent-signal.work-row" && typeof data.messageId === "string") {
+    const work = context.workByMessageId?.[data.messageId];
+    if (!work) return null;
+    const preview = typeof data.text === "string" ? data.text : "";
+    const actions = context.recoveryActions?.(data.messageId);
+    // Streamed text that has not been read back keeps its own readable form;
+    // otherwise one compact truthful work row carries the observed state.
+    return preview
+      ? <div className={styles.forming}><ConversationResponse>{preview}</ConversationResponse>{work.animate && <span className={styles.cursor} aria-hidden="true"/>}<small className={styles.formingStatus} role="status">{work.text}</small>{actions}</div>
+      : <ConversationWorkRow status={work}>{actions}</ConversationWorkRow>;
   }
   if (name === "talent-signal.memory" && data.version === 1 && typeof data.proposalId === "string"
     && typeof data.revision === "number") {
@@ -341,7 +465,7 @@ export function SessionUserMessage({ context }: { context: RenderContext }) {
   return <MessagePrimitive.Root className={styles.turn} role="article">
     <div className={styles.userRow}><div className={styles.userStack}>
       <MessagePrimitive.Parts>{({ part }) => part.type === "text" && part.text
-        ? <div className={styles.userMessage}>{part.text}</div>
+        ? <div className={styles.userMessage} data-user-message>{part.text}</div>
         : <></>}</MessagePrimitive.Parts>
       <MessagePrimitive.Parts>{({ part }) => part.type === "data" ? renderSessionData(part.name, part.data, context)
         : part.type === "text" ? <></> : null}</MessagePrimitive.Parts>

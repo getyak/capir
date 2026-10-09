@@ -1,16 +1,28 @@
 "use client";
 
+
 import {
   ArrowRight,
+  CaretRight,
   ChatCircleDots,
   Plus,
+  PushPin,
   Spinner,
 } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { workspaceSessionFetch } from "@/components/workspace-session-request";
+import {
+  organizeSessionRows,
+  useSessionOrganization,
+} from "@/lib/workspace-session-organization";
+import { WorkspaceListRow, useArrivalRegistry } from "@/components/workspace-list-motion";
+import {
+  WorkspaceSessionRow,
+  type SessionRowOrganization,
+} from "@/components/workspace-session-row";
 
 import {
   directoryStateNotice,
@@ -44,6 +56,8 @@ type Props = {
   sessionVersion: string | null;
   initialError: string | null;
   sessionRecoveryHref: string | null;
+  /** Stable account/user storage scope for local list organization. */
+  storageScope?: string | null;
 };
 
 export function SessionDirectory({
@@ -54,6 +68,7 @@ export function SessionDirectory({
   sessionVersion,
   initialError,
   sessionRecoveryHref,
+  storageScope = null,
 }: Props) {
   const router = useRouter();
   // Hydration must use the server's clock snapshot, including at minute/hour
@@ -69,6 +84,10 @@ export function SessionDirectory({
   const [binding, setBinding] = useState(sessionVersion);
   const [error, setError] = useState(initialError);
   const [busy, setBusy] = useState<"create" | "more" | null>(null);
+  const [archiveExpanded, setArchiveExpanded] = useState(false);
+  const archiveId = useId();
+  const { snapshot, setFlag } = useSessionOrganization(storageScope);
+  const arrival = useArrivalRegistry(sessions.map((session) => session.session_id));
   const pendingCreate = useRef<{
     sessionId: string;
     updatedAt: string;
@@ -108,7 +127,7 @@ export function SessionDirectory({
         ? payload.detail.session_id
         : attempt.sessionId;
       pendingCreate.current = null;
-      // A new unscoped Session has no turn and no model work; restoration is
+        // A new unscoped Session has no turn and no model work; restoration is
       // the only next step, so navigate straight to it.
       router.push(`/workspace/sessions/${encodeURIComponent(created)}`);
     } catch (caught) {
@@ -136,6 +155,8 @@ export function SessionDirectory({
       if (!response.ok || !Array.isArray(payload.sessions)) {
         throw new Error(payload.message || "无法加载更多对话。");
       }
+      // Pagination fetches history: it must never animate like a new arrival.
+      arrival.markHistory(payload.sessions.map((item) => item.session_id));
       setSessions((current) => {
         const seen = new Set(current.map((item) => item.session_id));
         return [
@@ -157,6 +178,70 @@ export function SessionDirectory({
     complete,
     total: sessions.length,
   });
+
+  const organized = organizeSessionRows(
+    sessions.map((session) => ({ id: session.session_id, session })),
+    snapshot.entries,
+  );
+
+  function organizationFor(session: SessionSummary): SessionRowOrganization {
+    const entry = snapshot.entries[session.session_id];
+    return {
+      archived: entry?.archived ?? false,
+      pinned: entry?.pinned ?? false,
+      onToggle: (flag, value) => setFlag(session.session_id, flag, value),
+      rowLabel: sessionDisplayTitle(session.title),
+    };
+  }
+
+  function renderRow(session: SessionSummary, archived: boolean) {
+    return (
+      <WorkspaceSessionRow organization={organizationFor(session)}>
+        <Link
+          className={styles.row}
+          href={`/workspace/sessions/${encodeURIComponent(session.session_id)}`}
+        >
+          <span aria-hidden="true" className={styles.rowIcon}>
+            <ChatCircleDots size={18} weight="duotone" />
+          </span>
+          <span className={styles.rowBody}>
+            <span className={styles.rowTitle}>
+              <span className={styles.rowTitleText}>
+                {sessionDisplayTitle(session.title)}
+              </span>
+              {snapshot.entries[session.session_id]?.pinned ? (
+                <span className={styles.pinnedChip}>
+                  <PushPin aria-hidden="true" size={11} weight="fill" />
+                  置顶
+                </span>
+              ) : null}
+              {session.is_unread ? (
+                <span className={styles.unread}>未读</span>
+              ) : null}
+            </span>
+            <span className={styles.rowMeta}>
+              {archived
+                ? "本机整理 · 已归档"
+                : session.scope_kind === "relationship"
+                  ? `${session.person_label || "联系人"} · ${session.context_label || "关系情境"}`
+                  : session.scope_kind === "identity_review"
+                    ? "身份核对"
+                    : // The display label is plain; the scope_kind value
+                      // ("unresolved_intent") keeps its own semantics.
+                      "独立对话"}
+              {" · "}
+              {session.turn_count === 0
+                ? "还没有回复"
+                : `${session.turn_count} 轮`}
+              {" · "}
+              {formatSessionTime(session.updated_at, now)}
+            </span>
+          </span>
+          <ArrowRight aria-hidden="true" size={16} />
+        </Link>
+      </WorkspaceSessionRow>
+    );
+  }
 
   return (
     <main id="main-content" tabIndex={-1} aria-labelledby="sessions-title" className={styles.page}>
@@ -196,54 +281,53 @@ export function SessionDirectory({
         </p>
       ) : null}
 
-      {sessions.length === 0 ? (
-        error ? null : <div className={styles.empty} role="status">
+      {snapshot.pendingInMemory ? (
+        <p className={styles.orgNotice} role="status">
+          本机存储不可用 · 归档与置顶仅在本页保留
+        </p>
+      ) : null}
+
+      {organized.visible.length === 0 ? (
+        error ? null : organized.archived.length ? null : <div className={styles.empty} role="status">
           <ChatCircleDots aria-hidden="true" size={26} weight="light" />
           <h2>{complete ? "每段思路，都可以从这里继续" : "对话还未读取完整"}</h2>
           <p>{complete ? "开始一段新对话，它会留在这里。" : notice}</p>
         </div>
       ) : (
         <ul className={styles.list}>
-          {sessions.map((session) => (
-            <li key={session.session_id}>
-              <Link
-                className={styles.row}
-                href={`/workspace/sessions/${encodeURIComponent(session.session_id)}`}
-              >
-                <span aria-hidden="true" className={styles.rowIcon}>
-                  <ChatCircleDots size={18} weight="duotone" />
-                </span>
-                <span className={styles.rowBody}>
-                  <span className={styles.rowTitle}>
-                    <span className={styles.rowTitleText}>
-                      {sessionDisplayTitle(session.title)}
-                    </span>
-                    {session.is_unread ? (
-                      <span className={styles.unread}>未读</span>
-                    ) : null}
-                  </span>
-                  <span className={styles.rowMeta}>
-                    {session.scope_kind === "relationship"
-                      ? `${session.person_label || "联系人"} · ${session.context_label || "关系情境"}`
-                      : session.scope_kind === "identity_review"
-                        ? "身份核对"
-                        : // The display label is plain; the scope_kind value
-                          // ("unresolved_intent") keeps its own semantics.
-                          "独立对话"}
-                    {" · "}
-                    {session.turn_count === 0
-                      ? "还没有回复"
-                      : `${session.turn_count} 轮`}
-                    {" · "}
-                    {formatSessionTime(session.updated_at, now)}
-                  </span>
-                </span>
-                <ArrowRight aria-hidden="true" size={16} />
-              </Link>
-            </li>
+          {organized.visible.map(({ id, session }) => (
+            <WorkspaceListRow arrival={arrival.isArrival(id)} key={id}>
+              {renderRow(session, false)}
+            </WorkspaceListRow>
           ))}
         </ul>
       )}
+
+      {organized.archived.length ? (
+        <section aria-label="本机整理的已归档对话" className={styles.archivedSection}>
+          <button
+            aria-controls={archiveId}
+            aria-expanded={archiveExpanded}
+            className={styles.archivedToggle}
+            onClick={() => setArchiveExpanded((value) => !value)}
+            type="button"
+          >
+            <span>已归档 · 本机整理（{organized.archived.length}）</span>
+            <CaretRight
+              aria-hidden="true"
+              className={archiveExpanded ? styles.archivedCaretOpen : undefined}
+              size={12}
+            />
+          </button>
+          <div hidden={!archiveExpanded} id={archiveId}>
+            <ul className={styles.list}>
+              {organized.archived.map(({ id, session }) => (
+                <li key={id}>{renderRow(session, true)}</li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      ) : null}
 
       {!complete ? (
         <div className={styles.moreRow}>

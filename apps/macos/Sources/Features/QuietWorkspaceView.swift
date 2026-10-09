@@ -553,12 +553,12 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 struct WorkspaceWebSurface: NSViewRepresentable {
     let browser: WorkspaceBrowser
     let zoom: Double
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> WorkspaceMaterialSurface {
         browser.webView.pageZoom = min(1.5, max(0.9, zoom))
-        return browser.webView
+        return WorkspaceMaterialSurface(webView: browser.webView)
     }
-    func updateNSView(_ nsView: WKWebView, context: Context) {
-        nsView.pageZoom = min(1.5, max(0.9, zoom))
+    func updateNSView(_ nsView: WorkspaceMaterialSurface, context: Context) {
+        nsView.webView.pageZoom = min(1.5, max(0.9, zoom))
     }
 }
 

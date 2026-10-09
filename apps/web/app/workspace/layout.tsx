@@ -189,7 +189,11 @@ export default async function WorkspaceLayout({
           <WorkspaceShellNav binding={pendingBinding} />
           <div className={styles.sidebarScroll}>
             {pendingBinding ? (
-              <WorkspaceRecentSessions key={pendingBinding} binding={pendingBinding} />
+              <WorkspaceRecentSessions
+                key={pendingBinding}
+                binding={pendingBinding}
+                storageScope={pendingSessionDraftScope}
+              />
             ) : null}
             <WorkspaceSidebarPeople binding={pendingBinding} />
           </div>
