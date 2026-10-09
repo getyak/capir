@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { conversationHome } from "@/lib/conversation-local";
+import type { LocalMessage } from "@/lib/conversation-local";
 import type { LegacyConversationRecovery } from "@/lib/conversation-legacy";
 import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
-import type { ConversationImageManifest, MemoryProposalItem } from "@talent-signal/contracts";
+import type { ConversationImageManifest, ConversationQueueEntry, MemoryProposalItem } from "@talent-signal/contracts";
 import { ComposerAddMenu } from "../new-conversation-add-menu";
 import { WorkspaceComposer } from "../workspace-composer";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
@@ -15,11 +16,16 @@ import { conversationNearBottom } from "../session-workbench/session-presentatio
 import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
 import { ConversationImageStrip } from "./conversation-images";
 import { useConversation } from "./use-conversation";
-import { sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
+import { createAnswerSeamRegistry } from "./answer-seam";
+import { conversationWorkStatus, sameConversationImages, unresolvedConversationCount, queueFailureText, type ConversationWorkStatus } from "./conversation-feedback";
+import { isWorkOnlyMessage, sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
 import { SessionRuntime } from "./session-runtime";
 import styles from "./queued-conversation.module.css";
 
-const stages: Record<string, string> = { queued: "等待开始", preparing: "正在准备回复", thinking: "正在处理", contact_lookup: "正在查找相关人物", contact_read: "正在阅读相关记录", calendar_draft: "正在整理日程草稿", answer: "正在回复", responding: "正在回复", persisting: "正在保存回复", running: "正在处理" };
+// Failure copy lives in the focused feedback helper; re-exported for existing
+// surfaces that render queue failure text.
+export { queueFailureText };
+
 // Admission may rewrite the draft URL only when the query is empty or holds
 // exactly one draft_session parameter for this session. A duplicated key or
 // any extra parameter is a separate navigation intent whose contents
@@ -37,13 +43,6 @@ export function displayText(objective: string, images: readonly ConversationImag
   // no redundant visible "（图片）" placeholder is shown. Without an attachment
   // the (empty) objective is returned unchanged.
   return images?.length ? "" : objective;
-}
-
-export function queueFailureText(code: string | null, hasImages: boolean): string {
-  if (code === "MODEL_RUN_TIMEOUT") return hasImages
-    ? "图片分析超时，原图已保留。可重试；反复失败时请移除并重新发送较小的图片。"
-    : "本次处理超时，消息已保留。可重试。";
-  return "上次未完成，请重试或移除";
 }
 
 type Props = { bootstrap?: { sessionId: string; capability: string } | null; initialDetail?: SessionDetail; scope: string; chatBinding: string; detailBinding: string; meetingLinks?: Array<{id: string; title: string}>; meetingReadFailed?: boolean; legacyRecovery?: LegacyConversationRecovery | null; entryCapability?: string | null };
@@ -115,35 +114,94 @@ export function QueuedConversation(props: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [away, setAway] = useState(false);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
+  const attention = useMemo(() => createAnswerSeamRegistry({ scope: props.scope, sessionId: id ?? "" }), [props.scope, id]);
   const active = chat.snapshot?.active;
-  const queued = chat.snapshot?.queued ?? [];
+  const activeMessageId = active?.message_id ?? null;
+  // The reader is watching this run finish: the only gate for the one-shot
+  // completed/needs-review seam. Loaded history is never observed here.
+  useEffect(() => {
+    if (id && activeMessageId) attention.observe(activeMessageId);
+  }, [id, activeMessageId, attention]);
+  const queued = useMemo(() => chat.snapshot?.queued ?? [], [chat.snapshot?.queued]);
   const turns = useMemo(() => chat.detail?.turns ?? [], [chat.detail?.turns]);
   const imageCount = chat.attachments.length;
-  const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && queued.length + chat.messages.length + (active ? 1 : 0) < 50;
+  const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && unresolvedConversationCount(chat.messages, chat.snapshot) < 50;
   const activeVisible = active && !turns.some(turn => turn.id === active.message_id);
   const forming = chat.preview?.run_id === active?.run_id ? chat.preview : null;
   const paused = chat.snapshot?.paused ?? false;
-  const hasContent = Boolean(turns.length || chat.messages.length || active || queued.length);
+  const hasContent = Boolean(turns.length || chat.messages.length || active || queued.length || Object.keys(chat.handoffEntries).length);
   const personLabel = chat.detail?.person_label ?? props.initialDetail?.person_label ?? "";
   const contextLabel = chat.detail?.context_label ?? props.initialDetail?.context_label ?? "";
   const scopeLabel = personLabel && contextLabel ? `${personLabel} · ${contextLabel}` : personLabel || contextLabel || "未绑定联系人或关系情境";
-  const status = chat.unavailable ? "这段对话已不可用" : chat.connection === "reconnecting" && hasContent ? "连接恢复中，消息已保留" : active?.cancel_requested ? "正在停止…" : active ? (stages[forming?.stage ?? active.stage ?? ""] ?? "正在处理") : paused ? "已暂停，可继续发送到队列" : queued.length ? `${queued.length} 条消息等待处理` : "";
-  const projectedMessages = useMemo(() => sessionMessages({
-    turns, active: activeVisible ? active : null, preview: forming,
-  }), [turns, activeVisible, active, forming]);
+
   const sourceImagesByMessageId = useMemo(() => Object.fromEntries(
     turns.map((turn) => [turn.id, turn.images ?? []]),
   ), [turns]);
   const sourceTextByMessageId = useMemo(() => Object.fromEntries(
     turns.map((turn) => [turn.id, turn.objective ?? ""]),
   ), [turns]);
+  // Canonical history owns a settled message; while it does not, the local
+  // outbox row is the only truthful transcript representation. A projected
+  // active message already shows its own bubble and work row, so the duplicate
+  // local user bubble is hidden there and after history settles.
+  const settledIds = useMemo(() => new Set(turns.map((turn) => turn.id)), [turns]);
+  const pendingMessages = useMemo(() => {
+    const messages = new Map<string, LocalMessage & { previewText?: string }>(chat.messages.map(message => [message.id, message]));
+    for (const entry of Object.values(chat.handoffEntries)) {
+      // The observed server entry owns edits and source timestamps, even when
+      // the user reopened this run without any local outbox row.
+      const local = messages.get(entry.message_id);
+      messages.set(entry.message_id, { ...local, id: entry.message_id, objective: entry.objective, images: entry.images, createdAt: entry.created_at, delivery: "accepted", expiresAt: local?.expiresAt ?? Date.parse(chat.detail?.expires_at ?? ""), receiptUncertain: false, previewText: chat.handoffPreviews[entry.message_id]?.text });
+    }
+    for (const entry of queued) {
+      const local = messages.get(entry.message_id);
+      if (local) messages.set(entry.message_id, { ...local, objective: entry.objective, images: entry.images });
+    }
+    return [...messages.values()].filter(message => !settledIds.has(message.id) && !(activeVisible && active?.message_id === message.id));
+  }, [chat.messages, chat.handoffEntries, chat.handoffPreviews, chat.detail?.expires_at, queued, settledIds, activeVisible, active]);
+  const localImageMessageIds = useMemo(() => new Set(chat.messages.filter(message => {
+    const canonical = turns.find(turn => turn.id === message.id) ?? (active?.message_id === message.id ? active : queued.find(entry => entry.message_id === message.id)) ?? chat.handoffEntries[message.id];
+    return message.images?.length && (!canonical || sameConversationImages(message.images, canonical.images));
+  }).map(message => message.id)), [chat.messages, turns, active, queued, chat.handoffEntries]);
+  const projectedMessages = useMemo(() => sessionMessages({
+    turns, active: activeVisible ? active : null, preview: forming, pending: pendingMessages,
+  }), [turns, activeVisible, active, forming, pendingMessages]);
+  const workByMessageId = useMemo(() => {
+    const map: Record<string, ConversationWorkStatus> = {};
+    const compute = (messageId: string, delivery: LocalMessage["delivery"], error: string | undefined, hasImages: boolean, entry: ConversationQueueEntry | null, entrySlot: "active" | "queued" | null) => {
+      map[messageId] = conversationWorkStatus({
+        delivery, error, settled: settledIds.has(messageId), entry, entrySlot,
+        paused, connection: chat.connection,
+        stage: forming?.stage ?? active?.stage ?? null,
+        outcome: chat.runOutcome[messageId] ?? null,
+        readbackStalled: chat.readbackStalled.includes(messageId),
+        hasImages,
+      });
+    };
+    for (const message of [...chat.messages, ...pendingMessages]) {
+      const isActive = active?.message_id === message.id;
+      const entry = isActive ? active : queued.find((item) => item.message_id === message.id) ?? null;
+      compute(message.id, message.delivery, message.error, Boolean(message.images?.length), entry, isActive ? "active" : entry ? "queued" : null);
+    }
+    if (active && !map[active.message_id]) compute(active.message_id, "accepted", undefined, Boolean(active.images?.length), active, "active");
+    return map;
+  }, [chat.messages, pendingMessages, chat.connection, chat.runOutcome, chat.readbackStalled, settledIds, paused, forming, active, queued]);
   const renderContext = {
     binding: props.chatBinding,
     meetingBinding: props.detailBinding,
     entryCapability: chat.entryCapability ?? props.entryCapability ?? null,
     scope: props.scope,
+    attention,
     sessionId: chat.detail?.session_id ?? id ?? "",
-    status,
+    workByMessageId,
+    localImageMessageIds,
+    recoveryActions: (messageId: string) => {
+      const work = workByMessageId[messageId];
+      const message = chat.messages.find(item => item.id === messageId);
+      if (work?.recover === "check" && message) return <><button onClick={() => void chat.retryDelivery(message)}>核对并重试</button>{message.delivery === "rejected" && <button onClick={() => chat.discardRejectedDelivery(message.id)}>移除</button>}</>;
+      if (work?.recover === "refresh") return <button onClick={() => void chat.refreshDetail().catch(() => {})}>刷新</button>;
+      return null;
+    },
     sourceImagesByMessageId,
     sourceTextByMessageId,
     onCardComment: (item: MemoryProposalItem) => {
@@ -197,9 +255,9 @@ export function QueuedConversation(props: Props) {
         {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><h2>今天想推进什么？</h2></div>}
         <ThreadPrimitive.Messages>{({ message }) => message.role === "user"
           ? <SessionUserMessage context={renderContext}/>
-          : <SessionAssistantMessage context={renderContext}/>}</ThreadPrimitive.Messages>
+          : <SessionAssistantMessage context={renderContext} workOnly={isWorkOnlyMessage(message.content)}/>}</ThreadPrimitive.Messages>
         {props.meetingLinks?.filter(meeting=>!turns.some(turn=>turn.response.meetingDraft?.id===meeting.id)).map(meeting=><section key={meeting.id} className="context-calendar-draft-handoff" aria-label="日历草稿核对入口"><strong>{meeting.title}</strong><a href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>核对日历草稿 →</a></section>)}
-        {chat.messages.map(message => <article className={styles.localTurn} key={message.id} data-delivery={message.delivery}><div className={styles.userRow}><div className={styles.userMessage}>{displayText(message.objective, message.images)}{message.images?.length ? <ConversationImageStrip binding={props.chatBinding} images={message.images} local messageId={message.id} scope={props.scope} sessionId={id ?? ""}/> : null}</div></div>{message.delivery === "accepted" ? null : <div className={styles.delivery}>{message.delivery === "unknown" || message.delivery === "rejected" ? <>{message.error || "送达结果尚未确认，请核对后重试。"}<button onClick={() => void chat.retryDelivery(message)}>核对并重试</button>{message.delivery === "rejected" && <button onClick={() => chat.discardRejectedDelivery(message.id)}>移除</button>}</> : message.delivery === "pending" ? "等待送达" : "正在送达…"}</div>}</article>)}
+
       </div>
     </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
@@ -228,7 +286,7 @@ export function QueuedConversation(props: Props) {
           footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} aria-label={active || queued.length || paused ? "加入队列" : "发送消息"} title={active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}>{active || queued.length || paused ? "加入队列" : "发送"}</button></div>}/>
       </div>
       {!hasContent && <div className={styles.starters} aria-label="开始一个话题">{["你可以帮我做什么？", "梳理今天需要跟进的人"].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
-      <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>Enter 发送 · Shift+Enter 换行</span></div>
+      <div className={styles.footer}><span>Enter 发送 · Shift+Enter 换行</span></div>
     </div>
   </main>;
 }

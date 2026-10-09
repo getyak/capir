@@ -118,7 +118,11 @@ it("recovers a lost admission capability by owner-authorized queue read without 
   });
   await act(async()=>{await chat.retryDelivery(message);});
   expect(chat.entryCapability).toBe("recovered");
-  expect(chat.messages).toEqual([]);
+  // The same-ID queue row is the authoritative receipt: the outbox identity is
+  // retained as accepted until canonical history arrives — never resent and
+  // never deleted before its turn exists.
+  expect(chat.messages.map(entry=>entry.id)).toEqual([message.id]);
+  expect(chat.messages[0].delivery).toBe("accepted");
   expect(onAdmitted).toHaveBeenCalledExactlyOnceWith(sid);
   expect(fetcher.mock.calls.filter(call=>call[1]?.method==="POST")).toHaveLength(1);
 });

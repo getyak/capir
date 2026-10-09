@@ -65,4 +65,29 @@ describe("Session message projection", () => {
     expect(pending.map((message) => message.id)).toEqual([`${MESSAGE}:user`, `${MESSAGE}:assistant`]);
     expect((pending[1]!.content as Array<{ name?: string }>)[0]!.name).toBe("talent-signal.progress");
   });
+
+  it("pins the in-flight work marker to its exact message identity", () => {
+    const active: ConversationQueueEntry = {
+      queue_entry_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      message_id: MESSAGE,
+      sequence: 1,
+      status: "running",
+      objective: "请继续",
+      images: [],
+      created_at: "2026-09-29T01:00:00.000Z",
+      updated_at: "2026-09-29T01:00:01.000Z",
+      revision: 1,
+      run_id: null,
+      stage: null,
+      cancel_requested: false,
+      failure_code: null,
+    };
+    // Without a run or preview the marker carries no forming text, so the
+    // surface renders exactly one compact work row for this message id.
+    const messages = sessionMessages({ turns: [], active, preview: null });
+    const data = (messages[1]!.content as Array<{ name?: string; data?: Record<string, unknown> }>)[0]!;
+    expect(data.name).toBe("talent-signal.progress");
+    expect(data.data?.messageId).toBe(MESSAGE);
+    expect(data.data?.text).toBe("");
+  });
 });
