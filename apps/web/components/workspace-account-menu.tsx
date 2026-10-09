@@ -14,6 +14,7 @@ import {
   accountWorkspaceLabel,
   type AccountIdentity,
 } from "@/lib/workspace-account";
+import { clearAllSessionOrganization } from "@/lib/workspace-session-organization";
 import { DesktopAccountLink, DesktopDeviceSettingsLink, DesktopUpdateButton } from "./desktop-chrome";
 import { ThemeToggle } from "./theme-toggle";
 import { clearAllPendingSessionDrafts } from "./session-workbench/session-draft-pending";
@@ -48,6 +49,9 @@ export function WorkspaceAccountMenu({
     clearAllPendingMeetingDraftIntents();
     // One partitioned store also removes any unsent conversation canvas intent.
     clearAllPendingSessionDrafts();
+    // Local list organization (archive/pin) leaves with the same boundary, so
+    // no account can inherit another's local projection on this browser.
+    clearAllSessionOrganization();
   }
 
   function close(returnFocus = false) {

@@ -12,6 +12,7 @@ import {
   WorkspaceMobileSourcesLink,
   WorkspaceShellNav,
 } from "@/components/workspace-shell-nav";
+import { WorkspaceSidebarShell } from "@/components/workspace-sidebar";
 import { WorkspaceRecentSessions } from "@/components/workspace-recent-sessions";
 import { WorkspaceGlobalSearchDialog } from "@/components/workspace-search";
 import { WorkspaceSidebarPeople } from "@/components/workspace-sidebar-people";
@@ -156,11 +157,15 @@ export default async function WorkspaceLayout({
         ) : null}
         <SessionDraftSessionBoundary storageScope={pendingSessionDraftScope} />
         <WorkspaceDirectoryScope binding={pendingBinding} />
-        <aside aria-label="Talent Signal 工作台" className={styles.sidebar}>
+        <WorkspaceSidebarShell>
           <WorkspaceShellNav binding={pendingBinding} />
           <div className={styles.sidebarScroll}>
             {pendingBinding ? (
-              <WorkspaceRecentSessions key={pendingBinding} binding={pendingBinding} />
+              <WorkspaceRecentSessions
+                key={pendingBinding}
+                binding={pendingBinding}
+                storageScope={pendingSessionDraftScope}
+              />
             ) : null}
             <WorkspaceSidebarPeople binding={pendingBinding} />
           </div>
@@ -174,7 +179,7 @@ export default async function WorkspaceLayout({
               workspaceName={workspaceName}
             />
           </div>
-        </aside>
+        </WorkspaceSidebarShell>
 
         <div className={styles.workspace}>
           <header className={styles.mobileHeader}>

@@ -28,3 +28,15 @@
 .response hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
 .destination { color: var(--muted-strong); font-size: 0.875em; overflow-wrap: anywhere; }
 .response :is(pre, [tabindex]):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+/* Extractive reading fold for completed long answers. The full text stays in
+   the DOM; folding only reveals the answer's own leading prose. */
+.foldSurface { min-width: 0; }
+.foldPreview { color: var(--muted-strong); font-size: 0.9375rem; line-height: 1.533; margin: 0; overflow-wrap: anywhere; }
+.foldFooter { align-items: center; display: flex; gap: 8px; margin: 2px 0 12px; min-height: 28px; }
+.foldBadge { color: var(--muted); font-size: 0.75rem; }
+.foldToggle { background: transparent; border: 0; border-radius: 6px; color: var(--muted-strong); cursor: pointer; font: inherit; font-size: 0.8125rem; min-height: 28px; padding: 4px 8px; text-decoration: underline; text-underline-offset: 3px; }
+.foldToggle:hover { background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent)); color: var(--ink); }
+.foldToggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .foldSurface, .foldPreview, .foldToggle { transition: none; } }
+@media (forced-colors: active) { .foldToggle { border: 1px solid ButtonText; } }

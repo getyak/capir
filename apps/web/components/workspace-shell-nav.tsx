@@ -14,23 +14,26 @@ import {
 import type { Icon } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSyncExternalStore, type MouseEvent } from "react";
+import { type MouseEvent } from "react";
 
 import {
   WORKSPACE_COMPOSE_HREF,
   WORKSPACE_FOCUS_AGENT_EVENT,
   WORKSPACE_NEW_CONVERSATION_EVENT,
   WORKSPACE_NAV_ROUTES,
-  WORKSPACE_RAIL_COLLAPSED_KEY,
-  WORKSPACE_RAIL_PREFERENCE_EVENT,
   type WorkspaceNavRoute,
   type WorkspaceNavRouteId,
   workspaceCaptureIntent,
   workspaceNavRouteForPath,
   workspaceNavRoutes,
 } from "@/lib/workspace-navigation";
+import { useCollapsedState, useRailReveal } from "@/lib/workspace-rail-preference";
 
 import { WorkspaceGlobalSearchDialog } from "./workspace-search";
+import {
+  WorkspaceSelectionHighlight,
+  WorkspaceSelectionScope,
+} from "./workspace-selection-highlight";
 import styles from "./workspace-shell.module.css";
 
 /** Presentation-only icon per route; route identity/hrefs live in the lib. */
@@ -43,47 +46,6 @@ const NAV_ICONS: Record<WorkspaceNavRouteId, Icon> = {
   sessions: ClockCounterClockwise,
   captures: Database,
 };
-
-const COLLAPSED_KEY = WORKSPACE_RAIL_COLLAPSED_KEY;
-const COLLAPSED_EVENT = WORKSPACE_RAIL_PREFERENCE_EVENT;
-let collapsedFallback = false;
-
-function collapsedSnapshot() {
-  try {
-    return window.localStorage.getItem(COLLAPSED_KEY) === "true";
-  } catch {
-    return collapsedFallback;
-  }
-}
-
-function subscribeToCollapsedPreference(onChange: () => void) {
-  window.addEventListener("storage", onChange);
-  window.addEventListener(COLLAPSED_EVENT, onChange);
-  return () => {
-    window.removeEventListener("storage", onChange);
-    window.removeEventListener(COLLAPSED_EVENT, onChange);
-  };
-}
-
-function useCollapsedState() {
-  const collapsed = useSyncExternalStore(
-    subscribeToCollapsedPreference,
-    collapsedSnapshot,
-    () => false,
-  );
-  return {
-    collapsed,
-    setCollapsed(next: boolean) {
-      collapsedFallback = next;
-      try {
-        window.localStorage.setItem(COLLAPSED_KEY, String(next));
-      } catch {
-        // Keep this interaction usable when browser storage is unavailable.
-      }
-      window.dispatchEvent(new Event(COLLAPSED_EVENT));
-    },
-  };
-}
 
 function NavLink({
   collapsed,
@@ -125,6 +87,7 @@ function NavLink({
         weight={current && route.id !== "home" ? "fill" : "regular"}
       />
       <span>{route.label}</span>
+      <WorkspaceSelectionHighlight selected={current} />
     </Link>
   );
 }
@@ -136,19 +99,27 @@ export function WorkspaceShellNav({
 }) {
   const pathname = usePathname();
   const { collapsed, setCollapsed } = useCollapsedState();
+  // The floating edge-hover reveal shows the expanded labels without touching
+  // the persisted collapse preference.
+  const { revealed } = useRailReveal();
+  const railCollapsed = collapsed && !revealed;
   const activeRoute = workspaceNavRouteForPath(pathname);
   // Desktop primary order: new conversation, Today, People, Meetings, Sources.
   // The mobile filter keeps only the first four (`mobile: true`).
   const primary = workspaceNavRoutes("primary");
   // The Sessions directory is already reachable from the recent-Sessions header
   // while the rail is expanded. A collapsed rail hides that scroll area, so the
-  // same destination keeps one named icon link here instead of a duplicate row.
-  const collapsedUtility = workspaceNavRoutes("utility");
+  // same destination (and Sources intake) keeps one named icon link here
+  // instead of duplicate rows.
+  const collapsedUtility = [
+    ...workspaceNavRoutes("utility"),
+    ...workspaceNavRoutes("account"),
+  ];
 
   return (
     <div
       className={styles.sidebarState}
-      data-collapsed={collapsed}
+      data-collapsed={railCollapsed}
     >
       <div className={styles.brandRow}>
         <Link
@@ -175,17 +146,18 @@ export function WorkspaceShellNav({
       </div>
 
       <nav aria-label="工作台导航" className={styles.nav}>
-        <div className={styles.navGroup}>
-          {primary.map((route) => (
-            <NavLink
-              collapsed={collapsed}
-              current={activeRoute?.id === route.id}
-              key={route.id}
-              route={route}
-            />
-          ))}
-        </div>
-        {collapsed ? (
+        <WorkspaceSelectionScope>
+          <div className={styles.navGroup}>
+            {primary.map((route) => (
+              <NavLink
+                collapsed={railCollapsed}
+                current={activeRoute?.id === route.id}
+                key={route.id}
+                route={route}
+              />
+            ))}
+          </div>
+        {railCollapsed ? (
           <div className={styles.navGroup} data-collapsed-only="true">
             {collapsedUtility.map((route) => (
               <NavLink
@@ -197,6 +169,7 @@ export function WorkspaceShellNav({
             ))}
           </div>
         ) : null}
+        </WorkspaceSelectionScope>
       </nav>
     </div>
   );

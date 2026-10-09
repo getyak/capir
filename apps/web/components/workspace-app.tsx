@@ -24,6 +24,7 @@ import { useMemo, useRef, useState } from "react";
 import { signOutOfWorkspace } from "@/app/login/actions";
 import { clearAllPendingMeetingDraftIntents } from "@/lib/meeting-draft-pending";
 import { clearAllPendingSessionDrafts } from "./session-workbench/session-draft-pending";
+import { clearAllSessionOrganization } from "@/lib/workspace-session-organization";
 import {
   getCaseEvidence,
   getCaseIdentityLabel,
@@ -258,6 +259,7 @@ export function WorkspaceApp({
     clearTimeWorkspaceStorage();
     clearAllPendingMeetingDraftIntents();
     clearAllPendingSessionDrafts();
+    clearAllSessionOrganization();
   }
 
   const fixtureCase =

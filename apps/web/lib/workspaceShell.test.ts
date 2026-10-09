@@ -33,7 +33,8 @@ describe("persistent workspace shell", () => {
     expect(sessionBoundary).toContain(
       "if (storageScope) prunePendingSessionDrafts(storageScope)",
     );
-    expect(sessionBoundary).toContain("else clearAllPendingSessionDrafts()");
+    expect(sessionBoundary).toContain("clearAllPendingSessionDrafts()");
+    expect(sessionBoundary).toContain("clearAllSessionOrganization()");
     expect(layout).toContain("fixtureWorkspace");
     expect(layout).toContain(
       "合成测试工作台——仅含评测数据，不是真实招聘记录",
@@ -172,7 +173,10 @@ describe("persistent workspace shell", () => {
     expect(canvas).not.toContain("window.localStorage");
     expect(canvas).toContain("今天想推进什么？");
     expect(canvas).toContain("new-conversation-objective");
-    expect(shellStyles).toContain("grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr)");
+    // The rail width is a Motion-animated variable on the sidebar; the shell
+    // column tracks it without ever swapping the DOM between row and column.
+    expect(shellStyles).toContain("grid-template-columns: auto minmax(0, 1fr)");
+    expect(shellStyles).toContain("width: var(--sidebar-rail-width, 236px)");
     expect(shellStyles).toContain("height: 58px");
   });
 
