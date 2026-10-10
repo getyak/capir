@@ -8,6 +8,8 @@ import XCTest
 /// started callbacks are all covered.
 @MainActor
 final class AgentSessionActiveRefreshTests: XCTestCase {
+    private static let fixtureNow = Date(timeIntervalSince1970: 1_789_000_300)
+
     final class DeferredSyncService: AgentSessionSyncServing, @unchecked Sendable {
         private let lock = NSLock()
         private var pending: [CheckedContinuation<AgentSessionRemotePage, Error>] = []
@@ -89,7 +91,7 @@ final class AgentSessionActiveRefreshTests: XCTestCase {
                     body: "Review the latest message.", status: "ready",
                     citationDependencyIDs: [], requiresUserDecision: false
                 )],
-                createdAt: ISO8601DateFormatter().string(from: Date())
+                createdAt: ISO8601DateFormatter().string(from: Self.fixtureNow)
             ),
             createdAt: Date(timeIntervalSince1970: 1_789_000_000),
             requiresRefresh: false
@@ -124,9 +126,9 @@ final class AgentSessionActiveRefreshTests: XCTestCase {
         let record = AgentSessionRemoteRecord(
             sessionID: session.id,
             revision: revision,
-            updatedAt: Date(),
-            expiresAt: Date().addingTimeInterval(86_400),
-            deletedAt: deleted ? Date() : nil,
+            updatedAt: Self.fixtureNow,
+            expiresAt: Self.fixtureNow.addingTimeInterval(86_400),
+            deletedAt: deleted ? Self.fixtureNow : nil,
             payload: deleted ? nil : PersistedAgentSession(remote)
         )
         return AgentSessionRemotePage(
@@ -141,7 +143,9 @@ final class AgentSessionActiveRefreshTests: XCTestCase {
         let session = seedSession()
         let service = DeferredSyncService()
         let persistence = CountingPersistence()
-        let store = AgentSessionStore(sessions: [session], persistence: persistence)
+        let store = AgentSessionStore(
+            sessions: [session], persistence: persistence, now: { Self.fixtureNow }
+        )
         store.saveGlobalDraft("draft kept for the user")
         let people = PursuitWorkspaceStore(service: nil)
         let consumer = AgentSessionActiveRefreshConsumer(
@@ -225,7 +229,7 @@ final class AgentSessionActiveRefreshTests: XCTestCase {
 
     func testTombstoneAvailabilityDrivesTheViewDecision() async throws {
         let session = seedSession()
-        let store = AgentSessionStore(sessions: [session])
+        let store = AgentSessionStore(sessions: [session], now: { Self.fixtureNow })
         // Derived from the REAL store state the view observes.
         XCTAssertTrue(
             AskSendAvailability.originalSessionUnavailable(
