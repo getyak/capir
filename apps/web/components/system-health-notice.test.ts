@@ -19,7 +19,7 @@ describe("ordinary workspace diagnostic attention", () => {
     const html = renderToStaticMarkup(createElement(HealthNotice, { value: {
       observation: unavailableSystemHealth(), phase: "ready", refreshing: false, stale: false, refresh: async () => {},
     } }));
-    expect(html).toContain("必要依赖不可用");
+    expect(html).toContain("服务暂时不可用");
     expect(html).toContain('href="/workspace/settings/diagnostics"');
   });
 });

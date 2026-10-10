@@ -30,6 +30,7 @@ vi.mock("next/navigation", () => ({
 
 import { writeConversationMessage } from "@/lib/conversation-local";
 import { QueuedConversation } from "./queued-conversation";
+import styles from "./queued-conversation.module.css";
 
 const SCOPE = "b".repeat(64);
 const SESSION = "11111111-1111-4111-8111-111111111111";
@@ -180,9 +181,11 @@ it("shows one truthful work row beneath an accepted message before any SSE state
   const rows = workRows();
   expect(rows).toHaveLength(1);
   expect(rows[0]!.getAttribute("data-phase")).toBe("waiting");
-  // Identity keeps the current product name and the monochrome brand mark.
+  // The enclosing message owns one brand mark; the status row must not
+  // introduce a second avatar or competing progress indicator.
   expect(rows[0]!.textContent).toContain("capri");
-  expect(rows[0]!.querySelector("[data-work-mark]")).not.toBeNull();
+  expect(document.querySelectorAll(`.${styles.mark}`)).toHaveLength(1);
+  expect(rows[0]!.querySelectorAll("[aria-hidden='true']")).toHaveLength(0);
   // Accepted-but-unobserved means waiting for reply status, never running.
   expect(rows[0]!.textContent).toContain("等待回复状态");
   expect(document.body.textContent).toContain("已接收的原位消息");
