@@ -16,6 +16,8 @@
 /* 880px readable axis shared by transcript and composer. */
 .content { max-width:880px; margin:0 auto; min-width:0; }
 .turn { margin-bottom:36px; }.localTurn { margin:0 0 26px; }
+.turn.userTurn { margin-bottom:20px; }
+.userTurn .userRow { margin-bottom:0; }
 /* Trailing user bubbles; one centered timestamp per send above them. */
 .sendTime { color:var(--muted); display:block; font-size:12px; line-height:19px; margin:0 0 12px; text-align:center; }
 .userRow { display:flex; justify-content:flex-end; margin-bottom:20px; }
@@ -55,11 +57,9 @@
 .forming { position:relative; }.cursor { width:5px; height:5px; display:inline-block; border-radius:50%; background:var(--muted); animation:breathe 1.8s ease-in-out infinite; margin-top:3px; }.waiting { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:14px; min-height:30px; }.pulse { width:6px; height:6px; border-radius:50%; background:#81936c; animation:breathe 1.8s ease-in-out infinite; }.runMeta { display:flex; gap:10px; font-size:13px; color:var(--muted); margin-top:9px; min-height:16px; }.delivery { display:flex; justify-content:flex-end; align-items:center; gap:5px; color:var(--muted); font-size:13px; margin-top:8px; }.delivery button,.notice button { background:none; color:inherit; text-decoration:underline; border:0; padding:5px; cursor:pointer; }
 
 /* One compact truthful work row beneath an accepted message. */
-.workRow { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:8px; min-height:30px; color:var(--muted); font-size:13px; line-height:20px; }
-.workLabel { display:flex; align-items:center; gap:6px; flex:none; font-weight:500; }
-.workRow .mark { width:16px; height:16px; }
+.workRow { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-height:24px; color:var(--muted); font-size:13px; line-height:20px; }
+.workLabel { flex:none; font-weight:400; }
 .workStatus { min-width:0; overflow-wrap:anywhere; }
-.workRow .pulse { flex:none; }
 .workRow button { background:none; color:inherit; text-decoration:underline; border:0; padding:5px; cursor:pointer; font:inherit; font-size:13px; }
 .formingStatus { display:block; margin-top:7px; color:var(--muted); font-size:12px; line-height:18px; }
 .canvas[data-empty="true"] { justify-content:center; padding-bottom:32px; overflow:auto; }
@@ -208,8 +208,9 @@
 .execution[data-live="true"]:not([open]) .executionStage { display:none; }
 .answer:has(.execution[data-live="true"]) > .identity { margin-top:12px; }
 .answer:has(.execution[data-live="true"][data-phase="running"]) > .identity .mark { animation:breathe 1.8s ease-in-out infinite; }
+.answer:has(.workRow[data-animate="true"]) > .identity .mark { animation:breathe 1.8s ease-in-out infinite; }
 .executionSummary:focus-visible { outline:2px solid var(--muted); outline-offset:3px; }
-@media(prefers-reduced-motion:reduce) { .answer:has(.execution[data-live="true"][data-phase="running"]) > .identity .mark { animation:none; } }
+@media(prefers-reduced-motion:reduce) { .answer:has(.execution[data-live="true"][data-phase="running"]) > .identity .mark, .answer:has(.workRow[data-animate="true"]) > .identity .mark { animation:none; } }
 
 /* Opaque warm reading surfaces when transparency is reduced. */
 @media(prefers-reduced-transparency:reduce) {

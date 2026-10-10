@@ -462,7 +462,7 @@ export function SessionUserMessage({ context }: { context: RenderContext }) {
   // image-bearing message never grows a prominent outer text bubble frame.
   // Text-only messages keep the original single bubble. The empty-text
   // synthetic part renders nothing instead of an empty bubble frame.
-  return <MessagePrimitive.Root className={styles.turn} role="article">
+  return <MessagePrimitive.Root className={`${styles.turn} ${styles.userTurn}`} role="article">
     <div className={styles.userRow}><div className={styles.userStack}>
       <MessagePrimitive.Parts>{({ part }) => part.type === "text" && part.text
         ? <div className={styles.userMessage} data-user-message>{part.text}</div>
