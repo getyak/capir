@@ -52,13 +52,16 @@ export function HealthNotice({ value }: { value: SystemHealthContextValue }) {
     return null;
   }
   const unavailable = value.observation?.status === "unavailable";
+  const confirmedProblem = value.observation?.components.some(item => item.status === "degraded");
   const message = value.stale
-    ? "上次检测发现服务异常，当前状态待确认。"
+    ? "服务检测结果已过期，当前状态待确认。"
     : value.phase === "error"
       ? "暂时无法确认服务状态。"
       : unavailable
         ? "服务暂时不可用，发送或处理消息可能受影响。"
-        : "部分服务状态尚未确认。";
+        : confirmedProblem
+          ? "部分服务存在异常，处理消息可能受影响。"
+          : "部分服务状态尚未确认。";
   return (
     <aside className={styles.notice} data-tone={unavailable ? "error" : "warning"} role="status">
       <span aria-hidden="true" className={styles.noticeMark} />
