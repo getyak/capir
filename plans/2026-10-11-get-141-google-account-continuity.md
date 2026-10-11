@@ -122,9 +122,12 @@ fences so it can run without weakening the inventory gate.
 4. Complete on the worker snapshot: integration tests (callback, action, page, component) and all
    repository gates for the web package, `pnpm docs:check`, and a production
    `next build` client-bundle check.
-5. Active: final independent review, PR/current-head gates, clean-source
-   resident Web/backend deployment, live revision and UI verification, owned
-   fixture cleanup, and Linear closure. Operational receipts are recorded on
+5. Active: implementation reviewed and merged in PR #316; required exact-head
+   CI/Security passed, affected resident Web/backend services deployed and
+   owned fixtures cleaned. Real Google binding acceptance remains incomplete
+   after a live completion returned 409 without an available backend error
+   code. Linear stays In Progress until a controlled Google fixture completes
+   the required acceptance. Operational receipts are recorded on
    [GET-141](https://linear.app/getyak/issue/GET-141) and the task's permanent
    sanitized evaluation artifacts.
 
@@ -165,16 +168,59 @@ fences so it can run without weakening the inventory gate.
   `BackendSessionExpiredError` preserve the sealed navigation hints and clear
   staged state without making a credential write.
 
-## Limitations (not performed, not claimed)
+## Operational acceptance status
 
-- No live Google OAuth round trip against the resident backend was executed in
-  this batch; the callback/action/page/component tests are integration tests of
-  the wiring we own and do not establish a full OAuth end-to-end pass.
+- PR [#316](https://github.com/getyak/capir/pull/316) merged at
+  `edbafaecf8a40836300c073f04d3dba1f529066a`; independent review closed the
+  account-section and session-expiry findings. Required CI/Security passed on
+  PR head `2903bcf18944f88da2a2c34b4cef39cb6d378c5b`; Web CI passed 274 files /
+  2,147 tests, and the PostgreSQL identity integration suite passed 39/39.
+- API and person-research Agent deployed from clean merged source. Live
+  migration 098 checksum and all six enabled retirement fences were read back.
+  The official deployment probes passed after a retained first synthetic-chat
+  probe failure and a full rerun; no failed probe was skipped.
+- Web initially used checked composition `dcb9afe6` to preserve the resident
+  sidebar. Its full CI passed; an unnecessarily broad manual Security run was
+  cancelled during unchanged Swift analysis, causing its aggregate gate to
+  fail. This is not recorded as a green Security run. Required PR #316 Security
+  had passed. A separately authorized deployment subsequently restored the
+  existing sidebar from clean merged `edbafaec` with this authentication change
+  retained; this task does not replace or restart that concurrent deployment.
+- HTTPS signed collision-presentation positives and forged, expired, tampered,
+  and unknown-provider negatives passed. The displayed collision panel used a
+  explicitly labelled synthetic navigation-only hint; it is not evidence of
+  an actual provider-email collision.
+- An owned empty password identity entered the actual preselected Google
+  panel. Wrong-password step-up returned 401 and created no attempt. Correct
+  step-up returned 201. Google SSO unexpectedly returned through the staged
+  callback; backend completion returned 409 and the actual recovery panel
+  reopened with the original task destination. The private Google identity
+  was not recorded in the evidence. No successful binding is claimed.
+- Read-only independent diagnosis found no deterministic origin, client-label,
+  nonce, original-session, or revision wiring defect. Without the backend error
+  code, an attempt/proof rejection cannot be distinguished from protected
+  email/provider ownership conflicts. A later dispatch check did not establish
+  a reliable browser block and is not claimed as isolated OAuth acceptance.
+- Actual local panel cancellation exposed the return action, which navigated
+  back to the original People page. Database readback showed no new provider
+  identity, no person/session data, and unchanged profile revision.
+- The owned primary fixture was signed out, sessions/grants/password credentials
+  revoked, open attempts and challenges consumed, and the account retired.
+  The daily Lab run was stopped and read back as deleted with no cleanup error;
+  its local credential was removed. The dedicated identity-test database was
+  removed after checking it had no active connection. Resident services,
+  shared databases, source worktrees, and rollback releases are preserved.
+
+## Remaining acceptance boundary
+
+- Real Google binding success remains unverified. An explicitly authorized,
+  test-controlled Google identity not already owned by another capri account
+  is required; a human performs Google verification and final credential
+  binding, and the task then verifies authoritative settings/readback. No
+  personal Google identity is to be bound merely to complete this check.
 - Full live Apple OAuth is not an acceptance requirement for this Google issue
   and was not performed.
-- Planned live evidence distinguishes a synthetic sealed navigation hint from
-  an actual provider collision. Original password sign-in and step-up, real
-  Google authorization dispatch, ref-specific product cancellation, and
-  authoritative identity readback will be tested on an owned disposable
-  identity. No real Google identity will be bound or presented as an OAuth
-  completion receipt.
+- Ref-specific cancellation and successful callback continuation have route and
+  real Settings-composition test coverage; the live cancellation above was the
+  local panel action, not a ref-specific backend cancellation receipt. Neither
+  an authorization dispatch nor a recovery page is a successful binding proof.
