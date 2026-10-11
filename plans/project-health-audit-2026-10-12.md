@@ -16,7 +16,8 @@
   and research allowance/sequencing `273ed9a1` after 414 Agent and 142 host tests
   plus actual same-Run process-interruption probes.
   Resident deployment and final delivery remain outstanding.
-- Next Pi batch: backend error logging and Web admission. Research allowance
+- Active Pi batch: backend error logging and Web admission
+  `20261012-060810-73e39891`, frozen base `196d8ca5`. Research allowance
   recovery `20261012-050607-5d7531a8` passed review after two bounded parent
   corrections; search/fetch/profile each dispatched once at a maximum of one
   across actual command process death and same-Run recovery.
