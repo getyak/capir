@@ -539,6 +539,8 @@ export function SettingsWorkspace({
   labEnabled,
   recovery,
   avatarUrl,
+  connect,
+  connectReturnTo,
   webRelease,
   webReleaseObservedAt,
 }: {
@@ -547,6 +549,8 @@ export function SettingsWorkspace({
   sessionVersion: string | null;
   section: SettingsSection;
   labEnabled: boolean;
+  connect?: "google" | "apple" | null;
+  connectReturnTo?: string | null;
   webRelease?: WebReleaseView | null;
   webReleaseObservedAt?: string;
   recovery?: {
@@ -622,6 +626,8 @@ export function SettingsWorkspace({
                 section={section === "overview" ? "profile" : (section as "account" | "workspace")}
                 embedded
                 recovery={recovery}
+                connect={connect}
+                connectReturnTo={connectReturnTo}
               />
             ) : (
               <section className={styles.unavailable}>

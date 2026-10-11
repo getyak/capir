@@ -21,6 +21,18 @@ describe("onboarding navigation targets", () => {
     expect(canonicalLoginTarget("http://localhost:3000", "https://owner:password@app.example", {}, true)).toBeNull();
     expect(canonicalLoginTarget("http://localhost:3000", "https://app.example", { callbackUrl: "https://attacker.example" }, true)).toBe("https://app.example/login?callbackUrl=%2Fworkspace");
   });
+  it("carries only the allowlisted connect hint through the canonical hop", () => {
+    expect(
+      canonicalLoginTarget("http://localhost:3000", "https://app.example", {
+        callbackUrl: "/desktop-auth/authorize?attempt=a&state=b",
+        connect: "google",
+      }, true),
+    ).toBe("https://app.example/login?callbackUrl=%2Fdesktop-auth%2Fauthorize%3Fattempt%3Da%26state%3Db&connect=google");
+    // A forged hint is dropped instead of steering the journey.
+    expect(
+      canonicalLoginTarget("http://localhost:3000", "https://app.example", { connect: "https://evil.example" }, true),
+    ).toBe("https://app.example/login?callbackUrl=%2Fworkspace");
+  });
   it("wraps a safe original target and encodes it", () => {
     expect(onboardingStartTarget("/workspace/pursuits/42?view=open")).toBe(
       `${ONBOARDING_PATH}?callbackUrl=${encodeURIComponent(

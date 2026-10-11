@@ -28,6 +28,7 @@ import {
   signInBackendAccount,
 } from "@/lib/server/backendAuth";
 import { getGoogleOAuthCredentials } from "@/lib/server/google-oauth";
+import { sealLoginCollisionHint } from "@/lib/server/loginCollision";
 import { TEST_WORKSPACE_COOKIE } from "@/lib/server/testWorkspaceSession";
 
 import { authCookieSecure } from "@/lib/auth-cookie-policy";
@@ -54,10 +55,20 @@ class StagedProofError extends AuthError {
   code = "staged_proof";
 }
 
-async function exchangeProviderSession<T>(exchange: () => Promise<T>): Promise<T> {
+async function exchangeProviderSession<T>(
+  provider: "google" | "apple",
+  exchange: () => Promise<T>,
+): Promise<T> {
   try { return await exchange(); }
   catch (error) {
-    if (error instanceof OAuthAccountLinkRequired) throw new AccountLinkRequired("Use the original sign-in method.");
+    if (error instanceof OAuthAccountLinkRequired) {
+      // GET-141 continuity: the rejected login retains nothing but this
+      // server-sealed provider hint (no token, email or account detail). It
+      // is the only authority for the continuity panel; the framework error
+      // query alone discloses nothing.
+      await sealLoginCollisionHint(provider);
+      throw new AccountLinkRequired("Use the original sign-in method.");
+    }
     throw error;
   }
 }
@@ -470,12 +481,12 @@ export function buildAuthConfig(): NextAuthConfig {
         }
         if (account?.provider === "google") {
           if (!account.id_token) throw new Error("Google did not return an identity token.");
-          const backend = await exchangeProviderSession(() => finishGoogleSignIn(account.id_token!));
+          const backend = await exchangeProviderSession("google", () => finishGoogleSignIn(account.id_token!));
           return applyBackendSessionToToken(token, backend);
         }
         if (account?.provider === "apple") {
           if (!account.id_token) throw new Error("Apple did not return an identity token.");
-          const backend = await exchangeProviderSession(() => finishAppleSignIn({
+          const backend = await exchangeProviderSession("apple", () => finishAppleSignIn({
             identityToken: account.id_token!,
             ...appleNameFields(profile, user?.name),
           }));

@@ -90,6 +90,12 @@ export type AuthOperation = {
     challenge_id: string;
     challenge_nonce: string;
   };
+  /**
+   * Optional same-origin navigation hint (GET-141): where the user may
+   * continue after this operation completes. Minimal navigation state only;
+   * never a token, never authority. Sanitized at seal and at use.
+   */
+  returnTo?: string;
   createdAt: string;
 };
 

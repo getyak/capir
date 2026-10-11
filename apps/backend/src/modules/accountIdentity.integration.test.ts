@@ -1141,6 +1141,23 @@ describe.skipIf(!pool)("reviewed duplicate resolution (PostgreSQL)", () => {
     await expect(
       assertAccountActive(pool!, shape.duplicate.accountId),
     ).rejects.toMatchObject({ code: "ACCOUNT_RETIRED" });
+    // Direct MCP writers admitted before retirement cannot add records to the
+    // retired source. The BEFORE guard must reject before column constraints,
+    // so this probe cannot accidentally persist a partial tool or OAuth row.
+    for (const table of [
+      "mcp_interaction_requests", "mcp_tool_calls", "mcp_oauth_connect_requests",
+      "mcp_continuation_outbox", "mcp_oauth_cleanup", "mcp_oauth_cleanup_effects",
+    ]) {
+      await expect(pool!.query(
+        `INSERT INTO ${table}(account_id) VALUES ($1)`,
+        [shape.duplicate.accountId],
+      )).rejects.toMatchObject({ message: "ACCOUNT_RETIRED" });
+      const lateRows = await pool!.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM ${table} WHERE account_id = $1`,
+        [shape.duplicate.accountId],
+      );
+      expect(lateRows.rows[0]!.count).toBe("0");
+    }
     void duplicateSession;
 
     // Idempotent readback.

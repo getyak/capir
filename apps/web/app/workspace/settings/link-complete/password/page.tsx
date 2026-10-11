@@ -18,7 +18,7 @@ export default async function StagedPasswordPage() {
     !operation.attempt ||
     (operation.intent !== "set_password" && operation.intent !== "change_password")
   ) {
-    redirect("/workspace/settings?link=error");
+    redirect("/workspace/settings?section=account&link=error");
   }
   return (
     <StagedPasswordForm

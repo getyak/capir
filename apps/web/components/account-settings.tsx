@@ -46,7 +46,7 @@ function NameForm({name,kind,revision,label,onSaved}:{name:string;kind:string;re
   </div>;
 }
 
-export function AccountSettingsPanel({initial,section,embedded=false,recovery,avatarUrl}:{avatarUrl?:string|null;initial:AccountSettings;section:'profile'|'account'|'workspace';embedded?:boolean;recovery?:{operationRef:string|null;roles:{current:{provider:string;expiresAt:string}|null;duplicate:{provider:string;expiresAt:string}|null}}}){
+export function AccountSettingsPanel({initial,section,embedded=false,recovery,avatarUrl,connect,connectReturnTo}:{avatarUrl?:string|null;initial:AccountSettings;section:'profile'|'account'|'workspace';embedded?:boolean;recovery?:{operationRef:string|null;roles:{current:{provider:string;expiresAt:string}|null;duplicate:{provider:string;expiresAt:string}|null}};connect?:'google'|'apple'|null;connectReturnTo?:string|null}){
   const [data,setData]=useState(initial);
   const role=data.workspace.is_owner?'所有者':data.workspace.role==='admin'?'管理员':'成员';
   const currentSession=data.sessions.find(session=>session.is_current)??null;
@@ -63,7 +63,7 @@ export function AccountSettingsPanel({initial,section,embedded=false,recovery,av
       <details className={styles.disclosure}><summary>头像保存在哪里？</summary><p>头像保存在当前浏览器或应用的这台设备上，按账号隔离，暂不跨设备同步。不会修改来源平台的照片。</p><Link href="/workspace/settings?section=appearance">管理头像风格与本机数据 →</Link></details>
     </>:section==='account'?<>
       {data.user.login_methods.length ? <>
-        <AccountSignInMethods initial={data} />
+        <AccountSignInMethods initial={data} connect={connect} returnTo={connectReturnTo} />
         <AccountConflictRecovery initial={data} recovery={recovery} />
         <AccountDataSync />
       </> : <section className={styles.section}><h2>登录方式</h2><p>此身份通过受限的测试会话访问。</p></section>}

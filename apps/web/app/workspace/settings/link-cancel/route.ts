@@ -1,22 +1,26 @@
 import { redirect } from "next/navigation";
 
 import { readAuthOperation, clearStagedAuth } from "@/lib/server/stagedAuth";
+import { continuityReturnTo } from "@/lib/login-continuity";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Fail-closed exit for cancelled or stale staged operations. Cookie state is
- * cleared here in a Route Handler (never during page render). Cancellation is
- * ref-specific: an old cancel can only clear the operation it was rendered
- * for, never a newer operation started meanwhile.
+ * Ref-specific exit for a cancelled staged operation. Only the matched
+ * operation is cleared, and only ITS sanitized return hint survives into a
+ * neutral cancelled result (no panel reopen, no success claim). A missing or
+ * foreign ref never clears or exposes a newer operation and gets the generic
+ * recoverable outcome instead.
  */
 export async function GET(request: Request): Promise<never> {
   const ref = new URL(request.url).searchParams.get("ref");
   const operation = await readAuthOperation();
-  // Only the originating attempt can be cancelled: an old, missing or foreign
-  // ref never clears a newer operation (availability loss).
   if (ref && operation && operation.ref === ref) {
+    const returnTo = continuityReturnTo(operation.returnTo);
     await clearStagedAuth();
+    redirect(
+      `/workspace/settings?section=account&link=cancelled${returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+    );
   }
-  redirect("/workspace/settings?link=error");
+  redirect("/workspace/settings?section=account&link=error");
 }
