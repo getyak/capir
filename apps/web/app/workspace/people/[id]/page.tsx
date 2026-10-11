@@ -5,6 +5,7 @@ import { ArrowLeft, CaretRight } from "@phosphor-icons/react/dist/ssr";
 
 import { auth } from "@/auth";
 import { MemoryReviewCard } from "@/components/memory-review/memory-review-card";
+import { ResearchNotebook, researchNoteMetadata } from "@/components/research-notebook";
 import { AvatarEditor } from "@/components/avatar-editor";
 import { peopleDirectoryHref, personDirectoryEntryId, personMemoryHref, readPeopleDirectoryQuery } from "@/components/people-directory-navigation";
 import {
@@ -127,7 +128,7 @@ export default async function PersonMemoryPage({
     person?.id ?? null,
   );
   const grouped = new Map<string, typeof items>();
-  for (const item of items) {
+  for (const item of items.filter((entry) => !researchNoteMetadata(entry))) {
     const list = grouped.get(item.scope) ?? [];
     list.push(item);
     grouped.set(item.scope, list);
@@ -204,6 +205,7 @@ export default async function PersonMemoryPage({
         </div>
 
         <div className={styles.memoryColumn}>
+          <ResearchNotebook items={items} />
           {proposals.length === 0 ? (
             <p className={styles.pendingEmpty}>暂无待确认变化</p>
           ) : (
@@ -241,8 +243,8 @@ export default async function PersonMemoryPage({
             <h2 className={styles.memoryTitle} id="person-memory-accepted">
               已保存的记忆
             </h2>
-            {items.length === 0 ? (
-              <p className={styles.quiet}>还没有在这个人物上保存记忆。</p>
+            {grouped.size === 0 ? (
+              <p className={styles.quiet}>还没有其他已确认的记忆。</p>
             ) : (
               Array.from(grouped.entries()).map(([scope, scopeItems]) => (
                 <article className={styles.scopeGroup} key={scope}>

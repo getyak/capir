@@ -2010,7 +2010,7 @@ export const PersonDirectoryResponseSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
     people: Type.Array(PersonDirectoryItemSchema, {
-      maxItems: 20,
+      maxItems: 200,
     }),
   },
   { $id: "PersonDirectoryResponse", additionalProperties: false },
