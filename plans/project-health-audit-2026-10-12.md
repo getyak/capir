@@ -1,5 +1,32 @@
 # Project health audit — 2026-10-12
 
+## Active delivery
+
+- Status: in progress. Owner: Codex for scope, independent review, integration,
+  revision-bound verification, deployment, PR and merge; Pi for sequential
+  implementation in isolated worktrees.
+- Outcome: repair the confirmed correctness/privacy/security defects, retire
+  proven dead Web code, archive obsolete scaffolding, and enforce knowledge/tool
+  ownership without changing applied SQL or unrelated work.
+- Integration branch: `codex/project-health-oct12`, based on remote main
+  `e751b37a8692a33387b7325004d7532face32021`.
+- Accepted so far: audit inventory and independent synthetic before-change
+  probes. No runtime repair or deployment has been accepted yet.
+- Active Pi batch: dependency safety `20261012-020739-2030b035`, frozen base
+  `269a1a5b7f01f19704c0aa0d2dd37f5823a94098`.
+- Remaining order: immutable research state; error logging/Web admission;
+  durable diagnostic privacy; dead Web retirement/meeting identity admission;
+  knowledge/tooling ownership. Review and verify each diff before integration.
+- Completion evidence: final local checks and real surface acceptance; latest
+  PR-head applicable CI/security/branch gates; confirmed merge; clean committed
+  resident API, Agent Host, Web and changed browser-executor revisions verified
+  live; isolated test-account and temporary-resource cleanup read back.
+- Boundary: the audit establishes these findings and checked scenarios, not an
+  absence of unknown defects. Unpublished upstream braces remediation stays
+  explicitly identified as a local mitigation.
+
+## Frozen Pi audit observation
+
 - Scope: full tracked repository at frozen base `4ee04b1883b50d7d708e72378a5aa39487a7834f` (audit only; this report is the only created file).
 - Method: inventory and ownership scan of every tracked top-level area, deterministic read-only checks, static scans (imports, references, dependency usage, doc-command consistency), and detailed traces of representative risky entrypoints (Web API admission, unauthenticated model forwarding, backend lifecycle sweeps, lab account deletion, migration runner, CLI auth). No code, test, or documentation was modified; nothing was committed.
 - Honest limit: 2,882 tracked files were inventoried and statically scanned; a minority of risky entrypoints were traced in detail. This report does not claim every line was manually reviewed or that all defects are found. Large files are recorded as debt, not defects.
@@ -237,3 +264,57 @@ native files remain debt unless an observable failure justifies a native change.
 Final accepted dispositions and revision-bound checks will be recorded here
 before PR delivery. The initial report's proposed batches are recommendations;
 the actual contracts and final acceptance are owned by Codex.
+
+
+### Independent reference-graph correction and additional boundary finding
+
+A TypeScript AST/module-resolution traversal of 508 non-test Web modules from
+160 Next route/layout entrypoints found 17 unreachable component/helper modules
+(3,651 lines), after explicitly excluding Next metadata entrypoints and build
+configuration from dead-code conclusions. There were no nonliteral dynamic
+imports. The seven directly unreferenced modules in PA-01 are the roots of a
+larger dead closure: old meeting helpers, SignalJourney/reduced-motion hook,
+legacy Plugs UI/helpers, and synthetic integration/browser-handoff helpers.
+Five exclusively imported CSS modules add 4,102 dead lines. Actual native/
+marketing image consumers were checked independently; shared SignalJourney
+images and workspace-meetings CSS stay in use and must remain.
+
+The initial Pi trace mistakenly calls `meeting-month-grid.tsx` live: it is
+referenced only by the unmounted `workspace-meetings.tsx`. The live Time
+workspace uses its own grid. CalendarDraftReview state does remount during
+TimeMeetingInspector's loading boundary, so absence of an explicit React key
+alone is not a demonstrated state-leak defect.
+
+PH-08 (P2): `apps/web/components/time-meeting-inspector.tsx` validates the
+response's schema but not its draft identity against the selected/requested
+ID. A synthetic actual React render requested draft B and accepted a valid
+draft A into actionable CalendarDraftReview while persistence remained bound
+to B. The observation probe passed in the shipped happy-dom/React surface;
+its temporary test was removed after evidence capture. The backend normally
+filters by identity, so this is a missing client admission check, not proof of
+an exploited cross-account read. Repair with exact identity/revision admission
+and live-surface regression tests in the dead-code retirement batch.
+
+Both diagram generators were executed in a task-owned temporary directory.
+All five generated Excalidraw sources matched the committed bytes exactly.
+PA-08 is a wiring/coverage gap, not a confirmed current diagram-source drift.
+
+
+PH-09 (P2): failure metadata is a second private-data boundary. A synthetic
+shipped `uploadChatMediaContent` invocation proved that an arbitrary storage
+`Error.message` is persisted verbatim as `chat_media_assets.failure_reason`,
+although the client receives a fixed retry message. The same static pattern
+occurs in source-authorization compilation responses/job errors, public research
+warnings/retry metadata and MCP continuation outbox errors. Adjacent socket/tool
+adapters admit arbitrary code-shaped strings into failure responses/detail;
+uppercase or a prefix is not a closed diagnostic vocabulary. A separate Pi batch
+will replace untyped failure content with fixed operation diagnostics, preserve
+provenance/retry/lease/idempotency behavior, and exercise the actual producer and
+consumer boundaries with synthetic canaries. No real-person or credential leak
+was observed; historical stored metadata is outside this prevention change.
+
+The additional native sign-out controller reentrancy suspicion was not promoted
+to a defect: production callsites acquire the shared maintenance barrier and
+set the root store's `isWorking` before suspension. UI retries and environment
+activation honor that barrier. No native source change or simulator run is
+justified by this rejected suspicion.
