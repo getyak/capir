@@ -1,0 +1,176 @@
+diff --git a/lib/compile.js b/lib/compile.js
+index dce69beb90ece5c3b0ca234a949418f9f34eedbc..972719dbdd2baee747fff217b571b71bf0685372 100644
+--- a/lib/compile.js
++++ b/lib/compile.js
+@@ -2,9 +2,17 @@
+ 
+ const fill = require('fill-range');
+ const utils = require('./utils');
++const { MAX_DEPTH } = require('./constants');
+ 
+ const compile = (ast, options = {}) => {
+-  const walk = (node, parent = {}) => {
++  const walk = (node, parent = {}, depth = 0) => {
++    // Bound AST container traversal depth, including directly supplied deep
++    // or cyclic ASTs (local mitigation for
++    // https://github.com/micromatch/braces/issues/70). Leaf nodes sit one
++    // level below their deepest container and stay within the bound.
++    if (node.nodes !== undefined && depth > MAX_DEPTH) {
++      throw new RangeError(`Input nesting depth exceeds maximum (${MAX_DEPTH})`);
++    }
+     const invalidBlock = utils.isInvalidBrace(parent);
+     const invalidNode = node.invalid === true && options.escapeInvalid === true;
+     const invalid = invalidBlock === true || invalidNode === true;
+@@ -47,7 +55,7 @@ const compile = (ast, options = {}) => {
+ 
+     if (node.nodes) {
+       for (const child of node.nodes) {
+-        output += walk(child, node);
++        output += walk(child, node, depth + 1);
+       }
+     }
+ 
+diff --git a/lib/constants.js b/lib/constants.js
+index 2bb3b8840382c56700869b3a9e1f958fcce01efd..88d7cc607c3fcaff093c4ea13d7eaf28048ef529 100644
+--- a/lib/constants.js
++++ b/lib/constants.js
+@@ -3,6 +3,12 @@
+ module.exports = {
+   MAX_LENGTH: 10000,
+ 
++  // Local security mitigation (unpublished upstream fix for
++  // https://github.com/micromatch/braces/issues/70): hard cap on nested
++  // brace/paren depth and AST traversal depth. Only bounds recursion; it
++  // does not change behavior for patterns within the bound.
++  MAX_DEPTH: 100,
++
+   // Digits
+   CHAR_0: '0', /* 0 */
+   CHAR_9: '9', /* 9 */
+diff --git a/lib/expand.js b/lib/expand.js
+index 35b2c41d6afdb8f0197959e26079f266e48370d3..30b7ed2c8d850ef80b68ccbcc1639a035d9d0735 100644
+--- a/lib/expand.js
++++ b/lib/expand.js
+@@ -3,6 +3,7 @@
+ const fill = require('fill-range');
+ const stringify = require('./stringify');
+ const utils = require('./utils');
++const { MAX_DEPTH } = require('./constants');
+ 
+ const append = (queue = '', stash = '', enclose = false) => {
+   const result = [];
+@@ -33,13 +34,23 @@ const append = (queue = '', stash = '', enclose = false) => {
+ const expand = (ast, options = {}) => {
+   const rangeLimit = options.rangeLimit === undefined ? 1000 : options.rangeLimit;
+ 
+-  const walk = (node, parent = {}) => {
++  const walk = (node, parent = {}, depth = 0) => {
++    // Bound AST traversal depth, including directly supplied deep or cyclic
++    // ASTs (local mitigation for https://github.com/micromatch/braces/issues/70).
++    if (depth > MAX_DEPTH) {
++      throw new RangeError(`Input nesting depth exceeds maximum (${MAX_DEPTH})`);
++    }
+     node.queue = [];
+ 
+     let p = parent;
+     let q = parent.queue;
+ 
++    let up = 0;
+     while (p.type !== 'brace' && p.type !== 'root' && p.parent) {
++      // Bound parent-chain walking against cyclic node.parent links.
++      if (++up > MAX_DEPTH) {
++        throw new RangeError(`Input nesting depth exceeds maximum (${MAX_DEPTH})`);
++      }
+       p = p.parent;
+       q = p.queue;
+     }
+@@ -75,7 +86,12 @@ const expand = (ast, options = {}) => {
+     let queue = node.queue;
+     let block = node;
+ 
++    up = 0;
+     while (block.type !== 'brace' && block.type !== 'root' && block.parent) {
++      // Bound parent-chain walking against cyclic node.parent links.
++      if (++up > MAX_DEPTH) {
++        throw new RangeError(`Input nesting depth exceeds maximum (${MAX_DEPTH})`);
++      }
+       block = block.parent;
+       queue = block.queue;
+     }
+@@ -100,7 +116,7 @@ const expand = (ast, options = {}) => {
+       }
+ 
+       if (child.nodes) {
+-        walk(child, node);
++        walk(child, node, depth + 1);
+       }
+     }
+ 
+diff --git a/lib/parse.js b/lib/parse.js
+index 3a6988e629f52aee6609dc5ec290a5e9ff47cecb..bd098a56f6c2cc5c4b7c9115220c75e26106f2f5 100644
+--- a/lib/parse.js
++++ b/lib/parse.js
+@@ -8,6 +8,7 @@ const stringify = require('./stringify');
+ 
+ const {
+   MAX_LENGTH,
++  MAX_DEPTH,
+   CHAR_BACKSLASH, /* \ */
+   CHAR_BACKTICK, /* ` */
+   CHAR_COMMA, /* , */
+@@ -145,6 +146,11 @@ const parse = (input, options = {}) => {
+     if (value === CHAR_LEFT_PARENTHESES) {
+       block = push({ type: 'paren', nodes: [] });
+       stack.push(block);
++      // Bound nested brace/paren recursion (local mitigation for
++      // https://github.com/micromatch/braces/issues/70).
++      if (stack.length - 1 > MAX_DEPTH) {
++        throw new RangeError(`Input nesting depth exceeds maximum (${MAX_DEPTH})`);
++      }
+       push({ type: 'text', value });
+       continue;
+     }
+@@ -211,6 +217,11 @@ const parse = (input, options = {}) => {
+ 
+       block = push(brace);
+       stack.push(block);
++      // Bound nested brace/paren recursion (local mitigation for
++      // https://github.com/micromatch/braces/issues/70).
++      if (stack.length - 1 > MAX_DEPTH) {
++        throw new RangeError(`Input nesting depth exceeds maximum (${MAX_DEPTH})`);
++      }
+       push({ type: 'open', value });
+       continue;
+     }
+diff --git a/lib/stringify.js b/lib/stringify.js
+index 8bcf872c31894f81a8c64d9202fd607e4fd7ea2b..64794a6169460c2a02d12c76ce2679b79b0f3ab4 100644
+--- a/lib/stringify.js
++++ b/lib/stringify.js
+@@ -1,9 +1,17 @@
+ 'use strict';
+ 
+ const utils = require('./utils');
++const { MAX_DEPTH } = require('./constants');
+ 
+ module.exports = (ast, options = {}) => {
+-  const stringify = (node, parent = {}) => {
++  const stringify = (node, parent = {}, depth = 0) => {
++    // Bound AST container traversal depth, including directly supplied deep
++    // or cyclic ASTs (local mitigation for
++    // https://github.com/micromatch/braces/issues/70). Leaf nodes sit one
++    // level below their deepest container and stay within the bound.
++    if (node.nodes !== undefined && depth > MAX_DEPTH) {
++      throw new RangeError(`Input nesting depth exceeds maximum (${MAX_DEPTH})`);
++    }
+     const invalidBlock = options.escapeInvalid && utils.isInvalidBrace(parent);
+     const invalidNode = node.invalid === true && options.escapeInvalid === true;
+     let output = '';
+@@ -21,7 +29,7 @@ module.exports = (ast, options = {}) => {
+ 
+     if (node.nodes) {
+       for (const child of node.nodes) {
+-        output += stringify(child);
++        output += stringify(child, undefined, depth + 1);
+       }
+     }
+     return output;

@@ -94,6 +94,37 @@ jobs:
       - name: Reject tracked secret material
         run: ./scripts/ci/check-secrets.sh
 
+  production-dependency-audit:
+    name: Full production dependency audit
+    # No job-level `if`: this audit must run on every security event
+    # (pull_request, push, schedule and manual dispatch) and must succeed.
+    # Registry/service errors fail the job; nothing may suppress the result.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Audit the complete production dependency graph
+        run: pnpm audit --prod --audit-level moderate
+
+      - name: Run local dependency patch regression tests
+        run: node --test scripts/dependency-security.test.mjs
+
   codeql:
     name: CodeQL (${{ matrix.language }})
     needs: changes
@@ -169,7 +200,7 @@ jobs:
 
   required:
     name: Security required
-    needs: [changes, dependency-review, secret-hygiene, codeql, codeql-swift]
+    needs: [changes, dependency-review, secret-hygiene, codeql, codeql-swift, production-dependency-audit]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -180,6 +211,7 @@ jobs:
       SECRET_RESULT: ${{ needs.secret-hygiene.result }}
       CODEQL_RESULT: ${{ needs.codeql.result }}
       SWIFT_RESULT: ${{ needs.codeql-swift.result }}
+      PRODUCTION_AUDIT_RESULT: ${{ needs.production-dependency-audit.result }}
     steps:
       - name: Enforce security job results
         run: |
@@ -187,6 +219,10 @@ jobs:
           test "$DEPENDENCY_RESULT" = "success" || test "$DEPENDENCY_RESULT" = "skipped"
           test "$SECRET_RESULT" = "success"
           test "$SWIFT_RESULT" = "success" || test "$SWIFT_RESULT" = "skipped"
+
+          # The full production dependency audit runs on every event and must
+          # succeed; it is never allowed to skip or be suppressed.
+          test "$PRODUCTION_AUDIT_RESULT" = "success"
 
           # JS/Actions CodeQL may be intentionally skipped only for an
           # automatic documentation-only change. Secrets and dependency
