@@ -40,7 +40,26 @@ are not part of this import.
 
 ## Current state
 
-Implementation and synthetic transaction/renderer checks passed. Authorized
-private input was imported and exact replay added nothing. Live sign-in exposed
-the existing 20-person directory cutoff; the shared bounded projection is now
-200 with a visible cap. Live readback and clean-source deployment remain active.
+Implementation, synthetic PostgreSQL transaction checks and live acceptance passed.
+Authorized private input was imported; an exact replay through the deployed CLI
+added nothing, and authenticated readback matched every supplied note and platform
+record. Anonymous access was denied and unresolved identities retained empty
+platform lists. Live sign-in exposed the existing 20-person directory cutoff; the
+shared bounded projection is now 200 with a visible cap.
+
+The resident backend and Web were deployed from clean detached committed releases.
+Recovery configuration and running backend revision were read back, and unrelated
+Tailscale handlers remained unchanged. Browser acceptance covered search with no
+results, clearing and returning to a filtered directory, provenance expansion and
+complete dossiers. A 390px check exposed a notebook grid minimum-width issue;
+the corrected Web release wraps prose and scrolls only the platform table, including
+when the complete dossier is expanded. Existing Notion person pages received
+corresponding workspace links and were read back without changing child references
+or human review state. The owned synthetic database and verification-only session
+were cleaned up after retaining private evidence.
+
+Backend unit checks passed (970, with 531 environment-dependent integration checks
+skipped); Web checks passed (2,150), with focused renderer checks repeated after
+the narrow-screen fix. Type checks, documentation checks and production builds
+passed. These checks validate storage and reading behavior, not the correctness of
+the imported AI judgments or every linked external account.
