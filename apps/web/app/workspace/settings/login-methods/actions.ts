@@ -509,7 +509,7 @@ export async function completeStagedUnlink(form: FormData): Promise<void> {
     operation.intent !== "unlink_provider" ||
     !(await stagedScopeMatches(operation, scope))
   ) {
-    redirect("/workspace/settings?link=error");
+    redirect("/workspace/settings?section=account&link=error");
   }
   try {
     await completeLoginMethodChange({
@@ -519,10 +519,10 @@ export async function completeStagedUnlink(form: FormData): Promise<void> {
     await clearStagedAuth();
   } catch {
     await clearStagedAuth();
-    redirect("/workspace/settings?link=error");
+    redirect("/workspace/settings?section=account&link=error");
   }
   // Next's success redirect throws control flow; it is not a failed mutation.
-  redirect("/workspace/settings?link=done");
+  redirect("/workspace/settings?section=account&link=done");
 }
 
 /**

@@ -126,7 +126,7 @@ export default async function LoginPage({ searchParams }: {
     redirect(
       collisionHint
         ? loginContinuationTarget({ callbackUrl, provider: collisionHint.provider })
-        : "/workspace/settings?link=error",
+        : "/workspace/settings?section=account&link=error",
     );
   }
   const verificationSecret = parameters.verification?.trim() ?? "";

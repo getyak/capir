@@ -79,7 +79,7 @@ describe("ref-specific link cancellation", () => {
   it("clears only the matched operation and keeps its return hint as a neutral result", async () => {
     await sealAuthOperation(operation(), false);
     expect(await run("current-link")).toBe(
-      `/workspace/settings?link=cancelled&returnTo=${encodeURIComponent(macCallback)}`,
+      `/workspace/settings?section=account&link=cancelled&returnTo=${encodeURIComponent(macCallback)}`,
     );
     // The matched operation is cleared; the result is neutral and does not
     // reopen the connecting panel (no connect hint).
@@ -89,23 +89,23 @@ describe("ref-specific link cancellation", () => {
   it("drops a forged return hint sealed into the cancelled operation", async () => {
     await sealAuthOperation(operation({ returnTo: "https://evil.example/steal" }), false);
     const target = await run("current-link");
-    expect(target).toBe("/workspace/settings?link=cancelled");
+    expect(target).toBe("/workspace/settings?section=account&link=cancelled");
     expect(target).not.toContain("evil.example");
   });
 
   it("never clears or exposes a newer operation for a foreign or old ref", async () => {
     await sealAuthOperation(operation({ ref: "newer-flow", returnTo: macCallback }), false);
     for (const ref of ["older-flow", "current-link"]) {
-      expect(await run(ref)).toBe("/workspace/settings?link=error");
+      expect(await run(ref)).toBe("/workspace/settings?section=account&link=error");
       // The newer operation survives every foreign cancel.
       expect(boundary.jar.has(AUTH_OPERATION_COOKIE)).toBe(true);
     }
     // A missing ref never clears anything either.
-    expect(await run(null)).toBe("/workspace/settings?link=error");
+    expect(await run(null)).toBe("/workspace/settings?section=account&link=error");
     expect(boundary.jar.has(AUTH_OPERATION_COOKIE)).toBe(true);
   });
 
   it("reports a generic recoverable outcome when nothing is staged", async () => {
-    expect(await run("current-link")).toBe("/workspace/settings?link=error");
+    expect(await run("current-link")).toBe("/workspace/settings?section=account&link=error");
   });
 });

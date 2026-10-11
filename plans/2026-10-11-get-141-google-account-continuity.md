@@ -119,7 +119,7 @@ fences so it can run without weakening the inventory gate.
 3. Complete: review hardening — hints preserved through the unauthenticated
    Settings hop, the authenticated login entry, action/continuation failures and
    ref-tied cancellation; browser-safe redirect module; concise copy.
-4. Complete: integration tests (callback, action, page, component) and all
+4. Complete on the worker snapshot: integration tests (callback, action, page, component) and all
    repository gates for the web package, `pnpm docs:check`, and a production
    `next build` client-bundle check.
 5. Active: final independent review, PR/current-head gates, clean-source
@@ -157,6 +157,13 @@ fences so it can run without weakening the inventory gate.
   that a backend operation was cancelled. Copy refers to the visible Settings
   page and authoritative method states instead of claiming a cancellation
   receipt from the query string.
+
+- Final review repairs route all credential outcomes into `section=account`.
+  Tests feed the real completion/error/cancel producer URLs into `SettingsPage`
+  and assert the sign-in component mounts, rather than only matching a URL or
+  rendering that component in isolation. Missing claims and a thrown
+  `BackendSessionExpiredError` preserve the sealed navigation hints and clear
+  staged state without making a credential write.
 
 ## Limitations (not performed, not claimed)
 

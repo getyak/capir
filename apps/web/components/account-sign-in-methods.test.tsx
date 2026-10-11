@@ -348,7 +348,7 @@ describe("connect continuity outcomes (dom)", () => {
     window.history.replaceState(
       {},
       "",
-      `/workspace/settings?link=done&method=google&state=connected&returnTo=${encodeURIComponent(macCallback)}`,
+      `/workspace/settings?section=account&link=done&method=google&state=connected&returnTo=${encodeURIComponent(macCallback)}`,
     );
     await mount(<AccountSignInMethods initial={settings()} />);
     expect(host.textContent).toContain("这个登录方式当前已绑定");
@@ -361,7 +361,7 @@ describe("connect continuity outcomes (dom)", () => {
     window.history.replaceState(
       {},
       "",
-      `/workspace/settings?link=done&method=google&state=connected&returnTo=${encodeURIComponent(macCallback)}`,
+      `/workspace/settings?section=account&link=done&method=google&state=connected&returnTo=${encodeURIComponent(macCallback)}`,
     );
     // The authoritative readback shows Google is NOT connected.
     await mount(<AccountSignInMethods initial={providerOnlySettings()} />);
@@ -376,7 +376,7 @@ describe("connect continuity outcomes (dom)", () => {
     window.history.replaceState(
       {},
       "",
-      `/workspace/settings?link=error&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
+      `/workspace/settings?section=account&link=error&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
     );
     await mount(<AccountSignInMethods initial={providerOnlySettings()} />);
     expect(host.textContent).toContain("无法确认这次操作的结果");
@@ -393,7 +393,7 @@ describe("connect continuity outcomes (dom)", () => {
     window.history.replaceState(
       {},
       "",
-      `/workspace/settings?link=cancelled&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
+      `/workspace/settings?section=account&link=cancelled&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
     );
     await mount(<AccountSignInMethods initial={providerOnlySettings()} />);
     expect(host.textContent).toContain("已回到账号设置。登录方式以下方实际状态为准。");

@@ -134,11 +134,11 @@ describe("login continuity navigation hints", () => {
       }),
     ).toBe("/workspace/settings");
     expect(settingsLinkErrorTarget({ provider: "google", returnTo: macCallback })).toBe(
-      `/workspace/settings?link=error&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
+      `/workspace/settings?section=account&link=error&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
     );
     expect(
       settingsLinkErrorTarget({ provider: "password", returnTo: "https://evil.example" }),
-    ).toBe("/workspace/settings?link=error");
-    expect(settingsLinkErrorTarget({})).toBe("/workspace/settings?link=error");
+    ).toBe("/workspace/settings?section=account&link=error");
+    expect(settingsLinkErrorTarget({})).toBe("/workspace/settings?section=account&link=error");
   });
 });

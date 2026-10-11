@@ -224,7 +224,7 @@ describe("login page account continuity", () => {
     // never opens a connecting panel.
     jar.entries.clear();
     await expect(renderPage({ error: "Configuration" })).rejects.toThrow(/NEXT_REDIRECT/);
-    expect(redirectTarget()).toBe("/workspace/settings?link=error");
+    expect(redirectTarget()).toBe("/workspace/settings?section=account&link=error");
   });
 
   it("sends an already-authenticated connect hint to the preselected continuation", async () => {
@@ -257,7 +257,7 @@ describe("login page account continuity", () => {
     // A delayed error from an unknown round: no valid staged proof.
     await expect(renderPage({ error: "AccessDenied" })).rejects.toThrow(/NEXT_REDIRECT/);
     expect(redirectTarget()).toBe(
-      `/workspace/settings?link=error&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
+      `/workspace/settings?section=account&link=error&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
     );
     // The current operation is left untouched for its own pages to resolve.
     expect(jar.entries.has(AUTH_OPERATION_COOKIE)).toBe(true);

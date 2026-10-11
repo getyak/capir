@@ -56,7 +56,7 @@ describe("credential completion outcome", () => {
   it("does not catch the real success redirect after a staged unlink commits", async () => {
     boundary.complete.mockResolvedValue({ status: "unlinked", settings: {} });
     await expect(completeStagedUnlink(form())).rejects.toMatchObject({
-      digest: expect.stringContaining("/workspace/settings?link=done"),
+      digest: expect.stringContaining("/workspace/settings?section=account&link=done"),
     });
     expect(boundary.complete).toHaveBeenCalledExactlyOnceWith({ attempt_id: "credential-attempt", attempt_secret: "fixture-attempt-secret" });
     expect(await readAuthOperation()).toBeNull();
@@ -65,7 +65,7 @@ describe("credential completion outcome", () => {
   it("keeps a lost unlink response uncertain and never repeats the mutation", async () => {
     boundary.complete.mockRejectedValue(new TypeError("Response lost after server commit"));
     await expect(completeStagedUnlink(form())).rejects.toMatchObject({
-      digest: expect.stringContaining("/workspace/settings?link=error"),
+      digest: expect.stringContaining("/workspace/settings?section=account&link=error"),
     });
     expect(boundary.complete).toHaveBeenCalledTimes(1);
   });
@@ -79,7 +79,7 @@ describe("credential completion outcome", () => {
     });
     boundary.complete.mockResolvedValue({ status: "unlinked", settings: {} });
     await expect(completeStagedUnlink(submitted)).rejects.toMatchObject({
-      digest: expect.stringContaining("/workspace/settings?link=error"),
+      digest: expect.stringContaining("/workspace/settings?section=account&link=error"),
     });
     expect(boundary.complete).not.toHaveBeenCalled();
   });

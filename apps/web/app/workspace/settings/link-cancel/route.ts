@@ -19,8 +19,8 @@ export async function GET(request: Request): Promise<never> {
     const returnTo = continuityReturnTo(operation.returnTo);
     await clearStagedAuth();
     redirect(
-      `/workspace/settings?link=cancelled${returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : ""}`,
+      `/workspace/settings?section=account&link=cancelled${returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : ""}`,
     );
   }
-  redirect("/workspace/settings?link=error");
+  redirect("/workspace/settings?section=account&link=error");
 }

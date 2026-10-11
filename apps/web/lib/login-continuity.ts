@@ -109,7 +109,7 @@ export function settingsLinkErrorTarget(input: {
   const provider = connectProviderFrom(input.provider);
   const returnTo = continuityReturnTo(input.returnTo);
   return (
-    "/workspace/settings?link=error" +
+    "/workspace/settings?section=account&link=error" +
     (provider ? `&connect=${provider}` : "") +
     (returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : "")
   );

@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 
 const fail = async (tail = ""): Promise<never> => {
   await clearStagedAuth();
-  redirect(`/workspace/settings?link=error${tail}`);
+  redirect(`/workspace/settings?section=account&link=error${tail}`);
 };
 
 /**
@@ -48,7 +48,8 @@ export async function GET(): Promise<never> {
     (operation?.intent === "link_provider" && operation.targetProvider
       ? `&connect=${operation.targetProvider}`
       : "") + doneTail;
-  if (!operation || !claims) return fail();
+  if (!operation) return fail();
+  if (!claims) return fail(errorTail);
   // The exact original session must still be the caller's session, and the
   // flow must still be inside its frozen absolute lifetime.
   if (
@@ -58,10 +59,10 @@ export async function GET(): Promise<never> {
     return fail(errorTail);
   }
 
-  const client = await authenticatedBackendClient();
-  if (!client) return fail(errorTail);
   let settings;
   try {
+    const client = await authenticatedBackendClient();
+    if (!client) return fail(errorTail);
     settings = await client.accountSettings();
   } catch {
     return fail(errorTail);
@@ -121,7 +122,7 @@ export async function GET(): Promise<never> {
       if (!recoveryValidation) return fail(errorTail);
       // The proof stays sealed and one-use; the authenticated recovery flow
       // that requested this reauthentication consumes it next.
-      redirect("/workspace/settings?link=verified");
+      redirect("/workspace/settings?section=account&link=verified");
     }
 
     if (operation.intent === "set_password" || operation.intent === "change_password") {
@@ -167,7 +168,7 @@ export async function GET(): Promise<never> {
       });
       await clearStagedAuth();
       redirect(
-        `/workspace/settings?link=done&method=${encodeURIComponent(operation.unlinkProvider ?? "")}&state=disconnected${doneTail}`,
+        `/workspace/settings?section=account&link=done&method=${encodeURIComponent(operation.unlinkProvider ?? "")}&state=disconnected${doneTail}`,
       );
     }
 
@@ -229,7 +230,7 @@ export async function GET(): Promise<never> {
     });
     await clearStagedAuth();
     redirect(
-      `/workspace/settings?link=done&method=${encodeURIComponent(operation.targetProvider ?? "")}&state=connected${doneTail}`,
+      `/workspace/settings?section=account&link=done&method=${encodeURIComponent(operation.targetProvider ?? "")}&state=connected${doneTail}`,
     );
   } catch (error) {
     if (
