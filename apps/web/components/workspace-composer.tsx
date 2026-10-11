@@ -48,6 +48,9 @@ import {
   type SidebarPerson,
 } from "@/lib/workspace-sidebar";
 import { useWorkspaceDirectory } from "./workspace-search";
+import { reconcileComposerMentions, type ComposerMention } from "@/lib/composer-mentions";
+import { ComposerPersonReference } from "./composer-person-reference";
+import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import styles from "./workspace-composer.module.css";
 
 type MenuItem = {
@@ -131,6 +134,7 @@ export function WorkspaceComposer({
   const meterId = `${base}-meter`;
   const mentionNoteId = `${base}-mention`;
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const mirror = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const pickerContext = useRef<{ binding: string | null } | null>(null);
@@ -152,6 +156,14 @@ export function WorkspaceComposer({
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const [overflowSignature, setOverflowSignature] = useState<string | null>(null);
+  const [mentionState, setMentionState] = useState<{ binding: string | null; value: string; records: ComposerMention[] }>({ binding, value, records: [] });
+  // Render-time scope fence: no previous account's label survives a binding
+  // change. Edits preserve only untouched explicitly selected spans.
+  const selectedMentions = mentionState.binding === binding
+    ? reconcileComposerMentions(mentionState.value, value, mentionState.records) : [];
+  if (mentionState.binding !== binding || mentionState.value !== value) {
+    setMentionState({ binding, value, records: selectedMentions });
+  }
 
   const active = suggestionsEnabled && !disabled && !readOnly;
   const fileIntake = Boolean(onFiles) && !disabled && !readOnly;
@@ -161,7 +173,10 @@ export function WorkspaceComposer({
   );
   const signature = trigger ? `${trigger.kind}\u0000${value}` : null;
   const mentionOpen = trigger?.kind === "mention" && dismissed !== signature;
-  const directory = useWorkspaceDirectory(binding, mentionOpen);
+  const directory = useWorkspaceDirectory(binding, mentionOpen || selectedMentions.length > 0);
+  const referencePeople = directory.failed || directory.loading || !directory.data ? []
+    : searchSidebarPeople(directory.data.people, "", Number.MAX_SAFE_INTEGER);
+  const visibleMentions = selectedMentions.filter(mention => referencePeople.some(person => person.id === mention.person.id));
 
   const commands =
     trigger?.kind === "slash" ? filterSlashCommands(trigger.query) : [];
@@ -254,11 +269,21 @@ export function WorkspaceComposer({
       element.style.height = "auto";
       element.style.height = `${Math.max(minimum, Math.min(element.scrollHeight, limit))}px`;
       element.style.overflowY = element.scrollHeight > limit ? "auto" : "hidden";
+      if (mirror.current) {
+        mirror.current.style.width = `${element.clientWidth}px`;
+        mirror.current.scrollTop = element.scrollTop;
+      }
     }
     resize();
+    let observedWidth = element.clientWidth;
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+      if (element.clientWidth !== observedWidth) { observedWidth = element.clientWidth; resize(); }
+    });
+    observer?.observe(element);
     window.addEventListener("resize", resize);
     window.visualViewport?.addEventListener("resize", resize);
     return () => {
+      observer?.disconnect();
       window.removeEventListener("resize", resize);
       window.visualViewport?.removeEventListener("resize", resize);
     };
@@ -375,6 +400,15 @@ export function WorkspaceComposer({
       try { document.execCommand("insertText", false, insert); } catch { /* unsupported host */ }
     }
     setDismissed(`${trigger.kind}\u0000${result.value}`);
+    if (item.kind === "mention" && item.person) {
+      const text = insert.trimEnd();
+      setMentionState({ binding, value: result.value, records: [
+        ...reconcileComposerMentions(value, result.value, selectedMentions.filter(
+          mention => mention.end <= trigger.start || mention.start >= trigger.end,
+        )),
+        { start: trigger.start, end: trigger.start + text.length, text, person: item.person },
+      ].sort((a, b) => a.start - b.start) });
+    }
     onValueChange(result.value);
   }
 
@@ -624,6 +658,7 @@ export function WorkspaceComposer({
         onMouseEnter={() => setActiveIndex(index)}
         role="option"
       >
+        {item.person ? <PersonDirectoryAvatar id={item.person.id} label={item.person.label} url={item.person.avatarUrl} size={28} /> : null}
         <span className={styles.itemText}>
           <strong>{item.title}</strong>
           <small>{item.detail}</small>
@@ -731,6 +766,20 @@ export function WorkspaceComposer({
         {label}
       </label>
       {layout === "inline" ? <div className={styles.inlineLeading}>{addMenu}{footerStart}</div> : null}
+      <div className={styles.editor}>
+      <div className={styles.mirror} ref={mirror} aria-hidden="true" data-composer-mention-mirror>
+        {(() => {
+          const parts: ReactNode[] = [];
+          let end = 0;
+          for (const mention of visibleMentions) {
+            parts.push(value.slice(end, mention.start));
+            parts.push(<mark key={`${mention.start}:${mention.person.id}`} className={styles.mentionMark}>{mention.text}</mark>);
+            end = mention.end;
+          }
+          parts.push(value.slice(end), "\u200b");
+          return parts;
+        })()}
+      </div>
       <textarea
         aria-activedescendant={
           menuOpen && items.length ? `${menuId}-option-${highlighted}` : undefined
@@ -775,13 +824,21 @@ export function WorkspaceComposer({
         onKeyDown={handleKeyDown}
         onKeyUp={syncCaret}
         onSelect={syncCaret}
+        onScroll={event => { if (mirror.current) { mirror.current.scrollTop = event.currentTarget.scrollTop; mirror.current.scrollLeft = event.currentTarget.scrollLeft; } }}
         placeholder={placeholder}
         readOnly={readOnly}
         ref={textarea}
         rows={layout === "inline" ? 1 : rows}
         value={value}
       />
+      </div>
       {layout === "inline" ? <div className={styles.inlineTrailing}>{footerEnd}</div> : null}
+      {visibleMentions.length > 0 ? <div className={styles.selectedReferences} role="group" aria-label="已选择的文字引用">
+        {[...new Map(visibleMentions.map(mention => [mention.person.id, mention])).values()].map(mention => {
+          const person = referencePeople.find(person => person.id === mention.person.id)!;
+          return <ComposerPersonReference key={person.id} person={person} disabled={disabled || readOnly} />;
+        })}
+      </div> : null}
 
       {pasteError ? <p className={styles.overflow} role="alert">{pasteError}</p> : null}
       {fileError ? <p className={styles.overflow} role="alert">{fileError}</p> : null}

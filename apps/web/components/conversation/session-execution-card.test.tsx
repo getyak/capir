@@ -126,6 +126,18 @@ it("keeps waiting, stopping and terminal outcomes distinct from active processin
       endedAt: phase === "queued" || phase === "stopping" ? null : "2026-10-05T01:00:03Z",
     }));
     expect(html).not.toContain("正在处理");
+    expect(html).not.toContain('data-processing-animated="true"');
     expect(html.includes('data-live="true"')).toBe(phase === "queued" || phase === "stopping");
   }
+});
+
+it("animates only a live running processing label", () => {
+  const live = renderToStaticMarkup(createElement(SessionExecutionCard, {
+    phase: "running", stage: "answer", startedAt: "2026-10-12T00:00:00Z", milestones: [],
+  }));
+  expect(live).toContain('data-processing-animated="true"');
+  const ended = renderToStaticMarkup(createElement(SessionExecutionCard, {
+    phase: "running", stage: "answer", startedAt: "2026-10-12T00:00:00Z", endedAt: "2026-10-12T00:00:03Z", milestones: [],
+  }));
+  expect(ended).not.toContain('data-processing-animated="true"');
 });
