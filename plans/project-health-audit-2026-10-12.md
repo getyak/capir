@@ -21,7 +21,8 @@
   recovery `20261012-050607-5d7531a8` passed review after two bounded parent
   corrections; search/fetch/profile each dispatched once at a maximum of one
   across actual command process death and same-Run recovery.
-- Remaining order: error logging/Web admission; durable diagnostic privacy;
+- Remaining order: error logging/Web admission; journal integrity recovery;
+  durable diagnostic privacy;
   model-context diagnostic privacy; dead Web retirement/meeting identity
   admission; knowledge/tooling ownership. Review and verify each diff before
   integration.
@@ -506,3 +507,24 @@ will explicitly verify queued execution and ordered journal results.
   batch; immutable publication does not imply durable call-budget reservation.
 - Scope remains local filesystem/process interruption, not distributed locking
   or power-loss durability. Resident rollout remains pending final delivery.
+
+## Interrupted checkpoint/journal integrity proof (PH-13, P2)
+
+The parent held the actual public CLI and person-image store immediately after
+its result checkpoint was durably written at sequence 1, before its first tool
+event append. After SIGKILL of the owned child and fresh same-Run recovery, both
+returned `no_action` with journal sequences `[2, 3]`: the original tool event was
+absent. One synthetic provider operation had occurred. No live provider, private
+image or production incident was involved.
+
+This does not invalidate the accepted call-cap repair: the consumed allowance
+remains durable. It exposes a separate evidence-integrity boundary. The queued
+repair must reject inconsistent checkpoint/journal or terminal evidence before
+provider execution or successful replay, preserve valid reserved-call recovery,
+and avoid manufacturing missing events or automatically replaying operations.
+Arbitrary checkpoint/journal publication is not a crash-atomic transaction.
+
+Before evidence: `research-journal-interruption-before-proof.log` in the private
+task artifact directory; both actual commands were tested against the accepted
+integration build. Status: open; separate sequential Pi outcome, followed by
+independent command-level verification.
