@@ -36,6 +36,7 @@ it("keeps the native editor and plain send payload while showing the exact direc
   const reference = host.querySelector<HTMLButtonElement>('[aria-label="查看 陈曦 的引用信息"]')!;
   await act(async () => reference.click());
   const preview = document.querySelector('[aria-label="陈曦 的简要资料"]')!;
+  expect(preview.contains(document.activeElement)).toBe(true);
   expect(preview.textContent).toContain("研究交流");
   expect(preview.querySelector("a")?.getAttribute("href")).toBe("/workspace/people/person-two");
   expect(preview.textContent).toContain("不会自动绑定身份或读取人物记忆");
