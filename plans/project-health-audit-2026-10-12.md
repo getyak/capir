@@ -456,3 +456,25 @@ remain the authority; no automatic allowance refund or retry authorization is
 added. Actual forked command recovery and runner checkpoint-failure regressions
 are required. This finding concerns those call caps, not an exactly-once remote
 effect or cumulative model-billing guarantee.
+
+
+## Concurrent research-tool journal ordering proof (PH-12, P2)
+
+Synthetic providers enqueue two valid callbacks through the supported provider
+interface with `Promise.allSettled`. Both shipped public CLI and person-image
+commands use real stores, with a checkpoint wrapper holding the first write
+until the second has completed. Two operations are authorized and dispatched,
+but each command fails with a journal sequence mismatch. This is a reproducible
+callback-concurrency scenario; no live SDK/provider or production incident is
+claimed. The Claude adapter passes those callbacks independently and does not
+provide a Run serialization barrier.
+
+The research recovery batch will serialize whole tool execution within each Run
+through counter reservation, gateway dispatch, checkpoint and journal append,
+then drain admitted work before provider/terminal settlement. Different Runs
+remain independent; fatal execution rejection blocks later queued work. This
+ordering is also needed to keep PH-11's pre-dispatch checkpoints from replacing
+newer counter snapshots during concurrent callbacks. Existing denial, abort and
+terminal semantics remain covered by tests. The before probes intentionally
+require concurrent writes and are not valid after-fix tests; new regressions
+will explicitly verify queued execution and ordered journal results.
