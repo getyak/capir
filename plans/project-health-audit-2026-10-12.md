@@ -13,9 +13,9 @@
 - Accepted so far: audit inventory, independent synthetic before-change probes,
   and dependency safety batch `81324609` after independent clean-install checks.
   Resident deployment and final delivery remain outstanding.
-- Next Pi batch: immutable research state; freeze its base after committing
-  this integration receipt. Dependency batch `20261012-020739-2030b035` passed
-  review after one test-target correction.
+- Active Pi batch: immutable research state `20261012-030523-ed97720c`,
+  frozen base `bbf75013b3980b4e1d85bc40742efac9aa91b2cd`. Dependency batch
+  `20261012-020739-2030b035` passed review after one test-target correction.
 - Remaining order: immutable research state; error logging/Web admission;
   durable diagnostic privacy; dead Web retirement/meeting identity admission;
   knowledge/tooling ownership. Review and verify each diff before integration.
@@ -350,7 +350,10 @@ this metadata repair.
   use clean dependency trees and verify actual patch behavior. The failed run
   is retained as evidence and is not counted as a pass.
 - Backend Docker dependency layer now includes `patches/` before install;
-  final clean image and portable CLI packaging are still unverified.
+  final clean image remains unverified. Codex real portable capir packaging
+  passes 6/6 tests: official Node download and SHA verification, production
+  dependency closure, confined archive extraction and relocated execution.
+  The patch regression gate still passes 10/10 after deploy-tree restoration.
 - Full graph still reports the development-only upstream braces advisory;
   the local patch deliberately rejects nesting above 100 and is a mitigation,
   not an upstream released fix. Product production graph is clean.
@@ -359,3 +362,27 @@ this metadata repair.
   reads or authentication behavior. ESLint10 peer-range warnings are a known
   compatibility boundary: current Next configs already use @eslint/compat
   and actual lint passes. No lint downgrade or suppression is planned.
+
+## Extended model-context diagnostic proof (PH-09)
+
+Two further actual synthetic probes confirm arbitrary error content reaches
+model-facing tool results: `currentImageInspection.execute` preserves a private
+`IMAGE_INSPECTION_*` string, and `runPublicResearchAgent` returns a generic
+gateway exception message to the actual scripted provider callback. Both
+observations pass in the corrected narrow probe (2/2). The initial probe also
+incorrectly expected that message in persisted journal output; it failed that
+assertion. Journal events/outputs are actually bounded and remain free of the
+canary, which the corrected probe explicitly verifies. No journal leak is
+claimed for this generic tool error.
+
+Static producer traces show untyped transport messages interpolated into typed
+search/direct-fetch/Firecrawl errors, then relayed by local gateways. PH-09 scope
+now includes fixed unknown-error fallbacks in all three Agent runners, a finite
+image diagnostic vocabulary, and fixed transport failures at those actual host
+producers. Existing typed policy feedback, approved evidence, cancellation,
+source revocation, budgets and terminal semantics remain required. No external
+provider was called. Temporary source probes were removed after evidence capture.
+
+The owned baseline browser was gracefully stopped after its rendered daily
+workspace receipt was retained. The isolated expiring test run remains available
+for reuse while valid; final stop/readback cleanup remains outstanding.
