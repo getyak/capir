@@ -12,17 +12,18 @@
   `e751b37a8692a33387b7325004d7532face32021`.
 - Accepted so far: audit inventory, independent synthetic before-change probes,
   dependency safety batch `81324609` after independent clean-install checks,
-  and immutable research state `1f5d50a1` after independent review and 133 host tests.
+  immutable research state `1f5d50a1` after independent review and 133 host tests,
+  and research allowance/sequencing `273ed9a1` after 414 Agent and 142 host tests
+  plus actual same-Run process-interruption probes.
   Resident deployment and final delivery remain outstanding.
-- Active Pi batch: interrupted research-call budget recovery and per-Run tool
-  sequencing `20261012-050607-5d7531a8`, frozen base
-  `7a30ba0d4922d02ab9cef728d0cd1805bb8e9535`. Immutable research state
-  `20261012-030523-ed97720c` passed review
-  after one consolidated Pi repair and three bounded parent corrections.
-- Remaining order: interrupted research-call budget recovery; error logging/Web admission;
-  durable diagnostic privacy; model-context diagnostic privacy; dead Web
-  retirement/meeting identity admission; knowledge/tooling ownership. Review
-  and verify each diff before integration.
+- Next Pi batch: backend error logging and Web admission. Research allowance
+  recovery `20261012-050607-5d7531a8` passed review after two bounded parent
+  corrections; search/fetch/profile each dispatched once at a maximum of one
+  across actual command process death and same-Run recovery.
+- Remaining order: error logging/Web admission; durable diagnostic privacy;
+  model-context diagnostic privacy; dead Web retirement/meeting identity
+  admission; knowledge/tooling ownership. Review and verify each diff before
+  integration.
 - Completion evidence: final local checks and real surface acceptance; latest
   PR-head applicable CI/security/branch gates; confirmed merge; clean committed
   resident API, Agent Host, Web and changed browser-executor revisions verified
