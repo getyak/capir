@@ -1,4 +1,5 @@
-.notebook { display: grid; gap: 1.5rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border, #d5d9d3); }
+.notebook { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 1.5rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border, #d5d9d3); overflow-wrap: anywhere; }
+.notebook > * { min-width: 0; }
 .header h2 { font-size: 1.25rem; font-weight: 600; margin: 0 0 .5rem; }
 .header p, .note p, .platforms p, .sources p { line-height: 1.7; margin: .5rem 0 0; white-space: pre-wrap; }
 .header p, .notebook small { color: var(--text-secondary, #69706c); font-size: .8rem; }
