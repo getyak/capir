@@ -14,7 +14,8 @@
   and dependency safety batch `81324609` after independent clean-install checks.
   Resident deployment and final delivery remain outstanding.
 - Active Pi batch: immutable research state `20261012-030523-ed97720c`,
-  frozen base `bbf75013b3980b4e1d85bc40742efac9aa91b2cd`. Dependency batch
+  frozen base `bbf75013b3980b4e1d85bc40742efac9aa91b2cd`, now in its first
+  consolidated repair after independent review. Dependency batch
   `20261012-020739-2030b035` passed review after one test-target correction.
 - Remaining order: immutable research state; error logging/Web admission;
   durable diagnostic privacy; model-context diagnostic privacy; dead Web
@@ -393,3 +394,34 @@ The newly confirmed model-context paths are assigned to a separate sequential
 Agent runner fallbacks, current image inspection and three host transport
 producers/tests. This keeps each reviewed change bounded while preserving one
 writer and one integration/review owner. The overall delivery remains pending.
+
+
+## Persistence review checkpoint — changes requested
+
+The first Pi implementation adds immutable hard-link publication and per-Run
+SQLite admission around the real CLI and person-image entrypoints. Its own
+118-test suite passes, but the runner initially stopped at scope validation:
+a strict TypeScript declaration companion to the owned MJS process fixture was
+necessary. The delivery owner inspected and narrowly approved that test-only
+companion; provider/model, base, limits and cumulative accounting are unchanged.
+This is not an accepted implementation receipt.
+
+Independent exact-source snapshots and synthetic probes reproduce further
+repair requirements in the new code:
+
+- Opening a FIFO with blocking `O_RDONLY` stalls before the regular-file check;
+  the owned probe child exited only at its explicit kill deadline.
+- Both writers delete a pre-existing, unowned temporary sentinel when exclusive
+  creation fails with `EEXIST`. Cleanup must follow successful ownership.
+- The person store accepts invalid nested candidates and manifest members;
+  terminal parsing accepts `artifact_created` without an artifact ID. These are
+  corrupt deserialization successes. The service response schema separately
+  rejects invalid artifact output; no escaped confirmed identity is claimed.
+- The test build fixture steals a lock based only on age and lacks general
+  owned-child cleanup before deleting temporary state after assertion failures.
+- The shared fingerprint guard newly accepts uppercase digests, unlike the
+  original canonical lowercase validators.
+
+Pi is repairing these five findings in the same task. Acceptance requires
+meaningful regressions, unfiltered required checks, and delivery-owner re-review
+and integration proof. No later implementation batch or PR has started.
