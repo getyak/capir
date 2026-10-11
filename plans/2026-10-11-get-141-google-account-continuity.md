@@ -8,22 +8,24 @@ that existing records are preserved and no empty account is created, one
 explicit action verifies the original login method and connects Google (or
 Apple) on the authenticated Settings surface, and the original safe callback —
 including CLI and Mac browser confirmations — continues only after the link is
-verified by backend readback. No backend changes, no auto email linking, no
-data merge; historical duplicate resolution keeps its existing protected
-conflict screen.
+verified by backend readback. No automatic email linking or bulk data merge.
+Historical nonempty duplicates keep the protected conflict screen; the existing
+verified empty-duplicate transfer also receives its missing MCP retirement
+fences so it can run without weakening the inventory gate.
 
 ## Verified baseline and important unknowns
 
 - Worktree at `71c86a91`; existing web suite green before edits (267 files,
-  2092 tests). Web only: `apps/web/*`, `docs/operations/account-access.md`,
-  this plan.
+  2092 tests). MiMo owns the bounded Web batch; Codex owns integration, the
+  backend migration and CI guard, independent acceptance, and delivery.
 - Collision wiring: the backend returns `GOOGLE_ACCOUNT_LINK_REQUIRED` /
   `APPLE_ACCOUNT_LINK_REQUIRED` when a verified provider email already belongs
   to an account; `postOAuthEndpoint` maps it to `OAuthAccountLinkRequired`, the
   jwt callback rethrows `AccountLinkRequired` (static type
   `OAuthAccountNotLinked`), and Auth.js redirects to `/login?error=…` with a
-  red generic message. The original callback survives only via the sealed
-  Auth.js `talent-signal.callback-url` cookie (`oauthRetryTarget`).
+  red generic message. The original callback is recovered from the HttpOnly
+  Auth.js `talent-signal.callback-url` cookie and validated as a same-origin
+  navigation hint (`oauthRetryTarget`); that cookie is not identity proof.
 - `@auth/core` 0.41.3 (next-auth `5.0.0-beta.32`) inspected at the installed
   source: an `AuthError` thrown from the `jwt` callback aborts the callback
   action before any cookie is pushed; `sessionStore.clean()` runs only on
@@ -39,6 +41,12 @@ conflict screen.
   `/workspace/settings/link-complete`, success only after authoritative
   `accountSettings` readback. The historical conflict screen and reconciliation
   stay untouched.
+- PostgreSQL exposed a baseline defect: 28 identity tests passed and 11 failed
+  because six newer MCP tables lacked the retirement fence required by the
+  full duplicate-account inventory. Migration 098 adds the existing OLD/NEW
+  account-locking fence to all six tables; the complete suite then passed
+  39/39. CI now executes this suite against its migrated account-proof database.
+  The reviewed migration is frozen in the architecture checksum.
 
 ## Design
 
@@ -114,13 +122,16 @@ conflict screen.
 4. Complete: integration tests (callback, action, page, component) and all
    repository gates for the web package, `pnpm docs:check`, and a production
    `next build` client-bundle check.
-5. Parent-owned: independent review, live provider round trip, resident
-  deployment from clean committed source with live-revision verification, UI
-  acceptance and issue closure.
+5. Active: final independent review, PR/current-head gates, clean-source
+   resident Web/backend deployment, live revision and UI verification, owned
+   fixture cleanup, and Linear closure. Operational receipts are recorded on
+   [GET-141](https://linear.app/getyak/issue/GET-141) and the task's permanent
+   sanitized evaluation artifacts.
 
 ## Verification
 
-- `pnpm --filter @talent-signal/web test` — 274 files / 2142 tests green,
+- Worker snapshot: `pnpm --filter @talent-signal/web test` — 274 files /
+  2142 tests green,
   including real-callback collision staging, real page composition (sealed vs
   forged vs expired hints, CLI/Mac callback preservation, authenticated and
   signed-out continuation redirects, staged-error hint recovery, refusal to
@@ -136,6 +147,16 @@ conflict screen.
   chunks contain no Node built-ins (browser-safety of the hint modules proven
   in the production client bundle, not just Vitest).
 - `pnpm docs:check` — documentation gate.
+- Backend build and the real PostgreSQL account-identity suite — 39/39 passed;
+  the independent backend review found no actionable issues. Final full-diff
+  review and post-integration checks remain separate gates.
+- A return-only cancellation callback also preserves the fixed Settings path
+  after session expiry. CLI navigation coverage uses the actual
+  `/capir/authorize` route and public state/PKCE/origin fields from the producer.
+- Public cancellation flags only select a return view; they cannot establish
+  that a backend operation was cancelled. Copy refers to the visible Settings
+  page and authoritative method states instead of claiming a cancellation
+  receipt from the query string.
 
 ## Limitations (not performed, not claimed)
 
@@ -144,5 +165,9 @@ conflict screen.
   the wiring we own and do not establish a full OAuth end-to-end pass.
 - Full live Apple OAuth is not an acceptance requirement for this Google issue
   and was not performed.
-- Resident deployment, live-revision verification, screenshot-level UI
-  acceptance and issue closure remain parent-owned.
+- Planned live evidence distinguishes a synthetic sealed navigation hint from
+  an actual provider collision. Original password sign-in and step-up, real
+  Google authorization dispatch, ref-specific product cancellation, and
+  authoritative identity readback will be tested on an owned disposable
+  identity. No real Google identity will be bound or presented as an OAuth
+  completion receipt.

@@ -300,12 +300,13 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp, conn
       verifiedMethod?.state === 'connected' &&
       (linkResult.state ? verifiedMethod.state === linkResult.state : true),
   );
+  // A cancelled URL is a navigation hint, not a backend cancellation receipt.
   const notice = linkResult?.status === 'done'
     ? (verifiedMethod?.state === 'connected' && (linkResult.state ? verifiedMethod.state === linkResult.state : true))
       ? '这个登录方式当前已绑定，可以用它登录同一个账户。'
       : '请核对下方登录方式的实际状态。'
     : linkResult?.status === 'cancelled'
-      ? '已取消这次连接。'
+      ? '已回到账号设置。登录方式以下方实际状态为准。'
       : linkResult?.status === 'error'
         ? '暂时无法确认这次操作的结果。请核对下方登录方式的实际状态，再决定是否重新验证。'
         : '';

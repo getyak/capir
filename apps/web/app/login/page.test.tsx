@@ -128,7 +128,7 @@ describe("login page account continuity", () => {
     // Concise neutral copy: title, preserved records, explicit action.
     expect(html).toContain("继续使用已有账号");
     expect(html).toContain("联系人和会话会保留在同一个账号中");
-    // No red generic error and no account-existence claim.
+    // No red generic error and no private account details.
     expect(html).not.toContain("这个邮箱已有账号");
     // The original CLI/Mac callback travels with both explicit actions.
     expect(anchorHref(html, "data-connect-continuity-primary")).toBe(
@@ -139,7 +139,32 @@ describe("login page account continuity", () => {
     );
   });
 
-  it("recovers the original callback from the sealed Auth.js cookie", async () => {
+  it("keeps the CLI authorization query through collision guidance and original login", async () => {
+    // Same route and fields produced by apps/cli/src/login.ts; only public
+    // state/PKCE challenge travels to Web, never the CLI verifier.
+    const cliCallback = "/capir/authorize?" + new URLSearchParams({
+      schema_version: "capir-auth.v2",
+      redirect_uri: "http://127.0.0.1:49152/capir/callback",
+      state: "a".repeat(43),
+      code_challenge: "b".repeat(43),
+      code_challenge_method: "S256",
+      web_origin: "https://app.example",
+      backend_origin: "https://backend.example.invalid",
+      client_label: "GET-141",
+    });
+    await sealLoginCollisionHint("google");
+    const panel = await renderPage({ error: "OAuthAccountNotLinked", callbackUrl: cliCallback });
+    const entry = new URL(anchorHref(panel, "data-connect-continuity-primary"), "https://app.example");
+    expect(entry.searchParams.get("callbackUrl")).toBe(cliCallback);
+    const login = await renderPage({ connect: entry.searchParams.get("connect")!, callbackUrl: cliCallback });
+    const redirectTo = login.match(/name="redirectTo" value="([^"]+)"/)?.[1]?.replaceAll("&amp;", "&");
+    expect(redirectTo).toBeDefined();
+    const destination = new URL(redirectTo!, entry.origin);
+    expect(destination.pathname).toBe("/workspace/settings");
+    expect(destination.searchParams.get("returnTo")).toBe(cliCallback);
+  });
+
+  it("recovers a safe original callback from the Auth.js navigation cookie", async () => {
     await sealLoginCollisionHint("apple");
     jar.entries.set(
       "talent-signal.callback-url",

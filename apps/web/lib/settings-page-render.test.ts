@@ -152,6 +152,21 @@ describe("settings page server composition", () => {
     expect(redirect).toHaveBeenCalledWith("/login?callbackUrl=%2Fworkspace%2Fsettings");
   });
 
+  it("keeps a return-only cancellation destination after the session expires", async () => {
+    auth.mockResolvedValue(null);
+    for (const section of [undefined, "overview", "account"]) {
+      redirect.mockClear();
+      await expect(SettingsPage({
+        searchParams: Promise.resolve({ section, returnTo: "/workspace/people" }),
+      })).rejects.toThrow("NEXT_REDIRECT");
+      const login = new URL(String(redirect.mock.calls[0][0]), "https://app.example");
+      const callback = new URL(login.searchParams.get("callbackUrl")!, login.origin);
+      expect(callback.pathname).toBe("/workspace/settings");
+      expect(callback.searchParams.get("returnTo")).toBe("/workspace/people");
+      expect(callback.searchParams.has("connect")).toBe(false);
+    }
+  });
+
   it("opens the preselected connecting panel from validated hints and drops forged ones", async () => {
     auth.mockResolvedValue({ user: { name: "林顾问" } });
     loadAccountSettings.mockResolvedValue(account);

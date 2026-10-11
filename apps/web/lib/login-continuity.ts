@@ -90,11 +90,11 @@ export function settingsConnectPath(input: {
 }): string {
   const separator = input.returnPath.includes("?") ? "&" : "?";
   const returnTo = continuityReturnTo(input.returnTo);
-  return (
-    input.returnPath +
-    (input.connect ? `${separator}connect=${input.connect}` : "") +
-    (returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : "")
-  );
+  const query = [
+    input.connect ? `connect=${input.connect}` : "",
+    returnTo ? `returnTo=${encodeURIComponent(returnTo)}` : "",
+  ].filter(Boolean).join("&");
+  return input.returnPath + (query ? separator + query : "");
 }
 
 /**

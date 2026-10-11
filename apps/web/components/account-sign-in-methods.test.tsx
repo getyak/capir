@@ -396,7 +396,8 @@ describe("connect continuity outcomes (dom)", () => {
       `/workspace/settings?link=cancelled&connect=google&returnTo=${encodeURIComponent(macCallback)}`,
     );
     await mount(<AccountSignInMethods initial={providerOnlySettings()} />);
-    expect(host.textContent).toContain("已取消这次连接。");
+    expect(host.textContent).toContain("已回到账号设置。登录方式以下方实际状态为准。");
+    expect(host.textContent).not.toContain("已取消这次连接。");
     // Cancellation claims nothing and never reopens the connecting panel,
     // even when a connect hint is forged alongside it.
     expect(host.textContent).not.toContain("继续之前的工作");

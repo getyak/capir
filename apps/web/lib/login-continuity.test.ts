@@ -60,8 +60,9 @@ describe("login continuity navigation hints", () => {
   it("preserves safe same-origin callbacks, including CLI/Mac browser callbacks", () => {
     for (const callback of [
       "/desktop-auth/authorize?attempt=10000000-0000-4000-8000-000000000001&state=aB3_-cD9",
+      "/capir/authorize?schema_version=capir-auth.v2&redirect_uri=http%3A%2F%2F127.0.0.1%3A49152%2Fcapir%2Fcallback&state=aB3_-cD9&code_challenge=public-pkce-challenge&code_challenge_method=S256&web_origin=https%3A%2F%2Fapp.example&backend_origin=https%3A%2F%2Fapi.example&client_label=GET-141",
       "/workspace/pursuits/42",
-      "/workspace/settings?section=cli",
+      "/workspace/settings?section=account",
     ]) {
       const target = loginContinuationTarget({ callbackUrl: callback, provider: "google" });
       expect(target).toBe(
