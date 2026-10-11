@@ -17,8 +17,9 @@
   frozen base `bbf75013b3980b4e1d85bc40742efac9aa91b2cd`. Dependency batch
   `20261012-020739-2030b035` passed review after one test-target correction.
 - Remaining order: immutable research state; error logging/Web admission;
-  durable diagnostic privacy; dead Web retirement/meeting identity admission;
-  knowledge/tooling ownership. Review and verify each diff before integration.
+  durable diagnostic privacy; model-context diagnostic privacy; dead Web
+  retirement/meeting identity admission; knowledge/tooling ownership. Review
+  and verify each diff before integration.
 - Completion evidence: final local checks and real surface acceptance; latest
   PR-head applicable CI/security/branch gates; confirmed merge; clean committed
   resident API, Agent Host, Web and changed browser-executor revisions verified
@@ -386,3 +387,9 @@ provider was called. Temporary source probes were removed after evidence capture
 The owned baseline browser was gracefully stopped after its rendered daily
 workspace receipt was retained. The isolated expiring test run remains available
 for reuse while valid; final stop/readback cleanup remains outstanding.
+
+The newly confirmed model-context paths are assigned to a separate sequential
+`model-context` Pi batch after durable diagnostic retention. It owns the three
+Agent runner fallbacks, current image inspection and three host transport
+producers/tests. This keeps each reviewed change bounded while preserving one
+writer and one integration/review owner. The overall delivery remains pending.
