@@ -17,7 +17,8 @@
   frozen base `bbf75013b3980b4e1d85bc40742efac9aa91b2cd`, now in its first
   consolidated repair after independent review. Dependency batch
   `20261012-020739-2030b035` passed review after one test-target correction.
-- Remaining order: immutable research state; error logging/Web admission;
+- Remaining order: immutable research state; interrupted research-call budget
+  recovery; error logging/Web admission;
   durable diagnostic privacy; model-context diagnostic privacy; dead Web
   retirement/meeting identity admission; knowledge/tooling ownership. Review
   and verify each diff before integration.
@@ -428,3 +429,30 @@ repair requirements in the new code:
 Pi is repairing these five findings in the same task. Acceptance requires
 meaningful regressions, unfiltered required checks, and delivery-owner re-review
 and integration proof. No later implementation batch or PR has started.
+
+
+## Interrupted research-call budget recovery proof (PH-11, P2)
+
+Three additional synthetic probes use the shipped compiled public CLI and
+person-image entrypoints, real local stores, scripted models and mock provider
+callbacks. Each authorizes at most one operation, waits at an IPC barrier after
+the operation has been dispatched, kills only the owned child, waits for exit,
+and recovers the same immutable Run from a fresh child. Search, Web fetch and
+person-profile lookup each dispatch twice against a cap of one. Fetch preserves
+a checkpoint with `fetchCalls: 0`; search/person have no checkpoint yet. No
+external provider or model service was called. The first probe setup omitted
+an explicit synthetic fetch gateway and correctly hit the existing Firecrawl
+credential gate before any dispatch; that setup failure is not a source defect.
+
+The actual runners increment call counters in memory before dispatch but save
+checkpoints only after a tool result. A process interruption therefore loses a
+consumed allowance. Immutable files and kernel-owned live-process admission do
+not independently repair this counter boundary. A separate sequential Pi batch
+after persistence will save the existing checkpoint/counters before authorized
+search/fetch/profile dispatch, fail closed if that save fails, and conservatively
+keep possibly dispatched operations consumed after interruption. Existing
+checkpoint schemas, journal sequence, cap-denial codes and terminal semantics
+remain the authority; no automatic allowance refund or retry authorization is
+added. Actual forked command recovery and runner checkpoint-failure regressions
+are required. This finding concerns those call caps, not an exactly-once remote
+effect or cumulative model-billing guarantee.
