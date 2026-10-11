@@ -270,7 +270,7 @@ async function queryPeople(
        END,
        last_activity_at DESC,
        subjects.id
-     LIMIT 20`,
+     LIMIT 200`,
     [auth.accountId, nameQuery, handleType, handleHash],
   );
 

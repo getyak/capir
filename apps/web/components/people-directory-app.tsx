@@ -52,7 +52,7 @@ export function PeopleDirectoryApp({
 
           <div className={styles.listTools}>
             <PeopleDirectorySearch query={query} returnSessionId={returnSessionId} />
-            <span aria-live="polite">{error ? "暂不可用" : `${people.length} 位${query ? "匹配人物" : "人物"}`}</span>
+            <span aria-live="polite">{error ? "暂不可用" : `${people.length === 200 ? "当前显示前 200" : people.length} 位${query ? "匹配人物" : "人物"}`}</span>
           </div>
 
           {error ? (
