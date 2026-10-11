@@ -359,3 +359,56 @@ describe("private conversation persistence boundary", () => {
     expect(JSON.stringify(query.mock.calls)).not.toContain("private-boundary-canary");
   });
 });
+
+// The shipped global error handler must return a fixed internal-error contract
+// and never echo private error content to the client, while keeping request
+// correlation. Log-side policy is measured on the real stream in
+// lib/requestLogger.integration.test.ts.
+describe("unhandled request failure contract", () => {
+  it("returns the fixed internal error shape without echoing error content", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const app = await buildApp({ config, pool: { query } as unknown as Pool });
+    apps.push(app);
+    app.get("/synthetic/throwing-route", async () => {
+      const cause = new Error("cause-private-canary");
+      const error = new Error("message-private-canary") as Error &
+        Record<string, unknown>;
+      error.name = "name-private-canary";
+      error.stack =
+        "name-private-canary: message-private-canary\n    at stack-private-canary";
+      error.cause = cause;
+      error.code = "PRIVATE_CODE_CANARY";
+      error.detail = "db-detail-private-canary";
+      error.query = "db-query-private-canary";
+      error.providerBody = "provider-body-private-canary";
+      throw error;
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/synthetic/throwing-route?state=url-private-canary",
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "The request could not be completed.",
+        request_id: expect.any(String),
+      },
+    });
+    for (const canary of [
+      "message-private-canary",
+      "stack-private-canary",
+      "cause-private-canary",
+      "name-private-canary",
+      "PRIVATE_CODE_CANARY",
+      "db-detail-private-canary",
+      "db-query-private-canary",
+      "provider-body-private-canary",
+      "url-private-canary",
+    ]) {
+      expect(response.body).not.toContain(canary);
+    }
+  });
+});

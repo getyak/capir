@@ -232,7 +232,7 @@ export function registerTimeWorkspaceRoutes(
         );
       } catch (error) {
         app.log.warn(
-          { error: error instanceof Error ? error.name : "unknown" },
+          { err: error },
           "time activity snapshot cleanup skipped",
         );
       }
