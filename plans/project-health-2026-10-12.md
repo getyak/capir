@@ -32,10 +32,10 @@ an invented defect or silently discard a supported surface.
 
 ## Milestones
 
-1. **Active: evidence and coverage.** Inventory all tracked areas, trace risky
+1. **Complete: evidence and coverage.** Inventory all tracked areas, trace risky
    production paths, identify duplicate/dead ownership and stale documentation,
    record exact evidence, severity, consequence and a proposed repair.
-2. **Pending: sequential implementation.** Give Pi one independently verifiable
+2. **Active: sequential implementation.** Give Pi one independently verifiable
    outcome per batch; inspect receipts and actual diffs before accepting.
 3. **Pending: independent review and acceptance.** Fix confirmed review findings;
    run relevant negative-path checks and applicable repository gates. Deploy
@@ -49,7 +49,7 @@ an invented defect or silently discard a supported surface.
 
 The read-only Pi audit is task `20261012-013442-7a6fbff5`, based on
 `4ee04b1883b50d7d708e72378a5aa39487a7834f`; its scope is the audit report only.
-Implementation has not started. Parent synthetic probes independently reproduce
+The audit report was independently reviewed and imported; implementation follows the ordered finding register. Parent synthetic probes independently reproduce
 conflicting local journal writes (10/10 starts and terminal pairs accepted),
 raw error content in backend logs, and ignored-output interference in docs checks.
 Two Web limiter implementations retain expired unique keys without a bound.
@@ -61,7 +61,7 @@ Baseline checks from the isolated tree: Agent 392 passed / 1 skipped, Agent Host
 Backend skips require isolated integration databases and do not establish those
 paths. Policy tests passed after dependency setup, including 13 architecture
 tests; the first architecture run failed solely because installation was pending.
-CLI packaging tests are also being recorded. No native builds were run.
+CLI packaging tests passed: 230 passed / 1 platform-specific skip. No native builds were run.
 
 Private working evidence is under the task artifact directory
 `~/.codex/task-artifacts/project-health-2026-10-12/`; the registered rebuildable
