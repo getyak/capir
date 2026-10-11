@@ -31,4 +31,25 @@ are intended; browser acceptance uses an isolated account and existing CLI auth.
 
 ## State
 
-Implementation in progress. No completed acceptance or release claimed yet.
+Completed: implementation merged in PR #323 (5c345f80). All applicable CI
+passed on f65acffd, including 276 Web files / 2,159 tests, Web
+lint/typecheck/build, backend and CLI quality, docs/architecture, CodeQL and
+security. Independent review and increment rechecks closed duplicate spans,
+hover-click toggling, container resizing, touch-leave and keyboard-focus issues;
+no open P0/P1 remained.
+
+Resident Web is verified at clean composed revision 383d9064, retaining the
+previously deployed research notebook feature. Authenticated browser acceptance
+covered 1280px desktop and 390px narrow screens, hover/click, Tab/Escape, editor
+focus, native undo, plain typed names, profile navigation, actual wheel scrolling,
+container-only resizing, observed processing and terminal states, reduced motion
+and forced colors. Console was clean. Owned Web restart recovered with the
+expected HTTPS password provider and authenticated Session readback. Existing
+Tailscale handlers were unchanged.
+
+The CLI-owned daily fixture was stopped and deletion read back; its browser
+runner exited. Generated credential evidence and registered temporary test
+artifacts were removed, while sanitized proof remains in the authorized private
+evidence workspace. The personal account and prior person page were restored.
+Touch-leave passed mounted pointer regression tests; direct hardware touch was
+not exercised because the in-app browser lacks direct touch dispatch.
