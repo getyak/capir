@@ -1767,7 +1767,7 @@
     position: absolute; top: 0; left: 0; padding: 6px 7px; max-width: 220px;
   }
   .brandActions, .shell:has(.sidebarState[data-collapsed="true"]) .brandActions {
-    position: absolute; top: 40px; left: 3px; flex-direction: column; gap: 4px;
+    position: absolute; top: 0; right: 0; left: auto; height: 32px; flex-direction: row; gap: 4px;
   }
 }
 .brandMark { filter: grayscale(1); }
