@@ -386,8 +386,11 @@ source revocation, budgets and terminal semantics remain required. No external
 provider was called. Temporary source probes were removed after evidence capture.
 
 The owned baseline browser was gracefully stopped after its rendered daily
-workspace receipt was retained. The isolated expiring test run remains available
-for reuse while valid; final stop/readback cleanup remains outstanding.
+workspace receipt was retained. The baseline test run was then stopped and read
+back as `deleted`, with no cleanup error; capir confirmed removal of the local
+run credential. Its private credential projection was deleted after the
+sanitary lifecycle receipt was retained. Final deployment acceptance will use
+a fresh isolated run, followed by its own stop/readback cleanup.
 
 The newly confirmed model-context paths are assigned to a separate sequential
 `model-context` Pi batch after durable diagnostic retention. It owns the three
