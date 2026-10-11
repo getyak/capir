@@ -14,8 +14,10 @@
   dependency safety batch `81324609` after independent clean-install checks,
   and immutable research state `1f5d50a1` after independent review and 133 host tests.
   Resident deployment and final delivery remain outstanding.
-- Active outcome: interrupted research-call budget recovery and per-Run tool
-  sequencing. Immutable research state `20261012-030523-ed97720c` passed review
+- Active Pi batch: interrupted research-call budget recovery and per-Run tool
+  sequencing `20261012-050607-5d7531a8`, frozen base
+  `7a30ba0d4922d02ab9cef728d0cd1805bb8e9535`. Immutable research state
+  `20261012-030523-ed97720c` passed review
   after one consolidated Pi repair and three bounded parent corrections.
 - Remaining order: interrupted research-call budget recovery; error logging/Web admission;
   durable diagnostic privacy; model-context diagnostic privacy; dead Web

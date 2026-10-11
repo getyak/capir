@@ -54,7 +54,9 @@ conflicting local journal writes (10/10 starts and terminal pairs accepted),
 raw error content in backend logs, and ignored-output interference in docs checks.
 Two Web limiter implementations retain expired unique keys without a bound.
 Current canonical audience and review guidance also contain conflicting legacy
-phrasing. These observations await synthesis with the repository-wide audit.
+phrasing. The ordered findings, rejected suspicions and accepted batch receipts
+now live in [the active audit register](project-health-audit-2026-10-12.md); this
+plan retains the overall delivery boundary rather than duplicate that register.
 
 Baseline checks from the isolated tree: Agent 392 passed / 1 skipped, Agent Host
 81 passed, backend 968 passed / 531 skipped, Web 2,147 passed. Typechecks passed.
