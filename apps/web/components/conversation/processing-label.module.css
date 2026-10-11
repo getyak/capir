@@ -1,0 +1,12 @@
+.label { color: inherit; }
+.label[data-processing-animated="true"] {
+  background: linear-gradient(105deg, var(--muted) 32%, var(--ink) 48%, var(--muted) 64%);
+  background-size: 240% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: processing-light 3.2s ease-in-out infinite;
+}
+@keyframes processing-light { 0%, 18% { background-position: 100% 0; } 82%, 100% { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  .label[data-processing-animated="true"] { animation: none; background: none; color: inherit; }
+}
