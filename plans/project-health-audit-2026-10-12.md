@@ -528,3 +528,9 @@ Before evidence: `research-journal-interruption-before-proof.log` in the private
 task artifact directory; both actual commands were tested against the accepted
 integration build. Status: open; separate sequential Pi outcome, followed by
 independent command-level verification.
+
+A second actual-command probe held publication after `terminal.json` was written
+but before the terminal-event append. Both commands replayed `no_action` from
+that receipt while the journal remained `[1, 2]`, with no terminal event. Public
+and person checkpoint offsets differ legitimately (`2` versus `3`); integrity
+validation must follow those producers and preserve valid completed replay.
