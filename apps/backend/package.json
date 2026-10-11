@@ -41,9 +41,9 @@
     "check:local": "./scripts/local-check.sh"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1145.0",
-    "@fastify/cors": "^11.1.0",
-    "@fastify/rate-limit": "^11.2.0",
+    "@aws-sdk/client-s3": "^3.1147.0",
+    "@fastify/cors": "^11.3.1",
+    "@fastify/rate-limit": "^11.2.1",
     "@fastify/swagger": "^9.9.1",
     "@sinclair/typebox": "^0.34.41",
     "@talent-signal/agent": "workspace:*",

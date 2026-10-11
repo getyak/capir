@@ -21,7 +21,7 @@
     "@napi-rs/keyring": "2.1.0",
     "@sinclair/typebox": "^0.34.41",
     "@talent-signal/contracts": "workspace:*",
-    "playwright": "1.63.0"
+    "playwright": "1.64.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
