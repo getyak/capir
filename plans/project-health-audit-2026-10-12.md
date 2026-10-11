@@ -11,14 +11,13 @@
 - Integration branch: `codex/project-health-oct12`, based on remote main
   `e751b37a8692a33387b7325004d7532face32021`.
 - Accepted so far: audit inventory, independent synthetic before-change probes,
-  and dependency safety batch `81324609` after independent clean-install checks.
+  dependency safety batch `81324609` after independent clean-install checks,
+  and immutable research state `1f5d50a1` after independent review and 133 host tests.
   Resident deployment and final delivery remain outstanding.
-- Active Pi batch: immutable research state `20261012-030523-ed97720c`,
-  frozen base `bbf75013b3980b4e1d85bc40742efac9aa91b2cd`, now in its first
-  consolidated repair after independent review. Dependency batch
-  `20261012-020739-2030b035` passed review after one test-target correction.
-- Remaining order: immutable research state; interrupted research-call budget
-  recovery; error logging/Web admission;
+- Active outcome: interrupted research-call budget recovery and per-Run tool
+  sequencing. Immutable research state `20261012-030523-ed97720c` passed review
+  after one consolidated Pi repair and three bounded parent corrections.
+- Remaining order: interrupted research-call budget recovery; error logging/Web admission;
   durable diagnostic privacy; model-context diagnostic privacy; dead Web
   retirement/meeting identity admission; knowledge/tooling ownership. Review
   and verify each diff before integration.
@@ -478,3 +477,28 @@ newer counter snapshots during concurrent callbacks. Existing denial, abort and
 terminal semantics remain covered by tests. The before probes intentionally
 require concurrent writes and are not valid after-fix tests; new regressions
 will explicitly verify queued execution and ordered journal results.
+
+## Accepted persistence repair
+
+- Integrated commit: `1f5d50a1`; Pi task `20261012-030523-ed97720c`, frozen
+  base `bbf75013b3980b4e1d85bc40742efac9aa91b2cd`.
+- Immutable run/artifact/no-action/terminal records publish complete exclusive
+  temporary files with no replacement; equivalent retries retain original IDs,
+  bytes and timestamps. Checkpoints alone remain mutable.
+- Both shipped research commands hold kernel-owned per-Run SQLite admission
+  before terminal replay/provider construction. Contention rejects; process
+  death releases admission without stale-lock stealing. Corrupt records fail
+  with content-free errors; FIFOs and symlinks are rejected.
+- Independent review required five Pi corrections (nonblocking reads, owned
+  temporary cleanup, nested/terminal validation, test-fixture lifecycle,
+  canonical digest case), then three bounded parent fixes: nonnegative safe
+  integer checkpoint counts, ownership transfer immediately after rename, and
+  canonical nil/max UUID compatibility for missing evidence references.
+- Parent verification of the final changed source: Agent build, host typecheck,
+  host build, all 133 host tests in 18 files, documentation check. Integration
+  replay/admission command checks passed. Synthetic SIGKILL probes confirmed
+  PH-11 still occurs after admission: search/fetch/profile each dispatched twice
+  with authorization maximum one. That separate finding remains for the next
+  batch; immutable publication does not imply durable call-budget reservation.
+- Scope remains local filesystem/process interruption, not distributed locking
+  or power-loss durability. Resident rollout remains pending final delivery.
