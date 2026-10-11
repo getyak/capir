@@ -1855,6 +1855,10 @@
     display: inline;
   }
 
+  :global(html:not([data-desktop-surface])) .railRow .railControl:focus-visible {
+    outline-offset: -2px;
+  }
+
   :global(html:not([data-desktop-surface])) .railRow .railShortcut {
     color: var(--muted);
     display: inline;

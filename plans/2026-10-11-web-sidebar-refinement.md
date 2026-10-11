@@ -34,10 +34,10 @@ hero, palette and narrative rules do not apply to this workspace.
 
 ## Milestones
 
-1. Active: settle bounded navigation composition and meaningful state coverage.
-2. Pending: implementation, focused host tests, typecheck/lint and build.
-3. Pending: rendered desktop/collapsed/mobile, dark, keyboard and recovery checks.
-4. Pending: independent review and clean committed release deployment.
+1. Complete: compact header, labeled vertical Web navigation and full-width people.
+2. Complete: focused 24 tests, full Web 2,093 tests, typecheck, lint and docs check.
+3. Complete: real authenticated desktop/light/dark, collapsed refresh, 390px mobile, search results/focus recovery and person context; 480px-height footer remains reachable.
+4. Active: independent review passed; move keyboard outline inside scrollable Web navigation, rebuild clean release and deploy.
 5. Pending: final live proof, run cleanup and release-cache lifecycle audit.
 
 ## Completion evidence
@@ -50,3 +50,13 @@ entry with the authenticated backend; passing static tests alone is insufficient
 Prepare a clean detached production release, activate using the resident
 installer, then verify live revision, HTTPS auth readiness and protected workspace.
 Preserve current and rollback releases. Do not modify live dependencies.
+
+## Verification notes
+
+Independent review found no confirmed P0/P1/P2 regression. Rendered short-window
+inspection exposed clipping of the outside focus outline on the last navigation
+row; use an inside outline for ordinary Web rail controls. Search dismissal
+returns focus to its trigger. Collapsed width is 72px after reload. At 390px
+the document width remains 390px and the People destination activates normally.
+Full Web tests used two workers to avoid competing with the concurrent OAuth
+task. Lint has zero errors and six existing warnings outside the edited scope.
