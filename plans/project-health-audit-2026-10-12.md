@@ -10,10 +10,12 @@
   ownership without changing applied SQL or unrelated work.
 - Integration branch: `codex/project-health-oct12`, based on remote main
   `e751b37a8692a33387b7325004d7532face32021`.
-- Accepted so far: audit inventory and independent synthetic before-change
-  probes. No runtime repair or deployment has been accepted yet.
-- Active Pi batch: dependency safety `20261012-020739-2030b035`, frozen base
-  `269a1a5b7f01f19704c0aa0d2dd37f5823a94098`.
+- Accepted so far: audit inventory, independent synthetic before-change probes,
+  and dependency safety batch `81324609` after independent clean-install checks.
+  Resident deployment and final delivery remain outstanding.
+- Next Pi batch: immutable research state; freeze its base after committing
+  this integration receipt. Dependency batch `20261012-020739-2030b035` passed
+  review after one test-target correction.
 - Remaining order: immutable research state; error logging/Web admission;
   durable diagnostic privacy; dead Web retirement/meeting identity admission;
   knowledge/tooling ownership. Review and verify each diff before integration.
@@ -307,7 +309,7 @@ although the client receives a fixed retry message. The same static pattern
 occurs in source-authorization compilation responses/job errors, public research
 warnings/retry metadata and MCP continuation outbox errors. Adjacent socket/tool
 adapters admit arbitrary code-shaped strings into failure responses/detail;
-uppercase or a prefix is not a closed diagnostic vocabulary. A separate Pi batch
+uppercase or a prefix is not a closed diagnostic vocabulary. A second actual `createWorkspacePublicResearch.execute` synthetic probe showed a code-shaped private Error message copied into both model-facing error detail and attempt metadata. A separate Pi batch
 will replace untyped failure content with fixed operation diagnostics, preserve
 provenance/retry/lease/idempotency behavior, and exercise the actual producer and
 consumer boundaries with synthetic canaries. No real-person or credential leak
@@ -318,3 +320,42 @@ to a defect: production callsites acquire the shared maintenance barrier and
 set the root store's `isWorking` before suspension. UI retries and environment
 activation honor that barrier. No native source change or simulator run is
 justified by this rejected suspicion.
+
+
+PH-10 (P2): the control-plane evaluator's `liveTrials` receipts report a
+hardcoded SDK version `0.3.241` in both missing-proof and completed branches,
+while the installed, validated SDK is `0.3.287`. This misattributes otherwise
+reviewable evaluation evidence. The tooling batch will reuse the existing
+package-manifest-derived `CLAUDE_SDK_VERSION` authority for both receipts, rather
+than substitute another drifting literal. Credential/model gates and actual
+trial outcomes remain unchanged; no new live model trial is authorized by
+this metadata repair.
+
+## Accepted dependency repair and independent receipt
+
+- Integrated `81324609`: compatible dependency repairs, removal of Mammoth's
+  unused CLI-only argparse graph, a frozen local braces depth patch, and a
+  mandatory full production audit in the existing Security required gate.
+- Codex reviewed all six files including untracked patch/tests, and required
+  the patch test to bind the active install to the current frozen digest while
+  tolerating unrelated stale package directories. No audit suppression added.
+- Pi repair: frozen offline install, production audit (zero advisories), Agent
+  and backend typechecks, real DOCX extraction 3/3, patch regressions 10/10,
+  workflow policy 6/6, docs check all passed.
+- Codex independent integration: an incremental frozen install retained old
+  unpatched package content under the new digest directory; the regression
+  gate correctly failed four tests. A clean minimal install reproduced proper
+  patch application, then a fresh complete frozen offline install passed
+  22/22 patch, workflow and existing CI scope-policy tests. Deployment must
+  use clean dependency trees and verify actual patch behavior. The failed run
+  is retained as evidence and is not counted as a pass.
+- Backend Docker dependency layer now includes `patches/` before install;
+  final clean image and portable CLI packaging are still unverified.
+- Full graph still reports the development-only upstream braces advisory;
+  the local patch deliberately rejects nesting above 100 and is a mitigation,
+  not an upstream released fix. Product production graph is clean.
+- Full baseline Web lint passes with six unused-symbol warnings; those exact
+  bindings are assigned to the Web retirement batch without removing proof
+  reads or authentication behavior. ESLint10 peer-range warnings are a known
+  compatibility boundary: current Next configs already use @eslint/compat
+  and actual lint passes. No lint downgrade or suppression is planned.
