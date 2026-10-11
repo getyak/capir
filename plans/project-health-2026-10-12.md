@@ -47,6 +47,27 @@ an invented defect or silently discard a supported surface.
 
 ## Evidence and decisions
 
+The read-only Pi audit is task `20261012-013442-7a6fbff5`, based on
+`4ee04b1883b50d7d708e72378a5aa39487a7834f`; its scope is the audit report only.
+Implementation has not started. Parent synthetic probes independently reproduce
+conflicting local journal writes (10/10 starts and terminal pairs accepted),
+raw error content in backend logs, and ignored-output interference in docs checks.
+Two Web limiter implementations retain expired unique keys without a bound.
+Current canonical audience and review guidance also contain conflicting legacy
+phrasing. These observations await synthesis with the repository-wide audit.
+
+Baseline checks from the isolated tree: Agent 392 passed / 1 skipped, Agent Host
+81 passed, backend 968 passed / 531 skipped, Web 2,147 passed. Typechecks passed.
+Backend skips require isolated integration databases and do not establish those
+paths. Policy tests passed after dependency setup, including 13 architecture
+tests; the first architecture run failed solely because installation was pending.
+CLI packaging tests are also being recorded. No native builds were run.
+
+Private working evidence is under the task artifact directory
+`~/.codex/task-artifacts/project-health-2026-10-12/`; the registered rebuildable
+test artifact is `/private/tmp/ai-test-project-health-oct12.2YTmvn`. Preserve
+minimal sanitized proof in the delivery record before removing temporary output.
+
 The audit report will live at `plans/project-health-audit-2026-10-12.md` while
 work is active. It must separate confirmed defects, maintainability debt,
 historical records and rejected suspicions. Final durable methods belong in
