@@ -123,6 +123,70 @@ describe("settings page server composition", () => {
     );
   });
 
+  it("preserves validated connect and return hints through the login hop", async () => {
+    auth.mockResolvedValue(null);
+    // Session expiry at the connection entry keeps provider and destination.
+    await expect(
+      SettingsPage({
+        searchParams: Promise.resolve({
+          section: "account",
+          connect: "google",
+          returnTo: "/desktop-auth/authorize?attempt=a&state=b",
+        }),
+      }),
+    ).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirect).toHaveBeenCalledWith(
+      `/login?callbackUrl=${encodeURIComponent(
+        "/workspace/settings?section=account&connect=google&returnTo=%2Fdesktop-auth%2Fauthorize%3Fattempt%3Da%26state%3Db",
+      )}`,
+    );
+    // Forged hints never enter the callback URL.
+    await expect(
+      SettingsPage({
+        searchParams: Promise.resolve({
+          connect: "https://evil.example",
+          returnTo: "https://evil.example/steal",
+        }),
+      }),
+    ).rejects.toThrow("NEXT_REDIRECT");
+    expect(redirect).toHaveBeenCalledWith("/login?callbackUrl=%2Fworkspace%2Fsettings");
+  });
+
+  it("opens the preselected connecting panel from validated hints and drops forged ones", async () => {
+    auth.mockResolvedValue({ user: { name: "林顾问" } });
+    loadAccountSettings.mockResolvedValue(account);
+    claims.mockResolvedValue({
+      backendAccountId: "22222222-2222-4222-8222-222222222222",
+      backendExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const html = renderToStaticMarkup(
+      await SettingsPage({
+        searchParams: Promise.resolve({
+          section: "account",
+          connect: "google",
+          returnTo: "/desktop-auth/authorize?attempt=a&state=b",
+        }),
+      }),
+    );
+    // The connecting panel is already open with consent copy; the original
+    // callback travels as a hidden return hint. No searching, no claim.
+    expect(html).toContain("将 Google 绑定到这个账户");
+    expect(html).toContain("先验证当前身份");
+    expect(html).toContain('name="returnTo"');
+
+    const forged = renderToStaticMarkup(
+      await SettingsPage({
+        searchParams: Promise.resolve({
+          section: "account",
+          connect: "https://evil.example",
+          returnTo: "https://evil.example/steal",
+        }),
+      }),
+    );
+    expect(forged).not.toContain("绑定到这个账户");
+    expect(forged).not.toContain("evil.example");
+  });
+
   it("preserves every schema section through login", async () => {
     auth.mockResolvedValue(null);
     for (const section of [

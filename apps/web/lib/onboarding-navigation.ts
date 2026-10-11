@@ -1,4 +1,5 @@
-import { safeRedirectTarget } from "./auth-config";
+import { safeRedirectTarget } from "./safe-redirect";
+import { connectProviderFrom } from "./login-continuity";
 
 export const ONBOARDING_PATH = "/onboarding";
 
@@ -62,7 +63,7 @@ export function oauthRetryTarget(raw: string | undefined, origin: string): strin
 
 /** Begin production login on its callback origin, so OAuth cookies come back. */
 export function canonicalLoginTarget(requestOrigin: string, configured: string | undefined,
-  parameters: { callbackUrl?: string; error?: string; reason?: string; mode?: string }, production: boolean): string | null {
+  parameters: { callbackUrl?: string; error?: string; reason?: string; mode?: string; connect?: string }, production: boolean): string | null {
   if (!production || !configured) return null;
   let canonical: URL; let incoming: URL;
   try { canonical = new URL(configured); incoming = new URL(requestOrigin); } catch { return null; }
@@ -73,5 +74,9 @@ export function canonicalLoginTarget(requestOrigin: string, configured: string |
   if (parameters.mode === "register") destination.searchParams.set("mode", "register");
   if (parameters.error) destination.searchParams.set("error", parameters.error.slice(0, 100));
   if (parameters.reason === "backend_session_expired") destination.searchParams.set("reason", parameters.reason);
+  // The allowlisted connect hint is navigation state and must survive the
+  // canonical hop; any other value is simply dropped.
+  const connect = connectProviderFrom(parameters.connect);
+  if (connect) destination.searchParams.set("connect", connect);
   return destination.toString();
 }

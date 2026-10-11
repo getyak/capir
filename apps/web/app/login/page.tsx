@@ -17,6 +17,8 @@ import {
   readAuthRound,
   validateStagedProof,
 } from "@/lib/server/stagedAuth";
+import { connectProviderFrom, loginContinuationTarget, settingsLinkErrorTarget } from "@/lib/login-continuity";
+import { readLoginCollisionHint } from "@/lib/server/loginCollision";
 import { OAuthSubmit } from "@/components/oauth-submit";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { getAuthAvailability, safeRedirectTarget } from "@/lib/auth-config";
@@ -25,6 +27,7 @@ import { signInWithApple, signInWithDefaultAccount, signInWithGoogle } from "./a
 import { DesktopNativeLoginNotice, isNativeLoginUserAgent } from "./desktop-native-notice";
 import styles from "./login.module.css";
 import { AccountContinuity } from "./account-continuity";
+import { LoginConnectContinuity } from "./login-connect-continuity";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -36,11 +39,13 @@ const oauthErrors: Record<string, string> = {
   AccessDenied: "登录已取消。准备好后，可以再试一次。",
   Configuration: "这次连接没有完成。已有账号请使用原登录方式，或稍后重试。",
   OAuthCallbackError: "这次登录没有完成，请重新连接。",
-  OAuthAccountNotLinked: "这个邮箱已有账号。请使用原来的方式登录，再到设置中绑定新的登录方式。",
+  // `OAuthAccountNotLinked` deliberately has no entry: an account-collision
+  // message is shown only with the server-sealed collision hint. A forged
+  // error query alone never claims that an account exists.
 };
 
 export default async function LoginPage({ searchParams }: {
-  searchParams: Promise<{ callbackUrl?: string; error?: string; reason?: string; mode?: string; verification?: string }>;
+  searchParams: Promise<{ callbackUrl?: string; error?: string; reason?: string; mode?: string; verification?: string; connect?: string }>;
 }) {
   const [session, parameters] = await Promise.all([auth(), searchParams]);
   const requestHeaders = await headers();
@@ -56,8 +61,25 @@ export default async function LoginPage({ searchParams }: {
   const callbackUrl = parameters.callbackUrl ? safeRedirectTarget(parameters.callbackUrl)
     : parameters.error ? oauthRetryTarget((await cookies()).get("talent-signal.callback-url")?.value, process.env.AUTH_URL ?? requestOrigin) : "/workspace";
   const sessionExpired = parameters.reason === "backend_session_expired";
+  // GET-141 continuity: the sealed hint (provider + seal time only) is the
+  // sole authority for collision messaging. A missing or expired hint shows
+  // only the generic neutral error and discloses no account information.
+  const collisionHint =
+    parameters.error === "OAuthAccountNotLinked"
+      ? await readLoginCollisionHint()
+      : null;
+  // Navigation hint only: where a completed login continues. Never proof of
+  // a collision, an account or a link result.
+  const connectHint = connectProviderFrom(parameters.connect);
+  // With an active connect hint every sign-in path continues to the
+  // preselected connecting panel; the original callback rides along as the
+  // return hint. An already-authenticated arrival uses the same destination.
+  const destination =
+    connectHint && !parameters.error
+      ? loginContinuationTarget({ callbackUrl, provider: connectHint })
+      : callbackUrl;
   if (session?.user && !sessionExpired && !parameters.error) {
-    redirect(`/onboarding?callbackUrl=${encodeURIComponent(callbackUrl)}`);
+    redirect(`/onboarding?callbackUrl=${encodeURIComponent(destination)}`);
   }
   // Staged Settings operations never fall through to ordinary login: a staged
   // proof returns to its fixed same-origin completion route, and a cancelled
@@ -84,22 +106,38 @@ export default async function LoginPage({ searchParams }: {
   }
   if (parameters.error && !sessionExpired && (stagedProof || stagedOperation)) {
     // An error arriving from an unknown earlier round can never borrow the
-    // CURRENT operation's authority to cancel it. The originating staged pages
-    // own ref-tied cancellation; here the user only returns to Settings with a
-    // recoverable state and the sealed operation is left untouched.
-    redirect("/workspace/settings?link=error");
+    // CURRENT operation's authority to cancel or execute it; the sealed
+    // operation stays untouched and only its sanitized navigation hints
+    // accompany the recoverable return.
+    redirect(
+      settingsLinkErrorTarget({
+        provider:
+          stagedOperation?.intent === "link_provider"
+            ? stagedOperation.targetProvider
+            : undefined,
+        returnTo: stagedOperation?.returnTo,
+      }),
+    );
   }
   if (parameters.error && !sessionExpired && session?.user) {
-    redirect("/workspace/settings?link=error");
+    // An already-authenticated collision continues on the authenticated
+    // Settings surface with the provider's connecting panel preselected and
+    // the original callback preserved; other errors keep the generic return.
+    redirect(
+      collisionHint
+        ? loginContinuationTarget({ callbackUrl, provider: collisionHint.provider })
+        : "/workspace/settings?link=error",
+    );
   }
   const verificationSecret = parameters.verification?.trim() ?? "";
   const availability = getAuthAvailability(process.env, { google: Boolean(getGoogleOAuthCredentials()) });
   const error = sessionExpired ? "登录已过期。重新登录后，可以继续刚才的工作。"
+    : collisionHint ? ""
     : parameters.error ? (oauthErrors[parameters.error] ?? "登录未完成，请重试或换一种方式。") : "";
   const providers = (
     <div className={styles.providers}>
       <form action={signInWithGoogle} data-oauth-form="true">
-        <input type="hidden" name="redirectTo" value={callbackUrl} />
+        <input type="hidden" name="redirectTo" value={destination} />
         <OAuthSubmit disabled={!availability.google} className={styles.provider}>
           <Image src="/images/google-sign-in.png" width={20} height={20} alt="" unoptimized />
           <span>使用 Google 继续</span>
@@ -125,10 +163,19 @@ export default async function LoginPage({ searchParams }: {
       <div className={styles.stage}>
         <AccountContinuity />
         <div className={styles.content}>
+          {collisionHint ? (
+            <LoginConnectContinuity provider={collisionHint.provider} callbackUrl={callbackUrl} />
+          ) : (
+          <>
+          {!parameters.error && connectHint && (
+            <p className={styles.connectHint} role="status" data-connect-continuity-hint>
+              {`登录后会带你继续连接 ${connectHint === "google" ? "Google" : "Apple"}。`}
+            </p>
+          )}
           {verificationSecret ? (
-            <VerificationConfirmForm secret={verificationSecret} redirectTo={callbackUrl} />
+            <VerificationConfirmForm secret={verificationSecret} redirectTo={destination} />
           ) : availability.password ? (
-            <AccountAccessForm callbackUrl={callbackUrl} registrationEnabled={availability.registration}
+            <AccountAccessForm callbackUrl={destination} registrationEnabled={availability.registration}
               initialMode={parameters.mode === "register" ? "register" : "sign-in"} notice={error}>
               {providers}
             </AccountAccessForm>
@@ -137,15 +184,17 @@ export default async function LoginPage({ searchParams }: {
               <header className={styles.heading}><h1 id="sign-in-title">从你开始。</h1><p>一个安静的地方，留住重要的人与对话。</p></header>
               {error && <p className={styles.error} role="alert">{error}</p>}
               {providers}
-              {availability.email && <EmailSignInForm callbackUrl={callbackUrl} enabled />}
+              {availability.email && <EmailSignInForm callbackUrl={destination} enabled />}
               {!availability.google && !availability.apple && !availability.email && <p className={styles.caption}>这个工作台暂未开放登录，请稍后再试。</p>}
             </section>
           )}
           {availability.defaultAccount && (
             <form action={signInWithDefaultAccount} className={styles.fixture}>
-              <input type="hidden" name="redirectTo" value={callbackUrl} />
+              <input type="hidden" name="redirectTo" value={destination} />
               <button type="submit">使用开发测试账号 · {availability.defaultAccountName}</button>
             </form>
+          )}
+          </>
           )}
           <p className={styles.privacy}>同一账号，联系人与会话自动同步。</p>
         </div>

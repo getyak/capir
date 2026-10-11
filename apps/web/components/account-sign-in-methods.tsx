@@ -9,6 +9,7 @@ import {
   unlinkLoginMethod,
   type LoginMethodActionState,
 } from '@/app/workspace/settings/login-methods/actions';
+import { settingsConnectHints, type ConnectProvider } from '@/lib/login-continuity';
 import styles from './account-sign-in-methods.module.css';
 
 /**
@@ -42,11 +43,17 @@ function ScopeFields({ scope }: { scope: RenderedScope }) {
   );
 }
 
-function OperationAuthPanel({ flow, hasPassword, connectedProviders, scope, onUpdated, onCancel }: {
+/** Optional GET-141 navigation hint: sealed with the operation, never authority. */
+function ReturnField({ returnTo }: { returnTo: string | null }) {
+  return returnTo ? <input type="hidden" name="returnTo" value={returnTo} /> : null;
+}
+
+function OperationAuthPanel({ flow, hasPassword, connectedProviders, scope, returnTo, onUpdated, onCancel }: {
   flow: NonNullable<Flow>;
   hasPassword: boolean;
   connectedProviders: Array<'apple' | 'google'>;
   scope: RenderedScope;
+  returnTo: string | null;
   onUpdated: (settings: AccountSettings) => void;
   onCancel: () => void;
 }) {
@@ -89,6 +96,7 @@ function OperationAuthPanel({ flow, hasPassword, connectedProviders, scope, onUp
       {hasPassword ? (
         <form action={formAction}>
           <ScopeFields scope={scope} />
+          <ReturnField returnTo={returnTo} />
           <p className={styles.stepUpTitle}>验证当前身份</p>
           <label className={styles.field}>
             <span>当前密码</span>
@@ -119,6 +127,7 @@ function OperationAuthPanel({ flow, hasPassword, connectedProviders, scope, onUp
       {connectedProviders.map(provider => (
         <form key={provider} action={startProviderReauth}>
           <ScopeFields scope={scope} />
+          <ReturnField returnTo={returnTo} />
           <input type="hidden" name="intent" value={intent} />
           <input type="hidden" name="reauthProvider" value={provider} />
           {flow.kind === 'link' && <input type="hidden" name="targetProvider" value={flow.provider} />}
@@ -200,23 +209,35 @@ function subscribeLocation(onChange: () => void) {
 const readLocation = () => window.location.search;
 const emptyLocation = () => '';
 
-export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
+export function AccountSignInMethods({ initial, linkStatus: linkStatusProp, connect, returnTo }: {
   initial: AccountSettings;
-  linkStatus?: 'done' | 'error' | null;
+  linkStatus?: 'done' | 'error' | 'cancelled' | null;
+  connect?: ConnectProvider | null;
+  returnTo?: string | null;
 }) {
   const [localResult, setLocalResult] = useState<{ source: AccountSettings; value: AccountSettings } | null>(null);
   const data = localResult?.source === initial ? localResult.value : initial;
   const setData = (value: AccountSettings) => setLocalResult({ source: initial, value });
-  const [flow, setFlow] = useState<Flow>(null);
+  const [manualFlow, setManualFlow] = useState<Flow>(null);
+  const [dismissedHint, setDismissedHint] = useState('');
   const [offline, setOffline] = useState(false);
   // Failure/cancel recovery is visible in place: the staged round trip returns
   // to Settings with `?link=done|error` and the row keeps its method state.
   const search = useSyncExternalStore(subscribeLocation, readLocation, emptyLocation);
   const parameters = new URLSearchParams(search);
   const linkValue = parameters.get('link');
+  // GET-141 continuation hints. The live query wins over the server-rendered
+  // props so a completion redirect that re-adds the hints keeps working; both
+  // are allowlisted, sanitized navigation state and never proof of a link
+  // result or authority for any change.
+  const hints = settingsConnectHints({
+    connect: parameters.get('connect') ?? connect,
+    returnTo: parameters.get('returnTo') ?? returnTo,
+  });
+  const returnTarget = hints.returnTo;
   const linkResult = linkStatusProp
     ? { status: linkStatusProp, method: undefined, state: undefined }
-    : linkValue === 'done' || linkValue === 'error'
+    : linkValue === 'done' || linkValue === 'error' || linkValue === 'cancelled'
       ? { status: linkValue, method: parameters.get('method'), state: parameters.get('state') }
       : null;
   useEffect(() => {
@@ -234,6 +255,28 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
   const connectedProviders = data.sign_in_methods
     .filter(method => method.state === 'connected' && method.provider !== 'password')
     .map(method => method.provider as 'apple' | 'google');
+  // The connecting panel opens preselected for the hinted provider, so after a
+  // collision the user never searches Settings. A new hint arrival (for
+  // example the recoverable `?link=error&connect=` retry redirect) reopens it;
+  // cancelling — locally or through the ref-specific cancel — stays cancelled
+  // and never reopens the panel automatically. Opening the panel writes
+  // nothing: every change still needs explicit consent and current-identity
+  // proof.
+  const preselectKey = `${hints.connect ?? ''}:${linkValue ?? ''}`;
+  const autoFlow: Flow =
+    hints.connect && linkValue !== 'cancelled' && preselectKey !== dismissedHint
+      ? (() => {
+          const hinted = data.sign_in_methods.find(item => item.provider === hints.connect);
+          return hinted?.state === 'unconnected' && (hasPassword || connectedProviders.length > 0)
+            ? { kind: 'link', provider: hints.connect }
+            : null;
+        })()
+      : null;
+  const flow = manualFlow ?? autoFlow;
+  const closeFlow = () => {
+    setManualFlow(null);
+    setDismissedHint(preselectKey);
+  };
   // Connected and legacy-unverified methods stay visible; a password that is
   // not set yet stays visible too, because setting it is a primary action.
   // Only optional unconnected providers are disclosed by count.
@@ -249,19 +292,39 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
   const verifiedMethod = linkResult?.status === 'done' && linkResult.method
     ? data.sign_in_methods.find(method => method.provider === linkResult.method)
     : undefined;
+  // Success is claimed AND the original journey continues only after the
+  // authoritative backend readback agrees; a public `?link=done` flag alone
+  // never shows the continuation.
+  const linkVerified = Boolean(
+    linkResult?.status === 'done' &&
+      verifiedMethod?.state === 'connected' &&
+      (linkResult.state ? verifiedMethod.state === linkResult.state : true),
+  );
   const notice = linkResult?.status === 'done'
     ? (verifiedMethod?.state === 'connected' && (linkResult.state ? verifiedMethod.state === linkResult.state : true))
       ? '这个登录方式当前已绑定，可以用它登录同一个账户。'
       : '请核对下方登录方式的实际状态。'
-    : linkResult?.status === 'error'
-      ? '暂时无法确认这次操作的结果。请核对下方登录方式的实际状态，再决定是否重新验证。'
-      : '';
+    : linkResult?.status === 'cancelled'
+      ? '已取消这次连接。'
+      : linkResult?.status === 'error'
+        ? '暂时无法确认这次操作的结果。请核对下方登录方式的实际状态，再决定是否重新验证。'
+        : '';
 
   return (
     <section className={styles.section} aria-labelledby="sign-in-methods-title">
       <h2 id="sign-in-methods-title">登录方式</h2>
       <p className={styles.secondary}>一个账户，多种登录方式。已绑定和需要验证的方式显示在最前面。</p>
       {notice && <p role="status" className={styles.notice}>{notice}</p>}
+      {linkVerified && returnTarget ? (
+        <p className={styles.actions}>
+          <a className={styles.primary} href={returnTarget} data-continue-return>继续之前的工作</a>
+        </p>
+      ) : null}
+      {!linkVerified && returnTarget && (linkResult || dismissedHint !== '') ? (
+        <p className={styles.actions}>
+          <a className={styles.quiet} href={returnTarget} data-continue-return>返回之前的工作</a>
+        </p>
+      ) : null}
       {offline && <p role="status" className={styles.error}>离线，恢复连接后重试</p>}
       <ul className={styles.rows} data-sign-in-visible>
         {visibleMethods.map(method => (
@@ -272,9 +335,9 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
             offline={offline}
             hasPassword={hasPassword}
             connectedProviders={connectedProviders}
-            onLink={() => setFlow({ kind: 'link', provider: method.provider as 'apple' | 'google' })}
-            onPassword={() => setFlow({ kind: 'password' })}
-            onUnlink={() => setFlow({ kind: 'unlink', provider: method.provider })}
+            onLink={() => setManualFlow({ kind: 'link', provider: method.provider as 'apple' | 'google' })}
+            onPassword={() => setManualFlow({ kind: 'password' })}
+            onUnlink={() => setManualFlow({ kind: 'unlink', provider: method.provider })}
           />
         ))}
       </ul>
@@ -291,9 +354,9 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
                 offline={offline}
                 hasPassword={hasPassword}
                 connectedProviders={connectedProviders}
-                onLink={() => setFlow({ kind: 'link', provider: method.provider as 'apple' | 'google' })}
-                onPassword={() => setFlow({ kind: 'password' })}
-                onUnlink={() => setFlow({ kind: 'unlink', provider: method.provider })}
+                onLink={() => setManualFlow({ kind: 'link', provider: method.provider as 'apple' | 'google' })}
+                onPassword={() => setManualFlow({ kind: 'password' })}
+                onUnlink={() => setManualFlow({ kind: 'unlink', provider: method.provider })}
               />
             ))}
           </ul>
@@ -310,11 +373,12 @@ export function AccountSignInMethods({ initial, linkStatus: linkStatusProp }: {
             accountRevision: data.workspace.revision,
             userRevision: data.user.revision,
           }}
+          returnTo={returnTarget}
           onUpdated={(settings) => {
             setData(settings);
-            setFlow(null);
+            setManualFlow(null);
           }}
-          onCancel={() => setFlow(null)}
+          onCancel={closeFlow}
         />
       )}
     </section>

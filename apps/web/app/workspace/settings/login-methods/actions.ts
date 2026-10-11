@@ -12,6 +12,11 @@ import {
 } from "@/lib/server/loginMethods";
 import { bindAppleNonce } from "@/lib/server/apple-session";
 import { bindGoogleNonce } from "@/lib/server/google-session";
+import {
+  connectProviderFrom,
+  continuityReturnTo,
+  settingsLinkErrorTarget,
+} from "@/lib/login-continuity";
 import { authenticatedBackendClient, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
 import {
   LINK_COMPLETE_PATH,
@@ -41,6 +46,25 @@ async function stagedScopeMatches(
     renderedScopeMatchesOperation(operation, scope) &&
     (await stagedSessionMatches(operation))
   );
+}
+
+/**
+ * Recoverable failure target for the connect chain: sealed operation hints
+ * when available, sanitized form hints otherwise. Navigation only — the hints
+ * never carry mutation authority.
+ */
+function failureTarget(
+  form: FormData | null,
+  sealed?: AuthOperation | null,
+): string {
+  const provider =
+    (sealed?.intent === "link_provider"
+      ? connectProviderFrom(sealed.targetProvider)
+      : null) ?? connectProviderFrom(form?.get("targetProvider") ?? null);
+  const returnTo =
+    continuityReturnTo(sealed?.returnTo) ??
+    continuityReturnTo(form?.get("returnTo") ?? null);
+  return settingsLinkErrorTarget({ provider, returnTo });
 }
 
 
@@ -178,12 +202,12 @@ export async function startProviderReauth(form: FormData): Promise<void> {
     (reauthProvider !== "apple" && reauthProvider !== "google") ||
     !["set_password", "change_password", "unlink_provider", "link_provider", "verify_identity", "verify_duplicate_identity"].includes(intent)
   ) {
-    redirect("/workspace/settings?link=error");
+    redirect(failureTarget(form));
   }
   try {
     const claims = await readPrimaryBackendSessionClaims();
     const client = await authenticatedBackendClient();
-    if (!claims || !client) redirect("/workspace/settings?link=error");
+    if (!claims || !client) redirect(failureTarget(form));
     const settings = await client.accountSettings();
     const scope = renderedScopeFrom(form);
     if (
@@ -195,7 +219,7 @@ export async function startProviderReauth(form: FormData): Promise<void> {
     ) {
       // The rendered authorization no longer matches live settings: a change
       // landed after the form was shown. Fail closed instead of widening it.
-      redirect("/workspace/settings?link=error");
+      redirect(failureTarget(form));
     }
     // The challenge label is fixed here by immutable purpose: recovery proofs
     // are consumed under the reconciliation label, account changes under the
@@ -239,6 +263,11 @@ export async function startProviderReauth(form: FormData): Promise<void> {
       userRevision: settings.user.revision,
       step: "awaiting-reauth",
       createdAt: new Date().toISOString(),
+      // GET-141: the original safe callback continues after a verified link;
+      // only the sanitized same-origin target is sealed, never a token.
+      ...(intent === "link_provider" && continuityReturnTo(form.get("returnTo"))
+        ? { returnTo: continuityReturnTo(form.get("returnTo"))! }
+        : {}),
       ...(intent === "link_provider" && (targetProvider === "apple" || targetProvider === "google")
         ? { targetProvider: targetProvider as "apple" | "google" }
         : {}),
@@ -284,8 +313,9 @@ export async function startProviderReauth(form: FormData): Promise<void> {
     ) {
       throw error;
     }
+    const sealed = await readAuthOperation();
     await clearStagedAuth();
-    redirect("/workspace/settings?link=error");
+    redirect(failureTarget(form, sealed));
   }
 }
 
@@ -339,13 +369,14 @@ export async function startPasswordStepUpLink(
 ): Promise<LoginMethodActionState> {
   const currentPassword = String(form.get("currentPassword") ?? "");
   const targetProvider = String(form.get("targetProvider") ?? "");
+  const returnTo = continuityReturnTo(form.get("returnTo"));
   if (targetProvider !== "apple" && targetProvider !== "google") {
-    redirect("/workspace/settings?link=error");
+    redirect(failureTarget(form));
   }
   try {
     const claims = await readPrimaryBackendSessionClaims();
     const client = await authenticatedBackendClient();
-    if (!claims || !client) redirect("/workspace/settings?link=error");
+    if (!claims || !client) redirect(failureTarget(form));
     const settings = await client.accountSettings();
     const scope = renderedScopeFrom(form);
     if (
@@ -355,7 +386,7 @@ export async function startPasswordStepUpLink(
       scope.accountRevision !== settings.workspace.revision ||
       scope.userRevision !== settings.user.revision
     ) {
-      redirect("/workspace/settings?link=error");
+      redirect(failureTarget(form));
     }
     // Purpose one: prove the current identity with the account password.
     const attempt = await startLoginMethodChange({
@@ -367,7 +398,7 @@ export async function startPasswordStepUpLink(
       expected_user_revision: scope.userRevision,
     });
     const challenge = attempt.provider_challenge;
-    if (!challenge) redirect("/workspace/settings?link=error");
+    if (!challenge) redirect(failureTarget(form));
     // Purpose two: the new provider's proof, collected on its own round trip.
     const stagedOperationRef = randomUUID();
     const stagedOperationCreatedAt = new Date().toISOString();
@@ -385,6 +416,7 @@ export async function startPasswordStepUpLink(
         accountRevision: scope.accountRevision,
         userRevision: scope.userRevision,
         step: "awaiting-target",
+        ...(returnTo ? { returnTo } : {}),
         attempt: {
           attempt_id: attempt.attempt_id,
           attempt_secret: attempt.attempt_secret,
@@ -424,8 +456,9 @@ export async function startPasswordStepUpLink(
     ) {
       throw error;
     }
+    const sealed = await readAuthOperation();
     await clearStagedAuth();
-    redirect("/workspace/settings?link=error");
+    redirect(failureTarget(form, sealed));
   }
 }
 
@@ -508,7 +541,7 @@ export async function continueTargetLink(form: FormData): Promise<void> {
     !operation.targetProvider ||
     !(await stagedScopeMatches(operation, scope))
   ) {
-    redirect("/workspace/settings?link=error");
+    redirect(failureTarget(form, operation));
   }
   try {
     await sealTargetRound({
@@ -538,7 +571,7 @@ export async function continueTargetLink(form: FormData): Promise<void> {
       throw error;
     }
     await clearStagedAuth();
-    redirect("/workspace/settings?link=error");
+    redirect(failureTarget(form, operation));
   }
 }
 
