@@ -90,3 +90,16 @@ it("replaces an existing span instead of duplicating it when the same person is 
     expect(host.querySelectorAll('[aria-label="查看 陈曦 的引用信息"]')).toHaveLength(1);
   } finally { fixture.people[0].contexts = original; }
 });
+
+it("keeps a touch-opened preview visible after the finger leaves the trigger", async () => {
+  await select();
+  vi.useFakeTimers();
+  try {
+    const reference = host.querySelector<HTMLButtonElement>('[aria-label="查看 陈曦 的引用信息"]')!;
+    await act(async () => reference.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "touch" })));
+    await act(async () => reference.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })));
+    await act(async () => reference.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, pointerType: "touch" })));
+    await act(async () => vi.advanceTimersByTime(250));
+    expect(document.querySelector('[aria-label="陈曦 的简要资料"]')).not.toBeNull();
+  } finally { vi.useRealTimers(); }
+});

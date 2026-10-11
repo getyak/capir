@@ -23,13 +23,13 @@ export function ComposerPersonReference({ person, disabled = false }: { person: 
       <button ref={trigger} type="button" className={styles.reference} aria-label={`查看 ${person.label} 的引用信息`}
         onClick={event => { if (event.detail > 0 && hovered.current) { event.preventDefault(); stay(); setOpen(true); } }}
         onPointerEnter={event => { if (event.pointerType === "mouse") { hovered.current = true; stay(); setOpen(true); } }}
-        onPointerLeave={() => { hovered.current = false; leave(); }}>
+        onPointerLeave={event => { if (event.pointerType === "mouse") { hovered.current = false; leave(); } }}>
         <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} size={22} />
         <span>@{person.label}</span><Check size={14} weight="bold" aria-hidden="true" />
       </button>
     </PopoverTrigger>
     <PopoverContent ref={panel} side="top" className={styles.referencePreview} aria-label={`${person.label} 的简要资料`}
-      onPointerEnter={stay} onPointerLeave={leave}
+      onPointerEnter={stay} onPointerLeave={event => { if (event.pointerType === "mouse") leave(); }}
       onOpenAutoFocus={event => event.preventDefault()}
       onCloseAutoFocus={event => { event.preventDefault(); if (panel.current?.contains(document.activeElement)) trigger.current?.focus(); }}>
       <div className={styles.referenceIdentity}><PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} size={36} />
