@@ -18,7 +18,8 @@
   admission `6953ebb8` after 54 backend and 36 Web focused tests plus actual
   Pino/limiter negative probes.
   Resident deployment and final delivery remain outstanding.
-- Next Pi batch: interrupted checkpoint/journal integrity (PH-13). Error
+- Active Pi batch: interrupted checkpoint/journal integrity (PH-13),
+  `20261012-071431-6fee91cd`, frozen base `5dbdde13`. Error
   logging/Web admission `20261012-060810-73e39891` passed independent review
   with one repair and a narrowly approved test companion. Research allowance
   recovery `20261012-050607-5d7531a8` passed review after two bounded parent
@@ -562,3 +563,20 @@ validation must follow those producers and preserve valid completed replay.
 - These budgets are per process; public deployments still need trusted edge
   control. Resident AI admission flags were not enabled. Clean committed
   final-source rollout and live acceptance remain outstanding.
+
+## Architecture guard regression (PH-14, P2)
+
+The first complete `pnpm docs:check` after integrating allowance/FIFO repair
+passes canonical links and wiki checks, then fails the architecture boundary
+gate: `personResearchRunner.ts` is 695 lines against its frozen maximum649.
+Earlier focused `node scripts/check-docs.mjs` receipts remain valid for link
+checking; they did not execute this guard. The complete command is failed,
+not a pass.
+
+This gate regression is assigned to the not-yet-started model-context batch: 
+move the existing person-research budget/image/scope preflight into its existing
+policy owner, preserving execution order and error semantics, and call it from
+the actual runner. Preserve shared FIFO, consumed allowances and journal
+integrity. Retain the original cap; do not raise the baseline, suppress the
+guard or compact formatting to meet it. Final architecture checks and the
+complete documentation command remain required before delivery. Status: open.
