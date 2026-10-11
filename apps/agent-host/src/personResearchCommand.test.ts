@@ -10,14 +10,26 @@ import {
   type AgentProviderRequest,
   type AgentToolResult,
 } from "@talent-signal/agent";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { runLocalPersonResearchCommand } from "./personResearchCommand.js";
 import { TikHubProvider } from "./tikHubProvider.js";
+import {
+  cleanupResearchWorkers,
+  ensureFreshHostBuild,
+  spawnResearchWorker,
+} from "./test/research-store-worker.mjs";
 
 const temporaryDirectories: string[] = [];
 
+beforeAll(async () => {
+  await ensureFreshHostBuild();
+}, 180_000);
+
 afterEach(async () => {
+  // Terminate and settle owned workers before removing their state
+  // directories, even when a barrier failed while a holder is blocked.
+  await cleanupResearchWorkers();
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) =>
       fs.rm(directory, { recursive: true, force: true }),
@@ -224,5 +236,88 @@ describe("local screenshot person-research command", () => {
       ]),
     ).rejects.toThrow("must contain PNG, JPEG, or WebP bytes");
     await expect(fs.access(join(stateRoot, "person-runs"))).rejects.toThrow();
+  });
+});
+
+describe("local person-research cross-process admission", () => {
+  const runID = "77777777-7777-4777-8777-777777777777";
+
+  async function makeStateRoot() {
+    const stateRoot = await fs.mkdtemp(join(tmpdir(), "talent-signal-person-agent-"));
+    temporaryDirectories.push(stateRoot);
+    return stateRoot;
+  }
+
+  it("invokes the vision provider once for a held Run and rejects the busy duplicate", async () => {
+    const stateRoot = await makeStateRoot();
+    const holder = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: true,
+    });
+    await holder.waitFor("ready");
+    holder.send("go");
+    await holder.waitFor("provider-invoked");
+
+    const duplicate = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+    });
+    await duplicate.waitFor("ready");
+    duplicate.send("go");
+    const duplicateResult = await duplicate.result;
+    expect(duplicateResult.ok).toBe(false);
+    expect(duplicateResult.errorName).toBe("LocalRunAdmissionBusyError");
+    expect(
+      duplicate.log.filter((event) => event.event === "provider-invoked"),
+    ).toHaveLength(0);
+
+    holder.send("finish");
+    const heldResult = await holder.result;
+    expect(heldResult).toMatchObject({
+      ok: true,
+      status: "artifact_created",
+      replayedTerminal: false,
+    });
+    expect(
+      holder.log.filter((event) => event.event === "provider-invoked"),
+    ).toHaveLength(1);
+  });
+
+  it("replays a completed person Run in a fresh process without any provider call", async () => {
+    const stateRoot = await makeStateRoot();
+    const first = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+    });
+    await first.waitFor("ready");
+    first.send("go");
+    await expect(first.result).resolves.toMatchObject({
+      ok: true,
+      status: "artifact_created",
+      replayedTerminal: false,
+    });
+
+    const replay = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+    });
+    await replay.waitFor("ready");
+    replay.send("go");
+    await expect(replay.result).resolves.toMatchObject({
+      ok: true,
+      status: "artifact_created",
+      replayedTerminal: true,
+    });
+    expect(
+      replay.log.filter((event) => event.event === "provider-invoked"),
+    ).toHaveLength(0);
   });
 });

@@ -88,14 +88,44 @@ model is not provider admission by itself. TikHub has no automatic fallback.
 ## Local state
 
 State defaults to `~/.talent-signal/agent/runs/<run-id>/` with owner-only
-directory and file permissions. Each Run contains its immutable scope,
-checkpoint, append-only events and outputs, terminal receipt, and either a
-draft artifact or `no_action`. Drafts declare `publicationAuthority: "none"`.
+directory (0700) and file (0600) permissions. Each Run contains its immutable
+scope (`run.json`), a mutable checkpoint, append-only events and outputs,
+terminal receipt, and either a draft artifact or `no_action`. Drafts declare
+`publicationAuthority: "none"`.
+
+Immutable records (run, terminal receipt, artifact, and no-action) are written
+to complete same-directory temporary files (0600) and published atomically with
+a hard link that never replaces an existing record. An equivalent replay keeps
+the original artifact or no-action ID and the original `startedAt`/`createdAt`
+values, and `startedAt` is excluded from Run identity. A conflicting candidate
+or terminal receipt, a corrupt/invalid envelope or ID, a non-regular target, or
+an existing record symlink fails closed without overwriting or regenerating
+anything. Checkpoints are the only records replaced by atomic rename. Persisted
+JSON is read with `O_NOFOLLOW` from a verified regular file; malformed JSON
+produces one fixed content-free error, so persisted person/provider payload
+never reaches logs or CLI stderr.
+
+Each Run directory also holds `admission.sqlite`, a per-Run coordination
+database containing no person, provider, or schema data. One SQLite
+`BEGIN IMMEDIATE` transaction is held across the whole command (terminal read
+and identity replay, provider construction, and runner execution), admitting at
+most one live process per Run: a second invocation of the same Run fails closed
+as busy before any model or network call, while different Runs stay
+independently executable and the person server's same-process dedup is
+unchanged. The busy timeout is zero; SQLite corruption and I/O failures are
+never reported as busy or success; the database is never deleted or renamed
+while active. Kernel/SQLite locks release when a process dies, so a fresh
+invocation reacquires without lock stealing, stale-pid unlinking, or rename
+recovery. This coordination uses Node's built-in experimental `node:sqlite`
+(requires Node >= 22.19) and the local filesystem: it is single-host
+coordination only, not a distributed lock, and immutable file writes alone do
+not serialize a Run.
 
 Pass `--run-id <uuid>` to resume or replay a Run and `--state-dir <path>` to
 choose another local root. A Run ID cannot be reused with a different objective
-or authorization. Deleting local state is a local user operation; no backend
-copy exists.
+or authorization. Completed-terminal replay constructs no providers and makes
+no model or network call. Deleting local state is a local user operation; no
+backend copy exists.
 
 Person-research state uses the sibling
 `~/.talent-signal/agent/person-runs/<run-id>/` tree. It stores only the image
@@ -121,6 +151,11 @@ retains its separate direct-fetch redirect and robots checks.
 The same suite covers autonomous platform-tool selection, photo-only
 abstention, hostile screenshot instructions, immutable image manifests,
 same-Run profile citations, owner-only files, replay drift, and absence of raw
-image bytes and secrets from local state. Live TikHub verification uses the
-non-billable liveness and account-envelope endpoints; it does not issue a
-profile search merely to test a credential.
+image bytes and secrets from local state. Real forked processes on freshly
+built host modules prove one-winner immutable publishing for conflicting starts
+and terminal receipts, duplicate artifact/no-action convergence on one
+persisted ID, fixed content-free malformed-record failures, and per-Run
+admission: busy rejection before any provider call, independent Runs, release
+on callback error and on process death, and provider-once command concurrency.
+Live TikHub verification uses the non-billable liveness and account-envelope
+endpoints; it does not issue a profile search merely to test a credential.

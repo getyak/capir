@@ -16,6 +16,7 @@ import {
 
 import { LocalResearchGateway } from "./localResearchGateway.js";
 import { LocalResearchStore } from "./localResearchStore.js";
+import { withLocalRunAdmission } from "./localRunAdmission.js";
 import {
   configuredFirecrawlWebFetch,
   configuredLocalAgentProvider,
@@ -159,91 +160,101 @@ export async function runLocalResearchCommand(
 ): Promise<LocalResearchCommandResult> {
   const parsed = parseResearchArguments(args, environment);
   const store = new LocalResearchStore(parsed.stateRoot);
-  const existing = await store.readTerminal(parsed.runID);
-  if (existing) {
-    const recorded = await store.readRun(parsed.runID);
-    const requestedIdentity = fingerprint({
-      runID: parsed.runID,
-      objective: parsed.objective,
-      authorization: {
-        purpose: "company_market_research",
-        subjectKind: parsed.subjectKind,
-        accessMode: parsed.accessMode,
-        allowedDomains: parsed.allowedDomains,
-        queryAnchors: parsed.queryAnchors,
-        maximumSearchCount: parsed.maximumSearchCount,
-        maximumFetchCount: parsed.maximumFetchCount,
-      },
-    });
-    if (
-      !recorded ||
-      fingerprint({
-        runID: recorded.scope.runID,
-        objective: recorded.scope.objective,
-        authorization: recorded.scope.authorization,
-      }) !== requestedIdentity
-    ) {
-      throw new Error(
-        "The completed run ID belongs to a different objective or authorization.",
-      );
-    }
-    const artifactFile =
-      existing.status === "artifact_created" && existing.candidateFingerprint
-        ? store.artifactPath(parsed.runID, existing.candidateFingerprint)
-        : null;
-    return {
-      receipt: existing,
-      stateDirectory: resolve(parsed.stateRoot, "runs", parsed.runID),
-      artifactFile,
-      replayedTerminal: true,
-    };
-  }
-  const searchProvider =
-    dependencies.searchProvider ?? configuredLocalWebSearchProvider(environment);
-  const modelProvider =
-    dependencies.modelProvider ?? configuredLocalAgentProvider(environment);
-  const gateway =
-    dependencies.gateway ??
-    new LocalResearchGateway(searchProvider, store, {
-      fetchPage: configuredFirecrawlWebFetch(environment),
-    });
-  const budget: AgentBudget = {
-    ...DEFAULT_AGENT_BUDGET,
-    maxToolCalls: Math.min(
-      DEFAULT_AGENT_BUDGET.maxToolCalls,
-      parsed.maximumSearchCount + parsed.maximumFetchCount + 1,
-    ),
-  };
-  const receipt = await runPublicResearchAgent({
-    scope: {
-      runID: parsed.runID,
-      objective: parsed.objective,
-      providerID: searchProvider.id,
-      authorization: {
-        purpose: "company_market_research",
-        subjectKind: parsed.subjectKind,
-        accessMode: parsed.accessMode,
-        allowedDomains: parsed.allowedDomains,
-        queryAnchors: parsed.queryAnchors,
-        maximumSearchCount: parsed.maximumSearchCount,
-        maximumFetchCount: parsed.maximumFetchCount,
-      },
+  const stateDirectory = resolve(parsed.stateRoot, "runs", parsed.runID);
+  // Whole-Run admission wraps terminal read and identity replay, provider
+  // construction, and runner execution: at most one live process per Run may
+  // reach any model or network call, while completed-terminal replay performs
+  // no provider call at all.
+  return withLocalRunAdmission(
+    { runDirectory: stateDirectory, runID: parsed.runID },
+    async () => {
+      const existing = await store.readTerminal(parsed.runID);
+      if (existing) {
+        const recorded = await store.readRun(parsed.runID);
+        const requestedIdentity = fingerprint({
+          runID: parsed.runID,
+          objective: parsed.objective,
+          authorization: {
+            purpose: "company_market_research",
+            subjectKind: parsed.subjectKind,
+            accessMode: parsed.accessMode,
+            allowedDomains: parsed.allowedDomains,
+            queryAnchors: parsed.queryAnchors,
+            maximumSearchCount: parsed.maximumSearchCount,
+            maximumFetchCount: parsed.maximumFetchCount,
+          },
+        });
+        if (
+          !recorded ||
+          fingerprint({
+            runID: recorded.scope.runID,
+            objective: recorded.scope.objective,
+            authorization: recorded.scope.authorization,
+          }) !== requestedIdentity
+        ) {
+          throw new Error(
+            "The completed run ID belongs to a different objective or authorization.",
+          );
+        }
+        const artifactFile =
+          existing.status === "artifact_created" && existing.candidateFingerprint
+            ? store.artifactPath(parsed.runID, existing.candidateFingerprint)
+            : null;
+        return {
+          receipt: existing,
+          stateDirectory,
+          artifactFile,
+          replayedTerminal: true,
+        };
+      }
+      const searchProvider =
+        dependencies.searchProvider ?? configuredLocalWebSearchProvider(environment);
+      const modelProvider =
+        dependencies.modelProvider ?? configuredLocalAgentProvider(environment);
+      const gateway =
+        dependencies.gateway ??
+        new LocalResearchGateway(searchProvider, store, {
+          fetchPage: configuredFirecrawlWebFetch(environment),
+        });
+      const budget: AgentBudget = {
+        ...DEFAULT_AGENT_BUDGET,
+        maxToolCalls: Math.min(
+          DEFAULT_AGENT_BUDGET.maxToolCalls,
+          parsed.maximumSearchCount + parsed.maximumFetchCount + 1,
+        ),
+      };
+      const receipt = await runPublicResearchAgent({
+        scope: {
+          runID: parsed.runID,
+          objective: parsed.objective,
+          providerID: searchProvider.id,
+          authorization: {
+            purpose: "company_market_research",
+            subjectKind: parsed.subjectKind,
+            accessMode: parsed.accessMode,
+            allowedDomains: parsed.allowedDomains,
+            queryAnchors: parsed.queryAnchors,
+            maximumSearchCount: parsed.maximumSearchCount,
+            maximumFetchCount: parsed.maximumFetchCount,
+          },
+        },
+        budget,
+        provider: modelProvider,
+        gateway,
+        journal: store,
+      });
+      const artifactFile =
+        receipt.status === "artifact_created" && receipt.candidateFingerprint
+          ? store.artifactPath(parsed.runID, receipt.candidateFingerprint)
+          : null;
+      return {
+        receipt,
+        stateDirectory,
+        artifactFile,
+        replayedTerminal: false,
+      };
     },
-    budget,
-    provider: modelProvider,
-    gateway,
-    journal: store,
-  });
-  const artifactFile =
-    receipt.status === "artifact_created" && receipt.candidateFingerprint
-      ? store.artifactPath(parsed.runID, receipt.candidateFingerprint)
-      : null;
-  return {
-    receipt,
-    stateDirectory: resolve(parsed.stateRoot, "runs", parsed.runID),
-    artifactFile,
-    replayedTerminal: false,
-  };
+  );
 }
 
 async function main() {
