@@ -42,6 +42,13 @@ describe("workspace navigation accessibility and reachability", () => {
     expect(html).toContain('aria-label="搜索人物或对话"');
   });
 
+  it("gives the expanded search entry readable text while retaining its accessible name", () => {
+    const primary = render().match(/<nav\b[^>]*>[\s\S]*?<\/nav>/)?.[0] ?? "";
+    expect(primary).toContain('aria-label="搜索人物或对话"');
+    expect(primary).toMatch(/<span[^>]*>搜索<\/span>/);
+    expect(primary).toContain("⌘K");
+  });
+
   it("renders the compact desktop order and preserves the collapsed history destination", () => {
     const html = render();
     expect(html).not.toContain("更多");

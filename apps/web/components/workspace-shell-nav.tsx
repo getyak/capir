@@ -39,7 +39,8 @@ import styles from "./workspace-shell.module.css";
 /**
  * Compact shared sidebar (settled GET-129): 248px expanded / 72px collapsed.
  *
- * The expanded rail is one horizontal row of five controls — today,
+ * The browser's expanded sidebar uses labeled rows. The native hosted rail
+ * retains one horizontal row of five controls — today,
  * conversation, people, meetings, scoped global search. The selected control
  * is a 74x36 pill with its label; the others stay 36x36 icons. Route identity
  * and hrefs live in `@/lib/workspace-navigation`; this file owns only

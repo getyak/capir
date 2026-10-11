@@ -282,6 +282,7 @@ export function WorkspaceGlobalSearchDialog({
           type="button"
         >
           <MagnifyingGlass aria-hidden="true" size={17} />
+          {presentation === "rail" && <><span className={styles.railControlLabel}>搜索</span><kbd className={styles.railShortcut}>⌘K</kbd></>}
           {presentation === "field" && <><span>搜索人物或对话</span><kbd>⌘K</kbd></>}
         </button>
       </DialogTrigger>

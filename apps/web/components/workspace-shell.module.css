@@ -1760,13 +1760,13 @@
 }
 
 @media (min-width: 761px) {
-  .brandRow, .shell:has(.sidebarState[data-collapsed="true"]) .brandRow {
+  :global(html[data-desktop-surface="workspace"]) .brandRow {
     display: block; height: 110px; min-height: 110px; margin-bottom: 10px; position: relative;
   }
-  .brand, .shell:has(.sidebarState[data-collapsed="true"]) .brand {
+  :global(html[data-desktop-surface="workspace"]) .brand {
     position: absolute; top: 0; left: 0; padding: 6px 7px; max-width: 220px;
   }
-  .brandActions, .shell:has(.sidebarState[data-collapsed="true"]) .brandActions {
+  :global(html[data-desktop-surface="workspace"]) .brandActions {
     position: absolute; top: 40px; left: 3px; flex-direction: column; gap: 4px;
   }
 }
@@ -1794,6 +1794,7 @@
 .railControl:hover { background:var(--hover); color:var(--ink); }
 .railControl[data-selected="true"] { background:var(--surface-selected); color:var(--ink); flex-basis:74px; font-weight:500; }
 .railControlLabel { display:none; line-height:20px; }
+.railShortcut { display:none; }
 .railControl[data-selected="true"] .railControlLabel { display:inline; }
 .railControl:focus-visible,.newConversation:focus-visible,.personChip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .railCollapsed { display:none; }
@@ -1807,6 +1808,94 @@
 .personChip { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--ink); cursor:pointer; display:flex; font:inherit; font-size:12px; gap:6px; height:32px; width:100%; min-width:0; padding:4px 0; text-align:left; }
 .personChip > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .personChip:hover,.personChip[aria-pressed="true"] { background:var(--surface-selected); }
+
+/* A browser sidebar is a reading/navigation surface. Keep the native hosted
+   toolbar's compact composition separate from the expanded Web hierarchy. */
+@media (min-width: 761px) {
+  :global(html:not([data-desktop-surface])) .brandRow {
+    min-height: 44px;
+    margin-bottom: 16px;
+  }
+
+  :global(html:not([data-desktop-surface])) .brand {
+    min-height: 44px;
+    padding: 6px 10px;
+  }
+
+  :global(html:not([data-desktop-surface])) .brandActions .iconButton {
+    height: 44px;
+    width: 44px;
+  }
+
+  :global(html:not([data-desktop-surface])) .railRow {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  :global(html:not([data-desktop-surface])) .shell:not(:has(.sidebarState[data-collapsed="true"])) .sidebarState {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+
+  :global(html:not([data-desktop-surface])) .railRow .railControl {
+    border-radius: 10px;
+    flex: 0 0 auto;
+    font-size: 14px;
+    gap: 12px;
+    height: 44px;
+    justify-content: flex-start;
+    padding: 0 12px;
+    width: 100%;
+  }
+
+  :global(html:not([data-desktop-surface])) .railRow .railControlLabel {
+    display: inline;
+  }
+
+  :global(html:not([data-desktop-surface])) .railRow .railShortcut {
+    color: var(--muted);
+    display: inline;
+    font: inherit;
+    font-size: 11px;
+    margin-left: auto;
+  }
+
+  :global(html:not([data-desktop-surface])) .sidebarScroll {
+    gap: 20px;
+    margin-top: 24px;
+  }
+
+  :global(html:not([data-desktop-surface])) .group {
+    margin-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  :global(html:not([data-desktop-surface])) .groupTitle {
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  :global(html:not([data-desktop-surface])) .historyHeader,
+  :global(html:not([data-desktop-surface])) .newConversation {
+    font-size: 12px;
+  }
+
+  :global(html:not([data-desktop-surface])) .personChips {
+    gap: 2px;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0;
+  }
+
+  :global(html:not([data-desktop-surface])) .personChip {
+    font-size: 13px;
+    gap: 10px;
+    height: 40px;
+    padding: 6px 10px;
+  }
+}
 .shell:has(.sidebarState[data-collapsed="true"]) .sidebarState { flex:1; min-height:0; }
 .shell:has(.sidebarState[data-collapsed="true"]) :is(.brandRow,.railRow) { display:none; }
 .shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { align-items:center; display:flex; flex:1; flex-direction:column; min-height:0; }
