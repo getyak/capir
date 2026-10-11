@@ -251,9 +251,11 @@ gates every screenshot and private-evidence model path separately.
 The unauthenticated public synthetic-conversation demo is admitted only with
 `TALENT_SIGNAL_ALLOW_PUBLIC_AI_DEMO=true` in addition to
 `TALENT_SIGNAL_AI_ENABLED=true` and a configured provider credential. It sends
-only the typed synthetic demo conversation text to the pinned model provider;
-it is not an evidence path and never receives screenshots, private
-conversations, or backend credentials. Its budget is one shared 8-per-minute
+only the bounded user-entered conversation text to the pinned model provider.
+Use synthetic text for this demo: the route does not classify whether a caller's
+text is private. It does not load authenticated workspace conversations,
+screenshots, or backend credentials, and has no workspace evidence authority.
+Its budget is one shared 8-per-minute
 GLOBAL fixed-window budget per process with a bounded `Retry-After`. Caller
 forwarding headers are never trusted for cost isolation, so deliberate header
 churn cannot buy more model budget. This budget is intentionally not a
@@ -275,8 +277,8 @@ secret path and never enters the client bundle, model-visible configuration,
 or logs. `OPENROUTER_BASE_URL` must remain the official OpenRouter host;
 `TALENT_SIGNAL_OPENROUTER_PROXY_URL` accepts only HTTP or HTTPS proxies, and
 `TALENT_SIGNAL_OPENROUTER_PROVIDER_ORDER` stays a bounded provider hint. The
-committed `.env.example` records these names with defaults `false` or empty and
-no credentials. Never enable an admission flag by mutating Infisical or a
+committed `.env.example` records disabled admission flags and empty credential
+placeholders; provider selection keeps its documented `auto` default. Never enable an admission flag by mutating Infisical or a
 resident environment outside a reviewed admission decision.
 
 ## Recovery and verification
