@@ -14,14 +14,17 @@
   dependency safety batch `81324609` after independent clean-install checks,
   immutable research state `1f5d50a1` after independent review and 133 host tests,
   and research allowance/sequencing `273ed9a1` after 414 Agent and 142 host tests
-  plus actual same-Run process-interruption probes.
+  plus actual same-Run process-interruption probes, and error logging/Web
+  admission `6953ebb8` after 54 backend and 36 Web focused tests plus actual
+  Pino/limiter negative probes.
   Resident deployment and final delivery remain outstanding.
-- Active Pi batch: backend error logging and Web admission
-  `20261012-060810-73e39891`, frozen base `196d8ca5`. Research allowance
+- Next Pi batch: interrupted checkpoint/journal integrity (PH-13). Error
+  logging/Web admission `20261012-060810-73e39891` passed independent review
+  with one repair and a narrowly approved test companion. Research allowance
   recovery `20261012-050607-5d7531a8` passed review after two bounded parent
   corrections; search/fetch/profile each dispatched once at a maximum of one
   across actual command process death and same-Run recovery.
-- Remaining order: error logging/Web admission; journal integrity recovery;
+- Remaining order: journal integrity recovery;
   durable diagnostic privacy;
   model-context diagnostic privacy; dead Web retirement/meeting identity
   admission; knowledge/tooling ownership. Review and verify each diff before
@@ -534,3 +537,28 @@ but before the terminal-event append. Both commands replayed `no_action` from
 that receipt while the journal remained `[1, 2]`, with no terminal event. Public
 and person checkpoint offsets differ legitimately (`2` versus `3`); integrity
 validation must follow those producers and preserve valid completed replay.
+
+## Accepted error logging and Web admission receipt
+
+- Integrated `6953ebb8` after one Pi repair. A necessary adjacent meetingDrafts
+  test companion was approved after the scope guard stopped implementation;
+  frozen provider, model, base and cumulative limits were preserved.
+- Codex traced the actual shipped logger/global handler and Pino message
+  inference. Final error serialization exports only closed categories and
+  allowlisted codes. Message normalization compares both `err` and `error`,
+  including primitive strings, while preserving a distinct fixed operation
+  message. Parent actual Fastify/Pino output contains no synthetic canary.
+- Public analysis uses the existing production Origin boundary and shared
+  8/minute process budget. Screenshot analysis uses 6/minute per verified
+  backend account/user after workspace and revocation checks, before image,
+  model or receipt work. The bounded map retains active offenders at capacity,
+  evicts expired keys, rejects oversized identifiers and returns finite retry.
+  Invalid injected clocks fail closed before changing consumed state.
+- All five independent final-source checks passed: backend types and 54 tests
+  in four files; Web types and 36 tests in three files; docs check. Exact-source
+  hashes and sanitized parent before/after receipts are retained in the
+  permanent task artifact directory. No real personal evidence or live model
+  was used. No confirmed P0/P1 remains in this batch.
+- These budgets are per process; public deployments still need trusted edge
+  control. Resident AI admission flags were not enabled. Clean committed
+  final-source rollout and live acceptance remain outstanding.
