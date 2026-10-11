@@ -107,7 +107,6 @@ async function withBuildLock(action) {
  * Returns the host dist directory.
  */
 export async function ensureFreshHostBuild() {
-  if (await isFresh()) return hostDist;
   return withBuildLock(async () => {
     if (await isFresh()) return hostDist;
     const options = { cwd: repoRoot, stdio: "pipe" };
@@ -403,12 +402,30 @@ async function runResearchCommandJob(job) {
     providerID: "synthetic-search",
     url: "https://example.com/update",
   });
+  // Synthetic gateway dispatch barrier: notifies the parent before any
+  // provider/network-equivalent call and optionally holds the first matching
+  // dispatch for a SIGKILL or release command.
+  let dispatches = 0;
+  let heldOnce = false;
+  const gatewayDispatch = async (operation) => {
+    const dispatch = dispatches++;
+    notify("gateway-dispatch", { operation, dispatch });
+    if (job.holdGatewayOperation === operation && !heldOnce) {
+      heldOnce = true;
+      if (job.holdGatewayUntil === "kill") await holdForever();
+      await waitForCommand("release");
+    }
+  };
   const searchProvider = {
     id: "synthetic-search",
-    async search() {
+    async search(_scope, input) {
+      await gatewayDispatch("search");
       return [
         {
-          url: "https://example.com/update",
+          url:
+            input && input.query && input.query.includes("second")
+              ? "https://example.com/update-2"
+              : "https://example.com/update",
           title: "Company update",
           snippet: "A public update.",
           publishedAt: null,
@@ -417,45 +434,84 @@ async function runResearchCommandJob(job) {
       ];
     },
   };
-  const fetchPage = async (_scope, discovered) => ({
-    canonicalUrl: discovered.url,
-    title: discovered.title,
-    text: "The company published an update.",
-    contentHash: "a".repeat(64),
-    retrievedAt: "2026-08-30T00:00:00.000Z",
-    providerID: discovered.providerID,
-  });
-  const scripted = new ScriptedAgentProvider(
-    [
-      {
-        tool: "search_web",
-        input: {
-          query: "Example Company public update",
-          maximum_results: 5,
-          recency_days: 30,
+  const fetchPage = async (_scope, discovered) => {
+    await gatewayDispatch("fetch");
+    return {
+      canonicalUrl: discovered.url,
+      title: discovered.title,
+      text: "The company published an update.",
+      contentHash: "a".repeat(64),
+      retrievedAt: "2026-08-30T00:00:00.000Z",
+      providerID: discovered.providerID,
+    };
+  };
+  const searchStep = {
+    tool: "search_web",
+    input: {
+      query: "Example Company public update",
+      maximum_results: 5,
+      recency_days: 30,
+    },
+  };
+  const secondSearchStep = {
+    tool: "search_web",
+    input: {
+      query: "Example Company second update",
+      maximum_results: 5,
+      recency_days: 30,
+    },
+  };
+  const fetchStep = { tool: "fetch_web", input: { result_id: resultID } };
+  const noAction = {
+    outcome: "no_action",
+    reason_code: "NO_MATERIAL_CHANGE",
+    reason: "The synthetic Run stops at its bounded tool plan.",
+    missing_evidence_refs: [],
+  };
+  const plan = job.plan ?? "artifact";
+  let steps = [];
+  let output = noAction;
+  switch (plan) {
+    case "artifact":
+      steps = [
+        searchStep,
+        fetchStep,
+        {
+          tool: "create_research_artifact",
+          input: {
+            title: "Company update",
+            summary: "The company published an update.",
+            limitations: "One public source was fetched.",
+            claims: [
+              {
+                statement: "The company published an update.",
+                source_refs: [resultID],
+              },
+            ],
+          },
         },
-      },
-      { tool: "fetch_web", input: { result_id: resultID } },
-      {
-        tool: "create_research_artifact",
-        input: {
-          title: "Company update",
-          summary: "The company published an update.",
-          limitations: "One public source was fetched.",
-          claims: [
-            {
-              statement: "The company published an update.",
-              source_refs: [resultID],
-            },
-          ],
-        },
-      },
-    ],
-    (toolResults) => ({
-      outcome: "artifact",
-      candidate_fingerprint: toolResults.at(-1)?.candidateFingerprint,
-    }),
-  );
+      ];
+      output = (toolResults) => ({
+        outcome: "artifact",
+        candidate_fingerprint: toolResults.at(-1)?.candidateFingerprint,
+      });
+      break;
+    case "search":
+      steps = [searchStep];
+      break;
+    case "search-fetch":
+      steps = [searchStep, fetchStep];
+      break;
+    case "fetch":
+      steps = [fetchStep];
+      break;
+    case "search-pair":
+      steps = [searchStep, secondSearchStep];
+      break;
+    default:
+      return reported(new Error(`Unknown research-command plan: ${plan}`));
+  }
+  const scripted = new ScriptedAgentProvider(steps, output);
   const modelProvider = {
     id: scripted.id,
     model: scripted.model,
@@ -464,7 +520,29 @@ async function runResearchCommandJob(job) {
     async run(request, invokeTool, signal) {
       notify("provider-invoked");
       if (job.holdProvider) await waitForCommand("finish");
-      return scripted.run(request, invokeTool, signal);
+      if (plan !== "search-pair") {
+        return scripted.run(request, invokeTool, signal);
+      }
+      // The supported provider callback concurrency scenario: two valid tool
+      // callbacks live at once with no per-Run serializer in the adapter.
+      const queuedController = new AbortController();
+      const first = invokeTool(steps[0].tool, steps[0].input);
+      const second = invokeTool(
+        steps[1].tool,
+        steps[1].input,
+        job.abortQueuedExecution ? queuedController.signal : undefined,
+      );
+      if (job.abortQueuedExecution) queuedController.abort();
+      notify("tools-enqueued");
+      await Promise.allSettled([first, second]);
+      return {
+        structuredOutput: output,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedUsd: 0,
+        turns: 1,
+        permissionDenials: [],
+      };
     },
   };
   const gateway = new LocalResearchGateway(searchProvider, new LocalResearchStore(job.stateRoot), {
@@ -473,22 +551,29 @@ async function runResearchCommandJob(job) {
   notify("ready");
   await waitForCommand("go");
   try {
+    const args = [
+      "research",
+      "--objective",
+      "Research Example Company's public update.",
+      "--subject",
+      "company",
+      "--allow-domain",
+      "example.com",
+      "--anchor",
+      "Example Company",
+      "--run-id",
+      job.runID,
+      "--state-dir",
+      job.stateRoot,
+    ];
+    if (job.maximumSearchCount !== undefined) {
+      args.push("--max-search", String(job.maximumSearchCount));
+    }
+    if (job.maximumFetchCount !== undefined) {
+      args.push("--max-fetch", String(job.maximumFetchCount));
+    }
     const result = await runLocalResearchCommand(
-      [
-        "research",
-        "--objective",
-        "Research Example Company's public update.",
-        "--subject",
-        "company",
-        "--allow-domain",
-        "example.com",
-        "--anchor",
-        "Example Company",
-        "--run-id",
-        job.runID,
-        "--state-dir",
-        job.stateRoot,
-      ],
+      args,
       {},
       {
         modelProvider,
@@ -499,6 +584,7 @@ async function runResearchCommandJob(job) {
     return {
       ok: true,
       status: result.receipt.status,
+      reasonCode: result.receipt.reasonCode,
       replayedTerminal: result.replayedTerminal,
       artifactFile: result.artifactFile,
     };
@@ -548,10 +634,25 @@ async function runPersonCommandJob(job) {
     mimeType: "image/png",
     contentHash: createHash("sha256").update(bytes).digest("hex"),
   });
+  // Synthetic gateway dispatch barrier: notifies the parent before any
+  // provider/network-equivalent call and optionally holds the first matching
+  // dispatch for a SIGKILL or release command.
+  let dispatches = 0;
+  let heldOnce = false;
+  const gatewayDispatch = async (operation) => {
+    const dispatch = dispatches++;
+    notify("gateway-dispatch", { operation, dispatch });
+    if (job.holdGatewayOperation === operation && !heldOnce) {
+      heldOnce = true;
+      if (job.holdGatewayUntil === "kill") await holdForever();
+      await waitForCommand("release");
+    }
+  };
   const profileProvider = new TikHubProvider({
     apiKey: "provider-secret-must-not-persist",
-    fetcher: async () =>
-      new Response(
+    fetcher: async () => {
+      await gatewayDispatch("profiles");
+      return new Response(
         JSON.stringify({
           code: 200,
           request_id: "provider-request-1",
@@ -570,54 +671,77 @@ async function runPersonCommandJob(job) {
           },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
-      ),
+      );
+    },
   });
-  const scripted = new ScriptedAgentProvider(
-    [
-      {
-        tool: "search_douyin_profiles",
-        input: {
-          visible_identity_clue: "@zhouyu",
-          source_artifact_id: artifactID,
-          maximum_results: 5,
+  const profileSearchStep = {
+    tool: "search_douyin_profiles",
+    input: {
+      visible_identity_clue: "@zhouyu",
+      source_artifact_id: artifactID,
+      maximum_results: 5,
+    },
+  };
+  const noAction = {
+    outcome: "no_action",
+    reason_code: "NO_PUBLIC_PROFILE_MATCH",
+    reason: "The synthetic Run stops at its bounded tool plan.",
+    missing_evidence_refs: [],
+  };
+  const plan = job.plan ?? "artifact";
+  let steps = [];
+  let output = noAction;
+  switch (plan) {
+    case "artifact":
+      steps = [
+        profileSearchStep,
+        {
+          tool: "create_person_research_artifact",
+          input: {
+            title: "可能的公开资料",
+            summary: "可见账号线索与一个公开资料相符，但身份尚未确认。",
+            limitations: "仅比较可见文字线索；未进行人脸识别或人物绑定。",
+            identity_status: "possible_match",
+            observed_clues: [
+              {
+                kind: "handle",
+                value: "@zhouyu",
+                source_artifact_id: artifactID,
+                observation_status: "unreviewed_screenshot_observation",
+              },
+            ],
+            candidates: [
+              {
+                result_id: resultID,
+                match_basis: "公开账号名与截图可见账号一致。",
+              },
+            ],
+            claims: [
+              {
+                statement: "提供方返回的公开资料账号名为 zhouyu。",
+                epistemic_status: "provider_observation",
+                source_refs: [resultID],
+              },
+            ],
+          },
         },
-      },
-      {
-        tool: "create_person_research_artifact",
-        input: {
-          title: "可能的公开资料",
-          summary: "可见账号线索与一个公开资料相符，但身份尚未确认。",
-          limitations: "仅比较可见文字线索；未进行人脸识别或人物绑定。",
-          identity_status: "possible_match",
-          observed_clues: [
-            {
-              kind: "handle",
-              value: "@zhouyu",
-              source_artifact_id: artifactID,
-              observation_status: "unreviewed_screenshot_observation",
-            },
-          ],
-          candidates: [
-            {
-              result_id: resultID,
-              match_basis: "公开账号名与截图可见账号一致。",
-            },
-          ],
-          claims: [
-            {
-              statement: "提供方返回的公开资料账号名为 zhouyu。",
-              epistemic_status: "provider_observation",
-              source_refs: [resultID],
-            },
-          ],
-        },
-      },
-    ],
-    (results) => ({
-      outcome: "person_research_artifact",
-      candidate_fingerprint: results.at(-1)?.candidateFingerprint,
-    }),
-  );
+      ];
+      output = (results) => ({
+        outcome: "person_research_artifact",
+        candidate_fingerprint: results.at(-1)?.candidateFingerprint,
+      });
+      break;
+    case "profile":
+      steps = [profileSearchStep];
+      break;
+    case "profile-pair":
+      // Two valid same-platform callbacks live at once.
+      steps = [profileSearchStep, profileSearchStep];
+      break;
+    default:
+      return reported(new Error(`Unknown person-command plan: ${plan}`));
+  }
+  const scripted = new ScriptedAgentProvider(steps, output);
   const modelProvider = {
     id: scripted.id,
     model: "synthetic-vision-tool-model",
@@ -630,7 +754,23 @@ async function runPersonCommandJob(job) {
     async run(request, invokeTool, signal) {
       notify("provider-invoked");
       if (job.holdProvider) await waitForCommand("finish");
-      return scripted.run(request, invokeTool, signal);
+      if (plan !== "profile-pair") {
+        return scripted.run(request, invokeTool, signal);
+      }
+      // The supported provider callback concurrency scenario: two valid tool
+      // callbacks live at once with no per-Run serializer in the adapter.
+      const first = invokeTool(steps[0].tool, steps[0].input);
+      const second = invokeTool(steps[1].tool, steps[1].input);
+      notify("tools-enqueued");
+      await Promise.allSettled([first, second]);
+      return {
+        structuredOutput: output,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedUsd: 0,
+        turns: 1,
+        permissionDenials: [],
+      };
     },
   };
   notify("ready");
@@ -643,7 +783,7 @@ async function runPersonCommandJob(job) {
         objective:
           "Find possible public profile matches using only identity text visibly present in this screenshot.",
         allowedPlatforms: ["douyin"],
-        maximumProviderCalls: 2,
+        maximumProviderCalls: job.maximumProviderCalls ?? 2,
         maximumResultsPerCall: 5,
         runID: job.runID,
         stateRoot: job.stateRoot,
@@ -654,6 +794,7 @@ async function runPersonCommandJob(job) {
     return {
       ok: true,
       status: result.receipt.status,
+      reasonCode: result.receipt.reasonCode,
       replayedTerminal: result.replayedTerminal,
       artifactFile: result.artifactFile,
     };

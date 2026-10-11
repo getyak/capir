@@ -44,12 +44,27 @@ export type ResearchWorkerJob =
       stateRoot: string;
       runID: string;
       holdProvider: boolean;
+      /** Tool plan for the synthetic provider; default keeps the shipped run. */
+      plan?: "artifact" | "search" | "search-fetch" | "fetch" | "search-pair";
+      /** Holds the first matching synthetic gateway dispatch. */
+      holdGatewayOperation?: "search" | "fetch";
+      holdGatewayUntil?: "kill" | "release";
+      maximumSearchCount?: number;
+      maximumFetchCount?: number;
+      /** Aborts the second concurrent callback's execution signal while queued. */
+      abortQueuedExecution?: boolean;
     }
   | {
       kind: "person-command";
       stateRoot: string;
       runID: string;
       holdProvider: boolean;
+      /** Tool plan for the synthetic provider; default keeps the shipped run. */
+      plan?: "artifact" | "profile" | "profile-pair";
+      /** Holds the first matching synthetic gateway dispatch. */
+      holdGatewayOperation?: "profiles";
+      holdGatewayUntil?: "kill" | "release";
+      maximumProviderCalls?: number;
     };
 
 export interface ResearchWorkerEvent {
@@ -72,6 +87,7 @@ export interface ResearchWorkerResult extends ResearchWorkerEvent {
   receipt?: unknown;
   committed?: ResearchWorkerCommit;
   status?: string;
+  reasonCode?: string;
   replayedTerminal?: boolean;
   artifactFile?: string | null;
   present?: boolean;

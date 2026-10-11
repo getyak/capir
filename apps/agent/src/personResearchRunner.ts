@@ -15,6 +15,11 @@ import {
 } from "./schemas.js";
 import { AgentCapabilityError } from "./runtimePolicy.js";
 import { agentUsage, assertAgentBudget, exceededBudget } from "./runBudget.js";
+import {
+  createResearchToolExecution,
+  ResearchToolWriteError,
+  writeResearchToolState,
+} from "./researchToolExecution.js";
 import { SYSTEM_AGENT_RUNTIME } from "./runtimeDependencies.js";
 import {
   PERSON_RESEARCH_AGENT_TOOL_NAMES,
@@ -300,12 +305,26 @@ export async function runPersonResearchAgent(
       sequence,
     } satisfies AgentPersonResearchCheckpoint);
 
+  // One per-invocation FIFO chain: concurrent provider tool callbacks execute
+  // one at a time so counter pre-saves, dispatches, checkpoint writes, and
+  // journal appends cannot interleave. Different Runs use different chains.
+  const toolExecution = createResearchToolExecution();
+
+  const failureCode = (error: unknown) =>
+    error instanceof AgentCapabilityError ||
+    error instanceof AgentPersonResearchPolicyError ||
+    error instanceof PersonResearchBoundaryError
+      ? error.code
+      : "PROVIDER_OR_COMMIT_FAILED";
+
   const complete = async (
     status: AgentPersonResearchTerminalReceipt["status"],
     reasonCode: string,
     artifactID: string | null = null,
     noActionID: string | null = null,
   ) => {
+    // No in-flight tool write may race provider/terminal settlement.
+    await toolExecution.drain();
     if (terminalStarted) throw new Error("The person-research terminal commit was already attempted.");
     terminalStarted = true;
     const receipt: AgentPersonResearchTerminalReceipt = {
@@ -341,17 +360,24 @@ export async function runPersonResearchAgent(
     return stored;
   };
 
-  const invokeTool = async (
+  const invokeTool = (
+    requestedName: string,
+    rawInput: unknown,
+  ): Promise<AgentToolResult> =>
+    toolExecution.enqueue(() => executeTool(requestedName, rawInput));
+
+  const executeTool = async (
     requestedName: string,
     rawInput: unknown,
   ): Promise<AgentToolResult> => {
+    // Cancellation of queued work is checked at actual execution, before any
+    // gateway dispatch.
     toolCalls += 1;
     const callID = runtime.randomUUID();
     const occurredAt = new Date(runtime.nowMs()).toISOString();
     const append = async (result: AgentToolResult) => {
       sequence += 1;
-      await saveCheckpoint();
-      await request.journal.append({
+      const event = {
         runID: scope.runID,
         sequence,
         kind: "tool_call",
@@ -361,7 +387,17 @@ export async function runPersonResearchAgent(
         inputFingerprint: fingerprint(rawInput),
         outputFingerprint: fingerprint(result),
         metadata: { call_id: callID, error_code: result.error?.code ?? null },
-      });
+      } as const;
+      try {
+        await writeResearchToolState(saveCheckpoint);
+        await writeResearchToolState(() => request.journal.append(event));
+      } catch (error) {
+        // A failed event write consumes no journal slot: the counter stays
+        // aligned with the appended journal so the fail-closed terminal can
+        // still be recorded.
+        sequence -= 1;
+        throw error;
+      }
       return result;
     };
     const deny = async (code: string, message: string) => {
@@ -420,6 +456,10 @@ export async function runPersonResearchAgent(
             "The public-profile provider-call budget is exhausted.",
           );
         }
+        // A possibly dispatched operation consumes its allowance
+        // conservatively: the incremented counter is durable before any
+        // provider/network call, so interruption can never refund or replay it.
+        await writeResearchToolState(saveCheckpoint);
         const results = await request.gateway.searchProfiles(
           scope,
           {
@@ -487,6 +527,8 @@ export async function runPersonResearchAgent(
         candidateFingerprint,
       });
     } catch (error) {
+      // A failed local journal write is fatal, never a model-visible denial.
+      if (error instanceof ResearchToolWriteError) throw error;
       if (
         error instanceof AgentCapabilityError ||
         error instanceof AgentPersonResearchPolicyError ||
@@ -520,10 +562,14 @@ export async function runPersonResearchAgent(
       },
       invokeTool,
       abort.signal,
-    );
+    ).finally(() => toolExecution.drain());
+    await toolExecution.drain();
+    const fatal = toolExecution.failure();
+    if (fatal !== null) {
+      return complete("failed", failureCode(fatal));
+    }
     sequence += 1;
-    await saveCheckpoint();
-    await request.journal.append({
+    const providerEvent = {
       runID: scope.runID,
       sequence,
       kind: "provider_result",
@@ -534,7 +580,14 @@ export async function runPersonResearchAgent(
         turns: providerResult.turns,
         permission_denial_count: providerResult.permissionDenials.length,
       },
-    });
+    } as const;
+    try {
+      await saveCheckpoint();
+      await request.journal.append(providerEvent);
+    } catch (error) {
+      sequence -= 1;
+      throw error;
+    }
     if (request.signal?.aborted) return complete("cancelled", "CANCELLED_BY_REQUESTER");
     if (timeoutController.signal.aborted) return complete("budget_exhausted", "MAX_DURATION_EXCEEDED");
     if (providerResult.terminalReason === "max_turns" || providerResult.terminalReason === "budget_exhausted") {
@@ -633,14 +686,7 @@ export async function runPersonResearchAgent(
     if (terminalStarted) throw error;
     if (request.signal?.aborted) return complete("cancelled", "CANCELLED_BY_REQUESTER");
     if (timeoutController.signal.aborted) return complete("budget_exhausted", "MAX_DURATION_EXCEEDED");
-    return complete(
-      "failed",
-      error instanceof AgentCapabilityError ||
-        error instanceof AgentPersonResearchPolicyError ||
-        error instanceof PersonResearchBoundaryError
-        ? error.code
-        : "PROVIDER_OR_COMMIT_FAILED",
-    );
+    return complete("failed", failureCode(error));
   } finally {
     runtime.clearTimeout(timeout);
     request.signal?.removeEventListener("abort", externalAbort);

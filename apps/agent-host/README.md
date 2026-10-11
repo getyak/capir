@@ -127,6 +127,23 @@ or authorization. Completed-terminal replay constructs no providers and makes
 no model or network call. Deleting local state is a local user operation; no
 backend copy exists.
 
+Tool execution inside one Run is serialized in-process on a small
+per-invocation FIFO chain: authorization-counter pre-save, gateway/provider
+dispatch, result checkpoint, and journal append run one at a time, so concurrent
+provider tool callbacks cannot interleave journal sequences or checkpoint
+snapshots. Different Runs stay independent, a fatal journal-write failure
+blocks later queued executions, and provider/terminal settlement is recorded
+only after all in-flight tool writes drain. The consumed search, fetch, or
+profile-call counter is checkpointed before its gateway dispatch: a possibly
+dispatched call consumes its allowance conservatively across interruption and
+is never refunded or replayed automatically merely because its result is
+absent, so a restarted Run reaches the existing cap-denial outcome instead of
+issuing a second provider operation. If that pre-dispatch checkpoint write
+fails, the dispatch does not run and the Run fails closed. All of this is
+explicit local-filesystem state on one host: it does not establish exactly-once
+remote effects, distributed locking, or cumulative model billing across power
+failure.
+
 Person-research state uses the sibling
 `~/.talent-signal/agent/person-runs/<run-id>/` tree. It stores only the image
 manifest and content hash, normalized public provider observations,
