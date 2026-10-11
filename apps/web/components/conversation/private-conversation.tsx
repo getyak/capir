@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { privateConversationMessages, readPrivateConversation, type PrivateTurn } from "@/lib/private-conversation";
 import { ConversationResponse } from "../conversation-response";
 import styles from "./private-conversation.module.css";
+import { ProcessingLabel } from "./processing-label";
 
 export function PrivateConversation({ binding, accountId }: { binding: string; accountId: string }) {
   return <PrivateConversationRoom key={`${accountId}:${binding}`} binding={binding} accountId={accountId} />;
@@ -130,7 +131,7 @@ function PrivateConversationRoom({ binding, accountId }: { binding: string; acco
       }}><div className={styles.messages}>{turns.map(turn => <article key={turn.id} className={styles.turn}>
         <div className={styles.user}><span className={styles.srOnly}>你：</span>{turn.prompt}</div>
         <div className={styles.answer}><div className={styles.answerName}><Ghost size={15} weight="fill" aria-hidden="true"/>capri</div>
-          {turn.answer ? <ConversationResponse foldable={turn.status === "complete"}>{turn.answer}</ConversationResponse> : turn.status === "pending" ? <span className={styles.waiting} role="status">正在思考<span aria-hidden="true">···</span></span> : null}
+          {turn.answer ? <ConversationResponse foldable={turn.status === "complete"}>{turn.answer}</ConversationResponse> : turn.status === "pending" ? <span className={styles.waiting} role="status"><ProcessingLabel animated>正在思考</ProcessingLabel></span> : null}
           {turn.status === "pending" && turn.answer && <span className={styles.cursor} aria-hidden="true"/>}
           {turn.status === "stopped" && <p className={styles.turnStatus}>已停止，以上内容尚未完成。</p>}
           {turn.status === "failed" && <p className={styles.turnStatus}>这条回复未完成。{!expired && turns.at(-1)?.id === turn.id && <button disabled={busy} onClick={() => void send(turn)}><ArrowClockwise size={14} aria-hidden="true"/>重试这条</button>}</p>}
