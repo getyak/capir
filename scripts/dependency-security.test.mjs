@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import "./dependency-cache.test.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const workspace = readFileSync(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
@@ -120,6 +121,18 @@ function backendFetchTimeoutGuard() {
   return guard;
 }
 
+test("the backend dependency cache is opt-in and only imports the pnpm store", () => {
+  const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
+  assert.match(dockerfile, /^ARG PNPM_DEPENDENCY_CACHE_IMAGE=node:24-bookworm-slim$/m);
+  assert.match(dockerfile, /^FROM \$\{PNPM_DEPENDENCY_CACHE_IMAGE\} AS dependency-cache$/m);
+  assert.match(dockerfile, /^RUN mkdir -p \/root\/\.local\/share\/pnpm\/store$/m);
+  assert.deepEqual(
+    [...dockerfile.matchAll(/^COPY --from=dependency-cache (.+)$/mg)].map((match) => match[1]),
+    ["/root/.local/share/pnpm/store /root/.local/share/pnpm/store"],
+    "only the dependency store may cross the cache-image boundary",
+  );
+});
+
 test("the backend install has bounded transport settings without bypassing supply-chain checks", () => {
   const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
   const install = dockerfile.replace(/\\\n\s*/g, " ")
@@ -138,10 +151,13 @@ test("the backend install has bounded transport settings without bypassing suppl
   assert.doesNotMatch(dockerfile, /^ENV PNPM_FETCH_TIMEOUT_MS=/m);
   assert.match(dockerfile, /&& pnpm config set --location=project --json maxSockets 4/);
   assert.match(dockerfile, /&& pnpm config set --location=project --json networkConcurrency 4/);
+  assert.match(dockerfile, /&& pnpm config set --location=project --json verifyStoreIntegrity true/);
   assert.match(dockerfile, /&& pnpm config set --location=project fetch-timeout "\$PNPM_FETCH_TIMEOUT_MS"/);
   assert.match(dockerfile, /&& node apps\/agent\/scripts\/prefetch-native-runtime\.cjs\n\nRUN pnpm install/);
   assert.match(dockerfile, /&& node apps\/agent\/scripts\/verify-native-runtime\.cjs/);
   assert.match(dockerfile, /^COPY apps\/agent\/scripts\/prefetch-native-runtime\.cjs apps\/agent\/scripts\/prefetch-native-runtime\.cjs$/m);
+  assert.match(dockerfile, /^COPY apps\/agent\/scripts\/verify-dependency-cache\.cjs apps\/agent\/scripts\/verify-dependency-cache\.cjs$/m);
+  assert.match(dockerfile, /&& node apps\/agent\/scripts\/verify-dependency-cache\.cjs\s*\\\n\s*&& node apps\/agent\/scripts\/prefetch-native-runtime\.cjs/);
   assert.doesNotMatch(install, /--(?:config\.)?maxsockets=/);
   assert.doesNotMatch(dockerfile,
     /--trust-lockfile|--minimum-release-age(?:=|\s+)0\b|--trust-policy(?:=|\s+)off\b/);
@@ -192,6 +208,7 @@ test("pnpm 11.18 uses bounded deadlines and numeric maxSockets in real frozen of
     assert.equal(configured.status, 0, `typed project config failed: ${configured.stderr}`);
     assert.match(readFileSync(join(fixture, "pnpm-workspace.yaml"), "utf8"), /^maxSockets: 4$/m);
     assert.equal(run(["config", "set", "--location=project", "--json", "networkConcurrency", "4"]).status, 0);
+    assert.equal(run(["config", "set", "--location=project", "--json", "verifyStoreIntegrity", "true"]).status, 0);
     assert.equal(run(["config", "set", "--location=project", "fetch-timeout", "3600000"]).status, 0);
     const configuredTimeout = run(["config", "get", "--json", "fetchTimeout"]);
     assert.equal(configuredTimeout.status, 0);
@@ -199,6 +216,9 @@ test("pnpm 11.18 uses bounded deadlines and numeric maxSockets in real frozen of
     const configuredNetwork = run(["config", "get", "--json", "networkConcurrency"]);
     assert.equal(configuredNetwork.status, 0);
     assert.equal(JSON.parse(configuredNetwork.stdout), 4);
+    const configuredIntegrity = run(["config", "get", "--json", "verifyStoreIntegrity"]);
+    assert.equal(configuredIntegrity.status, 0);
+    assert.equal(JSON.parse(configuredIntegrity.stdout), true);
     const installFlags = [
       "--offline", "--ignore-scripts", `--store-dir=${join(fixture, "store")}`,
       "--fetch-timeout=180000", "--network-concurrency=4",
