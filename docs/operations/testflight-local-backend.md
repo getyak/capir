@@ -139,8 +139,9 @@ build-only override, not a resident runtime setting. Keep the official registry,
 frozen lock/integrity checks, full supply-chain policy and required native
 runtime verification. A completed dependency install alone is insufficient:
 pnpm may omit a failed optional platform package that the runtime requires.
-After the complete image passes, use the prepared-image procedure below with
-`TS_TESTFLIGHT_REBUILD=false` and verify the approved image/revision pair.
+After the complete image passes, select and verify the approved image/revision
+pair, then use the verified-image restart command above with
+`TS_TESTFLIGHT_REBUILD=false`.
 
 Only after that probe succeeds, store the same HTTPS URL as
 `staging:/release/TALENT_SIGNAL_API_BASE_URL`. It is a build-time value, but the
