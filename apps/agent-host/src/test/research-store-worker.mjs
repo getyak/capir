@@ -270,6 +270,31 @@ function holdForever() {
   return new Promise(() => {});
 }
 
+/**
+ * Holds the first journal append of the requested kind at the exact
+ * interrupted-publication barrier: the event's durable result checkpoint
+ * write (`tool_call`) or its durable terminal receipt publication
+ * (`terminal`) has already completed and the append-only journal write is
+ * still pending. Only the class prototype of this child's own job is patched.
+ */
+function installJournalAppendBarrier(job, storeClass) {
+  if (!job.holdJournalAppendKind) return;
+  let held = false;
+  const originalAppend = storeClass.prototype.append;
+  storeClass.prototype.append = async function (event) {
+    if (!held && event.kind === job.holdJournalAppendKind) {
+      held = true;
+      notify("journal-append-held", {
+        kind: event.kind,
+        sequence: event.sequence,
+      });
+      if (job.holdJournalAppendUntil === "kill") await holdForever();
+      await waitForCommand("release");
+    }
+    return originalAppend.call(this, event);
+  };
+}
+
 function reported(error) {
   return {
     ok: false,
@@ -548,6 +573,7 @@ async function runResearchCommandJob(job) {
   const gateway = new LocalResearchGateway(searchProvider, new LocalResearchStore(job.stateRoot), {
     fetchPage,
   });
+  installJournalAppendBarrier(job, LocalResearchStore);
   notify("ready");
   await waitForCommand("go");
   try {
@@ -601,6 +627,10 @@ async function runPersonCommandJob(job) {
     moduleUrl("personResearchCommand.js")
   );
   const { TikHubProvider } = await import(moduleUrl("tikHubProvider.js"));
+  const { LocalPersonResearchStore } = await import(
+    moduleUrl("localPersonResearchStore.js")
+  );
+  installJournalAppendBarrier(job, LocalPersonResearchStore);
   const bytes = Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     Buffer.from("synthetic screenshot with @zhouyu"),

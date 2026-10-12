@@ -23,6 +23,15 @@ export const LOCAL_JSON_CORRUPT_MESSAGE =
 export const LOCAL_RECORD_NOT_REGULAR_MESSAGE =
   "The persisted local JSON record must be a regular file.";
 
+/**
+ * Fixed content-free message for a nonempty JSONL journal whose final record
+ * lacks its terminating newline. Such a record may be a torn write whose
+ * partial line would even parse as JSON; it is never treated as a complete
+ * record, so a future append cannot silently concatenate JSON objects.
+ */
+export const LOCAL_JSONL_TRUNCATED_MESSAGE =
+  "The persisted local JSONL record is truncated.";
+
 /** Content-free, kind-specific corruption error used by record validators. */
 export function localRecordCorruptError(kind: string): Error {
   return new Error(`The persisted local ${kind} record is corrupt.`);
@@ -90,17 +99,15 @@ function isErrno(error: unknown, code: string): boolean {
 export type LocalRecordParser<T> = (value: Record<string, unknown>) => T;
 
 /**
- * Reads one persisted JSON record. Returns `null` only when the path is
- * genuinely absent (ENOENT). The open is non-blocking and never follows a
+ * Opens one persisted record for reading, returning `null` only when the path
+ * is genuinely absent (ENOENT). The open is non-blocking and never follows a
  * symlink: a FIFO or other non-regular target is rejected by the post-open
- * fstat instead of blocking this reader before the stat. Malformed JSON raises
- * the fixed content-free message; a null/array/other non-object envelope is
- * corrupt, not absent. All other I/O errors propagate.
+ * fstat instead of blocking this reader before the stat. All other I/O errors
+ * propagate. The returned handle is owned by the caller and must be closed.
  */
-export async function readPersistedJsonRecord<T>(
+async function openPersistedRegularFile(
   path: string,
-  parse: LocalRecordParser<T>,
-): Promise<T | null> {
+): Promise<fs.FileHandle | null> {
   let handle: fs.FileHandle;
   try {
     handle = await fs.open(
@@ -117,6 +124,28 @@ export async function readPersistedJsonRecord<T>(
   try {
     const metadata = await handle.stat();
     if (!metadata.isFile()) throw new Error(LOCAL_RECORD_NOT_REGULAR_MESSAGE);
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
+/**
+ * Reads one persisted JSON record. Returns `null` only when the path is
+ * genuinely absent (ENOENT). The open is non-blocking and never follows a
+ * symlink: a FIFO or other non-regular target is rejected by the post-open
+ * fstat instead of blocking this reader before the stat. Malformed JSON raises
+ * the fixed content-free message; a null/array/other non-object envelope is
+ * corrupt, not absent. All other I/O errors propagate.
+ */
+export async function readPersistedJsonRecord<T>(
+  path: string,
+  parse: LocalRecordParser<T>,
+): Promise<T | null> {
+  const handle = await openPersistedRegularFile(path);
+  if (handle === null) return null;
+  try {
     const text = await handle.readFile("utf8");
     let parsed: unknown;
     try {
@@ -126,6 +155,28 @@ export async function readPersistedJsonRecord<T>(
     }
     if (!isLocalRecordObject(parsed)) throw new Error(LOCAL_JSON_CORRUPT_MESSAGE);
     return parse(parsed);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Reads the complete newline-terminated records of one persisted JSONL file.
+ * Returns `[]` when the path is genuinely absent (ENOENT) or empty. The same
+ * private-file, no-follow, non-blocking, regular-file guarantees as
+ * {@link readPersistedJsonRecord} apply. A nonempty file whose final record
+ * lacks its terminating newline is a torn write and raises the fixed
+ * {@link LOCAL_JSONL_TRUNCATED_MESSAGE} even when that partial line would
+ * parse as JSON; the ordinary trailing newline stays valid.
+ */
+export async function readPersistedJsonlLines(path: string): Promise<string[]> {
+  const handle = await openPersistedRegularFile(path);
+  if (handle === null) return [];
+  try {
+    const text = await handle.readFile("utf8");
+    if (text.length === 0) return [];
+    if (!text.endsWith("\n")) throw new Error(LOCAL_JSONL_TRUNCATED_MESSAGE);
+    return text.split("\n").slice(0, -1);
   } finally {
     await handle.close();
   }

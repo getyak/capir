@@ -14,6 +14,7 @@ import {
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { LOCAL_JSON_MALFORMED_MESSAGE } from "./localResearchFiles.js";
+import { LOCAL_TERMINAL_EVIDENCE_MISMATCH_MESSAGE } from "./localResearchJournal.js";
 import {
   LocalResearchStore,
   type LocalRunRecord,
@@ -301,6 +302,25 @@ describe("local public-research journal", () => {
     const rejected = results.filter((result) => !result.ok);
     expect(rejected).toHaveLength(1);
     expect(rejected[0]?.error).toContain("different terminal receipt");
+
+    // A published receipt alone is not replayable evidence: its matching
+    // terminal event must exist before any read reports success.
+    await expect(store.readTerminal(runID)).rejects.toThrow(
+      LOCAL_TERMINAL_EVIDENCE_MISMATCH_MESSAGE,
+    );
+
+    // The real producers append the matching terminal event right after the
+    // receipt publication completes.
+    const receipt = winner?.receipt as AgentPublicResearchTerminalReceipt;
+    await store.append({
+      runID,
+      sequence: 1,
+      kind: "terminal",
+      occurredAt: receipt.completedAt,
+      status: receipt.status,
+      outputFingerprint: fingerprint(receipt),
+      metadata: { reason_code: receipt.reasonCode, external_effect_count: 0 },
+    });
     await expect(store.readTerminal(runID)).resolves.toEqual(winner?.receipt);
   });
 

@@ -6,12 +6,14 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  LOCAL_JSONL_TRUNCATED_MESSAGE,
   LOCAL_JSON_CORRUPT_MESSAGE,
   LOCAL_JSON_MALFORMED_MESSAGE,
   LOCAL_RECORD_NOT_REGULAR_MESSAGE,
   isLocalRecordFingerprint,
   isLocalRecordID,
   publishImmutableJsonRecord,
+  readPersistedJsonlLines,
   readPersistedJsonRecord,
   replaceMutableJsonRecord,
 } from "./localResearchFiles.js";
@@ -355,6 +357,56 @@ describe("local persisted JSON records", () => {
     // Original UUID matching stays case-insensitive.
     expect(isLocalRecordID("33333333-3333-4333-8333-33333333333A")).toBe(true);
     expect(isLocalRecordID("33333333-3333-4333-8333-33333333333G")).toBe(false);
+  });
+});
+
+describe("local persisted JSONL records", () => {
+  it("returns no lines for an absent or empty journal and splits complete records", async () => {
+    const directory = await makeDirectory();
+    const path = join(directory, "events.jsonl");
+    await expect(readPersistedJsonlLines(path)).resolves.toEqual([]);
+    await fs.writeFile(path, "", "utf8");
+    await expect(readPersistedJsonlLines(path)).resolves.toEqual([]);
+    await fs.writeFile(path, "{\"sequence\":1}\n{\"sequence\":2}\n", "utf8");
+    await expect(readPersistedJsonlLines(path)).resolves.toEqual([
+      '{"sequence":1}',
+      '{"sequence":2}',
+    ]);
+  });
+
+  it("rejects a torn final record even when its partial JSON would parse", async () => {
+    const directory = await makeDirectory();
+    const path = join(directory, "events.jsonl");
+    const torn = '{"sequence":2}';
+    await fs.writeFile(path, `{"sequence":1}\n${torn}`, "utf8");
+
+    const failure = await readPersistedJsonlLines(path).then(
+      () => null,
+      (error: unknown) => error as Error,
+    );
+    expect(failure?.message).toBe(LOCAL_JSONL_TRUNCATED_MESSAGE);
+    expect(failure).not.toHaveProperty("cause");
+    // The torn record keeps its exact bytes; a future append cannot run over
+    // this reader's failure and concatenate JSON objects.
+    expect(await fs.readFile(path, "utf8")).toBe(`{"sequence":1}\n${torn}`);
+  });
+
+  it("rejects symlinked and non-regular journals without following them", async () => {
+    const directory = await makeDirectory();
+    const target = join(directory, "elsewhere-events.jsonl");
+    await fs.writeFile(target, '{"sequence":1}\n', "utf8");
+    const path = join(directory, "events.jsonl");
+    await fs.symlink(target, path);
+    await expect(readPersistedJsonlLines(path)).rejects.toThrow(
+      LOCAL_RECORD_NOT_REGULAR_MESSAGE,
+    );
+    expect((await fs.lstat(path)).isSymbolicLink()).toBe(true);
+
+    await fs.unlink(path);
+    await fs.mkdir(path);
+    await expect(readPersistedJsonlLines(path)).rejects.toThrow(
+      LOCAL_RECORD_NOT_REGULAR_MESSAGE,
+    );
   });
 });
 

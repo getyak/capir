@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   ScriptedAgentProvider,
   fingerprint,
+  type AgentPersonResearchTerminalReceipt,
   type AgentProvider,
   type AgentProviderRequest,
   type AgentToolResult,
@@ -13,11 +14,17 @@ import {
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { runLocalPersonResearchCommand } from "./personResearchCommand.js";
+import {
+  LOCAL_JOURNAL_CHECKPOINT_MISMATCH_MESSAGE,
+  LOCAL_RUN_EVIDENCE_ORPHANED_MESSAGE,
+  LOCAL_TERMINAL_EVIDENCE_MISMATCH_MESSAGE,
+} from "./localResearchJournal.js";
 import { TikHubProvider } from "./tikHubProvider.js";
 import {
   cleanupResearchWorkers,
   ensureFreshHostBuild,
   spawnResearchWorker,
+  type ResearchWorkerHandle,
 } from "./test/research-store-worker.mjs";
 
 const temporaryDirectories: string[] = [];
@@ -319,5 +326,280 @@ describe("local person-research cross-process admission", () => {
     expect(
       replay.log.filter((event) => event.event === "provider-invoked"),
     ).toHaveLength(0);
+  });
+});
+
+describe("local person-research interrupted journal publication", () => {
+  async function makeStateRoot() {
+    const stateRoot = await fs.mkdtemp(join(tmpdir(), "talent-signal-person-agent-"));
+    temporaryDirectories.push(stateRoot);
+    return stateRoot;
+  }
+
+  async function readJson(path: string): Promise<Record<string, unknown>> {
+    return JSON.parse(await fs.readFile(path, "utf8")) as Record<
+      string,
+      unknown
+    >;
+  }
+
+  async function readEvents(
+    path: string,
+  ): Promise<Array<{ sequence: number; kind: string }>> {
+    try {
+      const text = await fs.readFile(path, "utf8");
+      return text
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map(
+          (line) =>
+            JSON.parse(line) as { sequence: number; kind: string },
+        );
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
+  async function killAndAwait(handle: ResearchWorkerHandle) {
+    if (handle.child.exitCode !== null || handle.child.signalCode !== null) return;
+    const exited = new Promise((done) => handle.child.once("exit", done));
+    handle.kill("SIGKILL");
+    await exited;
+  }
+
+  it("fails closed when a durable result checkpoint has no journal event instead of resuming with a gap", async () => {
+    const stateRoot = await makeStateRoot();
+    const runID = "71717171-7171-4717-8717-717171717171";
+    const holder = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+      plan: "profile",
+      holdJournalAppendKind: "tool_call",
+      holdJournalAppendUntil: "kill",
+      maximumProviderCalls: 2,
+    });
+    await holder.waitFor("ready");
+    holder.send("go");
+    const held = await holder.waitFor("journal-append-held");
+    expect(held).toMatchObject({ kind: "tool_call", sequence: 1 });
+    // The result checkpoint is durable and claims journal event 1 while the
+    // append-only journal still holds no record at all.
+    const runDirectory = join(stateRoot, "person-runs", runID);
+    await expect(
+      readJson(join(runDirectory, "checkpoint.json")),
+    ).resolves.toMatchObject({ sequence: 1, providerCalls: 1, toolCalls: 1 });
+    expect(await readEvents(join(runDirectory, "events.jsonl"))).toEqual([]);
+    await killAndAwait(holder);
+
+    const replay = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+      plan: "profile",
+      maximumProviderCalls: 2,
+    });
+    await replay.waitFor("ready");
+    replay.send("go");
+    const result = await replay.result;
+    // A clear fixed failure instead of success with a gapped journal like [2,3].
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(LOCAL_JOURNAL_CHECKPOINT_MISMATCH_MESSAGE);
+    expect(result).not.toHaveProperty("receipt");
+    // Zero additional provider, model, or image inspection work.
+    expect(
+      replay.log.filter((event) => event.event === "provider-invoked"),
+    ).toHaveLength(0);
+    expect(
+      replay.log.filter((event) => event.event === "gateway-dispatch"),
+    ).toHaveLength(0);
+    // No missing history is synthesized by the failed attempt.
+    expect(await readEvents(join(runDirectory, "events.jsonl"))).toEqual([]);
+  });
+
+  it("fails closed when a durable terminal receipt has no terminal event instead of replaying it", async () => {
+    const stateRoot = await makeStateRoot();
+    const runID = "72727272-7272-4727-8727-727272727272";
+    const holder = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+      plan: "artifact",
+      holdJournalAppendKind: "terminal",
+      holdJournalAppendUntil: "kill",
+    });
+    await holder.waitFor("ready");
+    holder.send("go");
+    const held = await holder.waitFor("journal-append-held");
+    expect(held).toMatchObject({ kind: "terminal" });
+    // The terminal receipt is durable while its terminal event is not.
+    const runDirectory = join(stateRoot, "person-runs", runID);
+    await expect(
+      fs.access(join(runDirectory, "terminal.json")),
+    ).resolves.toBeUndefined();
+    await killAndAwait(holder);
+
+    const replay = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+      plan: "artifact",
+    });
+    await replay.waitFor("ready");
+    replay.send("go");
+    const result = await replay.result;
+    // The unaudited receipt is never returned as successful replay.
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(LOCAL_TERMINAL_EVIDENCE_MISMATCH_MESSAGE);
+    expect(result).not.toHaveProperty("receipt");
+    expect(
+      replay.log.filter((event) => event.event === "provider-invoked"),
+    ).toHaveLength(0);
+    expect(
+      replay.log.filter((event) => event.event === "gateway-dispatch"),
+    ).toHaveLength(0);
+    // No terminal event is invented over the interrupted publication.
+    const journal = await readEvents(join(runDirectory, "events.jsonl"));
+    expect(
+      journal.filter((event) => event.kind === "terminal"),
+    ).toHaveLength(0);
+  });
+});
+
+describe("local person-research orphaned Run evidence", () => {
+  async function makeStateRoot() {
+    const stateRoot = await fs.mkdtemp(join(tmpdir(), "talent-signal-person-agent-"));
+    temporaryDirectories.push(stateRoot);
+    return stateRoot;
+  }
+
+  function noActionReceipt(runID: string): AgentPersonResearchTerminalReceipt {
+    return {
+      runID,
+      status: "no_action",
+      reasonCode: "NO_PUBLIC_PROFILE_MATCH",
+      artifactID: null,
+      noActionID: "55555555-5555-4555-8555-555555555555",
+      candidateFingerprint: "a".repeat(64),
+      externalEffects: [],
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+        estimatedUsd: null,
+        turns: null,
+        toolCalls: 1,
+        durationMs: 100,
+      },
+      permissionDenials: [],
+      providerSessionID: null,
+      completedAt: "2026-08-30T00:02:00.000Z",
+    };
+  }
+
+  it("fails closed on orphaned reserved evidence instead of attaching it to a changed image or objective", async () => {
+    const stateRoot = await makeStateRoot();
+    const runID = "73737373-7373-4737-8737-737373737373";
+    const runDirectory = join(stateRoot, "person-runs", runID);
+    await fs.mkdir(runDirectory, { recursive: true, mode: 0o700 });
+    // Valid reservation checkpoint at sequence 0 with consumed allowance and
+    // no run.json: the confirmed orphaned-metadata state.
+    const checkpointBytes = `${JSON.stringify(
+      {
+        profileResults: [],
+        queryObservations: [],
+        providerCalls: 1,
+        toolCalls: 1,
+        sequence: 0,
+      },
+      null,
+      2,
+    )}\n`;
+    const checkpointPath = join(runDirectory, "checkpoint.json");
+    await fs.writeFile(checkpointPath, checkpointBytes, "utf8");
+
+    const attempt = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+      plan: "profile",
+      maximumProviderCalls: 2,
+    });
+    await attempt.waitFor("ready");
+    attempt.send("go");
+    const result = await attempt.result;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(LOCAL_RUN_EVIDENCE_ORPHANED_MESSAGE);
+    expect(result).not.toHaveProperty("receipt");
+    // Zero additional provider, model, or image inspection work.
+    expect(
+      attempt.log.filter((event) => event.event === "provider-invoked"),
+    ).toHaveLength(0);
+    expect(
+      attempt.log.filter((event) => event.event === "gateway-dispatch"),
+    ).toHaveLength(0);
+    // The orphaned evidence keeps its bytes and gains no replacement run.json
+    // that would attach it to a new image, objective, or authorization.
+    expect(await fs.readFile(checkpointPath, "utf8")).toBe(checkpointBytes);
+    await expect(fs.access(join(runDirectory, "run.json"))).rejects.toThrow();
+  });
+
+  it("fails closed on orphaned terminal evidence instead of replaying it under new metadata", async () => {
+    const stateRoot = await makeStateRoot();
+    const runID = "74747474-7474-4747-8747-747474747474";
+    const runDirectory = join(stateRoot, "person-runs", runID);
+    await fs.mkdir(runDirectory, { recursive: true, mode: 0o700 });
+    const receipt = noActionReceipt(runID);
+    const terminalBytes = `${JSON.stringify(receipt, null, 2)}\n`;
+    const eventBytes = `${JSON.stringify({
+      runID,
+      sequence: 1,
+      kind: "terminal",
+      occurredAt: receipt.completedAt,
+      status: receipt.status,
+      outputFingerprint: fingerprint(receipt),
+      metadata: { reason_code: receipt.reasonCode, external_effect_count: 0 },
+    })}\n`;
+    const terminalPath = join(runDirectory, "terminal.json");
+    const eventsPath = join(runDirectory, "events.jsonl");
+    await fs.writeFile(terminalPath, terminalBytes, "utf8");
+    await fs.writeFile(eventsPath, eventBytes, "utf8");
+
+    const attempt = spawnResearchWorker({
+      kind: "person-command",
+      stateRoot,
+      runID,
+      holdProvider: false,
+      plan: "artifact",
+    });
+    await attempt.waitFor("ready");
+    attempt.send("go");
+    const result = await attempt.result;
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(LOCAL_RUN_EVIDENCE_ORPHANED_MESSAGE);
+    expect(result).not.toHaveProperty("receipt");
+    expect(
+      attempt.log.filter((event) => event.event === "provider-invoked"),
+    ).toHaveLength(0);
+    expect(
+      attempt.log.filter((event) => event.event === "gateway-dispatch"),
+    ).toHaveLength(0);
+    // The complete-looking evidence is never replayed without its original
+    // immutable metadata and never rewritten.
+    expect(await fs.readFile(terminalPath, "utf8")).toBe(terminalBytes);
+    expect(await fs.readFile(eventsPath, "utf8")).toBe(eventBytes);
+    await expect(fs.access(join(runDirectory, "run.json"))).rejects.toThrow();
   });
 });

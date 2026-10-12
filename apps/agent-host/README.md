@@ -144,6 +144,37 @@ explicit local-filesystem state on one host: it does not establish exactly-once
 remote effects, distributed locking, or cumulative model billing across power
 failure.
 
+Journal recovery fails closed on two narrow interrupted-publication windows
+instead of manufacturing history. Before every recovery decision the host
+validates the append-only `events.jsonl` journal: each line must be one
+complete newline-terminated JSON record for the exact Run with a safe
+contiguous sequence from 1 and one supported event kind in essential shape,
+and a nonempty journal whose final record lacks its terminating newline is a
+torn write that is rejected before a future append could concatenate JSON
+objects. The first window is a durable result checkpoint whose journal event
+was never appended: the checkpoint and the journal are separate writes, so a
+checkpoint that claims an absent event fails closed before any model or
+gateway execution instead of resuming into a sequence gap. The second window
+is a durable terminal receipt whose matching terminal event was never
+appended: the receipt is published before its event, and such a receipt is
+never replayed as success. Both cases fail with one fixed content-free error
+that carries no record content; consumed counters stay consumed, no missing
+event is synthesized, and no provider call is replayed to reconstruct lost
+evidence. Recorded evidence also keeps its original immutable `run.json`
+metadata: when a Run directory holds any checkpoint, journal record, or
+terminal receipt while `run.json` is missing, recovery fails with one fixed
+content-free error before any model, provider, or gateway work and never
+publishes replacement metadata that would attach the old evidence to a new
+objective, image, authorization, or budget. A consistent reservation
+checkpoint at sequence 0 with an empty journal remains recoverable with its consumed allowance authoritative, and a
+completed Run whose receipt matches its final terminal event still replays
+without provider construction or image, model, or network operations.
+Reconciling an interrupted or orphaned Run requires manual inspection of its
+owner-only directory by the local user. This boundary is deliberately narrow and does not
+claim arbitrary crash-atomic journal publication: interruption between a
+checkpoint write, a receipt publication, and the matching journal append is
+detected and rejected at the next recovery, never rolled back or rewritten.
+
 Person-research state uses the sibling
 `~/.talent-signal/agent/person-runs/<run-id>/` tree. It stores only the image
 manifest and content hash, normalized public provider observations,

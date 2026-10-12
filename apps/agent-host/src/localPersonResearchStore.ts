@@ -33,6 +33,12 @@ import {
   readPersistedJsonRecord,
   replaceMutableJsonRecord,
 } from "./localResearchFiles.js";
+import {
+  readLocalResearchJournal,
+  requireLocalRunMetadataForEvidence,
+  validateLocalResearchJournalAgreement,
+  type LocalResearchJournalReading,
+} from "./localResearchJournal.js";
 
 const TERMINAL_STATUSES = [
   "artifact_created",
@@ -654,6 +660,10 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
   async start(input: LocalPersonResearchRunRecord): Promise<void> {
     await this.ensureRunDirectories(input.scope.runID);
     const requested = parseRunRecord(input.scope.runID, input);
+    // Recorded evidence keeps its ORIGINAL immutable Run metadata: an
+    // orphaned checkpoint, journal, or terminal receipt never receives
+    // replacement metadata published from this incoming request.
+    await this.requireRunMetadata(input.scope.runID);
     await publishImmutableJsonRecord(
       this.path(input.scope.runID, "run.json"),
       input,
@@ -667,15 +677,73 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
         return existing;
       },
     );
-    const checkpoint = await this.loadCheckpoint(input.scope.runID);
-    this.lastSequence.set(input.scope.runID, checkpoint?.sequence ?? 0);
+    // Recovery validation runs before any model or gateway execution: an
+    // interrupted publication fails closed here instead of resuming from
+    // invented or partially journaled history.
+    await this.loadCheckpoint(input.scope.runID);
   }
 
-  loadCheckpoint(runID: string) {
-    return readPersistedJsonRecord(
+  /**
+   * Reads the Run's journal and cross-checks it against the persisted
+   * terminal receipt. Called before recovery decisions so inconsistent or
+   * incomplete local evidence raises a fixed content-free error instead of
+   * being resumed or replayed.
+   */
+  private async validatedJournalEvidence(
+    runID: string,
+    checkpointSequence: number | null,
+  ): Promise<LocalResearchJournalReading> {
+    const receipt = await readPersistedJsonRecord(
+      this.path(runID, "terminal.json"),
+      (value) => parseTerminalReceipt(runID, value),
+    );
+    const journal = await readLocalResearchJournal(
+      runID,
+      this.path(runID, "events.jsonl"),
+    );
+    await this.requireRunMetadata(runID);
+    validateLocalResearchJournalAgreement({
+      journal,
+      checkpointSequence,
+      receipt: receipt
+        ? {
+            status: receipt.status,
+            outputFingerprint: fingerprint(receipt),
+          }
+        : null,
+    });
+    return journal;
+  }
+
+  /**
+   * Recorded evidence must retain its original immutable Run record. Wired
+   * into every recovery entry point (start before publication,
+   * loadCheckpoint, readTerminal) so direct exported store use is covered.
+   */
+  private requireRunMetadata(runID: string): Promise<void> {
+    return requireLocalRunMetadataForEvidence({
+      runID,
+      runRecordPath: this.path(runID, "run.json"),
+      checkpointPath: this.path(runID, "checkpoint.json"),
+      journalPath: this.path(runID, "events.jsonl"),
+      terminalPath: this.path(runID, "terminal.json"),
+      parseRunRecord: (value) => parseRunRecord(runID, value),
+    });
+  }
+
+  async loadCheckpoint(runID: string) {
+    const checkpoint = await readPersistedJsonRecord(
       this.path(runID, "checkpoint.json"),
       parseCheckpoint,
     );
+    const journal = await this.validatedJournalEvidence(
+      runID,
+      checkpoint?.sequence ?? 0,
+    );
+    // The validated journal, not the checkpoint, owns the next journal
+    // position: a checkpoint can legitimately trail a complete terminal.
+    this.lastSequence.set(runID, journal.lastSequence);
+    return checkpoint;
   }
 
   saveCheckpoint(runID: string, checkpoint: AgentPersonResearchCheckpoint) {
@@ -722,10 +790,28 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
     return publication.record;
   }
 
-  readTerminal(runID: string) {
-    return readPersistedJsonRecord(this.path(runID, "terminal.json"), (value) =>
-      parseTerminalReceipt(runID, value),
+  async readTerminal(runID: string) {
+    const receipt = await readPersistedJsonRecord(
+      this.path(runID, "terminal.json"),
+      (value) => parseTerminalReceipt(runID, value),
     );
+    if (receipt !== null) {
+      // Complete terminal evidence is self-contained: the receipt must carry
+      // its matching final terminal event before it can be replayed as
+      // success, and the checkpoint offset is not consulted because the
+      // producers legitimately publish terminal checkpoints at different
+      // offsets.
+      await this.validatedJournalEvidence(runID, null);
+      return receipt;
+    }
+    // Nonterminal state must already agree with its checkpoint before the
+    // absent terminal is reported to a recovery decision.
+    const checkpoint = await readPersistedJsonRecord(
+      this.path(runID, "checkpoint.json"),
+      parseCheckpoint,
+    );
+    await this.validatedJournalEvidence(runID, checkpoint?.sequence ?? 0);
+    return null;
   }
 
   readRun(runID: string) {

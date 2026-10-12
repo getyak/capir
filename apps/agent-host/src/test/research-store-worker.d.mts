@@ -53,6 +53,14 @@ export type ResearchWorkerJob =
       maximumFetchCount?: number;
       /** Aborts the second concurrent callback's execution signal while queued. */
       abortQueuedExecution?: boolean;
+      /**
+       * Holds the first journal append of this kind at its exact publication
+       * barrier: the event's durable result checkpoint write (`tool_call`) or
+       * its durable terminal receipt publication (`terminal`) has completed
+       * and the journal append is still pending.
+       */
+      holdJournalAppendKind?: "tool_call" | "terminal";
+      holdJournalAppendUntil?: "kill" | "release";
     }
   | {
       kind: "person-command";
@@ -65,6 +73,14 @@ export type ResearchWorkerJob =
       holdGatewayOperation?: "profiles";
       holdGatewayUntil?: "kill" | "release";
       maximumProviderCalls?: number;
+      /**
+       * Holds the first journal append of this kind at its exact publication
+       * barrier: the event's durable result checkpoint write (`tool_call`) or
+       * its durable terminal receipt publication (`terminal`) has completed
+       * and the journal append is still pending.
+       */
+      holdJournalAppendKind?: "tool_call" | "terminal";
+      holdJournalAppendUntil?: "kill" | "release";
     };
 
 export interface ResearchWorkerEvent {
