@@ -22,7 +22,7 @@
   and actual output/compatibility probes.
   Resident deployment and final delivery remain outstanding.
 - Active Pi batch: dead Web retirement and exact meeting-draft identity admission,
-  `20261012-121919-f4a7e76e`, frozen base `54741b30`, 48 scoped paths.
+  `20261012-121919-f4a7e76e`, frozen base `54741b30`, 50 scoped paths after the test-clock companion.
   Model/policy/crawl passed independent acceptance in `a171c2ed`.
 - Remaining order:
   dead Web retirement/meeting identity
@@ -723,3 +723,19 @@ remain required.
 - Actual integration-source model-output probes exclude private canaries. Actual HTML22-child failure probe now dispatches5 at authorized max5, retains1 page and4 bounded fixed warnings. Pi tests cover full response schema, duplicate/success/depth behavior. `personResearchRunner`642 lines fits the original649 cap.
 - Synthetic injected providers/loaders only; no private image or live model used. Per-invocation crawl attempts do not imply durable cross-worker caps or exactly-once remote reading. Final PostgreSQL18/resident rollout/PR/merge remain outstanding.
 - Receipts: model-parent-final-verification.json, model-integration-source.json, agent-diagnostic-after-proof.json, research-crawl-bounds-after-proof.json.
+
+## Calendar recovery test date dependency (PH-16, P2)
+
+The unchanged integration Web source independently fails the original
+`SessionCalendarDraftCard` unresolved Not now retry assertion after its fixed
+`expires_at: 2026-10-12T00:00:00Z` passes. Ten other file tests pass. Production
+expiry enforcement is correct; this is a test-harness date assumption, not a
+Web retirement regression. Pi's first full Web suite failed2170/2171, preserved
+as failed evidence. Codex stopped automatic repair to approve only the two
+calendar/transcript test companions before resuming the same frozen task.
+
+Use a fixed date-only clock before the fixture expiration and restore it after
+each test; retain real asynchronous timers, original expiration and operation-key
+assertions. Do not extend a hardcoded deadline, weaken production expiry, skip
+tests or mark the failed gate passed. Full final-source verification remains
+required. Private before receipt: `web-date-baseline-before.log`. Status: open.
