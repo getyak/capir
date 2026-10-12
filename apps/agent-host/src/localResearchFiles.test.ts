@@ -165,7 +165,12 @@ describe("local persisted JSON records", () => {
     expect(first).toEqual({ record, replayed: false });
     const published = await fs.readFile(path, "utf8");
     expect(JSON.parse(published)).toEqual(record);
-    expect((await fs.stat(path)).mode & 0o777).toBe(0o600);
+    const publishedFile = await fs.open(path, "r");
+    try {
+      expect((await publishedFile.stat()).mode & 0o777).toBe(0o600);
+    } finally {
+      await publishedFile.close();
+    }
 
     // Equivalent replay returns the ORIGINAL record and timestamps.
     const replay = await publishImmutableJsonRecord(

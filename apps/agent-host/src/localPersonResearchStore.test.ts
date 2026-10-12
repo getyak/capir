@@ -548,7 +548,9 @@ describe("local person-research journal", () => {
     await expect(store.complete(allNull)).rejects.toThrow(
       "The persisted local terminal record is corrupt.",
     );
-    await expect(fs.access(terminalPath)).rejects.toThrow();
+    await expect(fs.readFile(terminalPath, "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     // Existing corrupt terminal: rejected on read and on replay, bytes kept.
     await fs.writeFile(terminalPath, content, "utf8");
