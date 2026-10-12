@@ -21,12 +21,11 @@
   durable diagnostic boundaries `23751e6a` after 117 backend/192 host tests
   and actual output/compatibility probes.
   Resident deployment and final delivery remain outstanding.
-- Active Pi batch: model-context diagnostics, existing policy extraction and
-  public-crawl attempt bounds, `20261012-114341-39e2b8eb`, frozen base
-  `ea48fccc`, 19 scoped paths. Durable diagnostics passed independent review
-  in `23751e6a`; model-facing PH-09, PH-14 and PH-15 remain open.
+- Most recent accepted Pi batch: model-context diagnostics, existing policy
+  extraction and public-crawl attempt bounds, `20261012-114341-39e2b8eb`,
+  integrated `a171c2ed` after all ten independent checks and actual output/crawl
+  probes. Web retirement/meeting identity is next; final delivery remains open.
 - Remaining order:
-  model-context diagnostic privacy, policy extraction and public-crawl bounds;
   dead Web retirement/meeting identity
   admission; knowledge/tooling ownership. Review and verify each diff before
   integration.
@@ -579,7 +578,7 @@ policy owner, preserving execution order and error semantics, and call it from
 the actual runner. Preserve shared FIFO, consumed allowances and journal
 integrity. Retain the original cap; do not raise the baseline, suppress the
 guard or compact formatting to meet it. Final architecture checks and the
-complete documentation command remain required before delivery. Status: open.
+complete documentation command remain required before delivery. Accepted repair is recorded below.
 
 ## Journal integrity review checkpoint — initial changes requested
 
@@ -657,7 +656,7 @@ batch's frozen contract.
 
 Private before receipt: `research-crawl-bounds-before-proof.json`. Actual HTML
 extraction and success/failure/duplicate/long-URL regressions are required
-before acceptance. Status: open; assigned to the next sequential Pi batch.
+before acceptance. Status: accepted in `a171c2ed`; receipt below.
 
 
 ## Diagnostic privacy review checkpoint — changes requested
@@ -716,3 +715,12 @@ remain required.
   `diagnostic-http-ownership-after-proof.json`,
   `backend-diagnostic-after-proof.json`, and
   `diagnostic-owned-database-cleanup.json`.
+
+## Accepted model-context, policy and crawl repair
+
+- Integrated `a171c2ed`; worker `8e7422b9`; Pi `20261012-114341-39e2b8eb`, zero repairs.
+- Codex independently reviewed all19 scoped paths and the exact preflight move. Finite image diagnostics, fixed generic runner/transport messages preserve typed policy, revocation, cancellation and conservative consumed-call behavior.
+- All ten direct final-source commands passed without source changes: Agent427 tests and one existing skip, Host195, Backend26, types/builds/docs/original architecture guard. No P0/P1 remains in this batch.
+- Actual integration-source model-output probes exclude private canaries. Actual HTML22-child failure probe now dispatches5 at authorized max5, retains1 page and4 bounded fixed warnings. Pi tests cover full response schema, duplicate/success/depth behavior. `personResearchRunner`642 lines fits the original649 cap.
+- Synthetic injected providers/loaders only; no private image or live model used. Per-invocation crawl attempts do not imply durable cross-worker caps or exactly-once remote reading. Final PostgreSQL18/resident rollout/PR/merge remain outstanding.
+- Receipts: model-parent-final-verification.json, model-integration-source.json, agent-diagnostic-after-proof.json, research-crawl-bounds-after-proof.json.
