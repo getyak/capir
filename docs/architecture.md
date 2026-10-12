@@ -55,8 +55,7 @@ Device and server connectors receive only a reviewed, currently authorized
 effect. A connector result becomes an outcome only after the destination can be
 observed or the uncertainty is made explicit.
 
-The editable source is
-[`talent-signal-system-architecture.excalidraw`](talent-signal-system-architecture.excalidraw).
+The editable source is [`talent-signal-system-architecture.excalidraw`](talent-signal-system-architecture.excalidraw).
 
 ## Canonical flow
 
@@ -110,8 +109,9 @@ Architecture follows five durable rules.
 ### Pursuits own outcome context
 
 A Pursuit owns outcome, horizon, milestone, contextual roles, criteria, gaps,
-and actions, not a second person or source. Recruiting is the flagship template;
-a sales fixture reuses the contract without a parallel domain model.
+and actions, not a second person or source. Contextual roles apply across
+client work, partnerships, collaboration, and recruiting; a sales fixture
+reuses the contract without a parallel domain model.
 
 Pursuit progress derives from evidence-backed gaps and owner-recorded outcomes.
 An unknown completion response locks until exact-ID readback; completion is

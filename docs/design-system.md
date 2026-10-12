@@ -93,7 +93,7 @@ The primary surfaces answer different questions:
 | People | Who or what am I looking for? |
 | Time | What happened in this period, and what should I prepare for the next contact? |
 | Pursuit page | What outcome, milestone, gap, and action are current? |
-| Candidate page | What is currently true for this person in this Pursuit? |
+| Person / relationship page | What is currently true for this person in this Pursuit? |
 | Timeline | How did understanding and action change? |
 | Evidence review | What supports or contradicts this state? |
 | Relationship graph | Which connections matter to this question? |
@@ -224,11 +224,11 @@ The design must distinguish:
 
 Use plain language that describes what the user can do next. Never make a failed or uncertain state look complete. A forming streamed reply is not a citation, card, or completed answer; only validated blocks replace it, and a stopped run stays visibly incomplete.
 
-## Pursuit and candidate pages
+## Pursuit and person/relationship pages
 
 The Pursuit page explains one target outcome. It leads with outcome, deadline, milestone, supported blockers, and the smallest next step before the broader resource map.
 
-The living candidate page is a current, Pursuit-scoped explanation of the relationship. It should combine:
+The living person/relationship page is a current, Pursuit-scoped explanation of the relationship. It should combine:
 
 - the current dependency;
 - confirmed decision drivers;

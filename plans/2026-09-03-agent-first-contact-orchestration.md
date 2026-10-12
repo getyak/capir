@@ -5,7 +5,9 @@
 Replace iOS client-side pre-routing with a bounded conversation Agent that can
 choose direct reply or use an account-scoped contact Tool. Contact create and
 update remain reviewable proposals and require explicit recruiter confirmation.
-The authoritative product/technical brief is [`task.md`](../task.md).
+The historical product/technical brief is archived at
+[`plans/archive/2026-09-03-agent-first-contact-orchestration.md`](archive/2026-09-03-agent-first-contact-orchestration.md).
+It records the delivered slice and is not current product authority.
 
 ## Boundary
 
@@ -47,7 +49,8 @@ Pursuit analysis.
 
 ## Milestones
 
-1. **Completed — Freeze contract and knowledge ownership.** Added `task.md`,
+1. **Completed — Freeze contract and knowledge ownership.** Added the brief
+   now archived at `plans/archive/2026-09-03-agent-first-contact-orchestration.md`,
    this resumable plan, ADR 0010, and the canonical product, Agent, and
    integration deltas.
 2. **Completed — Implement Agent and backend vertical slice.** Added the Tool

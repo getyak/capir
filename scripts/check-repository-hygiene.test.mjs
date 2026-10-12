@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { checkHygiene, checkCorpusContent, trackedFiles } from "./check-repository-hygiene.mjs";
+import { checkHygiene, checkCorpusContent, checkAdrNumericIds, checkMigrationPrefixes, HISTORICAL_MIGRATION_COLLISIONS, trackedFiles } from "./check-repository-hygiene.mjs";
 
 describe("repository hygiene", () => {
   it("rejects extracted evaluation payload and harness paths but keeps the index", () => {
@@ -73,7 +73,65 @@ describe("repository hygiene", () => {
   });
 
   it("passes for the real tracked repository tree", () => {
-    assert.deepEqual(checkHygiene(trackedFiles()), []);
+    const paths = trackedFiles();
+    assert.deepEqual(checkHygiene(paths), []);
+    assert.deepEqual(checkAdrNumericIds(paths.filter((path) => path.startsWith("docs/decisions/"))), []);
+    assert.deepEqual(checkMigrationPrefixes(paths.filter((path) => path.startsWith("apps/backend/src/database/"))), []);
+  });
+});
+
+describe("stable identifiers", () => {
+  it("accepts the grandfathered historical migration collision sets and numbering gaps", () => {
+    assert.deepEqual(checkMigrationPrefixes([
+      "apps/backend/src/database/001_authority.sql",
+      ...HISTORICAL_MIGRATION_COLLISIONS.flat().map((name) => `apps/backend/src/database/${name}`),
+      "apps/backend/src/database/086_desktop_browser_login.sql",
+      "apps/backend/src/database/088_username_email_alias.sql",
+      "apps/backend/src/database/migration-manifest.json",
+      "apps/backend/src/database/migrate.ts",
+    ]), []);
+  });
+
+  it("rejects a new extra member or a reused prefix outside the historical sets", () => {
+    const extraMember = checkMigrationPrefixes([
+      ...HISTORICAL_MIGRATION_COLLISIONS.flat(),
+      "058_product_run_monitoring.sql",
+    ]);
+    assert.equal(extraMember.length, 1);
+    assert.match(extraMember[0], /migration prefix 058 is not a grandfathered historical collision set/);
+
+    const reusedPrefix = checkMigrationPrefixes([
+      "020_pursuit_domain.sql",
+      "020_pursuit_domain_again.sql",
+    ]);
+    assert.equal(reusedPrefix.length, 1);
+    assert.match(reusedPrefix[0], /migration prefix 020 is not a grandfathered historical collision set/);
+
+    const renamedHistoricalMember = checkMigrationPrefixes([
+      "047_proposed_extracted_text.sql",
+      "047_renamed_member.sql",
+    ]);
+    assert.equal(renamedHistoricalMember.length, 1);
+    assert.match(renamedHistoricalMember[0], /migration prefix 047/);
+  });
+
+  it("rejects colliding ADR numeric ids while dated records stay exempt", () => {
+    assert.deepEqual(checkAdrNumericIds([
+      "docs/decisions/0017-desktop-maintenance-controls.md",
+      "docs/decisions/0024-three-scope-memory-review.md",
+      "docs/decisions/2026-09-10-scoped-harness-capabilities.md",
+      "docs/decisions/2026-09-24-one-click-desktop-updates.md",
+    ]), []);
+
+    const errors = checkAdrNumericIds([
+      "docs/decisions/0017-desktop-maintenance-controls.md",
+      "docs/decisions/0017-three-scope-memory-review.md",
+      "docs/decisions/2026-09-10-scoped-harness-capabilities.md",
+    ]);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /ADR numeric id 0017 is not unique/);
+    assert.match(errors[0], /0017-desktop-maintenance-controls\.md/);
+    assert.match(errors[0], /0017-three-scope-memory-review\.md/);
   });
 });
 

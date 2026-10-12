@@ -81,7 +81,7 @@ async function checkScene(config) {
     assert(!element.isDeleted, `${config.name}: deleted element ${element.id}`);
   }
 
-  const canvas = byId.get(`${config.prefix}-canvas-bg`);
+  const canvas = byId.get(config.canvasElement ?? `${config.prefix}-canvas-bg`);
   assert(canvas, `${config.name}: canvas background is missing`);
   const canvasBounds = absoluteBounds(canvas);
 
@@ -318,6 +318,106 @@ results.push(
     renderPhrases: [
       "Talent Signal Agent module",
       "Agent freedom ends here",
+    ],
+  }),
+);
+results.push(
+  await checkScene({
+    name: "Agent control plane",
+    prefix: "agent-control",
+    canvasElement: "agent-control-background",
+    excalidraw: "docs/talent-signal-agent-control-plane.excalidraw",
+    svg: "docs/talent-signal-agent-control-plane.svg",
+    png: "docs/talent-signal-agent-control-plane.png",
+    minimumElements: 100,
+    minimumFontSize: 14,
+    requiredPhrases: [
+      "Models propose. The control plane authorizes. Destinations prove effects.",
+      "Capability Broker · the only effect boundary",
+      "FACT CONFIRMATION",
+      "ACTION APPROVAL",
+      "DESTINATION VERIFICATION",
+      "No surface owns canonical candidate state.",
+      "identity · policy · context · lifecycle",
+      "read/capture/propose only",
+      "no direct domain writes",
+    ],
+    requiredElementSuffixes: [
+      "surface-lane-box",
+      "control-lane-box",
+      "runtime-lane-box",
+      "truth-lane-box",
+      "gateway-box",
+      "task-box",
+      "context-box",
+      "policy-box",
+      "inbox-box",
+      "boundary-box",
+      "boundary-gate-a",
+      "boundary-gate-b",
+      "boundary-gate-c",
+      "surfaces-gateway",
+      "broker-connectors",
+      "connector-observation",
+      "postgres-projection",
+    ],
+    dashedElementSuffixes: [
+      "browser-box",
+      "wechat-box",
+      "byoa-box",
+      "byoa-gateway",
+      "durable-agent-box",
+      "external-agent-box",
+      "durable-external",
+    ],
+    renderPhrases: [
+      "Talent Signal agent control plane",
+      "Capability Broker · the only effect boundary",
+    ],
+  }),
+);
+results.push(
+  await checkScene({
+    name: "Agent runtime flow",
+    prefix: "agent-runtime",
+    canvasElement: "agent-runtime-background",
+    excalidraw: "docs/talent-signal-agent-runtime-flow.excalidraw",
+    svg: "docs/talent-signal-agent-runtime-flow.svg",
+    png: "docs/talent-signal-agent-runtime-flow.png",
+    minimumElements: 80,
+    minimumFontSize: 14,
+    requiredPhrases: [
+      "One episode: evidence → governed action → verified learning",
+      "Nothing becomes candidate state before recruiter confirmation.",
+      "A proposal is not permission. An API response is not proof.",
+      "The Wiki is a projection; learning is proposed and reviewable.",
+      "GATE 1 · CONFIRM",
+      "GATE 2 · APPROVE",
+      "GATE 3 · VERIFY",
+      "Temporal relationship memory",
+      "unknown effect → reconcile, never claim success.",
+    ],
+    requiredElementSuffixes: [
+      "evidence-lane-box",
+      "action-lane-box",
+      "memory-lane-box",
+      "fact-gate",
+      "approval-gate",
+      "verify-gate",
+      "evidence-0",
+      "evidence-4",
+      "action-0",
+      "action-4",
+      "state-to-signal",
+      "outcome-memory",
+      "memory-wiki",
+      "outcome-eval",
+      "failure-box",
+    ],
+    dashedElementSuffixes: ["learning-box", "wiki-learning", "learning-eval"],
+    renderPhrases: [
+      "One episode: evidence → governed action → verified learning",
+      "GATE 1 · CONFIRM",
     ],
   }),
 );

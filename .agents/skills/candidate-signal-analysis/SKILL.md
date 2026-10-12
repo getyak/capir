@@ -15,6 +15,17 @@ description: Extract recruiter-controlled candidate facts from a conversation sc
 
 Return JSON matching `references/output-contract.md`. Mark ambiguity rather than guessing.
 
+## Relationship to `analyze-candidate-signal`
+
+The distributable plugin skill
+[`plugins/talent-signal/skills/analyze-candidate-signal/SKILL.md`](../../../plugins/talent-signal/skills/analyze-candidate-signal/SKILL.md)
+is intentionally different from this in-repo skill: the plugin is read-only and
+bounded to one recruiter-owned `prepare_question` proposal or `no_action`,
+while this skill produces reviewable in-repo `create_contact`, `update_contact`,
+and `create_meeting` action cards. Both remain proposal-only with no execution
+authority and neither ranks a person. Keep the two output contracts separate;
+do not converge them.
+
 ## Guardrails
 
 - Never infer protected characteristics or sensitive personal details.

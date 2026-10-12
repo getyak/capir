@@ -1,4 +1,4 @@
-# 0017 — Three-scope Memory review domain
+# 0024 — Three-scope Memory review domain
 
 Date: 2026-09-22
 Status: Accepted

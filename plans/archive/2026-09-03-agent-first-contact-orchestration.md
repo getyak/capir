@@ -1,3 +1,15 @@
+> **Status: archived historical proposal (2026-09-03).** This brief was the
+> slice definition for the delivered agent-first contact orchestration work and
+> is kept as delivery evidence only; it is not current product authority. The
+> owning plan is
+> [`2026-08-28-conversation-first-contact-intake.md`](../2026-08-28-conversation-first-contact-intake.md)
+> and the resumable delivery record is
+> [`2026-09-03-agent-first-contact-orchestration.md`](../2026-09-03-agent-first-contact-orchestration.md).
+> One proof boundary from the owning plan is still outstanding and was never
+> accepted: the Apple Intelligence Foundation Models fallback needs a compatible
+> physical-device run, so the deterministic parser and clarification fallback
+> remain the production-safe behavior until that run happens.
+
 # Agent-first contact orchestration
 
 ## Outcome

@@ -1,7 +1,13 @@
 # Design goal contract
 
-Status: active
+Status: archived
 Version: 1
+
+> Archived marketing-design evaluation scaffolding from 2026-08-05. Kept
+> useful as historical evidence for the top1 design-evaluation flow; it is not
+> current product truth and no current marketing-design workflow reads it.
+> Local scratch output stays ignored (see this directory's `.gitignore` and the
+> repository root ignore for `.top1-design/`).
 
 ## User and context
 
