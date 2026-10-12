@@ -16,17 +16,18 @@
   and research allowance/sequencing `273ed9a1` after 414 Agent and 142 host tests
   plus actual same-Run process-interruption probes, and error logging/Web
   admission `6953ebb8` after 54 backend and 36 Web focused tests plus actual
-  Pino/limiter negative probes.
+  Pino/limiter negative probes, and journal integrity `e09c730b` after 183 host
+  tests and independent orphan-state/publication-interruption proofs.
   Resident deployment and final delivery remain outstanding.
-- Active Pi batch: interrupted checkpoint/journal integrity (PH-13),
-  `20261012-071431-6fee91cd`, frozen base `5dbdde13`. Error
+- Next Pi batch: durable diagnostic privacy. Interrupted checkpoint/journal
+  integrity (PH-13), `20261012-071431-6fee91cd`, frozen base `5dbdde13`, passed
+  independent review after one orphan-metadata repair. Error
   logging/Web admission `20261012-060810-73e39891` passed independent review
   with one repair and a narrowly approved test companion. Research allowance
   recovery `20261012-050607-5d7531a8` passed review after two bounded parent
   corrections; search/fetch/profile each dispatched once at a maximum of one
   across actual command process death and same-Run recovery.
-- Remaining order: journal integrity recovery;
-  durable diagnostic privacy;
+- Remaining order: durable diagnostic privacy;
   model-context diagnostic privacy; dead Web retirement/meeting identity
   admission; knowledge/tooling ownership. Review and verify each diff before
   integration.
@@ -530,8 +531,8 @@ Arbitrary checkpoint/journal publication is not a crash-atomic transaction.
 
 Before evidence: `research-journal-interruption-before-proof.log` in the private
 task artifact directory; both actual commands were tested against the accepted
-integration build. Status: open; separate sequential Pi outcome, followed by
-independent command-level verification.
+integration build. The accepted repair and independent after-change evidence
+are recorded below.
 
 A second actual-command probe held publication after `terminal.json` was written
 but before the terminal-event append. Both commands replayed `no_action` from
@@ -581,7 +582,7 @@ integrity. Retain the original cap; do not raise the baseline, suppress the
 guard or compact formatting to meet it. Final architecture checks and the
 complete documentation command remain required before delivery. Status: open.
 
-## Journal integrity review checkpoint — changes requested
+## Journal integrity review checkpoint — initial changes requested
 
 Pi `20261012-071431-6fee91cd` passes its four checks and 172 host tests, including
 the four real command publication-interruption cases. Codex traced both store
@@ -605,4 +606,32 @@ publishing replacement metadata. Keep fresh starts, valid original-metadata
 reservation recovery, completed replay, concurrent publication, consumed
 allowances and original evidence bytes. Fixed failures require manual
 inspection; do not fabricate identity, reset counts or reconstruct history.
-Final-source independent verification and before/after proofs remain pending.
+This first review was followed by the accepted repair below.
+
+## Accepted journal integrity and immutable identity repair
+
+- Integrated commit: `e09c730b`; worker commit `16e0bdb3`; Pi task
+  `20261012-071431-6fee91cd`, one repair, unchanged frozen model/base/limits.
+- Both actual stores read complete secure JSONL records, validate contiguous
+  Run-specific sequence, and require agreement with the checkpoint or matching
+  final terminal event before recovery or successful replay. Torn records and
+  interrupted publication fail with fixed content-free errors. No missing
+  event is reconstructed and consumed allowances remain consumed.
+- Any existing checkpoint, nonempty journal or terminal evidence requires the
+  original immutable `run.json`. The check runs before replacement metadata
+  could be published and at exported store recovery readers. Fresh state,
+  valid reservation recovery, completed replay and concurrent first publication
+  retain their positive coverage.
+- Parent final-source verification passed host typecheck, build, all 183 tests
+  in 21 files, and canonical documentation checking. The actual orphan-state
+  command now fails before model execution: zero model calls, metadata remains
+  absent, checkpoint bytes unchanged.
+- Independent integration-build process probes passed all four public/person
+  checkpoint/terminal publication interruptions. Fresh recovery fails with the
+  expected fixed diagnostic; journal sequences are unchanged, total synthetic
+  gateway dispatches remain one and additional model calls remain zero.
+- Private receipts: `research-journal-parent-final-verification.json`,
+  `research-orphan-state-after-proof.json` and
+  `research-journal-interruption-after-proof.log`. Synthetic fixtures only;
+  no live provider, private image or production incident is claimed. This is
+  fail-closed recovery, not arbitrary crash-atomic multi-file publication.
