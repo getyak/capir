@@ -13,6 +13,7 @@ COPY apps/web/package.json apps/web/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/evaluation/package.json packages/evaluation/package.json
 COPY apps/agent/scripts/verify-native-runtime.cjs apps/agent/scripts/verify-native-runtime.cjs
+COPY apps/agent/scripts/prefetch-native-runtime.cjs apps/agent/scripts/prefetch-native-runtime.cjs
 
 ARG PNPM_REGISTRY=https://registry.npmjs.org
 ARG PNPM_FETCH_TIMEOUT_MS=180000
@@ -22,7 +23,11 @@ RUN case "$PNPM_FETCH_TIMEOUT_MS" in ''|*[!0-9]*) \
     && [ "$PNPM_FETCH_TIMEOUT_MS" -le 3600000 ] \
     && pnpm config set registry "$PNPM_REGISTRY" \
     && pnpm config set --location=project --json maxSockets 4 \
-    && pnpm install --frozen-lockfile --ignore-scripts \
+    && pnpm config set --location=project --json networkConcurrency 4 \
+    && pnpm config set --location=project fetch-timeout "$PNPM_FETCH_TIMEOUT_MS" \
+    && node apps/agent/scripts/prefetch-native-runtime.cjs
+
+RUN pnpm install --frozen-lockfile --ignore-scripts \
       --fetch-timeout="$PNPM_FETCH_TIMEOUT_MS" --network-concurrency=4 \
       --filter @talent-signal/backend... \
       --filter @talent-signal/agent-host... \

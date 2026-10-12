@@ -995,3 +995,36 @@ integrity, policies, retry bounds, numeric sockets4, network concurrency4 and
 required native verification. No image-after-the-fact package repair or new
 proxy/registry is introduced. Actual option, invalid-input and cold-image
 acceptance remain required; do not relabel the failed attempt.
+
+### PH-24: Separate the native download from full-graph metadata residency
+
+PR329 merged as `8c10b5296a0c9dff879b871257403d1cc0cf1438` after
+independent review and current-head gates. Its clean image attempt passed the
+complete990-entry policy check in1735.9 seconds, but the required native
+archive's first3600000ms response-body deadline expired. The owned pnpm process
+incurred12689 major page faults in10 seconds; the6GiB VM had approximately
+137MiB available and152KiB of its2GiB swap free. The delivery owner cancelled
+only that owned build after5500.24 seconds (exit130), preserving the policy
+success, first timeout and cancellation reason. This did not exhaust all
+retries and did not switch any resident service. The host's16GiB RAM, existing
+6GiB and4GiB VMs and13.79GiB swap use did not support adding another8GiB builder.
+
+A bounded synthetic Boundary/CLI experiment rejects local-tarball seeding:
+pnpm11.18 indexes identical archive bytes under a different local package ID,
+so the original frozen registry lock cannot reuse them offline. Its separate
+positive control seeds only the exact registry `name@version` in a fresh store,
+then closes the synthetic registry. The unchanged frozen/offline install
+reuses that package without downloading, with matching module bytes and no
+lock/policy mutation. Wrong-content and empty-store cases do not falsely pass.
+Permanent discovery evidence is in `native-cache-boundary/`; its disposable
+scripts are not production tests or proof of real SDK transfer success.
+
+The next native implementation separates exact registry-native prefetch and
+the full frozen graph into distinct pnpm processes and Docker layers. Derive
+the SDK version from the existing Agent manifest and the supported Linux
+architecture from the builder. Preserve the existing official registry,
+numeric transport settings, finite deadlines, ignored lifecycle scripts,
+integrity, age/trust policies and final required-native verification. The
+memory improvement remains a hypothesis until the complete clean-source image
+and four-service live acceptance pass. Root owns review, documentation and
+delivery; the remaining implementation uses native Codex agents, not Pi.
