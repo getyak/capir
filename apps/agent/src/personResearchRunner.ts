@@ -4,6 +4,7 @@ import {
   assertPersonResearchAuthorization,
   assertPersonResearchDraftText,
   assertPersonResearchQuery,
+  assertPersonResearchRunInputs,
   AgentPersonResearchPolicyError,
 } from "./personResearchPolicy.js";
 import {
@@ -14,7 +15,7 @@ import {
   type PersonResearchNoActionOutput,
 } from "./schemas.js";
 import { AgentCapabilityError } from "./runtimePolicy.js";
-import { agentUsage, assertAgentBudget, exceededBudget } from "./runBudget.js";
+import { agentUsage, exceededBudget } from "./runBudget.js";
 import {
   createResearchToolExecution,
   ResearchToolWriteError,
@@ -23,7 +24,6 @@ import {
 import { SYSTEM_AGENT_RUNTIME } from "./runtimeDependencies.js";
 import {
   PERSON_RESEARCH_AGENT_TOOL_NAMES,
-  type AgentBudget,
   type AgentPersonResearchArtifactCandidate,
   type AgentPersonResearchCheckpoint,
   type AgentPersonResearchNoActionCandidate,
@@ -55,54 +55,6 @@ class PersonResearchBoundaryError extends Error {
     message: string,
   ) {
     super(message);
-  }
-}
-
-function assertBudget(budget: AgentBudget): void {
-  assertAgentBudget(budget, ({ field }) => {
-    throw new AgentPersonResearchPolicyError(
-      "AGENT_BUDGET_INVALID",
-      `${field} must be positive and no greater than the Agent ceiling.`,
-    );
-  });
-}
-
-function assertImageInput(request: AgentPersonResearchRunRequest): void {
-  const manifest = request.scope.inputArtifactManifest;
-  const parts = request.providerInputParts;
-  if (manifest.length !== 1 || parts.length !== 1) {
-    throw new AgentPersonResearchPolicyError(
-      "PERSON_RESEARCH_IMAGE_REQUIRED",
-      "Person research requires exactly one governed screenshot artifact.",
-    );
-  }
-  const item = manifest[0];
-  const part = parts[0];
-  if (
-    !item ||
-    !part ||
-    item.kind !== "image" ||
-    part.kind !== "image" ||
-    item.artifactID !== part.artifactID ||
-    item.mimeType !== part.mimeType ||
-    item.byteSize !== part.byteSize ||
-    item.contentHash !== part.contentHash ||
-    !new Set(["image/png", "image/jpeg", "image/webp"]).has(item.mimeType) ||
-    item.byteSize < 1 ||
-    item.byteSize > 10_000_000 ||
-    !/^[0-9a-f]{64}$/u.test(item.contentHash) ||
-    !part.dataBase64
-  ) {
-    throw new AgentPersonResearchPolicyError(
-      "PERSON_RESEARCH_IMAGE_INVALID",
-      "The screenshot must be one matching PNG, JPEG, or WebP artifact of at most 10 MB.",
-    );
-  }
-  if (!request.provider.inputCapabilities.imageUnderstanding) {
-    throw new AgentPersonResearchPolicyError(
-      "PERSON_RESEARCH_VISION_PROVIDER_REQUIRED",
-      "The configured pinned Agent model does not support image understanding.",
-    );
   }
 }
 
@@ -251,14 +203,7 @@ export async function runPersonResearchAgent(
   request: AgentPersonResearchRunRequest,
 ): Promise<AgentPersonResearchTerminalReceipt> {
   const runtime = request.runtime ?? SYSTEM_AGENT_RUNTIME;
-  assertBudget(request.budget);
-  assertImageInput(request);
-  if (!request.scope.runID.trim() || !request.scope.objective.trim() || !request.scope.providerID.trim()) {
-    throw new AgentPersonResearchPolicyError(
-      "PERSON_RESEARCH_SCOPE_INVALID",
-      "A local person-research Run requires a run ID, objective, and pinned provider.",
-    );
-  }
+  assertPersonResearchRunInputs(request);
   const authorization = assertPersonResearchAuthorization(request.scope.authorization);
   const scope = Object.freeze({ ...request.scope, authorization });
   const startedAtMs = runtime.nowMs();
@@ -536,9 +481,11 @@ export async function runPersonResearchAgent(
       ) {
         return deny(error.code, error.message);
       }
+      // Fixed generic fallback: an untyped exception message is untrusted
+      // transport/input text and never enters model context.
       return deny(
         "TOOL_INPUT_INVALID",
-        error instanceof Error ? error.message : "The Tool input is invalid.",
+        "The tool input is invalid. Repair the call against the declared tool schema and retry.",
       );
     }
   };

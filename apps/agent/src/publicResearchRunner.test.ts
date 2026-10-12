@@ -697,4 +697,74 @@ describe("public research Run durability", () => {
     expect(host.events[1]?.metadata.error_code).toBe("RUN_CANCELLED");
     expect(host.events.at(-1)?.kind).toBe("terminal");
   });
+
+  it("returns only the fixed generic fallback to the model tool callback for untyped gateway failures", async () => {
+    const host = new MemoryResearchHost();
+    host.searchWeb = async () => {
+      host.searchDispatches += 1;
+      throw Object.assign(new Error("SECRET_MESSAGE_CANARY"), {
+        name: "SECRET_NAME_CANARY",
+        stack: "Error: SECRET_STACK_CANARY\n    at SECRET_FRAME_CANARY",
+        cause: new Error("SECRET_CAUSE_CANARY"),
+      });
+    };
+    let toolResults: readonly AgentToolResult[] = [];
+    const provider = new ScriptedAgentProvider(
+      [
+        {
+          tool: "search_web",
+          input: searchInput("Example Company public market update"),
+        },
+      ],
+      (results) => {
+        toolResults = results;
+        return noActionOutput;
+      },
+    );
+
+    const receipt = await runPublicResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+    });
+
+    expect(toolResults[0]).toMatchObject({
+      ok: false,
+      error: {
+        code: "TOOL_INPUT_INVALID",
+        message:
+          "The tool input is invalid. Repair the call against the declared tool schema and retry.",
+      },
+    });
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe("TOOL_INPUT_INVALID");
+    expect(host.searchDispatches).toBe(1);
+    // The possibly dispatched operation stays conservatively consumed.
+    expect(host.checkpoint).toMatchObject({ searchCalls: 1 });
+    // No message, name, stack, or cause canary may reach the model tool result,
+    // the terminal receipt, or any durable journal state, and the journal keeps
+    // its bounded content-free behavior: not even the generic tool error text
+    // is retained there by default.
+    const serialized = JSON.stringify({
+      toolResults,
+      receipt,
+      events: host.events,
+      outputs: host.outputs,
+      terminal: host.terminal,
+    });
+    for (const canary of [
+      "SECRET_MESSAGE_CANARY",
+      "SECRET_NAME_CANARY",
+      "SECRET_STACK_CANARY",
+      "SECRET_FRAME_CANARY",
+      "SECRET_CAUSE_CANARY",
+    ]) {
+      expect(serialized).not.toContain(canary);
+    }
+    expect(JSON.stringify({ events: host.events, outputs: host.outputs })).not.toContain(
+      "Repair the call against the declared tool schema",
+    );
+  });
 });

@@ -591,16 +591,22 @@ export async function crawlPublicResearch(
   const visited = new Set<string>();
   const pages: CrawledPage[] = [];
   const warnings: string[] = [];
+  // One loop iteration owns one distinct approved page attempt. The attempt is
+  // reserved and consumed before loader dispatch — including when it fails —
+  // so a failing page tree can never exceed the approved maximum_page_count
+  // per-invocation bound and a consumed attempt is never refunded.
+  let attempts = 0;
 
   while (
     queue.length > 0 &&
-    pages.length < request.authorization.maximum_page_count
+    attempts < request.authorization.maximum_page_count
   ) {
     const next = queue.shift();
     if (!next || visited.has(next.url)) {
       continue;
     }
     visited.add(next.url);
+    attempts += 1;
     try {
       const url = canonicalUrl(next.url);
       if (url.hostname.toLowerCase() !== allowedHostname) {

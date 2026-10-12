@@ -182,6 +182,41 @@ describe("Firecrawl web fetch", () => {
     }
   });
 
+  it("keeps raw transport exception message, name, stack, and cause out of the typed Firecrawl failure", async () => {
+    const fetchPage = createFirecrawlWebFetch({
+      apiKey: "synthetic-firecrawl-key",
+      lookup: publicLookup,
+      fetcher: vi.fn<typeof fetch>().mockRejectedValue(
+        Object.assign(new Error("SECRET_MESSAGE_CANARY"), {
+          name: "SECRET_NAME_CANARY",
+          stack: "Error: SECRET_STACK_CANARY\n    at SECRET_FRAME_CANARY",
+          cause: new Error("SECRET_CAUSE_CANARY"),
+        }),
+      ),
+    });
+    let failure: unknown;
+    try {
+      await fetchPage(scope, result, new AbortController().signal);
+    } catch (error) {
+      failure = error;
+    }
+
+    // The typed code and fixed operation message survive; nothing from the
+    // raw transport exception does.
+    expect(failure).toMatchObject({
+      code: "WEB_FETCH_UNAVAILABLE",
+      message: "Firecrawl could not be reached.",
+    });
+    const error = failure as Error & { cause?: unknown };
+    const serialized = JSON.stringify({
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+      cause: error.cause,
+    });
+    expect(serialized).not.toContain("CANARY");
+  });
+
   it("propagates caller cancellation instead of rewriting it as a provider error", async () => {
     const controller = new AbortController();
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {

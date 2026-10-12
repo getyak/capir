@@ -491,6 +491,107 @@ describe("screenshot-driven person research Agent", () => {
       }),
     ).toThrow("1-4 supported public platforms");
   });
+
+  it("returns only the fixed generic fallback to the model tool callback for untyped gateway failures", async () => {
+    const host = new MemoryPersonResearchHost();
+    host.searchProfiles = async () => {
+      host.profileDispatches += 1;
+      throw Object.assign(new Error("SECRET_MESSAGE_CANARY"), {
+        name: "SECRET_NAME_CANARY",
+        stack: "Error: SECRET_STACK_CANARY\n    at SECRET_FRAME_CANARY",
+        cause: new Error("SECRET_CAUSE_CANARY"),
+      });
+    };
+    let toolResults: readonly AgentToolResult[] = [];
+    const provider = visionProvider(
+      [
+        {
+          tool: "search_douyin_profiles",
+          input: {
+            visible_identity_clue: "@zhouyu",
+            source_artifact_id: imageArtifact.artifactID,
+            maximum_results: 5,
+          },
+        },
+      ],
+      (results) => {
+        toolResults = results;
+        return {
+          outcome: "no_action",
+          reason_code: "NO_VISIBLE_IDENTITY_CLUE",
+          reason: "The tool call failed.",
+          missing_evidence_refs: [],
+        };
+      },
+    );
+
+    const receipt = await runPersonResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+      providerInputParts: inputParts,
+    });
+
+    expect(toolResults[0]).toMatchObject({
+      ok: false,
+      error: {
+        code: "TOOL_INPUT_INVALID",
+        message:
+          "The tool input is invalid. Repair the call against the declared tool schema and retry.",
+      },
+    });
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe("TOOL_INPUT_INVALID");
+    expect(host.profileDispatches).toBe(1);
+    // The possibly dispatched operation stays conservatively consumed.
+    expect(host.checkpoint).toMatchObject({ providerCalls: 1 });
+    // No message, name, stack, or cause canary may reach the model tool result,
+    // the terminal receipt, or any durable journal state, and the journal keeps
+    // its bounded content-free behavior: not even the generic tool error text
+    // is retained there by default.
+    const serialized = JSON.stringify({
+      toolResults,
+      receipt,
+      events: host.events,
+      outputs: host.outputs,
+      terminal: host.terminal,
+    });
+    for (const canary of [
+      "SECRET_MESSAGE_CANARY",
+      "SECRET_NAME_CANARY",
+      "SECRET_STACK_CANARY",
+      "SECRET_FRAME_CANARY",
+      "SECRET_CAUSE_CANARY",
+    ]) {
+      expect(serialized).not.toContain(canary);
+    }
+    expect(JSON.stringify({ events: host.events, outputs: host.outputs })).not.toContain(
+      "Repair the call against the declared tool schema",
+    );
+  });
+
+  it("requires a valid run scope before any journal or provider work", async () => {
+    const host = new MemoryPersonResearchHost();
+    await expect(
+      runPersonResearchAgent({
+        scope: { ...scope, runID: "  " },
+        budget: { ...DEFAULT_AGENT_BUDGET },
+        provider: visionProvider([], {
+          outcome: "no_action",
+          reason_code: "NO_VISIBLE_IDENTITY_CLUE",
+          reason: "No clue.",
+          missing_evidence_refs: [],
+        }),
+        gateway: host,
+        journal: host,
+        providerInputParts: inputParts,
+      }),
+    ).rejects.toMatchObject({ code: "PERSON_RESEARCH_SCOPE_INVALID" });
+    expect(host.events).toEqual([]);
+    expect(host.terminal).toBeNull();
+  });
 });
 
 describe("person research Run durability", () => {

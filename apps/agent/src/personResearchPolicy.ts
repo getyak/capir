@@ -1,6 +1,8 @@
+import { assertAgentBudget } from "./runBudget.js";
 import type {
   AgentPersonResearchAuthorization,
   AgentPersonResearchPlatform,
+  AgentPersonResearchRunRequest,
 } from "./types.js";
 
 export class AgentPersonResearchPolicyError extends Error {
@@ -119,6 +121,76 @@ export function assertPersonResearchDraftText(text: string): void {
     throw new AgentPersonResearchPolicyError(
       "PERSON_RESEARCH_ASSESSMENT_PROHIBITED",
       "A person-research draft cannot score, rank, or infer protected or sensitive traits.",
+    );
+  }
+}
+
+function assertPersonResearchImageInput(
+  request: AgentPersonResearchRunRequest,
+): void {
+  const manifest = request.scope.inputArtifactManifest;
+  const parts = request.providerInputParts;
+  if (manifest.length !== 1 || parts.length !== 1) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_IMAGE_REQUIRED",
+      "Person research requires exactly one governed screenshot artifact.",
+    );
+  }
+  const item = manifest[0];
+  const part = parts[0];
+  if (
+    !item ||
+    !part ||
+    item.kind !== "image" ||
+    part.kind !== "image" ||
+    item.artifactID !== part.artifactID ||
+    item.mimeType !== part.mimeType ||
+    item.byteSize !== part.byteSize ||
+    item.contentHash !== part.contentHash ||
+    !new Set(["image/png", "image/jpeg", "image/webp"]).has(item.mimeType) ||
+    item.byteSize < 1 ||
+    item.byteSize > 10_000_000 ||
+    !/^[0-9a-f]{64}$/u.test(item.contentHash) ||
+    !part.dataBase64
+  ) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_IMAGE_INVALID",
+      "The screenshot must be one matching PNG, JPEG, or WebP artifact of at most 10 MB.",
+    );
+  }
+  if (!request.provider.inputCapabilities.imageUnderstanding) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_VISION_PROVIDER_REQUIRED",
+      "The configured pinned Agent model does not support image understanding.",
+    );
+  }
+}
+
+/**
+ * Person-research run preflight, owned by this policy boundary and called by
+ * the actual runner before journal start or provider work. The budget, the
+ * governed screenshot/provider input, and scope identity are asserted in the
+ * exact order the runner has always enforced; authorization normalization
+ * keeps its own separate owner.
+ */
+export function assertPersonResearchRunInputs(
+  request: AgentPersonResearchRunRequest,
+): void {
+  assertAgentBudget(request.budget, ({ field }) => {
+    throw new AgentPersonResearchPolicyError(
+      "AGENT_BUDGET_INVALID",
+      `${field} must be positive and no greater than the Agent ceiling.`,
+    );
+  });
+  assertPersonResearchImageInput(request);
+  if (
+    !request.scope.runID.trim() ||
+    !request.scope.objective.trim() ||
+    !request.scope.providerID.trim()
+  ) {
+    throw new AgentPersonResearchPolicyError(
+      "PERSON_RESEARCH_SCOPE_INVALID",
+      "A local person-research Run requires a run ID, objective, and pinned provider.",
     );
   }
 }

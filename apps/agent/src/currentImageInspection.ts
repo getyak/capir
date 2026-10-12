@@ -25,6 +25,36 @@ const Observation = z.strictObject({
   source_warning: z.enum(["ai_generated_or_fictional"]).optional(),
 });
 export type CurrentImageObservation = z.infer<typeof Observation> & { model: string; request_id: string };
+
+/**
+ * Finite image-diagnostic vocabulary. Code-shaped strings are not
+ * sanitization: an arbitrary `IMAGE_INSPECTION_*` exception message is
+ * untrusted text that can carry private exception content into model context.
+ * Only codes emitted by the actual current producers (the credential
+ * constructor, the response-status/body/identity/output readers, the Zod
+ * output validation, or the fixed unavailable fallback) may reach the model.
+ */
+const IMAGE_INSPECTION_DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
+  "IMAGE_INSPECTION_CREDENTIAL_REQUIRED",
+  "IMAGE_INSPECTION_EMPTY",
+  "IMAGE_INSPECTION_TOO_LARGE",
+  "IMAGE_INSPECTION_IDENTITY_MISMATCH",
+  "IMAGE_INSPECTION_OUTPUT_INVALID",
+  "IMAGE_INSPECTION_UNAVAILABLE",
+]);
+
+/** The producer's `IMAGE_INSPECTION_HTTP_<status>` form for a valid HTTP response status. */
+const IMAGE_INSPECTION_HTTP_CODE = /^IMAGE_INSPECTION_HTTP_([1-5][0-9]{2})$/u;
+
+/** Map an inspection exception to its finite model-visible diagnostic. */
+function imageInspectionDetail(error: unknown): string {
+  if (error instanceof z.ZodError) return "IMAGE_INSPECTION_OUTPUT_INVALID";
+  const message = error instanceof Error ? error.message : undefined;
+  if (message && IMAGE_INSPECTION_DIAGNOSTIC_CODES.has(message)) return message;
+  const http = typeof message === "string" ? message.match(IMAGE_INSPECTION_HTTP_CODE) : null;
+  if (http) return `IMAGE_INSPECTION_HTTP_${http[1]}`;
+  return "IMAGE_INSPECTION_UNAVAILABLE";
+}
 export interface CurrentImageInspector {
   inspect(image: Extract<AgentProviderInputPart, {kind:"image"}>, signal: AbortSignal): Promise<CurrentImageObservation>;
 }
@@ -121,8 +151,7 @@ export function currentImageInspection(input:{
         }
         return content({artifact_id,content_hash:image.contentHash,...result,public_subjects,authority:"untrusted_image_observation"});
       }catch(error){signal.throwIfAborted();
-        const detail=error instanceof z.ZodError?"IMAGE_INSPECTION_OUTPUT_INVALID":error instanceof Error&&/^IMAGE_INSPECTION_[A-Z0-9_]+$/u.test(error.message)?error.message:"IMAGE_INSPECTION_UNAVAILABLE";
-        return content({error:"IMAGE_INSPECTION_FAILED",detail},true);
+        return content({error:"IMAGE_INSPECTION_FAILED",detail:imageInspectionDetail(error)},true);
       }
       finally{pending.delete(artifact_id);}
     }};

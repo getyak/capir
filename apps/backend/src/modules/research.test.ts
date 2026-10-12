@@ -1,7 +1,13 @@
 import type { Pool } from "pg";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { PublicResearchRequest } from "@talent-signal/contracts";
+import {
+  CONTRACT_VERSION,
+  PublicResearchResponseSchema,
+} from "@talent-signal/contracts";
+import { FormatRegistry } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 
 import type { AuthContext } from "./auth.js";
 import {
@@ -478,5 +484,218 @@ describe("bounded public research failure diagnostics", () => {
     expect(jobWrite?.params).toContain(PUBLIC_RESEARCH_UNAVAILABLE);
     const auditWrite = calls.find((call) => call.sql.includes("INSERT INTO audit_events"));
     expect(JSON.stringify(auditWrite?.params)).toContain(PUBLIC_RESEARCH_UNAVAILABLE);
+  });
+});
+
+describe("bounded public research crawl attempt budget", () => {
+  const seedUrl = "https://profile.example/person";
+
+  beforeAll(() => {
+    if (!FormatRegistry.Has("uuid")) {
+      FormatRegistry.Set("uuid", (value) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          value,
+        ),
+      );
+    }
+    if (!FormatRegistry.Has("date-time")) {
+      FormatRegistry.Set("date-time", (value) =>
+        Number.isFinite(Date.parse(value)),
+      );
+    }
+    if (!FormatRegistry.Has("uri")) {
+      FormatRegistry.Set("uri", (value) => {
+        try {
+          new URL(value);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+    }
+  });
+
+  function request(
+    maximumPageCount: number,
+    maximumLinkDepth: number,
+  ): PublicResearchRequest {
+    return {
+      idempotency_key: `research-attempt-budget-${maximumPageCount}-${maximumLinkDepth}`,
+      person_id: "11111111-1111-4111-8111-111111111111",
+      relationship_context_id:
+        "22222222-2222-4222-8222-222222222222",
+      seed_resource_id:
+        "33333333-3333-4333-8333-333333333333",
+      purpose: "Verify bounded crawl attempt accounting",
+      expected_seed_url: seedUrl,
+      authorization: {
+        decision: "approve_public_research",
+        allowed_domain: "profile.example",
+        maximum_page_count: maximumPageCount,
+        maximum_link_depth: maximumLinkDepth,
+      },
+    };
+  }
+
+  /** Canary-rich failure: none of its fields may survive into warnings. */
+  function canaryFailure(): Error {
+    return Object.assign(new Error("SECRET_FETCH_MESSAGE_CANARY"), {
+      name: "SECRET_FETCH_NAME_CANARY",
+      stack: "Error: SECRET_FETCH_STACK_CANARY",
+      cause: new Error("SECRET_FETCH_CAUSE_CANARY"),
+    });
+  }
+
+  /** 22 permitted same-domain child links, each anchor listed twice. */
+  function seedExtraction(): { text: string; links: string[] } {
+    const links = Array.from(
+      { length: 22 },
+      (_, index) =>
+        `https://profile.example/child-${String(index + 1).padStart(2, "0")}`,
+    );
+    const anchors = links
+      .map((link) => `<a href="${link}">Child</a><a href="${link}">Duplicate anchor</a>`)
+      .join("");
+    const html = new TextEncoder().encode(
+      `<html><body><p>Public research seed.</p>${anchors}</body></html>`,
+    );
+    return extractResearchPage(
+      new URL(seedUrl),
+      "text/html",
+      html,
+      "profile.example",
+    );
+  }
+
+  it("consumes each distinct failed child attempt from the per-invocation bound", async () => {
+    const extracted = seedExtraction();
+    expect(extracted.links).toHaveLength(22);
+    const dispatched: string[] = [];
+    const result = await crawlPublicResearch(
+      new URL(seedUrl),
+      request(5, 1),
+      async (url) => {
+        dispatched.push(url.toString());
+        if (url.pathname === "/person") {
+          return {
+            canonicalUrl: url.toString(),
+            contentHash: "a".repeat(64),
+            retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+            text: extracted.text,
+            links: extracted.links,
+          };
+        }
+        throw canaryFailure();
+      },
+    );
+
+    // maximum_page_count bounds total attempts, not only successful pages:
+    // the seed plus at most four failing children dispatch exactly five loads.
+    expect(dispatched).toHaveLength(5);
+    expect(dispatched[0]).toBe(seedUrl);
+    expect(result.pages.map((page) => page.canonicalUrl)).toEqual([seedUrl]);
+    expect(result.warnings).toHaveLength(4);
+    // Warnings stay inside the existing public bounds and keep the fixed
+    // diagnostic beside approved source provenance.
+    expect(result.warnings.length).toBeLessThanOrEqual(20);
+    for (const warning of result.warnings) {
+      expect(warning.length).toBeLessThanOrEqual(500);
+      expect(warning.startsWith("https://profile.example/child-")).toBe(true);
+      expect(warning.endsWith(`: ${PUBLIC_RESEARCH_FETCH_FAILED}`)).toBe(true);
+    }
+    expect(JSON.stringify(result)).not.toContain("CANARY");
+    // The actual public response schema remains valid for the bounded result.
+    const body = {
+      contract_version: CONTRACT_VERSION,
+      task_id: "12121212-1212-1212-8121-121212121212",
+      seed_resource_id: request(5, 1).seed_resource_id,
+      status: "partial",
+      authorization_scope: "Synthetic bounded public research scope.",
+      pages: [
+        {
+          canonical_url: seedUrl,
+          resource_id: "99999999-9999-4999-8999-999999999999",
+          capture_id: "88888888-8888-4888-8888-888888888888",
+          content_hash: "a".repeat(64),
+          retrieved_at: "2026-08-07T00:00:00.000Z",
+        },
+      ],
+      warnings: result.warnings,
+      created_at: "2026-08-07T00:00:00.000Z",
+      completed_at: "2026-08-07T00:01:00.000Z",
+    };
+    expect(Value.Check(PublicResearchResponseSchema, body)).toBe(true);
+  });
+
+  it("never dispatches duplicate links twice and keeps the all-success bound", async () => {
+    const extracted = seedExtraction();
+    const dispatched = new Map<string, number>();
+    const result = await crawlPublicResearch(
+      new URL(seedUrl),
+      request(5, 1),
+      async (url) => {
+        dispatched.set(url.toString(), (dispatched.get(url.toString()) ?? 0) + 1);
+        if (url.pathname === "/person") {
+          return {
+            canonicalUrl: url.toString(),
+            contentHash: "a".repeat(64),
+            retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+            text: extracted.text,
+            // Duplicate crawl-level links must not dispatch twice either.
+            links: [...extracted.links, ...extracted.links],
+          };
+        }
+        return {
+          canonicalUrl: url.toString(),
+          contentHash: url.pathname.padEnd(64, "b").slice(0, 64),
+          retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+          text: "Public child page excerpt.",
+          links: [],
+        };
+      },
+    );
+
+    expect([...dispatched.values()]).toEqual([1, 1, 1, 1, 1]);
+    expect(dispatched.size).toBe(5);
+    // The existing all-success bound keeps exactly maximum_page_count pages.
+    expect(result.pages).toHaveLength(5);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("keeps depth ownership: depth zero stays on the seed and depth one never expands children", async () => {
+    const extracted = seedExtraction();
+    const dispatched: string[] = [];
+    const load = async (url: URL): Promise<CrawledPage> => {
+      dispatched.push(url.toString());
+      return {
+        canonicalUrl: url.toString(),
+        contentHash: url.pathname.padEnd(64, "c").slice(0, 64),
+        retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+        text: "Public page excerpt.",
+        links:
+          url.pathname === "/person"
+            ? extracted.links
+            : ["https://profile.example/grandchild"],
+      };
+    };
+
+    const shallow = await crawlPublicResearch(
+      new URL(seedUrl),
+      request(3, 0),
+      load,
+    );
+    expect(dispatched).toEqual([seedUrl]);
+    expect(shallow.pages).toHaveLength(1);
+
+    dispatched.length = 0;
+    const oneHop = await crawlPublicResearch(
+      new URL(seedUrl),
+      request(3, 1),
+      load,
+    );
+    expect(dispatched).toHaveLength(3);
+    expect(dispatched).not.toContain("https://profile.example/grandchild");
+    expect(oneHop.pages).toHaveLength(3);
+    expect(oneHop.warnings).toEqual([]);
   });
 });

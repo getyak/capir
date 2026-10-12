@@ -344,11 +344,11 @@ async function fetchBounded(
       });
     } catch (error) {
       if (error instanceof AgentSafeWebFetchError) throw error;
+      // Fixed operation message: an untyped transport exception message is
+      // untrusted and never enters a typed fetch error or model context.
       throw new AgentSafeWebFetchError(
         "WEB_FETCH_UNAVAILABLE",
-        error instanceof Error
-          ? `The public page could not be reached: ${error.message}`
-          : "The public page could not be reached.",
+        "The public page could not be reached.",
       );
     }
     if ([301, 302, 303, 307, 308].includes(response.status)) {

@@ -167,7 +167,7 @@ an older value never restores older evidence. State remains explainable by histo
 
 ### Evidence is scoped
 
-Every consequential claim preserves source, purpose, authorization, and retention. Retrieval is authorized at use time, not only at storage time.
+Every consequential claim preserves source, purpose, authorization, and retention. Retrieval is authorized at use time, not only at storage time. A bounded public-research crawl consumes each distinct approved page attempt from its per-invocation authorization before dispatch, and a failed attempt stays consumed: a failing page tree can never widen the approved bound.
 
 Chat citation readback binds account, task, manifest, snapshot, person, context, and authorization scope. Every fragment must be active, reviewed,
 attribution-confirmed, inspectable, and authorized in that exact scope. The client rechecks before recording, when Ask opens, on foreground return,

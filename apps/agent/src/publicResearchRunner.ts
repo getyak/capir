@@ -472,9 +472,11 @@ export async function runPublicResearchAgent(
       ) {
         return deny(error.code, error.message);
       }
+      // Fixed generic fallback: an untyped exception message is untrusted
+      // transport/input text and never enters model context.
       return deny(
         "TOOL_INPUT_INVALID",
-        error instanceof Error ? error.message : "The Tool input is invalid.",
+        "The tool input is invalid. Repair the call against the declared tool schema and retry.",
       );
     }
   };

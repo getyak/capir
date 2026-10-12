@@ -564,7 +564,7 @@ export async function runBoundedAgent(
       }
       return deny(
         "TOOL_INPUT_INVALID",
-        error instanceof Error ? error.message : "The tool input is invalid.",
+        "The tool input is invalid. Repair the call against the declared tool schema and retry.",
       );
     }
   };
