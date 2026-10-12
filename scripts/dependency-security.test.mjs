@@ -95,6 +95,22 @@ test("patches/braces@3.0.3.patch is registered with a frozen digest", () => {
   );
 });
 
+test("the backend Docker context admits patches while preserving its exclusion boundary", () => {
+  const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
+  const rules = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile.dockerignore"), "utf8")
+    .trim().split("\n");
+  assert.match(dockerfile, /^COPY patches patches$/m);
+  assert.equal(rules[0], "**", "the context must remain default-deny");
+  const patchDirectory = rules.indexOf("!patches/");
+  const patchContents = rules.indexOf("!patches/**");
+  assert.ok(patchDirectory > 0, "the patch directory must be admitted");
+  assert.ok(patchContents > patchDirectory, "registered patch files must be admitted");
+  for (const exclusion of ["**/node_modules", "**/dist", "**/.env*", "**/*.log", "**/.DS_Store"]) {
+    assert.ok(rules.indexOf(exclusion) > patchContents,
+      `${exclusion} must remain excluded after the patch allowlist`);
+  }
+});
+
 test("ordinary compile/expand/escape/quote behavior is unchanged", () => {
   const goldens = {
     "a/{b,c}/d": { default: ["a/(b|c)/d"], expand: ["a/b/d", "a/c/d"] },

@@ -9,7 +9,7 @@
 - Outcome: repair the confirmed correctness/privacy/security defects, retire
   proven dead Web code, archive obsolete scaffolding, and enforce knowledge/tool
   ownership without changing applied SQL or unrelated work.
-- Integration branch: `codex/project-health-oct12`, based on remote main
+- Initial integration branch: `codex/project-health-oct12`, based on remote main
   `e751b37a8692a33387b7325004d7532face32021`.
 - Accepted so far: audit inventory, independent synthetic before-change probes,
   dependency safety batch `81324609` after independent clean-install checks,
@@ -30,9 +30,13 @@
   notebooks, PR324 acceptance, Motion14 and pinned Actions updates. Frozen
   dependency installation passed after a diagnosed network-timeout retry.
 - Final integration and isolated PostgreSQL18 checks passed; independent native
-  Codex review found no actionable P0–P3 on `23c44f6b`. Remaining: latest-head PR
-  gates, confirmed merge, resident rollout and isolated live-surface acceptance.
-  No active Pi writer remains.
+  Codex review found no actionable P0–P3 on `23c44f6b`. Native fixture follow-up
+  review accepted `dbab1c0d`. PR325 was squash-merged as `0b7510dd` after24
+  successful checks and two existing skip/neutral results. Resident rollout
+  found the confirmed PH20 build-context omission before any service switch.
+  Remaining: native correction on `codex/project-health-docker-context`, its
+  independent review/current-head gates and merge, resident rollout and isolated
+  live-surface acceptance. No active Pi writer remains.
 - Completion evidence: final local checks and real surface acceptance; latest
   PR-head applicable CI/security/branch gates; confirmed merge; clean committed
   resident API, Agent Host, Web and changed browser-executor revisions verified
@@ -827,4 +831,39 @@ by a later pathname read therefore retains that pattern. Preserve this failed
 scan in codeql-test-fixture-attempt1.json. The follow-up isolates initial0600
 publication verification in its own test and places the replay-mode check after
 all actual-path byte assertions. All original coverage remains; both worker and
-parent pass16 affected tests. Latest-head remote scanner success is still pending.
+parent pass16 affected tests. The actual latest JavaScript/Actions analyses on
+`dbab1c0d` both report zero results and bind to its PR merge preview. The
+aggregate has zero annotations and is neutral solely because the existing path
+policy skips Swift; no Swift scan success is claimed. All applicable PR checks
+then passed, and PR325 merged as `0b7510dd`.
+
+
+## Resident image build-context correction (PH-20)
+
+The clean merged `0b7510dd` backend image build fails at `COPY patches patches`:
+`apps/backend/Dockerfile.dockerignore` starts with default-deny `**` and does not
+allow the tracked patch directory, even though the Dockerfile copies it and the
+frozen workspace requires it. The prior Dockerfile COPY repair alone was
+incomplete. No resident service, keeper or Infisical pair was changed before
+this failure. Preserve `resident-backend-image-build.json` and
+`resident-deploy-blocker-docker-context.json` as failed evidence.
+
+A sequential native Codex worker owns the narrow patch-directory allowlist and
+its existing dependency-policy regression. Preserve final node_modules, dist,
+secret and log exclusions. An actual BuildKit COPY probe must establish the
+context behavior; source-text checks alone are not production build proof.
+Independent review, current-head CI and confirmed merge are required before
+resuming the clean full-image build and resident rollout.
+
+
+The native correction admits only `patches/` and `patches/**`. Its actual
+BuildKit scratch probe fails before the correction and succeeds afterward with
+the same synthetic inputs. Exported registered patch bytes retain their digest;
+node_modules, dist, environment, log and unlisted canaries stay absent. Eleven
+dependency-policy tests pass. No source release or resident service was modified
+for the probe, no image/container was created, and the owned temporary subtree
+was removed. Four small cache candidates are recorded and retained because a
+snapshot alone cannot establish exclusive ownership. Full clean image and live
+rollout proof remain required after review and merge. Permanent evidence:
+`docker-context-fix-summary.md`, its before/after BuildKit receipts and exact
+ignore projections.
