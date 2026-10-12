@@ -15,8 +15,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -118,28 +119,69 @@ test("the backend install has bounded transport settings without bypassing suppl
   assert.ok(install, "the backend's pnpm install command must remain explicit");
   for (const flag of [
     "--frozen-lockfile", "--ignore-scripts",
-    "--fetch-timeout=180000", "--network-concurrency=4", "--maxsockets=4",
+    "--fetch-timeout=180000", "--network-concurrency=4",
     "--filter @talent-signal/backend...", "--filter @talent-signal/agent-host...",
   ]) {
     assert.ok(install.includes(flag), `the backend install must retain ${flag}`);
   }
   assert.match(dockerfile, /^RUN npm install --global pnpm@11\.18\.0$/m);
   assert.match(dockerfile, /^ARG PNPM_REGISTRY=https:\/\/registry\.npmjs\.org$/m);
+  assert.match(dockerfile, /&& pnpm config set --location=project --json maxSockets 4/);
+  assert.doesNotMatch(install, /--(?:config\.)?maxsockets=/);
   assert.doesNotMatch(dockerfile,
     /--trust-lockfile|--minimum-release-age(?:=|\s+)0\b|--trust-policy(?:=|\s+)off\b/);
 });
 
-test("pnpm 11.18 accepts the Docker transport flags in an offline help-only parse", () => {
-  const parsed = spawnSync("pnpm", [
-    "install", "--offline", "--help",
-    "--fetch-timeout=180000", "--network-concurrency=4", "--maxsockets=4",
-  ], {
+test("pnpm 11.18 uses numeric maxSockets in a real frozen offline install", () => {
+  const discovered = spawnSync("pnpm", ["exec", "which", "pnpm"], {
     cwd: repositoryRoot,
     encoding: "utf8",
     timeout: 30_000,
   });
-  assert.equal(parsed.status, 0, `help-only parse failed: ${parsed.stderr}`);
-  assert.match(parsed.stdout, /^Version 11\.18\.0\r?$/m);
+  assert.equal(discovered.status, 0, `pinned pnpm discovery failed: ${discovered.stderr}`);
+  const pnpm = discovered.stdout.trim();
+  const fixture = mkdtempSync(join(tmpdir(), "capir-pnpm-config-"));
+  try {
+    writeFileSync(join(fixture, "package.json"), JSON.stringify({
+      name: "capir-owned-pnpm-config-test", private: true, version: "0.0.0",
+      packageManager: "pnpm@11.18.0",
+    }));
+    writeFileSync(join(fixture, "pnpm-workspace.yaml"), "packages: []\n");
+    const emptyConfig = join(fixture, "empty.npmrc");
+    writeFileSync(emptyConfig, "");
+    const env = {
+      PATH: process.env.PATH, HOME: process.env.HOME,
+      TMPDIR: tmpdir(), XDG_CONFIG_HOME: join(fixture, "config"),
+      XDG_CACHE_HOME: join(fixture, "cache"), XDG_DATA_HOME: join(fixture, "data"),
+      XDG_STATE_HOME: join(fixture, "state"),
+      npm_config_userconfig: emptyConfig, npm_config_globalconfig: emptyConfig,
+    };
+    const run = (args) => spawnSync(pnpm, args, {
+      cwd: fixture, env, encoding: "utf8", timeout: 30_000,
+    });
+    const configured = run(["config", "set", "--location=project", "--json", "maxSockets", "4"]);
+    assert.equal(configured.status, 0, `typed project config failed: ${configured.stderr}`);
+    assert.match(readFileSync(join(fixture, "pnpm-workspace.yaml"), "utf8"), /^maxSockets: 4$/m);
+    const installFlags = [
+      "--offline", "--ignore-scripts", `--store-dir=${join(fixture, "store")}`,
+      "--fetch-timeout=180000", "--network-concurrency=4",
+    ];
+    const generated = run(["install", "--lockfile-only", ...installFlags]);
+    assert.equal(generated.status, 0, `fixture lock generation failed: ${generated.stderr}`);
+    const lockfile = readFileSync(join(fixture, "pnpm-lock.yaml"), "utf8");
+    const rejected = run(["install", "--frozen-lockfile", ...installFlags, "--maxsockets=4"]);
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stdout + rejected.stderr, /Unknown option: 'maxsockets'/);
+    const installed = run(["install", "--frozen-lockfile", ...installFlags]);
+    assert.equal(installed.status, 0, `frozen offline install failed: ${installed.stderr}`);
+    assert.match(installed.stdout, /using pnpm v11\.18\.0/);
+    assert.equal(readFileSync(join(fixture, "pnpm-lock.yaml"), "utf8"), lockfile);
+    const effective = run(["config", "get", "--json", "maxSockets"]);
+    assert.equal(effective.status, 0);
+    assert.equal(JSON.parse(effective.stdout), 4);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 test("ordinary compile/expand/escape/quote behavior is unchanged", () => {
