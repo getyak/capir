@@ -580,3 +580,29 @@ the actual runner. Preserve shared FIFO, consumed allowances and journal
 integrity. Retain the original cap; do not raise the baseline, suppress the
 guard or compact formatting to meet it. Final architecture checks and the
 complete documentation command remain required before delivery. Status: open.
+
+## Journal integrity review checkpoint — changes requested
+
+Pi `20261012-071431-6fee91cd` passes its four checks and 172 host tests, including
+the four real command publication-interruption cases. Codex traced both store
+readers, shared secure JSONL parsing, producer offsets and the original
+immutable-publication regressions. This is a review checkpoint, not acceptance.
+
+A further actual synthetic command proves an orphan-state gap: after a valid
+sequence0 reservation checkpoint is retained and its original `run.json` is
+removed, public research can invoke its model and republish immutable metadata
+under a changed objective for the same Run ID. The successful `no_action`
+receipt therefore hides missing authoritative identity. The permanent receipt
+is `research-orphan-state-before-proof.json`; it uses only a scripted provider
+and injected local gateway, with no credentials, live network or personal data.
+Completed-terminal replay already checks recorded scope in both commands; no
+completed-replay identity bypass or production incident is claimed.
+
+One same-task repair is requested within the existing scope and frozen limits:
+checkpoint, nonempty journal or terminal evidence requires its original Run
+metadata before provider work, and `start` must reject orphaned evidence before
+publishing replacement metadata. Keep fresh starts, valid original-metadata
+reservation recovery, completed replay, concurrent publication, consumed
+allowances and original evidence bytes. Fixed failures require manual
+inspection; do not fabricate identity, reset counts or reconstruct history.
+Final-source independent verification and before/after proofs remain pending.
