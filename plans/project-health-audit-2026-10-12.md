@@ -21,10 +21,9 @@
   durable diagnostic boundaries `23751e6a` after 117 backend/192 host tests
   and actual output/compatibility probes.
   Resident deployment and final delivery remain outstanding.
-- Most recent accepted Pi batch: model-context diagnostics, existing policy
-  extraction and public-crawl attempt bounds, `20261012-114341-39e2b8eb`,
-  integrated `a171c2ed` after all ten independent checks and actual output/crawl
-  probes. Web retirement/meeting identity is next; final delivery remains open.
+- Active Pi batch: dead Web retirement and exact meeting-draft identity admission,
+  `20261012-121919-f4a7e76e`, frozen base `54741b30`, 48 scoped paths.
+  Model/policy/crawl passed independent acceptance in `a171c2ed`.
 - Remaining order:
   dead Web retirement/meeting identity
   admission; knowledge/tooling ownership. Review and verify each diff before
