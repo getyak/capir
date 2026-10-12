@@ -111,6 +111,37 @@ test("the backend Docker context admits patches while preserving its exclusion b
   }
 });
 
+test("the backend install has bounded transport settings without bypassing supply-chain checks", () => {
+  const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
+  const install = dockerfile.replace(/\\\n\s*/g, " ")
+    .match(/&& pnpm install (.*?)\s*&& node /)?.[1];
+  assert.ok(install, "the backend's pnpm install command must remain explicit");
+  for (const flag of [
+    "--frozen-lockfile", "--ignore-scripts",
+    "--fetch-timeout=180000", "--network-concurrency=4", "--maxsockets=4",
+    "--filter @talent-signal/backend...", "--filter @talent-signal/agent-host...",
+  ]) {
+    assert.ok(install.includes(flag), `the backend install must retain ${flag}`);
+  }
+  assert.match(dockerfile, /^RUN npm install --global pnpm@11\.18\.0$/m);
+  assert.match(dockerfile, /^ARG PNPM_REGISTRY=https:\/\/registry\.npmjs\.org$/m);
+  assert.doesNotMatch(dockerfile,
+    /--trust-lockfile|--minimum-release-age(?:=|\s+)0\b|--trust-policy(?:=|\s+)off\b/);
+});
+
+test("pnpm 11.18 accepts the Docker transport flags in an offline help-only parse", () => {
+  const parsed = spawnSync("pnpm", [
+    "install", "--offline", "--help",
+    "--fetch-timeout=180000", "--network-concurrency=4", "--maxsockets=4",
+  ], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  assert.equal(parsed.status, 0, `help-only parse failed: ${parsed.stderr}`);
+  assert.match(parsed.stdout, /^Version 11\.18\.0\r?$/m);
+});
+
 test("ordinary compile/expand/escape/quote behavior is unchanged", () => {
   const goldens = {
     "a/{b,c}/d": { default: ["a/(b|c)/d"], expand: ["a/b/d", "a/c/d"] },
