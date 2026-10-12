@@ -21,11 +21,15 @@
   durable diagnostic boundaries `23751e6a` after 117 backend/192 host tests
   and actual output/compatibility probes.
   Resident deployment and final delivery remain outstanding.
-- Active Pi batch: knowledge/tooling ownership, `20261012-132438-605a5dd0`,
-  frozen base `c6a1c196`,26 scoped patterns. Web passed independent review,
-  2171 tests, actual React/graph/asset proofs and clean build in `624565ea`.
-- Remaining order: knowledge/tooling ownership; then final local/real-surface
-  acceptance, latest-head PR gates, confirmed merge and resident rollout.
+- All nine implementation batches accepted. Model-context/crawl `a171c2ed`,
+  Web `624565ea` and knowledge/tooling `d9d9f043` join the accepted repairs above.
+  Pi knowledge task `20261012-132438-605a5dd0` used one scoped repair,135 turns;
+  Codex independently verified all seven final-source commands and50 paths.
+- Upstream `3c3c2eff` is merged without conflicts, preserving PR322 research
+  notebooks, PR324 acceptance, Motion14 and pinned Actions updates. Frozen
+  dependency installation passed after a diagnosed network-timeout retry.
+- Remaining order: final integration and real-surface acceptance, latest-head
+  PR gates, confirmed merge and resident rollout. No active Pi writer remains.
 - Completion evidence: final local checks and real surface acceptance; latest
   PR-head applicable CI/security/branch gates; confirmed merge; clean committed
   resident API, Agent Host, Web and changed browser-executor revisions verified
@@ -758,10 +762,20 @@ An independent strict checker copy fails on the frozen scene without editing
 active Pi source. The intermediate `textContrast:false` note branch suppresses
 all future low-contrast text in that scene and is rejected.
 
-The parent will explicitly scope only the generator and this control-plane
-Excalidraw/SVG/derived PNG at the ready checkpoint: correct the three title colors,
-preserve geometry, text, other scenes and the original threshold, and remove
-the bypass branch entirely. This is a concrete counterexample to the initial
+At the ready checkpoint the parent scoped only the generator and this
+control-plane Excalidraw/SVG/derived PNG. Pi corrected the three title colors,
+preserved source geometry/text/other scenes and removed the bypass entirely.
+The strict five-scene gate passes at the original4.5 threshold. This is a concrete counterexample to the initial
 no-repaint boundary, not evidence of source drift in the original five diagrams.
 Private receipts: `diagram-contrast-before.log`,
-`diagram-contrast-review-proof.json`. Status: review changes required.
+`diagram-contrast-review-proof.json`. Status: accepted in `d9d9f043`.
+
+
+## Accepted knowledge ownership and policy coverage
+
+- Integrated `d9d9f043`; worker `72331917`; Pi `20261012-132438-605a5dd0`, one repair. Codex reviewed50 final paths and all seven independent final-source commands passed without changes:21 docs/hygiene/prompt tests,6 scope tests,7 pinned-SDK provider tests, Agent/backend types and full docs/architecture gates.
+- Markdown inventory is Git tracked/index only and fails closed. Tests cover staged links, ignored output, missing canonical files, removed targets and Git failure. Policy CI and local check include the docs, hygiene and previously unwired prompt tests.
+- ADR memory identity becomes0024; migration rules grandfather only exact historical sets. All102 applied SQL files and the execution-order manifest are byte-identical. Archived task/design originals retain evidence and unresolved physical-device boundaries; current product/domain/skill/review ownership has one authoritative home.
+- Both generators reproduce all five scene sources. Only three control-plane stroke/fill colors changed; all12 other diagram artifacts remain byte-identical. Derived PNG keeps2582x1470 and was visually inspected; sharp/librsvg rasterization can differ in glyph detail from the original export. Strict contrast is now12.70366/5.630124/5.630124, with no NOTE bypass.
+- 49 paths match the reviewed worker hashes exactly; CI preserves the exact tested list edit over the newer upstream Actions pins. No unresolved confirmed P0/P1 remains in this batch. Final integration/database/live rollout/PR/merge evidence is still pending.
+- Private receipts: knowledge-parent-final-verification.json, knowledge-source-proof.json, knowledge-integration-source.json, knowledge-scope-amendment.json and preserved knowledge-attempt0 records.
