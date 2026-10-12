@@ -131,6 +131,17 @@ TS_TESTFLIGHT_REBUILD=false \
 
 Rebuild after backend or contract code changes.
 
+The backend image builder uses a 180000ms dependency-fetch deadline by default.
+For a measured slow connection, a clean-source prepared image may explicitly
+set `--build-arg PNPM_FETCH_TIMEOUT_MS=3600000` on `docker build`. The builder
+accepts only decimal integers from 180000 through 3600000ms; this is a finite
+build-only override, not a resident runtime setting. Keep the official registry,
+frozen lock/integrity checks, full supply-chain policy and required native
+runtime verification. A completed dependency install alone is insufficient:
+pnpm may omit a failed optional platform package that the runtime requires.
+After the complete image passes, use the prepared-image procedure below with
+`TS_TESTFLIGHT_REBUILD=false` and verify the approved image/revision pair.
+
 Only after that probe succeeds, store the same HTTPS URL as
 `staging:/release/TALENT_SIGNAL_API_BASE_URL`. It is a build-time value, but the
 endpoint remains tailnet-only.

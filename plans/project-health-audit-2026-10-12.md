@@ -955,3 +955,43 @@ Thirteen tests pass. Installed bundle and user configuration hashes are
 unchanged; owned fixture and three loopback listeners are cleaned up. Preserve
 `build-fetch-config-fix-summary.md` and the corrected/archived diagnosis. Final
 current-head review/gates/merge and full image/live verification remain required.
+
+
+### PH-23: Required native dependency download exceeds the cold-install deadline
+
+PR328 passed independent review and latest-head gates (18 pass, four existing
+skips) and merged as `5ff238f0c790423cdeac9befab8241dc22d5b945`.
+The complete cold Docker attempt on that clean revision ran1368.64 seconds.
+The full990-entry supply-chain policy check passed in15m29.5s; numeric project
+configuration and CLI parsing worked.263 of264 dependency packages installed.
+The remaining `claude-agent-sdk-linux-arm64@0.3.287` tarball exhausted pnpm's
+finite body-timeout retries. Because it is optional to pnpm, install proceeded;
+the required native-runtime verification correctly rejected the absent package
+with MODULE_NOT_FOUND. This is a failed image, not a failed supply-chain check
+or a passed resident deployment. All four services and keeper remain unchanged.
+
+Preserve `deployment-failures/5ff238f0/` and
+`resident-5ff238f0-native-package-failure.json`. Diagnosis is limited to that exact public tarball,
+with bounded sequential requests, discarded bodies and no credentials.
+Do not restart the build, skip the native check or weaken lock/integrity,
+registry, age/trust or supply-chain policies. Resolve the observed transfer
+boundary before another reviewed, gated merge and complete image attempt.
+
+
+The exact public tarball returns Content-Range `bytes0-0/109676765`.
+Sequential60-second discarded-body GETs received2457564 bytes on the host and
+3436499 bytes in Colima (40954/57274 B/s); neither completed. The existing
+credential-free proxy's15-second GET received757287 bytes (50476 B/s), so this
+bounded observation gives no improvement over direct transport. Tiny64KiB
+IPv4/IPv6/proxy probes cannot establish full-body throughput. Preserve the exact
+`resident-5ff238f0-SDK-tarball-diagnosis.json` and route/proxy receipt.
+
+The source correction keeps the180000ms default, adds one builder-only explicit
+finite download-deadline argument validated as a decimal integer in
+180000..3600000ms, and passes it through the actual install parser. Only this
+observed constrained-network deployment will opt into3600000ms. It does not
+guarantee transfer success. Preserve the official registry, frozen graph,
+integrity, policies, retry bounds, numeric sockets4, network concurrency4 and
+required native verification. No image-after-the-fact package repair or new
+proxy/registry is introduced. Actual option, invalid-input and cold-image
+acceptance remain required; do not relabel the failed attempt.

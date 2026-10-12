@@ -15,10 +15,15 @@ COPY packages/evaluation/package.json packages/evaluation/package.json
 COPY apps/agent/scripts/verify-native-runtime.cjs apps/agent/scripts/verify-native-runtime.cjs
 
 ARG PNPM_REGISTRY=https://registry.npmjs.org
-RUN pnpm config set registry "$PNPM_REGISTRY" \
+ARG PNPM_FETCH_TIMEOUT_MS=180000
+RUN case "$PNPM_FETCH_TIMEOUT_MS" in ''|*[!0-9]*) \
+      echo "PNPM_FETCH_TIMEOUT_MS must be a decimal integer between 180000 and 3600000" >&2; exit 1 ;; esac \
+    && [ "$PNPM_FETCH_TIMEOUT_MS" -ge 180000 ] \
+    && [ "$PNPM_FETCH_TIMEOUT_MS" -le 3600000 ] \
+    && pnpm config set registry "$PNPM_REGISTRY" \
     && pnpm config set --location=project --json maxSockets 4 \
     && pnpm install --frozen-lockfile --ignore-scripts \
-      --fetch-timeout=180000 --network-concurrency=4 \
+      --fetch-timeout="$PNPM_FETCH_TIMEOUT_MS" --network-concurrency=4 \
       --filter @talent-signal/backend... \
       --filter @talent-signal/agent-host... \
     && node apps/agent/scripts/verify-native-runtime.cjs
