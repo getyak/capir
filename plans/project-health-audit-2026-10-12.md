@@ -34,7 +34,10 @@
   review accepted `dbab1c0d`. PR325 was squash-merged as `0b7510dd` after24
   successful checks and two existing skip/neutral results. Resident rollout
   found the confirmed PH20 build-context omission before any service switch.
-  Remaining: native correction on `codex/project-health-docker-context`, its
+  PH20 merged in PR326 as `eaa22bc6` after18 successful checks and four existing
+  skip/neutral results. The actual complete image then passed patch COPY and
+  failed on metadata-fetch timeout (PH21) without switching any service.
+  Remaining: bounded fetch correction on `codex/project-health-build-fetch`,
   independent review/current-head gates and merge, resident rollout and isolated
   live-surface acceptance. No active Pi writer remains.
 - Completion evidence: final local checks and real surface acceptance; latest
@@ -867,3 +870,40 @@ snapshot alone cannot establish exclusive ownership. Full clean image and live
 rollout proof remain required after review and merge. Permanent evidence:
 `docker-context-fix-summary.md`, its before/after BuildKit receipts and exact
 ignore projections.
+
+
+## Cold metadata fetch timeout correction (PH-21)
+
+The clean `eaa22bc6` image install exits1 after471.94 seconds. Its supply-chain
+verifier checked990 entries, then reported `ERR_PNPM_BROKEN_METADATA_JSON` with
+an aborted-by-timeout cause. Patch COPY succeeded. Space and inode observations
+do not indicate exhaustion; successful HEAD responses did not prove complete
+metadata bodies. Actual eslint-plugin metadata is19.06MB: a controlled bridge
+GET completes in63.8 seconds and a host-mode GET in27.3 seconds. These are
+limited route samples, not proof that every request or complete install passes.
+All four owned network diagnostic containers were removed; resident services,
+keeper and managed saved configuration remain unchanged.
+
+Read-only native inspection of the installed pnpm11.18.0 traces default
+fetchTimeout60000ms through the resolution verifier to its response-body
+deadline. The verifier queues64 items; `network-concurrency` does not change
+that internal limit. CLI normalization defaults maxSockets to50, so lowering
+network concurrency alone does not establish a lower metadata connection cap.
+The recorded error23 comes from undici/AbortSignal TimeoutError, not a curl
+process error code. Preserve both failed complete builds and network evidence.
+
+A native source worker owns finite install-fetch settings and the existing
+dependency-policy regression. Keep the official registry, frozen lock, ignored
+scripts, release-age/trust checks and complete verifier intact. Independent
+review and current-head gates must pass before a new clean merged image build;
+no successful CLI parser check can substitute for that build or live acceptance.
+
+
+The native correction sets a finite180000ms fetch deadline, tarball network
+concurrency4 and an explicit maxSockets4. It preserves the current pnpm pin,
+official registry, frozen lock, ignored scripts and both scope filters. No
+prefer-offline or policy bypass was introduced. Thirteen dependency-policy
+tests pass, including offline CLI help parsing; actual package download and
+complete supply-chain success remain unverified until the new full image build.
+A local no-network timeout reproduction and the installed bundle hash/line
+trace are retained in `pnpm-metadata-diagnosis.md` and its evidence projection.

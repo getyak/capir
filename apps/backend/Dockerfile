@@ -17,6 +17,7 @@ COPY apps/agent/scripts/verify-native-runtime.cjs apps/agent/scripts/verify-nati
 ARG PNPM_REGISTRY=https://registry.npmjs.org
 RUN pnpm config set registry "$PNPM_REGISTRY" \
     && pnpm install --frozen-lockfile --ignore-scripts \
+      --fetch-timeout=180000 --network-concurrency=4 --maxsockets=4 \
       --filter @talent-signal/backend... \
       --filter @talent-signal/agent-host... \
     && node apps/agent/scripts/verify-native-runtime.cjs
