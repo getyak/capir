@@ -123,7 +123,7 @@ function backendFetchTimeoutGuard() {
 test("the backend install has bounded transport settings without bypassing supply-chain checks", () => {
   const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
   const install = dockerfile.replace(/\\\n\s*/g, " ")
-    .match(/&& pnpm install (.*?)\s*&& node /)?.[1];
+    .match(/RUN pnpm install (.*?)\s*&& node /)?.[1];
   assert.ok(install, "the backend's pnpm install command must remain explicit");
   for (const flag of [
     "--frozen-lockfile", "--ignore-scripts",
@@ -137,9 +137,28 @@ test("the backend install has bounded transport settings without bypassing suppl
   assert.match(dockerfile, /^ARG PNPM_FETCH_TIMEOUT_MS=180000$/m);
   assert.doesNotMatch(dockerfile, /^ENV PNPM_FETCH_TIMEOUT_MS=/m);
   assert.match(dockerfile, /&& pnpm config set --location=project --json maxSockets 4/);
+  assert.match(dockerfile, /&& pnpm config set --location=project --json networkConcurrency 4/);
+  assert.match(dockerfile, /&& pnpm config set --location=project fetch-timeout "\$PNPM_FETCH_TIMEOUT_MS"/);
+  assert.match(dockerfile, /&& node apps\/agent\/scripts\/prefetch-native-runtime\.cjs\n\nRUN pnpm install/);
+  assert.match(dockerfile, /&& node apps\/agent\/scripts\/verify-native-runtime\.cjs/);
+  assert.match(dockerfile, /^COPY apps\/agent\/scripts\/prefetch-native-runtime\.cjs apps\/agent\/scripts\/prefetch-native-runtime\.cjs$/m);
   assert.doesNotMatch(install, /--(?:config\.)?maxsockets=/);
   assert.doesNotMatch(dockerfile,
     /--trust-lockfile|--minimum-release-age(?:=|\s+)0\b|--trust-policy(?:=|\s+)off\b/);
+});
+
+test("native prefetch reads the single SDK pin and only accepts supported Linux targets", () => {
+  const { nativeRuntimePackage } = require("../apps/agent/scripts/prefetch-native-runtime.cjs");
+  const manifest = JSON.parse(readFileSync(join(repositoryRoot, "apps/agent/package.json"), "utf8"));
+  const version = manifest.dependencies["@anthropic-ai/claude-agent-sdk"];
+  for (const arch of ["arm64", "x64"]) {
+    assert.equal(nativeRuntimePackage(manifest, "linux", arch), `@anthropic-ai/claude-agent-sdk-linux-${arch}@${version}`);
+  }
+  assert.throws(() => nativeRuntimePackage(manifest, "darwin", "arm64"), /Linux arm64 or x64/);
+  assert.throws(() => nativeRuntimePackage(manifest, "linux", "ppc64"), /Linux arm64 or x64/);
+  for (const value of [`^${version}`, `~${version}`, "latest", `${version}; echo unsafe`, undefined]) {
+    assert.throws(() => nativeRuntimePackage({ dependencies: { "@anthropic-ai/claude-agent-sdk": value } }, "linux", "arm64"), /exact stable SDK version/);
+  }
 });
 
 test("pnpm 11.18 uses bounded deadlines and numeric maxSockets in real frozen offline installs", () => {
@@ -172,6 +191,14 @@ test("pnpm 11.18 uses bounded deadlines and numeric maxSockets in real frozen of
     const configured = run(["config", "set", "--location=project", "--json", "maxSockets", "4"]);
     assert.equal(configured.status, 0, `typed project config failed: ${configured.stderr}`);
     assert.match(readFileSync(join(fixture, "pnpm-workspace.yaml"), "utf8"), /^maxSockets: 4$/m);
+    assert.equal(run(["config", "set", "--location=project", "--json", "networkConcurrency", "4"]).status, 0);
+    assert.equal(run(["config", "set", "--location=project", "fetch-timeout", "3600000"]).status, 0);
+    const configuredTimeout = run(["config", "get", "--json", "fetchTimeout"]);
+    assert.equal(configuredTimeout.status, 0);
+    assert.equal(JSON.parse(configuredTimeout.stdout), 3600000);
+    const configuredNetwork = run(["config", "get", "--json", "networkConcurrency"]);
+    assert.equal(configuredNetwork.status, 0);
+    assert.equal(JSON.parse(configuredNetwork.stdout), 4);
     const installFlags = [
       "--offline", "--ignore-scripts", `--store-dir=${join(fixture, "store")}`,
       "--fetch-timeout=180000", "--network-concurrency=4",

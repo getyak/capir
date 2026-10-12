@@ -139,6 +139,14 @@ build-only override, not a resident runtime setting. Keep the official registry,
 frozen lock/integrity checks, full supply-chain policy and required native
 runtime verification. A completed dependency install alone is insufficient:
 pnpm may omit a failed optional platform package that the runtime requires.
+The required Linux SDK archive is prefetched by exact registry name/version in
+a separate pnpm process and Docker layer before the complete frozen install.
+Its version comes from the Agent manifest; only Linux arm64 and x64 are admitted.
+This preserves registry cache identity and separates the large archive transfer
+from full-graph metadata residency. Both phases use the validated timeout and
+numeric transport configuration; the complete policy check and native execution
+gate still determine whether the image is usable. A cache hit or successful
+prefetch alone does not establish image or deployment success.
 After the complete image passes, select and verify the approved image/revision
 pair, then use the verified-image restart command above with
 `TS_TESTFLIGHT_REBUILD=false`.
