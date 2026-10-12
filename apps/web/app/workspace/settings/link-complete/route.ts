@@ -37,7 +37,7 @@ const fail = async (tail = ""): Promise<never> => {
  */
 export async function GET(): Promise<never> {
   const operation = await readAuthOperation();
-  const proof = await readAuthProof();
+  await readAuthProof();
   const claims = await readPrimaryBackendSessionClaims();
   // GET-141 navigation hints only: the sanitized original callback continues
   // after a verified link, and a failed link reopens the preselected

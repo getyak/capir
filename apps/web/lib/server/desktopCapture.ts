@@ -9,7 +9,7 @@ import { workspaceSessionDraftStorageScope } from "./workspaceSessions";
 const noStore = { "cache-control": "no-store", "x-content-type-options": "nosniff" };
 const response = (body: unknown, status = 200) => Response.json(body, { status, headers: noStore });
 
-export async function desktopCaptureContextRoute(_request: Request): Promise<Response> {
+export async function desktopCaptureContextRoute(): Promise<Response> {
   try {
     const claims = await readBackendSessionClaims();
     if (!claims || backendSessionIsExpired(claims.backendExpiresAt)) {
