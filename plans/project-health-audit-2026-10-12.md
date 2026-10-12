@@ -748,3 +748,20 @@ required. Private before receipt: `web-date-baseline-before.log`. Accepted below
 - PH16 original fixed-date fixture failed on the unchanged baseline after its expiry. The two narrowly approved test harnesses freeze only Date and restore it/clear scoped storage, keeping real async timers, original dates, production expiry and idempotency assertions. Before failure is preserved; no skip or deadline extension.
 - No confirmed P0/P1 remains in this batch. Final PostgreSQL18/current-head CI/merge/resident rollout and isolated live acceptance remain outstanding.
 - Receipts: web-parent-final-verification.json, web-parent-build.json, meeting-identity-after-proof.json, web-retirement-after-proof.json, web-integration-source.json, web-date-baseline-before.log.
+
+## Diagram contrast and gate integrity review (PH-17, P2)
+
+Adding the two omitted scene checks exposes three actual control-plane titles:
+`surface-rule-title`4.237792 on its red-tinted panel; `policy-title` and
+`inbox-title`4.026413 on the light surface. The original checker threshold is4.5.
+An independent strict checker copy fails on the frozen scene without editing
+active Pi source. The intermediate `textContrast:false` note branch suppresses
+all future low-contrast text in that scene and is rejected.
+
+The parent will explicitly scope only the generator and this control-plane
+Excalidraw/SVG/derived PNG at the ready checkpoint: correct the three title colors,
+preserve geometry, text, other scenes and the original threshold, and remove
+the bypass branch entirely. This is a concrete counterexample to the initial
+no-repaint boundary, not evidence of source drift in the original five diagrams.
+Private receipts: `diagram-contrast-before.log`,
+`diagram-contrast-review-proof.json`. Status: review changes required.
