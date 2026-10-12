@@ -21,13 +21,12 @@
   durable diagnostic boundaries `23751e6a` after 117 backend/192 host tests
   and actual output/compatibility probes.
   Resident deployment and final delivery remain outstanding.
-- Active Pi batch: dead Web retirement and exact meeting-draft identity admission,
-  `20261012-121919-f4a7e76e`, frozen base `54741b30`, 50 scoped paths after the test-clock companion.
-  Model/policy/crawl passed independent acceptance in `a171c2ed`.
-- Remaining order:
-  dead Web retirement/meeting identity
-  admission; knowledge/tooling ownership. Review and verify each diff before
-  integration.
+- Most recent accepted Pi batch: Web retirement/meeting identity/test clock,
+  `20261012-121919-f4a7e76e`, integrated `624565ea`;50 exact-source paths,
+  2171 tests, independent React/graph/asset proofs and clean production build.
+  Knowledge/tooling ownership is the final implementation batch.
+- Remaining order: knowledge/tooling ownership; then final local/real-surface
+  acceptance, latest-head PR gates, confirmed merge and resident rollout.
 - Completion evidence: final local checks and real surface acceptance; latest
   PR-head applicable CI/security/branch gates; confirmed merge; clean committed
   resident API, Agent Host, Web and changed browser-executor revisions verified
@@ -738,4 +737,15 @@ Use a fixed date-only clock before the fixture expiration and restore it after
 each test; retain real asynchronous timers, original expiration and operation-key
 assertions. Do not extend a hardcoded deadline, weaken production expiry, skip
 tests or mark the failed gate passed. Full final-source verification remains
-required. Private before receipt: `web-date-baseline-before.log`. Status: open.
+required. Private before receipt: `web-date-baseline-before.log`. Accepted below.
+
+## Accepted Web retirement, exact draft identity and test clock
+
+- Integrated `624565ea`; worker `be7d7ffb`; Pi `20261012-121919-f4a7e76e`, two cumulative repairs (one automatic verification retry and one explicitly scoped resume), unchanged frozen provider/base/limits.
+- Codex reviewed all50 scoped paths. Retired17 unreachable modules,5 exclusive CSS files,4 dead-only tests and11 images (1,768,752 bytes). Added exact requested ID/revision admission and six actual React tests; retained live authority/auth/calendar behavior and compatibility redirect. Six unused bindings removed at source, lint0 warnings.
+- Independent five-command final-source receipt passed:2171 Web tests/275 files, types, lint, hygiene and docs, all50 path hashes unchanged. Clean committed production build passed. Actual independent React wrong-ID probe shows no private fields or mutation controls, with retry retained; ephemeral test removed.
+- Reference graph uses the actual frozen batch inventory512 ->495, with17 retired modules; seven residual graph non-roots are legitimate framework metadata, declarations and config. The initial inventory508 predates four upstream live modules. Its invalid direct-count comparison was preserved in web-retirement-after-attempt1.json and corrected; no source failure was hidden.
+- Native11 portraits and the live meeting stylesheet match protected baseline hashes; all16 scoped images/styles are absent.
+- PH16 original fixed-date fixture failed on the unchanged baseline after its expiry. The two narrowly approved test harnesses freeze only Date and restore it/clear scoped storage, keeping real async timers, original dates, production expiry and idempotency assertions. Before failure is preserved; no skip or deadline extension.
+- No confirmed P0/P1 remains in this batch. Final PostgreSQL18/current-head CI/merge/resident rollout and isolated live acceptance remain outstanding.
+- Receipts: web-parent-final-verification.json, web-parent-build.json, meeting-identity-after-proof.json, web-retirement-after-proof.json, web-integration-source.json, web-date-baseline-before.log.
