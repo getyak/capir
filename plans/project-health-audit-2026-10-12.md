@@ -21,10 +21,9 @@
   durable diagnostic boundaries `23751e6a` after 117 backend/192 host tests
   and actual output/compatibility probes.
   Resident deployment and final delivery remain outstanding.
-- Most recent accepted Pi batch: Web retirement/meeting identity/test clock,
-  `20261012-121919-f4a7e76e`, integrated `624565ea`;50 exact-source paths,
-  2171 tests, independent React/graph/asset proofs and clean production build.
-  Knowledge/tooling ownership is the final implementation batch.
+- Active Pi batch: knowledge/tooling ownership, `20261012-132438-605a5dd0`,
+  frozen base `c6a1c196`,26 scoped patterns. Web passed independent review,
+  2171 tests, actual React/graph/asset proofs and clean build in `624565ea`.
 - Remaining order: knowledge/tooling ownership; then final local/real-surface
   acceptance, latest-head PR gates, confirmed merge and resident rollout.
 - Completion evidence: final local checks and real surface acceptance; latest
