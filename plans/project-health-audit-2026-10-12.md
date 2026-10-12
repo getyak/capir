@@ -37,7 +37,10 @@
   PH20 merged in PR326 as `eaa22bc6` after18 successful checks and four existing
   skip/neutral results. The actual complete image then passed patch COPY and
   failed on metadata-fetch timeout (PH21) without switching any service.
-  Remaining: bounded fetch correction on `codex/project-health-build-fetch`,
+  PH21 merged in PR327 as `da1d8cb8` after18 successful checks. The next full
+  build completed npm bootstrap but actual install rejected `--maxsockets`
+  (PH22); its earlier help-only acceptance was insufficient evidence. Remaining:
+  strict CLI configuration correction on `codex/project-health-fetch-config`,
   independent review/current-head gates and merge, resident rollout and isolated
   live-surface acceptance. No active Pi writer remains.
 - Completion evidence: final local checks and real surface acceptance; latest
@@ -907,3 +910,48 @@ tests pass, including offline CLI help parsing; actual package download and
 complete supply-chain success remain unverified until the new full image build.
 A local no-network timeout reproduction and the installed bundle hash/line
 trace are retained in `pnpm-metadata-diagnosis.md` and its evidence projection.
+
+
+## Strict install configuration entry correction (PH-22)
+
+The actual Node24/pnpm11.18 complete image build on `da1d8cb8` completed npm
+bootstrap in328.5 seconds, then rejected `--maxsockets=4` as an unknown install
+option. No install or supply-chain validation ran, and no resident service,
+keeper or saved configuration changed. The prior `install --help` returned
+success without establishing acceptance by the real install parser. The
+delivery owner acknowledges this verification omission; preserve that earlier
+receipt and the actual failed image rather than relabeling either as success.
+
+An isolated registered-TMP, zero-dependency offline install accepts
+`--config.maxsockets=4` together with the existing timeout/concurrency settings
+and reads back4. The native source owner must verify the normalized value's
+route to the transport, replace the unsupported option, and replace help-only
+proof with a real isolated offline install plus the old-option counterexample.
+Keep all frozen dependency, pin, registry, ignored-script and security-policy
+boundaries. Current-head review/gates/merge and a complete new image remain
+required; an empty fixture does not prove full cold dependency validation.
+
+
+The first `--config.maxsockets=4` candidate passes the isolated empty install,
+but version-bound normalized-value inspection reveals a string, not a number.
+The actual undici Pool requires finite numeric connections; the empty install
+never dispatched a request and therefore did not exercise that boundary. This
+candidate is rejected before source submission. The correction now requires a
+typed numeric value and an unchanged original-CLI dispatcher observation (or an
+explicitly bounded constructor/normalization proof); instrumented diagnostics
+remain labeled and cannot substitute for full cold-image acceptance.
+
+
+The accepted typed entry is builder-local `pnpm config set --location=project
+--json maxSockets 4`, followed by the unchanged finite timeout/network options.
+The source removes both unsupported/untypeable socket flags. Original unmodified
+pnpm11.18 completes the synthetic loopback metadata GET, lock generation and
+frozen tarball install with releaseAge1440 retained. A separate print-only
+version-bound clone observes numeric4 at createClient; its later missing-worker
+exit1 is retained as a failed clone install, not passed evidence. The committed
+regression uses an actual isolated zero-dependency frozen offline install,
+verifies JSON numeric4 and requires the old unsupported option to fail.
+Thirteen tests pass. Installed bundle and user configuration hashes are
+unchanged; owned fixture and three loopback listeners are cleaned up. Preserve
+`build-fetch-config-fix-summary.md` and the corrected/archived diagnosis. Final
+current-head review/gates/merge and full image/live verification remain required.
