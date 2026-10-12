@@ -661,3 +661,31 @@ batch's frozen contract.
 Private before receipt: `research-crawl-bounds-before-proof.json`. Actual HTML
 extraction and success/failure/duplicate/long-URL regressions are required
 before acceptance. Status: open; assigned to the next sequential Pi batch.
+
+
+## Diagnostic privacy review checkpoint — changes requested
+
+The first diagnostic attempt, Pi `20261012-083418-4fa2ab76`, reached its
+120-minute deadline at 175 turns. Its 24 changed/new paths are within scope;
+source and session evidence are preserved. No final verification receipt or
+acceptance is claimed. The same task resumes with one consolidated feedback
+and unchanged frozen provider/model/base and cumulative limits.
+
+Independent actual-entry synthetic probes confirm three compatibility
+regressions in the intermediate source: a valid 620-character URL produces
+a 650-character warning against the existing 500-character bound; first-only
+recognized-code extraction loses transient classification when both fields
+carry distinct supported codes; an actual Unix HTTP server's 400 response
+with a client-owned `CONTACT_RESEARCH_HTTP_500` body is classified as 500.
+Repair warning bounds while retaining the fixed diagnostic, classify over
+all recognized fields with original detail priority, and accept server-body
+codes only from the actual server producer vocabulary. Preserve all budgets,
+authorization, retry limits and public schemas.
+
+The new conflict test also needs a dispatch barrier and unconditional owned
+request settlement so assertion failure cannot hang server cleanup. The owned
+`ph09-pg-4fa2ab76` synthetic container has `restart=no`; scoped cleanup remains
+required. Private review receipts: `diagnostic-compatibility-review-proof.json`
+and `diagnostic-http-ownership-review-proof.json`. No production incident or
+private evidence is claimed. Final-source checks and repaired actual probes
+remain required.
