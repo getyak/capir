@@ -1003,7 +1003,7 @@ independent review and current-head gates. Its clean image attempt passed the
 complete990-entry policy check in1735.9 seconds, but the required native
 archive's first3600000ms response-body deadline expired. The owned pnpm process
 incurred12689 major page faults in10 seconds; the6GiB VM had approximately
-137MiB available and152KiB of its2GiB swap free. The delivery owner cancelled
+134MiB available and152KiB of its2GiB swap free. The delivery owner cancelled
 only that owned build after5500.24 seconds (exit130), preserving the policy
 success, first timeout and cancellation reason. This did not exhaust all
 retries and did not switch any resident service. The host's16GiB RAM, existing
@@ -1028,3 +1028,68 @@ integrity, age/trust policies and final required-native verification. The
 memory improvement remains a hypothesis until the complete clean-source image
 and four-service live acceptance pass. Root owns review, documentation and
 delivery; the remaining implementation uses native Codex agents, not Pi.
+
+### PH-25: Reuse verified dependency-store input without carrying old application source
+
+PR330 passed18 current-head checks with four existing skips and merged as
+`4f1ce923c0dcfecdd5beeb4fa296de3c9c2d17d5`. Its independent SDK prefetch
+process stayed approximately160MiB RSS without process swap; the late10-second
+sample had zero additional major faults. The archive nevertheless reached its
+first3600000ms response-body timeout at3603.8 seconds. Root cancelled only the
+owned build after3799.58 seconds (exit130). The full990-entry install was not
+entered; all retries were not exhausted. Preserve the complete failure and
+resource receipts. All four resident services, keeper and Docker context remain
+healthy at their original versions.
+
+Read-only inspection finds a real cache candidate in the existing approved
+resident image `sha256:60c3beaeb8c67672ee144ee20fc3fdc3d461e4ded6f87b148bf2620214f86fc6`.
+Its pnpm11.18, SDK0.3.287 and Linux-arm64 native0.3.287 match the target; the
+Agent manifest hash matches both clean old and approved new source. The v11
+SQLite index contains the exact current frozen integrity plus registry package
+identity. Index presence does not validate every referenced file or prove the
+new image. No index, runtime container or installed application files were
+modified or copied for this inspection.
+
+The next slice admits an optional dependency-store cache image, with an empty
+default store and current application source kept separate. Only the pnpm
+store may enter the builder; installed modules, source, dist and environment
+files remain excluded. The original pinned pnpm must validate and consume the
+cache normally, with file-integrity checks, unchanged registry/frozen graph,
+complete supply-chain policy and required-native execution still enforced.
+Cache misses and corruption must refetch or fail rather than falsely pass.
+Review and current-head gates precede another complete clean-source image and
+live rollout. Native Codex agents own implementation and independent review.
+
+Postmerge CI on4f passes the Web/backend/CLI/security checks. The first
+phase-one job passes63 evaluation and45 runtime-observation tests, then cannot
+immediately download its successfully uploaded artifact; the artifact is
+independently read back by ID. Its second execution succeeds. The first remote
+iOS job passes648 unit tests and three UI cases, then fails at `app.launch()`
+while acquiring a background assertion. Native source and test blobs are
+unchanged, and that case's product assertions were not executed. Independent
+triage supports no specific source defect; the unchanged second CI execution
+completes successfully, including the iOS job and aggregate CI gate. All
+applicable latest4f checks are complete and accepted; the first
+failed attempt remains preserved. No local simulator or test bypass is introduced.
+
+### PH-26: Do not treat the pnpm timestamp fast path as complete cache-byte verification
+
+A real synthetic corruption control modifies a content file within100ms of
+store publication. Original pnpm11.18 with `verifyStoreIntegrity=true` reuses
+those altered bytes. Its pinned worker source explains the timestamp fast
+path; corruption outside that window is detected and fails the frozen offline
+consumer. Preserve both observations rather than retaining only the passing
+negative control. `store status` checks installed virtual-store modules: it
+rejects even good fresh input with no modules, and detects the altered module
+after installation. It cannot serve as input-CAFS verification.
+
+The cache boundary therefore requires a build-only streaming SHA512 check of
+incoming v11 content-addressed files against their source-confirmed path
+digests, independent of mtime. Default empty input is valid; invalid content,
+schema, symbolic links and read failures must fail closed. No package index,
+vendor bundle or registry identity is manufactured or edited. Pinned pnpm
+still performs its normal frozen/integrity/policy checks and the executable
+native gate remains required. The trusted immutable-image provenance contract
+also remains necessary; hashing cache files alone does not authenticate a
+package-to-index mapping. This guard closes the reviewed cache-input path and
+does not claim to repair all upstream pnpm behavior.

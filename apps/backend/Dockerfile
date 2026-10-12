@@ -1,9 +1,15 @@
+ARG PNPM_DEPENDENCY_CACHE_IMAGE=node:24-bookworm-slim
+FROM ${PNPM_DEPENDENCY_CACHE_IMAGE} AS dependency-cache
+
+RUN mkdir -p /root/.local/share/pnpm/store
+
 FROM node:24-bookworm-slim
 
 RUN npm install --global pnpm@11.18.0
 
 WORKDIR /app
 
+COPY --from=dependency-cache /root/.local/share/pnpm/store /root/.local/share/pnpm/store
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches patches
 COPY apps/backend/package.json apps/backend/package.json
@@ -14,6 +20,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/evaluation/package.json packages/evaluation/package.json
 COPY apps/agent/scripts/verify-native-runtime.cjs apps/agent/scripts/verify-native-runtime.cjs
 COPY apps/agent/scripts/prefetch-native-runtime.cjs apps/agent/scripts/prefetch-native-runtime.cjs
+COPY apps/agent/scripts/verify-dependency-cache.cjs apps/agent/scripts/verify-dependency-cache.cjs
 
 ARG PNPM_REGISTRY=https://registry.npmjs.org
 ARG PNPM_FETCH_TIMEOUT_MS=180000
@@ -24,7 +31,9 @@ RUN case "$PNPM_FETCH_TIMEOUT_MS" in ''|*[!0-9]*) \
     && pnpm config set registry "$PNPM_REGISTRY" \
     && pnpm config set --location=project --json maxSockets 4 \
     && pnpm config set --location=project --json networkConcurrency 4 \
+    && pnpm config set --location=project --json verifyStoreIntegrity true \
     && pnpm config set --location=project fetch-timeout "$PNPM_FETCH_TIMEOUT_MS" \
+    && node apps/agent/scripts/verify-dependency-cache.cjs \
     && node apps/agent/scripts/prefetch-native-runtime.cjs
 
 RUN pnpm install --frozen-lockfile --ignore-scripts \

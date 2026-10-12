@@ -147,6 +147,23 @@ from full-graph metadata residency. Both phases use the validated timeout and
 numeric transport configuration; the complete policy check and native execution
 gate still determine whether the image is usable. A cache hit or successful
 prefetch alone does not establish image or deployment success.
+For a prepared image on a constrained connection, the optional build-only
+`PNPM_DEPENDENCY_CACHE_IMAGE` argument can select a verified local dependency
+cache image. Its default is the Node24 base with an empty store. Admit only a
+trusted image for the target Linux architecture and pnpm11.18 store format;
+record and check its actual image ID before and after the build rather than
+trusting a mutable tag. The cache stage copies only the pnpm store, never
+installed modules, application source, dist or environment files. The builder
+explicitly enables store-file integrity verification; cache presence does not
+replace the current frozen graph, complete supply-chain policy or native gate.
+pnpm11.18 has a timestamp fast path, so the builder additionally streams and
+hashes incoming v11 content-addressed files before prefetch, independently of
+their modification times. This checks cache bytes without manufacturing or
+rewriting package indexes. Missing entries follow normal pnpm resolution;
+invalid cached content fails the builder. Keep this cache selection out
+of resident runtime configuration and retain its provenance in deployment proof.
+Content-address verification does not authenticate package-to-index mappings;
+trusted, immutable cache provenance remains necessary.
 After the complete image passes, select and verify the approved image/revision
 pair, then use the verified-image restart command above with
 `TS_TESTFLIGHT_REBUILD=false`.
