@@ -112,6 +112,14 @@ test("the backend Docker context admits patches while preserving its exclusion b
   }
 });
 
+function backendFetchTimeoutGuard() {
+  const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
+  const guard = dockerfile.replace(/\\\n\s*/g, " ")
+    .match(/^RUN (case .*?) && pnpm config set registry/m)?.[1];
+  assert.ok(guard, "the actual Docker install guard must precede registry/config/install commands");
+  return guard;
+}
+
 test("the backend install has bounded transport settings without bypassing supply-chain checks", () => {
   const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
   const install = dockerfile.replace(/\\\n\s*/g, " ")
@@ -119,20 +127,22 @@ test("the backend install has bounded transport settings without bypassing suppl
   assert.ok(install, "the backend's pnpm install command must remain explicit");
   for (const flag of [
     "--frozen-lockfile", "--ignore-scripts",
-    "--fetch-timeout=180000", "--network-concurrency=4",
+    '--fetch-timeout="$PNPM_FETCH_TIMEOUT_MS"', "--network-concurrency=4",
     "--filter @talent-signal/backend...", "--filter @talent-signal/agent-host...",
   ]) {
     assert.ok(install.includes(flag), `the backend install must retain ${flag}`);
   }
   assert.match(dockerfile, /^RUN npm install --global pnpm@11\.18\.0$/m);
   assert.match(dockerfile, /^ARG PNPM_REGISTRY=https:\/\/registry\.npmjs\.org$/m);
+  assert.match(dockerfile, /^ARG PNPM_FETCH_TIMEOUT_MS=180000$/m);
+  assert.doesNotMatch(dockerfile, /^ENV PNPM_FETCH_TIMEOUT_MS=/m);
   assert.match(dockerfile, /&& pnpm config set --location=project --json maxSockets 4/);
   assert.doesNotMatch(install, /--(?:config\.)?maxsockets=/);
   assert.doesNotMatch(dockerfile,
     /--trust-lockfile|--minimum-release-age(?:=|\s+)0\b|--trust-policy(?:=|\s+)off\b/);
 });
 
-test("pnpm 11.18 uses numeric maxSockets in a real frozen offline install", () => {
+test("pnpm 11.18 uses bounded deadlines and numeric maxSockets in real frozen offline installs", () => {
   const discovered = spawnSync("pnpm", ["exec", "which", "pnpm"], {
     cwd: repositoryRoot,
     encoding: "utf8",
@@ -172,10 +182,30 @@ test("pnpm 11.18 uses numeric maxSockets in a real frozen offline install", () =
     const rejected = run(["install", "--frozen-lockfile", ...installFlags, "--maxsockets=4"]);
     assert.equal(rejected.status, 1);
     assert.match(rejected.stdout + rejected.stderr, /Unknown option: 'maxsockets'/);
-    const installed = run(["install", "--frozen-lockfile", ...installFlags]);
-    assert.equal(installed.status, 0, `frozen offline install failed: ${installed.stderr}`);
-    assert.match(installed.stdout, /using pnpm v11\.18\.0/);
-    assert.equal(readFileSync(join(fixture, "pnpm-lock.yaml"), "utf8"), lockfile);
+    const installScript = `${backendFetchTimeoutGuard()} && printf 'INSTALL_REACHED\\n' \
+      && "$PNPM_TEST_BIN" install --frozen-lockfile --offline --ignore-scripts \
+      --store-dir="$PNPM_TEST_STORE" --fetch-timeout="$PNPM_FETCH_TIMEOUT_MS" --network-concurrency=4`;
+    const validatedInstall = (value) => spawnSync("/bin/sh", ["-c", installScript], {
+      cwd: fixture,
+      env: { ...env, PNPM_TEST_BIN: pnpm, PNPM_TEST_STORE: join(fixture, "store"), PNPM_FETCH_TIMEOUT_MS: value },
+      encoding: "utf8", timeout: 30_000,
+    });
+    for (const value of [
+      "", "abc", "+180000", "180000.0", "180000 ", "179999", "3600001",
+      "999999999999999999999999999", "180000; printf INJECTED", "$(printf 180000)", "180000\nprintf INJECTED",
+    ]) {
+      const invalid = validatedInstall(value);
+      assert.notEqual(invalid.status, 0, `${JSON.stringify(value)} must fail validation`);
+      assert.doesNotMatch(invalid.stdout, /INSTALL_REACHED|INJECTED|using pnpm/);
+    }
+    const defaultTimeout = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8")
+      .match(/^ARG PNPM_FETCH_TIMEOUT_MS=(\d+)$/m)?.[1];
+    for (const value of [defaultTimeout, "3600000"]) {
+      const installed = validatedInstall(value);
+      assert.equal(installed.status, 0, `frozen offline install (${value}) failed: ${installed.stderr}`);
+      assert.match(installed.stdout, /INSTALL_REACHED[\s\S]*using pnpm v11\.18\.0/);
+      assert.equal(readFileSync(join(fixture, "pnpm-lock.yaml"), "utf8"), lockfile);
+    }
     const effective = run(["config", "get", "--json", "maxSockets"]);
     assert.equal(effective.status, 0);
     assert.equal(JSON.parse(effective.stdout), 4);
