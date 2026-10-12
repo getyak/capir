@@ -3,8 +3,9 @@
 ## Active delivery
 
 - Status: in progress. Owner: Codex for scope, independent review, integration,
-  revision-bound verification, deployment, PR and merge; Pi for sequential
-  implementation in isolated worktrees.
+  revision-bound verification, deployment, PR and merge. Nine sequential Pi
+  implementation batches are accepted. At the user's latest request, remaining
+  work uses Codex and sequential native sub-agents; no further Pi/MiMo runs.
 - Outcome: repair the confirmed correctness/privacy/security defects, retire
   proven dead Web code, archive obsolete scaffolding, and enforce knowledge/tool
   ownership without changing applied SQL or unrelated work.
@@ -28,8 +29,10 @@
 - Upstream `3c3c2eff` is merged without conflicts, preserving PR322 research
   notebooks, PR324 acceptance, Motion14 and pinned Actions updates. Frozen
   dependency installation passed after a diagnosed network-timeout retry.
-- Remaining order: final integration and real-surface acceptance, latest-head
-  PR gates, confirmed merge and resident rollout. No active Pi writer remains.
+- Final integration and isolated PostgreSQL18 checks passed; independent native
+  Codex review found no actionable P0–P3 on `23c44f6b`. Remaining: latest-head PR
+  gates, confirmed merge, resident rollout and isolated live-surface acceptance.
+  No active Pi writer remains.
 - Completion evidence: final local checks and real surface acceptance; latest
   PR-head applicable CI/security/branch gates; confirmed merge; clean committed
   resident API, Agent Host, Web and changed browser-executor revisions verified
@@ -790,3 +793,12 @@ alignment to the already trusted upstream SHA; audit scope, thresholds and
 required success stay unchanged. Preserve the failed receipt and verify the
 policy/docs again. Runtime inputs and the audited lockfile remain identical to
 the passed integration checks; final PostgreSQL18 and delivery are outstanding.
+
+
+## Final local acceptance and native Codex review
+
+- Clean committed runtime source `23c44f6b`: Web2,174 tests/276 files, Agent427 plus one existing skip, Host195 and Backend research28 passed; applicable types and Web lint passed. Production audit reports zero advisories. Patch10, policy21 and secret-environment23 tests passed. After the diagnosed Actions pin correction, all50 CI policy tests and docs/architecture pass. Failed first receipt remains unchanged; all runtime inputs are identical across the workflow/documentation-only repair.
+- Owned PostgreSQL18 proof on this same head: migration, synthetic seed and213 integration tests across memory review, MCP interactions, screenshot contact tasks and meeting drafts passed. Source remained clean. Compose down with volume removal succeeded; empty project readback confirms cleanup.
+- Independent native Codex sub-agent `final_integration_review` reviewed the aggregate diff against upstream `3c3c2eff`, confirmed no actionable P0–P3, inspected recovery/privacy/admission/ownership boundaries, and independently checked103 SQL/manifest blobs, Web reference closure, action pins,22 policy tests and all five diagrams. The seven Web graph non-roots are framework/declaration/config owners, not dead product modules.
+- This establishes the listed scenarios and source boundaries, not unknown-defect absence, distributed exactly-once effects, model billing across power loss, live deployment, PR merge or native acceptance. All external delivery gates remain mandatory.
+- Permanent receipts: final-integration-combined-verification.json, final-integration-verification.json (original failed gate), final-integration-actions-repair-verification.json, postgres-final-proof/receipt.json, final-subagent-review.md and its inventory/migration manifests.
