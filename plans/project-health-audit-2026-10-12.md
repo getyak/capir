@@ -21,15 +21,10 @@
   durable diagnostic boundaries `23751e6a` after 117 backend/192 host tests
   and actual output/compatibility probes.
   Resident deployment and final delivery remain outstanding.
-- Active Pi batch: durable diagnostic privacy, `20261012-083418-4fa2ab76`,
-  frozen base `aaed24ca`. Interrupted checkpoint/journal
-  integrity (PH-13), `20261012-071431-6fee91cd`, frozen base `5dbdde13`, passed
-  independent review after one orphan-metadata repair. Error
-  logging/Web admission `20261012-060810-73e39891` passed independent review
-  with one repair and a narrowly approved test companion. Research allowance
-  recovery `20261012-050607-5d7531a8` passed review after two bounded parent
-  corrections; search/fetch/profile each dispatched once at a maximum of one
-  across actual command process death and same-Run recovery.
+- Active Pi batch: model-context diagnostics, existing policy extraction and
+  public-crawl attempt bounds, `20261012-114341-39e2b8eb`, frozen base
+  `ea48fccc`, 19 scoped paths. Durable diagnostics passed independent review
+  in `23751e6a`; model-facing PH-09, PH-14 and PH-15 remain open.
 - Remaining order:
   model-context diagnostic privacy, policy extraction and public-crawl bounds;
   dead Web retirement/meeting identity
