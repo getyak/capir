@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, open, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -48,9 +48,17 @@ test("regular and executable CAFS files are hashed independently of timestamps",
 test("same-size corruption with preserved mtime fails closed", linuxBuilder, async () => {
   await fixture(async (root) => {
     const file = await content(root, Buffer.from("original"));
-    const before = await stat(file);
-    await writeFile(file, "corrupt!");
-    await utimes(file, before.atime, before.mtime);
+    const handle = await open(file, "r+");
+    try {
+      const before = await handle.stat();
+      await handle.writeFile("corrupt!");
+      await handle.utimes(before.atime, before.mtime);
+      const after = await handle.stat();
+      assert.equal(after.size, before.size);
+      assert.ok(Math.abs(after.mtimeMs - before.mtimeMs) < 1);
+    } finally {
+      await handle.close();
+    }
     await assert.rejects(verifyDependencyCache(root), /digest mismatch/);
   });
 });
