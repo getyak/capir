@@ -29,7 +29,8 @@
   corrections; search/fetch/profile each dispatched once at a maximum of one
   across actual command process death and same-Run recovery.
 - Remaining order: durable diagnostic privacy;
-  model-context diagnostic privacy; dead Web retirement/meeting identity
+  model-context diagnostic privacy, policy extraction and public-crawl bounds;
+  dead Web retirement/meeting identity
   admission; knowledge/tooling ownership. Review and verify each diff before
   integration.
 - Completion evidence: final local checks and real surface acceptance; latest
@@ -636,3 +637,27 @@ This first review was followed by the accepted repair below.
   `research-journal-interruption-after-proof.log`. Synthetic fixtures only;
   no live provider, private image or production incident is claimed. This is
   fail-closed recovery, not arbitrary crash-atomic multi-file publication.
+
+## Public-crawl failure resource and response bounds (PH-15, P2)
+
+An independent synthetic probe uses the actual `extractResearchPage` to extract
+22 same-domain links from a small HTML page, then the actual
+`crawlPublicResearch` with `maximum_page_count: 5`, depth 1 and an injected
+loader whose child pages fail. It invokes the loader 23 times, retains one
+successful page and returns 22 warnings. The existing public response contract
+allows at most 20 warnings. No live network, provider or private evidence was
+used; no production incident is claimed.
+
+The loop counts only successful pages, so failed attempts do not consume its
+resource limit. Assign this confirmed boundary to the not-yet-started
+model-context/policy batch: each distinct approved page attempt consumes the
+per-invocation limit before loader dispatch, including failures. Preserve
+domain/DNS/redirect/byte/depth checks, duplicate suppression, partial success,
+capture/idempotency and retry lifecycle. Existing warning count and length
+limits stay unchanged. This does not claim a durable cross-worker retry cap
+or exactly-once remote reading, and does not change the active diagnostic
+batch's frozen contract.
+
+Private before receipt: `research-crawl-bounds-before-proof.json`. Actual HTML
+extraction and success/failure/duplicate/long-URL regressions are required
+before acceptance. Status: open; assigned to the next sequential Pi batch.
