@@ -17,7 +17,9 @@
   plus actual same-Run process-interruption probes, and error logging/Web
   admission `6953ebb8` after 54 backend and 36 Web focused tests plus actual
   Pino/limiter negative probes, and journal integrity `e09c730b` after 183 host
-  tests and independent orphan-state/publication-interruption proofs.
+  tests and independent orphan-state/publication-interruption proofs, and
+  durable diagnostic boundaries `23751e6a` after 117 backend/192 host tests
+  and actual output/compatibility probes.
   Resident deployment and final delivery remain outstanding.
 - Active Pi batch: durable diagnostic privacy, `20261012-083418-4fa2ab76`,
   frozen base `aaed24ca`. Interrupted checkpoint/journal
@@ -28,7 +30,7 @@
   recovery `20261012-050607-5d7531a8` passed review after two bounded parent
   corrections; search/fetch/profile each dispatched once at a maximum of one
   across actual command process death and same-Run recovery.
-- Remaining order: durable diagnostic privacy;
+- Remaining order:
   model-context diagnostic privacy, policy extraction and public-crawl bounds;
   dead Web retirement/meeting identity
   admission; knowledge/tooling ownership. Review and verify each diff before
@@ -689,3 +691,33 @@ required. Private review receipts: `diagnostic-compatibility-review-proof.json`
 and `diagnostic-http-ownership-review-proof.json`. No production incident or
 private evidence is claimed. Final-source checks and repaired actual probes
 remain required.
+
+
+## Accepted durable diagnostic and socket-boundary repair
+
+- Integrated `23751e6a`, worker `c83ac45a`; Pi task
+  `20261012-083418-4fa2ab76`, one resume. Its deadline and subsequent provider
+  `content_filter` stops were preserved, not counted as successful checks.
+  Codex completed only the deterministic test lifecycle and typed fixture
+  corrections, then independently verified all 24 final-source path hashes.
+- New media, Wiki compilation, research crawl/capture/recovery and MCP
+  continuation failure metadata carries fixed content-free diagnostics.
+  Screenshot span logging and task/Workspace diagnostics accept finite known
+  codes, preserving supported policy, browser, socket and retry conditions.
+- Server-body admission uses the actual server vocabulary; client-generated
+  status/timeout/readback/fault-injection codes cannot be claimed by the body.
+  Retry classification considers all recognized fields with original detail
+  priority. Warnings retain the original 500-character bound and fixed category.
+- All five final-source checks passed: 117 Backend tests in nine files, 192 Host
+  tests in 23 files, both typechecks and canonical documentation checking.
+  Independent actual-entry probes confirm the three compatibility repairs and
+  private-canary absence from upload SQL and complete Workspace tool receipts.
+- The owned synthetic PostgreSQL container and anonymous volume were removed
+  after zero connected clients; Docker context stayed unchanged. Final
+  PostgreSQL18, deployment and delivery remain outstanding. Historic customer
+  metadata was not rewritten; the model-context boundary remains open.
+- Private receipts: `diagnostic-parent-final-verification.json`,
+  `diagnostic-compatibility-after-proof.json`,
+  `diagnostic-http-ownership-after-proof.json`,
+  `backend-diagnostic-after-proof.json`, and
+  `diagnostic-owned-database-cleanup.json`.
