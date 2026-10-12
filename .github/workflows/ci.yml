@@ -164,7 +164,7 @@ jobs:
           node --test scripts/verify-secret-environment.test.mjs scripts/infisical/manifest.test.mjs scripts/infisical/migrate.test.mjs scripts/infisical/run.test.mjs
           node --test scripts/macos/release-prerequisites.test.mjs
           node --test scripts/check-architecture-boundaries.test.mjs
-          node --test scripts/check-repository-hygiene.test.mjs scripts/evaluation/*.test.mjs
+          node --test scripts/check-docs.test.mjs scripts/check-repository-hygiene.test.mjs scripts/prompts/library.test.mjs scripts/evaluation/*.test.mjs
           node --test scripts/ci/*.test.mjs
           node --test scripts/ios/*.test.mjs
           find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n

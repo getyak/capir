@@ -15,6 +15,10 @@ export function TimeMeetingInspector({ id, revision, binding, returnHref, refres
     const controller = new AbortController();
     timeRequest(`/api/meeting-drafts/${id}`, binding, { method: "POST", body: JSON.stringify({ expected_revision: revision }), signal: controller.signal }).then((payload) => {
       if (!matchesTypeBox(MeetingDraftRecordSchema, payload.draft)) throw new Error("会议草稿暂时无法读取。");
+      // Client admission: the response must be the exact requested draft at the
+      // revision bound to this request. A schema-valid mismatched record is a
+      // read failure, never rendered or bound to another draft's persistence.
+      if (payload.draft.id !== id || payload.draft.revision !== revision) throw new Error("会议草稿暂时无法读取。");
       if (!controller.signal.aborted) setResult({ key, draft: payload.draft });
     }).catch((error: unknown) => { if (!controller.signal.aborted) setResult({ key, error: error instanceof Error ? error.message : "读取失败。" }); });
     return () => controller.abort();

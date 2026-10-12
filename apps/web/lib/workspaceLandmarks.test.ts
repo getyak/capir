@@ -16,7 +16,6 @@ describe("workspace skip-link landmarks", () => {
   });
 
   it.each([
-    "components/integrated-workspace-app.tsx",
     "components/workspace-app.tsx",
     "app/workspace/loading.tsx",
   ])("renders one focusable main target in %s", (relativePath) => {

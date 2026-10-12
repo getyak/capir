@@ -3,6 +3,8 @@ import {
   analyzeWithAi,
   getAiAvailability,
 } from "@/lib/server/ai-analysis";
+import { isAllowedMutationOrigin } from "@/lib/request-origin";
+import { createRequestRateLimiter } from "@/lib/server/request-rate-limit";
 
 export const runtime = "nodejs";
 
@@ -10,44 +12,28 @@ const MAX_CONVERSATION_LENGTH = 12_000;
 const MAX_CONTEXT_LENGTH = 300;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_REQUESTS = 8;
-const attempts = new Map<string, { count: number; resetAt: number }>();
+
+/**
+ * The unauthenticated public demo has no trustworthy per-caller identity:
+ * forwarding headers are caller-controlled, so deliberately churning them must
+ * not buy extra model budget. Cost isolation therefore uses one bounded GLOBAL
+ * process budget (8 per minute) rather than claiming IP-spoof protection. This
+ * modest shared budget keeps the synthetic demo available to visitors without a
+ * login requirement. The budget is per process only; a public deployment needs
+ * its own trusted edge control and must not rely on this as a distributed
+ * limiter.
+ */
+const PUBLIC_DEMO_RATE_LIMIT_KEY = "public-ai-demo:global";
+const publicDemoRateLimiter = createRequestRateLimiter({
+  limit: RATE_LIMIT_REQUESTS,
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  capacity: 1,
+});
 
 function noStoreHeaders() {
   return {
     "Cache-Control": "no-store, max-age=0",
   };
-}
-
-function sameOrigin(request: NextRequest) {
-  const origin = request.headers.get("origin");
-  if (!origin || process.env.NODE_ENV !== "production") {
-    return true;
-  }
-
-  try {
-    return new URL(origin).host === request.nextUrl.host;
-  } catch {
-    return false;
-  }
-}
-
-function consumeRateLimit(identifier: string) {
-  const now = Date.now();
-  const current = attempts.get(identifier);
-  if (!current || current.resetAt <= now) {
-    attempts.set(identifier, {
-      count: 1,
-      resetAt: now + RATE_LIMIT_WINDOW_MS,
-    });
-    return true;
-  }
-
-  if (current.count >= RATE_LIMIT_REQUESTS) {
-    return false;
-  }
-
-  current.count += 1;
-  return true;
 }
 
 function parseRequestBody(value: unknown) {
@@ -82,21 +68,24 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!sameOrigin(request)) {
+  if (!isAllowedMutationOrigin(request.headers)) {
     return NextResponse.json(
       { error: "不允许跨源请求。" },
       { status: 403, headers: noStoreHeaders() },
     );
   }
 
-  const identifier =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    request.headers.get("x-real-ip") ??
-    "local";
-  if (!consumeRateLimit(identifier)) {
+  const rateLimit = publicDemoRateLimiter.consume(PUBLIC_DEMO_RATE_LIMIT_KEY);
+  if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: "分析请求过多，请稍后重试。" },
-      { status: 429, headers: noStoreHeaders() },
+      {
+        status: 429,
+        headers: {
+          ...noStoreHeaders(),
+          "Retry-After": String(rateLimit.retryAfterSeconds),
+        },
+      },
     );
   }
 

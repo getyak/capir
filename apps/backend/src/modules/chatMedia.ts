@@ -20,6 +20,12 @@ import type {
 
 export const CHAT_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
 export const CHAT_MEDIA_MAX_ITEMS = 10;
+/**
+ * Fixed content-free storage failure diagnostic. The storage exception is
+ * never retained: `failure_reason` may only carry this bounded code so raw
+ * error content cannot escape into durable failure metadata.
+ */
+export const CHAT_MEDIA_STORAGE_FAILURE_REASON = "CHAT_MEDIA_STORAGE_FAILED";
 
 interface ChatMediaRow {
   id: string;
@@ -234,7 +240,7 @@ export async function uploadChatMediaContent(
   try {
     if(workspaceId)await trackedLabMediaPut(pool,workspaceId,mediaId,storage,row.object_key,body,row.media_type);
     else await storage.put(row.object_key, body, row.media_type);
-  } catch (error) {
+  } catch {
     await query.query(
       `UPDATE chat_media_assets
        SET status = 'failed', failure_reason = $3, updated_at = now()
@@ -242,7 +248,7 @@ export async function uploadChatMediaContent(
       [
         auth.accountId,
         mediaId,
-        error instanceof Error ? error.message.slice(0, 500) : "storage_failed",
+        CHAT_MEDIA_STORAGE_FAILURE_REASON,
       ],
     );
     throw new ApiError(503, "CHAT_MEDIA_STORAGE_FAILED", "The image could not be stored. Retry keeps the same upload identity.");

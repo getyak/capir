@@ -8,6 +8,12 @@ description: Analyze synthetic or user-authorized recruiter conversation content
 Turn only content supplied in the current task into a reviewable artifact. Treat
 the artifact as a proposal, never as confirmation or execution authority.
 
+The in-repo variant
+[`candidate-signal-analysis`](../../../../.agents/skills/candidate-signal-analysis/SKILL.md)
+owns reviewable contact and meeting action proposals; this distributable skill
+stays read-only and bounded to one `prepare_question` proposal or `no_action`.
+The two output contracts are intentionally different and are not converged.
+
 ## Boundaries
 
 - Accept only synthetic content or conversation content the user supplied or

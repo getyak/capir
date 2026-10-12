@@ -7,6 +7,7 @@ import {
   assertPersonResearchQuery,
 } from "./personResearchPolicy.js";
 import { runPersonResearchAgent } from "./personResearchRunner.js";
+import { ResearchToolBlockedError } from "./researchToolExecution.js";
 import { DEFAULT_AGENT_BUDGET } from "./runner.js";
 import { ScriptedAgentProvider, type ScriptedOutput } from "./scriptedProvider.js";
 import type {
@@ -80,11 +81,20 @@ class MemoryPersonResearchHost
   implements AgentPersonResearchGateway, AgentPersonResearchJournal
 {
   checkpoint: AgentPersonResearchCheckpoint | null = null;
+  readonly checkpointHistory: AgentPersonResearchCheckpoint[] = [];
   readonly events: AgentJournalEvent[] = [];
   readonly outputs: AgentJournalOutput[] = [];
   readonly artifacts: AgentPersonResearchArtifactCandidate[] = [];
   readonly noActions: AgentPersonResearchNoActionCandidate[] = [];
   terminal: AgentPersonResearchTerminalReceipt | null = null;
+  profileDispatches = 0;
+  readonly profileDispatchCheckpoints: (AgentPersonResearchCheckpoint | null)[] = [];
+  /** Fails the nth saveCheckpoint call (1-based); null keeps every write. */
+  failSaveCall: number | null = null;
+  /** Holds the first synthetic profile dispatch until the promise resolves. */
+  holdFirstProfileDispatch: Promise<void> | null = null;
+  onProfileDispatch: (() => void) | null = null;
+  private saveCalls = 0;
 
   async start() {}
 
@@ -93,7 +103,12 @@ class MemoryPersonResearchHost
   }
 
   async saveCheckpoint(_runID: string, value: AgentPersonResearchCheckpoint) {
+    this.saveCalls += 1;
+    if (this.failSaveCall !== null && this.saveCalls === this.failSaveCall) {
+      throw new Error("Synthetic checkpoint write failure.");
+    }
     this.checkpoint = structuredClone(value);
+    this.checkpointHistory.push(structuredClone(value));
   }
 
   async append(event: AgentJournalEvent) {
@@ -113,6 +128,14 @@ class MemoryPersonResearchHost
     _runScope: AgentPersonResearchScope,
     input: { platform: AgentPublicProfileResult["platform"] },
   ) {
+    this.profileDispatches += 1;
+    this.profileDispatchCheckpoints.push(
+      this.checkpoint ? structuredClone(this.checkpoint) : null,
+    );
+    this.onProfileDispatch?.();
+    if (this.holdFirstProfileDispatch && this.profileDispatches === 1) {
+      await this.holdFirstProfileDispatch;
+    }
     return [
       {
         platform: input.platform,
@@ -467,5 +490,382 @@ describe("screenshot-driven person research Agent", () => {
         allowedPlatforms: [],
       }),
     ).toThrow("1-4 supported public platforms");
+  });
+
+  it("returns only the fixed generic fallback to the model tool callback for untyped gateway failures", async () => {
+    const host = new MemoryPersonResearchHost();
+    host.searchProfiles = async () => {
+      host.profileDispatches += 1;
+      throw Object.assign(new Error("SECRET_MESSAGE_CANARY"), {
+        name: "SECRET_NAME_CANARY",
+        stack: "Error: SECRET_STACK_CANARY\n    at SECRET_FRAME_CANARY",
+        cause: new Error("SECRET_CAUSE_CANARY"),
+      });
+    };
+    let toolResults: readonly AgentToolResult[] = [];
+    const provider = visionProvider(
+      [
+        {
+          tool: "search_douyin_profiles",
+          input: {
+            visible_identity_clue: "@zhouyu",
+            source_artifact_id: imageArtifact.artifactID,
+            maximum_results: 5,
+          },
+        },
+      ],
+      (results) => {
+        toolResults = results;
+        return {
+          outcome: "no_action",
+          reason_code: "NO_VISIBLE_IDENTITY_CLUE",
+          reason: "The tool call failed.",
+          missing_evidence_refs: [],
+        };
+      },
+    );
+
+    const receipt = await runPersonResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+      providerInputParts: inputParts,
+    });
+
+    expect(toolResults[0]).toMatchObject({
+      ok: false,
+      error: {
+        code: "TOOL_INPUT_INVALID",
+        message:
+          "The tool input is invalid. Repair the call against the declared tool schema and retry.",
+      },
+    });
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe("TOOL_INPUT_INVALID");
+    expect(host.profileDispatches).toBe(1);
+    // The possibly dispatched operation stays conservatively consumed.
+    expect(host.checkpoint).toMatchObject({ providerCalls: 1 });
+    // No message, name, stack, or cause canary may reach the model tool result,
+    // the terminal receipt, or any durable journal state, and the journal keeps
+    // its bounded content-free behavior: not even the generic tool error text
+    // is retained there by default.
+    const serialized = JSON.stringify({
+      toolResults,
+      receipt,
+      events: host.events,
+      outputs: host.outputs,
+      terminal: host.terminal,
+    });
+    for (const canary of [
+      "SECRET_MESSAGE_CANARY",
+      "SECRET_NAME_CANARY",
+      "SECRET_STACK_CANARY",
+      "SECRET_FRAME_CANARY",
+      "SECRET_CAUSE_CANARY",
+    ]) {
+      expect(serialized).not.toContain(canary);
+    }
+    expect(JSON.stringify({ events: host.events, outputs: host.outputs })).not.toContain(
+      "Repair the call against the declared tool schema",
+    );
+  });
+
+  it("requires a valid run scope before any journal or provider work", async () => {
+    const host = new MemoryPersonResearchHost();
+    await expect(
+      runPersonResearchAgent({
+        scope: { ...scope, runID: "  " },
+        budget: { ...DEFAULT_AGENT_BUDGET },
+        provider: visionProvider([], {
+          outcome: "no_action",
+          reason_code: "NO_VISIBLE_IDENTITY_CLUE",
+          reason: "No clue.",
+          missing_evidence_refs: [],
+        }),
+        gateway: host,
+        journal: host,
+        providerInputParts: inputParts,
+      }),
+    ).rejects.toMatchObject({ code: "PERSON_RESEARCH_SCOPE_INVALID" });
+    expect(host.events).toEqual([]);
+    expect(host.terminal).toBeNull();
+  });
+});
+
+describe("person research Run durability", () => {
+  const searchInput = {
+    visible_identity_clue: "@zhouyu",
+    source_artifact_id: imageArtifact.artifactID,
+    maximum_results: 5,
+  } as const;
+  const noActionOutput = {
+    outcome: "no_action",
+    reason_code: "NO_PUBLIC_PROFILE_MATCH",
+    reason: "The synthetic durable run produced no new draft.",
+    missing_evidence_refs: [],
+  } as const;
+
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  }
+
+  function providerResult(): AgentProviderResult {
+    return {
+      structuredOutput: noActionOutput,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedUsd: 0,
+      turns: 1,
+      permissionDenials: [],
+    };
+  }
+
+  function concurrentProvider(
+    tools: readonly [string, string],
+  ): {
+    provider: AgentProvider;
+    settlements: PromiseSettledResult<AgentToolResult>[];
+  } {
+    const settlements: PromiseSettledResult<AgentToolResult>[] = [];
+    const provider: AgentProvider = {
+      id: "concurrent-synthetic",
+      model: "synthetic-vision-tool-model",
+      sdkVersion: "concurrent-provider.v1",
+      inputCapabilities: {
+        text: true,
+        image: true,
+        imageUnderstanding: true,
+      },
+      async run(_request, invokeTool) {
+        const first = invokeTool(tools[0], searchInput);
+        const second = invokeTool(tools[1], searchInput);
+        settlements.push(...(await Promise.allSettled([first, second])));
+        return providerResult();
+      },
+    };
+    return { provider, settlements };
+  }
+
+  it("persists the consumed provider-call counter inside the gateway callback", async () => {
+    const host = new MemoryPersonResearchHost();
+    const provider = visionProvider(
+      [{ tool: "search_douyin_profiles", input: searchInput }],
+      noActionOutput,
+    );
+
+    const receipt = await runPersonResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+      providerInputParts: inputParts,
+    });
+
+    expect(receipt.status).toBe("no_action");
+    expect(host.profileDispatchCheckpoints[0]).toMatchObject({
+      providerCalls: 1,
+      toolCalls: 1,
+    });
+    expect(host.checkpoint?.providerCalls).toBe(1);
+  });
+
+  it("denies a profile search after a restored consumed budget without dispatching", async () => {
+    const host = new MemoryPersonResearchHost();
+    host.checkpoint = {
+      profileResults: [],
+      queryObservations: [],
+      providerCalls: 2,
+      toolCalls: 2,
+      sequence: 2,
+    };
+    const provider = visionProvider(
+      [{ tool: "search_douyin_profiles", input: searchInput }],
+      noActionOutput,
+    );
+
+    const receipt = await runPersonResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+      providerInputParts: inputParts,
+    });
+
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe("MAX_PERSON_PROFILE_CALLS_EXCEEDED");
+    expect(receipt.permissionDenials).toContain(
+      "search_douyin_profiles:MAX_PERSON_PROFILE_CALLS_EXCEEDED",
+    );
+    expect(host.profileDispatches).toBe(0);
+  });
+
+  it("fails closed without a gateway dispatch when the pre-dispatch checkpoint write fails", async () => {
+    const host = new MemoryPersonResearchHost();
+    host.failSaveCall = 1;
+    const provider = visionProvider(
+      [{ tool: "search_douyin_profiles", input: searchInput }],
+      noActionOutput,
+    );
+
+    const receipt = await runPersonResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+      providerInputParts: inputParts,
+    });
+
+    expect(receipt.status).toBe("failed");
+    expect(receipt.reasonCode).toBe("PROVIDER_OR_COMMIT_FAILED");
+    expect(host.profileDispatches).toBe(0);
+  });
+
+  it("serializes concurrent profile callbacks with contiguous journal sequences", async () => {
+    const host = new MemoryPersonResearchHost();
+    const started = deferred();
+    const release = deferred();
+    host.holdFirstProfileDispatch = release.promise;
+    host.onProfileDispatch = () => started.resolve();
+    const { provider, settlements } = concurrentProvider([
+      "search_douyin_profiles",
+      "search_tiktok_profiles",
+    ]);
+
+    const run = runPersonResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+      providerInputParts: inputParts,
+    });
+    run.catch(() => {});
+    try {
+      await started.promise;
+      // A broken serializer would dispatch the second gateway call while the
+      // first is still held.
+      await new Promise((done) => setTimeout(done, 100));
+      expect(host.profileDispatches).toBe(1);
+    } finally {
+      release.resolve();
+    }
+    const receipt = await run;
+
+    expect(receipt.status).toBe("no_action");
+    expect(settlements.every((entry) => entry.status === "fulfilled")).toBe(true);
+    expect(host.profileDispatches).toBe(2);
+    expect(
+      host.profileDispatchCheckpoints.map((entry) => entry?.providerCalls),
+    ).toEqual([1, 2]);
+    expect(host.checkpoint?.providerCalls).toBe(2);
+    expect(host.checkpoint?.toolCalls).toBe(2);
+    for (const values of [
+      host.checkpointHistory.map((entry) => entry.providerCalls),
+      host.checkpointHistory.map((entry) => entry.toolCalls),
+    ]) {
+      expect(values).toEqual([...values].sort((a, b) => a - b));
+    }
+    expect(host.events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+    expect(host.events.map((event) => event.kind)).toEqual([
+      "tool_call",
+      "tool_call",
+      "provider_result",
+      "terminal",
+    ]);
+  });
+
+  it("blocks the queued execution after a fatal checkpoint write failure", async () => {
+    const host = new MemoryPersonResearchHost();
+    // Call 1 is the first tool's pre-dispatch save; call 2 is its result save.
+    host.failSaveCall = 2;
+    const { provider, settlements } = concurrentProvider([
+      "search_douyin_profiles",
+      "search_tiktok_profiles",
+    ]);
+
+    const receipt = await runPersonResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+      providerInputParts: inputParts,
+    });
+
+    expect(receipt.status).toBe("failed");
+    expect(receipt.reasonCode).toBe("PROVIDER_OR_COMMIT_FAILED");
+    expect(host.profileDispatches).toBe(1);
+    const blocked = settlements[1];
+    expect(blocked?.status).toBe("rejected");
+    if (blocked?.status === "rejected") {
+      expect(blocked.reason).toBeInstanceOf(ResearchToolBlockedError);
+    }
+    expect(host.events.map((event) => event.kind)).toEqual(["terminal"]);
+    expect(host.terminal?.status).toBe("failed");
+  });
+
+  it("checks aborted queued work at actual execution and dispatches no second gateway", async () => {
+    const host = new MemoryPersonResearchHost();
+    const started = deferred();
+    const release = deferred();
+    host.holdFirstProfileDispatch = release.promise;
+    host.onProfileDispatch = () => started.resolve();
+    const settlements: PromiseSettledResult<AgentToolResult>[] = [];
+    const controller = new AbortController();
+    const provider: AgentProvider = {
+      id: "concurrent-synthetic",
+      model: "synthetic-vision-tool-model",
+      sdkVersion: "concurrent-provider.v1",
+      inputCapabilities: {
+        text: true,
+        image: true,
+        imageUnderstanding: true,
+      },
+      async run(_request, invokeTool) {
+        const first = invokeTool("search_douyin_profiles", searchInput);
+        await started.promise;
+        const second = invokeTool("search_tiktok_profiles", searchInput);
+        // The second execution is queued behind the held first execution when
+        // the Run is cancelled.
+        controller.abort();
+        release.resolve();
+        settlements.push(...(await Promise.allSettled([first, second])));
+        return providerResult();
+      },
+    };
+
+    const run = runPersonResearchAgent({
+      scope,
+      budget: { ...DEFAULT_AGENT_BUDGET },
+      provider,
+      gateway: host,
+      journal: host,
+      providerInputParts: inputParts,
+      signal: controller.signal,
+    });
+    run.catch(() => {});
+    const receipt = await run;
+
+    expect(receipt.status).toBe("cancelled");
+    expect(receipt.reasonCode).toBe("CANCELLED_BY_REQUESTER");
+    expect(host.profileDispatches).toBe(1);
+    const second = settlements[1];
+    expect(second?.status).toBe("fulfilled");
+    if (second?.status === "fulfilled") {
+      expect(second.value.ok).toBe(false);
+      expect(second.value.error?.code).toBe("RUN_CANCELLED");
+    }
+    expect(host.events.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+    expect(host.events[1]?.metadata.error_code).toBe("RUN_CANCELLED");
+    expect(host.events.at(-1)?.kind).toBe("terminal");
   });
 });

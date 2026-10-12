@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   currentSessionMock,
@@ -39,6 +39,7 @@ import { BackendSessionExpiredError } from "@/lib/backend-session";
 function buildRequest(options: {
   ip?: string;
   screenshotOwner?: string;
+  workspace?: string;
 }) {
   const form = new FormData();
   form.set(
@@ -55,7 +56,7 @@ function buildRequest(options: {
       headers: {
         host: "127.0.0.1:3000",
         origin: "http://127.0.0.1:3000",
-        "x-talent-signal-workspace": "owner",
+        "x-talent-signal-workspace": options.workspace ?? "owner",
         "x-forwarded-for": options.ip ?? "203.0.113.10",
       },
       body: form,
@@ -63,8 +64,49 @@ function buildRequest(options: {
   );
 }
 
+function expectBoundedRetryAfter(response: Response) {
+  const retryAfter = Number(response.headers.get("retry-after"));
+  expect(Number.isInteger(retryAfter)).toBe(true);
+  expect(retryAfter).toBeGreaterThanOrEqual(1);
+  expect(retryAfter).toBeLessThanOrEqual(60);
+}
+
+async function admitAuthenticatedPrincipal(
+  principal: { accountId: string; userId: string },
+  attempts: number,
+  startIp = 203,
+) {
+  readBackendSessionClaimsMock.mockResolvedValue({
+    backendAccountId: principal.accountId,
+    backendUserId: principal.userId,
+    backendExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+  });
+  currentSessionMock.mockResolvedValue({
+    account: { id: principal.accountId },
+    user: { id: principal.userId },
+  });
+  for (let index = 0; index < attempts; index += 1) {
+    const result = await POST(
+      buildRequest({
+        ip: `203.0.113.${startIp + index}`,
+        workspace: principal.accountId,
+      }),
+    );
+    expect(result.status).toBe(200);
+  }
+}
+
+// Two full fixed windows per test: the module-level principal budget can never
+// leak across tests through fake clock or shared map state.
+let clockBase = 1_700_000_000_000;
+let currentBase = clockBase;
+
 describe("screenshot analysis route", () => {
   beforeEach(() => {
+    clockBase += 120_000;
+    currentBase = clockBase;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(currentBase));
     vi.clearAllMocks();
     currentSessionMock.mockResolvedValue({account:{id:"owner"},user:{id:"user"}});
     readBackendSessionClaimsMock.mockResolvedValue({ backendAccountId: "owner", backendUserId: "user", backendExpiresAt: new Date(Date.now()+60000).toISOString() });
@@ -96,6 +138,10 @@ describe("screenshot analysis route", () => {
       },
     });
     issueScreenshotAnalysisReceiptMock.mockReturnValue("receipt-1");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it.each([null, ""])("rejects absent or empty rendered scope before reading private images: %s", async scope => {
@@ -203,5 +249,93 @@ describe("screenshot analysis route", () => {
       code: "provider_network_failed",
       error: expect.stringMatching(/无法连接所选截图分析 Provider/),
     });
+  });
+
+  it("logs only closed failure classification and correlation, never raw provider text", async () => {
+    analyzeScreenshotMock.mockRejectedValueOnce(
+      new Error(
+        "provider-body-private-canary with message-private-canary",
+      ),
+    );
+    classifyScreenshotAnalysisFailureMock.mockReturnValueOnce(
+      "analysis_failed",
+    );
+
+    const result = await POST(buildRequest({ ip: "203.0.113.23" }));
+
+    expect(result.status).toBe(502);
+    const logged = JSON.stringify(
+      vi.mocked(console.error).mock.calls,
+    );
+    expect(logged).toContain("analysis_failed");
+    expect(logged).toContain("Screenshot analysis failed.");
+    expect(logged).not.toContain("provider-body-private-canary");
+    expect(logged).not.toContain("message-private-canary");
+  });
+
+  it("binds the budget to the admitted account and user, not forwarded headers", async () => {
+    for (let index = 0; index < 6; index += 1) {
+      const result = await POST(
+        buildRequest({ ip: `203.0.113.${40 + index}` }),
+      );
+      expect(result.status).toBe(200);
+    }
+    expect(analyzeScreenshotMock).toHaveBeenCalledTimes(6);
+
+    // A new forwarded header variation cannot buy a seventh admission.
+    const limited = await POST(buildRequest({ ip: "203.0.113.200" }));
+    expect(limited.status).toBe(429);
+    expectBoundedRetryAfter(limited);
+    await expect(limited.json()).resolves.toMatchObject({
+      code: "rate_limited",
+    });
+    expect(analyzeScreenshotMock).toHaveBeenCalledTimes(6);
+    expect(issueScreenshotAnalysisReceiptMock).toHaveBeenCalledTimes(6);
+  });
+
+  it("keeps distinct admitted principals on isolated budgets", async () => {
+    await admitAuthenticatedPrincipal(
+      { accountId: "owner", userId: "user" },
+      6,
+    );
+    const exhausted = await POST(
+      buildRequest({ ip: "203.0.113.201", workspace: "owner" }),
+    );
+    expect(exhausted.status).toBe(429);
+
+    await admitAuthenticatedPrincipal(
+      { accountId: "owner-b", userId: "user-b" },
+      2,
+      50,
+    );
+    expect(analyzeScreenshotMock).toHaveBeenCalledTimes(8);
+  });
+
+  it("counts down a finite Retry-After and restores the budget at the window boundary", async () => {
+    // Keep the authenticated session valid across the simulated window.
+    readBackendSessionClaimsMock.mockResolvedValue({
+      backendAccountId: "owner",
+      backendUserId: "user",
+      backendExpiresAt: new Date(currentBase + 3_600_000).toISOString(),
+    });
+    for (let index = 0; index < 6; index += 1) {
+      await POST(buildRequest({ ip: `203.0.113.${60 + index}` }));
+    }
+
+    vi.setSystemTime(new Date(currentBase + 30_000));
+    const midway = await POST(buildRequest({ ip: "203.0.113.202" }));
+    expect(midway.status).toBe(429);
+    expectBoundedRetryAfter(midway);
+    expect(Number(midway.headers.get("retry-after"))).toBe(30);
+
+    vi.setSystemTime(new Date(currentBase + 59_999));
+    const boundary = await POST(buildRequest({ ip: "203.0.113.203" }));
+    expect(boundary.status).toBe(429);
+    expect(Number(boundary.headers.get("retry-after"))).toBe(1);
+
+    vi.setSystemTime(new Date(currentBase + 60_000));
+    const reset = await POST(buildRequest({ ip: "203.0.113.204" }));
+    expect(reset.status).toBe(200);
+    expect(analyzeScreenshotMock).toHaveBeenCalledTimes(7);
   });
 });

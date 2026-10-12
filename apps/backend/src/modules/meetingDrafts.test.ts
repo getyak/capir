@@ -41,11 +41,12 @@ describe("meeting draft task binding", () => {
   it("keeps Lab accounts out and isolates an ordinary account sweep failure", async () => {
     const first = "90000000-0000-4000-8000-000000000009";
     const second = "a0000000-0000-4000-8000-00000000000a";
+    const accountFailure = new Error("isolated database failure");
     const query = vi
       .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ account_id: first }, { account_id: second }] })
-      .mockRejectedValueOnce(new Error("isolated database failure"))
+      .mockRejectedValueOnce(accountFailure)
       .mockResolvedValueOnce({ rows: [] });
     const warn = vi.fn();
     await sweepMeetingDraftRetention(
@@ -71,16 +72,17 @@ describe("meeting draft task binding", () => {
       [second],
     );
     expect(warn).toHaveBeenCalledWith(
-      { error: "Error" },
+      { err: accountFailure },
       "meeting draft retention sweep skipped one account",
     );
   });
 
   it("continues sensitive redaction when ephemeral snapshot cleanup fails", async () => {
     const accountID = "90000000-0000-4000-8000-000000000009";
+    const snapshotFailure = new Error("snapshot lock");
     const query = vi
       .fn()
-      .mockRejectedValueOnce(new Error("snapshot lock"))
+      .mockRejectedValueOnce(snapshotFailure)
       .mockResolvedValueOnce({ rows: [{ account_id: accountID }] })
       .mockResolvedValueOnce({ rows: [] });
     const warn = vi.fn();
@@ -100,7 +102,7 @@ describe("meeting draft task binding", () => {
       [accountID],
     );
     expect(warn).toHaveBeenCalledWith(
-      { error: "Error" },
+      { err: snapshotFailure },
       "meeting draft list snapshot cleanup skipped",
     );
   });

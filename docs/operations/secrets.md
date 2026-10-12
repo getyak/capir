@@ -242,6 +242,45 @@ selects `TALENT_SIGNAL_SCREENSHOT_PROVIDER=zhipu` and uses a separately pinned
 vision model. Do not treat the text-only GLM Agent model as proof of image
 support.
 
+## Web AI analysis admission
+
+Web AI surfaces stay disabled by default. `TALENT_SIGNAL_AI_ENABLED=true`
+admits only the bounded Web analysis routes; the processing policy below still
+gates every screenshot and private-evidence model path separately.
+
+The unauthenticated public synthetic-conversation demo is admitted only with
+`TALENT_SIGNAL_ALLOW_PUBLIC_AI_DEMO=true` in addition to
+`TALENT_SIGNAL_AI_ENABLED=true` and a configured provider credential. It sends
+only the bounded user-entered conversation text to the pinned model provider.
+Use synthetic text for this demo: the route does not classify whether a caller's
+text is private. It does not load authenticated workspace conversations,
+screenshots, or backend credentials, and has no workspace evidence authority.
+Its budget is one shared 8-per-minute
+GLOBAL fixed-window budget per process with a bounded `Retry-After`. Caller
+forwarding headers are never trusted for cost isolation, so deliberate header
+churn cannot buy more model budget. This budget is intentionally not a
+distributed limiter: a public deployment needs its own trusted edge control in
+front of it.
+
+Screenshot analysis keeps its own processing policy:
+`TALENT_SIGNAL_AI_ENABLED`, `TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING`, and
+exactly one provider credential (`TALENT_SIGNAL_SCREENSHOT_PROVIDER=auto`,
+`ark`, `zhipu`, or `openrouter`) with a separately pinned vision model such as
+`TALENT_SIGNAL_OPENROUTER_SCREENSHOT_MODEL`. Authentication, rendered
+workspace binding, and revocation checks run before any image body, model, or
+receipt work, and admitted requests are bounded at 6 per minute per verified
+backend account and user, never per caller-supplied IP address, on the same
+per-process basis.
+
+OpenRouter stays server-only: `OPENROUTER_API_KEY` belongs to the Web workload
+secret path and never enters the client bundle, model-visible configuration,
+or logs. `OPENROUTER_BASE_URL` must remain the official OpenRouter host;
+`TALENT_SIGNAL_OPENROUTER_PROXY_URL` accepts only HTTP or HTTPS proxies, and
+`TALENT_SIGNAL_OPENROUTER_PROVIDER_ORDER` stays a bounded provider hint. The
+committed `.env.example` records disabled admission flags and empty credential
+placeholders; provider selection keeps its documented `auto` default. Never enable an admission flag by mutating Infisical or a
+resident environment outside a reviewed admission decision.
+
 ## Recovery and verification
 
 - Revoke the affected workload identity before rotating a suspected credential.

@@ -4,6 +4,7 @@ import {
   assertPersonResearchAuthorization,
   assertPersonResearchDraftText,
   assertPersonResearchQuery,
+  assertPersonResearchRunInputs,
   AgentPersonResearchPolicyError,
 } from "./personResearchPolicy.js";
 import {
@@ -14,11 +15,15 @@ import {
   type PersonResearchNoActionOutput,
 } from "./schemas.js";
 import { AgentCapabilityError } from "./runtimePolicy.js";
-import { agentUsage, assertAgentBudget, exceededBudget } from "./runBudget.js";
+import { agentUsage, exceededBudget } from "./runBudget.js";
+import {
+  createResearchToolExecution,
+  ResearchToolWriteError,
+  writeResearchToolState,
+} from "./researchToolExecution.js";
 import { SYSTEM_AGENT_RUNTIME } from "./runtimeDependencies.js";
 import {
   PERSON_RESEARCH_AGENT_TOOL_NAMES,
-  type AgentBudget,
   type AgentPersonResearchArtifactCandidate,
   type AgentPersonResearchCheckpoint,
   type AgentPersonResearchNoActionCandidate,
@@ -50,54 +55,6 @@ class PersonResearchBoundaryError extends Error {
     message: string,
   ) {
     super(message);
-  }
-}
-
-function assertBudget(budget: AgentBudget): void {
-  assertAgentBudget(budget, ({ field }) => {
-    throw new AgentPersonResearchPolicyError(
-      "AGENT_BUDGET_INVALID",
-      `${field} must be positive and no greater than the Agent ceiling.`,
-    );
-  });
-}
-
-function assertImageInput(request: AgentPersonResearchRunRequest): void {
-  const manifest = request.scope.inputArtifactManifest;
-  const parts = request.providerInputParts;
-  if (manifest.length !== 1 || parts.length !== 1) {
-    throw new AgentPersonResearchPolicyError(
-      "PERSON_RESEARCH_IMAGE_REQUIRED",
-      "Person research requires exactly one governed screenshot artifact.",
-    );
-  }
-  const item = manifest[0];
-  const part = parts[0];
-  if (
-    !item ||
-    !part ||
-    item.kind !== "image" ||
-    part.kind !== "image" ||
-    item.artifactID !== part.artifactID ||
-    item.mimeType !== part.mimeType ||
-    item.byteSize !== part.byteSize ||
-    item.contentHash !== part.contentHash ||
-    !new Set(["image/png", "image/jpeg", "image/webp"]).has(item.mimeType) ||
-    item.byteSize < 1 ||
-    item.byteSize > 10_000_000 ||
-    !/^[0-9a-f]{64}$/u.test(item.contentHash) ||
-    !part.dataBase64
-  ) {
-    throw new AgentPersonResearchPolicyError(
-      "PERSON_RESEARCH_IMAGE_INVALID",
-      "The screenshot must be one matching PNG, JPEG, or WebP artifact of at most 10 MB.",
-    );
-  }
-  if (!request.provider.inputCapabilities.imageUnderstanding) {
-    throw new AgentPersonResearchPolicyError(
-      "PERSON_RESEARCH_VISION_PROVIDER_REQUIRED",
-      "The configured pinned Agent model does not support image understanding.",
-    );
   }
 }
 
@@ -246,14 +203,7 @@ export async function runPersonResearchAgent(
   request: AgentPersonResearchRunRequest,
 ): Promise<AgentPersonResearchTerminalReceipt> {
   const runtime = request.runtime ?? SYSTEM_AGENT_RUNTIME;
-  assertBudget(request.budget);
-  assertImageInput(request);
-  if (!request.scope.runID.trim() || !request.scope.objective.trim() || !request.scope.providerID.trim()) {
-    throw new AgentPersonResearchPolicyError(
-      "PERSON_RESEARCH_SCOPE_INVALID",
-      "A local person-research Run requires a run ID, objective, and pinned provider.",
-    );
-  }
+  assertPersonResearchRunInputs(request);
   const authorization = assertPersonResearchAuthorization(request.scope.authorization);
   const scope = Object.freeze({ ...request.scope, authorization });
   const startedAtMs = runtime.nowMs();
@@ -300,12 +250,26 @@ export async function runPersonResearchAgent(
       sequence,
     } satisfies AgentPersonResearchCheckpoint);
 
+  // One per-invocation FIFO chain: concurrent provider tool callbacks execute
+  // one at a time so counter pre-saves, dispatches, checkpoint writes, and
+  // journal appends cannot interleave. Different Runs use different chains.
+  const toolExecution = createResearchToolExecution();
+
+  const failureCode = (error: unknown) =>
+    error instanceof AgentCapabilityError ||
+    error instanceof AgentPersonResearchPolicyError ||
+    error instanceof PersonResearchBoundaryError
+      ? error.code
+      : "PROVIDER_OR_COMMIT_FAILED";
+
   const complete = async (
     status: AgentPersonResearchTerminalReceipt["status"],
     reasonCode: string,
     artifactID: string | null = null,
     noActionID: string | null = null,
   ) => {
+    // No in-flight tool write may race provider/terminal settlement.
+    await toolExecution.drain();
     if (terminalStarted) throw new Error("The person-research terminal commit was already attempted.");
     terminalStarted = true;
     const receipt: AgentPersonResearchTerminalReceipt = {
@@ -341,17 +305,24 @@ export async function runPersonResearchAgent(
     return stored;
   };
 
-  const invokeTool = async (
+  const invokeTool = (
+    requestedName: string,
+    rawInput: unknown,
+  ): Promise<AgentToolResult> =>
+    toolExecution.enqueue(() => executeTool(requestedName, rawInput));
+
+  const executeTool = async (
     requestedName: string,
     rawInput: unknown,
   ): Promise<AgentToolResult> => {
+    // Cancellation of queued work is checked at actual execution, before any
+    // gateway dispatch.
     toolCalls += 1;
     const callID = runtime.randomUUID();
     const occurredAt = new Date(runtime.nowMs()).toISOString();
     const append = async (result: AgentToolResult) => {
       sequence += 1;
-      await saveCheckpoint();
-      await request.journal.append({
+      const event = {
         runID: scope.runID,
         sequence,
         kind: "tool_call",
@@ -361,7 +332,17 @@ export async function runPersonResearchAgent(
         inputFingerprint: fingerprint(rawInput),
         outputFingerprint: fingerprint(result),
         metadata: { call_id: callID, error_code: result.error?.code ?? null },
-      });
+      } as const;
+      try {
+        await writeResearchToolState(saveCheckpoint);
+        await writeResearchToolState(() => request.journal.append(event));
+      } catch (error) {
+        // A failed event write consumes no journal slot: the counter stays
+        // aligned with the appended journal so the fail-closed terminal can
+        // still be recorded.
+        sequence -= 1;
+        throw error;
+      }
       return result;
     };
     const deny = async (code: string, message: string) => {
@@ -420,6 +401,10 @@ export async function runPersonResearchAgent(
             "The public-profile provider-call budget is exhausted.",
           );
         }
+        // A possibly dispatched operation consumes its allowance
+        // conservatively: the incremented counter is durable before any
+        // provider/network call, so interruption can never refund or replay it.
+        await writeResearchToolState(saveCheckpoint);
         const results = await request.gateway.searchProfiles(
           scope,
           {
@@ -487,6 +472,8 @@ export async function runPersonResearchAgent(
         candidateFingerprint,
       });
     } catch (error) {
+      // A failed local journal write is fatal, never a model-visible denial.
+      if (error instanceof ResearchToolWriteError) throw error;
       if (
         error instanceof AgentCapabilityError ||
         error instanceof AgentPersonResearchPolicyError ||
@@ -494,9 +481,11 @@ export async function runPersonResearchAgent(
       ) {
         return deny(error.code, error.message);
       }
+      // Fixed generic fallback: an untyped exception message is untrusted
+      // transport/input text and never enters model context.
       return deny(
         "TOOL_INPUT_INVALID",
-        error instanceof Error ? error.message : "The Tool input is invalid.",
+        "The tool input is invalid. Repair the call against the declared tool schema and retry.",
       );
     }
   };
@@ -520,10 +509,14 @@ export async function runPersonResearchAgent(
       },
       invokeTool,
       abort.signal,
-    );
+    ).finally(() => toolExecution.drain());
+    await toolExecution.drain();
+    const fatal = toolExecution.failure();
+    if (fatal !== null) {
+      return complete("failed", failureCode(fatal));
+    }
     sequence += 1;
-    await saveCheckpoint();
-    await request.journal.append({
+    const providerEvent = {
       runID: scope.runID,
       sequence,
       kind: "provider_result",
@@ -534,7 +527,14 @@ export async function runPersonResearchAgent(
         turns: providerResult.turns,
         permission_denial_count: providerResult.permissionDenials.length,
       },
-    });
+    } as const;
+    try {
+      await saveCheckpoint();
+      await request.journal.append(providerEvent);
+    } catch (error) {
+      sequence -= 1;
+      throw error;
+    }
     if (request.signal?.aborted) return complete("cancelled", "CANCELLED_BY_REQUESTER");
     if (timeoutController.signal.aborted) return complete("budget_exhausted", "MAX_DURATION_EXCEEDED");
     if (providerResult.terminalReason === "max_turns" || providerResult.terminalReason === "budget_exhausted") {
@@ -633,14 +633,7 @@ export async function runPersonResearchAgent(
     if (terminalStarted) throw error;
     if (request.signal?.aborted) return complete("cancelled", "CANCELLED_BY_REQUESTER");
     if (timeoutController.signal.aborted) return complete("budget_exhausted", "MAX_DURATION_EXCEEDED");
-    return complete(
-      "failed",
-      error instanceof AgentCapabilityError ||
-        error instanceof AgentPersonResearchPolicyError ||
-        error instanceof PersonResearchBoundaryError
-        ? error.code
-        : "PROVIDER_OR_COMMIT_FAILED",
-    );
+    return complete("failed", failureCode(error));
   } finally {
     runtime.clearTimeout(timeout);
     request.signal?.removeEventListener("abort", externalAbort);

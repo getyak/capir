@@ -19,6 +19,10 @@ import {
   assertContactResearchResponseMatchesRequest,
   type ContactResearchClient,
 } from "./contactResearchClient.js";
+import {
+  recognizedDiagnosticCodes,
+  RESEARCH_TOOL_ERROR_CODE_SET,
+} from "../lib/diagnosticCodes.js";
 
 /**
  * Workspace public-subject research adapter.
@@ -86,9 +90,10 @@ import {
  *   abort failures never retry, and the retry itself dispatches only inside
  *   the remaining global budget;
  * - every search/fetch receipt carries sanitized per-dispatch attempt metadata
- *   (call_id, ok/failed, code-shaped error code) on success and failure paths;
+ *   (call_id, ok/failed, recognized fixed error code) on success and failure
+ *   paths; unrecognized exception codes are omitted entirely;
  * - every failure is a sanitized tool failure: fixed messages plus at most a
- *   code-shaped detail, never raw provider text.
+ *   recognized fixed detail code, never raw provider or exception text.
  */
 
 export const WORKSPACE_PUBLIC_RESEARCH_TOOL_NAMES = [
@@ -296,8 +301,22 @@ const FETCH_SCHEMA: Record<string, unknown> = {
   },
 };
 
-const CODE_SHAPED = /^[A-Z][A-Z0-9_]{2,63}$/u;
 const SOURCE_ID = /^[a-f0-9]{64}$/u;
+
+/**
+ * Finite allowlist of diagnostic codes this adapter may surface in model-facing
+ * detail or attempt receipts: recognized research-tool diagnostics plus this
+ * module's locally declared typed policy codes. A code-shaped string that is
+ * not in this set is never trusted and never surfaces.
+ */
+const WORKSPACE_PUBLIC_RESEARCH_DIAGNOSTIC_CODES: ReadonlySet<string> =
+  new Set([
+    ...RESEARCH_TOOL_ERROR_CODE_SET,
+    "PUBLIC_RESEARCH_RESPONSE_MISMATCH",
+    "PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT",
+    "PERSON_RESEARCH_QUERY_INVALID",
+    "PERSON_RESEARCH_QUERY_PROHIBITED",
+  ]);
 
 class WorkspacePublicResearchStaleSubjectError extends Error {
   constructor() {
@@ -322,7 +341,13 @@ function failure(
     ok: false,
     callID,
     name,
-    error: { code, message, ...(detail && CODE_SHAPED.test(detail) ? { detail } : {}) },
+    error: {
+      code,
+      message,
+      ...(detail && WORKSPACE_PUBLIC_RESEARCH_DIAGNOSTIC_CODES.has(detail)
+        ? { detail }
+        : {}),
+    },
   };
 }
 
@@ -333,16 +358,20 @@ function attachAttempts(
   return attempts.length > 0 ? { ...result, attempts: [...attempts] } : result;
 }
 
+/**
+ * Extract only recognized fixed diagnostic codes from an untrusted exception,
+ * covering both the `code` property and a coded `Error.message`,
+ * deduplicated. Neither channel is trusted unless the exact code is in the
+ * finite allowlist: an unrecognized arbitrary code never triggers retry and
+ * never appears in model-facing detail. Detail display keeps first-code
+ * priority (`code` property before `message`); retry classification considers
+ * every recognized field, matching the original bounded classifier.
+ */
 function thrownCodes(error: unknown): string[] {
-  const codes: string[] = [];
-  const code =
-    error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
-      ? (error as { code: string }).code
-      : null;
-  if (code && CODE_SHAPED.test(code)) codes.push(code);
-  const message = error instanceof Error ? error.message : "";
-  if (CODE_SHAPED.test(message) && !codes.includes(message)) codes.push(message);
-  return codes;
+  return recognizedDiagnosticCodes(
+    error,
+    WORKSPACE_PUBLIC_RESEARCH_DIAGNOSTIC_CODES,
+  );
 }
 
 function thrownDetail(error: unknown): string | undefined {

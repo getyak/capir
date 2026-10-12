@@ -177,4 +177,43 @@ describe("local safe web fetch", () => {
       ),
     ).rejects.toMatchObject({ code: "WEB_FETCH_UNAVAILABLE" });
   });
+
+  it("keeps raw transport exception message, name, stack, and cause out of the typed direct-fetch failure", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("not found", { status: 404 }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("SECRET_MESSAGE_CANARY"), {
+          name: "SECRET_NAME_CANARY",
+          stack: "Error: SECRET_STACK_CANARY\n    at SECRET_FRAME_CANARY",
+          cause: new Error("SECRET_CAUSE_CANARY"),
+        }),
+      );
+    let failure: unknown;
+    try {
+      await fetchDiscoveredPublicPage(
+        scope,
+        result,
+        new AbortController().signal,
+        { fetcher, lookup: publicLookup },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    // The typed code and fixed operation message survive; nothing from the
+    // raw transport exception does.
+    expect(failure).toMatchObject({
+      code: "WEB_FETCH_UNAVAILABLE",
+      message: "The public page could not be reached.",
+    });
+    const error = failure as Error & { cause?: unknown };
+    const serialized = JSON.stringify({
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+      cause: error.cause,
+    });
+    expect(serialized).not.toContain("CANARY");
+  });
 });

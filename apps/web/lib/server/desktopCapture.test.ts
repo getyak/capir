@@ -13,7 +13,6 @@ vi.mock("@talent-signal/contracts", async importOriginal => {
 
 import { desktopCaptureContextRoute } from "./desktopCapture";
 
-const request = () => new Request("https://workspace.example/api/desktop-capture/context");
 const claims = (account: string, token: string) => ({
   backendAccountId: account, backendUserId: "user", backendAccountName: "Workspace",
   backendAccessToken: token, backendExpiresAt: "2099-01-01T00:00:00.000Z",
@@ -25,14 +24,14 @@ beforeEach(() => {
 
 it("requires an active signed-in workspace", async () => {
   fixture.claims.mockResolvedValue(null);
-  expect((await desktopCaptureContextRoute(request())).status).toBe(401);
+  expect((await desktopCaptureContextRoute()).status).toBe(401);
   expect(fixture.policy).not.toHaveBeenCalled();
 });
 
 it("keeps recovery scope stable across login rotation while changing its authority binding", async () => {
   fixture.claims.mockResolvedValueOnce(claims("account-one", "token-a")).mockResolvedValueOnce(claims("account-one", "token-b"));
-  const first = await (await desktopCaptureContextRoute(request())).json();
-  const second = await (await desktopCaptureContextRoute(request())).json();
+  const first = await (await desktopCaptureContextRoute()).json();
+  const second = await (await desktopCaptureContextRoute()).json();
   expect(first.owner_scope).toBe(second.owner_scope);
   expect(first.workspace_account_id).toBe("account-one");
   expect(first.login_binding).not.toBe(second.login_binding);
@@ -42,7 +41,7 @@ it("keeps recovery scope stable across login rotation while changing its authori
 
 it("fences one account's staged screenshot from another account", async () => {
   fixture.claims.mockResolvedValueOnce(claims("account-one", "token-a")).mockResolvedValueOnce(claims("account-two", "token-b"));
-  const first = await (await desktopCaptureContextRoute(request())).json();
-  const second = await (await desktopCaptureContextRoute(request())).json();
+  const first = await (await desktopCaptureContextRoute()).json();
+  const second = await (await desktopCaptureContextRoute()).json();
   expect(first.owner_scope).not.toBe(second.owner_scope);
 });

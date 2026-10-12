@@ -15,6 +15,7 @@ import {
 
 import { LocalPersonResearchGateway } from "./localPersonResearchGateway.js";
 import { LocalPersonResearchStore } from "./localPersonResearchStore.js";
+import { withLocalRunAdmission } from "./localRunAdmission.js";
 import {
   configuredLocalPersonProfileProvider,
   configuredLocalVisionAgentProvider,
@@ -218,63 +219,73 @@ export async function runLocalPersonResearchImage(
     authorization,
     inputArtifactManifest: [image.manifest],
   };
-  const existing = await store.readTerminal(input.runID);
-  if (existing) {
-    const recorded = await store.readRun(input.runID);
-    const requestedIdentity = fingerprint({ scope });
-    if (!recorded || fingerprint({ scope: recorded.scope }) !== requestedIdentity) {
-      throw new Error(
-        "The completed Run ID belongs to a different image, objective, or authorization.",
-      );
-    }
-    const artifactFile =
-      existing.status === "artifact_created" && existing.candidateFingerprint
-        ? store.artifactPath(input.runID, existing.candidateFingerprint)
-        : null;
-    return {
-      receipt: existing,
-      stateDirectory: resolve(input.stateRoot, "person-runs", input.runID),
-      artifactFile,
-      replayedTerminal: true,
-    };
-  }
-  const profileProvider =
-    dependencies.profileProvider ??
-    configuredLocalPersonProfileProvider(environment);
-  const modelProvider =
-    dependencies.modelProvider ?? configuredLocalVisionAgentProvider(environment);
-  const gateway =
-    dependencies.gateway ?? new LocalPersonResearchGateway(profileProvider, store);
-  const budget: AgentBudget = {
-    ...DEFAULT_AGENT_BUDGET,
-    maxToolCalls: Math.min(
-      DEFAULT_AGENT_BUDGET.maxToolCalls,
-      input.maximumProviderCalls + 1,
-    ),
-  };
-  const receipt = await runPersonResearchAgent({
-    scope,
-    budget,
-    provider: modelProvider,
-    gateway,
-    journal: store,
-    providerInputParts: [
-      {
-        ...image.manifest,
-        dataBase64: image.dataBase64,
-      },
-    ],
-  });
-  const artifactFile =
-    receipt.status === "artifact_created" && receipt.candidateFingerprint
-      ? store.artifactPath(input.runID, receipt.candidateFingerprint)
-      : null;
-  return {
-    receipt,
-    stateDirectory: resolve(input.stateRoot, "person-runs", input.runID),
-    artifactFile,
-    replayedTerminal: false,
-  };
+  const stateDirectory = resolve(input.stateRoot, "person-runs", input.runID);
+  // Whole-Run admission wraps terminal read and identity replay, provider
+  // construction, and runner execution: at most one live process per Run may
+  // reach any model or network call, while completed-terminal replay performs
+  // no provider call at all.
+  return withLocalRunAdmission(
+    { runDirectory: stateDirectory, runID: input.runID },
+    async () => {
+      const existing = await store.readTerminal(input.runID);
+      if (existing) {
+        const recorded = await store.readRun(input.runID);
+        const requestedIdentity = fingerprint({ scope });
+        if (!recorded || fingerprint({ scope: recorded.scope }) !== requestedIdentity) {
+          throw new Error(
+            "The completed Run ID belongs to a different image, objective, or authorization.",
+          );
+        }
+        const artifactFile =
+          existing.status === "artifact_created" && existing.candidateFingerprint
+            ? store.artifactPath(input.runID, existing.candidateFingerprint)
+            : null;
+        return {
+          receipt: existing,
+          stateDirectory,
+          artifactFile,
+          replayedTerminal: true,
+        };
+      }
+      const profileProvider =
+        dependencies.profileProvider ??
+        configuredLocalPersonProfileProvider(environment);
+      const modelProvider =
+        dependencies.modelProvider ?? configuredLocalVisionAgentProvider(environment);
+      const gateway =
+        dependencies.gateway ?? new LocalPersonResearchGateway(profileProvider, store);
+      const budget: AgentBudget = {
+        ...DEFAULT_AGENT_BUDGET,
+        maxToolCalls: Math.min(
+          DEFAULT_AGENT_BUDGET.maxToolCalls,
+          input.maximumProviderCalls + 1,
+        ),
+      };
+      const receipt = await runPersonResearchAgent({
+        scope,
+        budget,
+        provider: modelProvider,
+        gateway,
+        journal: store,
+        providerInputParts: [
+          {
+            ...image.manifest,
+            dataBase64: image.dataBase64,
+          },
+        ],
+      });
+      const artifactFile =
+        receipt.status === "artifact_created" && receipt.candidateFingerprint
+          ? store.artifactPath(input.runID, receipt.candidateFingerprint)
+          : null;
+      return {
+        receipt,
+        stateDirectory,
+        artifactFile,
+        replayedTerminal: false,
+      };
+    },
+  );
 }
 
 export async function runLocalPersonResearchCommand(

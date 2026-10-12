@@ -17,6 +17,7 @@ pull request / push
         |
         +--> Security required
                dependency review on pull requests
+               full production dependency audit
                credential hygiene
                CodeQL for web and Actions
 
@@ -49,6 +50,10 @@ ambiguous input, and `false` only when every changed path is a Markdown file or
 lives under `docs/` or `_index/`.
 
 - `Repository policy and docs` and `Secret hygiene` run on every change.
+- `Full production dependency audit` runs on every security event and must
+  succeed; scope classification never skips, suppresses, or narrows it. It
+  audits the complete production dependency graph and runs the local
+  dependency-patch regression tests.
 - `Web quality`, `Backend quality`, `Phase one`, and JS/Actions CodeQL are
   skipped only for an automatic documentation-only pull request or `main` push.
 - `macOS Hybrid boundary` runs only when its app, `workspace-ui`, macOS tooling,
@@ -63,6 +68,12 @@ The `Release iOS` workflow listens only to `CI` runs on `main`, so a
 pull-request CI completion no longer produces a skipped release run. Manual
 release dispatch remains available and the release decision logic is unchanged.
 
+The production dependency audit is currently clean. The locally patched
+`braces` depth bound leaves its upstream advisory visible in the
+development-inclusive audit because no fixed upstream release is published;
+report that as an open upstream advisory rather than adding a broad audit
+ignore.
+
 ## Waiting on required checks
 
 Use one bounded command instead of repeated ad-hoc polling:
@@ -75,6 +86,28 @@ The waiter reads only `gh pr checks` output for `CI required` and `Security
 required`, prints a clear failure or timeout, and never mutates the repository,
 the pull request, or any check. Override the bounded scope with newline-separated
 `REQUIRED_CHECKS` and the poll interval with `WAIT_INTERVAL` when needed.
+
+## User-directed model review
+
+First-pass review of a pull request is one user-directed local MiMo review,
+not an unattended service: `mimo-review prepare`, `mimo-review run`, inspect
+the findings, then publish one scoped `COMMENT` on the pull request.
+
+- The review binds to the exact current pull-request head recorded at
+  preparation time, so findings describe one stable revision instead of an
+  evolving branch.
+- Inspect before publishing. Only findings that survive owner inspection are
+  posted, scoped to the changed files and to claims the reviewer can support.
+  The model comment is review input; it is never a required approval, a CI
+  success, or evidence that a gate passed.
+- Rerun the review only when the head materially changed, such as after a
+  confirmed P0/P1 fix; do not buy repeated reviews of the same commit.
+- Independent Codex judgment remains mandatory for security, migration,
+  architecture, and safety-boundary issues. Deterministic CI and Security
+  gates and branch protection stay mandatory in every case.
+- The local Xiaomi Token Plan key is used only in user-initiated local
+  sessions. No GitHub Actions workflow runs an unattended model review, and
+  there is no broad provider failover to an unbudgeted per-usage service.
 
 ## Workflow inventory
 
@@ -283,9 +316,10 @@ push:
    changes legitimately skip runtime quality and JS/Actions CodeQL jobs, while
    unrelated runtime changes can skip the path-scoped macOS Hybrid job. Never
    disable or weaken a required gate to make a change pass.
-5. Request a Codex review manually only on a stable, high-risk head. After a
-   material P0/P1 fix, request at most one re-review of the new head; do not
-   stream intermediate pushes into repeated review requests.
+5. Request the user-directed model review on a stable current head as described
+   in [User-directed model review](#user-directed-model-review). After a
+   material P0/P1 fix, rerun it at most once on the new head; do not stream
+   intermediate pushes into repeated reviews.
 
 ## Failure and recovery
 

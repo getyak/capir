@@ -5,6 +5,7 @@ RUN npm install --global pnpm@11.18.0
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches patches
 COPY apps/backend/package.json apps/backend/package.json
 COPY apps/agent/package.json apps/agent/package.json
 COPY apps/agent-host/package.json apps/agent-host/package.json

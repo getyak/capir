@@ -1,4 +1,5 @@
 export * from "./claudeProvider.js";
+export * from "./claudeSdkVersion.js";
 export * from "./claudeHarness.js";
 export * from "./claudeHarnessConfiguration.js";
 export * from "./claudeChatProvider.js";

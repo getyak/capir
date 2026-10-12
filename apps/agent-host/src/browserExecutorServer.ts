@@ -2,6 +2,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createHash, timingSafeEqual } from "node:crypto";
 import { BROWSER_EXECUTOR_PATH, BROWSER_REQUEST_BYTES, BROWSER_RESPONSE_BYTES,
   parseBrowserRequest, parseBrowserResponse, type BrowserExecutorRequest } from "./browserExecutorProtocol.js";
+import {
+  boundedDiagnosticCode,
+  BROWSER_EXECUTOR_ERROR_CODE_SET,
+} from "./diagnosticCodes.js";
 import type { PublicBrowserObservation } from "./isolatedPublicBrowser.js";
 
 interface Entry {
@@ -117,7 +121,13 @@ export async function startBrowserExecutorServer(options: BrowserExecutorOptions
       try { json(response, 200, { request: parsed, observation: await entry.promise }); }
       finally { response.removeListener("close", closed); detach(); }
     })().catch(error => {
-      const code = error instanceof Error && /^BROWSER_[A-Z_]+$/u.test(error.message) ? error.message : "BROWSER_EXECUTOR_FAILED";
+      // Only finite recognized diagnostics cross this boundary: an arbitrary
+      // error.code or code-shaped error.message is never forwarded.
+      const code = boundedDiagnosticCode(
+        error,
+        BROWSER_EXECUTOR_ERROR_CODE_SET,
+        "BROWSER_EXECUTOR_FAILED",
+      );
       json(response, code === "BROWSER_REQUEST_TOO_LARGE" ? 413 : 502, { error: code });
     });
   });

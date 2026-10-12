@@ -42,6 +42,32 @@ interface ResearchSeed {
   displayName: string;
 }
 
+/**
+ * Fixed content-free research failure diagnostics. Untrusted exception text
+ * never enters task warnings, retrieval-job `last_error`, audit recovery
+ * metadata, or any other durable field; the approved source URL provenance is
+ * preserved alongside the fixed diagnostic.
+ */
+export const PUBLIC_RESEARCH_FETCH_FAILED = "PUBLIC_RESEARCH_FETCH_FAILED";
+export const PUBLIC_RESEARCH_CAPTURE_FAILED = "PUBLIC_RESEARCH_CAPTURE_FAILED";
+export const PUBLIC_RESEARCH_UNAVAILABLE = "PUBLIC_RESEARCH_UNAVAILABLE";
+export const PUBLIC_RESEARCH_RETRY_FAILED = "PUBLIC_RESEARCH_RETRY_FAILED";
+
+/**
+ * Public warnings are bounded to 500 characters by contract. Keep the fixed
+ * diagnostic complete and truncate only the approved source URL provenance so
+ * a long valid URL can never overflow the durable warning.
+ */
+const PUBLIC_RESEARCH_WARNING_LIMIT = 500;
+
+export function publicResearchWarning(
+  approvedUrl: string,
+  diagnostic: string,
+): string {
+  const suffix = `: ${diagnostic}`;
+  return `${approvedUrl.slice(0, Math.max(0, PUBLIC_RESEARCH_WARNING_LIMIT - suffix.length))}${suffix}`;
+}
+
 export interface CrawledPage {
   canonicalUrl: string;
   contentHash: string;
@@ -565,16 +591,22 @@ export async function crawlPublicResearch(
   const visited = new Set<string>();
   const pages: CrawledPage[] = [];
   const warnings: string[] = [];
+  // One loop iteration owns one distinct approved page attempt. The attempt is
+  // reserved and consumed before loader dispatch — including when it fails —
+  // so a failing page tree can never exceed the approved maximum_page_count
+  // per-invocation bound and a consumed attempt is never refunded.
+  let attempts = 0;
 
   while (
     queue.length > 0 &&
-    pages.length < request.authorization.maximum_page_count
+    attempts < request.authorization.maximum_page_count
   ) {
     const next = queue.shift();
     if (!next || visited.has(next.url)) {
       continue;
     }
     visited.add(next.url);
+    attempts += 1;
     try {
       const url = canonicalUrl(next.url);
       if (url.hostname.toLowerCase() !== allowedHostname) {
@@ -591,12 +623,11 @@ export async function crawlPublicResearch(
           }
         }
       }
-    } catch (error) {
-      warnings.push(
-        error instanceof Error
-          ? `${next.url}: ${error.message}`.slice(0, 500)
-          : `${next.url}: public research failed`,
-      );
+    } catch {
+      // Fixed content-free diagnostic: the raw exception never becomes a
+      // durable warning; the approved page URL keeps the provenance, bounded
+      // so the warning always fits the public schema.
+      warnings.push(publicResearchWarning(next.url, PUBLIC_RESEARCH_FETCH_FAILED));
     }
   }
   return { pages, warnings };
@@ -748,6 +779,7 @@ export async function runPublicResearch(
   pool: Pool,
   auth: AuthContext,
   request: PublicResearchRequest,
+  loadPage: ResearchPageLoader = loadPublicResearchPage,
 ): Promise<ResearchMutationResult> {
   const seed = await loadSeed(pool, auth, request);
   const seedUrl = canonicalUrl(seed.sourceUrl);
@@ -917,7 +949,7 @@ export async function runPublicResearch(
   const taskId = initial.taskId;
   const taskCreatedAt = initial.taskCreatedAt;
 
-  const crawled = await crawlPublicResearch(seedUrl, request);
+  const crawled = await crawlPublicResearch(seedUrl, request, loadPage);
   const committedPages: PublicResearchPage[] = [];
   for (const [index, page] of crawled.pages.entries()) {
     try {
@@ -1009,13 +1041,12 @@ export async function runPublicResearch(
         content_hash: page.contentHash,
         retrieved_at: page.retrievedAt.toISOString(),
       });
-    } catch (error) {
+    } catch {
+      // Fixed content-free diagnostic: the raw capture exception never becomes
+      // a durable warning; the approved page URL keeps the provenance, bounded
+      // so the warning always fits the public schema.
       crawled.warnings.push(
-        `${page.canonicalUrl}: ${
-          error instanceof Error
-            ? error.message
-            : "the retrieved page could not be committed"
-        }`.slice(0, 500),
+        publicResearchWarning(page.canonicalUrl, PUBLIC_RESEARCH_CAPTURE_FAILED),
       );
     }
   }
@@ -1350,7 +1381,7 @@ export async function runPendingPublicResearchJobs(
         const completed = await completeUnavailableResearchJob(
           pool,
           job,
-          error.message,
+          PUBLIC_RESEARCH_UNAVAILABLE,
           new Date(),
         );
         if (completed) {
@@ -1362,9 +1393,7 @@ export async function runPendingPublicResearchJobs(
       await recordResearchRetry(
         pool,
         job,
-        error instanceof Error
-          ? error.message
-          : "Bounded public research recovery failed.",
+        PUBLIC_RESEARCH_RETRY_FAILED,
         now,
       );
       result.retried += 1;

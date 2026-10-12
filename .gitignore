@@ -38,6 +38,11 @@ fastlane/screenshots/
 _index/private/*
 !_index/private/README.md
 
+# The 2026-08-05 top1 marketing-design evaluation scaffolding was archived to
+# plans/archive/2026-08-05-marketing-design/. Any future .top1-design scratch
+# stays local-only and untracked.
+.top1-design/
+
 # Evaluation corpus, historical evidence, and the evaluation harness were
 # extracted to the private getyak/capir-evals repository (GET-134). New run
 # outputs are written by the private executor to its ignored runs/ directory;

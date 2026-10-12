@@ -395,7 +395,7 @@ function buildControlPlane(api) {
   });
   text("surface-rule-title", 128, 785, 350, 32, "Surface rule", 19, {
     align: "left",
-    color: colors.accentStrong,
+    color: colors.ink,
     weight: 700,
   });
   text(
@@ -481,7 +481,7 @@ function buildControlPlane(api) {
     145,
     "Policy Engine",
     "role + tenant + risk\nconsent + destination\ncurrent state + TTL",
-    { backgroundColor: colors.surface, strokeColor: colors.accent },
+    { backgroundColor: colors.surface, strokeColor: colors.accent, titleColor: colors.accentStrong },
   );
   node(
     "inbox",
@@ -491,7 +491,7 @@ function buildControlPlane(api) {
     145,
     "Attention Inbox",
     "fact review ≠ action approval\nclarify · ignore · edit · approve",
-    { backgroundColor: colors.surface, strokeColor: colors.accent },
+    { backgroundColor: colors.surface, strokeColor: colors.accent, titleColor: colors.accentStrong },
   );
   arrow("definition-task", [[765, 435], [765, 390]], {
     strokeColor: colors.violet,

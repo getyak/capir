@@ -88,14 +88,92 @@ model is not provider admission by itself. TikHub has no automatic fallback.
 ## Local state
 
 State defaults to `~/.talent-signal/agent/runs/<run-id>/` with owner-only
-directory and file permissions. Each Run contains its immutable scope,
-checkpoint, append-only events and outputs, terminal receipt, and either a
-draft artifact or `no_action`. Drafts declare `publicationAuthority: "none"`.
+directory (0700) and file (0600) permissions. Each Run contains its immutable
+scope (`run.json`), a mutable checkpoint, append-only events and outputs,
+terminal receipt, and either a draft artifact or `no_action`. Drafts declare
+`publicationAuthority: "none"`.
+
+Immutable records (run, terminal receipt, artifact, and no-action) are written
+to complete same-directory temporary files (0600) and published atomically with
+a hard link that never replaces an existing record. An equivalent replay keeps
+the original artifact or no-action ID and the original `startedAt`/`createdAt`
+values, and `startedAt` is excluded from Run identity. A conflicting candidate
+or terminal receipt, a corrupt/invalid envelope or ID, a non-regular target, or
+an existing record symlink fails closed without overwriting or regenerating
+anything. Checkpoints are the only records replaced by atomic rename. Persisted
+JSON is read with `O_NOFOLLOW` from a verified regular file; malformed JSON
+produces one fixed content-free error, so persisted person/provider payload
+never reaches logs or CLI stderr.
+
+Each Run directory also holds `admission.sqlite`, a per-Run coordination
+database containing no person, provider, or schema data. One SQLite
+`BEGIN IMMEDIATE` transaction is held across the whole command (terminal read
+and identity replay, provider construction, and runner execution), admitting at
+most one live process per Run: a second invocation of the same Run fails closed
+as busy before any model or network call, while different Runs stay
+independently executable and the person server's same-process dedup is
+unchanged. The busy timeout is zero; SQLite corruption and I/O failures are
+never reported as busy or success; the database is never deleted or renamed
+while active. Kernel/SQLite locks release when a process dies, so a fresh
+invocation reacquires without lock stealing, stale-pid unlinking, or rename
+recovery. This coordination uses Node's built-in experimental `node:sqlite`
+(requires Node >= 22.19) and the local filesystem: it is single-host
+coordination only, not a distributed lock, and immutable file writes alone do
+not serialize a Run.
 
 Pass `--run-id <uuid>` to resume or replay a Run and `--state-dir <path>` to
 choose another local root. A Run ID cannot be reused with a different objective
-or authorization. Deleting local state is a local user operation; no backend
-copy exists.
+or authorization. Completed-terminal replay constructs no providers and makes
+no model or network call. Deleting local state is a local user operation; no
+backend copy exists.
+
+Tool execution inside one Run is serialized in-process on a small
+per-invocation FIFO chain: authorization-counter pre-save, gateway/provider
+dispatch, result checkpoint, and journal append run one at a time, so concurrent
+provider tool callbacks cannot interleave journal sequences or checkpoint
+snapshots. Different Runs stay independent, a fatal journal-write failure
+blocks later queued executions, and provider/terminal settlement is recorded
+only after all in-flight tool writes drain. The consumed search, fetch, or
+profile-call counter is checkpointed before its gateway dispatch: a possibly
+dispatched call consumes its allowance conservatively across interruption and
+is never refunded or replayed automatically merely because its result is
+absent, so a restarted Run reaches the existing cap-denial outcome instead of
+issuing a second provider operation. If that pre-dispatch checkpoint write
+fails, the dispatch does not run and the Run fails closed. All of this is
+explicit local-filesystem state on one host: it does not establish exactly-once
+remote effects, distributed locking, or cumulative model billing across power
+failure.
+
+Journal recovery fails closed on two narrow interrupted-publication windows
+instead of manufacturing history. Before every recovery decision the host
+validates the append-only `events.jsonl` journal: each line must be one
+complete newline-terminated JSON record for the exact Run with a safe
+contiguous sequence from 1 and one supported event kind in essential shape,
+and a nonempty journal whose final record lacks its terminating newline is a
+torn write that is rejected before a future append could concatenate JSON
+objects. The first window is a durable result checkpoint whose journal event
+was never appended: the checkpoint and the journal are separate writes, so a
+checkpoint that claims an absent event fails closed before any model or
+gateway execution instead of resuming into a sequence gap. The second window
+is a durable terminal receipt whose matching terminal event was never
+appended: the receipt is published before its event, and such a receipt is
+never replayed as success. Both cases fail with one fixed content-free error
+that carries no record content; consumed counters stay consumed, no missing
+event is synthesized, and no provider call is replayed to reconstruct lost
+evidence. Recorded evidence also keeps its original immutable `run.json`
+metadata: when a Run directory holds any checkpoint, journal record, or
+terminal receipt while `run.json` is missing, recovery fails with one fixed
+content-free error before any model, provider, or gateway work and never
+publishes replacement metadata that would attach the old evidence to a new
+objective, image, authorization, or budget. A consistent reservation
+checkpoint at sequence 0 with an empty journal remains recoverable with its consumed allowance authoritative, and a
+completed Run whose receipt matches its final terminal event still replays
+without provider construction or image, model, or network operations.
+Reconciling an interrupted or orphaned Run requires manual inspection of its
+owner-only directory by the local user. This boundary is deliberately narrow and does not
+claim arbitrary crash-atomic journal publication: interruption between a
+checkpoint write, a receipt publication, and the matching journal append is
+detected and rejected at the next recovery, never rolled back or rewritten.
 
 Person-research state uses the sibling
 `~/.talent-signal/agent/person-runs/<run-id>/` tree. It stores only the image
@@ -121,6 +199,11 @@ retains its separate direct-fetch redirect and robots checks.
 The same suite covers autonomous platform-tool selection, photo-only
 abstention, hostile screenshot instructions, immutable image manifests,
 same-Run profile citations, owner-only files, replay drift, and absence of raw
-image bytes and secrets from local state. Live TikHub verification uses the
-non-billable liveness and account-envelope endpoints; it does not issue a
-profile search merely to test a credential.
+image bytes and secrets from local state. Real forked processes on freshly
+built host modules prove one-winner immutable publishing for conflicting starts
+and terminal receipts, duplicate artifact/no-action convergence on one
+persisted ID, fixed content-free malformed-record failures, and per-Run
+admission: busy rejection before any provider call, independent Runs, release
+on callback error and on process death, and provider-once command concurrency.
+Live TikHub verification uses the non-billable liveness and account-envelope
+endpoints; it does not issue a profile search merely to test a credential.

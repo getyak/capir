@@ -65,10 +65,6 @@ class RateLimitedCredentialsError extends CredentialsSignin {
   code = "rate_limited";
 }
 
-class AccountExistsCredentialsError extends CredentialsSignin {
-  code = "account_exists";
-}
-
 function formOf(entries: Record<string, string>) {
   const data = new FormData();
   for (const [key, value] of Object.entries(entries)) data.set(key, value);
