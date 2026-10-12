@@ -779,3 +779,14 @@ Private receipts: `diagram-contrast-before.log`,
 - Both generators reproduce all five scene sources. Only three control-plane stroke/fill colors changed; all12 other diagram artifacts remain byte-identical. Derived PNG keeps2582x1470 and was visually inspected; sharp/librsvg rasterization can differ in glyph detail from the original export. Strict contrast is now12.70366/5.630124/5.630124, with no NOTE bypass.
 - 49 paths match the reviewed worker hashes exactly; CI preserves the exact tested list edit over the newer upstream Actions pins. No unresolved confirmed P0/P1 remains in this batch. Final integration/database/live rollout/PR/merge evidence is still pending.
 - Private receipts: knowledge-parent-final-verification.json, knowledge-source-proof.json, knowledge-integration-source.json, knowledge-scope-amendment.json and preserved knowledge-attempt0 records.
+
+## Upstream Actions integration repair (PH-18, P2)
+
+Final integration passed the first13 check groups, then the CI policy suite
+failed49/50. The new production-audit job retained the earlier setup-node SHA,
+while upstream PR319 updated the existing CI jobs. The unchanged policy test
+correctly detects this mismatch. The delivery owner applies the one-line pin
+alignment to the already trusted upstream SHA; audit scope, thresholds and
+required success stay unchanged. Preserve the failed receipt and verify the
+policy/docs again. Runtime inputs and the audited lockfile remain identical to
+the passed integration checks; final PostgreSQL18 and delivery are outstanding.
