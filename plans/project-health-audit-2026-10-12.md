@@ -19,7 +19,8 @@
   Pino/limiter negative probes, and journal integrity `e09c730b` after 183 host
   tests and independent orphan-state/publication-interruption proofs.
   Resident deployment and final delivery remain outstanding.
-- Next Pi batch: durable diagnostic privacy. Interrupted checkpoint/journal
+- Active Pi batch: durable diagnostic privacy, `20261012-083418-4fa2ab76`,
+  frozen base `aaed24ca`. Interrupted checkpoint/journal
   integrity (PH-13), `20261012-071431-6fee91cd`, frozen base `5dbdde13`, passed
   independent review after one orphan-metadata repair. Error
   logging/Web admission `20261012-060810-73e39891` passed independent review
