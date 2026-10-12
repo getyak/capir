@@ -1968,6 +1968,13 @@ async function enqueueContinuationIntent(
   );
 }
 
+/**
+ * Fixed content-free diagnostic retained when a durable continuation enqueue
+ * fails. The raw exception never enters `last_error`; the row stays pending
+ * with its attempt count incremented so recovery can deliver exactly once.
+ */
+export const MCP_CONTINUATION_ENQUEUE_FAILED = "MCP_CONTINUATION_ENQUEUE_FAILED";
+
 interface OutboxRow {
   account_id: string;
   created_by_user_id: string;
@@ -2013,15 +2020,17 @@ async function deliverOutboxRow(
        WHERE account_id = $1 AND request_id = $2 AND state = 'pending'`,
       [row.account_id, row.request_id],
     );
-  } catch (error) {
+  } catch {
     // A transient enqueue failure stays pending and is retried by recovery;
-    // an unsent continuation is never labelled delivered.
+    // an unsent continuation is never labelled delivered. Only the fixed
+    // content-free diagnostic is retained: the raw exception never enters
+    // `last_error` or any other durable field.
     await pool
       .query(
         `UPDATE mcp_continuation_outbox
          SET attempts = attempts + 1, last_error = $3, updated_at = clock_timestamp()
          WHERE account_id = $1 AND request_id = $2 AND state = 'pending'`,
-        [row.account_id, row.request_id, String(error).slice(0, 240)],
+        [row.account_id, row.request_id, MCP_CONTINUATION_ENQUEUE_FAILED],
       )
       .catch(() => undefined);
   }

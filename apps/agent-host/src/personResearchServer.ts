@@ -16,6 +16,10 @@ import {
   type PersonResearchServiceDependencies,
 } from "./personResearchService.js";
 import { runContactResearchTool, type ContactResearchDependencies } from "./contactResearchService.js";
+import {
+  boundedDiagnosticCode,
+  CONTACT_TOOLS_ERROR_CODE_SET,
+} from "./diagnosticCodes.js";
 
 const MAX_BODY_BYTES = 13_500_000;
 const MAX_ACTIVE_RUNS = 2;
@@ -143,10 +147,15 @@ export async function startPersonResearchServer(
         try { const result = await entry.promise; if (!response.destroyed) json(response, 200, result); }
         finally { response.removeListener("close", detach); detach(); if (!existing) researchCalls.delete(key); }
       } catch (error) {
-        const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
-          ? error.code : error instanceof Error && /^BROWSER_[A-Z_]+$/u.test(error.message)
-            ? error.message : "CONTACT_RESEARCH_UNAVAILABLE";
-        json(response, 502, { error: code });
+        // Only finite recognized diagnostics cross this boundary: an arbitrary
+        // error.code or code-shaped error.message is never forwarded.
+        json(response, 502, {
+          error: boundedDiagnosticCode(
+            error,
+            CONTACT_TOOLS_ERROR_CODE_SET,
+            "CONTACT_RESEARCH_UNAVAILABLE",
+          ),
+        });
       }
       return;
     }

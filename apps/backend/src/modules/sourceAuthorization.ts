@@ -18,6 +18,17 @@ import type { AuthContext } from "./auth.js";
 import { invalidateMemoriesForCaptureIds } from "./memoryReviewRecall.js";
 import { compileRelationshipWiki } from "./wiki.js";
 
+/**
+ * Fixed content-free recompilation diagnostics. A failed Relationship Wiki
+ * recompilation keeps `compilation` null and stays retryable through the
+ * compilation job; the raw exception is never retained in the durable
+ * decision response, job `last_error`, or any other field.
+ */
+export const RELATIONSHIP_WIKI_COMPILATION_FAILED =
+  "Relationship Wiki recompilation failed.";
+export const RELATIONSHIP_WIKI_EXPIRY_COMPILATION_FAILED =
+  "Relationship Wiki recompilation failed after source authorization expired.";
+
 interface SourceAuthorizationRow {
   id: string;
   created_by_user_id: string;
@@ -1014,13 +1025,10 @@ async function compileExpiredSourceAuthorization(
         block_count: compilation.body.blocks.length,
       },
     };
-  } catch (error) {
+  } catch {
     body = {
       ...body,
-      compilation_error:
-        error instanceof Error
-          ? error.message.slice(0, 500)
-          : "Relationship Wiki recompilation failed after source authorization expired.",
+      compilation_error: RELATIONSHIP_WIKI_EXPIRY_COMPILATION_FAILED,
     };
   }
   await persistSourceAuthorizationCompilation(
@@ -1403,14 +1411,11 @@ export async function runPendingSourceAuthorizationCompilationJobs(
         { leaseOwner: workerId },
       );
       result.completed += 1;
-    } catch (error) {
+    } catch {
       body = {
         ...body,
         compilation: null,
-        compilation_error:
-          error instanceof Error
-            ? error.message.slice(0, 500)
-            : "Relationship Wiki recompilation failed.",
+        compilation_error: RELATIONSHIP_WIKI_COMPILATION_FAILED,
       };
       await persistSourceAuthorizationCompilation(
         pool,

@@ -302,6 +302,7 @@ import {
 import {
   decideCaptureSourceAuthorization,
   persistSourceAuthorizationCompilation,
+  RELATIONSHIP_WIKI_COMPILATION_FAILED,
 } from "./modules/sourceAuthorization.js";
 import { runSourceLifecycleSweep } from "./modules/sourceLifecycle.js";
 import {
@@ -2220,13 +2221,13 @@ export async function buildApp(
               block_count: compilation.body.blocks.length,
             },
           };
-        } catch (error) {
+        } catch {
+          // Content-free fixed diagnostic: the raw exception never enters the
+          // durable response body or job metadata; compilation stays null and
+          // the compilation job remains retryable.
           body = {
             ...body,
-            compilation_error:
-              error instanceof Error
-                ? error.message.slice(0, 500)
-                : "Relationship Wiki recompilation failed.",
+            compilation_error: RELATIONSHIP_WIKI_COMPILATION_FAILED,
           };
         }
         await persistSourceAuthorizationCompilation(

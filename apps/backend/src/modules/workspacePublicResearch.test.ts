@@ -884,3 +884,154 @@ it("includes canonical profile context while excluding malformed/private anchors
  expect(workspacePublicResearchQuery("Andrej Karpathy",[{kind:"handle",text:"https://github.com/karpathy"},{kind:"work",text:"nanoGPT"}])).toBe("Andrej Karpathy https://github.com/karpathy nanoGPT");
  expect(workspacePublicResearchQuery("Andrej Karpathy",[{kind:"handle",text:"https://example.test/profile/test%40gmail.com"},{kind:"work",text:"NeedsTherapy"}])).toBe("Andrej Karpathy biography official website");
 });
+
+describe("untrusted exception diagnostics", () => {
+  const canaryError = () => Object.assign(new Error("WORKSPACE_SECRET_MESSAGE_CANARY"), {
+    name: "SECRET_NAME_CANARY",
+    stack: "Error: WORKSPACE_SECRET_MESSAGE_CANARY\n    at SECRET_STACK_CANARY",
+    cause: new Error("SECRET_CAUSE_CANARY"),
+    code: "CONTACT_RESEARCH_ARBITRARY_SECRET_CODE",
+  });
+
+  it("omits arbitrary uppercase or prefixed canaries and never retries them", async () => {
+    const { client, execute } = fakeClient(() => { throw canaryError(); });
+    const research = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [subject("sub-1", "Lilian Weng")],
+    });
+
+    expect(isWorkspacePublicResearchTransientError(canaryError())).toBe(false);
+    const result = failed(await research.execute("search_public_subject", { subject_id: "sub-1" }));
+
+    // An unrecognized arbitrary code is not transient: exactly one dispatch.
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.error?.code).toBe("PUBLIC_RESEARCH_UNAVAILABLE");
+    expect(result.error?.detail).toBeUndefined();
+    expect(result.attempts).toEqual([{ call_id: result.callID, status: "failed" }]);
+    // The full tool result carries no raw message, name, stack, cause, or code.
+    expect(JSON.stringify(result)).not.toContain("CANARY");
+    expect(JSON.stringify(result)).not.toContain("SECRET");
+  });
+
+  it("keeps the same bound on the fetch path", async () => {
+    const source = discovered("exa", "web", "https://example.com/profile");
+    const { client, execute } = fakeClient((request) => {
+      if (request.input.operation === "search") {
+        return searchReply(request, [source], [okChannel("web", "exa", 1)]);
+      }
+      throw canaryError();
+    });
+    const research = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [subject("sub-1", "Lilian Weng")],
+    });
+    ok(await research.execute("search_public_subject", { subject_id: "sub-1" }));
+
+    const fetch = failed(await research.execute("fetch_public_sources", {
+      source_ids: [source.source_id],
+    }));
+    expect(fetch.error?.code).toBe("PUBLIC_RESEARCH_UNAVAILABLE");
+    expect(fetch.error?.detail).toBeUndefined();
+    expect(fetch.attempts).toEqual([{ call_id: fetch.callID, status: "failed" }]);
+    expect(JSON.stringify(fetch)).not.toContain("CANARY");
+    expect(JSON.stringify(fetch)).not.toContain("SECRET");
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps recognized transient faults retryable and identifiable", async () => {
+    const source = discovered("exa", "web", "https://example.com/retried");
+    let calls = 0;
+    const { client, execute } = fakeClient((request) => {
+      calls += 1;
+      if (calls === 1) throw new Error("CONTACT_RESEARCH_INJECTED_TRANSIENT");
+      return searchReply(request, [source], [okChannel("web", "exa", 1)]);
+    });
+    const research = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [subject("sub-1", "Andrew Ng")],
+    });
+    const result = ok(await research.execute("search_public_subject", { subject_id: "sub-1" }));
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.attempts?.[0]).toMatchObject({
+      status: "failed",
+      error_code: "CONTACT_RESEARCH_INJECTED_TRANSIENT",
+    });
+  });
+
+  it("retries when any recognized field is transient while detail keeps first-code priority", async () => {
+    // Regression: a dual-recognized exception (code property + coded message)
+    // must classify retry from ALL recognized fields like the original
+    // bounded classifier, while the attempt/detail display keeps the
+    // code-property-first priority.
+    const dual = Object.assign(new Error("CONTACT_RESEARCH_TIMEOUT"), {
+      code: "CONTACT_RESEARCH_UNAVAILABLE",
+    });
+    expect(isWorkspacePublicResearchTransientError(dual)).toBe(true);
+
+    const source = discovered("exa", "web", "https://example.com/dual-field");
+    let calls = 0;
+    let currencyChecks = 0;
+    const { client, execute } = fakeClient((request) => {
+      calls += 1;
+      if (calls === 1) throw dual;
+      return searchReply(request, [source], [okChannel("web", "exa", 1)]);
+    });
+    const research = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [
+        subject("sub-1", "Andrew Ng", async () => {
+          currencyChecks += 1;
+          return true;
+        }),
+      ],
+    });
+
+    const result = ok(await research.execute("search_public_subject", { subject_id: "sub-1" }));
+
+    // Original bounded retry semantics: one automatic retry with a fresh call
+    // id and rechecked subject currency.
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.attempts?.[0]?.call_id).toBe(result.callID);
+    expect(result.attempts?.[1]?.call_id).not.toBe(result.callID);
+    expect(currencyChecks).toBeGreaterThanOrEqual(2);
+    // First-code detail priority: the code property wins over the message.
+    expect(result.attempts?.[0]).toEqual({
+      call_id: result.callID,
+      status: "failed",
+      error_code: "CONTACT_RESEARCH_UNAVAILABLE",
+    });
+    expect((result.data as { sources: ContactPublicSource[] }).sources).toEqual([source]);
+  });
+
+  it("classifies retry from the coded message when only the message is recognized", async () => {
+    const messageOnly = Object.assign(new Error("CONTACT_RESEARCH_TIMEOUT"), {
+      code: "CONTACT_RESEARCH_UNAVAILABLE_SECRET_CANARY",
+    });
+    expect(isWorkspacePublicResearchTransientError(messageOnly)).toBe(true);
+    // Detail priority still omits the unrecognized code property entirely.
+    const source = discovered("exa", "web", "https://example.com/message-only");
+    let calls = 0;
+    const { client, execute } = fakeClient((request) => {
+      calls += 1;
+      if (calls === 1) throw messageOnly;
+      return searchReply(request, [source], [okChannel("web", "exa", 1)]);
+    });
+    const research = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [subject("sub-1", "Andrew Ng")],
+    });
+    const result = ok(await research.execute("search_public_subject", { subject_id: "sub-1" }));
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.attempts?.[0]).toEqual({
+      call_id: result.callID,
+      status: "failed",
+      error_code: "CONTACT_RESEARCH_TIMEOUT",
+    });
+    expect(JSON.stringify(result)).not.toContain("CANARY");
+  });
+});
