@@ -1,55 +1,34 @@
 # Project health audit — 2026-10-12
 
-## Active delivery
+## Completed delivery
 
-- Status: in progress. Owner: Codex for scope, independent review, integration,
-  revision-bound verification, deployment, PR and merge. Nine sequential Pi
-  implementation batches are accepted. At the user's latest request, remaining
-  work uses Codex and sequential native sub-agents; no further Pi/MiMo runs.
-- Outcome: repair the confirmed correctness/privacy/security defects, retire
-  proven dead Web code, archive obsolete scaffolding, and enforce knowledge/tool
-  ownership without changing applied SQL or unrelated work.
-- Initial integration branch: `codex/project-health-oct12`, based on remote main
-  `e751b37a8692a33387b7325004d7532face32021`.
-- Accepted so far: audit inventory, independent synthetic before-change probes,
-  dependency safety batch `81324609` after independent clean-install checks,
-  immutable research state `1f5d50a1` after independent review and 133 host tests,
-  and research allowance/sequencing `273ed9a1` after 414 Agent and 142 host tests
-  plus actual same-Run process-interruption probes, and error logging/Web
-  admission `6953ebb8` after 54 backend and 36 Web focused tests plus actual
-  Pino/limiter negative probes, and journal integrity `e09c730b` after 183 host
-  tests and independent orphan-state/publication-interruption proofs, and
-  durable diagnostic boundaries `23751e6a` after 117 backend/192 host tests
-  and actual output/compatibility probes.
-  Resident deployment and final delivery remain outstanding.
-- All nine implementation batches accepted. Model-context/crawl `a171c2ed`,
-  Web `624565ea` and knowledge/tooling `d9d9f043` join the accepted repairs above.
-  Pi knowledge task `20261012-132438-605a5dd0` used one scoped repair,135 turns;
-  Codex independently verified all seven final-source commands and50 paths.
-- Upstream `3c3c2eff` is merged without conflicts, preserving PR322 research
-  notebooks, PR324 acceptance, Motion14 and pinned Actions updates. Frozen
-  dependency installation passed after a diagnosed network-timeout retry.
-- Final integration and isolated PostgreSQL18 checks passed; independent native
-  Codex review found no actionable P0–P3 on `23c44f6b`. Native fixture follow-up
-  review accepted `dbab1c0d`. PR325 was squash-merged as `0b7510dd` after24
-  successful checks and two existing skip/neutral results. Resident rollout
-  found the confirmed PH20 build-context omission before any service switch.
-  PH20 merged in PR326 as `eaa22bc6` after18 successful checks and four existing
-  skip/neutral results. The actual complete image then passed patch COPY and
-  failed on metadata-fetch timeout (PH21) without switching any service.
-  PH21 merged in PR327 as `da1d8cb8` after18 successful checks. The next full
-  build completed npm bootstrap but actual install rejected `--maxsockets`
-  (PH22); its earlier help-only acceptance was insufficient evidence. Remaining:
-  strict CLI configuration correction on `codex/project-health-fetch-config`,
-  independent review/current-head gates and merge, resident rollout and isolated
-  live-surface acceptance. No active Pi writer remains.
-- Completion evidence: final local checks and real surface acceptance; latest
-  PR-head applicable CI/security/branch gates; confirmed merge; clean committed
-  resident API, Agent Host, Web and changed browser-executor revisions verified
-  live; isolated test-account and temporary-resource cleanup read back.
-- Boundary: the audit establishes these findings and checked scenarios, not an
-  absence of unknown defects. Unpublished upstream braces remediation stays
-  explicitly identified as a local mitigation.
+- Runtime audit and repair: complete at merged revision
+  `f18eafb232d1da5781ca0632672c2590703bea89`. Codex owns synthesis,
+  independent review and final verification. Nine initial Pi batches were
+  accepted; all subsequent work followed the user's native Codex sub-agent
+  instruction without further Pi/MiMo runs.
+- Scope: correctness, privacy, dependency safety, dead Web code, obsolete
+  scaffolding, knowledge ownership and deployment reliability across 2,882
+  tracked files. No confirmed P0/P1 remains open in the reviewed scope.
+- PRs325–331 are merged, with current-head applicable checks and merge readback.
+  The final runtime revision's CI and Security workflows succeeded on attempt1
+  after merge, including remote iOS smoke (16 success, seven skips).
+- The complete clean-source image and all four resident services passed;
+  independent root readback and one isolated daily workspace passed. The
+  workspace is deleted, credentials removed and owned browser stopped.
+- This archive closes task state. The final documentation PR carries the
+  archive and reusable Web package-manager bootstrap guidance; it changes no
+  runtime source and does not supersede the deployed revision.
+- Remaining limits: two upstream dependency advisories, incomplete Intel/Linux
+  offline graph evidence, and one retained BuildKit probe history are described
+  in final disposition below. No unknown-defect guarantee is made.
+
+All sections preceding **Final runtime acceptance and disposition** retain the
+sequence of audit observations, proposed repairs, failed samples and accepted
+batch receipts. Their frozen file paths, line numbers, pending gates and
+resource readings describe the recorded stage, not today's live state. Final
+acceptance below supersedes pending delivery status without rewriting failure
+evidence.
 
 ## Frozen Pi audit observation
 
@@ -1093,3 +1072,139 @@ native gate remains required. The trusted immutable-image provenance contract
 also remains necessary; hashing cache files alone does not authenticate a
 package-to-index mapping. This guard closes the reviewed cache-input path and
 does not claim to repair all upstream pnpm behavior.
+
+The final cache slice passes15 host dependency-policy tests and seven real
+non-root Linux tests, including preserved-mtime corruption, invalid schemas,
+symbolic links and unreadable content. The immutable existing cache passes
+streaming verification of15742 files/405440909 bytes. The original pnpm's
+incorrectly reused synthetic byte set is rejected by the new guard. Default
+and explicit store-only COPY and exact-ignore guard admission probes pass;
+the full-cache COPY and complete image remain live deployment gates.
+
+Independent review closes one P2 by importing the seven behavior tests through
+the existing required Linux security entry. PR331's first CodeQL scan finds a
+High path-stat/write race in the synthetic corruption fixture. The fixture is
+repaired using one open descriptor for stat/write/utimes, finally cleanup and
+explicit same-size/mtime assertions, without suppressing the scanner or changing
+production guard bytes. Native independent review and seven fresh Linux tests
+accept the repair. The final head `935fc9155a7b7f2e933e290b37de94fb51c0f7a5`
+passes15 checks with four skips; JavaScript/Actions analyses have zero results
+and no open PR alerts. The actual Linux security job runs22 tests with zero
+skips. PR331 merges as `f18eafb232d1da5781ca0632672c2590703bea89`;
+all six reviewed file hashes match the merged source. Full image and four
+resident-service acceptance remain pending; do not infer them from these gates.
+
+
+## Final runtime acceptance and disposition
+
+### PH-27: Synthetic cache fixture race closed without scanner suppression
+
+PR331's High path-stat/write fixture finding is closed by the same-descriptor
+stat/write/utimes repair described above. Final head
+`935fc9155a7b7f2e933e290b37de94fb51c0f7a5` passed15 checks and four skips;
+JavaScript/Actions analyses returned zero results and open PR alerts. The Linux
+security job executed22 tests with zero skips. All six reviewed source hashes
+match merge `f18eafb232d1da5781ca0632672c2590703bea89`.
+
+### Complete image and four resident services
+
+The actual clean `f18eafb2` image build completed successfully in1432.5455
+seconds. Full dependency-store COPY, SHA512 verification of15742 files /
+405440909 bytes and exact SDK prefetch passed; guard/prefetch took9.3 seconds.
+The complete990-entry policy passed in926.9 seconds. Required Linux-arm64
+execution reported `2.1.287 (Claude Code)` from SDK package0.3.287. No old
+application source, installed modules, dist or environment entered the build.
+The trusted cache-image ID remained unchanged. These receipts establish the
+complete image; earlier failed builds and cancelled retries remain failures.
+
+API and Agent Host run image
+`sha256:f1932ade14e3f5da11330e5302042cb345d67ac3a3a973863bc7a4070b858953`.
+API readiness and public manifest return `f18eafb2`; Host and its socket are
+ready. Existing PostgreSQL data, Compose identity, Tailscale handlers and keeper
+remain preserved. The authorized deployment checks cover migration, synthetic
+Opik write/read/delete, Apple keys/auth, ASR and a cited synthetic Ask.
+
+Web runs clean detached `f18eafb2` with buildID `q1qtfJNhZh-k0dE7rRvfe`.
+Its active receipt, current release, physical process cwd, launchd ancestry,
+providers200 and HTTPS surface agree. Next rewrites its process title, so the
+independent readback's generic `expected_script_matched=false` field is not
+used as the Web source proof. Browser executor's exact entry argv does match
+its clean `f18eafb2` release; authenticated readiness is200/Chromium. Its daemon,
+pinned browser image, token permissions and launchd configuration are preserved.
+`example.invalid` produces bounded502/BROWSER_NAVIGATION_FAILED and no owned
+worker remains. Docker context stays `colima`.
+
+### PH-28: Managed Web pnpm bootstrap failure recovered through the original build
+
+The first canonical Web build exited1 before Next output with a generic
+operation-aborted timeout. The managed global pnpm11.22.0 shim needed project
+pnpm11.18.0, whose cached CLI was missing. Original shim source confirms normal
+version activation can fetch registry metadata and install that CLI before
+Next starts. Generic first stderr does not identify whether resolution or
+engine-identity failed; no exact failed substep is claimed.
+
+The first failure and healthy prior live Web were preserved. One normal version
+probe restored the pinned CLI with its previously verified source hash. The
+unchanged complete canonical build then succeeded on attempt2, followed by
+installation, process recovery and HTTPS readback. A version probe alone was
+never treated as production build proof. No source, global shim, runtime
+configuration, registry or policy was altered. Durable prevention belongs in
+the existing local-backend operations guide, not another configuration variant.
+
+### Independent live acceptance and cleanup
+
+Root's revision-bound resident readback succeeded. One real expiring daily test
+account was created through `capir test create --env staging --preset daily
+--open web`. Request `ba140859-e1ab-40fb-90fc-4d67edf16401` and run
+`75405a19-96da-4646-9214-542835aad5b0` bind the303 exchange, active banner and
+rendered ready counts12/30/4. The screenshot confirms the banner and main chat;
+it does not prove every sidebar is fully settled.
+
+A malformed synthetic login produced a correlated safe INTERNAL_ERROR log with
+no canary or raw error fields, before auth writes. The test account's first six
+empty screenshot requests returned503/ai_disabled and the seventh429 with
+Retry-After60 despite forged IPs. This verifies disabled/no-action and account
+rate budget; successful AI image processing was not exercised. No images or
+live model calls were sent by the final root probes. The retired welcome5 PNG
+returns404 while the retained synthetic marketing WebP returns200.
+
+`capir test stop` and status both exited0: state `deleted`, credential removed.
+The owned browser runner and private credential projection were removed;
+cleanup errors are empty. The temporary screenshot was copied to permanent
+sanitized evidence before registered output cleanup.
+
+### Resource lifecycle and remaining boundaries
+
+The completed old dependency backup was removed through one precise registered
+artifact after open-consumer checks. Its apparent1.1GiB size reclaimed only
+17588224 actual host bytes; apparent size does not establish reclaimed space.
+A later free-space recovery
+has no attributed cleanup cause. Two exact-ID prune attempts on this task's
+completed f18 cache records each returned0B; they are not claimed as reclamation.
+Supported ext4 free-block discard then reported11GiB logical trim and actual
+host free space increased28.811 to31.659GiB. Live revision, current/rollback
+images, keeper and Docker context remained unchanged; final delivery reads
+31.60GiB free. No shared VM restart, resize, volume removal or new simulator was
+used.
+
+The old90-second cache-export probe still has a BuildKit Running history record:
+COPY completed, export stopped at61150079 bytes, original host client absent.
+Installed BuildKit has no solver cancellation-by-ref API; deleting history would
+not cancel it. The record and failed probe are retained. Bounded load inspection
+found no evidence of continuing heavy work before the sole successful new image
+build. This limitation is not described as a cancelled solver.
+
+GitHub advisories remain open: braces High in the development graph (no released
+upstream fix; reviewed bounded local patch) and glib0.18.5 Medium in the
+Linux/BSD-gated GTK graph. Production npm audit is clean. ARM64 macOS locked
+reverse graph returned0 without glib; Intel/Linux offline attempts returned101
+for missing cache and are not passing evidence. No advisory was dismissed or
+unsupported native upgrade introduced. The audit establishes repaired findings
+and these checked paths, not the absence of all unknown bugs.
+
+Sanitized source-review, PR/gate, image, resident, root live and lifecycle
+receipts are retained in `~/.codex/task-artifacts/project-health-2026-10-12/`.
+Key final records are `postmerge-f18-final-checks.json`,
+`resident-f18eafb2-final-delivery.json`,
+`live-resident-independent-readback.json`, `live-final-acceptance.json`,
+`resident-f18eafb2-supported-data-trim.json` and `review-ledger.json`.

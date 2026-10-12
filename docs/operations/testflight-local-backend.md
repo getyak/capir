@@ -221,6 +221,14 @@ pnpm install --frozen-lockfile
 python3 scripts/deploy/install-web-launch-agent.py "$PWD"
 ```
 
+Confirm the project-pinned pnpm version through the same managed build context
+before starting the production build. A newer global shim may activate that
+version by fetching package-manager metadata and installing its missing CLI;
+this can fail before Next starts. Preserve that failure and the existing live
+release, then verify normal pinned-version activation before retrying the
+complete build. A successful version probe is not a build receipt. Keep service
+recovery on the launcher's direct Node entry, independent of this bootstrap.
+
 Keep a clean, detached backend/Opik deployment checkout in a directory shared with Colima,
 such as `~/data/talent-signal-runtime-releases/<revision>`. Web builds run on
 the host, but Opik's ClickHouse and nginx configuration use Docker bind mounts.
