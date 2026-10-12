@@ -817,3 +817,14 @@ Only the two test files change; no production or scanner rule changes.
 The worker and delivery owner independently pass all24 targeted tests; worker
 Host typecheck passes. Latest-head remote CodeQL and other CI gates remain
 required. Independent final review must bind to the new commit before delivery.
+
+
+The first pushed fixture repair removes two annotations; the actual scanner on
+`2bfb0e11` still reports one at the post-replay pathname read. The
+[primary CodeQL query](https://github.com/github/codeql/blob/main/javascript/ql/src/Security/CWE-367/FileSystemRace.ql)
+also classifies opening the pathname as a check. A closed descriptor followed
+by a later pathname read therefore retains that pattern. Preserve this failed
+scan in codeql-test-fixture-attempt1.json. The follow-up isolates initial0600
+publication verification in its own test and places the replay-mode check after
+all actual-path byte assertions. All original coverage remains; both worker and
+parent pass16 affected tests. Latest-head remote scanner success is still pending.

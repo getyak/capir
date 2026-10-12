@@ -153,6 +153,23 @@ describe("local persisted JSON records", () => {
     );
   });
 
+  it("publishes a fresh immutable record with owner-only permissions", async () => {
+    const directory = await makeDirectory();
+    const path = join(directory, "record.json");
+    const record: ExampleRecord = {
+      recordID: "33333333-3333-4333-8333-333333333333",
+      body: { label: "first" },
+      createdAt: "2026-08-30T00:00:00.000Z",
+    };
+    await publishImmutableJsonRecord(path, record, parseExample);
+    const publishedFile = await fs.open(path, "r");
+    try {
+      expect((await publishedFile.stat()).mode & 0o777).toBe(0o600);
+    } finally {
+      await publishedFile.close();
+    }
+  });
+
   it("publishes immutable records without ever replacing an existing record", async () => {
     const directory = await makeDirectory();
     const path = join(directory, "record.json");
@@ -165,13 +182,6 @@ describe("local persisted JSON records", () => {
     expect(first).toEqual({ record, replayed: false });
     const published = await fs.readFile(path, "utf8");
     expect(JSON.parse(published)).toEqual(record);
-    const publishedFile = await fs.open(path, "r");
-    try {
-      expect((await publishedFile.stat()).mode & 0o777).toBe(0o600);
-    } finally {
-      await publishedFile.close();
-    }
-
     // Equivalent replay returns the ORIGINAL record and timestamps.
     const replay = await publishImmutableJsonRecord(
       path,
@@ -187,6 +197,12 @@ describe("local persisted JSON records", () => {
     expect(replay).toEqual({ record, replayed: true });
     expect(await fs.readFile(path, "utf8")).toBe(published);
     expect(await temporaryFiles(directory)).toEqual([]);
+    const publishedFile = await fs.open(path, "r");
+    try {
+      expect((await publishedFile.stat()).mode & 0o777).toBe(0o600);
+    } finally {
+      await publishedFile.close();
+    }
   });
 
   it("rejects a conflict or helper I/O failure without overwrite and without leaving its temporary file", async () => {
