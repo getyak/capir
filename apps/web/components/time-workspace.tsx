@@ -10,6 +10,7 @@ import { readTimeEditorDraft, clearTimeEditorDraft, clearTimeWorkspaceStorage, p
 import { matchesTypeBox } from "@/lib/typebox-validation";
 import { revalidateReview, survivingReviewSources } from "@/lib/time-review-continuity";
 import { WORKSPACE_SESSION_EXPIRED_EVENT } from "./workspace-session-request";
+import { requestWorkspaceRefresh } from "@/lib/workspace-refresh";
 import { TimeActivityIcon, TimeMonth, TimeTimeline, TimeWeek } from "./time-workspace-views";
 import { ConversationResponse } from "./conversation-response";
 import { TimeScheduleEditor } from "./time-schedule-editor";
@@ -62,7 +63,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
   const moreLock = useRef(false);
   // Canceling a pending generation always releases its lock and busy state.
   const cancelReviewGeneration = useCallback(() => { reviewRun.current?.abort(); reviewRun.current = null; setReviewBusy(false); }, []);
-  const refreshData = useCallback(() => { setRefresh((v) => v + 1); }, []);
+  const refreshData = useCallback(() => { setRefresh((v) => v + 1); requestWorkspaceRefresh(binding); }, [binding]);
   function canLeaveEditor() {
     if (recoveryLock.current) return false;
     if (editorDirty) {

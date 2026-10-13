@@ -1808,7 +1808,6 @@
 .railUtility .iconButton,.railUtility .railControl { height:44px; width:44px; }
 .shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .connectPill { display:none; }
 .shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .accountTrigger { width:44px; }
-@media(min-width:1001px) { :global(body:has([data-person-context-panel])) .shell { margin-right:336px; } }
 @media(max-width:760px) {
   .shell:has(.sidebarState[data-collapsed="true"]) { grid-template-columns:minmax(0,1fr); }
   .shell:has(.sidebarState[data-collapsed="true"]) .sidebar { padding:7px; }

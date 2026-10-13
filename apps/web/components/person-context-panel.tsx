@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowUpRight, X } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import type { PersonContextPreview } from "@/lib/person-context-preview";
 import { subscribeWorkspaceDirectoryInvalidation } from "@/lib/workspace-directory-cache";
 import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./workspace-session-request";
@@ -17,9 +17,6 @@ type Selection = { personId: string; binding: string; pathname: string; returnSe
 type PanelContext = { open: (personId: string, opener?: HTMLElement | null) => void; selectedId: string | null };
 const Context = createContext<PanelContext>({open: () => undefined, selectedId: null});
 export const usePersonContextPanel = () => useContext(Context);
-const subscribeNarrow = (notify: () => void) => {const query = window.matchMedia("(max-width: 1000px)"); query.addEventListener("change", notify); return () => query.removeEventListener("change", notify);};
-const isNarrow = () => window.matchMedia("(max-width: 1000px)").matches;
-const serverNarrow = () => false;
 const date = (value: string) => new Date(value).toLocaleDateString("zh-CN", {month: "numeric", day: "numeric"});
 
 export function PersonContextPanelProvider({binding, children}: {binding: string | null; children: ReactNode}) {
@@ -35,13 +32,11 @@ export function PersonContextPanelProvider({binding, children}: {binding: string
   }, [binding, pathname]);
   const close = useCallback(() => setSelection(null), []);
   useEffect(() => { window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT,close); return () => window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT,close); }, [close]);
-  const narrow = useSyncExternalStore(subscribeNarrow, isNarrow, serverNarrow);
   return <Context.Provider value={{open, selectedId: current?.personId ?? null}}>
-    <Dialog.Root open={Boolean(current)} onOpenChange={value => {if (!value) close();}} modal={narrow}>
+    <Dialog.Root open={Boolean(current)} onOpenChange={value => {if (!value) close();}} modal>
       {children}
-      {current && <Dialog.Portal><Dialog.Overlay className={`ts-workspace-theme ${styles.overlay}`} />
+      {current && <Dialog.Portal><Dialog.Overlay className={`ts-workspace-theme ${styles.overlay}`} data-person-context-overlay />
         <Dialog.Content aria-describedby={undefined} className={`ts-workspace-theme ts-workspace-surface ${styles.panel}`} data-person-context-panel
-          onInteractOutside={event => {if (!narrow) event.preventDefault();}}
           onCloseAutoFocus={event => {event.preventDefault(); const target = current.opener; requestAnimationFrame(() => {if (target?.isConnected) target.focus(); else document.querySelector<HTMLElement>("#queued-conversation-composer")?.focus();});}}>
           <div className={styles.top}><Dialog.Title>人物背景</Dialog.Title><Dialog.Close aria-label="关闭人物背景" className={styles.close}><X size={18} aria-hidden="true" /></Dialog.Close></div>
           <Preview key={`${current.binding}:${current.personId}`} selection={current}/>
