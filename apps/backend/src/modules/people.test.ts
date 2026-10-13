@@ -1,9 +1,11 @@
 import type { Pool } from "pg";
+import { TalentSignalClient } from "@talent-signal/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { sha256 } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
 import {
+  getPerson,
   getRelationshipScope,
   listPeople,
   searchPeople,
@@ -56,6 +58,7 @@ describe("people directory", () => {
     expect(query.mock.calls[0]?.[1]).toEqual([
       auth.accountId,
       "周屿",
+      null,
       null,
       null,
     ]);
@@ -220,6 +223,7 @@ describe("people directory", () => {
       "",
       "email",
       sha256("zhou.yu@example.com"),
+      null,
     ]);
     expect(query.mock.calls[0]?.[1]).not.toContain(
       "ZHOU.YU@example.com",
@@ -303,6 +307,7 @@ describe("people directory", () => {
       "",
       "email",
       sha256("unknown@example.com"),
+      null,
     ]);
   });
 
@@ -389,4 +394,67 @@ describe("people directory", () => {
       },
     });
   });
+});
+
+
+describe("exact person detail", () => {
+  const personId = "44444444-4444-4444-8444-444444444444";
+  const personRow = {
+    id: personId, display_label: "Reviewed contact", context_count: 0,
+    capture_count: 1, confirmed_identity_count: 1,
+    last_activity_at: new Date("2026-10-13T02:00:00Z"), contexts: [],
+  };
+
+  it("applies exact identity before the directory limit and preserves conflicting reviewed sources", async () => {
+    const field = { field: "company", value: "Northstar", evidence_fragment_id: "66666666-6666-4666-8666-666666666666",
+      capture_id: "77777777-7777-4777-8777-777777777777", source_resource_id: "88888888-8888-4888-8888-888888888888",
+      observed_at: new Date("2026-10-12T02:00:00Z"), relationship_context_id: null, source_label: "Reviewed profile" };
+    const point = { id: "99999999-9999-4999-8999-999999999999", type: "email", display_hint: "z•••@example.com",
+      source_resource_id: field.source_resource_id, source_display_name: field.source_label,
+      valid_from: new Date("2026-10-12T02:00:00Z"), valid_until: new Date("2027-10-12T02:00:00Z") };
+    const query = vi.fn().mockResolvedValueOnce({ rows: [personRow] })
+      .mockResolvedValueOnce({ rows: [field, { ...field, value: "Other company", evidence_fragment_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }] })
+      .mockResolvedValueOnce({ rows: [point] });
+    const response = await getPerson({ query } as unknown as Pool, auth, personId);
+    const exactSql = String(query.mock.calls[0]?.[0]);
+    expect(exactSql.indexOf("AND ($5::uuid IS NULL OR subjects.id = $5)")).toBeLessThan(exactSql.lastIndexOf("LIMIT 200"));
+    expect(query.mock.calls[0]?.[1]).toEqual([auth.accountId, "", null, null, personId]);
+    expect(response.person.id).toBe(personId);
+    expect(response.basic_fields.map(item => item.value)).toEqual(["Northstar", "Other company"]);
+    expect(response.basic_fields[0]).toEqual({ ...field, observed_at: "2026-10-12T02:00:00.000Z" });
+    expect(response.contact_points).toEqual([{ ...point, valid_from: "2026-10-12T02:00:00.000Z", valid_until: "2027-10-12T02:00:00.000Z" }]);
+    const fieldSql = String(query.mock.calls[1]?.[0]);
+    expect(fieldSql).toContain("fragments.review_status = 'reviewed'");
+    expect(fieldSql).toContain("fragments.attributed_actor = 'recruiter'");
+    expect(fieldSql).toContain("fragments.attribution_status = 'confirmed'");
+    expect(fieldSql).toContain("fragments.locator ->> 'field' = ANY($3::text[])");
+    expect(fieldSql).not.toContain("person_profile_observations");
+    expect(fieldSql).not.toContain("inferences");
+    expect(query.mock.calls[1]?.[1]?.[2]).not.toContain("handle");
+    expect(query.mock.calls[1]?.[1]?.[2]).not.toContain("email");
+  });
+
+  it("returns 404 for absent, inactive or other-account identities without reading sources", async () => {
+    const query = vi.fn().mockResolvedValueOnce({ rows: [] });
+    await expect(getPerson({ query } as unknown as Pool, auth, personId))
+      .rejects.toMatchObject({ statusCode: 404, code: "PERSON_NOT_FOUND" });
+    expect(query).toHaveBeenCalledOnce();
+  });
+});
+
+
+it("uses the exact person URL and carries the opaque Memory pagination cursor", async () => {
+  const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "content-type": "application/json" } }));
+  vi.stubGlobal("fetch", fetch);
+  try {
+    const client = new TalentSignalClient("https://synthetic.example.test", "synthetic-token");
+    await client.getPerson("44444444-4444-4444-8444-444444444444");
+    await client.recallMemories({ surface: "people", person_id: "44444444-4444-4444-8444-444444444444", limit: 24, cursor: "opaque+cursor=/" });
+    expect(fetch.mock.calls[0]?.[0]).toBe("https://synthetic.example.test/v1/people/44444444-4444-4444-8444-444444444444");
+    const recallUrl = new URL(String(fetch.mock.calls[1]?.[0]));
+    expect(recallUrl.searchParams.get("cursor")).toBe("opaque+cursor=/");
+    expect(recallUrl.searchParams.get("limit")).toBe("24");
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

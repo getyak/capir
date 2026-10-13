@@ -5,6 +5,9 @@ import {
   type IdentityHandleType,
   type PersonDirectoryIdentityMatch,
   type PersonDirectoryResponse,
+  type PersonDetailResponse,
+  type RelationshipContactPoint,
+  type ReviewedContactBasicField,
   type RelationshipScope,
 } from "@talent-signal/contracts";
 import type { DatabaseClient } from "../database/pool.js";
@@ -59,6 +62,7 @@ async function queryPeople(
   auth: AuthContext,
   query = "",
   includeConfirmedHandleMatch = false,
+  exactPersonId: string | null = null,
 ): Promise<PersonDirectoryResponse> {
   const normalizedQuery = query.normalize("NFKC").trim().toLowerCase();
   const parsedHandle = includeConfirmedHandleMatch ? peopleIdentityQuery(query) : null;
@@ -127,7 +131,12 @@ async function queryPeople(
            AND (
              confirmed_handles.source_resource_id IS NULL
              OR (
-               confirmed_receipts.authorization_state = 'authorized'
+               confirmed_resources.processing_state <> 'deleted'
+               AND confirmed_resources.deleted_at IS NULL
+               AND (confirmed_resources.retention_until IS NULL OR confirmed_resources.retention_until > now())
+               AND confirmed_receipts.source_access_state <> 'deleted'
+               AND (confirmed_receipts.retention_until IS NULL OR confirmed_receipts.retention_until > now())
+               AND confirmed_receipts.authorization_state = 'authorized'
                AND (
                  confirmed_receipts.authorization_expires_at IS NULL
                  OR confirmed_receipts.authorization_expires_at > now()
@@ -187,16 +196,32 @@ async function queryPeople(
          ON profile_resources.account_id = profiles.account_id
         AND profile_resources.id = profiles.source_resource_id
         AND profile_resources.processing_state <> 'deleted'
+        AND profile_resources.deleted_at IS NULL
+        AND (profile_resources.retention_until IS NULL OR profile_resources.retention_until > now())
+       JOIN captures profile_captures
+         ON profile_captures.account_id = profile_resources.account_id
+        AND profile_captures.id = profile_resources.capture_id
+        AND profile_captures.subject_id = subjects.id
+        AND profile_captures.status = 'active'
+        AND profile_captures.identity_status = 'bound'
+       LEFT JOIN assignments profile_assignments
+         ON profile_assignments.account_id = profile_captures.account_id
+        AND profile_assignments.id = profile_captures.assignment_id
+        AND profile_assignments.subject_id = subjects.id
+        AND profile_assignments.status = 'active'
        JOIN source_retention_receipts profile_receipts
          ON profile_receipts.account_id = profile_resources.account_id
         AND profile_receipts.capture_id = profile_resources.capture_id
         AND profile_receipts.authorization_state = 'authorized'
+        AND profile_receipts.source_access_state <> 'deleted'
+        AND (profile_receipts.retention_until IS NULL OR profile_receipts.retention_until > now())
         AND (
           profile_receipts.authorization_expires_at IS NULL
           OR profile_receipts.authorization_expires_at > now()
         )
        WHERE profiles.account_id = subjects.account_id
          AND profiles.subject_id = subjects.id
+         AND (profile_captures.assignment_id IS NULL OR profile_assignments.id IS NOT NULL)
        LIMIT 1
      ) public_profiles ON true
      LEFT JOIN LATERAL (
@@ -230,7 +255,12 @@ async function queryPeople(
          AND (
            handles.source_resource_id IS NULL
            OR (
-             handle_receipts.authorization_state = 'authorized'
+             handle_resources.processing_state <> 'deleted'
+             AND handle_resources.deleted_at IS NULL
+             AND (handle_resources.retention_until IS NULL OR handle_resources.retention_until > now())
+             AND handle_receipts.source_access_state <> 'deleted'
+             AND (handle_receipts.retention_until IS NULL OR handle_receipts.retention_until > now())
+             AND handle_receipts.authorization_state = 'authorized'
              AND (
                handle_receipts.authorization_expires_at IS NULL
                OR handle_receipts.authorization_expires_at > now()
@@ -254,6 +284,7 @@ async function queryPeople(
      ) matched_handle ON true
      WHERE subjects.account_id = $1
        AND subjects.status = 'active'
+       AND ($5::uuid IS NULL OR subjects.id = $5)
        AND (
          ($2 = '' AND $3::text IS NULL)
          OR (
@@ -271,7 +302,7 @@ async function queryPeople(
        last_activity_at DESC,
        subjects.id
      LIMIT 200`,
-    [auth.accountId, nameQuery, handleType, handleHash],
+    [auth.accountId, nameQuery, handleType, handleHash, exactPersonId],
   );
 
   return {
@@ -395,6 +426,146 @@ export async function searchPeople(
   query: string,
 ): Promise<PersonDirectoryResponse> {
   return queryPeople(pool, auth, query, true);
+}
+
+// Structured fields have explicit typed authority. Identity values stay in the
+// governed masked contact-points projection, never in a raw-field fallback.
+const BASIC_CONTACT_FIELDS = ["display_name", "name", "company", "job_title", "location"];
+
+export async function getPerson(
+  pool: DatabaseClient,
+  auth: AuthContext,
+  personId: string,
+): Promise<PersonDetailResponse> {
+  // Apply identity/account/status before the directory's limit so older people
+  // remain addressable regardless of their position in the recent directory.
+  const directory = await queryPeople(pool, auth, "", false, personId);
+  const person = directory.people[0];
+  if (!person) {
+    throw new ApiError(404, "PERSON_NOT_FOUND", "The active person was not found.");
+  }
+
+  // Raw transport may already be purged after review while these explicitly
+  // reviewed fragments remain retained. Raw purge alone is not revocation;
+  // deletion, authorization and retention deadlines still fence every read.
+  const [fields, points] = await Promise.all([
+    pool.query<Omit<ReviewedContactBasicField, "observed_at"> & { observed_at: Date }>(
+      `SELECT fragments.locator ->> 'field' AS field,
+         fragments.text_content AS value,
+         fragments.id AS evidence_fragment_id,
+         captures.id AS capture_id,
+         resources.id AS source_resource_id,
+         resources.observed_at,
+         captures.assignment_id AS relationship_context_id,
+         resources.display_name AS source_label
+       FROM evidence_fragments fragments
+       JOIN source_resources resources
+         ON resources.account_id = fragments.account_id
+        AND resources.id = fragments.resource_id
+        AND resources.capture_id = fragments.capture_id
+       JOIN captures
+         ON captures.account_id = resources.account_id
+        AND captures.id = resources.capture_id
+       JOIN subjects
+         ON subjects.account_id = captures.account_id
+        AND subjects.id = captures.subject_id
+        AND subjects.status = 'active'
+       LEFT JOIN assignments
+         ON assignments.account_id = captures.account_id
+        AND assignments.id = captures.assignment_id
+        AND assignments.subject_id = subjects.id
+        AND assignments.status = 'active'
+       JOIN source_retention_receipts receipts
+         ON receipts.account_id = captures.account_id
+        AND receipts.capture_id = captures.id
+       WHERE subjects.account_id = $1
+         AND subjects.id = $2
+         AND captures.status = 'active'
+         AND captures.identity_status = 'bound'
+         AND (captures.assignment_id IS NULL OR assignments.id IS NOT NULL)
+         AND resources.resource_kind = 'contact_record'
+         AND resources.processing_state <> 'deleted'
+         AND resources.deleted_at IS NULL
+         AND (resources.retention_until IS NULL OR resources.retention_until > now())
+         AND receipts.source_access_state <> 'deleted'
+         AND receipts.authorization_state = 'authorized'
+         AND (receipts.authorization_expires_at IS NULL OR receipts.authorization_expires_at > now())
+         AND (receipts.retention_until IS NULL OR receipts.retention_until > now())
+         AND fragments.status = 'active'
+         AND fragments.deleted_at IS NULL
+         AND fragments.review_status = 'reviewed'
+         AND fragments.attributed_actor = 'recruiter'
+         AND fragments.attribution_status = 'confirmed'
+         AND fragments.fragment_kind = 'contact_field'
+         AND fragments.locator ->> 'kind' = 'contact_field'
+         AND fragments.locator ->> 'field' = ANY($3::text[])
+         AND NULLIF(btrim(fragments.text_content), '') IS NOT NULL
+       ORDER BY fragments.locator ->> 'field', resources.observed_at DESC, fragments.id`,
+      [auth.accountId, personId, BASIC_CONTACT_FIELDS],
+    ),
+    pool.query<Omit<RelationshipContactPoint, "valid_from" | "valid_until"> & {
+      valid_from: Date; valid_until: Date | null;
+    }>(
+      `SELECT handles.id, handles.handle_type AS type, handles.display_hint,
+         resources.id AS source_resource_id,
+         resources.display_name AS source_display_name,
+         handles.valid_from, handles.valid_until
+       FROM identity_handles handles
+       JOIN subjects
+         ON subjects.account_id = handles.account_id
+        AND subjects.id = handles.subject_id
+        AND subjects.status = 'active'
+       JOIN source_resources resources
+         ON resources.account_id = handles.account_id
+        AND resources.id = handles.source_resource_id
+       JOIN captures
+         ON captures.account_id = resources.account_id
+        AND captures.id = resources.capture_id
+        AND captures.subject_id = subjects.id
+       LEFT JOIN assignments
+         ON assignments.account_id = captures.account_id
+        AND assignments.id = captures.assignment_id
+        AND assignments.subject_id = subjects.id
+        AND assignments.status = 'active'
+       JOIN source_retention_receipts receipts
+         ON receipts.account_id = captures.account_id
+        AND receipts.capture_id = captures.id
+       WHERE subjects.account_id = $1
+         AND subjects.id = $2
+         AND handles.status = 'confirmed'
+         AND handles.deleted_at IS NULL
+         AND handles.confirmed_by_user_id IS NOT NULL
+         AND handles.display_hint IS NOT NULL
+         AND handles.valid_from <= now()
+         AND (handles.valid_until IS NULL OR handles.valid_until > now())
+         AND captures.status = 'active'
+         AND captures.identity_status = 'bound'
+         AND (captures.assignment_id IS NULL OR assignments.id IS NOT NULL)
+         AND resources.processing_state <> 'deleted'
+         AND resources.deleted_at IS NULL
+         AND (resources.retention_until IS NULL OR resources.retention_until > now())
+         AND receipts.source_access_state <> 'deleted'
+         AND receipts.authorization_state = 'authorized'
+         AND (receipts.authorization_expires_at IS NULL OR receipts.authorization_expires_at > now())
+         AND (receipts.retention_until IS NULL OR receipts.retention_until > now())
+       ORDER BY handles.handle_type, handles.created_at, handles.id
+       LIMIT 20`,
+      [auth.accountId, personId],
+    ),
+  ]);
+
+  return {
+    contract_version: CONTRACT_VERSION,
+    person,
+    // Preserve all reviewed rows, including conflicting values. Time ordering
+    // is presentation only and grants no row authority as the current value.
+    basic_fields: fields.rows.map((field) => ({ ...field, observed_at: field.observed_at.toISOString() })),
+    contact_points: points.rows.map((point) => ({
+      ...point,
+      valid_from: point.valid_from.toISOString(),
+      valid_until: point.valid_until?.toISOString() ?? null,
+    })),
+  };
 }
 
 export async function getRelationshipScope(

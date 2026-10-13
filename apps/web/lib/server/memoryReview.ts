@@ -160,6 +160,25 @@ function derivedSearch(
     const params = new URLSearchParams({ surface: entry.purpose });
     if (entry.personId) params.set("person_id", entry.personId);
     if (entry.contextId) params.set("relationship_context_id", entry.contextId);
+    const limits = original.getAll("limit");
+    const cursors = original.getAll("cursor");
+    if (limits.length > 1 || cursors.length > 1) throw new MemoryEntryMismatch();
+    const limit = limits[0];
+    if (limit !== undefined) {
+      if (!/^[1-9]\d{0,2}$/.test(limit) || Number(limit) > 100) {
+        throw new MemoryEntryMismatch();
+      }
+      params.set("limit", limit);
+    }
+    const cursor = cursors[0];
+    if (cursor !== undefined) {
+      // The backend validates the cursor contents. Only a bounded continuation
+      // is forwarded; person and relationship authority still come from entry.
+      if (!cursor || cursor.length > 500 || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
+        throw new MemoryEntryMismatch();
+      }
+      params.set("cursor", cursor);
+    }
     return `?${params.toString()}`;
   }
   if (first === "pursuits" && segments.length === 3 && third === "scopes") {

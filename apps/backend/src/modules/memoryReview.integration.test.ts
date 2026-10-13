@@ -1335,6 +1335,49 @@ describe.skipIf(!pool)("Memory review integration", () => {
     expect(people.rows[0]?.count).toBe(0);
   });
 
+  it("projects edit permission for same-account person Memory without granting mutation authority", async () => {
+    const author = await makeAuth("person-edit-permission");
+    const reader: AuthContext = {
+      ...author, userId: randomUUID(), userEmail: `reader-${author.accountId}@synthetic.local`,
+    };
+    await pool!.query(
+      "INSERT INTO users(id,account_id,email,display_name,kind) VALUES($1,$2,$3,'Same-account reader','simulated_human')",
+      [reader.userId, author.accountId, reader.userEmail],
+    );
+    const contact = await makeContact(author, "Chen");
+    const staged = await stage(author, {
+      items: [candidate({
+        scope: "person", statement_kind: "source_statement", speaker: "Chen",
+        display_text: "Chen says he owns the design system this quarter",
+        source_excerpt: "Chen says he owns the design system this quarter",
+      })],
+      contactDecision: "existing", personId: contact.personId, contextId: contact.contextId,
+    });
+    const opened = await open(author, staged!.proposal.proposal_id, "chat");
+    const accepted = await commit(author, opened.review, opened.review_credential!, {
+      selected: opened.review.items.map(item => item.id), contactDecision: "existing",
+    });
+    const memoryId = accepted.body.receipt.created_item_ids[0]!;
+    const request = { surface: "people" as const, person_id: contact.personId };
+    const ownerRecall = await recallMemories(pool!, author, request);
+    const readerRecall = await recallMemories(pool!, reader, request);
+    expect(ownerRecall.items).toHaveLength(1);
+    expect(readerRecall.items).toHaveLength(1);
+    expect(ownerRecall.items[0]).toMatchObject({ id: memoryId, can_edit: true });
+    expect(readerRecall.items[0]).toMatchObject({ id: memoryId, can_edit: false });
+    expect(readerRecall.items[0]).not.toHaveProperty("owner_user_id");
+    expect(readerRecall.items[0]).not.toHaveProperty("created_by_user_id");
+    await expect(mutateMemoryItem(pool!, reader, memoryId, {
+      operation: "delete", idempotency_key: randomUUID(), expected_version: 1,
+      reason: "Same-account read permission is not edit authority",
+      entry_scope: { purpose: "people", person_id: contact.personId },
+    })).rejects.toMatchObject({ statusCode: 404, code: "MEMORY_NOT_FOUND" });
+    // A denied write must not remove an otherwise readable shared person item.
+    const retained = await recallMemories(pool!, reader, request);
+    expect(retained.items).toHaveLength(1);
+    expect(retained.items[0]).toMatchObject({ id: memoryId, version: 1, can_edit: false });
+  }, 30_000);
+
   it("keeps self and relationship memory private to the same-account author", async () => {
     const author = await makeAuth("privacy-author");
     const other = { ...author, userId: randomUUID(), userEmail: `other-${author.accountId}@synthetic.local` };

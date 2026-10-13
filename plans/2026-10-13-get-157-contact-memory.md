@@ -1,0 +1,66 @@
+# GET-157 — A readable, editable contact memory page
+
+## Outcome and deadline
+
+The requested deadline was 2026-10-13 15:00 Asia/Shanghai. It was missed; delivery remains incomplete until the gates below pass. Deliver a contact detail page with clearly distinct original source excerpts, an edited narrative, and available human-reviewed structured facts. Confirmed Memory is editable without losing original provenance. Independent agents assess the rendered outcome against the issue’s 98/100 target; missing evidence cannot be counted as a pass.
+
+## Boundary
+
+Own Web contact detail, its exact person read and Memory pagination. Reuse current governed correction API, reviewed contact-field evidence and confirmed identity handles. Do not infer company, role, location or identity from prose, AI research, or unreviewed observations. Do not widen raw-conversation collection or retention. No iOS source change or Simulator is planned. Parent owns issue writes, commits, PR, gates, resident deployment, merge and final acceptance.
+
+## Baseline and evidence
+
+- Fresh origin/main: `51259ec9`; main checkout has unrelated untracked user artifacts preserved.
+- Delivery worktree: `/Users/cubxxw/.codex/worktrees/get-157-contact-memory/talent-signal`.
+- Private issue/reference: `/Users/cubxxw/.local/state/get-157/issue.json`, `reference.png`.
+- Existing contact page is static; Memory mutations support correct/delete, expected version and idempotency.
+- Existing directory is capped at 200; detail must use exact identity read. Memory recall is capped at 50; preserve pagination.
+- Reviewed structured `contact_field` fragments exist; their valid authorized source boundary must remain intact.
+- Resource preflight is reclaiming verified completed build dependencies to meet 30 GiB before host builds.
+
+## Milestones
+
+1. Active: implement three-layer display, reviewed basic fields, exact person read, paginated Memory and safe correction.
+2. Independent code review; close all confirmed P0/P1; run current-revision relevant checks.
+3. Rendered desktop/narrow/theme/keyboard QA in one disposable capir test space; iterate on observed failures and score deductions.
+4. Create linked PR, pass every applicable current-head gate, merge without bypass.
+5. Deploy all affected resident services from clean committed source; verify live revision and edited behavior, stop owned test run, read back Linear completion only after acceptance.
+
+## Acceptance
+
+Verify source/narrative/structured authority and controls; edit-cancel-save-reload; conflict, failed and unknown results with draft preservation/idempotent recovery; no-confirmed-data and long content; pagination beyond 50 and exact identity beyond 200; light/dark, reduced motion, desktop and narrow viewport, keyboard focus and directory return. Report observed scope and score with evidence. Retain sanitized proof in private capir-evals or permanent task artifacts, and remove rebuildable temporary artifacts after delivery.
+
+## Current state
+
+Baseline isolated. Pi failed before source writes; native workers implemented non-overlapping backend/UI scopes, with the parent owning server reads and delivery. Figma plugin responds but its connected design page currently differs from the attached contact reference; use the issue reference’s information order and current product tokens without claiming pixel-exact reconstruction.
+
+Owned runtime test: `a50fcb29-dcc9-4f21-8fc0-67c425062e90`, request `68603489-f813-47ff-a15f-3d83dd729b6e`, expires 2026-10-13 15:48 Asia/Shanghai. Web banner and daily 12/30/4 readback passed on resident baseline; detailed Memory fixture preparation is separate. Dedicated Chrome for Testing process `75023` belongs to this run. Independent rubric is `/Users/cubxxw/.local/state/get-157/experience-eval.md`; no score claimed before rendered checks.
+
+## 12:27 checkpoint
+
+- Pi `20261013-115211-9404c8e9` failed before writing code: provider `content_filter`/high risk. Evidence preserved; no repeated model call. Native backend/UI workers now own non-overlapping code; parent owns loader and BFF.
+- Parent dependency preflight rejected stale main installed lock (`454602…`) despite current source lock. Recovered via APFS clone from live `51259ec9`, whose source and installed locks both match current `e535aa…`; offline frozen pnpm11.18 passed with zero downloads.
+- Contracts, Agent, evaluation and workspace-ui builds passed. Parent loader/BFF tests: 2 files, 30 tests passed; UI is finishing reviewer fixes and focused tests.
+- Independent review has confirmed one P1 (known Memory conflict hidden as fact) and P2 draft/refresh/owner-permission failures; all assigned for correction before final review. Backend adds optional owner-specific can_edit projection without owner ID exposure or new write authority.
+- Isolated run fixture contains 4 real domain-committed synthetic Memory items and reviewed company/job fields. First harness assumed HTTP200 instead of actual201; fixed harness recovered existing commit by readback (no duplicate seed). Sanitized receipts under private task state.
+- Registered local test artifact `/private/tmp/ai-test-get-157.SdQwXk`; owns a disposable `get_157_acceptance_20261013` DB in existing web-local PostgreSQL (loopback55433). Preparation/check runner `/Users/cubxxw/.local/state/get-157/verify-db.mjs`; cleanup must drop only that registered DB and remove artifact after permanent evidence.
+- Safe resource cleanup retained current + five successful rollback Web builds/dependencies; free about32GiB. Formal index `/Users/cubxxw/.local/state/dev-storage-guard/preflight-get-157-20261013.json`. Do not redo trim or cleanup.
+- Deployment must update 2 API (4317,4318), 3 existing Agent sidecars, resident Web; root-only helper `/Users/cubxxw/.local/state/get-157/redeploy-development-residents.py` preserves development config in memory. Keeper must bootout before TestFlight activation and bootstrap in finally.
+- Actual capri Figma file found `7Z8yHplvwjVhpq8IuKv87f`, contact section28:70. Native opened correct file, but Figwright relay still answers older StripSearch plugin; new plugin connected, source data is not yet obtained. No claim of pixel reconstruction.
+
+## 16:20 checkpoint
+
+- Deadline missed; no PR, merge, deployment or 98/100 outcome has been claimed. Linear stays In Progress.
+- Focused Web checks passed: 51 UI and 30 loader/BFF cases, full Web types and lint. Backend focused 39 cases and types passed. Exact route extraction passed 3 cases; no-DB integration discovery correctly skips 15 cases.
+- Documentation, wiki and architecture checks passed after extracting the existing exact person route into its own module.
+- Real PostgreSQL: 15 structured-person integration cases passed; same-account permission integration passed (1 case), with only that I/O test given a 30-second timeout.
+- Independent review found a new P1: account/session-stale 409 must clear private data, invalidate late requests and trigger the existing workspace session boundary, while domain-version conflicts preserve draft. UI worker is fixing it before commit. Temporal plan labels must describe source-time plans without implying current future status.
+- Second safe resource cleanup restored >30 GiB. Current/5 successful rollback releases and all source/evidence retained. Keep builds sequential under high Node/swap load.
+- Initial test run expired at15:48. Stop/cleanup is in progress; create a fresh expiring run for deployed browser acceptance.
+
+## Code acceptance before PR
+
+- Session-stale P1 and source-time wording P2 fixed, independently re-reviewed and closed. The existing workspace boundary removes the whole private page; stale/late response tests verify no old-scope restoration. Genuine Memory revision conflicts retain the draft.
+- Updated UI evidence: 6 suites, 61 tests passed; owned ESLint and whole-Web TypeScript passed. Parent loader/BFF 30 tests, backend39 tests, real-SQL15 person tests plus1 permission test, docs/wiki/architecture checks passed.
+- All confirmed P0/P1 are closed at source review. Current-head CI, merge, clean-source resident deployments, browser acceptance and independent score remain pending.
+- Expired initial run stopped with state=deleted, cleanup_error=null and credential_removed=true. A fresh daily run is provisioning for post-deployment acceptance.
