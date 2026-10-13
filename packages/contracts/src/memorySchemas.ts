@@ -563,6 +563,8 @@ export const MemoryRecallItemSchema = Type.Object(
     supersedes_id: optional(id),
     conflict_group_id: optional(id),
     evidence_retained: Type.Boolean(),
+    // Reader-specific presentation capability; mutations revalidate authority.
+    can_edit: Type.Optional(Type.Boolean()),
     evidence_refs: Type.Array(
       Type.Object(
         {

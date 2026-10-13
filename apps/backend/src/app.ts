@@ -100,7 +100,6 @@ import {
   RelationshipScopeSchema,
   RevokeApprovalRequestSchema,
   RevokeCapabilityRequestSchema,
-  PersonDirectoryResponseSchema,
   PersonMergePreviewSchema,
   PersonMergeRequestSchema,
   PersonMergeResponseSchema,
@@ -305,11 +304,8 @@ import {
   RELATIONSHIP_WIKI_COMPILATION_FAILED,
 } from "./modules/sourceAuthorization.js";
 import { runSourceLifecycleSweep } from "./modules/sourceLifecycle.js";
-import {
-  getRelationshipScope,
-  listPeople,
-  searchPeople,
-} from "./modules/people.js";
+import { getRelationshipScope } from "./modules/people.js";
+import { registerPeopleRoutes } from "./modules/peopleRoutes.js";
 import {
   completePursuitAction,
   createPursuit,
@@ -429,18 +425,6 @@ const WorkspaceReviewQuerySchema = Type.Object(
 const SourceLocatorQuerySchema = Type.Object(
   {
     source_locator: Type.String({ minLength: 1, maxLength: 500 }),
-  },
-  { additionalProperties: false },
-);
-const PeopleQuerySchema = Type.Object(
-  {
-    query: Type.Optional(Type.String({ maxLength: 160 })),
-  },
-  { additionalProperties: false },
-);
-const PeopleSearchSchema = Type.Object(
-  {
-    query: Type.String({ minLength: 1, maxLength: 500 }),
   },
   { additionalProperties: false },
 );
@@ -1813,40 +1797,7 @@ export async function buildApp(
     async (request) => getCapture(pool, request.auth, request.params.id),
   );
 
-  app.get<{ Querystring: { query?: string } }>(
-    "/v1/people",
-    {
-      preHandler: authenticate,
-      schema: {
-        tags: ["people"],
-        security,
-        querystring: PeopleQuerySchema,
-        response: {
-          200: PersonDirectoryResponseSchema,
-          "4xx": ErrorResponseSchema,
-        },
-      },
-    },
-    async (request) => listPeople(pool, request.auth, request.query.query),
-  );
-
-  app.post<{ Body: { query: string } }>(
-    "/v1/people/search",
-    {
-      preHandler: authenticate,
-      schema: {
-        tags: ["people"],
-        security,
-        body: PeopleSearchSchema,
-        response: {
-          200: PersonDirectoryResponseSchema,
-          "4xx": ErrorResponseSchema,
-        },
-      },
-    },
-    async (request) =>
-      searchPeople(pool, request.auth, request.body.query),
-  );
+  registerPeopleRoutes(app, pool, authenticate);
 
   app.get<{
     Params: { personId: string; contextId: string };

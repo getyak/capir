@@ -25,7 +25,7 @@ function ResearchLink({ url, children }: { url: unknown; children: React.ReactNo
   return href ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>;
 }
 export function ResearchNotebook({ items }: { items: MemoryRecallItem[] }) {
-  const records = items.map(item => ({ item, meta: researchNoteMetadata(item) })).filter(record => record.meta !== null)
+  const records = items.filter(item => item.evidence_retained).map(item => ({ item, meta: researchNoteMetadata(item) })).filter(record => record.meta !== null)
     .sort((a, b) => label(a.meta!.note_key).localeCompare(label(b.meta!.note_key)));
   if (!records.length) return null;
   const platforms = records.filter(({ meta }) => meta!.section === "platform");
@@ -57,7 +57,7 @@ export function ResearchNotebook({ items }: { items: MemoryRecallItem[] }) {
       </ul>)}
     </details>}
     {dossier.length > 0 && <details className={styles.details}><summary>完整档案与历史研究 · {dossier.length} 段</summary>
-      <div className={styles.markdown}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => <ResearchLink url={href}>{children}</ResearchLink> }}>
+      <div className={styles.markdown}><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => <ResearchLink url={href}>{children}</ResearchLink>, img: ({ alt }) => <span>{alt ?? "研究资料图像"}</span> }}>
         {dossier.map(({ item }) => body(item)).join("")}
       </ReactMarkdown></div>
     </details>}

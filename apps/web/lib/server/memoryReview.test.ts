@@ -64,6 +64,40 @@ afterEach(() => {
 });
 
 describe("same-origin Memory BFF", () => {
+  it("forwards returned pagination only inside the signed People scope", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ surface: "people", person_id: PERSON, items: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await memoryReviewRoute(new Request(`http://web.local/api/memory/items?surface=people&person_id=${PERSON}&limit=50&cursor=eyJpZCI6InJldHVybmVkIn0`, {
+      headers: headers(capability("people", { personId: PERSON })),
+    }), ["items"]);
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [forwardedUrl] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const url = new URL(forwardedUrl);
+    expect(url.searchParams.get("person_id")).toBe(PERSON);
+    expect(url.searchParams.get("surface")).toBe("people");
+    expect(url.searchParams.get("limit")).toBe("50");
+    expect(url.searchParams.get("cursor")).toBe("eyJpZCI6InJldHVybmVkIn0");
+  });
+
+  it.each(["limit=0", "limit=101", "limit=50&limit=100", "cursor=", "cursor=https%3A%2F%2Fexample.invalid", "cursor=one&cursor=two"])("refuses malformed or ambiguous continuation %s before dispatch", async (query) => {
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    const response = await memoryReviewRoute(new Request(`http://web.local/api/memory/items?${query}`, {
+      headers: headers(capability("people", { personId: PERSON })),
+    }), ["items"]);
+    expect(response.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let a cursor replace the signed person", async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal("fetch", fetchMock);
+    const response = await memoryReviewRoute(new Request(`http://web.local/api/memory/items?person_id=${CONTEXT}&cursor=returned`, {
+      headers: headers(capability("people", { personId: PERSON })),
+    }), ["items"]);
+    expect(response.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects a path outside the additive allowlist", async () => {
     const response = await memoryReviewRoute(
       new Request("http://web.local/api/memory/accounts/secret"),
