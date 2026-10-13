@@ -5,8 +5,10 @@ import { ArrowLeft, CaretRight } from "@phosphor-icons/react/dist/ssr";
 
 import { auth } from "@/auth";
 import { MemoryReviewCard } from "@/components/memory-review/memory-review-card";
-import { ResearchNotebook, researchNoteMetadata } from "@/components/research-notebook";
+import { safeResearchLink } from "@/components/research-notebook";
+import { PersonMemoryContent } from "@/components/person-memory-content";
 import { AvatarEditor } from "@/components/avatar-editor";
+import { memoryDate } from "@/lib/person-memory-projection";
 import { peopleDirectoryHref, personDirectoryEntryId, personMemoryHref, readPeopleDirectoryQuery } from "@/components/people-directory-navigation";
 import {
   validReturnSessionId,
@@ -30,10 +32,15 @@ export const metadata: Metadata = {
   title: "人物 · capri",
 };
 
-const SCOPE_LABELS: Record<string, string> = {
-  self: "关于我",
-  person: "关于对方",
-  relationship: "我们之间",
+const FIELD_LABELS: Record<string, string> = {
+  company: "公司", employer: "公司", organization: "机构", current_company: "公司",
+  job_title: "职位", title: "职位", role: "角色", current_role: "职位",
+  location: "所在地", city: "城市", website: "主页", homepage: "主页", industry: "领域",
+  education: "教育", school: "学校", biography: "简介", bio: "简介", summary: "简介",
+};
+const CONTACT_LABELS: Record<string, string> = {
+  email: "邮箱", phone: "电话", wechat: "微信", linkedin_url: "LinkedIn",
+  public_profile_url: "公开主页", source_native_id: "来源账号",
 };
 
 export default async function PersonMemoryPage({
@@ -118,7 +125,7 @@ export default async function PersonMemoryPage({
     );
   }
 
-  const { person, proposals, items } = data;
+  const { person, proposals, items, basicFields = [], contactPoints = [], hasMore = false, nextCursor = null } = data;
   // The successful return targets the actual loaded Person entry so the
   // directory resumes at that Person. No canonical Person return (or none
   // loaded) keeps the link ordinary.
@@ -127,11 +134,10 @@ export default async function PersonMemoryPage({
     returnSessionId,
     person?.id ?? null,
   );
-  const grouped = new Map<string, typeof items>();
-  for (const item of items.filter((entry) => !researchNoteMetadata(entry))) {
-    const list = grouped.get(item.scope) ?? [];
-    list.push(item);
-    grouped.set(item.scope, list);
+  const fields = new Map<string, typeof basicFields>();
+  for (const field of basicFields) {
+    if (["display_name", "name"].includes(field.field)) continue;
+    fields.set(field.field, [...(fields.get(field.field) ?? []), field]);
   }
   // A name-only or expired clue must not read as a currently confirmed contact.
   const confirmedIdentity = person?.identity_matches.find(
@@ -140,16 +146,20 @@ export default async function PersonMemoryPage({
 
   return (
     <main className={styles.main} id="main-content" tabIndex={-1}>
+      <div className={styles.pageNavigation}>
+        <Link className={styles.backLink} href={personEntryHref}>
+          <ArrowLeft aria-hidden="true" size={15} />返回人物目录
+        </Link>
+      </div>
       <header className={styles.identity}>
         <AvatarEditor
           id={person?.id ?? id}
-          size={64}
-          shape="squircle"
+          size={48}
+          shape="circle"
           label={person?.display_label ?? "人物"}
           url={person?.avatar?.url ?? null}
         />
         <div className={styles.identityText}>
-          <p className={styles.eyebrow}>人物记忆</p>
           <h1>{person?.display_label ?? "人物"}</h1>
           {person?.profile?.headline ? (
             <p className={styles.identityNote}>{person.profile.headline}</p>
@@ -161,6 +171,36 @@ export default async function PersonMemoryPage({
 
       <div className={styles.columns}>
         <div className={styles.contextColumn}>
+          <section aria-labelledby="person-basic-fields">
+            <h2 className={styles.sectionTitle} id="person-basic-fields">基本信息</h2>
+            {fields.size || contactPoints.length ? <dl className={styles.basicFields}>
+              {Array.from(fields.entries()).map(([field, entries]) => <div className={styles.basicField} key={field}>
+                <dt>{FIELD_LABELS[field] ?? field}</dt>
+                <dd>{entries.map(entry => {
+                  const url = ["website", "homepage"].includes(field) ? safeResearchLink(entry.value) : null;
+                  return <div className={styles.fieldValue} key={entry.evidence_fragment_id}>
+                    {url ? <a href={url} target="_blank" rel="noopener noreferrer">{entry.value}</a> : <span>{entry.value}</span>}
+                    <details className={styles.fieldSource}><summary>{entries.length > 1 ? "已核对来源 · 多条记录" : "已核对来源"}</summary>
+                      <p>{entry.source_label} · {memoryDate(entry.observed_at)}</p>
+                      <Link href={withReturnSession(`/workspace?capture=${encodeURIComponent(entry.capture_id)}`, returnSessionId)}>查看采集来源 <CaretRight size={12} aria-hidden="true" /></Link>
+                      <dl className={styles.sourceMetadata}><dt>证据标识</dt><dd>{entry.evidence_fragment_id}</dd><dt>来源标识</dt><dd>{entry.source_resource_id}</dd></dl>
+                    </details>
+                  </div>;
+                })}</dd>
+              </div>)}
+              {contactPoints.map(point => <div className={styles.basicField} key={point.id}><dt>{CONTACT_LABELS[point.type] ?? "联系方式"}</dt><dd>
+                <span>{point.display_hint}</span>
+                <details className={styles.fieldSource}><summary>已确认联系方式</summary><p>{point.source_display_name ?? "已确认身份线索"} · {memoryDate(point.valid_from)}</p>{point.valid_until ? <p>有效至 {memoryDate(point.valid_until)}</p> : null}</details>
+              </dd></div>)}
+            </dl> : <p className={styles.quiet}>{person ? "还没有已核对的基础信息。" : "人物目录暂时没有这个人的条目。"}</p>}
+          </section>
+          {person?.profile?.summary ? <section className={styles.profileSummary} aria-labelledby="person-profile-summary">
+            <h2 className={styles.scopeTitle} id="person-profile-summary">简介</h2><p>{person.profile.summary}</p>
+            <small>{person.profile.provenance_kind === "user_authored" ? "你补充的" : "已复核公开资料"} · {memoryDate(person.profile.updated_at)}</small>
+          </section> : null}
+        </div>
+
+        <div className={styles.memoryColumn}>
           {person && person.contexts.length > 0 ? (
             <nav className={styles.contexts} aria-labelledby="person-contexts">
               <h2 className={styles.sectionTitle} id="person-contexts">
@@ -184,31 +224,15 @@ export default async function PersonMemoryPage({
                   </li>
                 ))}
               </ul>
-              <p className={styles.contextHelper}>
-                进入对应关系继续查看资料与对话。
-              </p>
             </nav>
           ) : (
             <p className={`${styles.quiet} ${styles.contextsEmpty}`}>
               {person
-                ? "这个人还没有关系情境；先从这里查看人物记忆，或在对话中建立关系。"
+                ? "还没有关系情境，可直接查看人物记忆。"
                 : "人物目录暂时没有这个人的条目。"}
             </p>
           )}
-          <Link
-            className={styles.backLink}
-            href={personEntryHref}
-          >
-            <ArrowLeft aria-hidden="true" size={16} />
-            返回人物目录
-          </Link>
-        </div>
-
-        <div className={styles.memoryColumn}>
-          <ResearchNotebook items={items} />
-          {proposals.length === 0 ? (
-            <p className={styles.pendingEmpty}>暂无待确认变化</p>
-          ) : (
+          {proposals.length > 0 ? (
             <section
               className={styles.section}
               aria-labelledby="person-memory-pending"
@@ -234,41 +258,9 @@ export default async function PersonMemoryPage({
                 ))}
               </ul>
             </section>
-          )}
-
-          <section
-            className={styles.section}
-            aria-labelledby="person-memory-accepted"
-          >
-            <h2 className={styles.memoryTitle} id="person-memory-accepted">
-              已保存的记忆
-            </h2>
-            {grouped.size === 0 ? (
-              <p className={styles.quiet}>还没有其他已确认的记忆。</p>
-            ) : (
-              Array.from(grouped.entries()).map(([scope, scopeItems]) => (
-                <article className={styles.scopeGroup} key={scope}>
-                  <h3 className={styles.scopeTitle}>
-                    {SCOPE_LABELS[scope] ?? scope}
-                  </h3>
-                  <ul className={styles.memoryList}>
-                    {scopeItems.map((item) => (
-                      <li className={styles.memoryItem} key={item.id}>
-                        <p className={styles.memoryText}>{item.display_text}</p>
-                        <small className={styles.memoryKind}>
-                          {item.statement_kind === "source_statement"
-                            ? `来源陈述${item.speaker ? ` · ${item.speaker}` : ""}`
-                            : item.statement_kind === "user_opinion"
-                              ? "用户观点"
-                              : "已保存事实"}
-                        </small>
-                      </li>
-                    ))}
-                  </ul>
-                </article>
-              ))
-            )}
-          </section>
+          ) : null}
+          <PersonMemoryContent key={`${binding}:${person?.id ?? id}`} personId={person?.id ?? id} binding={binding} entryCapability={entryCapability}
+            initialItems={items} hasMore={hasMore} nextCursor={nextCursor} contexts={person?.contexts ?? []} returnSessionId={returnSessionId} />
         </div>
       </div>
     </main>

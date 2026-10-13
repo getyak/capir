@@ -549,3 +549,57 @@ describe("source authorization compile fallback diagnostics", () => {
     }
   });
 });
+
+
+describe("exact person detail route", () => {
+  const personId = "70000000-0000-4000-8000-000000000001";
+  const accountId = "30000000-0000-4000-8000-000000000001";
+  const authRow = { account_id: accountId, account_slug: "fixture-alpha",
+    user_id: "40000000-0000-4000-8000-000000000001", user_email: "synthetic@example.test",
+    user_kind: "simulated_human", session_id: "50000000-0000-4000-8000-000000000001" };
+
+  it("requires authentication and validates the person ID before fetching detail", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [authRow] });
+    const app = await buildApp({ config, pool: { query } as unknown as Pool });
+    apps.push(app);
+    const unauthorized = await app.inject({ method: "GET", url: `/v1/people/${personId}` });
+    expect(unauthorized.statusCode).toBe(401);
+    expect(query).not.toHaveBeenCalled();
+    const invalid = await app.inject({ method: "GET", url: "/v1/people/not-a-uuid",
+      headers: { authorization: "Bearer synthetic-session" } });
+    expect(invalid.statusCode).toBe(400);
+    expect(query.mock.calls.every(([sql]) => String(sql).includes("FROM sessions"))).toBe(true);
+  });
+
+  it("returns the exact detail contract through real authentication and serialization", async () => {
+    const query = vi.fn(async (sql: string, params: unknown[]) => {
+      if (sql.includes("FROM sessions")) return { rows: [authRow] };
+      if (sql.includes("AS context_count")) {
+        expect(params).toEqual([accountId, "", null, null, personId]);
+        return { rows: [{ id: personId, display_label: "Synthetic contact", context_count: 0,
+          capture_count: 0, confirmed_identity_count: 0, last_activity_at: new Date("2026-10-13T02:00:00Z"), contexts: [] }] };
+      }
+      return { rows: [] };
+    });
+    const app = await buildApp({ config, pool: { query } as unknown as Pool });
+    apps.push(app);
+    const response = await app.inject({ method: "GET", url: `/v1/people/${personId}`,
+      headers: { authorization: "Bearer synthetic-session" } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ contract_version: expect.any(String),
+      person: { id: personId, display_label: "Synthetic contact", context_count: 0,
+        capture_count: 0, confirmed_identity_count: 0, last_activity_at: "2026-10-13T02:00:00.000Z",
+        contexts: [], profile: null, avatar: null, identity_matches: [] }, basic_fields: [], contact_points: [] });
+  });
+
+  it("returns a bounded 404 when an authenticated account cannot read that person", async () => {
+    const query = vi.fn(async (sql: string) => ({ rows: sql.includes("FROM sessions") ? [authRow] : [] }));
+    const app = await buildApp({ config, pool: { query } as unknown as Pool });
+    apps.push(app);
+    const response = await app.inject({ method: "GET", url: `/v1/people/${personId}`,
+      headers: { authorization: "Bearer synthetic-session" } });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ error: { code: "PERSON_NOT_FOUND" } });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+});

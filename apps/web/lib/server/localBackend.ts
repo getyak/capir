@@ -17,6 +17,7 @@ import {
   type EffectResultResponse,
   type EffectReversalPreview,
   type PersonDirectoryResponse,
+  type PersonDetailResponse,
   type PersonMergePreview,
   type PersonMergeRequest,
   type PersonMergeResponse,
@@ -169,22 +170,38 @@ export async function searchPeopleDirectory(
  */
 export async function loadPersonMemory(personId: string): Promise<{
   person: PersonDirectoryResponse["people"][number] | null;
+  basicFields: PersonDetailResponse["basic_fields"];
+  contactPoints: NonNullable<PersonDetailResponse["contact_points"]>;
   proposals: MemoryProposalRecord[];
   items: MemoryRecallItem[];
+  hasMore: boolean;
+  nextCursor: string | null;
 }> {
   if (!UUID.test(personId)) throw new Error("人物标识无效。");
-  const [{ client }, directory] = await Promise.all([
-    authenticatedClient("web-person-memory"),
-    loadPeopleDirectory(),
-  ]);
-  const [proposals, recall] = await Promise.all([
+  const { client } = await authenticatedClient("web-person-memory");
+  const [detail, proposals, recall] = await Promise.all([
+    client.getPerson(personId),
     client.listMemoryProposals({ purpose: "people", person_id: personId }),
     client.recallMemories({ surface: "people", person_id: personId, limit: 50 }),
   ]);
+  if (detail.person.id !== personId || recall.surface !== "people" ||
+      recall.person_id !== personId || recall.items.some((item) =>
+        item.subject_id !== personId || item.scope === "self")) {
+    throw new Error("人物记忆的读取范围已变化，请重新打开。");
+  }
+  const hasMore = recall.has_more === true;
+  const nextCursor = recall.next_cursor ?? null;
+  if (hasMore && !nextCursor) {
+    throw new Error("人物记忆的后续记录暂时无法读取，请重试。");
+  }
   return {
-    person: directory.people.find((entry) => entry.id === personId) ?? null,
+    person: detail.person,
+    basicFields: detail.basic_fields,
+    contactPoints: detail.contact_points ?? [],
     proposals: proposals.proposals,
     items: recall.items,
+    hasMore,
+    nextCursor,
   };
 }
 

@@ -24,4 +24,9 @@ describe("research notebook reading", () => {
     expect(safeResearchLink("data:text/html,hi")).toBeNull(); expect(safeResearchLink("/api/private")).toBeNull();
     expect(renderToStaticMarkup(<ResearchNotebook items={[]} />)).toBe("");
   });
+  it("withholds unavailable research excerpts and does not load remote markdown images", () => {
+    expect(renderToStaticMarkup(<ResearchNotebook items={[{ ...item("identity"), evidence_retained: false }]} />)).toBe("");
+    const html = renderToStaticMarkup(<ResearchNotebook items={[{ ...item("dossier"), display_text: "![source image](https://synthetic.invalid/tracker.png)" }]} />);
+    expect(html).not.toContain("<img"); expect(html).toContain("source image");
+  });
 });

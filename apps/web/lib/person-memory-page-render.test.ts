@@ -120,4 +120,18 @@ describe("saved Person destination", () => {
     expect(mint).not.toHaveBeenCalled();
     expect(html).not.toContain("unsafe-return");
   });
+  it("shows reviewed fields and masked contact points with provenance, without choosing a current value or repeating identity", async () => {
+    const entry = { field: "company", value: "澄川产品", evidence_fragment_id: "fragment-1", capture_id: personId, source_resource_id: "source-1", observed_at: "2026-10-12T00:00:00Z", relationship_context_id: contextId, source_label: "核对后的名片" };
+    loadPersonMemory.mockResolvedValue({ ...fixture(), basicFields: [entry, { ...entry, value: "另一家机构", evidence_fragment_id: "fragment-2" }, { ...entry, field: "display_name", value: "陈知远", evidence_fragment_id: "name" }],
+      contactPoints: [{ id: "contact", type: "email", display_hint: "c•••@example.com", source_resource_id: "source-1", source_display_name: "核对后的名片", valid_from: "2026-10-12T00:00:00Z", valid_until: null }] });
+    const html = await render();
+    for (const text of ["基本信息", "公司", "澄川产品", "另一家机构", "已核对来源 · 多条记录", "核对后的名片", "证据标识", "fragment-1", "c•••@example.com"]) expect(html).toContain(text);
+    expect(html).not.toContain("display_name"); expect(html).not.toContain("当前公司");
+    expect(html).toContain(`/workspace?capture=${personId}&amp;session=${sessionId}`);
+  });
+  it("does not manufacture structured biography from accepted Memory or research", async () => {
+    loadPersonMemory.mockResolvedValue({ ...fixture(), basicFields: [], contactPoints: [], items: [{ id: "memory", scope: "person", display_text: "对方提到在某公司工作", statement_kind: "source_statement", speaker: "对方" }] });
+    const html = await render(); expect(html).toContain("还没有已核对的基础信息"); expect(html).toContain("对方提到在某公司工作");
+    expect(html).not.toContain("<dt>公司</dt>"); expect(html).not.toContain("最近往来");
+  });
 });
