@@ -9,6 +9,7 @@ import { validMeetingDay } from "@/lib/meeting-calendar";
 import { addDays, adjacentMonth, dateInZone, formatDay, formatTime, monthDays, parseTimeLocation, timeHref } from "@/lib/time-workspace";
 import { timeRequest, TimeRequestError } from "@/lib/time-workspace-client";
 import { matchesTypeBox } from "@/lib/typebox-validation";
+import { subscribeWorkspaceDirectoryInvalidation } from "@/lib/workspace-directory-cache";
 import { coordinatorScopeIsCurrent, requestWorkspaceRefresh, subscribeWorkspaceRefresh, workspaceRefreshGeneration, type RefreshReason } from "@/lib/workspace-refresh";
 import { WORKSPACE_SESSION_EXPIRED_EVENT } from "./workspace-session-request";
 import styles from "./workspace-sidebar-calendar.module.css";
@@ -50,11 +51,10 @@ export function WorkspaceSidebarCalendar({ binding }: { binding: string | null }
   const days = monthDays(month), previousMonth = safeMonth(month, -1), nextMonth = safeMonth(month, 1);
   const today = dateInZone(new Date(), timeZone);
   const grid = useRef<HTMLTableElement>(null), pendingFocus = useRef<string | null>(null);
-  const request = useRef<AbortController | null>(null);
   const keyboardHint = useId(), horizonId = useId();
   const [feed, setFeed] = useState<Feed | null>(null);
-  const [expiredBinding, setExpiredBinding] = useState<string | null>(null);
-  const expired = binding !== null && expiredBinding === binding;
+  const [expiredBindings, setExpiredBindings] = useState<ReadonlySet<string>>(() => new Set());
+  const expired = binding !== null && expiredBindings.has(binding);
   const to = safeDay(day, horizon);
   const scope = useMemo<TimeScope | null>(() => to ? {
     from: day, to, time_zone: timeZone, kind: "schedule", ...(personId ? { person_id: personId } : {}),
@@ -67,51 +67,62 @@ export function WorkspaceSidebarCalendar({ binding }: { binding: string | null }
   const incomplete = value && (!value.complete || value.next_cursor !== null);
 
   useEffect(() => {
-    const loseAuthorization = () => {
-      request.current?.abort();
-      setFeed(null);
-      if (binding) setExpiredBinding(binding);
-    };
-    window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, loseAuthorization);
-    return () => {
-      window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, loseAuthorization);
-    };
-  }, [binding]);
-
-  useEffect(() => {
-    if (!binding || !browserZone || expired || !scope) return;
+    if (!binding || expired) return;
     const activeBinding = binding, activeScope = scope;
-    let owned = true, inFlight = false, version = 0;
+    let owned = true, denied = false, inFlight = false, revalidationQueued = false, version = 0;
     let controller: AbortController | null = null;
-    const params = new URLSearchParams({ ...scope });
+    const params = activeScope ? new URLSearchParams({ ...activeScope }) : null;
+    function loseAuthorization() {
+      if (!owned || denied) return;
+      // Fence synchronously before React commits: any scoped 401/discard can
+      // revoke this reader without dispatching the recognized expiry event.
+      denied = true; version++; controller?.abort(); inFlight = false;
+      setFeed(null);
+      setExpiredBindings((current) => new Set(current).add(activeBinding));
+    }
     async function load(reason: RefreshReason, generation: number) {
       // An interval never restarts a slow read. Explicit mutations/foreground
       // reads fence its result and obtain a fresh authoritative snapshot.
-      if (!owned || !coordinatorScopeIsCurrent(activeBinding, generation) || inFlight && reason === "interval") return;
+      if (!owned || denied || !browserZone || !activeScope || !params || !coordinatorScopeIsCurrent(activeBinding, generation) || inFlight && reason === "interval") return;
       controller?.abort();
       const active = new AbortController(), attempt = ++version;
-      controller = active; request.current = active; inFlight = true;
+      controller = active; inFlight = true;
       try {
         const payload = await timeRequest(`/api/time/activities?${params}`, activeBinding, { signal: active.signal });
         if (!matchesTypeBox(TimeActivityListResponseSchema, payload) || !sameScope(payload.scope, activeScope)) {
           throw new Error("Schedule scope could not be verified.");
         }
-        if (owned && attempt === version && !active.signal.aborted && coordinatorScopeIsCurrent(activeBinding, generation)) setFeed({ key: feedKey, value: payload });
+        if (owned && !denied && attempt === version && !active.signal.aborted && coordinatorScopeIsCurrent(activeBinding, generation)) setFeed({ key: feedKey, value: payload });
       } catch (error: unknown) {
-        if (!owned || attempt !== version || active.signal.aborted || !coordinatorScopeIsCurrent(activeBinding, generation)) return;
+        if (!owned || denied || attempt !== version || active.signal.aborted || !coordinatorScopeIsCurrent(activeBinding, generation)) return;
         if (error instanceof TimeRequestError && (error.status === 401 || error.code === "session_stale")) {
-          setExpiredBinding(binding);
-          setFeed(null);
+          loseAuthorization();
         } else setFeed({ key: feedKey, failed: true });
       } finally {
-        if (attempt === version) { inFlight = false; if (request.current === active) request.current = null; }
+        if (attempt === version) inFlight = false;
       }
     }
-    const unsubscribe = subscribeWorkspaceRefresh(binding, (reason, generation) => {
+    const unsubscribe = browserZone && activeScope ? subscribeWorkspaceRefresh(binding, (reason, generation) => {
       void load(reason, generation);
+    }) : () => {};
+    const unsubscribeInvalidation = subscribeWorkspaceDirectoryInvalidation((keys, mode) => {
+      if (!owned || denied || keys !== null && !keys.includes(activeBinding)) return;
+      if (mode === "discard") { loseAuthorization(); return; }
+      // A burst of successful mutations earns one fresh read, while discard
+      // arriving before it runs still prevents any use of the old binding.
+      if (revalidationQueued) return;
+      revalidationQueued = true;
+      queueMicrotask(() => {
+        revalidationQueued = false;
+        if (owned && !denied) void load("manual", workspaceRefreshGeneration(activeBinding));
+      });
     });
+    window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, loseAuthorization);
     void load("manual", workspaceRefreshGeneration(binding));
-    return () => { owned = false; version++; controller?.abort(); unsubscribe(); if (request.current === controller) request.current = null; };
+    return () => {
+      owned = false; version++; controller?.abort(); unsubscribe(); unsubscribeInvalidation();
+      window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, loseAuthorization);
+    };
   }, [binding, browserZone, expired, scope, feedKey]);
 
   useLayoutEffect(() => {

@@ -14,7 +14,7 @@ import {
 import type { Icon } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useSyncExternalStore, type MouseEvent } from "react";
+import { useLayoutEffect, useRef, useSyncExternalStore, type MouseEvent } from "react";
 
 import {
   WORKSPACE_COMPOSE_HREF,
@@ -31,8 +31,10 @@ import {
   workspaceRailSelection,
 } from "@/lib/workspace-navigation";
 import { recentSessionRows } from "@/lib/workspace-recent-sessions";
+import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-session-organization";
 
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
+import { useWorkspaceNavigationHref } from "./workspace-navigation-continuity";
 import { WorkspaceGlobalSearchDialog, useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-shell.module.css";
 
@@ -119,6 +121,7 @@ function RailControl({
 }) {
   const router = useRouter();
   const mobile = useSyncExternalStore(mobileSubscribe,mobileSnapshot,() => false);
+  const rememberedHref = useWorkspaceNavigationHref(route.href);
   const isNew = mobile && control === "conversation";
   const label = isNew ? "新对话" : RAIL_LABELS[control];
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
@@ -129,7 +132,7 @@ function RailControl({
       className={styles.railControl}
       data-mobile={route.mobile ? "true" : "false"}
       data-selected={current ? "true" : undefined}
-      href={route.href}
+      href={isNew ? route.href : rememberedHref}
       key={route.id}
       title={label}
       onClick={event => {
@@ -155,11 +158,12 @@ function RailControl({
  * account-scoped directory projection in server order — exact Session ids,
  * never an implicit personal ranking.
  */
-function RailSessionShortcuts({ binding }: { binding: string | null }) {
+function RailSessionShortcuts({ binding, storageScope }: { binding: string | null; storageScope: string | null }) {
   const pathname = usePathname();
   const { data, loading, failed } = useWorkspaceDirectory(binding, true);
-  const rows =
-    binding && data ? recentSessionRows(data.sessions, binding) : null;
+  const { snapshot } = useSessionOrganization(storageScope);
+  const projected = binding && data ? recentSessionRows(data.sessions, binding, undefined, 200) : null;
+  const rows = projected ? organizeSessionRows(projected, snapshot.entries).visible : null;
   if (!binding || !rows || loading || failed || !rows.length) return null;
   return (
     <div aria-label="最近对话快捷方式" className={styles.railSessions}>
@@ -191,12 +195,33 @@ function RailSessionShortcuts({ binding }: { binding: string | null }) {
 
 export function WorkspaceShellNav({
   binding,
+  storageScope = null,
 }: {
   binding: string | null;
+  /** The same account/user-stable scope used by the expanded Session list. */
+  storageScope?: string | null;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { collapsed, setCollapsed } = useCollapsedState();
   const selection = workspaceRailSelection(pathname);
+  const conversationHref = useWorkspaceNavigationHref("/workspace");
+  const peopleHref = useWorkspaceNavigationHref("/workspace/people");
+  const meetingsHref = useWorkspaceNavigationHref("/workspace/meetings");
+  const collapseToggle = useRef<HTMLButtonElement>(null);
+  const expandToggle = useRef<HTMLButtonElement>(null);
+
+  useLayoutEffect(() => {
+    const hidden = collapsed ? collapseToggle.current : expandToggle.current;
+    if (document.activeElement === hidden) {
+      (collapsed ? expandToggle.current : collapseToggle.current)?.focus();
+    }
+  }, [collapsed]);
+
+  function startNewConversation() {
+    const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }));
+    if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}`);
+  }
 
   return (
     <div
@@ -218,6 +243,7 @@ export function WorkspaceShellNav({
             aria-pressed={false}
             className={styles.iconButton}
             onClick={() => setCollapsed(true)}
+            ref={collapseToggle}
             title="收起侧边栏"
             type="button"
           >
@@ -250,33 +276,40 @@ export function WorkspaceShellNav({
           group (search, people, collapse, connections). It stays in the DOM so
           the destinations remain reachable links in every state; CSS owns the
           collapsed/expanded swap. */}
-      <div className={styles.railCollapsed} data-collapsed-only="true">
+      <nav aria-label="工作台导航（已收起）" className={styles.railCollapsed} data-collapsed-only="true">
         <div className={styles.railCollapsedTop}>
-          <Link aria-label="今日" className={styles.railIconLink} href="/workspace/today" title="今日">
+          <Link aria-current={selection === "today" ? "page" : undefined} aria-label="今日" className={styles.railIconLink} href="/workspace/today" title="今日">
             <House aria-hidden="true" size={18} />
           </Link>
-          <Link aria-label="打开对话记录" className={styles.railIconLink} href="/workspace/sessions" title="对话记录">
-            <ClockCounterClockwise aria-hidden="true" size={18} />
+          <Link aria-current={selection === "conversation" ? "page" : undefined} aria-label="对话" className={styles.railIconLink} href={conversationHref} title="继续对话">
+            <ChatCircleDots aria-hidden="true" size={18} />
           </Link>
-          <Link aria-label="时间" className={styles.railIconLink} href="/workspace/meetings" title="时间">
+          <button aria-label="开始新对话" className={styles.iconButton} onClick={startNewConversation} title="开始新对话" type="button">
+            <Plus aria-hidden="true" size={18} />
+          </button>
+          <Link aria-current={selection === "meetings" ? "page" : undefined} aria-label="时间" className={styles.railIconLink} href={meetingsHref} title="时间">
             <CalendarBlank aria-hidden="true" size={18} />
           </Link>
         </div>
-        <RailSessionShortcuts binding={binding} />
+        <RailSessionShortcuts binding={binding} storageScope={storageScope} />
         <div className={styles.railUtility}>
           <WorkspaceGlobalSearchDialog
             binding={binding}
             label={RAIL_LABELS.search}
             presentation="rail"
           />
-          <Link aria-label="人物" className={styles.railIconLink} href="/workspace/people" title="人物">
+          <Link aria-current={selection === "people" ? "page" : undefined} aria-label="人物" className={styles.railIconLink} href={peopleHref} title="人物">
             <Users aria-hidden="true" size={18} />
+          </Link>
+          <Link aria-label="打开对话记录" className={styles.railIconLink} href="/workspace/sessions" title="对话记录">
+            <ClockCounterClockwise aria-hidden="true" size={18} />
           </Link>
           <button
             aria-label="展开侧边栏"
             aria-pressed
             className={styles.iconButton}
             onClick={() => setCollapsed(false)}
+            ref={expandToggle}
             title="展开侧边栏"
             type="button"
           >
@@ -286,12 +319,13 @@ export function WorkspaceShellNav({
             aria-label="连接应用（打开扩展工作区；不会自动连接任何服务）"
             className={styles.railIconLink}
             href="/workspace/extensions"
+            aria-current={WORKSPACE_NAV_ROUTES.find(route => route.id === "plugs")?.matches(pathname) ? "page" : undefined}
             title="连接应用"
           >
             <LinkSimple aria-hidden="true" size={18} />
           </Link>
         </div>
-      </div>
+      </nav>
     </div>
   );
 }

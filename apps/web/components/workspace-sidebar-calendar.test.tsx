@@ -6,11 +6,12 @@ import { CONTRACT_VERSION, type TimeActivity, type TimeActivityListResponse } fr
 import { timeFixtureActivity } from "@/lib/test/time-fixtures";
 import { timeHref } from "@/lib/time-workspace";
 import { requestWorkspaceRefresh } from "@/lib/workspace-refresh";
+import { invalidateWorkspaceDirectory } from "@/lib/workspace-directory-cache";
 const mock = vi.hoisted(() => ({ query: "day=2026-09-21&view=week&tz=UTC", request: vi.fn() }));
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(mock.query) }));
 vi.mock("@/lib/time-workspace-client", async (original) => ({ ...await original<typeof import("@/lib/time-workspace-client")>(), timeRequest: mock.request }));
 import { TimeRequestError } from "@/lib/time-workspace-client";
-import { WORKSPACE_SESSION_EXPIRED_EVENT } from "./workspace-session-request";
+import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./workspace-session-request";
 import { WorkspaceSidebarCalendar } from "./workspace-sidebar-calendar";
 
 let host: HTMLDivElement, root: Root;
@@ -94,7 +95,7 @@ describe("workspace calendar sidebar", () => {
     const [url, binding, options] = mock.request.mock.calls[0]!;
     expect(binding).toBe("a"); expect(options.signal).toBeInstanceOf(AbortSignal);
     expect(Object.fromEntries(new URL(url, "http://localhost").searchParams)).toEqual({ from: "2026-09-21", to: "2026-09-28", time_zone: "UTC", kind: "schedule", person_id: timeFixtureActivity.source_id });
-    expect(host.textContent).toContain("9月21日起 · 内部安排 · 已按人物筛选");
+    expect(host.querySelector('section[aria-label="近期内部安排"]')?.textContent).toContain("起 · 内部安排 · 已按人物筛选");
     expect(mock.request.mock.calls.every(([, , init]) => !init.method || init.method === "GET")).toBe(true);
   });
 
@@ -183,6 +184,90 @@ describe("workspace calendar sidebar", () => {
     await render(null); expect(mock.request).not.toHaveBeenCalled(); expect(host.textContent).toContain("登录后查看安排");
     mock.request.mockRejectedValue(new TimeRequestError("Stale", 409, "session_stale")); await render();
     expect(host.textContent).toContain("登录已失效"); expect(host.textContent).not.toContain("没有待进行");
+  });
+
+  it("withdraws loaded schedules on a matching directory discard and cannot reread that binding", async () => {
+    await render(); expect(host.textContent).toContain("Synthetic meeting");
+    const reads = mock.request.mock.calls.length;
+    await act(async () => {
+      invalidateWorkspaceDirectory("a", "discard");
+      requestWorkspaceRefresh("a");
+    });
+    expect(host.textContent).not.toContain("Synthetic meeting"); expect(host.textContent).toContain("登录已失效");
+    expect(mock.request).toHaveBeenCalledTimes(reads);
+    mock.query += "&upcoming=30"; await render();
+    await act(async () => invalidateWorkspaceDirectory("a", "revalidate"));
+    expect(mock.request).toHaveBeenCalledTimes(reads); expect(host.textContent).not.toContain("Synthetic meeting");
+    await render("b"); expect(host.textContent).toContain("Synthetic meeting"); expect(mock.request.mock.lastCall![1]).toBe("b");
+  });
+
+  it("fences pending schedules after an actual scoped lowercase 401 discard without an expiry event", async () => {
+    host.dataset.workspaceScope = "synthetic-workspace";
+    await render(); expect(host.textContent).toContain("Synthetic meeting");
+    let resolve!: (value: unknown) => void, pendingUrl = "";
+    mock.request.mockImplementationOnce((url: string) => { pendingUrl = url; return new Promise((done) => { resolve = done; }); });
+    await act(async () => requestWorkspaceRefresh("a"));
+    const signal = mock.request.mock.lastCall![2].signal as AbortSignal;
+    const expiry = vi.fn(); window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, expiry);
+    try {
+      await act(async () => {
+        const response = await workspaceSessionFetch("/api/workspace-sessions", undefined,
+          async () => Response.json({ code: "authentication_required" }, { status: 401 }));
+        expect(response.status).toBe(401);
+        requestWorkspaceRefresh("a");
+      });
+      expect(expiry).not.toHaveBeenCalled(); expect(signal.aborted).toBe(true);
+      expect(mock.request).toHaveBeenCalledTimes(2);
+      expect(host.textContent).not.toContain("Synthetic meeting"); expect(host.textContent).toContain("登录已失效");
+      await act(async () => resolve(payload(pendingUrl, [{ ...timeFixtureActivity, title: "Revoked private schedule" }])));
+      expect(host.textContent).not.toContain("Revoked private schedule");
+      await act(async () => invalidateWorkspaceDirectory(undefined, "revalidate"));
+      expect(mock.request).toHaveBeenCalledTimes(2);
+    } finally { window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, expiry); }
+  });
+
+  it("ignores another binding's discard and revalidation while its authorized read is pending", async () => {
+    await render(); let resolve!: (value: unknown) => void, pendingUrl = "";
+    mock.request.mockImplementationOnce((url: string) => { pendingUrl = url; return new Promise((done) => { resolve = done; }); });
+    await act(async () => requestWorkspaceRefresh("a"));
+    const signal = mock.request.mock.lastCall![2].signal as AbortSignal;
+    await act(async () => {
+      invalidateWorkspaceDirectory("other", "discard");
+      invalidateWorkspaceDirectory("other", "revalidate");
+    });
+    expect(signal.aborted).toBe(false); expect(mock.request).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain("Synthetic meeting"); expect(host.textContent).not.toContain("登录已失效");
+    await act(async () => resolve(payload(pendingUrl, [{ ...timeFixtureActivity, title: "Still authorized" }])));
+    expect(host.textContent).toContain("Still authorized");
+  });
+
+  it("retains a discard fence while the chosen date has no readable scope", async () => {
+    await render(); const reads = mock.request.mock.calls.length;
+    mock.query = "day=9999-12-31&tz=UTC"; await render();
+    expect(host.textContent).toContain("此日期超出可读取范围");
+    await act(async () => invalidateWorkspaceDirectory("a", "discard"));
+    mock.query = "day=2026-09-21&tz=UTC"; await render();
+    expect(host.textContent).toContain("登录已失效"); expect(host.textContent).not.toContain("Synthetic meeting");
+    expect(mock.request).toHaveBeenCalledTimes(reads);
+  });
+
+  it("coalesces matching and global revalidation into fresh readback without discarding authorization", async () => {
+    await render(); let resolve!: (value: unknown) => void, pendingUrl = "";
+    mock.request.mockImplementationOnce((url: string) => { pendingUrl = url; return new Promise((done) => { resolve = done; }); });
+    await act(async () => requestWorkspaceRefresh("a"));
+    const signal = mock.request.mock.lastCall![2].signal as AbortSignal;
+    mock.request.mockImplementation(async (url: string) => payload(url, [{ ...timeFixtureActivity, title: "Fresh after revalidation" }]));
+    await act(async () => {
+      invalidateWorkspaceDirectory("a", "revalidate");
+      invalidateWorkspaceDirectory(undefined, "revalidate");
+      invalidateWorkspaceDirectory("a", "revalidate");
+    });
+    expect(signal.aborted).toBe(true); expect(mock.request).toHaveBeenCalledTimes(3);
+    expect(host.textContent).toContain("Fresh after revalidation"); expect(host.textContent).not.toContain("登录已失效");
+    await act(async () => resolve(payload(pendingUrl, [{ ...timeFixtureActivity, title: "Pre-mutation stale schedule" }])));
+    expect(host.textContent).not.toContain("Pre-mutation stale schedule");
+    await act(async () => invalidateWorkspaceDirectory("a", "revalidate"));
+    expect(mock.request).toHaveBeenCalledTimes(4);
   });
 
   it("withdraws a removed schedule after an authorized foreground read without storing content", async () => {

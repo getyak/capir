@@ -107,7 +107,15 @@ describe("temporary person context sheet",()=>{
     else {
       // Radix registers the document pointer listener after the opening press.
       await act(async()=>{await new Promise(resolve=>setTimeout(resolve,0));});
-      await act(async()=>document.querySelector('[data-person-context-overlay]')!.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,cancelable:true,pointerType:"mouse",button:0})));
+      const overlay=document.querySelector('[data-person-context-overlay]')!;
+      await act(async()=>overlay.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,cancelable:true,pointerType:"mouse",button:0})));
+      // Dialog 1.1.23 defers primary-button outside dismissal to the completed
+      // click. happy-dom does not generate that click from a dispatched press.
+      expect(document.querySelector('[role="dialog"]')).toBe(panel);
+      await act(async()=>{
+        overlay.dispatchEvent(new PointerEvent("pointerup",{bubbles:true,cancelable:true,pointerType:"mouse",button:0}));
+        overlay.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,button:0}));
+      });
     }
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await vi.waitFor(()=>expect(document.activeElement).toBe(opener));

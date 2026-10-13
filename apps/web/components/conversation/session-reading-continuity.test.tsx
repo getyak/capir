@@ -306,10 +306,10 @@ it("keeps the same position when the framework hides and resumes a retained Sess
   details.set(FIRST, initialDetail);
   async function render(mode: "visible" | "hidden") {
     await act(async () => {
-      root.render(createElement(Activity, { mode }, createElement(SessionWorkbench, {
-        accountId: "synthetic", chatSessionVersion: `chat-${SCOPE}`, sessionVersion: `detail-${SCOPE}`,
-        storageScope: SCOPE, initialDetail, initialError: null, sessionRecoveryHref: null,
-      })));
+      root.render(<Activity mode={mode}><SessionWorkbench
+        accountId="synthetic" chatSessionVersion={`chat-${SCOPE}`} sessionVersion={`detail-${SCOPE}`}
+        storageScope={SCOPE} initialDetail={initialDetail} initialError={null} sessionRecoveryHref={null}
+      /></Activity>);
       for (let index = 0; index < 8; index += 1) await Promise.resolve();
     });
     await resize();

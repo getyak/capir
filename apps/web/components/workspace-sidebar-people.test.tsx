@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, type ComponentProps, type FormEvent } from "react";
+import { act, createElement, type ComponentProps, type SubmitEvent } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,7 +27,7 @@ vi.mock("next/form", () => ({
     return createElement("form", {
       ...props,
       action,
-      onSubmit: (event: FormEvent<HTMLFormElement>) => {
+      onSubmit: (event: SubmitEvent<HTMLFormElement>) => {
         onSubmit?.(event);
         if (!event.defaultPrevented) {
           const url = new URL(String(action), "https://capri.test");

@@ -19,9 +19,8 @@ describe("persistent workspace shell", () => {
     const sessionBoundary = read("components/session-draft-session-boundary.tsx");
     const standaloneWorkspace = read("components/workspace-app.tsx");
     const routeHeader = read("components/workspace-route-header.tsx");
-    const sidebarPeople = read("components/workspace-sidebar-people.tsx");
 
-    expect(layout).toContain("<WorkspaceShellNav binding={pendingBinding} />");
+    expect(layout).toMatch(/<WorkspaceShellNav\s+binding=\{pendingBinding\}\s+storageScope=\{pendingSessionDraftScope\}/);
     expect(layout).toContain('id="workspace-content"');
     expect(layout).toContain("<AccountControls");
     expect(layout).toContain("<MeetingDraftSessionBoundary");
@@ -63,12 +62,10 @@ describe("persistent workspace shell", () => {
     expect(accountMenu).not.toContain("/workspace/plugs");
     // A Session detail supplies its own context; the shell header yields to it.
     expect(routeHeader).toContain("if (SESSION_DETAIL.test(pathname)) return null;");
-    // A successfully empty people projection hides the auxiliary group without
-    // suppressing actionable read errors or a populated projection.
-    expect(sidebarPeople).toContain(
-      'if (!loading && !failed && people.length === 0) return null;',
-    );
-    expect(sidebarPeople).toContain("人物暂时无法读取");
+    // The persistent layout delegates the middle to the current route; People
+    // loading/empty/error behavior is exercised by its rendered component tests.
+    expect(layout).toContain("<WorkspaceSidebarContext");
+    expect(layout).not.toContain("<WorkspaceSidebarPeople");
     expect(layout).toContain("<WorkspaceMobileSourcesLink />");
     const shellStyles = read("components/workspace-shell.module.css");
     expect(shellStyles).toContain(".mobileSources");
