@@ -11,7 +11,7 @@ export function AuthorizationFrame({ title, summary, children, note }: {
   note: string;
 }) {
   return (
-    <main className={styles.page} id="main-content" aria-labelledby="capir-auth-title">
+    <main className={styles.page} id="main-content" tabIndex={-1} aria-labelledby="capir-auth-title">
       <div className={styles.panel}>
         <header className={styles.header}>
           <BrandMark />
