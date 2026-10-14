@@ -594,7 +594,12 @@ private struct ConnectedQuietWorkspace: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            WorkspaceWebSurface(browser: browser, zoom: zoom)
+            // A covering view leaves WebKit controls reachable by accessibility
+            // and keyboard. Detach only its presentation; browser retains the
+            // same WebView and navigation/session ownership for recovery.
+            if !browser.signedOut && browser.failure == nil {
+                WorkspaceWebSurface(browser: browser, zoom: zoom)
+            }
             if browser.signedOut {
                 // Native signed-out surface only: the Web login page never
                 // paints inside the workspace window.
