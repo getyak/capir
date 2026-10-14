@@ -1111,7 +1111,7 @@ export function AgentCreatePersonCard({
   return (
     <section
       aria-labelledby="agent-create-title"
-      className="context-agent-create"
+      className={`context-agent-create ${styles.card}`}
     >
       <header>
         <span>
