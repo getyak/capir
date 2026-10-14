@@ -99,7 +99,7 @@ describe("quiet workspace shell render", () => {
       }),
     );
 
-    expect(html).toContain("今天想推进什么？");
+    expect(html).toContain("把没聊完的，接着聊。");
     expect(html).toContain("有什么想一起理清的？");
     // The default composer stays a single attachment/send pair: the person and
     // capture affordances live behind one compact add control, not a strip.

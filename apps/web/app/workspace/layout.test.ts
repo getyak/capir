@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
-const {claims,settings} = vi.hoisted(()=>({claims:vi.fn(),settings:vi.fn()}));
+const {claims,settings,testCookie} = vi.hoisted(()=>({claims:vi.fn(),settings:vi.fn(),testCookie:{present:true}}));
 vi.mock("@/auth",()=>({auth:async()=>({user:{name:"Owner"}})}));
-vi.mock("next/headers",()=>({cookies:async()=>({has:()=>true})}));
+vi.mock("next/headers",()=>({cookies:async()=>({has:()=>testCookie.present})}));
 vi.mock("@/app/login/actions",()=>({signOutOfWorkspace:vi.fn()}));
 vi.mock("@/app/workspace/settings/testing/actions",()=>({leaveTestWorkspace:vi.fn()}));
 vi.mock("@/lib/server/accountBackend",()=>({loadAccountSettings:settings}));
@@ -14,7 +14,7 @@ import WorkspaceLayout from "./layout";
 function snapshot(value: unknown): string {
  return JSON.stringify(value, (key,item) => key === "type" || key.startsWith("_") ? undefined : item);
 }
-beforeEach(()=>{vi.clearAllMocks();settings.mockRejectedValue(new Error("Settings unavailable"));});
+beforeEach(()=>{vi.clearAllMocks();testCookie.present=true;settings.mockRejectedValue(new Error("Settings unavailable"));});
 it("retains effective workspace scope when optional settings fail",async()=>{
  claims.mockResolvedValue({backendAccessToken:"synthetic-owned-session",backendRole:"member",backendUsername:"owner",backendAccountId:"rendered-test",backendUserId:"user-1",backendAccountName:"Test",backendAccountSlug:"lab-test",backendExpiresAt:new Date(Date.now()+60000).toISOString()});
  const rendered=snapshot(await WorkspaceLayout({children:"operational-child"}));
@@ -44,4 +44,16 @@ it("rejects labels returned for another identity",async()=>{
  const rendered=snapshot(await WorkspaceLayout({children:"operational-child"}));
  expect(rendered).not.toContain("Other user");
  expect(rendered).toContain('"accountName":"Owner"');
+});
+
+it("keeps reauthentication and all scope-clearing boundaries when no test cookie exists", async () => {
+  claims.mockResolvedValue(null);
+  testCookie.present = false;
+  const rendered = snapshot(await WorkspaceLayout({ children: "private-operational-child" }));
+  expect(rendered).toContain("/login?reason=backend_session_expired");
+  expect(rendered).not.toContain("返回我的空间");
+  expect(rendered).not.toContain("private-operational-child");
+  expect(rendered).toContain('"sessionVersion":null');
+  expect(rendered).toContain('"storageScope":null');
+  expect(rendered).toContain('"binding":null');
 });

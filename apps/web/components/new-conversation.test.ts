@@ -881,7 +881,7 @@ describe("authenticated home with a legacy conversation-home record", () => {
       createElement(WorkspaceNewConversation, READY),
     );
     expect(html).toContain("queued-conversation-composer");
-    expect(html).toContain("今天想推进什么？");
+    expect(html).toContain("把没聊完的，接着聊。");
     expect(html).not.toContain("new-conversation-objective");
   });
 });

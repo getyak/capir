@@ -62,15 +62,18 @@
 .workStatus { min-width:0; overflow-wrap:anywhere; }
 .workRow button { background:none; color:inherit; text-decoration:underline; border:0; padding:5px; cursor:pointer; font:inherit; font-size:13px; }
 .formingStatus { display:block; margin-top:7px; color:var(--muted); font-size:12px; line-height:18px; }
-.canvas[data-empty="true"] { justify-content:center; padding-bottom:32px; overflow:auto; }
+/* Fall back to the start when a banner or growing draft consumes the canvas. */
+.canvas[data-empty="true"] { justify-content:safe center; padding-bottom:32px; overflow:auto; }
 .canvas[data-empty="true"] .transcript { flex:0 0 auto; overflow:visible; padding:0 32px; scrollbar-gutter:auto; }
 .canvas[data-empty="true"] .content { max-width:680px; }
 .canvas[data-empty="true"] .dock { margin:28px auto 0; padding-top:0; max-width:728px; }
-.welcome { display:flex; align-items:center; gap:14px; padding:0 10px; margin:0; }
-.welcomeMark { width:29px; height:29px; flex:none; background:var(--workspace-brand-image) center / contain no-repeat; }
+.welcome { display:flex; align-items:flex-start; gap:14px; padding:0 10px; margin:0; }
+.welcomeMark { width:29px; height:29px; margin-top:6px; flex:none; background:var(--workspace-brand-image) center / contain no-repeat; }
+.welcome>div { min-width:0; }
 .welcome h2 { font-family:inherit; font-size:28px; font-weight:500; line-height:1.5; margin:0; }
+.welcome p { color:var(--muted); font-size:15px; line-height:1.8; margin:12px 0 0; max-width:48ch; }
 .starters { display:flex; justify-content:center; flex-wrap:wrap; gap:4px 18px; margin-top:18px; }
-.starters button { display:flex; gap:7px; align-items:center; border:0; border-radius:8px; padding:7px 3px; font-size:13px; background:none; color:var(--muted); cursor:pointer; transition:transform 100ms ease-out; }
+.starters button { display:flex; gap:7px; align-items:center; border:0; border-radius:8px; padding:9px 7px; min-height:44px; font-size:13px; background:none; color:var(--muted); cursor:pointer; transition:transform 100ms ease-out; }
 .starters button:hover { color:var(--ink); }
 .starters button:active { transform:scale(0.97); }
 .starters svg { opacity:.6; transform:rotate(45deg); }

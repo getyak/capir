@@ -3,6 +3,7 @@ import "@/components/workspace-theme.css";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
+import { ArrowRight } from "@phosphor-icons/react/dist/ssr";
 
 import { auth } from "@/auth";
 import { loadAccountSettings } from "@/lib/server/accountBackend";
@@ -35,6 +36,7 @@ import accountStyles from "@/components/account-settings.module.css";
 import { SystemHealthProvider } from "@/components/system-health-provider";
 import { AvatarPreferencesProvider } from "@/components/avatar-preferences-provider";
 import { WorkspaceAccountMenu } from "@/components/workspace-account-menu";
+import { WorkspaceAccessRecovery } from "@/components/workspace-access-recovery";
 import { MeetingDraftSessionBoundary } from "@/components/meeting-draft-session-boundary";
 import { WorkspaceDirectoryScope } from "@/components/workspace-directory-cache";
 import { SessionDraftSessionBoundary } from "@/components/session-draft-session-boundary";
@@ -138,19 +140,15 @@ export default async function WorkspaceLayout({
         <MeetingDraftSessionBoundary sessionVersion={null} />
         <SessionDraftSessionBoundary storageScope={null} />
         <WorkspaceDirectoryScope binding={null} />
-        <section className={accountStyles.section} aria-live="polite">
-          <h1>需要重新确认登录空间</h1>
-          <p className={accountStyles.error}>
-            登录空间已变化或会话已过期，暂不能显示工作区内容。
-          </p>
+        <WorkspaceAccessRecovery>
           {hasTestWorkspace ? (
             <form action={leaveTestWorkspace}>
-              <button type="submit">返回我的空间</button>
+              <button type="submit">返回我的空间<ArrowRight size={16} aria-hidden="true" /></button>
             </form>
           ) : (
-            <Link href="/login?reason=backend_session_expired">重新登录</Link>
+            <Link href="/login?reason=backend_session_expired">重新登录<ArrowRight size={16} aria-hidden="true" /></Link>
           )}
-        </section>
+        </WorkspaceAccessRecovery>
       </>
     );
   }
