@@ -4,9 +4,10 @@ import { SiteFooter } from "@/components/site-footer";
 import { SupportEmailEntry } from "@/components/support-email-entry";
 import { SiteHeader } from "@/components/site-header";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
+import { loadPublicMacRelease } from "@/lib/server/public-macos-release";
 import { siteConfig } from "@/lib/site";
 import { DeveloperSetup } from "./setup";
-import { MACOS_DOWNLOAD_HREF, MACOS_CHECKSUM_HREF, MACOS_RELEASES_HREF, MACOS_DISTRIBUTION_DOC_HREF, MACOS_VERSION } from "./release";
+import { MACOS_RELEASES_HREF, MACOS_DISTRIBUTION_DOC_HREF } from "./release";
 import styles from "./download.module.css";
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -20,7 +21,7 @@ function EntryIcon({ kind }: { kind: "mac" | "phone" | "web" | "tools" }) {
   </svg>;
 }
 export default async function DownloadPage() {
-  const locale = await getMarketingLocale();
+  const [locale, macRelease] = await Promise.all([getMarketingLocale(), loadPublicMacRelease()]);
   const en = locale === "en";
   return <><SiteHeader /><main id="main-content" tabIndex={-1} className={styles.page} lang={locale}>
     <section className={styles.hero} aria-labelledby="download-title">
@@ -35,8 +36,10 @@ export default async function DownloadPage() {
       </div>
       <div className={styles.entries}>
         <article className={styles.entry}>
-          <EntryIcon kind="mac" /><div><h2>macOS <span className={styles.badge}>{en ? "Preview" : "预览"}</span></h2><p>{en ? "Apple silicon + Intel · macOS 14+" : "Apple 芯片与 Intel · macOS 14+"}</p></div>
-          <a className={styles.primary} href={MACOS_DOWNLOAD_HREF}>{en ? "Download .dmg" : "下载 .dmg"}<span aria-hidden="true">↗</span></a>
+          <EntryIcon kind="mac" /><div><h2>macOS {macRelease?.preview ? <span className={styles.badge}>{en ? "Preview" : "预览"}</span> : null}</h2><p>{en ? "Apple silicon + Intel · macOS 14+" : "Apple 芯片与 Intel · macOS 14+"}</p>
+            <p className={styles.releaseIdentity}>{macRelease ? `${macRelease.version} (${macRelease.build}) · GitHub` : en ? "Release version unavailable" : "版本暂时不可读"}</p>
+          </div>
+          <a className={styles.primary} href={macRelease?.downloadHref ?? MACOS_RELEASES_HREF}>{macRelease ? en ? "Download .dmg" : "下载 .dmg" : en ? "View releases" : "查看发布包"}<span aria-hidden="true">↗</span></a>
         </article>
         <article className={styles.entry}>
           <EntryIcon kind="phone" /><div><h2>iPhone</h2><p>{en ? "Invited TestFlight preview" : "TestFlight 受邀预览"}</p></div>
@@ -54,13 +57,15 @@ export default async function DownloadPage() {
       </div>
     </section>
     <section className={styles.install} aria-labelledby="install-title">
-      <div><span className={styles.index}>{en ? "AFTER DOWNLOAD" : "下载之后"}</span><h2 id="install-title">{en ? "On your Mac, in three steps." : "在 Mac 上，三步开始。"}</h2><p>{en ? `Version ${MACOS_VERSION} · Developer ID signed and notarized. The installed app may still be named Talent Signal.` : `版本 ${MACOS_VERSION} · Developer ID 签名并公证。已发布应用可能仍名为 Talent Signal。`}</p></div>
+      <div><span className={styles.index}>{en ? "AFTER DOWNLOAD" : "下载之后"}</span><h2 id="install-title">{en ? "On your Mac, in three steps." : "在 Mac 上，三步开始。"}</h2><p>{macRelease
+        ? en ? `Published ${macRelease.version} (${macRelease.build}). Check the matching SHA-256 manifest before installing. The app is named Talent Signal.` : `发布版 ${macRelease.version}（${macRelease.build}）。安装前核对同一版本的 SHA-256 清单。应用名称为 Talent Signal。`
+        : en ? "We could not read the published version. Open the release list to check its installer and matching SHA-256 manifest." : "暂时无法读取发布版本。请到发布页核对安装包及配套的 SHA-256 清单。"}</p></div>
       <ol className={styles.installSteps}>
         <li><span>01</span><div><h3>{en ? "Install" : "安装"}</h3><p>{en ? "Open the DMG and drag Talent Signal to Applications." : "打开 DMG，将 Talent Signal 拖入「应用程序」。"}</p></div></li>
         <li><span>02</span><div><h3>{en ? "Connect" : "连接"}</h3><p>{en ? "Enter the HTTPS workspace address your owner provides. Private workspaces require their authorized network." : "输入工作区所有者提供的 HTTPS 地址。私有工作区需先连入获准网络。"}</p></div></li>
         <li><span>03</span><div><h3>{en ? "Sign in" : "登录"}</h3><p>{en ? "Sign in in your browser, then return to the Mac app." : "在系统浏览器中登录，再回到 Mac 客户端。"}</p></div></li>
       </ol>
-      <div className={styles.installLinks}><a href={MACOS_CHECKSUM_HREF}>{en ? "SHA-256 checksums" : "SHA-256 校验清单"} ↗</a><a href={MACOS_RELEASES_HREF}>{en ? "All releases" : "所有发布版本"} ↗</a><a href={MACOS_DISTRIBUTION_DOC_HREF}>{en ? "Installation guide" : "完整安装说明"} ↗</a></div>
+      <div className={styles.installLinks}>{macRelease ? <a href={macRelease.checksumHref}>{en ? "SHA-256 checksums" : "SHA-256 校验清单"} ↗</a> : null}<a href={MACOS_RELEASES_HREF}>{en ? "All releases" : "所有发布版本"} ↗</a><a href={MACOS_DISTRIBUTION_DOC_HREF}>{en ? "Installation guide" : "完整安装说明"} ↗</a></div>
     </section>
     <DeveloperSetup locale={locale} />
     <section className={styles.help} aria-labelledby="help-title"><div><p className={styles.kicker}>{en ? "A LITTLE HELP" : "需要一点帮助"}</p><h2 id="help-title">{en ? "An easier start." : "让开始，更顺手。"}</h2><SupportEmailEntry className={styles.textLink}>{siteConfig.email} ↗</SupportEmailEntry></div><div className={styles.faqs}>
