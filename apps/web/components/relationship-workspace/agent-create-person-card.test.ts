@@ -274,6 +274,22 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+describe("create-contact mount admission", () => {
+  it("becomes editable when its authenticated scope mounts in the same React commit", async () => {
+    delete scopeContainer.dataset.workspaceScope;
+    await act(async () => root.render(createElement("div", { "data-workspace-scope": SYNTHETIC_WORKSPACE },
+      createElement(AgentCreatePersonCard, { onCancel: mock.cancelled, onCommitted: mock.committed, onDeferred: mock.deferred }))));
+    rootMounted = true;
+    const name = host.querySelector<HTMLInputElement>('input[placeholder="例如：陈雅宁"]');
+    expect(name?.disabled).toBe(false);
+    expect(host.textContent).not.toContain("未找到工作台上下文");
+    await type('input[placeholder="例如：陈雅宁"]', NAME);
+    await flush();
+    expect(name?.value).toBe(NAME);
+    expect(resourcePosts()).toHaveLength(0);
+  });
+});
+
 describe("create-contact resource request identity", () => {
   it("binds a captured_at observation time to the first source and the confirmed clue", async () => {
     await render();
