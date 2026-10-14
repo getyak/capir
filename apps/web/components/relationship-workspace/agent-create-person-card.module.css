@@ -1,3 +1,17 @@
+.card button,
+.card summary {
+  min-height: 44px;
+  scroll-margin-block-start: 12px;
+}
+
+.card > header button {
+  min-width: 44px;
+}
+
+.card summary {
+  padding-block: 10px;
+}
+
 .primaryAction {
   scroll-margin-block-end: 16px;
 }

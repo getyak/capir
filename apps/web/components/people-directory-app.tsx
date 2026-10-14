@@ -94,7 +94,7 @@ export function PeopleDirectoryApp({
                 </Link>
               ) : (
                 <Link
-                  href={withReturnSession("/workspace?surface=desk", returnSessionId)}
+                  href={withReturnSession("/workspace?surface=desk&intent=create-contact", returnSessionId)}
                 >
                   添加第一位联系人
                 </Link>
