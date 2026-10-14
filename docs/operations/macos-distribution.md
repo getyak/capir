@@ -107,6 +107,13 @@ or Gatekeeper assessment. It never falls back to a preview silently.
 Manual dispatch accepts only the current default branch and requires successful
 push CI for that exact revision.
 
+Publication also requires that the packaged revision still be the current
+`main` revision. When landing consecutive changes during a signed Mac release, wait
+for the signed downloads and latest appcast entry to be published and read back
+before advancing `main`. If `main` moves during packaging, publication fails
+closed and a later successful CI run evaluates the newer revision. Keep that
+guard intact; do not retag stale source or replace published package bytes.
+
 ## Signing configuration
 
 Infisical remains the canonical secret store. Configure a separate GitHub OIDC
