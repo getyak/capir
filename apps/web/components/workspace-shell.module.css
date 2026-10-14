@@ -1789,8 +1789,9 @@
 .sidebarScroll { margin-top:20px; }
 .groupTitle { font-size:11px; line-height:18px; padding:0 10px; }
 .historyBar { align-items:center; display:flex; gap:2px; margin-bottom:4px; }
+.historyBar > .historyDisclosure { flex:1 1 auto; min-width:0; width:auto; }
 .historyHeader { flex:1; font-size:11px; min-width:0; }
-.newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; font-size:11px; gap:4px; height:32px; padding:0 6px; }
+.newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; font-size:11px; gap:4px; height:44px; padding:0 6px; }
 .newConversation:hover { background:var(--hover); color:var(--ink); }
 .personChips { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; padding:0 8px; }
 .personChip { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--ink); cursor:pointer; display:flex; font:inherit; font-size:12px; gap:6px; height:32px; width:100%; min-width:0; padding:4px 0; text-align:left; }

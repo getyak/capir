@@ -4,7 +4,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowUpRight, X } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import type { PersonContextPreview } from "@/lib/person-context-preview";
 import { subscribeWorkspaceDirectoryInvalidation } from "@/lib/workspace-directory-cache";
 import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./workspace-session-request";
@@ -22,16 +22,39 @@ const date = (value: string) => new Date(value).toLocaleDateString("zh-CN", {mon
 export function PersonContextPanelProvider({binding, children}: {binding: string | null; children: ReactNode}) {
   const pathname = usePathname();
   const [selection, setSelection] = useState<Selection | null>(null);
+  // Discard is authorization loss, not a retryable read error. Keep its fence
+  // for this Provider's lifetime, including close/reopen and binding changes.
+  // Store at most 64 bindings; never evict a tombstone and revive old access.
+  // If that bound is exhausted, this Provider stays closed until remounted.
+  // This is memory-only denial, never a source of new session authority.
+  const revoked = useRef({bindings: new Set<string>(), exhausted: false});
+  const bindingDenied = useCallback((candidate: string) => revoked.current.exhausted || revoked.current.bindings.has(candidate), []);
+  const denyBinding = useCallback((candidate: string) => {
+    const fence = revoked.current;
+    if (!fence.bindings.has(candidate)) {
+      if (fence.bindings.size >= 64) fence.exhausted = true;
+      else fence.bindings.add(candidate);
+    }
+    const exhausted = fence.exhausted;
+    setSelection(previous => exhausted || previous?.binding === candidate ? null : previous);
+  }, []);
   // Render-time fences hide content before effects run on any scope or route
   // transition. Clear the intent too, so browser Back never reopens old data.
   const current = selection?.binding === binding && selection?.pathname === pathname ? selection : null;
   useEffect(() => { if (selection && !current) queueMicrotask(() => setSelection(previous => previous === selection ? null : previous)); }, [selection, current]);
   const open = useCallback((personId: string, opener?: HTMLElement | null) => {
-    if (!binding) return;
+    if (!binding || bindingDenied(binding)) return;
     setSelection({personId, binding, pathname, returnSession: pathname.match(/^\/workspace\/sessions\/([\da-f-]+)$/i)?.[1] ?? null, opener: opener ?? null});
-  }, [binding, pathname]);
+  }, [binding, pathname, bindingDenied]);
   const close = useCallback(() => setSelection(null), []);
-  useEffect(() => { window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT,close); return () => window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT,close); }, [close]);
+  useEffect(() => subscribeWorkspaceDirectoryInvalidation((keys, mode) => {
+    if (mode === "discard" && binding && (keys === null || keys.includes(binding))) denyBinding(binding);
+  }), [binding, denyBinding]);
+  useEffect(() => {
+    const expired = () => { if (binding) denyBinding(binding); else close(); };
+    window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT,expired);
+    return () => window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT,expired);
+  }, [binding, denyBinding, close]);
   return <Context.Provider value={{open, selectedId: current?.personId ?? null}}>
     <Dialog.Root open={Boolean(current)} onOpenChange={value => {if (!value) close();}} modal>
       {children}
@@ -39,14 +62,14 @@ export function PersonContextPanelProvider({binding, children}: {binding: string
         <Dialog.Content aria-describedby={undefined} className={`ts-workspace-theme ts-workspace-surface ${styles.panel}`} data-person-context-panel
           onCloseAutoFocus={event => {event.preventDefault(); const target = current.opener; requestAnimationFrame(() => {if (target?.isConnected) target.focus(); else document.querySelector<HTMLElement>("#queued-conversation-composer")?.focus();});}}>
           <div className={styles.top}><Dialog.Title>人物背景</Dialog.Title><Dialog.Close aria-label="关闭人物背景" className={styles.close}><X size={18} aria-hidden="true" /></Dialog.Close></div>
-          <Preview key={`${current.binding}:${current.personId}`} selection={current}/>
+          <Preview key={`${current.binding}:${current.personId}`} selection={current} bindingDenied={bindingDenied} denyBinding={denyBinding}/>
         </Dialog.Content>
       </Dialog.Portal>}
     </Dialog.Root>
   </Context.Provider>;
 }
 
-function Preview({selection}: {selection: Selection}) {
+function Preview({selection, bindingDenied, denyBinding}: {selection: Selection; bindingDenied: (binding: string) => boolean; denyBinding: (binding: string) => void}) {
   const [result, setResult] = useState<PersonContextPreview | null>(null);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -56,7 +79,7 @@ function Preview({selection}: {selection: Selection}) {
     let requestVersion = 0;
     let inFlight = false;
     async function load(force = false) {
-      if (!owned || (inFlight && !force)) return;
+      if (!owned || bindingDenied(selection.binding) || (inFlight && !force)) return;
       controller?.abort();
       controller = new AbortController();
       const signal = controller.signal;
@@ -73,11 +96,11 @@ function Preview({selection}: {selection: Selection}) {
         if (!response.ok) throw new Error("unavailable");
         const body = await response.json() as PersonContextPreview;
         if (body.session_version !== selection.binding || body.person?.id !== selection.personId) throw new Error("stale");
-        if (owned && version === requestVersion && coordinatorScopeIsCurrent(selection.binding, generation)) {
+        if (owned && !bindingDenied(selection.binding) && version === requestVersion && !signal.aborted && coordinatorScopeIsCurrent(selection.binding, generation)) {
           setResult(body); setFailed(false);
         }
       } catch {
-        if (owned && version === requestVersion && !signal.aborted) {setResult(null); setFailed(true);}
+        if (owned && !bindingDenied(selection.binding) && version === requestVersion && !signal.aborted) {setResult(null); setFailed(true);}
       } finally {
         if (version === requestVersion) inFlight = false;
       }
@@ -88,11 +111,11 @@ function Preview({selection}: {selection: Selection}) {
     const unsubscribe = subscribeWorkspaceDirectoryInvalidation((keys, mode) => {
       if (keys && !keys.includes(selection.binding)) return;
       if (mode === "revalidate") void load(true);
-      else { requestVersion++; controller?.abort(); inFlight = false; setResult(null); setFailed(true); }
+      else { denyBinding(selection.binding); requestVersion++; controller?.abort(); inFlight = false; setResult(null); setFailed(true); }
     });
     void load();
     return () => {owned = false; controller?.abort(); unsubscribe(); unsubscribeRefresh();};
-  }, [selection.binding, selection.personId, attempt]);
+  }, [selection.binding, selection.personId, attempt, bindingDenied, denyBinding]);
   const canonical = withReturnSession(`/workspace/people/${selection.personId}`, selection.returnSession);
   if (failed) return <div className={styles.state} role="alert"><p>人物背景暂时无法读取。</p><button onClick={() => {setFailed(false); setAttempt(value => value + 1);}}>重试</button><p>不会使用陈旧内容补齐。</p></div>;
   if (!result) return <div className={styles.state} role="status">正在读取人物背景…</div>;
