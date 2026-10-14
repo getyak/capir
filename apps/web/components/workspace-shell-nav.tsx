@@ -139,7 +139,7 @@ function RailControl({
         if (!isNew || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
         event.preventDefault();
         const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT,{cancelable:true}));
-        if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}`);
+        if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`);
       }}
     >
       <NavigationIcon
@@ -220,7 +220,7 @@ export function WorkspaceShellNav({
 
   function startNewConversation() {
     const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }));
-    if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}`);
+    if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`);
   }
 
   return (

@@ -3,7 +3,7 @@
 import { ArrowUp, ArrowClockwise, Warning } from "@phosphor-icons/react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -129,11 +129,13 @@ export function WorkspaceNewConversation({
   storageScope: string | null;
 }) {
   const router = useRouter();
+  const search = useSearchParams();
+  const focusComposer = Boolean(bootstrap && search.get("intent") === "compose" && search.get("draft_session") === bootstrap.sessionId);
   const [restarting, setRestarting] = useState(false);
   useEffect(() => { queueMicrotask(() => setRestarting(false)); }, [bootstrap?.sessionId]);
 
   useEffect(() => {
-    const reset = (event: Event) => { event.preventDefault(); if (storageScope) conversationHome(storageScope, null); setRestarting(true); router.push(`/workspace?draft_session=${crypto.randomUUID()}`); };
+    const reset = (event: Event) => { event.preventDefault(); if (storageScope) conversationHome(storageScope, null); setRestarting(true); router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`); };
     window.addEventListener(WORKSPACE_NEW_CONVERSATION_EVENT, reset);
     return () =>
       window.removeEventListener(WORKSPACE_NEW_CONVERSATION_EVENT, reset);
@@ -145,6 +147,7 @@ export function WorkspaceNewConversation({
       accountId={accountId}
       key={bootstrap?.sessionId ?? "home"}
       bootstrap={bootstrap}
+      focusComposer={focusComposer}
       sessionBinding={sessionBinding}
       sessionVersion={sessionVersion}
       storageScope={storageScope}
@@ -152,7 +155,7 @@ export function WorkspaceNewConversation({
   );
 }
 
-function ConversationCanvas(props: { bootstrap?: { sessionId: string; capability: string } | null; accountId: string | null; sessionVersion: string | null; sessionBinding: string | null; storageScope: string | null }) {
+function ConversationCanvas(props: { bootstrap?: { sessionId: string; capability: string } | null; focusComposer?: boolean; accountId: string | null; sessionVersion: string | null; sessionBinding: string | null; storageScope: string | null }) {
   const { accountId, sessionVersion, sessionBinding, storageScope } = props;
   // Storage is never a render input, so the first client render matches the
   // server and an authenticated-ready home never mounts a live legacy
@@ -184,6 +187,7 @@ function ConversationCanvas(props: { bootstrap?: { sessionId: string; capability
       legacyRecovery={recovery}
       scope={storageScope}
       bootstrap={props.bootstrap}
+      focusComposer={props.focusComposer}
     />
   );
 }

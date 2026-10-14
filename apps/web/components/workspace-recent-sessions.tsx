@@ -75,7 +75,7 @@ export function WorkspaceRecentSessions({
     const unhandled = window.dispatchEvent(
       new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }),
     );
-    if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}`);
+    if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`);
   }
 
   return (

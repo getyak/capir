@@ -59,13 +59,16 @@ export function queueFailureText(code: string | null, hasImages: boolean): strin
   return "上次未完成，请重试或移除";
 }
 
-type Props = { bootstrap?: { sessionId: string; capability: string } | null; initialDetail?: SessionDetail; scope: string; chatBinding: string; detailBinding: string; meetingLinks?: Array<{id: string; title: string}>; meetingReadFailed?: boolean; legacyRecovery?: LegacyConversationRecovery | null; entryCapability?: string | null };
+type Props = { bootstrap?: { sessionId: string; capability: string } | null; focusComposer?: boolean; initialDetail?: SessionDetail; scope: string; chatBinding: string; detailBinding: string; meetingLinks?: Array<{id: string; title: string}>; meetingReadFailed?: boolean; legacyRecovery?: LegacyConversationRecovery | null; entryCapability?: string | null };
 export function QueuedConversation(props: Props) {
   const router = useRouter();
   const [id, setId] = useState<string | null>(props.initialDetail?.session_id ?? null);
   const [admitted, setAdmitted] = useState(Boolean(props.initialDetail));
   const handedOff = useRef(Boolean(props.initialDetail));
   const navigating = useRef(false);
+  // Home admits the exact draft's compose intent before bootstrap canonicalizes
+  // its URL. Keep it only for this mount, until the asynchronous editor is ready.
+  const focusRequested = useRef(props.focusComposer ?? false);
   useEffect(() => {
     // A Next Link can be pending while the old pathname is still visible.
     const leaving = () => { navigating.current = true; };
@@ -257,6 +260,13 @@ export function QueuedConversation(props: Props) {
   useEffect(() => { if (chat.ready && chat.draft && props.initialDetail) document.getElementById("queued-conversation-composer")?.focus({ preventScroll: true }); /* Restore focus only at initial hydration. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.ready]);
+  useEffect(() => {
+    if (!focusRequested.current || !chat.ready || chat.unavailable || props.initialDetail || navigating.current) return;
+    const composer = document.getElementById("queued-conversation-composer");
+    if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) return;
+    focusRequested.current = false;
+    composer.focus({ preventScroll: true });
+  }, [chat.ready, chat.unavailable, props.initialDetail]);
   function latest() { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
   async function send() { if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
   function navigate(href: string) { navigating.current = true; router.push(href); }

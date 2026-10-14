@@ -131,7 +131,7 @@ describe("expanded and collapsed workspace navigation", () => {
     const action = host.querySelector<HTMLButtonElement>('[data-collapsed-only="true"] button[aria-label="开始新对话"]');
     expect(action).toBeTruthy(); await act(async () => action!.click());
     const first = String(state.push.mock.calls[0]?.[0]);
-    expect(first).toMatch(/^\/workspace\?draft_session=[0-9a-f-]{36}$/u);
+    expect(first).toMatch(/^\/workspace\?draft_session=[0-9a-f-]{36}&intent=compose$/u);
     await act(async () => action!.click());
     expect(state.push.mock.calls[1]?.[0]).not.toBe(first);
   });
@@ -150,7 +150,7 @@ describe("expanded and collapsed workspace navigation", () => {
     await act(async () => action.dispatchEvent(event));
     expect(event.defaultPrevented).toBe(false); expect(state.push).not.toHaveBeenCalled();
     await act(async () => action.click());
-    expect(String(state.push.mock.calls[0]?.[0])).toMatch(/^\/workspace\?draft_session=[0-9a-f-]{36}$/u);
+    expect(String(state.push.mock.calls[0]?.[0])).toMatch(/^\/workspace\?draft_session=[0-9a-f-]{36}&intent=compose$/u);
   });
 
   it("hides failed or incorrectly bound recent projections and keeps retry and whole-directory access", async () => {
