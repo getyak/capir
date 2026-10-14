@@ -123,7 +123,10 @@ struct DesktopBrowserLoginSurface: View {
                         .controlSize(.large)
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("desktop.login.checkResult")
-                    loginButton.buttonStyle(.link)
+                    loginButton
+                        .buttonStyle(.link)
+                        .keyboardShortcut(.return, modifiers: [.option])
+                        .help("重新开始登录（⌥↩）")
                 } else {
                     primaryLoginButton
                 }
