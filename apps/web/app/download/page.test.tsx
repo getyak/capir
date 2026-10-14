@@ -32,8 +32,9 @@ describe("published Mac download entry", () => {
     vi.stubGlobal("fetch", async () => new Response(JSON.stringify([published("0.2.8", 999)])));
     const html = await renderPage();
     const iphone = html.match(/<article\b[^>]*>[\s\S]*?<\/article>/g)?.find(article => article.includes("<h2>iPhone</h2>"));
-    expect(iphone).toContain('href="mailto:hello@talentsignal.ai?subject=');
-    expect(iphone).not.toMatch(/testflight\.apple\.com|apps\.apple\.com/);
+    const links = Array.from(iphone?.matchAll(/<a\b[^>]*href="([^"]+)"/g) ?? [], match => match[1]);
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatch(/^mailto:hello@talentsignal\.ai\?subject=/);
   });
 
   it("follows a complete published preview cohort instead of a hard-coded installer", async () => {
