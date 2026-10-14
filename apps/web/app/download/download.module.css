@@ -1,5 +1,6 @@
 .page { max-width: 1180px; padding: 0 36px; margin: 0 auto; color: var(--ink); }
 .page a, .page button, .page summary { -webkit-tap-highlight-color: transparent; }
+.page a, .page button, .page summary, .page pre { scroll-margin-top: 100px; scroll-margin-bottom: 16px; }
 .page a:focus-visible, .page button:focus-visible, .page summary:focus-visible, .page pre:focus-visible { outline: 2px solid var(--focus); outline-offset: 5px; }
 .hero { display: grid; grid-template-columns: 1fr 1.06fr; gap: 72px; align-items: center; padding: 74px 0 65px; }
 .kicker { font-size: 12px; font-weight: 600; letter-spacing: .1em; color: var(--muted-strong); margin: 0 0 18px; }
@@ -16,6 +17,7 @@
 .entry > svg { color: var(--muted-strong); }
 .entry h2 { font-size: 18px; font-weight: 600; margin: 0 0 5px; display: flex; align-items: center; gap: 10px; }
 .entry p { color: var(--muted-strong); font-size: 12px; margin: 0; line-height: 1.6; }
+.entry .releaseIdentity { color: var(--ink-soft); font-variant-numeric: tabular-nums; margin-top: 5px; }
 .badge { font-size: 10px; letter-spacing: .04em; font-weight: 500; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted-strong); }
 .primary, .secondary { display: inline-flex; align-items: center; justify-content: center; gap: 12px; min-height: 44px; padding: 9px 15px; border-radius: 7px; white-space: nowrap; font-size: 13px; text-decoration: none; font-weight: 500; transition: background .18s ease, border-color .18s ease; }
 .primary { background: var(--ink); color: var(--background); border: 1px solid var(--ink); }
@@ -97,13 +99,21 @@
   .entry { grid-template-columns: 22px 1fr auto; gap: 9px; }
   .entry > svg { width: 22px; }
   .entry h2 { font-size: 16px; gap: 5px; }
-  .entry p { font-size: 11px; }
-  .badge { font-size: 9px; }
-  .primary, .secondary { padding: 8px 9px; font-size: 11px; }
   .installSteps { grid-template-columns: 1fr; gap: 19px; }
   .installSteps li { display: flex; gap: 19px; }
   .installSteps h3 { margin-top: 0; }
   .switcher button { padding: 8px 10px; }
+}
+/* Reflow the task instead of scaling its text and controls down on a phone. */
+@media (max-width: 520px) {
+  .entry { align-items: start; grid-template-columns: 22px minmax(0, 1fr); gap: 10px 14px; }
+  .entry > svg { margin-top: 3px; width: 22px; }
+  .entry > div { min-width: 0; }
+  .entry > a, .entry > span { grid-column: 2; justify-self: start; max-width: 100%; }
+  .entry h2 { font-size: 17px; }
+  .entry p { font-size: 12px; }
+  .badge { font-size: 11px; }
+  .primary, .secondary { font-size: 13px; padding: 9px 15px; }
 }
 @media (prefers-reduced-motion: reduce) { .page *, .page *::before, .page *::after { transition: none !important; scroll-behavior: auto !important; } }
 @media (forced-colors: active) { .primary, .secondary, .switcher button[aria-pressed="true"], .codeBox { border-color: ButtonText; } }
