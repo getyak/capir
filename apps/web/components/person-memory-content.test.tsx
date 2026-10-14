@@ -55,6 +55,17 @@ describe("person document interactions", () => {
     expect(host.textContent).not.toContain("下个月可以聊一下试点");
     await click("原始摘录"); expect(host.textContent).toContain("暂无可读取"); expect(host.textContent).not.toContain("下个月可以聊一下试点");
   });
+  it.each(["逐条记忆", "阅读概览", "原始摘录"])("does not describe unreadable memory as empty in %s", async mode => {
+    await mount([memory()], true);
+    await click(mode);
+    fetcher.mockResolvedValueOnce(Response.json({}, { status: 404 }));
+    await click("继续加载记忆");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("访问范围已不可用");
+    expect(host.textContent).not.toContain("还没有已确认的记忆");
+    expect(host.textContent).not.toContain("确认记忆后，这里会形成阅读概览");
+    expect(host.textContent).not.toContain("暂无可读取的原始摘录");
+    expect(host.textContent).not.toContain("0 条");
+  });
   it("keeps editing in place, cancels without a write, and lets IME own Enter/Escape", async () => {
     await mount(); await click("修改"); const textarea = await draft("我补充的记忆");
     expect(document.activeElement).toBe(textarea); expect(button("阅读概览").disabled).toBe(true);

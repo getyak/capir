@@ -1,4 +1,4 @@
-/* A compact document: reviewed fields on the left, scoped Memory on the right. */
+/* Relationship context and governed Memory lead; biography is supporting reference. */
 .main { --workspace-title-size: 1.5rem; --workspace-section-size: 1rem; --workspace-meta-size: .8125rem; margin: 0 auto; max-width: 1120px; padding: 20px 40px 80px; }
 .pageNavigation { margin-bottom: 14px; }
 .backLink { align-items: center; color: var(--muted-strong); display: inline-flex; font-size: var(--workspace-meta-size); gap: 7px; min-height: 44px; padding: 0 4px; text-decoration: none; }
@@ -7,8 +7,9 @@
 .identityText { min-width: 0; }
 .identityText h1 { font-size: var(--workspace-title-size); font-weight: 600; line-height: 1.4; margin: 0; overflow-wrap: anywhere; }
 .identityNote { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.6; margin: 4px 0 0; overflow-wrap: anywhere; }
-.columns { display: grid; gap: 44px; grid-template-columns: minmax(200px, 256px) minmax(0, 1fr); margin-top: 26px; }
+.columns { display: grid; gap: 44px; grid-template-columns: minmax(0, 1fr) minmax(200px, 256px); margin-top: 26px; }
 .contextColumn, .memoryColumn { min-width: 0; }
+.contextColumn { border-left: 1px solid var(--line-soft); padding-left: 28px; }
 .sectionTitle { font-size: var(--workspace-section-size); font-weight: 600; line-height: 1.5; margin: 0; }
 .sectionHeading { align-items: baseline; display: flex; gap: 12px; justify-content: space-between; }
 .sectionCount { color: var(--muted); font-size: var(--workspace-meta-size); white-space: nowrap; }
@@ -27,9 +28,10 @@
 .profileSummary { border-top: 1px solid var(--line-soft); margin-top: 23px; padding-top: 20px; }
 .profileSummary p { font-size: var(--workspace-body-size); line-height: 1.75; margin: 12px 0 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .profileSummary small { color: var(--muted); font-size: var(--workspace-meta-size); line-height: 1.6; }
-.contexts { margin-bottom: 24px; }
+.contexts { margin-bottom: 28px; }
+.contextHint { color: var(--muted); font-size: var(--workspace-meta-size); line-height: 1.7; margin: 6px 0 0; }
 .contextList { display: flex; flex-wrap: wrap; gap: 2px 16px; list-style: none; margin: 8px 0 0; padding: 0; }
-.contextRow { align-items: center; color: var(--ink); display: inline-flex; font-size: var(--workspace-body-size); gap: 6px; min-height: 44px; padding: 0 1px; text-decoration: none; transition: color 140ms var(--ease-out); }
+.contextRow { align-items: center; border-bottom: 1px solid var(--line); color: var(--ink); display: inline-flex; font-size: var(--workspace-body-size); gap: 20px; min-height: 44px; padding: 0 1px; text-decoration: none; transition: color 140ms var(--ease-out); }
 .contextRow:hover { color: var(--muted-strong); }
 .contextLabel { overflow-wrap: anywhere; }
 .contextRow svg { color: var(--muted); flex: 0 0 auto; }
@@ -76,6 +78,9 @@
 .error { color: var(--danger, var(--ink)); font-size: var(--workspace-meta-size); line-height: 1.7; margin: 10px 0; overflow-wrap: anywhere; }
 .saveNotice { color: var(--muted-strong); font-size: var(--workspace-meta-size); line-height: 1.6; margin: 8px 0 16px; }
 .quiet, .layerHelp { color: var(--muted); font-size: var(--workspace-meta-size); line-height: 1.7; margin: 12px 0 0; overflow-wrap: anywhere; }
+.emptyMemory { border-bottom: 1px solid var(--line-soft); padding: 22px 0 24px; }
+.emptyMemory h3 { font-size: var(--workspace-body-size); font-weight: 500; line-height: 1.6; margin: 0 0 8px; }
+.emptyMemory p { color: var(--muted-strong); font-size: var(--workspace-meta-size); line-height: 1.8; margin: 0; max-width: 44ch; overflow-wrap: anywhere; }
 .layerHelp { margin: 0 0 18px; }
 .reading article + article { margin-top: 22px; }
 .readingParagraph { margin-top: 10px; }
@@ -96,6 +101,7 @@
 @media (max-width: 860px) {
   .main { padding: 20px 24px 76px; }
   .columns { gap: 32px; grid-template-columns: minmax(0, 1fr); margin-top: 23px; }
+  .contextColumn { border-left: 0; border-top: 1px solid var(--line-soft); padding: 24px 0 0; }
   .basicFields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 25px; }
   .profileSummary { margin-top: 19px; padding-top: 18px; }
 }

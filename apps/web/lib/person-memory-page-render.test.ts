@@ -71,6 +71,12 @@ describe("saved Person destination", () => {
     expect(review).not.toHaveBeenCalled();
   });
 
+  it("puts relationship context and saved memory before biography in the document reading order", async () => {
+    const html = await render();
+    expect(html.indexOf('id="person-contexts"')).toBeLessThan(html.indexOf('id="person-memory-accepted"'));
+    expect(html.indexOf('id="person-memory-accepted"')).toBeLessThan(html.indexOf('id="person-basic-fields"'));
+  });
+
   it.each(["name", "expired_handle", "confirmed_handle"])("does not promote a %s identity clue beyond its authority", async (kind) => {
     const data = fixture();
     loadPersonMemory.mockResolvedValue({ ...data, person: { ...data.person, identity_matches: [{ kind }] } });

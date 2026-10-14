@@ -107,7 +107,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   return <div ref={root}>
     <section className={styles.section} aria-labelledby="person-memory-accepted">
       <div className={styles.sectionHeading}><h2 className={styles.sectionTitle} id="person-memory-accepted">已确认记忆</h2>
-        <span className={styles.sectionCount}>{ordinary.length}{controller.hasMore ? "+" : ""} 条</span></div>
+        <span className={styles.sectionCount}>{controller.loadError && !ordinary.length ? "暂不可读取" : <>{ordinary.length}{controller.hasMore ? "+" : ""} 条</>}</span></div>
       <nav className={styles.layers} aria-label="记忆阅读方式">
         {([ ["memory", "逐条记忆"], ["reading", "阅读概览"], ["raw", "原始摘录"] ] as const).map(([value, label]) =>
           <button key={value} className={styles.layer} aria-pressed={mode === value} disabled={Boolean(edit)} type="button" onClick={() => setMode(value)}>{label}</button>)}
@@ -116,7 +116,10 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
       {controller.notice ? <p className={styles.saveNotice} role="status">{controller.notice}</p> : null}
       {edit && !ordinary.some(item => item.id === edit.itemId) ? editor : null}
       {mode === "memory" ? <>
-        {!ordinary.length ? <p className={styles.quiet}>还没有已确认的记忆；确认后的内容会显示在这里。</p> : groups.map(group =>
+        {!ordinary.length ? !controller.loadError && <div className={styles.emptyMemory}>
+          <h3>{controller.hasMore ? "这一页还没有已确认的记忆" : "还没有已确认的记忆"}</h3>
+          <p>{controller.hasMore ? "还有已保存内容，可继续加载查看。" : "可以在相关对话里补充背景。有可保存的内容时，先由你核对，再留下记忆。"}</p>
+        </div> : groups.map(group =>
           <article className={styles.scopeGroup} key={group.scope}>
             <h3 className={styles.scopeTitle}>{MEMORY_SCOPE_LABELS[group.scope]}</h3>
             <ul className={styles.memoryList}>{group.items.map(item => <li className={styles.memoryItem} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}>
@@ -136,13 +139,13 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
           </article>)}
       </> : mode === "reading" ? <div className={styles.reading}>
         <p className={styles.layerHelp}>按已确认记忆整理的阅读视图，不新增事实。修改请回到逐条记忆。</p>
-        {!groups.length ? <p className={styles.quiet}>确认记忆后，这里会形成阅读概览。</p> : groups.map(group => <article key={group.scope}>
+        {!groups.length ? !controller.loadError && <p className={styles.quiet}>{controller.hasMore ? "当前已加载内容中还没有阅读概览，可继续加载查看。" : "确认记忆后，这里会形成阅读概览。"}</p> : groups.map(group => <article key={group.scope}>
           <h3 className={styles.scopeTitle}>{MEMORY_SCOPE_LABELS[group.scope]}</h3>
           {group.items.map(item => <div className={styles.readingParagraph} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><p>{item.display_text}</p><small>{memoryAttribution(item)} · <MemoryTime item={item} /></small></div>)}
         </article>)}
       </div> : <div className={styles.raw}>
         <p className={styles.layerHelp}>仅显示仍在保留的来源摘录。原话和来源时间保留，不代替已确认记忆。</p>
-        {!raw.length ? <p className={styles.quiet}>暂无可读取的原始摘录。未保留、已删除或不可用的来源不会显示。</p> : raw.map(item => <article className={styles.rawItem} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><h3>{item.display_text}</h3>{item.conflict_group_id ? <p className={styles.conflictNote}>存在冲突 · 待核对</p> : null}<SourceExcerpts item={item} /></article>)}
+        {!raw.length ? !controller.loadError && <p className={styles.quiet}>{controller.hasMore ? "当前已加载内容中没有可读取的摘录，可继续加载查看。" : "暂无可读取的原始摘录。未保留、已删除或不可用的来源不会显示。"}</p> : raw.map(item => <article className={styles.rawItem} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><h3>{item.display_text}</h3>{item.conflict_group_id ? <p className={styles.conflictNote}>存在冲突 · 待核对</p> : null}<SourceExcerpts item={item} /></article>)}
       </div>}
       {controller.hasMore ? <div className={styles.pagination}><Button variant="ghost" disabled={controller.loadingMore || Boolean(edit)} onClick={() => void controller.loadMore()}>{controller.loadingMore ? "正在加载…" : "继续加载记忆"}</Button><span>还有已保存内容</span></div> : null}
     </section>
