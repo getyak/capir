@@ -4999,31 +4999,6 @@ private struct WorkspacePersonDetailView: View {
             .accessibilityIdentifier("person-detail-name")
     }
 
-    private func roleTypeLabel(_ roleType: String) -> String {
-        switch roleType {
-        case "candidate": appLanguage.text("Candidate")
-        case "client": appLanguage.text("Client")
-        default: roleType.humanized
-        }
-    }
-
-    private func roleStatusLabel(_ status: String) -> String {
-        switch status {
-        case "active": appLanguage.text("Active role")
-        case "quiet": appLanguage.text("Quiet role")
-        case "removed": appLanguage.text("Removed role")
-        default: status.humanized
-        }
-    }
-
-    private func roleConfidenceLabel(_ confidence: String) -> String {
-        switch confidence {
-        case "confirmed": appLanguage.text("Confirmed role")
-        case "suggested": appLanguage.text("Suggested role")
-        default: confidence.humanized
-        }
-    }
-
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -5047,7 +5022,7 @@ private struct WorkspacePersonDetailView: View {
                                     .font(.headline)
                                     .foregroundStyle(Color.tsInk)
                                     .accessibilityIdentifier("person-detail-role-title-\(role.id)")
-                                Text("\(roleTypeLabel(role.roleType)) · \(roleStatusLabel(role.status)) · \(roleConfidenceLabel(role.confidence))")
+                                Text(WorkspacePersonRolePresentation.summary(for: role, language: appLanguage))
                                     .font(.caption)
                                     .foregroundStyle(Color.tsMutedInk)
                                 Text(role.evidenceState.explanation)

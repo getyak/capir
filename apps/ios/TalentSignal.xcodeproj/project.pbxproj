@@ -270,6 +270,7 @@
 		F3E8C0F8266E3749EA007A9C /* LabFaultView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9EE45D571DF974240C9F499 /* LabFaultView.swift */; };
 		F70C256D2311208D92D3B544 /* AnswerFeedbackSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD36C107212D0841B0098704 /* AnswerFeedbackSheet.swift */; };
 		F7982A2DD2E9DBE8E42AE202 /* LabWorkspaceJourneyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC3F58B55D23FBF07C26F9F /* LabWorkspaceJourneyStore.swift */; };
+		F798914EF7B0688DE146AF34 /* WorkspacePersonRolePresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 937E7835550FDCF7CC33BB3A /* WorkspacePersonRolePresentation.swift */; };
 		F79BCF629783842E00D4CC74 /* LabFaultStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B14669B3FB6444D56A491DD8 /* LabFaultStore.swift */; };
 		F832FB87F57A51896C97714E /* RuntimeEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8811C7D2D18B4CD8F3BF47FC /* RuntimeEnvironment.swift */; };
 		F864B401A294FBA71D6C93C2 /* TextSignalCaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54258A90B16E34F5EE3E5D6E /* TextSignalCaptureStore.swift */; };
@@ -463,6 +464,7 @@
 		91CE9CF3D21A7E16E3C237D8 /* RelationshipCaptureStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelationshipCaptureStore.swift; sourceTree = "<group>"; };
 		92D3DFA665A94517E53A0FA4 /* SignalRecordingActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalRecordingActivity.swift; sourceTree = "<group>"; };
 		93506A00D46DA655C2A6E14B /* LabTaskTrial.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabTaskTrial.swift; sourceTree = "<group>"; };
+		937E7835550FDCF7CC33BB3A /* WorkspacePersonRolePresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePersonRolePresentation.swift; sourceTree = "<group>"; };
 		93A1A42FC8EED05AFF2F8D70 /* ResearchDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchDeepLink.swift; sourceTree = "<group>"; };
 		94AA1797B242C30CA16F3FBD /* AccountSignInMethodsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSignInMethodsModel.swift; sourceTree = "<group>"; };
 		94B8AA9A90553828117B10B7 /* LabServerTraceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabServerTraceTests.swift; sourceTree = "<group>"; };
@@ -925,6 +927,7 @@
 				8341A8939A8399FB5E3DB75E /* TalentSignalLabView.swift */,
 				54258A90B16E34F5EE3E5D6E /* TextSignalCaptureStore.swift */,
 				3CA3B1B8042B74DA1B5D1670 /* TextSignalCaptureView.swift */,
+				937E7835550FDCF7CC33BB3A /* WorkspacePersonRolePresentation.swift */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -1452,6 +1455,7 @@
 				61C6EB2AE6DFAA4CC58A1DEE /* TextSignalOutbox.swift in Sources */,
 				F29414196CFB77B16AEF2319 /* TextSignalSyncClient.swift in Sources */,
 				C1F6AE9A97C2AA0F940D8C1C /* WorkspaceActiveRefresh.swift in Sources */,
+				F798914EF7B0688DE146AF34 /* WorkspacePersonRolePresentation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
