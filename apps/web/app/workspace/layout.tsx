@@ -37,6 +37,7 @@ import { SystemHealthProvider } from "@/components/system-health-provider";
 import { AvatarPreferencesProvider } from "@/components/avatar-preferences-provider";
 import { WorkspaceAccountMenu } from "@/components/workspace-account-menu";
 import { WorkspaceAccessRecovery } from "@/components/workspace-access-recovery";
+import { WorkspaceReauthenticationLink } from "@/components/workspace-reauthentication-link";
 import { MeetingDraftSessionBoundary } from "@/components/meeting-draft-session-boundary";
 import { WorkspaceDirectoryScope } from "@/components/workspace-directory-cache";
 import { SessionDraftSessionBoundary } from "@/components/session-draft-session-boundary";
@@ -146,7 +147,7 @@ export default async function WorkspaceLayout({
               <button type="submit">返回我的空间<ArrowRight size={16} aria-hidden="true" /></button>
             </form>
           ) : (
-            <Link href="/login?reason=backend_session_expired">重新登录<ArrowRight size={16} aria-hidden="true" /></Link>
+            <WorkspaceReauthenticationLink>重新登录<ArrowRight size={16} aria-hidden="true" /></WorkspaceReauthenticationLink>
           )}
         </WorkspaceAccessRecovery>
       </>
