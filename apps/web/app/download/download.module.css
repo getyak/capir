@@ -1,5 +1,6 @@
 .page { max-width: 1180px; padding: 0 36px; margin: 0 auto; color: var(--ink); }
 .page a, .page button, .page summary { -webkit-tap-highlight-color: transparent; }
+.page a, .page button, .page summary, .page pre { scroll-margin-top: 100px; scroll-margin-bottom: 16px; }
 .page a:focus-visible, .page button:focus-visible, .page summary:focus-visible, .page pre:focus-visible { outline: 2px solid var(--focus); outline-offset: 5px; }
 .hero { display: grid; grid-template-columns: 1fr 1.06fr; gap: 72px; align-items: center; padding: 74px 0 65px; }
 .kicker { font-size: 12px; font-weight: 600; letter-spacing: .1em; color: var(--muted-strong); margin: 0 0 18px; }
