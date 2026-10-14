@@ -3,6 +3,7 @@ import {createHash, createHmac, randomBytes, timingSafeEqual} from 'node:crypto'
 import {Value} from '@sinclair/typebox/value';
 import {CapirAuthAuthorizeRequestSchema, type CapirAuthAuthorizeRequest} from '@talent-signal/contracts';
 import {authSecret, backendAuthBaseUrl, type BackendSessionClaims} from './backendAuth';
+import {BackendSessionExpiredError} from '@/lib/backend-session';
 
 export const AUTH_HEADERS = {'cache-control':'no-store', 'referrer-policy':'no-referrer', 'x-content-type-options':'nosniff'};
 export function capirAuthOrigins() {
@@ -23,6 +24,7 @@ export async function capirAuthRequest<T>(path:string, claims:BackendSessionClai
     headers:{authorization:`Bearer ${claims.backendAccessToken}`, ...(body === undefined ? {} : {'content-type':'application/json'})},
     ...(body === undefined ? {} : {body:JSON.stringify(body)}), signal:AbortSignal.timeout(5000),
   });
+  if (response.status === 401) throw new BackendSessionExpiredError();
   if (!response.ok) throw new Error('CLI authorization is unavailable for this account.');
   return await response.json() as T;
 }

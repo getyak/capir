@@ -1,6 +1,7 @@
 import {beforeEach,expect,it,vi} from 'vitest';
 vi.mock('./backendAuth',()=>({authSecret:()=> 'synthetic-csrf-secret',backendAuthBaseUrl:()=> 'http://127.0.0.1:4317'}));
 import {capirAuthRequest,openCapirForm,sealCapirForm,validateConsentParams} from './capir-auth';
+import {BackendSessionExpiredError} from '@/lib/backend-session';
 const claims={backendAccessToken:'primary-session-one',backendAccountId:'a',backendUserId:'u',backendAccountName:'A',backendAccountSlug:'a',backendExpiresAt:'2099-01-01T00:00:00Z',backendRole:'admin' as const,backendUsername:null};
 const params={schema_version:'capir-auth.v2',web_origin:'https://web.test.invalid',backend_origin:'https://api.test.invalid',redirect_uri:'http://127.0.0.1:49381/capir/callback',state:'s'.repeat(43),code_challenge:'p'.repeat(43),code_challenge_method:'S256',client_label:'Proof CLI'};
 beforeEach(()=>{process.env.CAPIR_AUTH_WEB_ORIGIN=params.web_origin;process.env.CAPIR_AUTH_BACKEND_ORIGIN=params.backend_origin;vi.restoreAllMocks();});
@@ -21,4 +22,15 @@ it('expires form proof and never dispatches backend tokens to a caller-selected 
  expect(()=>openCapirForm(new Request(params.web_origin,{headers:{origin:params.web_origin}}),claims,sealed)).toThrow();
  const transport=vi.spyOn(globalThis,'fetch').mockResolvedValue(Response.json({scopes:[]}));await capirAuthRequest('context',claims);
  expect(transport.mock.calls[0]?.[0]).toBe('http://127.0.0.1:4317/v1/capir/auth/context');expect(transport.mock.calls[0]?.[1]?.redirect).toBe('error');
+});
+it('preserves backend401 as session recovery instead of losing it in a generic authorization error',async()=>{
+ vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response(null,{status:401}));
+ await expect(capirAuthRequest('context',claims)).rejects.toBeInstanceOf(BackendSessionExpiredError);
+});
+it('keeps service failures distinct from expired sessions and omits backend response details',async()=>{
+ vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response('private-backend-detail',{status:503}));
+ const error=await capirAuthRequest('context',claims).catch((caught:unknown)=>caught);
+ expect(error).toBeInstanceOf(Error);
+ expect(error).not.toBeInstanceOf(BackendSessionExpiredError);
+ expect((error as Error).message).not.toContain('private-backend-detail');
 });
