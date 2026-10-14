@@ -4925,11 +4925,13 @@ struct PursuitDetailView: View {
 
 private struct PursuitDefinitionSection: View {
     let title: String
+    var headingColor: Color = .tsVermilion
     let rows: [(String, String)]
 
     var body: some View {
         VStack(spacing: 0) {
-            RelationshipEyebrow(title)
+            RelationshipEyebrow(title, color: headingColor)
+                .accessibilityAddTraits(.isHeader)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 30)
                 .padding(.bottom, 8)
@@ -4970,34 +4972,122 @@ private struct WorkspacePersonDetailView: View {
     @State private var sourceError: String?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.appLanguage) private var appLanguage
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    @ViewBuilder
+    private var identityHeader: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 12) {
+                WorkspacePersonAvatar(person: person, size: 54)
+                identityName
+            }
+        } else {
+            HStack(alignment: .center, spacing: 14) {
+                WorkspacePersonAvatar(person: person, size: 54)
+                identityName
+            }
+        }
+    }
+
+    private var identityName: some View {
+        Text(person.displayLabel)
+            .font(.custom("Georgia", size: 34, relativeTo: .largeTitle))
+            .foregroundStyle(Color.tsInk)
+            .tracking(-0.7)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("person-detail-name")
+    }
+
+    private func roleTypeLabel(_ roleType: String) -> String {
+        switch roleType {
+        case "candidate": appLanguage.text("Candidate")
+        case "client": appLanguage.text("Client")
+        default: roleType.humanized
+        }
+    }
+
+    private func roleStatusLabel(_ status: String) -> String {
+        switch status {
+        case "active": appLanguage.text("Active role")
+        case "quiet": appLanguage.text("Quiet role")
+        case "removed": appLanguage.text("Removed role")
+        default: status.humanized
+        }
+    }
+
+    private func roleConfidenceLabel(_ confidence: String) -> String {
+        switch confidence {
+        case "confirmed": appLanguage.text("Confirmed role")
+        case "suggested": appLanguage.text("Suggested role")
+        default: confidence.humanized
+        }
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    RelationshipEyebrow(appLanguage.text("Stable person identity"))
+                    RelationshipEyebrow(appLanguage.text("Stable person identity"), color: .tsMutedInk)
                         .padding(.top, 26)
-                    HStack(alignment: .center, spacing: 14) {
-                        WorkspacePersonAvatar(person: person, size: 54)
-                        Text(person.displayLabel)
-                            .font(.custom("Georgia", size: 34, relativeTo: .largeTitle))
-                            .foregroundStyle(Color.tsInk)
-                            .tracking(-0.7)
-                            .fixedSize(horizontal: false, vertical: true)
+                    identityHeader
+                        .padding(.top, 10)
+                    RelationshipEyebrow(appLanguage.text("Pursuit roles"), color: .tsMutedInk)
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.top, 26)
+                    if roles.isEmpty {
+                        Text(appLanguage.text("No active Pursuit role is recorded."))
+                            .font(.subheadline)
+                            .foregroundStyle(Color.tsMutedInk)
+                            .padding(.top, 12)
+                    } else {
+                        ForEach(roles) { role in
+                            VStack(alignment: .leading, spacing: 7) {
+                                Text(role.pursuitTitle)
+                                    .font(.headline)
+                                    .foregroundStyle(Color.tsInk)
+                                    .accessibilityIdentifier("person-detail-role-title-\(role.id)")
+                                Text("\(roleTypeLabel(role.roleType)) · \(roleStatusLabel(role.status)) · \(roleConfidenceLabel(role.confidence))")
+                                    .font(.caption)
+                                    .foregroundStyle(Color.tsMutedInk)
+                                Text(role.evidenceState.explanation)
+                                    .font(.caption2)
+                                    .foregroundStyle(
+                                        role.evidenceState.availability == "unavailable"
+                                            ? Color.tsVermilion
+                                            : Color.tsMutedInk
+                                    )
+                            }
+                            .padding(.vertical, 16)
+                            .overlay(alignment: .bottom) { Divider().overlay(Color.tsLine) }
+                        }
                     }
-                    .padding(.top, 10)
+
                     Text(
                         appLanguage.text(
-                            "Roles below are contextual. They do not redefine identity or rank this person."
+                            "Roles are contextual. They do not redefine identity or rank this person."
                         )
                     )
-                        .font(.body)
+                        .font(.footnote)
                         .foregroundStyle(Color.tsMutedInk)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 12)
 
+                    if !sourceTasks.isEmpty {
+                        RelationshipEyebrow(appLanguage.text("Conversation and sourced context"), color: .tsMutedInk)
+                            .accessibilityAddTraits(.isHeader)
+                            .padding(.top, 30)
+                        ForEach(sourceTasks) { task in
+                            ScreenshotContactCard(task: task, language: appLanguage,
+                                onLoadImage: { index in try await workspaceStore.loadScreenshotContactImage(taskID: task.taskID, index: index) }).padding(.top, 16)
+                        }
+                    }
+                    if let sourceError { Text(sourceError).font(.caption).foregroundStyle(Color.tsMutedInk).padding(.top, 16) }
+
                     if let profile = person.profile {
-                        RelationshipEyebrow(appLanguage.text("About"))
+                        RelationshipEyebrow(appLanguage.text("About"), color: .tsMutedInk)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("person-detail-about")
                             .padding(.top, 30)
                         Text(profile.headline)
                             .font(.headline)
@@ -5018,6 +5108,7 @@ private struct WorkspacePersonDetailView: View {
                         )
                         .font(.caption)
                         .foregroundStyle(Color.tsMutedInk)
+                        .accessibilityIdentifier("person-detail-profile-provenance")
                         .padding(.top, 10)
                         if let sourceURL = profile.sourceProfileURL,
                            let url = URL(string: sourceURL),
@@ -5035,47 +5126,9 @@ private struct WorkspacePersonDetailView: View {
                         }
                     }
 
-                    if !sourceTasks.isEmpty {
-                        RelationshipEyebrow(appLanguage.text("Conversation and sourced context"))
-                            .padding(.top, 30)
-                        ForEach(sourceTasks) { task in
-                            ScreenshotContactCard(task: task, language: appLanguage,
-                                onLoadImage: { index in try await workspaceStore.loadScreenshotContactImage(taskID: task.taskID, index: index) }).padding(.top, 16)
-                        }
-                    }
-                    if let sourceError { Text(sourceError).font(.caption).foregroundStyle(Color.tsMutedInk).padding(.top, 16) }
-
-                    RelationshipEyebrow(appLanguage.text("Pursuit roles"))
-                        .padding(.top, 30)
-                    if roles.isEmpty {
-                        Text(appLanguage.text("No active Pursuit role is recorded."))
-                            .font(.subheadline)
-                            .foregroundStyle(Color.tsMutedInk)
-                            .padding(.top, 12)
-                    } else {
-                        ForEach(roles) { role in
-                            VStack(alignment: .leading, spacing: 7) {
-                                Text(role.pursuitTitle)
-                                    .font(.headline)
-                                    .foregroundStyle(Color.tsInk)
-                                Text("\(role.roleType.humanized) · \(role.status.humanized) · \(role.confidence.humanized)")
-                                    .font(.caption)
-                                    .foregroundStyle(Color.tsMutedInk)
-                                Text(role.evidenceState.explanation)
-                                    .font(.caption2)
-                                    .foregroundStyle(
-                                        role.evidenceState.availability == "unavailable"
-                                            ? Color.tsVermilion
-                                            : Color.tsMutedInk
-                                    )
-                            }
-                            .padding(.vertical, 16)
-                            .overlay(alignment: .bottom) { Divider().overlay(Color.tsLine) }
-                        }
-                    }
-
                     PursuitDefinitionSection(
                         title: appLanguage.text("Governed identity"),
+                        headingColor: .tsMutedInk,
                         rows: [
                             (appLanguage.text("Sources"), "\(person.captureCount)"),
                             (appLanguage.text("Identity clues"), "\(person.confirmedIdentityCount)"),
