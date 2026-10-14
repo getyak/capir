@@ -170,42 +170,13 @@ export default async function PersonMemoryPage({
       </header>
 
       <div className={styles.columns}>
-        <div className={styles.contextColumn}>
-          <section aria-labelledby="person-basic-fields">
-            <h2 className={styles.sectionTitle} id="person-basic-fields">基本信息</h2>
-            {fields.size || contactPoints.length ? <dl className={styles.basicFields}>
-              {Array.from(fields.entries()).map(([field, entries]) => <div className={styles.basicField} key={field}>
-                <dt>{FIELD_LABELS[field] ?? field}</dt>
-                <dd>{entries.map(entry => {
-                  const url = ["website", "homepage"].includes(field) ? safeResearchLink(entry.value) : null;
-                  return <div className={styles.fieldValue} key={entry.evidence_fragment_id}>
-                    {url ? <a href={url} target="_blank" rel="noopener noreferrer">{entry.value}</a> : <span>{entry.value}</span>}
-                    <details className={styles.fieldSource}><summary>{entries.length > 1 ? "已核对来源 · 多条记录" : "已核对来源"}</summary>
-                      <p>{entry.source_label} · {memoryDate(entry.observed_at)}</p>
-                      <Link href={withReturnSession(`/workspace?capture=${encodeURIComponent(entry.capture_id)}`, returnSessionId)}>查看采集来源 <CaretRight size={12} aria-hidden="true" /></Link>
-                      <dl className={styles.sourceMetadata}><dt>证据标识</dt><dd>{entry.evidence_fragment_id}</dd><dt>来源标识</dt><dd>{entry.source_resource_id}</dd></dl>
-                    </details>
-                  </div>;
-                })}</dd>
-              </div>)}
-              {contactPoints.map(point => <div className={styles.basicField} key={point.id}><dt>{CONTACT_LABELS[point.type] ?? "联系方式"}</dt><dd>
-                <span>{point.display_hint}</span>
-                <details className={styles.fieldSource}><summary>已确认联系方式</summary><p>{point.source_display_name ?? "已确认身份线索"} · {memoryDate(point.valid_from)}</p>{point.valid_until ? <p>有效至 {memoryDate(point.valid_until)}</p> : null}</details>
-              </dd></div>)}
-            </dl> : <p className={styles.quiet}>{person ? "还没有已核对的基础信息。" : "人物目录暂时没有这个人的条目。"}</p>}
-          </section>
-          {person?.profile?.summary ? <section className={styles.profileSummary} aria-labelledby="person-profile-summary">
-            <h2 className={styles.scopeTitle} id="person-profile-summary">简介</h2><p>{person.profile.summary}</p>
-            <small>{person.profile.provenance_kind === "user_authored" ? "你补充的" : "已复核公开资料"} · {memoryDate(person.profile.updated_at)}</small>
-          </section> : null}
-        </div>
-
         <div className={styles.memoryColumn}>
           {person && person.contexts.length > 0 ? (
             <nav className={styles.contexts} aria-labelledby="person-contexts">
               <h2 className={styles.sectionTitle} id="person-contexts">
                 关系情境
               </h2>
+              <p className={styles.contextHint}>选择已有情境，继续相关对话。</p>
               <ul className={styles.contextList}>
                 {person.contexts.map((context) => (
                   <li key={context.id}>
@@ -262,6 +233,36 @@ export default async function PersonMemoryPage({
           <PersonMemoryContent key={`${binding}:${person?.id ?? id}`} personId={person?.id ?? id} binding={binding} entryCapability={entryCapability}
             initialItems={items} hasMore={hasMore} nextCursor={nextCursor} contexts={person?.contexts ?? []} returnSessionId={returnSessionId} />
         </div>
+
+        <aside className={styles.contextColumn} aria-label="人物资料">
+          <section aria-labelledby="person-basic-fields">
+            <h2 className={styles.sectionTitle} id="person-basic-fields">基本信息</h2>
+            {fields.size || contactPoints.length ? <dl className={styles.basicFields}>
+              {Array.from(fields.entries()).map(([field, entries]) => <div className={styles.basicField} key={field}>
+                <dt>{FIELD_LABELS[field] ?? field}</dt>
+                <dd>{entries.map(entry => {
+                  const url = ["website", "homepage"].includes(field) ? safeResearchLink(entry.value) : null;
+                  return <div className={styles.fieldValue} key={entry.evidence_fragment_id}>
+                    {url ? <a href={url} target="_blank" rel="noopener noreferrer">{entry.value}</a> : <span>{entry.value}</span>}
+                    <details className={styles.fieldSource}><summary>{entries.length > 1 ? "已核对来源 · 多条记录" : "已核对来源"}</summary>
+                      <p>{entry.source_label} · {memoryDate(entry.observed_at)}</p>
+                      <Link href={withReturnSession(`/workspace?capture=${encodeURIComponent(entry.capture_id)}`, returnSessionId)}>查看采集来源 <CaretRight size={12} aria-hidden="true" /></Link>
+                      <dl className={styles.sourceMetadata}><dt>证据标识</dt><dd>{entry.evidence_fragment_id}</dd><dt>来源标识</dt><dd>{entry.source_resource_id}</dd></dl>
+                    </details>
+                  </div>;
+                })}</dd>
+              </div>)}
+              {contactPoints.map(point => <div className={styles.basicField} key={point.id}><dt>{CONTACT_LABELS[point.type] ?? "联系方式"}</dt><dd>
+                <span>{point.display_hint}</span>
+                <details className={styles.fieldSource}><summary>已确认联系方式</summary><p>{point.source_display_name ?? "已确认身份线索"} · {memoryDate(point.valid_from)}</p>{point.valid_until ? <p>有效至 {memoryDate(point.valid_until)}</p> : null}</details>
+              </dd></div>)}
+            </dl> : <p className={styles.quiet}>{person ? "还没有已核对的基础信息。" : "人物目录暂时没有这个人的条目。"}</p>}
+          </section>
+          {person?.profile?.summary ? <section className={styles.profileSummary} aria-labelledby="person-profile-summary">
+            <h2 className={styles.scopeTitle} id="person-profile-summary">简介</h2><p>{person.profile.summary}</p>
+            <small>{person.profile.provenance_kind === "user_authored" ? "你补充的" : "已复核公开资料"} · {memoryDate(person.profile.updated_at)}</small>
+          </section> : null}
+        </aside>
       </div>
     </main>
   );
