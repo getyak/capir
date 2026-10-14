@@ -2,13 +2,13 @@
 import {act,createElement} from "react";
 import {createRoot,type Root} from "react-dom/client";
 import {afterEach,beforeEach,describe,expect,it,vi} from "vitest";
-const mocks=vi.hoisted(()=>({path:"/workspace",fetch:vi.fn(),listener:null as null | ((keys:readonly string[]|null,mode:string)=>void)}));
+const mocks=vi.hoisted(()=>({path:"/workspace",fetch:vi.fn()}));
 vi.mock("next/navigation",()=>({usePathname:()=>mocks.path}));
 vi.mock("./person-directory-avatar",()=>({PersonDirectoryAvatar:()=>null}));
 vi.mock("./workspace-session-request",()=>({workspaceSessionFetch:mocks.fetch,WORKSPACE_SESSION_EXPIRED_EVENT:"expired"}));
-vi.mock("@/lib/workspace-directory-cache",()=>({subscribeWorkspaceDirectoryInvalidation:(listener:typeof mocks.listener)=>{mocks.listener=listener;return()=>{mocks.listener=null;};}}));
 import {PersonContextPanelProvider,usePersonContextPanel} from "./person-context-panel";
 import {requestWorkspaceRefresh} from "@/lib/workspace-refresh";
+import {invalidateWorkspaceDirectory} from "@/lib/workspace-directory-cache";
 let root:Root, host:HTMLDivElement;
 function Buttons(){const panel=usePersonContextPanel();return createElement("div",null,...["a","b"].map(id=>createElement("button",{key:id,onClick:(event:React.MouseEvent<HTMLButtonElement>)=>panel.open(id,event.currentTarget)},id)));}
 const render=async(binding="binding")=>act(async()=>{root.render(<PersonContextPanelProvider binding={binding}><Buttons /></PersonContextPanelProvider>);});
@@ -17,6 +17,14 @@ const body=(id:string)=>({person:{id,label:`same name ${id}`,headline:null,avata
 beforeEach(()=>{vi.resetAllMocks();mocks.path="/workspace";Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});Object.defineProperty(window,"matchMedia",{configurable:true,value:()=>({matches:false,addEventListener(){},removeEventListener(){}})});host=document.createElement("div");document.body.append(host);root=createRoot(host);});
 afterEach(async()=>{await act(async()=>root.unmount());host.remove();});
 describe("person preview ownership",()=>{
+  it("reads only after an explicit person selection",async()=>{
+    mocks.fetch.mockResolvedValue(Response.json(body("a")));
+    await render();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await click("a");
+    expect(mocks.fetch).toHaveBeenCalledWith("/api/local-integration/people/a/preview",expect.objectContaining({headers:{"x-workspace-session":"binding"}}));
+  });
   it("clears remotely deleted content on the shared active refresh",async()=>{
     mocks.fetch.mockResolvedValueOnce(Response.json(body("a"))).mockResolvedValueOnce(Response.json({code:"person_unavailable"},{status:404}));
     await render();await click("a");
@@ -49,7 +57,137 @@ describe("person preview ownership",()=>{
   });
   it("drops saved content when deletion invalidates the directory and the new read fails",async()=>{
     mocks.fetch.mockResolvedValueOnce(Response.json(body("a"))).mockResolvedValueOnce(Response.json({code:"person_unavailable"},{status:404}));
-    await render();await click("a");await act(async()=>mocks.listener?.(null,"revalidate"));
+    await render();await click("a");await act(async()=>invalidateWorkspaceDirectory(undefined,"revalidate"));
     const panel=document.querySelector('[role="dialog"]');expect(panel?.textContent).toContain("暂时无法读取");expect(panel?.textContent).not.toContain("same name a");
+  });
+  it("aborts an expired panel's read and cannot reopen it with a late response",async()=>{
+    let resolve!:(response:Response)=>void;
+    let signal:AbortSignal|undefined;
+    mocks.fetch.mockImplementation((_url:string,options:RequestInit)=>{signal=options.signal as AbortSignal;return new Promise<Response>(done=>{resolve=done;});});
+    await render();await click("a");
+    expect(document.querySelector('[role="status"]')?.textContent).toContain("正在读取");
+    await act(async()=>window.dispatchEvent(new Event("expired")));
+    expect(signal?.aborted).toBe(true);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async()=>resolve(Response.json(body("a"))));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("shows a failed scoped read without stale content and recovers only through retry",async()=>{
+    mocks.fetch.mockResolvedValueOnce(Response.json({...body("a"),session_version:"other-account"})).mockResolvedValueOnce(Response.json(body("a")));
+    await render();await click("a");
+    const panel=document.querySelector('[role="dialog"]')!;
+    expect(panel.querySelector('[role="alert"]')?.textContent).toContain("暂时无法读取");
+    expect(panel.textContent).not.toContain("same name a");
+    await act(async()=>Array.from(panel.querySelectorAll("button")).find(button=>button.textContent==="重试")!.click());
+    expect(panel.textContent).toContain("same name a");
+    expect(panel.querySelector('[role="alert"]')).toBeNull();
+  });
+  it("withdraws a loaded discarded binding and never rereads it through refresh or reopening",async()=>{
+    mocks.fetch.mockImplementation(()=>Promise.resolve(Response.json(body("a"))));
+    await render();await click("a");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("same name a");
+    await act(async()=>invalidateWorkspaceDirectory("binding","discard"));
+    expect(document.body.textContent).not.toContain("same name a");
+    const retry=Array.from(document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find(button=>button.textContent==="重试");
+    if(retry) await act(async()=>retry.click());
+    await act(async()=>{
+      requestWorkspaceRefresh("binding","interval");
+      invalidateWorkspaceDirectory("binding","revalidate");
+      invalidateWorkspaceDirectory(undefined,"revalidate");
+    });
+    await click("a");await click("b");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.querySelector('[role="alert"] button')).toBeNull();
+  });
+  it("fences a pending response after discard even when its transport ignores abort",async()=>{
+    let resolve!:(response:Response)=>void;
+    let signal:AbortSignal|undefined;
+    mocks.fetch.mockImplementation((_url:string,options:RequestInit)=>{signal=options.signal as AbortSignal;return new Promise<Response>(done=>{resolve=done;});});
+    await render();await click("a");
+    await act(async()=>invalidateWorkspaceDirectory("binding","discard"));
+    expect(signal?.aborted).toBe(true);
+    await act(async()=>resolve(Response.json(body("a"))));
+    expect(document.body.textContent).not.toContain("same name a");
+    const close=document.querySelector<HTMLButtonElement>('[aria-label="关闭人物背景"]');
+    if(close) await act(async()=>close.click());
+    await click("a");
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("keeps a discarded binding denied across closing and newer binding changes",async()=>{
+    mocks.fetch.mockResolvedValueOnce(Response.json(body("a"))).mockResolvedValueOnce(Response.json({...body("b"),session_version:"new-binding"}));
+    await render();await click("a");
+    await act(async()=>invalidateWorkspaceDirectory("binding","discard"));
+    await render("new-binding");await click("b");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("same name b");
+    expect(mocks.fetch).toHaveBeenLastCalledWith("/api/local-integration/people/b/preview",expect.objectContaining({headers:{"x-workspace-session":"new-binding"}}));
+    await render("binding");await click("a");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+  });
+  it("remembers a global discard even while the panel is closed",async()=>{
+    mocks.fetch.mockResolvedValue(Response.json(body("a")));
+    await render();
+    await act(async()=>invalidateWorkspaceDirectory(undefined,"discard"));
+    await click("a");
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("ignores another binding's discard without hiding authorized person content",async()=>{
+    mocks.fetch.mockImplementation(()=>Promise.resolve(Response.json(body("a"))));
+    await render();await click("a");
+    await act(async()=>invalidateWorkspaceDirectory("other-binding","discard"));
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("same name a");
+    await act(async()=>requestWorkspaceRefresh("binding","interval"));
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+  });
+  it("allows an ordinary failed read to recover with the same binding",async()=>{
+    mocks.fetch.mockResolvedValueOnce(Response.json({code:"temporarily_unavailable"},{status:503})).mockResolvedValueOnce(Response.json(body("a")));
+    await render();await click("a");
+    const panel=document.querySelector('[role="dialog"]')!;
+    expect(panel.querySelector('[role="alert"]')).not.toBeNull();
+    await act(async()=>Array.from(panel.querySelectorAll("button")).find(button=>button.textContent==="重试")!.click());
+    expect(panel.textContent).toContain("same name a");
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("temporary person context sheet",()=>{
+  it.each([false,true])("contains focus at narrow=%s while the underlying workspace stays inert",async(narrow)=>{
+    Object.defineProperty(window,"matchMedia",{configurable:true,value:()=>({matches:narrow,addEventListener(){},removeEventListener(){}})});
+    mocks.fetch.mockResolvedValue(Response.json(body("a")));
+    await render();await click("a");
+    const panel=document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(document.querySelector('[data-person-context-overlay]')).not.toBeNull();
+    expect(host.getAttribute("aria-hidden")).toBe("true");
+    expect(panel.contains(document.activeElement)).toBe(true);
+    await act(async()=>host.querySelector<HTMLButtonElement>("button")!.focus());
+    expect(panel.contains(document.activeElement)).toBe(true);
+  });
+  it.each(["close","Escape","outside"])("dismisses with %s and restores the exact opener",async(method)=>{
+    mocks.fetch.mockResolvedValue(Response.json(body("a")));
+    await render();
+    const opener=host.querySelector<HTMLButtonElement>("button")!;
+    await act(async()=>{opener.focus();opener.click();});
+    const panel=document.querySelector<HTMLElement>('[role="dialog"]')!;
+    if(method==="close") await act(async()=>panel.querySelector<HTMLButtonElement>('[aria-label="关闭人物背景"]')!.click());
+    else if(method==="Escape") await act(async()=>panel.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true,cancelable:true})));
+    else {
+      // Radix registers the document pointer listener after the opening press.
+      await act(async()=>{await new Promise(resolve=>setTimeout(resolve,0));});
+      const overlay=document.querySelector('[data-person-context-overlay]')!;
+      await act(async()=>overlay.dispatchEvent(new PointerEvent("pointerdown",{bubbles:true,cancelable:true,pointerType:"mouse",button:0})));
+      // Dialog 1.1.23 defers primary-button outside dismissal to the completed
+      // click. happy-dom does not generate that click from a dispatched press.
+      expect(document.querySelector('[role="dialog"]')).toBe(panel);
+      await act(async()=>{
+        overlay.dispatchEvent(new PointerEvent("pointerup",{bubbles:true,cancelable:true,pointerType:"mouse",button:0}));
+        overlay.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,button:0}));
+      });
+    }
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await vi.waitFor(()=>expect(document.activeElement).toBe(opener));
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
   });
 });

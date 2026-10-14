@@ -1,0 +1,185 @@
+.directory {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.headingRow {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.heading {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.search {
+  align-items: center;
+  background: var(--background);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  min-height: 44px;
+  min-width: 0;
+  padding: 0 3px 0 9px;
+}
+
+.search > svg {
+  flex: 0 0 auto;
+  margin-right: 6px;
+}
+
+.search input[type="search"] {
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  flex: 1 1 auto;
+  font: inherit;
+  font-size: 0.8125rem;
+  min-width: 0;
+  outline: none;
+  padding: 10px 0;
+  width: 100%;
+}
+
+.search input::placeholder {
+  color: var(--muted);
+}
+
+.search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.search:focus-within {
+  border-color: var(--muted-strong);
+}
+
+.searchControl {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0;
+  width: 30px;
+}
+
+.searchControl:hover,
+.person:hover {
+  background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent));
+}
+
+.searchControl:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.list {
+  display: grid;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.person {
+  align-items: center;
+  border-radius: 8px;
+  color: var(--ink);
+  display: flex;
+  gap: 9px;
+  min-height: 48px;
+  min-width: 0;
+  padding: 7px 8px;
+  text-decoration: none;
+}
+
+.person[aria-current="page"] {
+  background: var(--surface-selected);
+}
+
+.identity {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.identity strong,
+.identity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity strong {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.identity small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.state,
+.scope {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 0 8px;
+}
+
+.state p {
+  margin: 0;
+}
+
+.retry,
+.allPeople {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--muted-strong);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  min-height: 44px;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.allPeople {
+  font-size: 0.75rem;
+}
+
+.searchControl:focus-visible,
+.person:focus-visible,
+.retry:focus-visible,
+.allPeople:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  .person[aria-current="page"] {
+    outline: 1px solid Highlight;
+  }
+}

@@ -12,9 +12,9 @@ import {
   WorkspaceMobileSourcesLink,
   WorkspaceShellNav,
 } from "@/components/workspace-shell-nav";
-import { WorkspaceRecentSessions } from "@/components/workspace-recent-sessions";
+import { WorkspaceSidebarContext } from "@/components/workspace-sidebar-context";
+import { WorkspaceNavigationContinuityProvider } from "@/components/workspace-navigation-continuity";
 import { WorkspaceGlobalSearchDialog } from "@/components/workspace-search";
-import { WorkspaceSidebarPeople } from "@/components/workspace-sidebar-people";
 import { WorkspacePrivacyEntry, WorkspaceRouteHeader } from "@/components/workspace-route-header";
 import { WorkspacePrivacyBoundary } from "@/components/workspace-privacy-boundary";
 import { WorkspaceSessionBoundary } from "@/components/workspace-session-boundary";
@@ -178,6 +178,7 @@ export default async function WorkspaceLayout({
   return (
     <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
+      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope}>
       <PersonContextPanelProvider binding={pendingBinding}>
       <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
         {pendingBinding ? (
@@ -186,16 +187,9 @@ export default async function WorkspaceLayout({
         <SessionDraftSessionBoundary storageScope={pendingSessionDraftScope} />
         <WorkspaceDirectoryScope binding={pendingBinding} />
         <aside aria-label="capri 工作台" className={styles.sidebar}>
-          <WorkspaceShellNav binding={pendingBinding} />
+          <WorkspaceShellNav binding={pendingBinding} storageScope={pendingSessionDraftScope} />
           <div className={styles.sidebarScroll}>
-            {pendingBinding ? (
-              <WorkspaceRecentSessions
-                key={pendingBinding}
-                binding={pendingBinding}
-                storageScope={pendingSessionDraftScope}
-              />
-            ) : null}
-            <WorkspaceSidebarPeople binding={pendingBinding} />
+            <WorkspaceSidebarContext binding={pendingBinding} storageScope={pendingSessionDraftScope} />
           </div>
           <div className={styles.account}>
             {fixtureWorkspace ? (
@@ -258,6 +252,7 @@ export default async function WorkspaceLayout({
         </div>
       </div>
       </PersonContextPanelProvider>
+      </WorkspaceNavigationContinuityProvider>
       </AvatarPreferencesProvider>
     </WorkspacePrivacyBoundary></WorkspaceSessionBoundary>
   );

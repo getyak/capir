@@ -39,7 +39,7 @@ export function WorkspaceRecentSessions({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
   const listId = useId();
   const archiveId = useId();
@@ -75,7 +75,7 @@ export function WorkspaceRecentSessions({
     const unhandled = window.dispatchEvent(
       new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }),
     );
-    if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}`);
+    if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`);
   }
 
   return (
@@ -163,7 +163,7 @@ export function WorkspaceRecentSessions({
         ) : current?.state === "error" ? null : (
           <div aria-label="正在读取对话" role="status"><div aria-hidden="true" className={styles.historySkeleton} /></div>
         )}
-        {current?.state === "ready" && !current.rows.visible.length ? null : (
+        {empty ? null : (
           <Link aria-label="打开对话记录" className={styles.historyAll} href="/workspace/sessions">
             查看全部对话
           </Link>
@@ -186,6 +186,7 @@ export function WorkspaceRecentSessions({
                   <li key={row.id}>
                     <WorkspaceSessionRow organization={organizationFor(row)}>
                       <Link
+                        aria-current={pathname === `/workspace/sessions/${row.id}` ? "page" : undefined}
                         className={styles.sessionRow}
                         data-archived="true"
                         href={`/workspace/sessions/${row.id}`}

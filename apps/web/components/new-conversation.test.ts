@@ -27,15 +27,27 @@ vi.mock("./workspace-session-request", () => ({
   workspaceSessionFetch: fetcher,
 }));
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/workspace",
+  usePathname: () => window.location.pathname,
   useRouter: () => router,
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
+vi.mock("./workspace-search", () => ({
+  useWorkspaceDirectory: () => ({
+    data: { sessions: { session_version: "session-binding", sessions: [] }, people: { people: [] } },
+    loading: false, failed: false, retry: vi.fn(),
+  }),
+  WorkspaceGlobalSearchDialog: ({ label }: { label: string }) => createElement("button", { "aria-label": label }, "Search"),
 }));
 
 import { conversationHome, writeConversationDraft } from "@/lib/conversation-local";
 import { newConversationPendingDraft } from "@/lib/new-conversation";
 import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
 import { WorkspaceNewConversation } from "./new-conversation";
+import { QueuedConversation } from "./conversation/queued-conversation";
+import { WorkspaceShellNav } from "./workspace-shell-nav";
+import { WorkspaceRecentSessions } from "./workspace-recent-sessions";
+import { SessionWorkbench } from "./session-workbench/session-workbench";
+import type { SessionDetail } from "./session-workbench/session-detail-state";
 import {
   writePendingSessionDraft,
   type PendingSessionDraft,
@@ -150,6 +162,7 @@ beforeEach(() => {
   router.push.mockReset();
   router.refresh.mockReset();
   router.replace.mockReset();
+  vi.spyOn(window, "matchMedia").mockImplementation(() => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList);
 });
 
 afterEach(async () => {
@@ -158,6 +171,142 @@ afterEach(async () => {
   mount?.remove();
   mount = null;
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("explicit New conversation focus handoff", () => {
+  const saved: SessionDetail = {
+    session_id: SESSION_ID, revision: 1, updated_at: "2026-10-13T00:00:00.000Z",
+    expires_at: "2099-01-01T00:00:00.000Z", state: "active", title: "Synthetic saved Session",
+    turn_count: 0, is_unread: false, scope_kind: "unresolved_intent", person_id: null,
+    relationship_context_id: null, person_label: "", context_label: "", deleted_at: null,
+    display_authority: "stale_unconfirmed", composer_draft: null, composer_draft_updated_at: null, turns: [],
+  };
+
+  function sidebarCanvas(surface: "saved" | "home", props: Props = READY) {
+    return createElement("div", null,
+      createElement(WorkspaceShellNav, { binding: "session-binding", storageScope: SCOPE }),
+      createElement(WorkspaceRecentSessions, { binding: "session-binding", storageScope: SCOPE }),
+      surface === "saved" ? createElement(SessionWorkbench, {
+        accountId: "account-1", chatSessionVersion: "session-version", sessionVersion: "session-binding",
+        storageScope: SCOPE, initialDetail: saved, initialError: null, sessionRecoveryHref: null,
+      }) : createElement(WorkspaceNewConversation, props),
+    );
+  }
+
+  async function open(surface: "saved" | "home", props: Props = READY) {
+    mount = document.createElement("div"); document.body.append(mount); root = createRoot(mount);
+    await act(async () => root?.render(sidebarCanvas(surface, props)));
+    await flush();
+  }
+
+  function newAction(presentation: "expanded" | "collapsed") {
+    return document.querySelector<HTMLButtonElement>(presentation === "expanded"
+      ? 'section[aria-label="最近对话"] button[aria-label="开始新对话"]'
+      : '[data-collapsed-only="true"] button[aria-label="开始新对话"]')!;
+  }
+
+  async function resolveNavigation() {
+    const href = String(router.push.mock.calls.at(-1)?.[0]);
+    const sessionId = new URL(href, "http://localhost").searchParams.get("draft_session")!;
+    window.history.replaceState(null, "", href);
+    await act(async () => root?.render(sidebarCanvas("home", {
+      ...READY, bootstrap: { sessionId, capability: `new-server-capability:${sessionId}` },
+    })));
+    await flush();
+    return document.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+  }
+
+  it.each(["expanded", "collapsed"] as const)("focuses the fresh composer after %s sidebar navigation from a saved Session", async (presentation) => {
+    fetcher.mockImplementation(() => new Promise<Response>(() => {}));
+    window.history.replaceState(null, "", `/workspace/sessions/${SESSION_ID}`);
+    await open("saved");
+    const action = newAction(presentation); action.focus();
+    await act(async () => action.click());
+    const composer = await resolveNavigation();
+    expect(composer.disabled).toBe(false);
+    expect(document.activeElement).toBe(composer);
+    expect(router.push).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+  });
+
+  it.each(["expanded", "collapsed"] as const)("focuses once after the %s sidebar resets a mounted Home", async (presentation) => {
+    writeConversationDraft(SCOPE, SESSION_ID, { value: "Synthetic retained unsent draft", writer: "focus-test", updatedAt: new Date().toISOString(), expiresAt: Date.now() + 60_000 });
+    await open("home", { ...READY, bootstrap: { sessionId: SESSION_ID, capability: "old-server-capability" } });
+    const previous = document.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+    const action = newAction(presentation); action.focus();
+    await act(async () => action.click());
+    expect(document.querySelector("#queued-conversation-composer")).toBeNull();
+    const composer = await resolveNavigation();
+    expect(composer).not.toBe(previous);
+    expect(composer.value).toBe("");
+    expect(document.activeElement).toBe(composer);
+    expect(router.push).toHaveBeenCalledOnce();
+    action.focus();
+    await act(async () => root?.render(sidebarCanvas("home", {
+      ...READY, bootstrap: { sessionId: conversationHome(SCOPE)!, capability: "same-server-capability" },
+    })));
+    await flush();
+    expect(document.activeElement).toBe(action);
+    expect(new URL(window.location.href).searchParams.has("intent")).toBe(false);
+    expect(fetcher).not.toHaveBeenCalled();
+
+    // Reopening this retained draft is reading continuity, not another compose
+    // action. A new queue mount must not inherit the already consumed request.
+    const sessionId = conversationHome(SCOPE)!;
+    fetcher.mockImplementation(() => new Promise<Response>(() => {}));
+    window.history.replaceState(null, "", `/workspace/sessions/${SESSION_ID}`);
+    await act(async () => root?.render(sidebarCanvas("saved")));
+    window.history.replaceState(null, "", `/workspace?draft_session=${sessionId}`);
+    action.focus();
+    await act(async () => root?.render(sidebarCanvas("home", {
+      ...READY, bootstrap: { sessionId, capability: "retained-server-capability" },
+    })));
+    await flush();
+    expect(document.activeElement).toBe(action);
+  });
+
+  it("waits for account readiness before focusing a newly mounted composer", async () => {
+    window.history.replaceState(null, "", `/workspace?draft_session=${SESSION_ID}&intent=compose`);
+    const pending = { ...READY, sessionBinding: null, bootstrap: { sessionId: SESSION_ID, capability: "server-capability" } };
+    await open("home", pending);
+    const action = newAction("collapsed"); action.focus();
+    expect(document.activeElement).toBe(action);
+    expect(document.querySelector("#queued-conversation-composer")).toBeNull();
+    act(() => root?.render(sidebarCanvas("home", { ...READY, bootstrap: pending.bootstrap })));
+    const composer = document.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+    expect(composer.disabled).toBe(true);
+    expect(document.activeElement).toBe(action);
+    await flush();
+    expect(composer.disabled).toBe(false);
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it.each(["", `?draft_session=${OTHER_SESSION_ID}&intent=compose`])("keeps sidebar focus when Home has no compose request for its Session (%s)", async (search) => {
+    writeConversationDraft(SCOPE, SESSION_ID, { value: "Synthetic recovered draft", writer: "focus-test", updatedAt: new Date().toISOString(), expiresAt: Date.now() + 60_000 });
+    window.history.replaceState(null, "", `/workspace${search}`);
+    mount = document.createElement("div"); document.body.append(mount); root = createRoot(mount);
+    act(() => root?.render(sidebarCanvas("home", {
+      ...READY, bootstrap: { sessionId: SESSION_ID, capability: "server-capability" },
+    })));
+    const action = newAction("collapsed"); action.focus();
+    await flush();
+    expect(document.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")?.value).toBe("Synthetic recovered draft");
+    expect(document.activeElement).toBe(action);
+  });
+
+  it("never focuses a disabled unavailable Session for a compose request", async () => {
+    mount = document.createElement("div"); document.body.append(mount); root = createRoot(mount);
+    const action = document.createElement("button"); document.body.append(action); action.focus();
+    await act(async () => root?.render(createElement(QueuedConversation, {
+      initialDetail: { ...saved, state: "deleted", deleted_at: "2026-10-13T00:00:00.000Z" },
+      scope: SCOPE, chatBinding: "session-version", detailBinding: "session-binding", focusComposer: true,
+    })));
+    await flush();
+    expect(document.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")?.disabled).toBe(true);
+    expect(document.activeElement).toBe(action);
+    action.remove();
+  });
 });
 
 describe("authenticated home with a legacy conversation-home record", () => {

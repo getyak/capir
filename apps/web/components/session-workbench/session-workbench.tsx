@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { QueuedConversation } from "../conversation/queued-conversation";
 import { useConversationAxis } from "../conversation/use-conversation-axis";
+import { useConversationReadingPosition } from "../conversation/use-conversation-reading-position";
 import { SessionSendTime } from "../conversation/session-execution-card";
 import { usePersonContextPanel } from "../person-context-panel";
 import { useWorkspaceChat } from "../relationship-workspace/use-workspace-chat";
@@ -194,6 +195,9 @@ function LegacySessionWorkbench({
   const followLatestRef = useRef(true);
   const landedRef = useRef(false);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
+  const reading = useConversationReadingPosition({ viewportRef: transcriptRef, followsLatestRef: followLatestRef, onAwayChange: setAwayFromLatest,
+    scope: storageScope, sessionId: state.detail.session_id, binding: binding ?? "", ready: Boolean(binding),
+    unavailable: state.detail.state !== "active", expiresAt: state.detail.expires_at });
 
   const commitState = useCallback((update: (current: DetailState) => DetailState) => {
     const next = update(stateRef.current);
@@ -222,12 +226,13 @@ function LegacySessionWorkbench({
   }, []);
 
   // Passive scroll tracking: incoming turns follow only while the reader is
-  // already at the latest message. Reopening lands at the latest turn once.
+  // already at the latest message. A retained reading position owns reopening.
   useEffect(() => {
     const node = transcriptRef.current;
     if (!node) return;
     function update() {
       if (!node) return;
+      if (reading.restoring.current) { reading.restore(); return; }
       const near = conversationNearBottom({
         clientHeight: node.clientHeight,
         scrollHeight: node.scrollHeight,
@@ -235,12 +240,14 @@ function LegacySessionWorkbench({
       });
       followLatestRef.current = near;
       setAwayFromLatest(!near);
+      reading.remember();
     }
     update();
     node.addEventListener("scroll", update, { passive: true });
     // A growing draft, recovery notice, or shorter window changes the reading
     // viewport without a scroll event. Preserve the reader's previous intent.
     const resize = new ResizeObserver(() => {
+      if (reading.restoring.current) { reading.restore(); return; }
       if (followLatestRef.current) node.scrollTop = node.scrollHeight;
       update();
     });
@@ -249,7 +256,7 @@ function LegacySessionWorkbench({
       resize.disconnect();
       node.removeEventListener("scroll", update);
     };
-  }, []);
+  }, [reading]);
 
   // Shared active refresh for the OPEN conversation: foreground, focus,
   // network recovery and the bounded active interval merge newly committed
@@ -299,10 +306,11 @@ function LegacySessionWorkbench({
     if (!node) return;
     if (!landedRef.current) {
       landedRef.current = true;
+      if (reading.restored.current) return;
       node.scrollTop = node.scrollHeight;
       return;
     }
-    if (!followLatestRef.current) return;
+    if (reading.restoring.current || !followLatestRef.current) return;
     const reducedMotion =
       typeof window !== "undefined" &&
       window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -310,7 +318,7 @@ function LegacySessionWorkbench({
       behavior: conversationScrollBehavior(reducedMotion),
       top: node.scrollHeight,
     });
-  }, [turnCount]);
+  }, [turnCount, reading]);
 
   const detail = state.detail;
   const personContextPanel = usePersonContextPanel();
@@ -652,6 +660,7 @@ function LegacySessionWorkbench({
       }
       setConfirmingDelete(false);
       deleteKeyRef.current = null;
+      reading.forget();
       pendingDraftRef.current = null;
       foreignPendingRef.current = false;
       clearDurableDraft();
@@ -782,6 +791,7 @@ function LegacySessionWorkbench({
   function jumpToLatest() {
     const node = transcriptRef.current;
     if (!node) return;
+    reading.cancelRestore();
     followLatestRef.current = true;
     setAwayFromLatest(false);
     const reducedMotion =
@@ -791,6 +801,7 @@ function LegacySessionWorkbench({
       behavior: conversationScrollBehavior(reducedMotion),
       top: node.scrollHeight,
     });
+    reading.remember();
   }
 
   function closeDetails(returnFocus = false) {
@@ -961,6 +972,10 @@ function LegacySessionWorkbench({
         className={chatStyles.transcript}
         ref={transcriptRef}
         tabIndex={0}
+        onWheel={() => reading.cancelRestore()}
+        onTouchStart={() => reading.cancelRestore()}
+        onPointerDown={() => reading.cancelRestore()}
+        onKeyDown={(event) => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) reading.cancelRestore(); }}
       >
         {detail.turns.length === 0 ? (
           <p className={styles.hint}>

@@ -1,0 +1,36 @@
+.calendar { min-width: 0; padding: 2px 4px 12px; }
+.monthHeader, .upcomingHeader { align-items: center; display: flex; gap: 2px; min-height: 36px; }
+.monthHeader h2, .upcomingHeader h2 { color: var(--muted-strong, var(--ink)); flex: 1; font-size: 12px; font-weight: 550; line-height: 1.5; margin: 0; }
+.monthHeader button { align-items: center; background: transparent; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; display: flex; height: 32px; justify-content: center; padding: 0; width: 28px; }
+.monthHeader button:hover, .calendarActions a:hover, .calendarActions button:hover, .schedule:hover { background: var(--hover, color-mix(in srgb, var(--ink) 6%, transparent)); color: var(--ink); }
+.monthHeader button:disabled { cursor: default; opacity: 0.35; }
+.monthGrid { border-collapse: collapse; table-layout: fixed; width: 100%; }
+.monthGrid th { color: var(--muted); font-size: 11px; font-weight: 400; height: 24px; padding: 0; }
+.monthGrid td { height: 30px; padding: 1px 0; text-align: center; }
+.monthGrid a { align-items: center; border-radius: 6px; color: var(--ink); display: flex; font-size: 12px; height: 28px; justify-content: center; line-height: 1; margin: 0 1px; text-decoration: none; }
+.monthGrid a[data-outside="true"] { color: var(--muted); opacity: 0.58; }
+.monthGrid a:hover { background: var(--hover, color-mix(in srgb, var(--ink) 6%, transparent)); }
+.monthGrid a[data-today="true"] { text-decoration: underline; text-underline-offset: 4px; }
+.monthGrid a[data-selected="true"] { background: var(--ink); color: var(--background); font-weight: 600; opacity: 1; }
+.calendarActions { align-items: center; color: var(--muted); display: flex; font-size: 11px; justify-content: space-between; min-height: 32px; }
+.calendarActions a, .calendarActions button { background: transparent; border: 0; border-radius: 5px; color: var(--muted-strong, var(--ink)); cursor: pointer; font: inherit; padding: 8px 5px; text-decoration: none; }
+.calendarActions span { padding-right: 4px; }
+.upcoming { margin-top: 18px; }
+.upcomingHeader select { background: transparent; border: 1px solid var(--line-soft); border-radius: 5px; color: var(--muted-strong, var(--ink)); cursor: pointer; font: inherit; font-size: 11px; min-height: 28px; padding: 2px 3px; }
+.scope { color: var(--muted); font-size: 11px; line-height: 1.6; margin: 0 0 6px; }
+.scheduleList { list-style: none; margin: 0; padding: 0; }
+.schedule { border-radius: 6px; color: var(--ink); display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 8px 5px; text-decoration: none; }
+.schedule time { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.schedule strong { font-size: 12px; font-weight: 500; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule > span { color: var(--muted); font-size: 11px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.state, .coverage { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 0; padding: 8px 4px; }
+.state button { background: transparent; border: 0; color: var(--ink); cursor: pointer; font: inherit; margin-left: 5px; min-height: 32px; padding: 4px; text-decoration: underline; text-underline-offset: 3px; }
+.coverage { font-size: 11px; padding-top: 3px; }
+.rangeLink { color: var(--muted); display: block; font-size: 11px; line-height: 1.5; padding: 9px 4px; text-decoration: none; }
+.rangeLink:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.calendar a:focus-visible, .calendar button:focus-visible, .calendar select:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+.srOnly { clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
+@media (forced-colors: active) {
+  .monthGrid a[data-selected="true"] { background: Highlight; color: HighlightText; outline: 1px solid Highlight; }
+  .monthGrid a[data-outside="true"] { opacity: 1; }
+}
