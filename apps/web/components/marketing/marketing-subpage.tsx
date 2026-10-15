@@ -7,33 +7,13 @@ import {
 } from "@/lib/marketing-copy";
 import type { MarketingLocale } from "@/lib/marketing-locale";
 import styles from "./marketing.module.css";
+import { ProductStory, productStoryMeta } from "./product-story";
 
 export type MarketingPageKind =
   "product" | "how-it-works" | "trust" | "pricing";
 export const subpageCopy = {
   "zh-CN": {
-    product: {
-      title: "重要的人和未完的事，放回同一段来往。",
-      description:
-        "截图是入口。你想留下的是这次认识的背景、答应的事情，以及下一次还用得上的话。",
-      rows: [
-        [
-          "先理解，再决定留下什么。",
-          "不必先建联系人，或选一个文件夹。",
-          "先看到一段有来源的理解，再审阅人物、背景或未完事项。同名时先确认身份；还没有下一步，留作认识背景也有价值。",
-        ],
-        [
-          "人、背景和事情，分别生长。",
-          "临时计划保留当时的时间，不变成永久标签。",
-          "人物资料保留核对过的身份线索；记忆保留带时间的背景；事项保留承诺和等待条件。重要内容能回到原话，也能纠正或删除。",
-        ],
-        [
-          "下一次，从上一次接着聊。",
-          "新回复更新同一件事，而不是再建一张孤立笔记。",
-          "会面前回顾共同背景，会面后审阅变化。事情可以等待、完成、停止；主动提醒需要明确触发条件，暂停不代表不感兴趣。",
-        ],
-      ],
-    },
+    product: { ...productStoryMeta["zh-CN"], rows: [] },
     "how-it-works": {
       title: "少重建一次背景，多认真交谈一次。",
       description:
@@ -90,28 +70,7 @@ export const subpageCopy = {
     },
   },
   en: {
-    product: {
-      title: "Keep the people and unfinished things that matter.",
-      description:
-        "A screenshot is the entrance. The useful result is a remembered introduction, a promise, or words that will matter again.",
-      rows: [
-        [
-          "Understand first. Choose what to keep.",
-          "No contact form or folder required first.",
-          "See a sourced understanding before reviewing a person, context, or unfinished thing. Resolve same-name ambiguity first. An introduction with no next step can be useful on its own.",
-        ],
-        [
-          "People, context, and work grow separately.",
-          "A temporary plan keeps its original time and uncertainty.",
-          "People retain reviewed identity clues; memories retain dated context; work retains commitments and waiting conditions. Important context returns to the source and can be corrected or deleted.",
-        ],
-        [
-          "Pick up the next conversation where you left off.",
-          "A new reply updates the same thing instead of creating another isolated note.",
-          "Review shared context before meeting and changes afterward. Work can wait, complete, or stop. Reminders need explicit triggers; a pause does not imply disinterest.",
-        ],
-      ],
-    },
+    product: { ...productStoryMeta["en"], rows: [] },
     "how-it-works": {
       title: "Less reconstructing. More real conversation.",
       description:
@@ -177,6 +136,7 @@ export function MarketingSubpage({
   kind: MarketingPageKind;
   locale: MarketingLocale;
 }) {
+  if (kind === "product") return <ProductStory locale={locale} />;
   const c = marketingCopy(locale);
   const copy = subpageCopy[locale][kind];
   const en = locale === "en";
@@ -278,42 +238,6 @@ export function MarketingSubpage({
             </section>
           ))}
         </div>
-      )}
-      {kind === "product" && (
-        <section className={styles.callout}>
-          <h2>
-            {en
-              ? "The same thing can continue next time."
-              : "这件事，下次还接得起来。"}
-          </h2>
-          <div className={styles.path}>
-            <div>
-              {en ? "You" : "你"}
-              <small>
-                {en ? "Promise to send an overview" : "你答应先发介绍"}
-              </small>
-            </div>
-            <span aria-hidden="true">→</span>
-            <div>
-              {en ? "Chen Xia" : "陈夏"}
-              <small>
-                {en ? "Overview sent" : "产品介绍已发出"}
-              </small>
-            </div>
-            <span aria-hidden="true">→</span>
-            <div>
-              {en ? "Next conversation" : "下一次交流"}
-              <small>
-                {en ? "Review shared context" : "回顾共同背景"}
-              </small>
-            </div>
-          </div>
-          <p>
-            {en
-              ? "A synthetic path through the same person and item. Changes keep their sources and review; pausing affects reminders alone. The full screenshot continuity loop is a product direction. Confirm available capabilities when requesting access."
-              : "同一人物、同一件事的合成路径。每次变化都保留来源和审阅；暂停只改变提醒，不推测对方态度。完整截图接续是产品方向，具体开放能力需在申请时核对。"}
-          </p>
-        </section>
       )}
       {kind === "trust" && (
         <p className={styles.callout}>
