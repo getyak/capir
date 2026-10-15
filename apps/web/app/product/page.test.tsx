@@ -25,6 +25,13 @@ describe("product relationship story", () => {
     expect(caseStudy?.textContent).toContain(language === "en" ? "How you met is not in this source" : "认识的经过，这份来源没有提到");
   });
 
+  it.each(["zh-CN", "en"] as const)("keeps the readable heading consistent with its metadata in %s", async language => {
+    const document = await rendered(language);
+    const { generateMetadata } = await import("./page");
+    const metadata = await generateMetadata();
+    expect(document.querySelector("h1")?.textContent).toBe(metadata.title);
+  });
+
   it.each(["zh-CN", "en"] as const)("retains speakers and uncertainty at the actual source disclosure in %s", async language => {
     const document = await rendered(language);
     const source = document.querySelector("aside details");

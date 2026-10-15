@@ -110,7 +110,7 @@ const storyCopy = {
       ["Work", "A promise and its waiting condition", "The same product overview moves from waiting on you to waiting on their review."],
     ],
     quietTitle: "Waiting is a useful outcome, too.",
-    quietText: "No new progress need not create another task. Pausing affects reminders, not assumptions about someone’s interest. Preparing a draft does not send a message.",
+    quietText: "Without new progress, there may be nothing to do. Pausing affects reminders, not assumptions about someone’s interest. Preparing a draft does not send a message.",
     removalToggle: "What happens if a source is removed?",
     removalText: "Current context and suggestions that lose their support should become invalid. An earlier review cannot replace the original words or restore deleted content.",
     closingTitle: "Explore before bringing your own conversations.",
@@ -127,7 +127,7 @@ export function ProductStory({ locale }: { locale: MarketingLocale }) {
       <section className={styles.hero} aria-labelledby="product-story-title">
         <div className={styles.intro}>
           <p className={styles.eyebrow}>{copy.eyebrow}</p>
-          <h1 id="product-story-title">{copy.title.map(line => <span key={line}>{line}</span>)}</h1>
+          <h1 id="product-story-title">{copy.title.map((line, index) => <span key={line}>{line}{locale === "en" && index < copy.title.length - 1 ? " " : ""}</span>)}</h1>
           <p className={styles.promise}>{copy.promise}</p>
           <Link href={relationshipDemoHref} className={shared.primary}>
             {c.demo}<ArrowRight size={18} aria-hidden="true" />
