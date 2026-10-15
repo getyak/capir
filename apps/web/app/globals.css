@@ -15480,9 +15480,17 @@ article[data-state="unresolved"]
 .site-language { min-height: 44px; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; padding: 0 4px; max-width: 70px; }
 .site-language option { background: var(--background); color: var(--ink); }
 .site-language:disabled { cursor: progress; }
-@media(max-width: 760px) { .marketing-header .site-header__inner { gap: 10px; } .marketing-header .site-header__actions { gap: 5px; } .marketing-header .brand { gap: 6px; } .marketing-header .brand__name { font-size: 13px; } .marketing-header .icon-button { width: 44px; height: 44px; } }
-.marketing-header .site-header__inner { background: transparent; border: 0; border-radius: 0; box-shadow: none; max-width: 1280px; padding-inline: 40px; }
+@media(max-width: 760px) { .marketing-header .site-header__inner { gap: 10px; } .marketing-header .site-header__actions { gap: 5px; } .marketing-header .brand { gap: 6px; } .marketing-header .brand__name { font-size: 13px; } }
+.marketing-header .site-header__inner { background: transparent; border: 0; border-radius: 0; box-shadow: none; grid-template-columns: minmax(80px, 1fr) auto minmax(max-content, 1fr); max-width: 1280px; padding-inline: 40px; }
 .marketing-header .desktop-nav a { font-size: 13px; min-height: 44px; display: inline-flex; align-items: center; }
+/* Keep the action track intrinsic so the desktop boundary cannot squeeze icons.
+   The control stays still; color feedback does not move its hit rectangle. */
+.marketing-header .icon-button { flex: none; width: 44px; height: 44px; }
+.marketing-header .brand { min-height: 44px; min-width: 44px; }
+.marketing-header .desktop-account-link { justify-content: center; min-height: 44px; min-width: 44px; }
+.marketing-header .icon-button,
+.marketing-header .button,
+.marketing-header .desktop-nav a { transform: none; }
 .marketing-header .site-header__actions .button { border-color: transparent; min-height: 44px; }
 @media(max-width:1040px) { .marketing-header .site-header__inner { padding-inline: 20px; max-width: 100%; } }
 
