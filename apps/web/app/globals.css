@@ -15481,7 +15481,7 @@ article[data-state="unresolved"]
 .site-language option { background: var(--background); color: var(--ink); }
 .site-language:disabled { cursor: progress; }
 @media(max-width: 760px) { .marketing-header .site-header__inner { gap: 10px; } .marketing-header .site-header__actions { gap: 5px; } .marketing-header .brand { gap: 6px; } .marketing-header .brand__name { font-size: 13px; } }
-.marketing-header .site-header__inner { background: transparent; border: 0; border-radius: 0; box-shadow: none; grid-template-columns: minmax(80px, 1fr) auto minmax(max-content, 1fr); max-width: 1280px; padding-inline: 40px; }
+.marketing-header .site-header__inner { background: transparent; border: 0; border-radius: 0; box-shadow: none; column-gap: 16px; grid-template-columns: minmax(80px, 1fr) auto minmax(max-content, 1fr); max-width: 1280px; padding-inline: 40px; }
 .marketing-header .desktop-nav a { font-size: 13px; min-height: 44px; display: inline-flex; align-items: center; }
 /* Keep the action track intrinsic so the desktop boundary cannot squeeze icons.
    The control stays still; color feedback does not move its hit rectangle. */
@@ -15492,6 +15492,8 @@ article[data-state="unresolved"]
 .marketing-header .button,
 .marketing-header .desktop-nav a { transform: none; }
 .marketing-header .site-header__actions .button { border-color: transparent; min-height: 44px; }
+.marketing-header .button:hover { background: var(--ink-soft); }
+.marketing-header .button:active { background: var(--muted-strong); }
 @media(max-width:1040px) { .marketing-header .site-header__inner { padding-inline: 20px; max-width: 100%; } }
 
 /* An unscoped conversation is a primary working surface, including editable
