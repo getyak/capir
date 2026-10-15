@@ -1,10 +1,12 @@
 .page { max-width: 1280px; margin: 0 auto; padding: 0 40px; color: var(--ink); }
-.hero { display: grid; grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); gap: 72px; align-items: center; padding: 56px 0 64px; }
+.hero { display: grid; grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); gap: 0 72px; align-items: center; padding: 56px 0 64px; }
+.intro { grid-column: 1; grid-row: 1; align-self: end; }
+.overview { grid-column: 1; grid-row: 2; align-self: start; }
 .eyebrow { margin-bottom: 20px; font-size: 13px; line-height: 1.7; color: var(--muted-strong); }
 .intro h1 { font-size: clamp(36px, 4.1vw, 54px); font-weight: 600; line-height: 1.22; letter-spacing: -.04em; }
 .intro h1 span { display: block; }
 .lead { max-width: 44em; margin: 20px 0 24px; color: var(--muted-strong); font-size: 17px; line-height: 1.8; }
-.source { min-width: 0; padding: 26px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.source { grid-column: 2; grid-row: 1 / span 2; min-width: 0; padding: 26px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
 .sourceLabel { padding-bottom: 16px; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.7; color: var(--muted-strong); }
 .sourceLabel span { display: block; }
 .source blockquote { margin: 24px 0; }
@@ -41,10 +43,12 @@
 .demoLink:active { background: var(--muted-strong); }
 .page :is(a, summary) { scroll-margin-top: 106px; scroll-margin-bottom: 20px; }
 .page :is(a, summary):focus-visible { outline: 3px solid var(--accent-strong); outline-offset: 4px; }
-@media (max-width: 1023px) { .hero, .boundaries, .questions { gap: 36px; } .source { padding: 22px; } .comparison { gap: 36px; } }
+@media (max-width: 1023px) { .hero { column-gap: 36px; } .boundaries, .questions { gap: 36px; } .source { padding: 22px; } .comparison { gap: 36px; } }
 @media (max-width: 767px) {
   .page { padding: 0 20px; }
   .hero { grid-template-columns: 1fr; gap: 28px; padding: 34px 0 40px; }
+  .intro, .overview, .source { grid-column: auto; grid-row: auto; align-self: auto; }
+  .overview .lead { margin-top: 0; }
   .intro h1 { font-size: clamp(31px, 8.4vw, 40px); }
   .eyebrow { margin-bottom: 16px; }
   .lead { margin: 18px 0 22px; font-size: 16px; }

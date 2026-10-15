@@ -103,8 +103,6 @@ export function TrustStory({ locale }: { locale: MarketingLocale }) {
         <div className={styles.intro}>
           <p className={styles.eyebrow}>{copy.eyebrow}</p>
           <h1 id="trust-story-title">{copy.title.map((line, index) => <span key={line}>{line}{locale === "en" && index < copy.title.length - 1 ? " " : ""}</span>)}</h1>
-          <p className={styles.lead}>{trustStoryMeta[locale].description}</p>
-          <a className={styles.textLink} href="#trust-boundaries">{copy.follow}<ArrowDown size={18} aria-hidden="true" /></a>
         </div>
         <aside className={styles.source} aria-label={copy.caseLabel}>
           <p className={styles.sourceLabel}>{copy.caseLabel}<span>{copy.date}</span></p>
@@ -112,6 +110,10 @@ export function TrustStory({ locale }: { locale: MarketingLocale }) {
           <blockquote><cite>{copy.speaker}</cite><p>“{copy.reply}”</p></blockquote>
           <p className={styles.limit}>{copy.limit}</p>
         </aside>
+        <div className={styles.overview}>
+          <p className={styles.lead}>{trustStoryMeta[locale].description}</p>
+          <a className={styles.textLink} href="#trust-boundaries">{copy.follow}<ArrowDown size={18} aria-hidden="true" /></a>
+        </div>
       </section>
       <section id="trust-boundaries" className={styles.boundaries} aria-labelledby="trust-boundaries-title">
         <div><p className={styles.eyebrow}>{copy.chainLabel}</p><h2 id="trust-boundaries-title">{copy.chainTitle}</h2><p className={styles.lead}>{copy.chainIntro}</p></div>
