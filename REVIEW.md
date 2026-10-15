@@ -69,3 +69,10 @@ browser chrome, compare the full target bounds with the actual covering region;
 a center hit alone does not establish complete visibility. Do not inject
 application scroll or focus to turn a failed acceptance into a pass; preserve
 failed samples and distinguish harness corrections from production fixes.
+
+For emulated responsive captures, verify the saved image against the actual
+viewport and fixed layers; nominal capture dimensions alone do not establish a
+faithful surface. Preserve scaled or duplicated captures as harness failures. A
+layout box also does not prove visible content: collapsed native disclosures can
+retain boxes and stale computed styles. Measure contrast only for painted
+content, then separately verify the opened state.
