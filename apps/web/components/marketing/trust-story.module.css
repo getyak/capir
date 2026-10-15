@@ -1,0 +1,64 @@
+.page { max-width: 1280px; margin: 0 auto; padding: 0 40px; color: var(--ink); }
+.hero { display: grid; grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); gap: 72px; align-items: center; padding: 56px 0 64px; }
+.eyebrow { margin-bottom: 20px; font-size: 13px; line-height: 1.7; color: var(--muted-strong); }
+.intro h1 { font-size: clamp(36px, 4.1vw, 54px); font-weight: 600; line-height: 1.22; letter-spacing: -.04em; }
+.intro h1 span { display: block; }
+.lead { max-width: 44em; margin: 20px 0 24px; color: var(--muted-strong); font-size: 17px; line-height: 1.8; }
+.source { min-width: 0; padding: 26px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); }
+.sourceLabel { padding-bottom: 16px; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.7; color: var(--muted-strong); }
+.sourceLabel span { display: block; }
+.source blockquote { margin: 24px 0; }
+.source cite { font-size: 13px; line-height: 1.7; font-style: normal; color: var(--muted-strong); }
+.source blockquote p { margin-top: 8px; font-size: 22px; line-height: 1.6; letter-spacing: -.015em; }
+.limit { margin-top: 28px; border-left: 2px solid var(--accent-strong); padding-left: 16px; font-size: 15px; line-height: 1.8; }
+.page h2 { max-width: 25em; font-size: clamp(27px, 2.75vw, 36px); line-height: 1.4; letter-spacing: -.03em; font-weight: 600; text-wrap: balance; }
+.page h3 { font-size: 20px; line-height: 1.55; font-weight: 600; letter-spacing: -.015em; }
+.boundaries { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 72px; border-top: 1px solid var(--line-strong); padding: 52px 0 56px; scroll-margin-top: 106px; }
+.chain { list-style: none; margin: 0; padding: 0; }
+.chain li { padding: 22px 0; border-top: 1px solid var(--line); }
+.chain li:first-child { padding-top: 0; border: 0; }
+.state { margin-bottom: 10px; font-size: 13px; line-height: 1.7; color: var(--muted-strong); }
+.chain li > p:last-child, .comparison article > p:last-child { margin-top: 12px; font-size: 16px; line-height: 1.8; color: var(--muted-strong); }
+.chapter { padding: 48px 0 56px; border-top: 1px solid var(--line-strong); }
+.comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; margin-top: 32px; }
+.comparison article { padding-top: 22px; border-top: 1px solid var(--line-strong); }
+.comparison .unsupported { border-top: 2px solid var(--accent-strong); }
+.unsupported .state { color: var(--accent-strong); }
+.questions { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 72px; padding: 36px 0 48px; border-top: 1px solid var(--line-strong); }
+.questions details { border-bottom: 1px solid var(--line); }
+.questions summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 60px; padding: 16px 0; cursor: pointer; list-style: none; font-size: 16px; line-height: 1.7; font-weight: 500; }
+.questions summary::-webkit-details-marker { display: none; }
+.questions summary span { flex: none; font-size: 22px; font-weight: 400; color: var(--muted-strong); }
+.questions details[open] summary span { transform: rotate(45deg); }
+.questions details > p { padding-bottom: 22px; font-size: 15px; line-height: 1.9; color: var(--muted-strong); }
+.closing { border-top: 1px solid var(--line-strong); padding: 52px 0 72px; }
+.actions { display: flex; gap: 16px 32px; flex-wrap: wrap; align-items: center; }
+.textLink, .demoLink { display: inline-flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 44px; font-size: 15px; line-height: 1.6; text-decoration: underline; text-underline-offset: 5px; text-decoration-color: var(--line-strong); }
+.textLink:hover { color: var(--accent-strong); text-decoration-color: currentColor; }
+.textLink svg, .demoLink svg { flex: none; }
+.demoLink { padding: 10px 16px; background: var(--ink); color: var(--background); border-radius: 7px; text-decoration: none; }
+.demoLink:hover { background: var(--ink-soft); }
+.demoLink:active { background: var(--muted-strong); }
+.page :is(a, summary) { scroll-margin-top: 106px; scroll-margin-bottom: 20px; }
+.page :is(a, summary):focus-visible { outline: 3px solid var(--accent-strong); outline-offset: 4px; }
+@media (max-width: 1023px) { .hero, .boundaries, .questions { gap: 36px; } .source { padding: 22px; } .comparison { gap: 36px; } }
+@media (max-width: 767px) {
+  .page { padding: 0 20px; }
+  .hero { grid-template-columns: 1fr; gap: 28px; padding: 34px 0 40px; }
+  .intro h1 { font-size: clamp(31px, 8.4vw, 40px); }
+  .eyebrow { margin-bottom: 16px; }
+  .lead { margin: 18px 0 22px; font-size: 16px; }
+  .source { padding: 20px; }
+  .source blockquote p { font-size: 21px; }
+  .limit { padding-left: 12px; }
+  .boundaries { grid-template-columns: 1fr; gap: 18px; padding: 36px 0 40px; }
+  .chapter { padding: 36px 0 40px; }
+  .comparison { grid-template-columns: 1fr; gap: 28px; margin-top: 24px; }
+  .questions { grid-template-columns: 1fr; gap: 0; padding: 28px 0 36px; }
+  .questions summary { font-size: 15px; }
+  .closing { padding: 36px 0 52px; }
+  .actions { align-items: flex-start; gap: 12px 24px; }
+  .demoLink { max-width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .page a { transition: none; transform: none; } }
+@media (forced-colors: active) { .source, .comparison .unsupported, .limit { border-color: CanvasText; } .demoLink { border: 1px solid ButtonText; } }

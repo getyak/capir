@@ -8,6 +8,7 @@ import {
 import type { MarketingLocale } from "@/lib/marketing-locale";
 import styles from "./marketing.module.css";
 import { ProductStory, productStoryMeta } from "./product-story";
+import { TrustStory, trustStoryMeta } from "./trust-story";
 
 export type MarketingPageKind =
   "product" | "how-it-works" | "trust" | "pricing";
@@ -36,32 +37,7 @@ export const subpageCopy = {
         ],
       ],
     },
-    trust: {
-      title: "有出处的背景，有边界的智能。",
-      description: "把原话、解释和决定分开，让每一步都能检查、纠正或停止。",
-      rows: [
-        [
-          "你选择来源",
-          "只处理你为当前目的主动提供的内容。",
-          "公开演示仅包含合成资料，不读取你的通讯录、聊天或日历。实际接入的来源与权限应在使用前明确。",
-        ],
-        [
-          "原话可以检查",
-          "来源、说话人和时间与重要结论保持关联。",
-          "身份不明、相对时间或矛盾不会被悄悄补全。Agent 的解释以建议呈现，不给个人价值、性格或录用概率评分。",
-        ],
-        [
-          "行动单独授权",
-          "确认事实，不等于发送消息或安排日程。",
-          "外部效果需要单独审阅最终对象、内容和时间。本页的确认按钮仅改变当前演示状态，不保存真实记录。",
-        ],
-        [
-          "移除意味着失效",
-          "当前结论不能继续使用已移除的支持证据。",
-          "依赖来源的建议失效，历史决定仍保留其当时的确认与当前来源状态。演示的“重新开始”创建新一轮演示，不代表恢复任何已删除的真实资料。",
-        ],
-      ],
-    },
+    trust: { ...trustStoryMeta["zh-CN"], rows: [] },
     pricing: {
       title: "先体验，再决定是否一起使用。",
       description:
@@ -93,33 +69,7 @@ export const subpageCopy = {
         ],
       ],
     },
-    trust: {
-      title: "Context with sources. Intelligence with boundaries.",
-      description:
-        "Keep original words, interpretations, and decisions separate, so each step can be inspected, corrected, or stopped.",
-      rows: [
-        [
-          "You choose the source",
-          "Process only the content you provide for the current purpose.",
-          "This public demo contains synthetic material only. It does not read your contacts, chats, or calendar. Real source access and permissions should be explicit before use.",
-        ],
-        [
-          "The words stay inspectable",
-          "Keep source, speaker, and time attached to important conclusions.",
-          "Unknown identities, relative dates, and contradictions are not silently resolved. Agent interpretations remain suggestions, with no scoring of personal worth, personality, or acceptance probability.",
-        ],
-        [
-          "Actions need separate approval",
-          "Confirming a fact does not send a message or schedule a meeting.",
-          "External effects require review of the final recipient, content, and time. This demo's confirmation button only changes the current page state, never real records.",
-        ],
-        [
-          "Removal invalidates support",
-          "Current conclusions cannot keep using a removed source.",
-          "Dependent suggestions become unsupported. Earlier decisions keep their confirmation history and current source status. “Start a new demo” starts a fresh simulation; it does not recover deleted real data.",
-        ],
-      ],
-    },
+    trust: { ...trustStoryMeta["en"], rows: [] },
     pricing: {
       title: "Explore first. Decide together when it fits.",
       description:
@@ -137,6 +87,7 @@ export function MarketingSubpage({
   locale: MarketingLocale;
 }) {
   if (kind === "product") return <ProductStory locale={locale} />;
+  if (kind === "trust") return <TrustStory locale={locale} />;
   const c = marketingCopy(locale);
   const copy = subpageCopy[locale][kind];
   const en = locale === "en";
@@ -238,15 +189,6 @@ export function MarketingSubpage({
             </section>
           ))}
         </div>
-      )}
-      {kind === "trust" && (
-        <p className={styles.callout}>
-          <Link className={styles.inlineLink} href="/privacy">
-            {c.privacy}
-            {en ? ` · ${c.original}` : ""}
-            <ArrowRight size={16} aria-hidden="true" />
-          </Link>
-        </p>
       )}
       {kind !== "pricing" && (
         <section className={styles.closing}>
