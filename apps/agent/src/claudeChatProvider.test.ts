@@ -247,6 +247,40 @@ describe("Claude natural chat product adapter", () => {
     expect(answer.citation_ids).toEqual(["evidence-1"]);
   });
 
+  it("does not manufacture a citation when a model reads and uses a snapshot without selecting evidence", async () => {
+    const execute = async (_configuration: unknown, request: ClaudeHarnessRequest) => {
+      const read = request.tools.find(tool => tool.name === "read_relationship_memory")!;
+      await read.execute({ block_types: ["relationship_context"] }, new AbortController().signal);
+      return { ...outcome, text: "The record says the contact asked for role scope before choosing a meeting time." };
+    };
+    const answer = await new ClaudeChatProvider(configuration, execute).answer({
+      objective: "What is the safest next question to ask this synthetic contact?",
+      prompt_snapshot: bundledPrompt("assistant/relationship"),
+      context_blocks: [{ block_id: "synthetic-block-0001", block_key: "synthetic-follow-up-gap", type: "relationship_context",
+        status: "confirmed", headline: "Synthetic follow-up context",
+        summary: "The contact asked for role scope before choosing a meeting time.",
+        items: ["No role scope was included in the synthetic exchange."], evidence_fragment_ids: ["synthetic-evidence-0001"] }],
+      allowed_citation_ids: ["synthetic-evidence-0001"],
+    });
+    expect(answer.kind).toBe("clarification");
+    expect(answer.citation_ids).toEqual([]);
+  });
+
+  it("returns only selected successful evidence among multiple allowed sources", async () => {
+    const execute = async (_configuration: unknown, request: ClaudeHarnessRequest) => {
+      const cite = request.tools.find(tool => tool.name === "cite_evidence")!;
+      await cite.execute({ source_ids: ["scope-source"] }, new AbortController().signal);
+      await cite.execute({ source_ids: ["other-account"] }, new AbortController().signal);
+      return { ...outcome, text: "Send the requested role scope first." };
+    };
+    const answer = await new ClaudeChatProvider(configuration, execute).answer({
+      objective: "What should I ask next?", prompt_snapshot: bundledPrompt("assistant/relationship"),
+      context_blocks: [], allowed_citation_ids: ["scope-source", "unrelated-source"],
+    });
+    expect(answer.kind).toBe("answer");
+    expect(answer.citation_ids).toEqual(["scope-source"]);
+  });
+
   it("retrieves sourced Memory in a fresh Session without embedding it as prior dialogue", async () => {
     const memory = { block_id: "commitment", block_key: "commitment", type: "commitment", status: "confirmed",
       headline: "Prototype follow-up", summary: "周五给陈夏发原型", items: [], evidence_fragment_ids: ["source-commitment"] };
