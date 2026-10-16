@@ -95,3 +95,24 @@ and request direction. The single case must give a usable next question after
 supplying the missing role scope (unknown role details remain placeholders); the
 multiple case must preserve that direction and omit the irrelevant facility
 source. A scalar `passed` field proves only the mechanical citation check.
+
+## Second candidate checkpoint
+
+Candidate `144d7181` passed Agent432/1skip, compilation and documentation checks,
+and independent code review found no P0/P1. Its single-block model sample returned
+the correct selected citation and preserved the request direction. However, its
+draft asked whether "the time we discussed" still worked. The supplied context
+does not establish any previously discussed time. Independent business review
+rejected this unsupported premise, despite the unchanged mechanical probe
+returning `passed=true`. Request `1af842f2-c7b8-414d-bd05-043e88737cbc` is retained
+in the delivery evidence with a separate business-failure assessment.
+
+The second case was not run for this candidate. Neither local candidate is
+approved for PR delivery, deployment or issue closure. No resident service was
+changed in this follow-up. Before another source candidate, reconsider the
+answer design and its treatment of missing draft premises; do not repeatedly
+append sample-specific prohibitions or retry an unchanged source. Keep the
+original input, citation gate, model/budget, source/request-direction standards
+and GET-34 business matrix. A documentation-only commit is not a new behavioral
+candidate. Production builds also remain gated by at least30GiB available space;
+the fresh safe-cleanup audit found no eligible large artifact.
