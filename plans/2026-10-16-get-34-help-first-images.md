@@ -108,3 +108,21 @@ synthetic article usefully without a contact; this is a baseline observation,
 not candidate proof. Actual model comparison, current-head CI and deployment
 remain delivery gates. Private credentials, browser state and DB DSNs remain
 only in the owned temporary artifact and must not enter Git or formal evidence.
+
+### CI-driven multi-image correction
+
+The first PR head (`5565e72a`) failed the real Memory integration case with two
+images in the same current message. The historical guard had confused default
+single-image fallback eligibility with current-message membership. A new host
+regression reproduced this failure. The guard now checks membership in all
+current-message images; the single-image default remains unchanged. The real
+Memory integration suite plus image-intent tests passed 111/111 on PostgreSQL.
+The independent reviewer checked the correction and its TypeScript narrowing.
+
+Old-resident live baseline: article-only and direct-chat analysis/no-save both
+answered usefully. Group-only instead explained why it would not prepare a
+contact card and invited a one-to-one screenshot, without helping prioritize
+the visible export/layout questions. Preserve this observed failure when
+comparing the candidate; do not infer a model-quality improvement from the
+host tests alone. Infisical authentication was restored through the existing
+browser login and the 24-name backend runtime contract now passes.

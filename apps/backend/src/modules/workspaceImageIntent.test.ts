@@ -106,6 +106,20 @@ describe("help-first current-image host boundary", () => {
       newContact: { source_locator: { artifact_id: artifactID } } });
   });
 
+  it("accepts a grounded model proposal when two images belong to the current message", async () => {
+    const stage = vi.fn<WorkspaceMemoryLookup["stage"]>(async () => ({ proposalID: "10000000-0000-4000-8000-000000000003",
+      proposalRevision: 1, itemCount: 0, defaultSelectedCount: 0, scopeCounts: { self: 0, person: 0, relationship: 0 },
+      contactStatus: "pending", personID: null, personDisplayLabel: "小雨" }));
+    const provider = new ScriptedAgentProvider([{ tool: "memory_review", input: contactProposal }],
+      { outcome: "reply", title: "回答", body: "两张图片都在这次消息中。" });
+    const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: imageMessageID,
+      objective: "图片内容", provider, inputParts: [image, { ...image, artifactID: `conversation-image-${imageMessageID}-1-second` }],
+      imageIsCurrent: async () => true, contacts: { search: async () => [], read: vi.fn() },
+      memory: { recall: async () => ({ items: [] }), stage } });
+    expect(stage).toHaveBeenCalledOnce();
+    expect(result.memoryProposal?.revision).toBe(1);
+  });
+
   it.each([false, true])("preserves a model proposal with a historical image present (self-only=%s)", async selfOnly => {
     const { stage } = await run({ olderImage: true, propose: true, selfOnly, objective: "先给结论" });
     expect(stage).toHaveBeenCalledOnce();

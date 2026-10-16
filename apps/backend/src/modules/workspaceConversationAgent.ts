@@ -883,8 +883,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
           );
         }
       }
-      if (request.contact_decision === "new" && request.new_contact_source_locator?.kind === "image_region"
-        && request.new_contact_source_locator.artifact_id !== defaultImageArtifactID
+      if (request.contact_decision === "new" && newContactLocator?.kind === "image_region"
+        && !currentImages.some(part => part.artifactID === newContactLocator.artifact_id)
         && !sourceTexts().some(explicitHistoricalContactRequest)) {
         return toolFailure(name, "CONTACT_REVIEW_NOT_CURRENT",
           "A historical image is question context. Preparing its contact needs an explicit current-user contact request.");
