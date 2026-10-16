@@ -191,3 +191,49 @@ scores, an easier objective, automatic citations, or a different provider to
 declare the requirement satisfied. Capture provider-reported model metadata in
 future diagnostics as well as the configured alias; previous records did not
 retain that field and must not be backfilled by inference.
+
+## Prerequisite continuity design, frozen before implementation
+
+Model output can cite a source accurately while proposing a next step that
+contradicts its outstanding prerequisite. The next source slice makes that
+dependency part of the formal advice/draft contract: carry an unmet information
+or decision prerequisite into the proposed wording. Provide the required
+content, leave a placeholder for the whole missing content, or make the dependent
+action conditional on it. A neighboring label, acknowledgement or intent to
+provide something does not fulfill the information request. Do not claim that
+an open prerequisite has been satisfied. Apply this only when recommending a
+next step or composing a draft; do not turn simple recall into planning.
+
+This is a general completeness rule, with no role-specific banned phrase or
+fixed response template. Keep the adapter protocol, source status, accepted
+Memory distinction, no-action and write authority unchanged. No extra model
+repair call, new tool, host-generated answer/citation, probe/temperature/effort/
+budget/provider change is included. A claim that prompting guarantees semantic
+correctness remains unsupported; actual final replies must pass independently.
+
+Retain the original single/multiple/known-meeting cases. Freeze a fourth
+counterexample before implementation: the source explicitly records that the
+user supplied the full requested scope and the contact acknowledged it and is
+ready to discuss meeting options; no meeting time is chosen. A useful next
+question can progress to availability without requesting the already supplied
+scope again or inventing a booked time. This tests the satisfied branch of the
+same prerequisite rule.
+
+Fixed case fixtures and expected behavior are saved in the task evidence as
+`prerequisite-contract-fixed-cases.json` before source editing. Each case runs
+once per substantive reviewed source candidate, in single, multiple, known,
+satisfied order, with separate citation/semantic judgments. Stop a candidate on
+its first failure and retain all results. A change of documentation, elapsed
+time, or an easier test does not permit a retry. The earlier one-candidate-per-
+heartbeat cap was an orchestration choice, not a user gate; any further work
+still needs new evidence, an explicit design, source change and independent
+review, and must preserve all fixed standards.
+
+Design review adds an explicit unknown-state boundary before candidate review:
+absence from the snapshot proves neither that a prerequisite is unmet nor that
+it is fulfilled. Keep that uncertainty conditional and do not invent a new
+obligation. Add an unknown-state counterexample after the four fixed cases: the
+source says the contact is open to a conversation but does not establish whether
+role details were requested or sent. A useful next question must not assert an
+outstanding request or completed transfer. This strengthens coverage and leaves
+all existing inputs/standards unchanged.
