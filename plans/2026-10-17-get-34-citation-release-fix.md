@@ -159,3 +159,35 @@ provider-only patch would leave the formal product prompt stale. It is diagnosis
 only. On acceptance, create PR and verify current CI, merge and build both real
 resident artifacts under the resource gate, then complete the unchanged GET-34
 production matrix. The issue remains In Progress until then.
+
+## Evidence-to-draft candidate outcome
+
+Candidate `d0469a10` passed Node24 Agent432/1skip, typecheck, compilation,
+documentation/architecture and independent source review. Both changed compiled
+modules were copied and SHA256-read-back before model startup, and the actual
+bundled formal prompt digest was verified before the model call.
+
+The frozen single case passed independent semantic review: its indirect question
+kept scope uncertainty conditional and did not invent a meeting time. The
+selective multi-source case selected only the relevant citation, but failed
+business acceptance. Its introductory advice correctly said to supply the
+requested scope, while its suggested question substituted a position title for
+the scope and moved to scheduling. The final explanation then claimed that the
+requested information had been included. A title does not resolve the recorded
+scope prerequisite. That contradiction cannot be excused by the correct
+introductory paragraph or the successful citation receipt.
+
+The failed request `62fb23c9-fc0a-4035-80fc-766cbb9d8950` and passing single
+request `6c0cddcf-086e-48bc-a4c8-3712f19de796` remain preserved with separate
+mechanical and semantic decisions. The known-meeting control was not run. This
+round's sole candidate is rejected for PR/deployment; no resident service was
+changed. Do not retry it or add another prompt amendment in this round.
+
+Next design work must address unresolved prerequisites in proposed wording,
+including whether a partial answer falsely claims to satisfy the prerequisite.
+This observed model inconsistency is not proof of a particular source-code root
+cause. Keep the original cases and all failed outputs; do not use aggregate
+scores, an easier objective, automatic citations, or a different provider to
+declare the requirement satisfied. Capture provider-reported model metadata in
+future diagnostics as well as the configured alias; previous records did not
+retain that field and must not be backfilled by inference.
