@@ -7,6 +7,8 @@ export interface CalendarDraftContext {
   sourceRequestID: string;
   referenceTime: string;
   timeZone: string;
+  /** Host-only live decision, including later same-Run user steering. */
+  permitsDraft?: () => boolean;
   /** Host-only exact original message lookup for accepted task updates. */
   resolveMessageExcerpt?: (excerpt: string) => { messageID: string; text: string } | false;
   /** Host-only validator backed by same-Run current image observations. */
@@ -33,7 +35,8 @@ export function calendarDraftCapability(context: CalendarDraftContext | undefine
   let draft: CalendarDraft | undefined;
   let staged = false;
   let finishing = false;
-  const preparationReady = () => Boolean(draft && finishing);
+  const permitted = () => context?.permitsDraft?.() !== false;
+  const preparationReady = () => Boolean(draft && finishing && permitted());
   const discard = () => { draft = undefined; staged = false; finishing = false; };
   if (!context) return { tools: [] as HarnessTool[], instructions: "", clock: undefined, draft: () => draft, preparationReady, discard };
   if (!z.uuid().safeParse(context.sourceRequestID).success || !Number.isFinite(Date.parse(context.referenceTime))) throw new Error("CALENDAR_DRAFT_CONTEXT_INVALID");
@@ -48,6 +51,7 @@ export function calendarDraftCapability(context: CalendarDraftContext | undefine
     name: "stage_calendar_draft", readOnly: false, alwaysLoad: true, schema,
     description: `Prepare one editable calendar draft for the user's current request, without saving an event, inviting anyone, or scheduling a reminder. Use calendar_clock in the current request context as the exclusive reference for today. Resolve relative dates using that reference, include the explicit UTC offset in both local timestamps, preserve stated duration, and quote the exact supporting user text. For screenshot or poster evidence, use the current host inspection already supplied, or call inspect_current_image if absent. Quote an exact span of visible_text (consecutive lines may be joined with whitespace) and set source_image_artifact_id; never combine nonadjacent lines or paraphrase. A screenshot may describe an old date: its relative times require an explicit source date or a user-confirmed reference; an undated old screenshot cannot use today as its source date. Respect later rescheduling/cancellation in the source. If a date or duration is materially unclear, ask before staging. A successful draft still requires an explicit human calendar action. Set finish_preparation:true only to explicitly finish this entire current task when ALL requested goals are already handled and only human calendar review remains. Omit it or use false when contact search, Memory proposals, analysis, other requested work or clarification remains; that continues the task. This flag grants no calendar execution authority.`,
     execute: async raw => {
+      if (!permitted()) return content({ error: "CALENDAR_DRAFT_DECLINED" }, true);
       const input = schema.parse(raw);
       if (staged) return content({ error: "CALENDAR_DRAFT_ALREADY_STAGED" }, true);
       const messageSource = !input.source_image_artifact_id ? context.resolveMessageExcerpt?.(input.source_excerpt) : undefined;
@@ -55,6 +59,7 @@ export function calendarDraftCapability(context: CalendarDraftContext | undefine
         ? await context.validateImageExcerpt?.(input.source_image_artifact_id,input.source_excerpt)
         : context.resolveMessageExcerpt ? Boolean(messageSource && messageSource.text.includes(input.source_excerpt)) : objective.includes(input.source_excerpt);
       if (!grounded) return content({ error: "CALENDAR_DRAFT_SOURCE_MISMATCH", instruction: "Use the current host inspection or inspect_current_image if absent. Quote an exact continuous span of visible_text and supply source_image_artifact_id. Preserve line order and intervening text; whitespace may join consecutive lines. Never substitute generated descriptions for a quote." }, true);
+      if (!permitted()) return content({ error: "CALENDAR_DRAFT_DECLINED" }, true);
       if (staged) return content({ error: "CALENDAR_DRAFT_ALREADY_STAGED" }, true);
       if (input.time_zone !== context.timeZone || !wallTimeMatches(input.starts_at, context.timeZone) || !wallTimeMatches(input.ends_at, context.timeZone)) {
         return content({ error: "CALENDAR_DRAFT_TIME_ZONE_MISMATCH", time_zone: context.timeZone }, true);
@@ -71,5 +76,5 @@ export function calendarDraftCapability(context: CalendarDraftContext | undefine
       return content({ calendar_draft: draft, instruction: "Present the draft for human review in the attached calendar card. No calendar event has been created and nobody has been invited. The user must use that card's calendar action; a conversational reply is not approval and cannot save an event. Keep the reply brief because the card already shows the exact title and time." });
     },
   };
-  return { tools: [tool], instructions, clock, draft: () => draft, preparationReady, discard };
+  return { tools: [tool], instructions, clock, draft: () => permitted() ? draft : undefined, preparationReady, discard };
 }
