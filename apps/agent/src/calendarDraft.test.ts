@@ -7,6 +7,27 @@ const input = { title: "与陈夏会谈", starts_at: "2026-09-10T15:00:00+08:00"
 const signal = new AbortController().signal;
 
 describe("review-only calendar capability", () => {
+  it("refuses a draft when the host rejects proposals", async () => {
+    const capability = calendarDraftCapability({ ...context, permitsDraft: () => false }, objective);
+    expect((await capability.tools[0]!.execute(input, signal)).isError).toBe(true);
+    expect(capability.draft()).toBeUndefined();
+  });
+  it("rechecks the host decision after an asynchronous image read", async () => {
+    let permitted = true;
+    const capability = calendarDraftCapability({ ...context, permitsDraft: () => permitted,
+      validateImageExcerpt: async () => { permitted = false; return { artifact_id: "image", content_hash: "a".repeat(64), inspection_request_id: "inspection" }; },
+    }, objective);
+    expect((await capability.tools[0]!.execute({ ...input, source_image_artifact_id: "image" }, signal)).isError).toBe(true);
+    expect(capability.draft()).toBeUndefined();
+  });
+  it("withholds a previously staged draft when a later host decision rejects it", async () => {
+    let permitted = true;
+    const capability = calendarDraftCapability({ ...context, permitsDraft: () => permitted }, objective);
+    expect((await capability.tools[0]!.execute({ ...input, finish_preparation: true }, signal)).isError).toBe(false);
+    permitted = false;
+    expect(capability.draft()).toBeUndefined();
+    expect(capability.preparationReady()).toBe(false);
+  });
   it("binds a supplemental exact quote to its original message without granting an external action", async () => {
     const messageID = "20000000-0000-4000-8000-000000000002";
     const capability = calendarDraftCapability({ ...context,

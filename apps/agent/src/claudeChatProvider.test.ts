@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClaudeChatProvider, splitFirstTurnSessionTitle, configuredClaudeChatPrompt } from "./claudeChatProvider.js";
+import { ClaudeChatProvider, splitFirstTurnSessionTitle, configuredClaudeChatPrompt, CLAUDE_WORKSPACE_OUTPUT_GUIDANCE } from "./claudeChatProvider.js";
 import { claudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
 import { ClaudeHarnessInterruption, type ClaudeHarnessRequest } from "./claudeHarness.js";
 import { createEnvironmentChatAnswerProvider } from "./chatAnswerProvider.js";
@@ -408,7 +408,7 @@ describe("inline user message images", () => {
     const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
       sawImages = harnessRequest.images;
       expect(harnessRequest.continuation).toBeUndefined();
-      expect(harnessRequest.systemPrompt).toContain("For a name-only screenshot, prepare the memory_review contact decision directly");
+      expect(harnessRequest.systemPrompt).toContain(CLAUDE_WORKSPACE_OUTPUT_GUIDANCE);
       expect(harnessRequest.systemPrompt).not.toContain("Cite relationship evidence through cite_evidence");
       expect(harnessRequest.budget).toEqual(request.budget);
       expect(JSON.parse(harnessRequest.context!).input_images).toEqual([

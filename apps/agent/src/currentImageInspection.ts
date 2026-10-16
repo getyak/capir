@@ -156,18 +156,20 @@ export function currentImageInspection(input:{
       finally{pending.delete(artifact_id);}
     }};
   return {tools:images.length&&input.inspector?[tool]:[],
-    prepare: async(signal:AbortSignal)=>{
-      if(images.length!==1||!input.inspector)return null;
-      const image=images[0]!;
+    prepare: async(signal:AbortSignal,artifactID?:string)=>{
+      const selected=artifactID?images.filter(image=>image.artifactID===artifactID):images;
+      if(selected.length!==1||!input.inspector)return null;
+      const image=selected[0]!;
       const receipt=await tool.execute({artifact_id:image.artifactID},signal);
       if(receipt.isError)return null;
       const observation=observations.get(image.artifactID);
       return observation?{artifactID:image.artifactID,...observation,
         public_subjects:input.subjectRegistry?.subjects().map(({id,name})=>({id,name}))??[]}:null;
     },
-    counterparty: async()=>{
-      if(images.length!==1)return null;
-      const image=images[0]!, result=observations.get(image.artifactID);
+    counterparty: async(artifactID?:string)=>{
+      const selected=artifactID?images.filter(image=>image.artifactID===artifactID):images;
+      if(selected.length!==1)return null;
+      const image=selected[0]!, result=observations.get(image.artifactID);
       const name=result?.counterparty_name?.trim();
       const header=result?.visible_text.find(text=>text.trim()===name);
       if(result?.conversation_kind!=="direct"||!name||!header||!await current(image))return null;

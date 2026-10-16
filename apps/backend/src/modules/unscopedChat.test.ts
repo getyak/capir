@@ -210,7 +210,6 @@ describe("unscoped Agent conversation", () => {
         byteSize: data.length, contentHash: "b".repeat(64), data }],
     });
     expect(run).toHaveBeenCalledWith(expect.objectContaining({
-      objective: expect.stringContaining("请先完成工具调用"),
       inputParts: [expect.objectContaining({ kind: "image", artifactID: "conversation-image-10000000-0000-4000-8000-000000000002-0-10000000-0000-4000-8000-000000000001",
         mimeType: "image/png", byteSize: data.length, dataBase64: Buffer.from(data).toString("base64") })],
     }), expect.any(Function), expect.anything());

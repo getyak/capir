@@ -11,7 +11,7 @@ async function run(options:{observation?:CurrentImageObservation;objective?:stri
  const stage=vi.fn(async()=>({proposalID:"10000000-0000-4000-8000-000000000002",proposalRevision:1,itemCount:0,defaultSelectedCount:0,scopeCounts:{self:0,person:0,relationship:0},contactStatus:"ambiguous" as const,personID:null,personDisplayLabel:"小雨",relationshipDisplayLabel:"已暂存的关系标签"}));
  const inspector={inspect:vi.fn(async()=>options.observation??observation)};
  const provider=options.provider??new ScriptedAgentProvider([],{outcome:"reply",title:"需要确认",body:"Andrew 是哪一位，需要链接确认。"});
- const result=await executeWorkspaceConversationAgentCore({workspaceID:"test",objective:options.objective??"了解聊天里讨论的 Andrew",provider,
+ const result=await executeWorkspaceConversationAgentCore({workspaceID:"test",messageID:"10000000-0000-4000-8000-000000000001",objective:options.objective??"了解聊天里讨论的 Andrew",provider,
   inputParts:options.multiple?[image,{...image,artifactID:artifactID+"2"}]:[image],imageInspector:inspector,imageIsCurrent:async()=>options.current?.()??true,
   ...(options.bound?{humanIdentityBinding:{personID:"10000000-0000-4000-8000-000000000003",contextID:null}}:{}),
   contacts:{search:vi.fn(async()=>[]),read:vi.fn()},memory:{recall:async()=>({items:[],hasMore:false,nextCursor:null}),stage}});
