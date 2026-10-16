@@ -69,3 +69,29 @@ require the resource gate.
 
 Status: design frozen before corrective implementation. The original screenshot
 plan and all production acceptance remain outstanding.
+
+## First candidate evidence and revised design
+
+Candidate `c4cdf9b0` passed the unchanged citation gate in both fixed model cases,
+but failed the pre-existing useful-answer criterion. The single-block final
+reply claimed the question had already been answered and omitted a concrete next
+question. The multiple-block reply selected only the relevant citation, but
+suggested asking the contact to provide the very role scope the contact had
+requested from the user. Both failed samples remain retained; neither permits
+PR delivery or production activation.
+
+The answer path has no steering/preparation Stop hook and returns the SDK's
+final `result.result`. No evidence establishes host text truncation. Clarify the
+same adapter's existing final-answer requirement: tool prefaces are not delivered
+by this answer call, so the final reply must itself contain the requested answer.
+Preserve who asked whom for what; help the user satisfy a contact's information
+request before proposing a follow-up, rather than bouncing it back. Do not
+concatenate intermediate text, manufacture a host answer, add calls, change
+tool authority or relax either fixed case.
+
+For the next source candidate, use the same two inputs and per-candidate call
+limit. In addition to citation receipts, manually check final-answer usefulness
+and request direction. The single case must give a usable next question after
+supplying the missing role scope (unknown role details remain placeholders); the
+multiple case must preserve that direction and omit the irrelevant facility
+source. A scalar `passed` field proves only the mechanical citation check.
