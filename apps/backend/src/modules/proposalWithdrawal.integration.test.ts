@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { ScriptedAgentProvider, type AgentToolResult } from "@talent-signal/agent";
 import { CONTRACT_VERSION } from "@talent-signal/contracts";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { inTransaction } from "../database/pool.js";
 import type { AuthContext } from "./auth.js";
 import { admitConversationQueueEntry } from "./conversationQueueAdmission.js";
+import { createConversationQueueSteeringFeed, createConversationQueueSteeringSource } from "./conversationQueueSteering.js";
 import { claimConversationQueueSteeringMembers, claimNextConversationQueueEntry } from "./conversationQueueState.js";
 import { withdrawMemoryProposalForRun } from "./memoryProposalWithdrawal.js";
 import {
@@ -24,6 +26,7 @@ import {
   withdrawMcpProposalsForRun,
   type McpStagingAuthority,
 } from "./mcpInteractions.js";
+import { executeWorkspaceConversationAgent } from "./workspaceConversationAgent.js";
 
 const url = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
 if (url && !["127.0.0.1", "localhost"].includes(new URL(url).hostname)) {
@@ -88,6 +91,74 @@ async function choice(f: Fixture) {
 }
 
 suite("host withdrawal of this run's pending proposals", () => {
+  it("wires the production agent adapters to durable withdrawal after same-run no-action steering", async () => {
+    const f = await fixture(), steeringMessageID = randomUUID();
+    const answer = { outcome: "reply", title: "分析", body: "继续解释原内容，先给结论再列依据。" };
+    const noSave = "no_action，不要保存，继续分析";
+    let stagedResults: readonly AgentToolResult[] = [];
+    const steering = createConversationQueueSteeringFeed(createConversationQueueSteeringSource({
+      pool: pool!, auth: f.auth, fence: f.authority.fence, sessionId: f.sessionID,
+      onLost: reason => { throw new Error(reason); },
+      loadImages: async () => { throw new Error("This text-only fixture must not load images"); },
+    }), { quietMs: 0, maxBatchAgeMs: 0 });
+    class SteeringAfterStagingProvider extends ScriptedAgentProvider {
+      override readonly inputCapabilities = { text: true, image: true, imageUnderstanding: false, steering: true } as const;
+      override async run(...args: Parameters<ScriptedAgentProvider["run"]>) {
+        const result = await super.run(...args);
+        expect(stagedResults.map(receipt => ({ name: receipt.name, ok: receipt.ok }))).toEqual([
+          { name: "memory_review", ok: true }, { name: "mcp_connections", ok: true }, { name: "mcp_connections", ok: true },
+        ]);
+        const proposed = stagedResults[0]!.data as { proposal_id: string; proposal_revision: number };
+        expect((await pool!.query("SELECT id,revision,status,source_task_id,source_message_id FROM memory_proposals WHERE account_id=$1", [f.auth.accountId])).rows)
+          .toEqual([{ id: proposed.proposal_id, revision: proposed.proposal_revision, status: "open",
+            source_task_id: f.authority.fence.runId, source_message_id: f.messageID }]);
+        for (const receipt of stagedResults.slice(1)) {
+          const { request_id } = receipt.data as { request_id: string };
+          expect((await readMcpInteraction(pool!, f.auth, request_id)).request)
+            .toMatchObject({ id: request_id, state: "pending", revision: 1, session_id: f.sessionID, message_id: f.messageID });
+        }
+        const admission = await admitConversationQueueEntry(pool!, f.auth, { session_id: f.sessionID,
+          message_id: steeringMessageID, objective: noSave, idempotency_key: randomUUID() });
+        expect(admission.response.steers_run_id).toBe(f.authority.fence.runId);
+        const batch = await args[0].steering!.nextBatchAtSafePoint();
+        expect(batch?.messages).toEqual([{ messageID: steeringMessageID, text: noSave, acceptedAt: admission.response.accepted_at }]);
+        await batch!.acknowledge!();
+        expect(await args[0].steering!.nextBatchAtSafePoint({ final: true })).toBeNull();
+        expect((await pool!.query("SELECT steer_group_entry_id,steer_state FROM conversation_queue_entries WHERE id=$1", [admission.response.queue_entry_id])).rows)
+          .toEqual([{ steer_group_entry_id: f.authority.fence.entryId, steer_state: "delivered" }]);
+        return result;
+      }
+    }
+    const provider = new SteeringAfterStagingProvider([
+      { tool: "memory_review", input: { operation: "propose", contact_decision: "none", items: [{
+        scope: "self", operation: "add", statement_kind: "source_statement", display_text: "回复先给结论，再列依据",
+        source_excerpt: objective, source_locator: { kind: "message", session_id: f.sessionID, message_id: f.messageID },
+        speaker: "self", time_status: "known", sensitivity: "normal", reason: "Explicit future reply preference",
+      }] } },
+      ...[1, 2].map(index => ({ tool: "mcp_connections", input: { operation: "propose_choice",
+        purpose: `Synthetic next-step choice ${index}`, options: JSON.stringify([{ id: "one", label: "One" }, { id: "two", label: "Two" }]),
+      } })),
+    ], results => { stagedResults = results; return answer; });
+    const result = await executeWorkspaceConversationAgent({ database: pool!, auth: f.auth, objective, provider,
+      sessionID: f.sessionID, messageID: f.messageID, runID: f.authority.fence.runId, hostAuthority: f.authority, steering });
+
+    const proposed = stagedResults[0]!.data as { proposal_id: string; proposal_revision: number };
+    expect((await pool!.query("SELECT id,revision,status FROM memory_proposals WHERE account_id=$1", [f.auth.accountId])).rows)
+      .toEqual([{ id: proposed.proposal_id, revision: proposed.proposal_revision + 1, status: "dismissed" }]);
+    expect((await pool!.query("SELECT status FROM memory_proposal_items WHERE proposal_id=$1", [proposed.proposal_id])).rows)
+      .toEqual([{ status: "skipped" }]);
+    const requestIDs = stagedResults.slice(1).map(receipt => (receipt.data as { request_id: string }).request_id);
+    expect(new Set(requestIDs).size).toBe(2);
+    expect((await pool!.query("SELECT id,state,revision FROM mcp_interaction_requests WHERE account_id=$1 ORDER BY id", [f.auth.accountId])).rows)
+      .toEqual(requestIDs.toSorted().map(id => ({ id, state: "rejected", revision: 2 })));
+    expect((await pool!.query("SELECT request_id FROM mcp_continuation_outbox WHERE account_id=$1", [f.auth.accountId])).rows).toEqual([]);
+    expect((await pool!.query("SELECT id FROM memory_items WHERE account_id=$1", [f.auth.accountId])).rows).toEqual([]);
+    expect(result.memoryProposal).toBeNull();
+    expect(result.block.mcp_interaction).toBeUndefined();
+    expect(result.block).toMatchObject({ title: answer.title, body: answer.body });
+    expect(result.event).toBeNull();
+  });
+
   it("dismisses this run's Memory durably and leaves another run's Memory reviewable", async () => {
     const f = await fixture(), other = await fixture(f.auth), proposed = await memory(f), untouched = await memory(other);
     const opened = await openMemoryReview(pool!, f.auth, proposed.proposal_id, { purpose: "chat", session_id: f.sessionID });
