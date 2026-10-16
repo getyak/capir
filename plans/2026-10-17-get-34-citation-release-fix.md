@@ -116,3 +116,46 @@ original input, citation gate, model/budget, source/request-direction standards
 and GET-34 business matrix. A documentation-only commit is not a new behavioral
 candidate. Production builds also remain gated by at least30GiB available space;
 the fresh safe-cleanup audit found no eligible large artifact.
+
+## Evidence-to-draft design, frozen before implementation
+
+The next slice changes responsibility boundaries instead of appending a ban for
+the last failed phrase. The formal relationship prompt owns product behavior:
+keep source facts, unknown premises and proposed wording distinct, preserve the
+direction of requests, and omit unnecessary assumptions or use placeholders for
+missing details a useful draft needs. Prior messages, commitments, actions and
+times in a proposed draft need the same source support as factual narration.
+No fixed response template or sample-specific wording is required.
+
+The natural SDK adapter owns transport and tool protocol. Remove its obsolete
+contact-directory routing instructions: `answer()` does not offer those tools,
+while both workspace execution paths already use their own routing guidance.
+Move request-direction policy to the formal prompt rather than duplicating it.
+Retain citation receipts, accepted Memory lineage/coverage, complete final output,
+title metadata and truthful write receipts. Workspace/image routing is unchanged.
+This separation matches the canonical Context engineering ownership; it is a
+design hypothesis, not a proven explanation of model errors.
+
+Rejected alternatives remain host-generated citations/answers, concatenated tool
+prefaces, changing the probe or model, and an added corrective model call. This
+slice does not add capability, budget, persistence, retries or external effects.
+
+One behavioral candidate is allowed in this round. Keep the exact frozen single
+and selective multi-source cases and their citation/semantic standards. Add a
+separate counterexample: a source explicitly records a meeting on2026-10-20 at
+15:00 Asia/Shanghai and an outstanding role-scope request; the user asks for a
+concise reply with the scope placeholder and recorded meeting time. The final
+draft must preserve that known time, preserve the request direction, use a scope
+placeholder and cite its supporting source. This detects a blanket ban on time
+references or excessive clarification. Each case runs once and only after the
+preceding final reply passes independent semantic review. Any failure stops this
+candidate and this round's model attempts; elapsed time or documentation commits
+do not permit a retry.
+
+Run the full Agent suite, typecheck/compile and documentation checks, then an
+independent code review before local commit/model validation. The controlled
+image must carry and hash-read-back both changed compiled modules, since a
+provider-only patch would leave the formal product prompt stale. It is diagnosis
+only. On acceptance, create PR and verify current CI, merge and build both real
+resident artifacts under the resource gate, then complete the unchanged GET-34
+production matrix. The issue remains In Progress until then.
