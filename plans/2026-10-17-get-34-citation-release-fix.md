@@ -237,3 +237,41 @@ source says the contact is open to a conversation but does not establish whether
 role details were requested or sent. A useful next question must not assert an
 outstanding request or completed transfer. This strengthens coverage and leaves
 all existing inputs/standards unchanged.
+
+
+## Prerequisite candidate diagnostic outcome
+
+Candidate `a9f34357` passed the final Node24 Agent suite (432 passed, one
+optional skip), typecheck, compilation and documentation/architecture checks.
+Independent Codex source review found no P0/P1; its five frozen cases and
+owner-scoped disposable harness were also reviewed. A cleanup-receipt P2 was
+fixed before any call: Docker daemon errors are unknown cleanup, not successful
+removal. One answer invocation can contain multiple SDK/remote tool rounds;
+the diagnostic receipt now states that distinction explicitly.
+
+The first fixed case did not return an answer before the unchanged 60000ms
+adapter deadline. Both the read and exact citation tools completed, but the
+SDK interrupted with `CLAUDE_HARNESS_TIMEOUT`, request
+`236703b9-7388-4ceb-89a5-369729794cb2`. It observed three model response frames,
+reported model `claude-sonnet-5`, no SDK API-retry events, and incomplete usage.
+These fields do not establish a final answer, full billed usage, the remote
+HTTP request count, or the cause of the delay. The wrapper wall time including
+container setup/cleanup was 62.58 seconds. Both compiled module readbacks and
+the bundled formal prompt hash matched before invocation.
+
+There is no final reply to assess for prerequisite correctness. This is an
+operational acceptance failure, not evidence that the new semantic contract is
+correct or incorrect. Stop the remaining four cases and retain the original
+failure/receipt unchanged. Do not create a PR, deploy this candidate, extend the
+budget, change provider, or retry it after a documentation-only change. No
+resident service was changed; the owned disposable container was removed.
+
+Source inspection confirms the deadline includes SDK initialization and all
+model/tool rounds, and that only a completed SDK result can become a product
+answer. The observed tools completed well before the deadline; the log cannot
+separate the remaining provider/model/SDK phases. Prior successful candidates
+used the same deadline but different formal prompt source and are not a causal
+control for this delay. Do not manufacture a prompt edit to reopen a call. New
+actionable runtime/provider evidence or a source defect must support the next
+explicit design and independent review; absent that evidence, retain the
+checkpoint without repeating model/deployment attempts.
