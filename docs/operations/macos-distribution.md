@@ -238,15 +238,32 @@ and first-launch acceptance.
 `CFFIXED_USER_HOME` alone is not a preferences boundary on macOS: the preferences
 daemon can still use the real user's app domain. Published-app acceptance instead
 runs on the existing disposable GitHub-hosted Mac. PR CI runs the bounded native
-keyboard/hidden-input regressions; the release job downloads the published ZIP,
-compares its verified bytes, checks its unchanged signature/version, and launches
-that exact app in a task-owned installation. This must pass before the update feed
+keyboard/hidden-input regressions, then a separate real Finder drag from an ad-hoc
+compiled PR installer fixture. The release job downloads the published DMG and ZIP,
+compares both verified downloads, and drags the actual mounted app icon onto its
+actual Applications alias on the empty hosted Mac. It requires all bundle files
+and symlinks to match, verifies the installed signature/notarization and ZIP
+identity, then launches that exact installed app for the original first-run tests.
+One real drag test and three first-run tests, with no failures or skips, must pass before the update feed
 is promoted. `first-run-acceptance.sh` refuses local/self-hosted execution before
 changing settings, refuses a preconfigured workspace, temporarily enables native
 Keyboard Navigation on that disposable host and restores its prior setting. It
 strips release/provider credentials before XCTest and retains the result bundle
 and screenshots as bounded Actions evidence. It never resets a product domain or
 re-signs the published app to manufacture an isolated identity.
+
+`installer-drag-acceptance.sh` refuses local/self-hosted runs, a configured profile,
+an existing Applications destination, and inputs outside runner temp. It never
+removes an installed app. Its native XCTest uses Apple's
+[`click(forDuration:thenDragTo:)`](https://developer.apple.com/documentation/xcuiautomation/xcuielement)
+with real Finder elements and retains AX text, screenshots and installation
+identity. Failed or unavailable dragging stays a failed gate: copying with a shell
+or a keyboard command cannot substitute for this interaction. Cleanup detaches
+only the helper's own mount, including on failure.
+Finder's application accessibility root can have an empty frame despite visible,
+hittable installer windows and icons. Capture the actual screen for its UI test
+evidence; an application-root screenshot failure must not be mistaken for a failed
+drag or repaired by weakening the drag/installation assertions.
 
 For conditional first-run pages, request keyboard focus from the destination
 view's lifecycle after its controls mount, with a current-page guard. An outgoing
