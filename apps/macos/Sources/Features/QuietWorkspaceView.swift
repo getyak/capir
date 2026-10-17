@@ -716,7 +716,7 @@ private struct FirstRunWindowFit: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async {
             guard let window = view.window else { return }
-            let size = NSSize(width: 480, height: 500)
+            let size = NSSize(width: 720, height: 650)
             window.setContentSize(size)
             window.center()
             window.toolbar = nil
@@ -728,6 +728,7 @@ private struct FirstRunWindowFit: NSViewRepresentable {
 }
 
 struct QuietWorkspaceView: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject private var connection = WorkspaceConnection.shared
     @StateObject private var login = DesktopBrowserLoginCoordinator.shared
     @Environment(\.openSettings) private var openSettings
@@ -747,13 +748,7 @@ struct QuietWorkspaceView: View {
                     }
                 }
         } else {
-            VStack(spacing: 0) {
-                Spacer(minLength: 28)
-                WorkspaceConnectionForm(mode: .firstRun, onConnected: {})
-                    .frame(maxWidth: 400)
-                    .padding(.horizontal, 44)
-                Spacer(minLength: 28)
-            }
+            FirstRunExperience(reduceMotionPreview: model.isReducedMotionPreview)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(TSBrand.canvas)
             .background(FirstRunWindowFit())

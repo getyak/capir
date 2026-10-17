@@ -12,9 +12,17 @@ collaboration, and recruiting. The downloadable client is `apps/macos`.
    the platform that changed. Preview releases are explicitly labeled.
 2. Compare the downloaded file with its `SHA256SUMS.txt` using
    `shasum -a 256 <downloaded-file>`. Drag **Talent Signal** to Applications.
-3. Open the app and enter the HTTPS workspace origin supplied by the workspace
-   owner, or paste a full `/workspace/...` link. The app shows the normalized origin.
+3. Open the app and choose **连接你的工作区**, then enter the HTTPS workspace
+   origin supplied by its owner, or paste a full `/workspace/...` link. The app
+   shows the normalized origin. The optional **先体验一个示例** is a fictional,
+   prewritten local example: inspect each result's exact words and explicitly
+   correct an interpretation before connecting. Corrections remain in that
+   example only; they neither contact a model nor create people, messages or
+   schedules. Returning to connection keeps an unfinished address draft.
    Choose **Sign in in your browser**, authenticate or confirm your own account in the system browser, and return to the Mac workspace. The Mac window never asks for your username or password.
+
+An already configured workspace opens normally. First-run motion never delays
+the connect/sample controls, and Reduce Motion displays the invitation directly.
 
 For an owner-operated private workspace, authorize the second Mac in the same
 Tailscale network and connect Tailscale before opening the app. The package
