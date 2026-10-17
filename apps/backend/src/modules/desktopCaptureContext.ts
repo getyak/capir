@@ -3,8 +3,11 @@ import { DesktopCapturePolicySchema, type DesktopCapturePolicy } from "@talent-s
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
 
+const processorNames: Record<RemoteChatAnswerProviding["providerId"], string> = {
+  "claude-agent-sdk": "Claude", "zhipu-chat-completions": "Zhipu", "deepseek-chat-completions": "DeepSeek",
+};
 const processorLabel = (provider: RemoteChatAnswerProviding) =>
-  `${provider.providerId === "claude-agent-sdk" ? "Claude" : "Zhipu"} · ${provider.imageModel || provider.model}`;
+  `${processorNames[provider.providerId]} · ${provider.imageModel || provider.model}`;
 
 export function describeDesktopCapturePolicy(
   current: RemoteChatAnswerProviding | null,

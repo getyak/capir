@@ -1,12 +1,24 @@
 import { captureProductStep } from "./productRunCapture.js";
 import { createHash } from "node:crypto";
 import { configuredClaudeChatProvider } from "./claudeChatProvider.js";
+import { DeepSeekRelationshipTextProvider } from "./deepSeekRelationshipTextProvider.js";
 import { createEnvironmentRuntimeObserver, type RuntimeObserver } from "./runtimeObservationOutbox.js";
 import { type RuntimeObservationContext, type RuntimeObservationSession, type RuntimeObservationSpan } from "./runtimeObservation.js";
 import { AGENT_TOOL_CATALOG, agentToolJsonSchema, contactWorkspaceOperationTools } from "./toolCatalog.js";
-import { RELATIONSHIP_SYSTEM_PROMPT, UNSCOPED_CONVERSATION_SYSTEM_PROMPT, WORKSPACE_OUTPUT_GUIDANCE } from "./prompts.js";
-import { resolveProductPrompt, type PromptSnapshot } from "./promptRegistry.js";
-import { applyChatPreset, chatModelReasoningEffort, loadedRelationshipTaskPrompt, loadedRelationshipTaskConfiguration } from "./relationshipTaskConfiguration.js";
+import { RELATIONSHIP_SYSTEM_PROMPT, WORKSPACE_OUTPUT_GUIDANCE } from "./prompts.js";
+import { type PromptSnapshot } from "./promptRegistry.js";
+import { chatModelReasoningEffort, DEEPSEEK_TEXT_TASK_MODEL, loadedRelationshipTaskConfiguration } from "./relationshipTaskConfiguration.js";
+import {
+  CHAT_ANSWER_TEXT_WIRE,
+  CHAT_PROMPT_PRESETS,
+  conversationContext,
+  parseChatAnswerJson,
+  parseChatAnswerTextTask,
+  positiveInteger,
+  reportedCacheTokenSplit,
+  restrictScreenshotPrompt,
+  serializeChatAnswerTextTask,
+} from "./chatAnswerTextTask.js";
 import { agentImageModel, redactObservationMedia, userImageParts, zhipuAgentUserTurn } from "./chatAnswerProviderMultimodal.js";
 import { WorkspaceConversationFinalOutputSchema } from "./schemas.js";
 import type { AgentProvider, AgentProviderRequest, AgentProviderResult, AgentToolResult, ConversationMessage } from "./types.js";
@@ -76,12 +88,15 @@ export interface RemoteChatAnswerResult {
   title: string;
   body: string;
   citation_ids: string[];
-  provider_id: "zhipu-chat-completions" | "claude-agent-sdk";
+  provider_id: "zhipu-chat-completions" | "claude-agent-sdk" | "deepseek-chat-completions";
   model: string;
   provider_request_id: string | null;
   input_tokens: number;
   output_tokens: number;
   usage_reported?: boolean;
+  /** Optional cache split from actual provider usage; null when unknown. */
+  cache_hit_tokens?: number | null;
+  cache_miss_tokens?: number | null;
   reported_model?: string | null;
   /** null when the SDK does not expose transport attempts. */
   remote_requests_started?: number | null;
@@ -103,7 +118,7 @@ export interface AgentRunConfigurationEvidence {
 
 export interface RemoteChatAnswerProviding {
   readonly loadedTaskConfiguration?: ReturnType<typeof loadedRelationshipTaskConfiguration>;
-  readonly providerId: "zhipu-chat-completions" | "claude-agent-sdk";
+  readonly providerId: "zhipu-chat-completions" | "claude-agent-sdk" | "deepseek-chat-completions";
   readonly model: string;
   readonly supportsImageInput: boolean;
   readonly imageModel?: string | null;
@@ -137,6 +152,8 @@ interface ZhipuChatResponse {
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
+    prompt_cache_hit_tokens?: number;
+    prompt_cache_miss_tokens?: number;
   };
 }
 
@@ -152,66 +169,16 @@ interface ZhipuChatAnswerProviderOptions {
 
 const DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4";
 const DEFAULT_TIMEOUT_MS = 15_000;
-const MAX_CONTEXT_CHARACTERS = 48_000;
-const MAX_PROVIDER_CONTENT_CHARACTERS = 16_000;
-
-export function boundedConversationHistory(
-  messages: readonly ConversationMessage[] = [],
-  currentMessageID?: string,
-): ConversationMessage[] {
-  let remaining = 12_000;
-  const selected: ConversationMessage[] = [];
-  for (const message of messages.slice(-12).reverse()) {
-    if (message.message_id === currentMessageID || !message.text.trim()) continue;
-    if (message.role !== "user" && message.role !== "assistant") continue;
-    const text = message.text.slice(0, Math.min(2_000, remaining));
-    if (!text) break;
-    selected.push({ message_id: message.message_id, role: message.role, text });
-    remaining -= text.length;
-  }
-  return selected.reverse();
-}
-
-const SCREENSHOT_INTERPRETATION_BOUNDARY = "Use only the existing labeled canonical screenshot summary as unconfirmed interpretation. Do not add participants, shared intent, agreement, dates, or time zones. Do not invent concrete dates even as examples; use [date] and [timezone] placeholders or ask directly. For missing timing ask the specific date/time-zone question or suggest reviewing the existing capture. Do not default to requesting the same screenshot again. This context grants no reviewed evidence or action authority.";
-
-function hasScreenshotConversationContext(messages: readonly ConversationMessage[] = []) {
-  return boundedConversationHistory(messages).some((message) =>
-    message.role === "assistant" && message.text.includes('"kind":"prior_screenshot_context"'));
-}
-
-function restrictScreenshotPrompt(
-  configured: { text: string; revision: string },
-  messages: readonly ConversationMessage[] = [],
-  canonicalAdmission = false,
-) {
-  // This marker only adds restrictions; it never admits citations or Tools.
-  if (!canonicalAdmission && !hasScreenshotConversationContext(messages)) return configured;
-  const text = `${configured.text}\n\n${SCREENSHOT_INTERPRETATION_BOUNDARY}`;
-  return { text, revision: createHash("sha256").update(text).digest("hex").slice(0, 16) };
-}
-
-function conversationContext(messages: readonly ConversationMessage[] = []) {
-  return {
-    authority: "conversation_only_not_evidence_or_tool_authorization",
-    messages: boundedConversationHistory(messages),
-  };
-}
-
 export { RELATIONSHIP_SYSTEM_PROMPT } from "./prompts.js";
 
-export const CHAT_PROMPT_PRESETS = ["baseline", "concise", "evidence_first"] as const;
+export { CHAT_PROMPT_PRESETS, boundedConversationHistory, configuredChatPrompt, configuredChatRequestPrompt } from "./chatAnswerTextTask.js";
+export { DeepSeekRelationshipTextProvider } from "./deepSeekRelationshipTextProvider.js";
+
 const PROMPT_STYLE: Record<ChatPromptPreset, string> = {
   baseline: "",
   concise: "Keep the answer brief; lead with the useful conclusion.",
   evidence_first: "Lead with the evidence, then explain uncertainty and useful next steps.",
 };
-
-export function configuredChatPrompt(mode: RemoteChatAnswerRequest["mode"] = "relationship",
-  preset: ChatPromptPreset = "baseline", promptText?: string): { text: string; revision: string } {
-  if (!CHAT_PROMPT_PRESETS.includes(preset)) throw new Error("Unregistered Chat prompt preset.");
-  const base = promptText ?? (mode === "unscoped_conversation" ? UNSCOPED_CONVERSATION_SYSTEM_PROMPT : RELATIONSHIP_SYSTEM_PROMPT);
-  return applyChatPreset(base, preset);
-}
 
 export function configuredAgentPrompt(systemPrompt: string, preset: ChatPromptPreset = "baseline") {
   if (!CHAT_PROMPT_PRESETS.includes(preset)) throw new Error("Unregistered Chat prompt preset.");
@@ -230,24 +197,6 @@ function validatedBaseUrl(value: string): string {
     throw new Error("The Zhipu Chat base URL must use the official v4 endpoint.");
   }
   return `${parsed.origin}${parsed.pathname.replace(/\/+$/u, "")}`;
-}
-
-function positiveInteger(value: unknown): number {
-  const parsed = typeof value === "number" ? value : Number(value ?? 0);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
-}
-
-function parseJsonObject(content: string): Record<string, unknown> {
-  if (content.length > MAX_PROVIDER_CONTENT_CHARACTERS) {
-    throw new Error("Zhipu Chat returned an oversized response.");
-  }
-  const trimmed = content.trim();
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
-  const parsed = JSON.parse(fenced?.[1] ?? trimmed) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Zhipu Chat did not return one JSON object.");
-  }
-  return parsed as Record<string, unknown>;
 }
 
 function resolvedContactSelection(result: AgentToolResult): {
@@ -399,72 +348,6 @@ function uniqueContactSearchSelection(result: AgentToolResult): {
   return pairs.length === 1 ? pairs[0]! : null;
 }
 
-function requiredString(
-  value: unknown,
-  name: string,
-  maxLength: number,
-): string {
-  if (typeof value !== "string") {
-    throw new Error(`Zhipu Chat ${name} must be a string.`);
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > maxLength) {
-    throw new Error(`Zhipu Chat ${name} is empty or too long.`);
-  }
-  return trimmed;
-}
-
-function parseProviderAnswer(
-  value: Record<string, unknown>,
-  allowedCitationIds: readonly string[],
-  permitsAttachmentOnlyAnswer = false,
-): Pick<RemoteChatAnswerResult, "kind" | "title" | "body" | "citation_ids" | "session_title"> {
-  const kind = requiredString(value.kind, "kind", 40);
-  if (!new Set<RemoteChatBlockKind>([
-    "answer",
-    "question_set",
-    "clarification",
-  ]).has(kind as RemoteChatBlockKind)) {
-    throw new Error("Zhipu Chat returned an unsupported response kind.");
-  }
-  const title = requiredString(value.title, "title", 160);
-  const body = requiredString(value.body, "body", 4_000);
-  // Optional display metadata cannot invalidate a usable, evidence-checked answer.
-  const candidateTitle = typeof value.session_title === "string" ? value.session_title.trim() : "";
-  const sessionTitle = candidateTitle && Array.from(candidateTitle).length <= 256
-    ? candidateTitle : undefined;
-  if (!Array.isArray(value.citation_ids)) {
-    throw new Error("Zhipu Chat citation_ids must be an array.");
-  }
-  const citationIds = [...new Set(value.citation_ids.map((item) => {
-    if (typeof item !== "string" || !item.trim()) {
-      throw new Error("Zhipu Chat returned an invalid citation ID.");
-    }
-    return item.trim();
-  }))];
-  if (citationIds.length > 20) {
-    throw new Error("Zhipu Chat returned too many citations.");
-  }
-  const allowed = new Set(allowedCitationIds);
-  if (citationIds.some((id) => !allowed.has(id))) {
-    throw new Error("Zhipu Chat cited evidence outside the governed manifest.");
-  }
-  if (
-    kind !== "clarification" &&
-    citationIds.length === 0 &&
-    !permitsAttachmentOnlyAnswer
-  ) {
-    throw new Error("Evidence-based Zhipu Chat output requires a citation.");
-  }
-  return {
-    kind: kind as RemoteChatBlockKind,
-    title,
-    body,
-    citation_ids: citationIds,
-    ...(sessionTitle ? { session_title: sessionTitle } : {}),
-  };
-}
-
 export class ZhipuChatAnswerProvider
   implements RemoteChatAnswerProviding, AgentProvider
 {
@@ -537,89 +420,41 @@ export class ZhipuChatAnswerProvider
   private async answerInternal(
     request: RemoteChatAnswerRequest, observation: RuntimeObservationSession | null,
   ): Promise<RemoteChatAnswerResult> {
-    const objective = request.objective.trim();
-    if (!objective) throw new Error("A Chat objective is required.");
-    const mode = request.mode ?? "relationship";
-    if (request.reference_time !== undefined && !Number.isFinite(Date.parse(request.reference_time))) throw new Error("Frozen Chat reference time is invalid.");
-    const images = request.images ?? [];
-    if (
-      mode === "unscoped_conversation" &&
-      (request.context_blocks.length > 0 ||
-        request.allowed_citation_ids.length > 0)
-    ) {
-      throw new Error(
-        "Unscoped Chat cannot receive relationship context or citations.",
-      );
-    }
-    if (images.length > 0 && !this.visionModel) {
-      throw new Error("Remote Chat image processing is not admitted.");
-    }
-    if (images.length > 10) {
-      throw new Error("Remote Chat accepts at most ten governed images.");
-    }
-    const imageBytes = images.reduce((total, image) => total + image.data.byteLength, 0);
-    if (imageBytes > 20 * 1024 * 1024) {
-      throw new Error("Remote Chat images exceed the governed processing limit.");
-    }
-    const contextPayload = JSON.stringify({
-      mode,
-      objective,
-      session_title_requested: request.session_title_requested === true,
-      ...(request.reference_time === undefined ? {} : { frozen_reference_time: request.reference_time }),
-      previous_dialogue: conversationContext(request.conversation_history),
-      ...(request.permits_unconfirmed_session_context_answer ? { answer_boundary: "You may answer conversationally from the labeled unconfirmed screenshot interpretation without citations. Attribute it as an unconfirmed prior interpretation; do not promote it to reviewed facts or action authority. Cite only current allowed evidence when making relationship fact claims. Do not add participants, shared intent, agreement, dates, or time zones. For missing timing ask the specific date/time-zone question or suggest reviewing the existing capture; do not default to uploading the same screenshot again." } : {}),
-      context_blocks: request.context_blocks,
-      allowed_citation_ids: request.allowed_citation_ids,
-    });
-    if (contextPayload.length > MAX_CONTEXT_CHARACTERS) {
-      throw new Error("The governed Chat context is too large for remote processing.");
-    }
-
-    const promptName = mode === "unscoped_conversation" ? "assistant/conversation" : "assistant/relationship";
-    const snapshot = request.prompt_snapshot ?? (mode === "relationship" && images.length === 0 && request.prompt_preset === undefined
-      ? loadedRelationshipTaskPrompt() : await resolveProductPrompt(promptName));
-    if (snapshot.name !== promptName) throw new Error("Frozen prompt task mismatch.");
-    const configured = configuredChatRequestPrompt(request, snapshot);
-    const selectedModel = images.length > 0 ? this.visionModel! : this.model;
-    const userContent = images.length === 0
-      ? contextPayload
+    const task = await serializeChatAnswerTextTask(request, { imagesAdmitted: this.visionModel !== null });
+    const selectedModel = task.images.length > 0 ? this.visionModel! : this.model;
+    const messages = task.images.length === 0
+      ? task.messages
       : [
-          { type: "text", text: contextPayload },
-          ...images.map((image) => ({
-            type: "image_url",
-            image_url: {
-              url: `data:${image.media_type};base64,${Buffer.from(image.data).toString("base64")}`,
-            },
-          })),
+          task.messages[0]!,
+          {
+            role: "user",
+            content: [
+              { type: "text", text: task.contextPayload },
+              ...task.images.map((image) => ({
+                type: "image_url",
+                image_url: {
+                  url: `data:${image.media_type};base64,${Buffer.from(image.data).toString("base64")}`,
+                },
+              })),
+            ],
+          },
         ];
     const payload = await this.requestCompletion({
         model: selectedModel,
-        messages: [
-          {
-            role: "system",
-            content: configured.text,
-          },
-          { role: "user", content: userContent },
-        ],
-        response_format: { type: "json_object" },
+        messages,
+        ...CHAT_ANSWER_TEXT_WIRE,
         thinking: { type: "enabled" },
         ...(chatModelReasoningEffort(selectedModel) ? { reasoning_effort: chatModelReasoningEffort(selectedModel) } : {}),
-        temperature: 0,
-        max_tokens: 1_600,
-        stream: false,
-      }, AbortSignal.timeout(this.timeoutMs), observation, configured.revision);
+      }, AbortSignal.timeout(this.timeoutMs), observation, task.prompt.revision);
     if (!payload || payload.model !== selectedModel) {
       throw new Error("Zhipu Chat returned a different or missing model.");
     }
     const content = payload.choices?.[0]?.message?.content;
     if (!content) throw new Error("Zhipu Chat returned no answer content.");
-    const answer = parseProviderAnswer(
-      parseJsonObject(content),
-      request.allowed_citation_ids,
-      images.length > 0 || mode === "unscoped_conversation" || request.permits_unconfirmed_session_context_answer === true,
-    );
+    const answer = parseChatAnswerTextTask(content, request, "Zhipu Chat");
     return {
       ...answer,
+      ...reportedCacheTokenSplit(payload.usage),
       provider_id: this.providerId,
       model: selectedModel,
       provider_request_id: payload.id?.trim() || null,
@@ -627,8 +462,8 @@ export class ZhipuChatAnswerProvider
       output_tokens: positiveInteger(payload.usage?.completion_tokens),
       usage_reported: Number.isInteger(payload.usage?.prompt_tokens)
         && Number.isInteger(payload.usage?.completion_tokens),
-      prompt_revision: configured.revision,
-      prompt_snapshot: snapshot,
+      prompt_revision: task.prompt.revision,
+      prompt_snapshot: task.snapshot,
     };
   }
 
@@ -850,7 +685,7 @@ export class ZhipuChatAnswerProvider
       if (calls.length === 0) {
         return {
           structuredOutput: message.content
-            ? parseJsonObject(message.content)
+            ? parseChatAnswerJson(message.content)
             : null,
           inputTokens,
           outputTokens,
@@ -965,8 +800,25 @@ export function createEnvironmentChatAnswerProvider(
   if (environment.TALENT_SIGNAL_CHAT_PROVIDER?.trim() === "claude") {
     return configuredClaudeChatProvider(environment);
   }
+  if (environment.TALENT_SIGNAL_CHAT_PROVIDER?.trim() === "deepseek") {
+    const apiKey = environment.DEEPSEEK_API_KEY?.trim();
+    const model = environment.TALENT_SIGNAL_CHAT_MODEL?.trim();
+    if (!apiKey) throw new Error("Remote Chat DeepSeek admission requires DEEPSEEK_API_KEY.");
+    if (model !== DEEPSEEK_TEXT_TASK_MODEL) {
+      throw new Error("Remote Chat DeepSeek admission requires TALENT_SIGNAL_CHAT_MODEL=deepseek-flash.");
+    }
+    if (environment.TALENT_SIGNAL_CHAT_VISION_MODEL?.trim()) {
+      throw new Error("DeepSeek relationship text tasks do not accept a vision model.");
+    }
+    return new DeepSeekRelationshipTextProvider({
+      observer: createEnvironmentRuntimeObserver(environment),
+      apiKey,
+      model,
+      fetcher,
+    });
+  }
   if (environment.TALENT_SIGNAL_CHAT_PROVIDER?.trim() !== "zhipu") {
-    throw new Error("Remote Chat admission requires TALENT_SIGNAL_CHAT_PROVIDER=zhipu or claude.");
+    throw new Error("Remote Chat admission requires TALENT_SIGNAL_CHAT_PROVIDER=zhipu, claude or deepseek.");
   }
   const apiKey = environment.ZHIPU_API_KEY?.trim();
   const model = environment.TALENT_SIGNAL_CHAT_MODEL?.trim();
@@ -997,9 +849,3 @@ export function createEnvironmentChatAnswerProvider(
 
 export const CHAT_PROMPT_REVISION = createHash("sha256")
   .update(RELATIONSHIP_SYSTEM_PROMPT).digest("hex").slice(0, 16);
-
-/** Exact effective system text and revision after request-specific screenshot restrictions. */
-export function configuredChatRequestPrompt(request: RemoteChatAnswerRequest, snapshot: PromptSnapshot) {
-  return restrictScreenshotPrompt(configuredChatPrompt(request.mode ?? "relationship", request.prompt_preset, snapshot.text),
-    request.conversation_history, request.permits_unconfirmed_session_context_answer);
-}

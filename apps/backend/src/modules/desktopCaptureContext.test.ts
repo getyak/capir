@@ -17,6 +17,11 @@ describe("desktop capture processing disclosure", () => {
     expect(describeDesktopCapturePolicy(null, new Map(), false).available).toBe(false);
   });
 
+  it("names an opted-in DeepSeek text processor without admitting image upload", () => {
+    expect(describeDesktopCapturePolicy(provider("deepseek-chat-completions", "deepseek-flash", false), new Map(), false))
+      .toMatchObject({ available: false, processor_labels: ["DeepSeek · deepseek-flash"] });
+  });
+
   it("discloses possible Lab processors in a stable order and changes the policy version", () => {
     const current = provider("claude-agent-sdk", "sonnet");
     const plain = describeDesktopCapturePolicy(current, new Map(), false);
