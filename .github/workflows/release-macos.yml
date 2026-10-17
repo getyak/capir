@@ -119,6 +119,7 @@ jobs:
         env:
           MACOS_DERIVED_DATA: ${{ runner.temp }}/talent-signal-macos-release-check
           MACOS_FIRST_RUN_RESULT: ${{ runner.temp }}/macos-first-run-release.xcresult
+          MACOS_INSTALLER_DRAG_RESULT: ${{ runner.temp }}/macos-installer-drag-release.xcresult
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           base="Talent-Signal-${MACOS_VERSION}-${MACOS_BUILD_NUMBER}-macOS-universal-${MACOS_RELEASE_MODE}"
@@ -126,9 +127,14 @@ jobs:
           installation="$RUNNER_TEMP/macos-first-run-installation"
           mkdir "$download" "$installation"
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$base.zip" --dir "$download"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$base.dmg" --dir "$download"
           cmp "$MACOS_OUTPUT_DIR/$base.zip" "$download/$base.zip"
+          cmp "$MACOS_OUTPUT_DIR/$base.dmg" "$download/$base.dmg"
           ditto -x -k "$download/$base.zip" "$installation"
-          app="$installation/Talent Signal.app"
+          MACOS_INSTALLER_DMG="$download/$base.dmg" scripts/macos/installer-drag-acceptance.sh
+          app='/Applications/Talent Signal.app'
+          python3 scripts/macos/verify-installer-bundles.py "$installation/Talent Signal.app" "$app" \
+            > "$RUNNER_TEMP/macos-installer-bundle-identity.json"
           codesign --verify --deep --strict "$app"
           if [[ "$MACOS_RELEASE_MODE" == signed ]]; then
             xcrun stapler validate "$app"
@@ -137,6 +143,7 @@ jobs:
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$MACOS_VERSION" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$MACOS_BUILD_NUMBER" ]]
           shasum -a 256 "$download/$base.zip" > "$RUNNER_TEMP/macos-first-run-published-sha256.txt"
+          shasum -a 256 "$download/$base.dmg" >> "$RUNNER_TEMP/macos-first-run-published-sha256.txt"
           MACOS_FIRST_RUN_APP_PATH="$app" scripts/macos/first-run-acceptance.sh
       - name: Retain published-app acceptance evidence
         if: always()
@@ -146,6 +153,9 @@ jobs:
           path: |
             ${{ runner.temp }}/macos-first-run-release.xcresult
             ${{ runner.temp }}/macos-first-run-release-summary.json
+            ${{ runner.temp }}/macos-installer-drag-release.xcresult
+            ${{ runner.temp }}/macos-installer-drag-release-summary.json
+            ${{ runner.temp }}/macos-installer-bundle-identity.json
             ${{ runner.temp }}/macos-first-run-published-sha256.txt
           retention-days: 14
           if-no-files-found: warn

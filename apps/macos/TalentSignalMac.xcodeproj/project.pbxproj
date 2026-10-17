@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		04CEA8F3868CCADEED3E8C76 /* AppModelSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E345FFFB4FA94F245199A55 /* AppModelSafetyTests.swift */; };
 		0691119F8DFC6A62F5C21B72 /* URLMacRelationshipService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22C28EB4D881AFA45D42DC4A /* URLMacRelationshipService.swift */; };
+		08C66F5F05BDAFABA968D8E2 /* InstallerDragUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 541153CDB2B6CC077F728D61 /* InstallerDragUITests.swift */; };
 		0BA49699C1005EBC2BC746EA /* CapturePreviewImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2683949F3F3BDBC79926B6C /* CapturePreviewImage.swift */; };
 		0BD5DD91A6FD3658043FF04A /* FollowUpReminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6FAB510B194E63A927204C /* FollowUpReminder.swift */; };
 		0C061B412DB679EDEF1D7DA2 /* CaptureOnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1629910383E086D81986E575 /* CaptureOnboardingView.swift */; };
@@ -183,6 +184,7 @@
 		50A04DFE6202B6A3F2E6165E /* DesktopBrowserLoginWebKitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopBrowserLoginWebKitTests.swift; sourceTree = "<group>"; };
 		5223308356A11C8BB41F6F61 /* ProvisionalFollowUpInsight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProvisionalFollowUpInsight.swift; sourceTree = "<group>"; };
 		52E59BEFB1E2D00277E71664 /* WorkspaceConnectionForm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceConnectionForm.swift; sourceTree = "<group>"; };
+		541153CDB2B6CC077F728D61 /* InstallerDragUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallerDragUITests.swift; sourceTree = "<group>"; };
 		54447F055E4538AF78551201 /* DesktopBrowserLoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopBrowserLoginView.swift; sourceTree = "<group>"; };
 		5A16BF664AE0CC6C1CFAE534 /* PreparedFollowUpDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreparedFollowUpDraftTests.swift; sourceTree = "<group>"; };
 		5AD90EEF17A04E5E2B369C16 /* cat.svg */ = {isa = PBXFileReference; path = cat.svg; sourceTree = "<group>"; };
@@ -295,6 +297,7 @@
 			isa = PBXGroup;
 			children = (
 				3EDD5FE007DFACA7D2E6963C /* FirstRunExperienceUITests.swift */,
+				541153CDB2B6CC077F728D61 /* InstallerDragUITests.swift */,
 				27E176B0638C441E812A4A9C /* TalentSignalMacUITests.swift */,
 				48F446A4493D3BC8752DD69A /* WorkspaceSettingsUITests.swift */,
 			);
@@ -745,6 +748,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				95C61EE7B25BF6D9C0C6985F /* FirstRunExperienceUITests.swift in Sources */,
+				08C66F5F05BDAFABA968D8E2 /* InstallerDragUITests.swift in Sources */,
 				776AB6E98F8C341FB55BDF7B /* TalentSignalMacUITests.swift in Sources */,
 				3E22F7949308564FBF8AE736 /* WorkspaceSettingsUITests.swift in Sources */,
 			);
