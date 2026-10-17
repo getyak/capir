@@ -30,6 +30,7 @@ cleanup() {
 trap cleanup EXIT
 defaults write -g AppleKeyboardUIMode -int 3
 # Do not pass release/signing/provider credentials to the test runner or app.
+test_status=0
 env -i PATH="$PATH" HOME="$HOME" USER="${USER:-runner}" \
   TMPDIR="${TMPDIR:-/tmp}" DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}" \
   TEST_RUNNER_CAPIR_FIRST_RUN_APP_PATH="${MACOS_FIRST_RUN_APP_PATH:-}" \
@@ -39,14 +40,24 @@ env -i PATH="$PATH" HOME="$HOME" USER="${USER:-runner}" \
     -derivedDataPath "$MACOS_DERIVED_DATA" CODE_SIGNING_ALLOWED=NO \
     -parallel-testing-enabled NO \
     -resultBundlePath "$MACOS_FIRST_RUN_RESULT" \
-    -only-testing:TalentSignalMacUITests/FirstRunExperienceUITests test-without-building
-xcrun xcresulttool get test-results summary --path "$MACOS_FIRST_RUN_RESULT" \
-  --format json > "${MACOS_FIRST_RUN_RESULT%.xcresult}-summary.json"
-python3 - "${MACOS_FIRST_RUN_RESULT%.xcresult}-summary.json" <<'PY'
+    -only-testing:TalentSignalMacUITests/FirstRunExperienceUITests test-without-building || test_status=$?
+# Export failures too: an assertion must be visible without downloading videos.
+summary_status=0
+if xcrun xcresulttool get test-results summary --path "$MACOS_FIRST_RUN_RESULT" \
+  --format json > "${MACOS_FIRST_RUN_RESULT%.xcresult}-summary.json"; then
+python3 - "${MACOS_FIRST_RUN_RESULT%.xcresult}-summary.json" <<'PY' || summary_status=$?
 import json, sys
 with open(sys.argv[1]) as source:
     result = json.load(source)
+print('Native first-run results:', result.get('passedTests'), 'passed,', result.get('failedTests'), 'failed,', result.get('skippedTests'), 'skipped.')
+for failure in result.get('testFailures', []):
+    print(failure.get('testIdentifierString', ''), failure.get('failureText', ''))
 if result.get('passedTests') != 3 or result.get('failedTests') != 0 or result.get('skippedTests') != 0:
     raise SystemExit('Expected all three native first-run tests, with zero failures or skips.')
 print('Native first-run acceptance: 3 passed, 0 failed, 0 skipped.')
 PY
+else
+  summary_status=1
+fi
+[[ "$test_status" == 0 ]] || exit "$test_status"
+[[ "$summary_status" == 0 ]] || exit "$summary_status"

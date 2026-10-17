@@ -248,6 +248,13 @@ strips release/provider credentials before XCTest and retains the result bundle
 and screenshots as bounded Actions evidence. It never resets a product domain or
 re-signs the published app to manufacture an isolated identity.
 
+For conditional first-run pages, request keyboard focus from the destination
+view's lifecycle after its controls mount, with a current-page guard. An outgoing
+button's focus assignment can leave focus on the window and swallow the next
+Space. Keep the real Tab/Space regression; pointer clicks cannot prove this path.
+Export the XCTest summary even after a failed invocation, preserve its nonzero
+status, and reject missing, malformed, failed or skipped acceptance results.
+
 Sources: [Apple Developer ID](https://developer.apple.com/developer-id/),
 [notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
 [GitHub workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows).

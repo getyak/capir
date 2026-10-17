@@ -78,9 +78,11 @@ final class FirstRunExperienceUITests: XCTestCase {
         client.typeKey(.space, modifierFlags: [])
         XCTAssertTrue(client.buttons["sample.reveal"].waitForExistence(timeout: 5))
         client.typeKey(.space, modifierFlags: [])
-        XCTAssertTrue(client.buttons["sample.insight.dependency"].waitForExistence(timeout: 5))
+        XCTAssertTrue(client.buttons["sample.insight.dependency"].waitForExistence(timeout: 5),
+                      "Entering the example must focus Reveal so the next Space exposes its interpretations.")
         client.typeKey(.space, modifierFlags: [])
-        XCTAssertTrue(client.buttons["sample.edit"].waitForExistence(timeout: 5))
+        XCTAssertTrue(client.buttons["sample.edit"].waitForExistence(timeout: 5),
+                      "Revealing the interpretations must focus the first insight so Space opens its source.")
         client.typeKey(.tab, modifierFlags: [])
         client.typeKey(.space, modifierFlags: [])
         let quote = client.descendants(matching: .any)["sample.selectedSource"]

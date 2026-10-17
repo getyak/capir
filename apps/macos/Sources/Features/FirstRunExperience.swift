@@ -56,7 +56,6 @@ struct FirstRunExperience: View {
             // https://developer.apple.com/documentation/swiftui/environmentvalues/accessibilityreducemotion
             if reduceMotion { arrived = true }
             else { withAnimation(.easeOut(duration: 0.75)) { arrived = true } }
-            focus = .connect
         }
         .accessibilityIdentifier("firstRun.experience")
     }
@@ -104,6 +103,10 @@ struct FirstRunExperience: View {
                 .font(.caption)
                 .foregroundStyle(TSBrand.secondaryInk)
         }
+        .task {
+            guard screen == .invitation else { return }
+            focus = .connect
+        }
         .accessibilityElement(children: .contain)
     }
 
@@ -131,8 +134,8 @@ struct FirstRunExperience: View {
                 .accessibilityIdentifier("sample.source")
             if !sample.revealed {
                 Button("看看下一步") {
+                    focus = nil
                     sample.reveal()
-                    focus = .insight(.dependency)
                 }
                     .buttonStyle(FirstRunPrimaryButtonStyle())
                         .focused($focus, equals: .reveal)
@@ -223,13 +226,19 @@ struct FirstRunExperience: View {
                         .buttonStyle(FirstRunPrimaryButtonStyle())
                         .accessibilityIdentifier("sample.connect")
                     Button("重新体验") {
+                        focus = nil
                         sample.reset()
-                        focus = .reveal
                     }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("sample.reset")
                 }
             }
+        }
+        .task(id: sample.revealed) {
+            // Request focus after the destination controls enter the view tree.
+            // A request made by the outgoing button targets an unmounted view.
+            guard screen == .example else { return }
+            focus = sample.revealed ? .insight(sample.selected ?? .dependency) : .reveal
         }
         .accessibilityElement(children: .contain)
     }
@@ -244,13 +253,9 @@ struct FirstRunExperience: View {
     private func show(_ destination: Screen) {
         // The address form stays mounted; only visibility changes. Moving focus
         // out of its hidden controls prevents typing into an invisible draft.
+        focus = nil
         if reduceMotion { screen = destination }
         else { withAnimation(.easeInOut(duration: 0.75)) { screen = destination } }
-        switch destination {
-        case .invitation: focus = .connect
-        case .example: focus = sample.revealed ? .insight(sample.selected ?? .dependency) : .reveal
-        case .connection: focus = nil
-        }
     }
 }
 
