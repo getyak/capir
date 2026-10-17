@@ -78,6 +78,136 @@ afterAll(async () => {
 });
 
 describe("CapirTestProvisioningClient transport discipline", () => {
+  for (const wrapper of ["wrong-version", "missing-version"]) {
+    it(`rejects_a_200_success_with_a_${wrapper}_wrapper_before_projecting_its_valid_run`, async () => {
+      // The run body is fully valid with the EXACT create/stop identity: only
+      // the success wrapper is wrong or missing, isolating wrapper validation.
+      const requestId = "10000000-0000-4000-8000-000000000011";
+      const runId = "10000000-0000-4000-8000-000000000012";
+      const run = {
+        id: runId,
+        request_id: requestId,
+        account_id: "10000000-0000-4000-8000-000000000013",
+        user_id: "10000000-0000-4000-8000-000000000014",
+        username: "synthetic",
+        email: "synthetic@lab.invalid",
+        preset: "empty" as const,
+        preset_version: "1",
+        preset_digest: "0".repeat(64),
+        counts: { contacts: 0, observations: 0, tasks: 0 },
+        state: "ready" as const,
+        expires_at: "2030-01-01T00:00:00.000Z",
+        cleanup_error: null,
+        login_url: "https://web.test.invalid/capir/test-entry",
+      };
+      const faulty = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(
+          wrapper === "missing-version" ? { run } : { schema_version: "capir-test.wrong", run },
+        ));
+      });
+      await new Promise<void>((resolve) => faulty.listen(0, "127.0.0.1", resolve));
+      const address = faulty.address();
+      if (!address || typeof address === "string") throw new Error("faulty address");
+      try {
+        const client = new CapirTestProvisioningClient(`http://127.0.0.1:${address.port}`, {
+          provisioningKey: CANARY_PROVISIONER,
+        });
+        await expect(client.create({
+          request_id: requestId,
+          username: "synthetic",
+          password: CANARY_PASSWORD,
+          preset: "empty",
+          duration_hours: 1,
+          web_origin: "https://web.test.invalid",
+        })).rejects.toMatchObject({ code: "CAPIR_TEST_RESPONSE_INVALID", status: 200 });
+        await expect(client.stop(runId, {
+          request_id: "10000000-0000-4000-8000-000000000015",
+        })).rejects.toMatchObject({ code: "CAPIR_TEST_RESPONSE_INVALID", status: 200 });
+      } finally {
+        faulty.closeAllConnections();
+        await new Promise<void>((resolve) => faulty.close(() => resolve()));
+      }
+    });
+  }
+
+  for (const status of [200, 400, 401, 403, 409]) {
+    it(`preserves_${status}_headers_when_the_response_body_never_settles`, async () => {
+      let dispatched = 0;
+      const held = http.createServer((_req, res) => {
+        dispatched += 1;
+        res.writeHead(status, { "content-type": "application/json" });
+        res.flushHeaders();
+        res.write('{"error":');
+      });
+      await new Promise<void>((resolve) => held.listen(0, "127.0.0.1", resolve));
+      const address = held.address();
+      if (!address || typeof address === "string") throw new Error("held address");
+      try {
+        const client = new CapirTestProvisioningClient(`http://127.0.0.1:${address.port}`, {
+          provisioningKey: CANARY_PROVISIONER,
+          timeoutMs: 250,
+        });
+        await expect(client.stop("10000000-0000-4000-8000-000000000001", {
+          request_id: "10000000-0000-4000-8000-000000000002",
+        })).rejects.toMatchObject({
+          // An accepted success whose body is lost is an unconfirmed transport
+          // result; a received rejection status stays authoritative.
+          status: status === 200 ? 0 : status,
+          code: status === 200 ? "CAPIR_TEST_TRANSPORT_FAILED" : "HTTP_ERROR",
+        });
+        expect(dispatched).toBe(1);
+      } finally {
+        held.closeAllConnections();
+        await new Promise<void>((resolve) => held.close(() => resolve()));
+      }
+    });
+  }
+
+  for (const body of ["{", "null"]) {
+    it(`keeps a rejection status with an invalid or null JSON envelope (${body})`, async () => {
+      const rejecting = http.createServer((_req, res) => {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(body);
+      });
+      await new Promise<void>((resolve) => rejecting.listen(0, "127.0.0.1", resolve));
+      const address = rejecting.address();
+      if (!address || typeof address === "string") throw new Error("rejecting address");
+      try {
+        const client = new CapirTestProvisioningClient(`http://127.0.0.1:${address.port}`);
+        await expect(client.status("synthetic")).rejects.toMatchObject({ status: 400, code: "HTTP_ERROR" });
+      } finally {
+        rejecting.closeAllConnections();
+        await new Promise<void>((resolve) => rejecting.close(() => resolve()));
+      }
+    });
+  }
+
+  for (const body of ["{", "", "null"]) {
+    it(`never substitutes an empty projection for an invalid success body (${JSON.stringify(body)})`, async () => {
+      const faulty = http.createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(body);
+      });
+      await new Promise<void>((resolve) => faulty.listen(0, "127.0.0.1", resolve));
+      const address = faulty.address();
+      if (!address || typeof address === "string") throw new Error("faulty address");
+      try {
+        const client = new CapirTestProvisioningClient(`http://127.0.0.1:${address.port}`);
+        // The malformed or non-object success body never resolves to a
+        // silent empty projection; its result is typed unconfirmed.
+        await expect(
+          client.stop("10000000-0000-4000-8000-000000000001", {
+            request_id: "10000000-0000-4000-8000-000000000002",
+          }),
+        ).rejects.toMatchObject({ code: "CAPIR_TEST_RESPONSE_INVALID" });
+      } finally {
+        faulty.closeAllConnections();
+        await new Promise<void>((resolve) => faulty.close(() => resolve()));
+      }
+    });
+  }
+
   it("rejects every redirected provisioning request without forwarding any credential", async () => {
     const client = new CapirTestProvisioningClient(origin, {
       provisioningKey: CANARY_PROVISIONER,

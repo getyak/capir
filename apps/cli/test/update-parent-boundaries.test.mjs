@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync, readlinkSync, lstatSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, chmodSync, symlinkSync, readlinkSync, lstatSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { planLauncher, applyLauncher } from "../dist/update/layout.js";
@@ -39,6 +39,10 @@ test("launcher undo restores an existing binary byte for byte", () => {
     const launcher = join(work, "capir"), root = join(work, "install");
     const original = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0xff, 0xc0, 0x80, 0x00]);
     writeFileSync(launcher, original, { mode: 0o751 });
+    // writeFileSync mode is umask-masked: set the exact original mode so the
+    // fixture really owns a 0o751 launcher under any umask, and the exact-mode
+    // restoration assertion below tests the undo itself.
+    chmodSync(launcher, 0o751);
     const applied = applyLauncher(planLauncher(launcher, root, true), root);
     applied.undo();
     assert.deepEqual(readFileSync(launcher), original);

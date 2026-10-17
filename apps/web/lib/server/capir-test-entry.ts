@@ -112,8 +112,15 @@ export function verifyCapirTestRun(
 function safeHandoffFailure(error: unknown): never {
   if (error instanceof TalentSignalHttpError) {
     // Never print untrusted response bodies: only a typed status and a fixed
-    // local message leave this boundary.
-    fail(error.status, "CAPIR_TEST_HANDOFF_FAILED", "The one-use test handoff could not be exchanged.");
+    // local message leave this boundary. Only an ACTUAL integer in 400-599 is
+    // a valid refusal status to retain; a transport status (zero), a
+    // fractional or runtime-string status and an untrusted success status are
+    // invalid here and are normalized to 502.
+    const status =
+      Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
+        ? error.status
+        : 502;
+    fail(status, "CAPIR_TEST_HANDOFF_FAILED", "The one-use test handoff could not be exchanged.");
   }
   fail(502, "CAPIR_TEST_HANDOFF_FAILED", "The one-use test handoff could not be exchanged.");
 }

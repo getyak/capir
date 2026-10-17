@@ -303,8 +303,11 @@ export async function runAuthLogin(
   }
 
   // Exchange the single code on the configured backend with the PKCE verifier.
+  // The final v1/v2 exchange receives only the REMAINING original consent
+  // deadline (deadlineAt is fixed at start and can never be renewed), not a
+  // fresh transport duration.
   const exchangeClient = options.protocolV2 ? new CapirAuthV2Client(options.environment.backendOrigin, dependencies.fetchImpl) : client;
-  const exchange = options.protocolV2 ? (body: unknown, opts: {signal:AbortSignal}) => (exchangeClient as CapirAuthV2Client).exchangeV2(body, opts) : client.exchange.bind(client);
+  const exchange = options.protocolV2 ? (body: unknown, opts: {signal:AbortSignal;timeoutMs:number}) => (exchangeClient as CapirAuthV2Client).exchangeV2(body, opts) : client.exchange.bind(client);
   const exchanged = await Promise.race([exchange({
     code: outcome.code,
     code_verifier: codeVerifier,
@@ -312,7 +315,7 @@ export async function runAuthLogin(
     redirect_uri: `http://127.0.0.1:${callbackPort}/capir/callback`,
     web_origin: options.environment.webOrigin,
     backend_origin: options.environment.backendOrigin,
-  }, { signal: controller.signal }), cancellation]);
+  }, requestOptions()), cancellation]);
   let verifiedIdentity:import("@talent-signal/contracts").CapirAuthV2StatusResponse['identity']=null;
   if (options.protocolV2) {
     try {
