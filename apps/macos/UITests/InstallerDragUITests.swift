@@ -47,7 +47,9 @@ final class InstallerDragUITests: XCTestCase {
         defer {
             let text = XCTAttachment(string: finder.debugDescription)
             text.name = "actual-finder-final-AX"; text.lifetime = .keepAlways; add(text)
-            let screenshot = XCTAttachment(screenshot: finder.screenshot())
+            // Finder's application AX root can have an empty frame even while
+            // the real installer window/icons are visible and hittable.
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
             screenshot.name = "actual-finder-after-drag"; screenshot.lifetime = .keepAlways; add(screenshot)
         }
         // Finder exposes file icons as icons or images depending on the OS build.
@@ -55,7 +57,7 @@ final class InstallerDragUITests: XCTestCase {
         let applications = window.icons["Applications"].exists ? window.icons["Applications"] : window.images["Applications"]
         XCTAssertTrue(appIcon.waitForExistence(timeout: 5)); XCTAssertTrue(applications.waitForExistence(timeout: 5))
         XCTAssertTrue(appIcon.isHittable); XCTAssertTrue(applications.isHittable)
-        let before = XCTAttachment(screenshot: finder.screenshot())
+        let before = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         before.name = "actual-finder-before-drag"; before.lifetime = .keepAlways; add(before)
         let beforeAX = XCTAttachment(string: finder.debugDescription)
         beforeAX.name = "actual-finder-before-AX"; beforeAX.lifetime = .keepAlways; add(beforeAX)

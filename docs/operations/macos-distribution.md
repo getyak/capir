@@ -260,6 +260,10 @@ with real Finder elements and retains AX text, screenshots and installation
 identity. Failed or unavailable dragging stays a failed gate: copying with a shell
 or a keyboard command cannot substitute for this interaction. Cleanup detaches
 only the helper's own mount, including on failure.
+Finder's application accessibility root can have an empty frame despite visible,
+hittable installer windows and icons. Capture the actual screen for its UI test
+evidence; an application-root screenshot failure must not be mistaken for a failed
+drag or repaired by weakening the drag/installation assertions.
 
 For conditional first-run pages, request keyboard focus from the destination
 view's lifecycle after its controls mount, with a current-page guard. An outgoing
