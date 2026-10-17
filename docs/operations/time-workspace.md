@@ -30,6 +30,24 @@ navigation do not overwrite each other. Browser history changes dismiss clean st
 editors. Unsaved editors remain open until the user saves or explicitly closes them,
 even when tab-local storage is unavailable.
 
+## Today consumption
+
+Web and its shared Mac product window, and native iOS, consume the same
+currently authorized, user-authored canonical arrangement. Today reads at most
+three pages of 100 records across seven local calendar dates, including today;
+ongoing and all-day arrangements remain eligible until their exclusive end.
+Cancelled, completed and unconfirmed records do not become the next arrangement.
+Cross-midnight labels retain both dates, and all-day labels exclude the ending
+midnight. Device-local iOS calendar entries keep their separate authority.
+
+Today preserves loading, partial, unavailable and verified-empty states per
+source. A failed goal producer does not hide a valid arrangement or unread
+conversation. Reads reuse the existing active-refresh lifecycle, with no new
+poller, model invocation, persistence, mark-read or calendar write. Credential
+expiry and account/scope changes withdraw private content and reject late
+callbacks. The Web opens the exact existing Time item; native iOS re-reads the
+same ID and current revision in a read-only detail and withdraws revoked content.
+
 ## Saving and recovery
 
 Manual arrangements can be created, edited, explicitly completed or cancelled,
