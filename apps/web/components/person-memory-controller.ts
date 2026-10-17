@@ -120,23 +120,26 @@ export function usePersonMemory(options: Options) {
     return response;
   }, [options.binding, expire]);
 
-  const readPage = useCallback(async (cursor: string | null): Promise<MemoryRecallResponse> => {
+  const readPage = useCallback(async (cursor: string | null, epoch: number): Promise<MemoryRecallResponse> => {
+    if (epoch !== generation.current) throw new Error("Memory scope changed");
     const query = new URLSearchParams({ surface: "people", person_id: options.personId, limit: "50" });
     if (cursor) query.set("cursor", cursor);
     const response = await request(`/api/memory/items?${query}`);
+    if (epoch !== generation.current) throw new Error("Memory scope changed");
     if (!response.ok) throw new MemoryReadError(response.status, await memoryErrorCode(response));
     const data = await response.json() as MemoryRecallResponse;
+    if (epoch !== generation.current) throw new Error("Memory scope changed");
     if (!Array.isArray(data.items) || (data.person_id && data.person_id !== options.personId)
       || (data.has_more && (typeof data.next_cursor !== "string" || !data.next_cursor))) throw new Error("Invalid memory page");
     return data;
   }, [options.personId, request]);
 
-  const readSnapshot = useCallback(async (): Promise<MemoryRecallItem[]> => {
+  const readSnapshot = useCallback(async (epoch: number): Promise<MemoryRecallItem[]> => {
     let cursor: string | null = null;
     const refreshed: MemoryRecallItem[] = [];
     const seen = new Set<string>();
     do {
-      const page = await readPage(cursor); refreshed.push(...page.items);
+      const page = await readPage(cursor, epoch); refreshed.push(...page.items);
       cursor = page.has_more ? page.next_cursor ?? null : null;
       if (cursor && seen.has(cursor)) throw new Error("Repeated cursor");
       if (cursor) seen.add(cursor);
@@ -189,7 +192,7 @@ export function usePersonMemory(options: Options) {
             // signed read scope before retracting any saved item or excerpt.
             attempt.current = null;
             try {
-              const snapshot = await readSnapshot();
+              const snapshot = await readSnapshot(epoch);
               if (epoch !== generation.current) return null;
               setItems(snapshot); setHasMore(false); setNextCursor(null);
               const readable = snapshot.find(item => item.id === operation.id);
@@ -215,6 +218,7 @@ export function usePersonMemory(options: Options) {
           throw new Error("Mutation result unknown");
         }
         const body = await response.json() as MemoryItemMutationResponse;
+        if (epoch !== generation.current) return null;
         if (body.status !== "active" || !body.item || body.item.display_text !== operation.text
           || body.item.supersedes_id !== operation.id || body.item.id === operation.id) throw new Error("Mutation receipt not verified");
         operation.replacement = body.item;
@@ -227,7 +231,7 @@ export function usePersonMemory(options: Options) {
       let readHasMore = false;
       let readCursor: string | null = null;
       do {
-        const page = await readPage(cursor);
+        const page = await readPage(cursor, epoch);
         if (epoch !== generation.current) return null;
         readItems.push(...page.items); readHasMore = Boolean(page.has_more); readCursor = page.next_cursor ?? null;
         persisted = page.items.find(item => item.id === operation.replacement!.id);
@@ -272,7 +276,7 @@ export function usePersonMemory(options: Options) {
     const epoch = generation.current;
     busy.current = true;
     try {
-      const refreshed = await readSnapshot();
+      const refreshed = await readSnapshot(epoch);
       if (epoch !== generation.current) return;
       setItems(refreshed); setHasMore(false); setNextCursor(null);
       const newest = refreshed.find(item => item.id === active.itemId || item.supersedes_id === active.itemId);
@@ -293,11 +297,12 @@ export function usePersonMemory(options: Options) {
     const epoch = generation.current;
     pageBusy.current = true; setLoadingMore(true); setLoadError(null);
     try {
-      const page = await readPage(nextCursor);
+      const page = await readPage(nextCursor, epoch);
       if (epoch !== generation.current) return;
       if (page.has_more && page.next_cursor === nextCursor) throw new Error("Repeated memory cursor");
       setItems(value => { const ids = new Set(value.map(item => item.id)); return [...value, ...page.items.filter(item => !ids.has(item.id))]; });
       setHasMore(Boolean(page.has_more)); setNextCursor(page.next_cursor ?? null);
+      return true;
     } catch (caught) {
       if (epoch !== generation.current) return;
       if (caught instanceof MemoryReadError && [401, 403, 404, 410].includes(caught.status)) {
