@@ -106,4 +106,25 @@ describe("DeepSeek relationship text runtime policy", () => {
     expect(() => deepSeekRelationshipTextTaskConfiguration("DeepSeek-V4.1-Flash-1017")).toThrow("deepseek-flash");
     expect(() => deepSeekLoadedRelationshipTextTaskConfiguration("deepseek-flash ")).toThrow("deepseek-flash");
   });
+
+  it("binds an explicit optimizer candidate without changing the loaded baseline", () => {
+    const candidate = { ...BASELINE_OPTIMIZATION_CANDIDATE, taskFragmentId: "concise" as const };
+    const configured = deepSeekRelationshipTextTaskConfiguration("deepseek-flash", candidate);
+    const baseline = deepSeekLoadedRelationshipTextTaskConfiguration("deepseek-flash").configuration;
+    expect(configured.parameters).toEqual(candidate);
+    expect(configured.configurationId).not.toBe(baseline.configurationId);
+    expect(configured.promptContentDigest).toBe(relationshipTaskConfiguration("deepseek-flash", candidate).promptContentDigest);
+    expect(configured.runtimePolicyDigest).toBe(baseline.runtimePolicyDigest);
+    expect(deepSeekLoadedRelationshipTextTaskConfiguration("deepseek-flash").configuration.parameters)
+      .toEqual(BASELINE_OPTIMIZATION_CANDIDATE);
+  });
+
+  it("rejects forbidden explicit candidate mutations and unapproved examples", () => {
+    expect(() => deepSeekRelationshipTextTaskConfiguration("deepseek-flash", {
+      ...BASELINE_OPTIMIZATION_CANDIDATE, tools: ["write"],
+    } as typeof BASELINE_OPTIMIZATION_CANDIDATE)).toThrow("OPTIMIZER_FORBIDDEN_MUTATION");
+    expect(() => deepSeekRelationshipTextTaskConfiguration("deepseek-flash", {
+      ...BASELINE_OPTIMIZATION_CANDIDATE, exampleIds: ["not-approved"],
+    })).toThrow("OPTIMIZER_EXAMPLE_NOT_DEV_APPROVED");
+  });
 });

@@ -137,9 +137,10 @@ export const DEEPSEEK_TEXT_TASK_POLICY = Object.freeze({
     reported: DEEPSEEK_TEXT_TASK_REPORTED_MODELS,
   }),
 });
-export function deepSeekRelationshipTextTaskConfiguration(model: string): RelationshipTaskConfiguration {
+export function deepSeekRelationshipTextTaskConfiguration(model: string, candidate: OptimizationCandidate = loadedCandidate,
+  examples: readonly OptimizationDevExample[] = loadedExamples): RelationshipTaskConfiguration {
   if (model !== DEEPSEEK_TEXT_TASK_MODEL) throw new Error("Configure the DeepSeek relationship text model as deepseek-flash.");
-  const base = relationshipTaskConfiguration(model, loadedCandidate, loadedExamples, DEEPSEEK_TEXT_TASK_POLICY.maxDurationMs);
+  const base = relationshipTaskConfiguration(model, candidate, examples, DEEPSEEK_TEXT_TASK_POLICY.maxDurationMs);
   return { ...base, runtimePolicyDigest: taskConfigurationDigest(DEEPSEEK_TEXT_TASK_POLICY) };
 }
 export function deepSeekLoadedRelationshipTextTaskConfiguration(model: string) {
