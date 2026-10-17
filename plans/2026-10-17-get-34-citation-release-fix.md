@@ -312,3 +312,33 @@ actual SDK SSE recovery/partial/terminal/keepalive fixtures. Never convert a
 partial block into a final answer. Add bounded source-free phase receipt fields
 only if necessary to diagnose another failure. Full Agent/type/docs and
 independent review then the unchanged five real-model cases remain required.
+
+
+## Timeout recovery qualification and answer relevance
+
+Commit `8f5a4bdb` recovered the reproduced stream stall in the actual pinned SDK.
+All13 permanent synthetic protocol receipts passed, including no headers, an
+unfinished content block, terminal events without EOF, caller cancellation,
+keepalive, repeated stalls and the unchanged host turn/deadline limits. The
+real-model single-source case returned in9.57s with the selected source and
+passed independent semantic review. The multiple-source case completed without
+a timeout and selected only the relevant source, but its final paragraph exposed
+an unrelated stored office record merely to say it was irrelevant. Retain this
+failure; do not run the remaining cases for this candidate or call it accepted.
+
+The remaining gap is the boundary between retrieved context and the final user
+answer. Citation selection alone is not output relevance or purpose limitation.
+The formal relationship prompt owns that product rule: available records are not
+necessarily relevant; include only facts needed for the current requested answer
+or draft, and omit excluded records and the internal source-selection process.
+An explicit user request to audit sources remains supported. Do not filter a
+sample string, hide needed conflicts, change snapshot visibility, fabricate
+citations or add a model pass. Keep the transport fix and all original budgets.
+
+Before implementation, retain the same five fixed real-model cases and independent
+semantic review after each result. The multiple-source case must now both cite
+only the relevant source and omit the unrelated record entirely; single, known,
+fulfilled and unknown prerequisite behavior must remain useful and grounded.
+This is a general purpose-bound output rule, not permission to relax any previous
+criterion. Compile all three modules again and record their hashes. Preserve all
+failed receipts, and do not retry an unchanged behavioral candidate.
