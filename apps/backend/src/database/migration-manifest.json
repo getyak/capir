@@ -102,6 +102,7 @@
     "095_mcp_oauth_cleanup_effects",
     "096_capir_test_provisioning",
     "097_capir_auth",
-    "098_mcp_account_retirement_fences"
+    "098_mcp_account_retirement_fences",
+    "099_capture_image_observation"
   ]
 }

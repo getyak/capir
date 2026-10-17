@@ -9,6 +9,7 @@ import { registerAgentSessionRoutes } from "./modules/agentSessionRoutes.js";
 import { registerConversationQueueRoutes } from "./modules/conversationQueueRoutes.js";
 import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.js";
 import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.js";
+import { registerDesktopCaptureResult } from "./modules/desktopCaptureResult.js";
 import { registerDesktopBrowserLogin } from "./routes/desktopBrowserLogin.js";
 import { postgresDesktopBrowserLoginDb, sweepDesktopBrowserLoginAttempts } from "./modules/desktopBrowserLogin.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
@@ -753,6 +754,7 @@ export async function buildApp(
   );
   registerConversationQueueRoutes(app, pool, authenticate);
   registerDesktopCaptureReceipt(app, pool, authenticate);
+  registerDesktopCaptureResult(app, pool, authenticate);
   registerDesktopBrowserLogin(app, pool, config, authenticate);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);

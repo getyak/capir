@@ -8,6 +8,47 @@ const data=Buffer.from("synthetic image");
 const image={kind:"image" as const,artifactID:"conversation-image-10000000-0000-4000-8000-000000000001-0-source",mimeType:"image/png",byteSize:data.length,contentHash:createHash("sha256").update(data).digest("hex"),dataBase64:data.toString("base64")};
 const observation={description:"green chair",visible_text:["明天下午三点到四点"],uncertainties:[],model:"doubao",request_id:"receipt"};
 const signal=new AbortController().signal;
+describe("capture text preview from the same inspection",()=>{
+ it("does not inspect merely to draw a preview, and carries literal pending clues with the real receipt",async()=>{
+  const inspector={inspect:vi.fn(async()=>({...observation,visible_text:["林知远 · 松禾设计", "明天交流"],
+   visible_entities:[{kind:"person" as const,text:"林知远",source_excerpt:"林知远 · 松禾设计"},
+                     {kind:"company" as const,text:"松禾设计",source_excerpt:"林知远 · 松禾设计"}]}))};
+  const capability=currentImageInspection({images:[image],inspector,isCurrent:async()=>true});
+  expect(await capability.preview(image.artifactID)).toBeNull();
+  expect(inspector.inspect).not.toHaveBeenCalled();
+  await capability.prepare(signal);
+  expect(await capability.preview(image.artifactID)).toEqual({artifact_id:image.artifactID,content_hash:image.contentHash,
+   model:"doubao",inspection_request_id:"receipt",conversation_kind:"unknown",pending:true,
+   clues:[{kind:"person",text:"林知远",source_excerpt:"林知远 · 松禾设计"},{kind:"company",text:"松禾设计",source_excerpt:"林知远 · 松禾设计"}]});
+  await capability.preview(image.artifactID);
+  expect(inspector.inspect).toHaveBeenCalledOnce();
+ });
+ it("rejects fabricated text, skipped excerpts and stale sources; no-text images remain honest",async()=>{
+  let current=true;
+  const capability=currentImageInspection({images:[image],isCurrent:async()=>current,inspector:{inspect:async()=>({...observation,
+   visible_text:["林知远", "今天交流", "松禾设计"],conversation_kind:"group",
+   visible_entities:[{kind:"person",text:"虚构姓名",source_excerpt:"林知远"},
+                     {kind:"company",text:"松禾设计",source_excerpt:"林知远 松禾设计"}]})}});
+  await capability.prepare(signal);
+  expect(await capability.preview(image.artifactID)).toMatchObject({clues:[],conversation_kind:"group",pending:true});
+  current=false;
+  expect(await capability.preview(image.artifactID)).toBeNull();
+  const photo=currentImageInspection({images:[image],isCurrent:async()=>true,inspector:{inspect:async()=>({...observation,visible_text:[]})}});
+  await photo.prepare(signal);
+  expect(await photo.preview(image.artifactID)).toMatchObject({clues:[]});
+ });
+ it("bounds, deduplicates and preserves fictional warnings without granting identity authority",async()=>{
+  const text=Array.from({length:10},(_,i)=>`Company ${i}`).join(" · ");
+  const entries=Array.from({length:10},(_,i)=>({kind:"company" as const,text:`Company ${i}`,source_excerpt:text}));
+  const capability=currentImageInspection({images:[image],isCurrent:async()=>true,inspector:{inspect:async()=>({...observation,
+   visible_text:[text],visible_entities:[entries[0]!,...entries],source_warning:"ai_generated_or_fictional"})}});
+  await capability.prepare(signal);
+  const preview=await capability.preview(image.artifactID);
+  expect(preview?.clues).toHaveLength(6);
+  expect(new Set(preview?.clues.map(clue=>clue.text)).size).toBe(6);
+  expect(preview).toMatchObject({pending:true,source_warning:"ai_generated_or_fictional"});
+ });
+});
 describe("current image inspection",()=>{
  it("hands registered image-only topic IDs to the preflight model context",async()=>{
   let current=true;const registry=publicSubjectRegistry("查一下截图提到的作者");
@@ -80,6 +121,19 @@ describe("Ark observation parsing",()=>{
  it("rejects unexpected fields or a schema document in place of observations",async()=>{
   await expect(inspect({...payload,execute:"send an invitation"})).rejects.toThrow();
   await expect(inspect({type:"object",properties:{description:{type:"string"}}})).rejects.toThrow();
+ });
+ it("does not discard literal image evidence when one optional context anchor has an unsupported kind",async()=>{
+  const value={...payload,visible_text:["林知远·松禾设计"],conversation_kind:"unknown",counterparty_name:null,
+   public_context_anchors:[{name:"林知远",kind:"role",excerpt:"林知远·松禾设计"},
+    {name:"松禾设计",kind:"organization",excerpt:"林知远·松禾设计"}],
+   visible_entities:[{kind:"person",text:"林知远",source_excerpt:"林知远·松禾设计"},
+    {kind:"company",text:"松禾设计",source_excerpt:"林知远·松禾设计"}]};
+  const parsed=await inspect(value);
+  expect(parsed.visible_text).toEqual(value.visible_text);
+  expect(parsed.visible_entities).toEqual(value.visible_entities);
+  expect(parsed.public_context_anchors).toEqual([value.public_context_anchors[0]]);
+  await expect(inspect({...value,public_context_anchors:Array(9).fill(value.public_context_anchors[0])})).rejects.toThrow();
+  await expect(inspect({...value,visible_text:"not an array"})).rejects.toThrow();
  });
 });
 

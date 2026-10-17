@@ -1,0 +1,163 @@
+import CoreGraphics
+import Foundation
+import XCTest
+@testable import TalentSignalMac
+
+private final class RelayMemoryPreferences: CapturePreferenceStore {
+    var values: [String: Any] = [:]
+    func object(forKey key: String) -> Any? { values[key] }
+    func set(_ value: Any?, forKey key: String) { values[key] = value }
+    func removeObject(forKey key: String) { values.removeValue(forKey: key) }
+}
+
+private final class RelayMemoryRecovery: CaptureRecoveryPersisting {
+    var intents: [UUID: CaptureIntent] = [:]
+    func save(_ intent: CaptureIntent) throws { intents[intent.id] = intent }
+    func load(origin: String, ownerScope: String, now: Date) throws -> [CaptureIntent] { [] }
+    func remove(_ intent: CaptureIntent) throws { intents.removeValue(forKey: intent.id) }
+}
+
+@MainActor private final class RelaySelector: CaptureSelecting {
+    let image: CGImage
+    var preview = false
+    init() {
+        image = CGContext(data: nil, width: 640, height: 480, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
+    }
+    func select() async throws -> CaptureSelectionResult {
+        .init(image: image, capturedAt: Date(timeIntervalSince1970: 1_800_000_000), preview: preview)
+    }
+    func cancel() {}
+}
+
+@MainActor private final class RelayTransport: CaptureTransporting {
+    var current: CaptureContext
+    var admissions = 0
+    var resultReads = 0
+    var canonical: CaptureReceipt?
+    var lastIntent: CaptureIntent?
+    var resultError: Error?
+    var suspendResult = false
+    var pendingResult: CheckedContinuation<CaptureResult?, Error>?
+    var noClues = false
+    init(context: CaptureContext) { current = context }
+    func context() async throws -> CaptureContext { current }
+    func admit(_ intent: CaptureIntent, context: CaptureContext) async throws -> CaptureAdmission {
+        admissions += 1; lastIntent = intent.withoutRawImage()
+        canonical = .init(sessionId: intent.sessionId, messageId: intent.messageId, queueEntryId: UUID(), status: "queued",
+            imageManifest: [.init(attachmentId: intent.attachmentId, byteSize: intent.imageByteSize, contentHash: intent.contentHash)], resultRecorded: false)
+        return .init(sessionId: intent.sessionId, messageId: intent.messageId, queueEntryId: canonical!.queueEntryId, status: "queued")
+    }
+    func receipt(for intent: CaptureIntent, context: CaptureContext) async throws -> CaptureReceipt? { canonical }
+    func complete() {
+        let old = canonical!
+        canonical = .init(sessionId: old.sessionId, messageId: old.messageId, queueEntryId: old.queueEntryId, status: "completed",
+            imageManifest: old.imageManifest, resultRecorded: true)
+    }
+    func makeResult(_ intent: CaptureIntent) -> CaptureResult {
+        .init(sessionId: intent.sessionId, messageId: intent.messageId, queueEntryId: canonical!.queueEntryId,
+            resultVersion: String(repeating: "a", count: 64), source: canonical!.imageManifest[0],
+            observation: noClues ? nil : .init(artifactId: "conversation-image-\(intent.messageId.uuidString.lowercased())-0-\(intent.attachmentId.uuidString.lowercased())",
+                contentHash: intent.contentHash, model: "synthetic-existing-inspector", inspectionRequestId: "same-run-receipt",
+                conversationKind: .unknown, pending: true,
+                clues: [.init(kind: .company, text: "松禾设计", sourceExcerpt: "松禾设计")], sourceWarning: nil),
+            observedAt: "2026-10-18T00:00:00Z")
+    }
+    func result(for intent: CaptureIntent, context: CaptureContext) async throws -> CaptureResult? {
+        resultReads += 1
+        if let resultError { throw resultError }
+        if suspendResult { return try await withCheckedThrowingContinuation { pendingResult = $0 } }
+        return makeResult(intent)
+    }
+}
+
+final class CaptureRelayCoordinatorTests: XCTestCase {
+    @MainActor private func fixture() -> (CaptureCoordinator, RelayTransport, RelaySelector, RelayMemoryRecovery) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let context = CaptureContext(origin: "https://workspace.example", ownerScope: "owner-one", loginBinding: "login-one",
+            expiresAt: now.addingTimeInterval(3600), processing: .init(policyVersion: "policy", workspaceLabel: "Workspace",
+                processorLabels: ["Existing Inspector"], sourceRetentionDays: 30, available: true))
+        let preferences = CapturePreferences(store: RelayMemoryPreferences())
+        preferences.acknowledgeProcessingScope(origin: context.origin, ownerScope: context.ownerScope,
+            policyVersion: context.processing.policyVersion, at: now)
+        let transport = RelayTransport(context: context), selector = RelaySelector(), recovery = RelayMemoryRecovery()
+        return (CaptureCoordinator(transport: transport, selector: selector, recovery: recovery, preferences: preferences, now: { now }),
+                transport, selector, recovery)
+    }
+
+    @MainActor func testAdmissionReleasesOriginalAndOnlyRetainsABoundedExpiringThumbnail() async throws {
+        let (coordinator, transport, _, recovery) = fixture()
+        await coordinator.startCapture()
+        let relay = try XCTUnwrap(coordinator.relay), image = try XCTUnwrap(relay.thumbnail)
+        XCTAssertEqual(transport.admissions, 1)
+        XCTAssertTrue(recovery.intents.isEmpty)
+        XCTAssertEqual(max(image.width, image.height), 320)
+        XCTAssertEqual(relay.phase, .processing)
+        XCTAssertEqual(coordinator.nextLocalExpiry, Date(timeIntervalSince1970: 1_800_000_300))
+        coordinator.expireLocalImages(at: Date(timeIntervalSince1970: 1_800_000_300))
+        XCTAssertNil(coordinator.relay)
+        XCTAssertEqual(transport.admissions, 1)
+    }
+
+    @MainActor func testRealResultReadbackAndSourceWithdrawalNeverResubmitOrLeaveCachedClues() async throws {
+        let (coordinator, transport, _, _) = fixture()
+        await coordinator.startCapture(); transport.complete()
+        await coordinator.refreshCurrentStatus()
+        XCTAssertEqual(coordinator.relay?.phase, .ready)
+        XCTAssertEqual(coordinator.relay?.result?.observation?.clues.first?.text, "松禾设计")
+        transport.resultError = CaptureTransportError.server(410, "DESKTOP_CAPTURE_SOURCE_GONE")
+        await coordinator.refreshRelayResult()
+        XCTAssertNil(coordinator.relay)
+        XCTAssertEqual(transport.admissions, 1)
+        XCTAssertEqual(transport.resultReads, 2)
+    }
+
+    @MainActor func testOwnerChangeWhileResultIsInFlightCannotResurrectPixelsOrClues() async throws {
+        let (coordinator, transport, _, _) = fixture()
+        await coordinator.startCapture(); transport.complete(); transport.suspendResult = true
+        let late = transport.makeResult(try XCTUnwrap(transport.lastIntent))
+        let refresh = Task { await coordinator.refreshCurrentStatus() }
+        for _ in 0..<100 where transport.pendingResult == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingResult)
+        let old = transport.current
+        coordinator.rebindOwner(to: .init(origin: old.origin, ownerScope: "owner-two", loginBinding: "login-two",
+            expiresAt: old.expiresAt, processing: old.processing))
+        transport.pendingResult?.resume(returning: late); transport.pendingResult = nil
+        await refresh.value
+        XCTAssertNil(coordinator.relay)
+        XCTAssertEqual(coordinator.presentation, .idle)
+        XCTAssertEqual(coordinator.boundOwnerScope, "owner-two")
+    }
+
+    @MainActor func testCollapsingPresentationDoesNotStopOrResubmitTheCanonicalTask() async {
+        let (coordinator, transport, _, _) = fixture()
+        await coordinator.startCapture(); coordinator.dismissRelay()
+        transport.complete(); await coordinator.refreshCurrentStatus()
+        XCTAssertNil(coordinator.relay)
+        XCTAssertEqual(transport.admissions, 1)
+        XCTAssertEqual(transport.resultReads, 0)
+        guard case .viewable = coordinator.presentation else { return XCTFail("Real task still completes after visual dismissal") }
+    }
+
+    @MainActor func testPreviewStaysLocalAndSendsOnlyTheEditedImageAndInstruction() async throws {
+        let (coordinator, transport, selector, _) = fixture(); selector.preview = true
+        await coordinator.startCapture()
+        XCTAssertEqual(transport.admissions, 0); XCTAssertNil(coordinator.relay)
+        let edited = try XCTUnwrap(CaptureSelectedImage.copyRegion(selector.image, pixels: CGRect(x: 0, y: 0, width: 16, height: 8)))
+        await coordinator.submitPreview(edited, objective: "核对公司文字")
+        XCTAssertEqual(transport.admissions, 1)
+        XCTAssertEqual(transport.lastIntent?.objective, "核对公司文字")
+        XCTAssertEqual(coordinator.relay?.thumbnail?.width, 16)
+        XCTAssertNil(coordinator.relay?.origin, "Edited preview has no invented region origin")
+    }
+
+    @MainActor func testLegacyProducerHasAnHonestNoClueResultAndLoginChangeClearsIt() async {
+        let (coordinator, transport, _, _) = fixture(); transport.noClues = true
+        await coordinator.startCapture(); transport.complete(); await coordinator.refreshCurrentStatus()
+        XCTAssertNotNil(coordinator.relay?.result); XCTAssertNil(coordinator.relay?.result?.observation)
+        let old = transport.current
+        coordinator.rebindOwner(to: .init(origin: old.origin, ownerScope: old.ownerScope, loginBinding: "login-new",
+            expiresAt: old.expiresAt, processing: old.processing))
+        XCTAssertNil(coordinator.relay)
+    }
+}

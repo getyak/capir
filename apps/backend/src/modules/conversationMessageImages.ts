@@ -350,7 +350,12 @@ export async function readConversationMessageImage(
          AND i.image_index=$4
          AND e.created_by_user_id=$5
          AND e.expires_at>now()
-         AND s.deleted_at IS NULL AND s.expires_at>now()`,
+         AND i.expires_at>now()
+         AND encode(sha256(i.content),'hex')=i.content_hash AND s.created_by_user_id=$5
+         AND s.deleted_at IS NULL AND s.expires_at>now()
+         AND NOT EXISTS (SELECT 1 FROM memory_source_revocations r WHERE r.account_id=i.account_id
+           AND ((r.source_kind='artifact' AND r.source_id='conversation-image-'||i.message_id::text||'-'||i.image_index::text||'-'||i.attachment_id::text)
+             OR (r.source_kind='session' AND r.source_id=i.session_id::text)))`,
       [auth.accountId, sessionId, messageId, imageIndex, auth.userId],
     )
   ).rows[0];

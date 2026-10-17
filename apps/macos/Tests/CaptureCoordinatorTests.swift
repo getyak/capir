@@ -109,7 +109,8 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(transport.submissions, 1)
         XCTAssertEqual(recovery.saved.count, 0, "A matching canonical image receipt releases raw local bytes")
         guard case .processing = coordinator.presentation else { return XCTFail("Expected admitted processing") }
-        XCTAssertNil(coordinator.nextLocalExpiry, "Only content-free receipt identity remains after admission")
+        XCTAssertEqual(coordinator.nextLocalExpiry, Date(timeIntervalSince1970: 1_800_000_300),
+                       "The original bytes are released; the bounded presentation thumbnail expires after five minutes")
     }
 
     @MainActor

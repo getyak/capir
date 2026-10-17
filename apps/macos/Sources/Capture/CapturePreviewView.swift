@@ -17,13 +17,17 @@ struct CapturePreviewView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var displaySize: CGSize = .zero
+    @State private var objective = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("先预览这次截图").font(.headline)
                 Spacer()
-                Button("取消") { coordinator.discardPreview(); close() }
+                Button { coordinator.discardPreview(); close() } label: {
+                    Text("取消").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                }
+                    .keyboardShortcut(.cancelAction)
             }
             if let image = coordinator.previewImage {
                 GeometryReader { proxy in
@@ -83,16 +87,28 @@ struct CapturePreviewView: View {
             } else {
                 ContentUnavailableView("截图已关闭", systemImage: "photo")
             }
+            TextField("这次想了解什么？（可选）", text: $objective, axis: .vertical)
+                .textFieldStyle(.roundedBorder).lineLimit(1...3)
+                .accessibilityLabel("截图附加说明，可选")
+            if objective.utf16.count > 1000 {
+                Text("附加说明最多 1000 字符，请缩短后发送。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             HStack(spacing: 12) {
                 Picker("编辑方式", selection: $tool) {
                     ForEach(PreviewTool.allCases, id: \.self) { item in Text(item.rawValue).tag(item) }
                 }.pickerStyle(.segmented).frame(width: 180)
-                Button("清除编辑") { crop = nil; redactions = [] }
+                Button { crop = nil; redactions = [] } label: {
+                    Text("清除编辑").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                }
                 Spacer()
                 if let error { Text(error).font(.caption).foregroundStyle(.secondary) }
-                Button("发送截图") { submit() }
+                Button(action: submit) {
+                    Text("发送截图").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                }
                     .buttonStyle(.borderedProminent)
-                    .disabled(busy || coordinator.previewImage == nil)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(busy || coordinator.previewImage == nil || objective.utf16.count > 1000)
             }
         }
         .padding(20)
@@ -106,7 +122,7 @@ struct CapturePreviewView: View {
             ? CGSize(width: CGFloat(source.width), height: CGFloat(source.height)) : displaySize
         do {
             let edited = try CapturePreviewImage.render(source, logicalSize: logical, crop: crop, redactions: redactions)
-            Task { await coordinator.submitPreview(edited); close() }
+            Task { await coordinator.submitPreview(edited, objective: objective); close() }
         } catch {
             busy = false
             self.error = "编辑后的截图暂时无法生成，请重试。"

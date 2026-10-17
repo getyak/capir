@@ -186,6 +186,8 @@ function uniquelyGroundedScope(
 }
 
 export interface WorkspaceConversationAgentExecution {
+  /** Host-only same-inspection text; never Session-authored authority. */
+  captureImageObservation?: import("@talent-signal/contracts").CaptureImageObservation;
   block: ChatResponseBlock;
   event: WorkspaceConversationAgentEvent | null;
   /** Independent optional review reference; never the sole agent event. */
@@ -1594,6 +1596,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
       firstContactReceipts.length === 0 || firstContactResearchAnswerAlreadyCovered(body, firstContactReceipts)
         ? body
         : body + firstContactResearchAnswerSection(firstContactReceipts);
+    const captureImageObservation = defaultImageArtifactID
+      ? await imageInspection.preview(defaultImageArtifactID) : null;
     if (runState.memoryProposal?.contactStatus === "ambiguous" && "body" in output
       && !/同名|same.name/iu.test(output.body)) {
       output.body += /\p{Script=Han}/u.test(input.objective)
@@ -1643,6 +1647,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
             : null,
         memoryProposal: memoryRef(runState.memoryProposal),
         firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}),
         providerResult,
       };
     }
@@ -1676,6 +1681,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
           : null,
         memoryProposal: memoryRef(runState.memoryProposal),
         firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}),
         providerResult,
       };
     }
@@ -1715,6 +1721,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         },
         memoryProposal: memoryRef(runState.memoryProposal),
         firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}),
         providerResult,
       };
     }
@@ -1739,6 +1746,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
       event: runState.proposal,
       memoryProposal: memoryRef(runState.memoryProposal),
       firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}),
       providerResult,
     };
   } finally {

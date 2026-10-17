@@ -100,6 +100,8 @@ final class DesktopPetController: ObservableObject {
 
     private let artworkSize = NSSize(width: 100, height: 100)
     private var artworkPanel: DesktopPetPanel?
+    @Published private(set) var captureNod: Double = 0
+    private var captureNodTask: Task<Void, Never>?
     var openWorkspaceWindow: (() -> Void)?
 
     private init() {
@@ -202,6 +204,25 @@ final class DesktopPetController: ObservableObject {
         openWorkspaceWindow?()
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    var captureAnchor: (frame: CGRect, display: CaptureRelayDisplay)? {
+        guard isVisible, let artworkPanel, artworkPanel.isVisible, let screen = artworkPanel.screen,
+              let display = CaptureRelayDisplay(screen: screen), display.visibleFrame.contains(artworkPanel.frame) else { return nil }
+        return (artworkPanel.frame, display)
+    }
+
+    func resetCaptureNod() { captureNodTask?.cancel(); captureNodTask = nil; captureNod = 0 }
+
+    func captureNodOnce() {
+        resetCaptureNod()
+        guard motionEnabled, isVisible, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        withAnimation(.easeOut(duration: 0.130)) { captureNod = -3 }
+        captureNodTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(130))
+            guard !Task.isCancelled, let self else { return }
+            withAnimation(.easeOut(duration: 0.130)) { self.captureNod = 0 }
+        }
+    }
 }
 
 /// Capture the scene-owned open action while the main workspace is present.
@@ -280,6 +301,17 @@ private final class DesktopPetInteractionView: NSHostingView<DesktopPetArtworkVi
         addCursorRect(bounds, cursor: .openHand)
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let capture = NSMenuItem(title: "截图交给 Agent", action: #selector(captureFromPet), keyEquivalent: "")
+        capture.target = self; menu.addItem(capture)
+        let open = NSMenuItem(title: "打开工作区", action: #selector(openFromPet), keyEquivalent: "")
+        open.target = self; menu.addItem(open)
+        return menu
+    }
+    @objc private func captureFromPet() { CaptureRuntime.shared.startCaptureFromPet() }
+    @objc private func openFromPet() { controller?.openWorkspace() }
+
     override func accessibilityPerformPress() -> Bool {
         controller?.openWorkspace()
         return true
@@ -324,11 +356,13 @@ private struct DesktopPetArtworkView: View {
     var body: some View {
         PetArtwork(pet: controller.selectedPet, size: 92,
                    motionEnabled: controller.motionEnabled && controller.isVisible)
+            .rotationEffect(.degrees(controller.captureNod), anchor: .bottom)
             .frame(width: 100, height: 100)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(controller.selectedPet.name)桌面伙伴")
             .accessibilityHint("点击打开工作区，拖动调整桌面位置")
             .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: Text("截图交给 Agent")) { CaptureRuntime.shared.startCaptureFromPet() }
     }
 }
 

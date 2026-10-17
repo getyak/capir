@@ -10,6 +10,14 @@ const headers = { "cache-control": "no-store", "x-content-type-options": "nosnif
 const reply = (body: unknown, status = 200) => Response.json(body, { status, headers });
 
 export async function desktopCaptureReceiptRoute(request: Request, sessionId: string, messageId: string): Promise<Response> {
+  return desktopCaptureReadRoute(request, sessionId, messageId, false);
+}
+
+export async function desktopCaptureResultRoute(request: Request, sessionId: string, messageId: string): Promise<Response> {
+  return desktopCaptureReadRoute(request, sessionId, messageId, true);
+}
+
+async function desktopCaptureReadRoute(request: Request, sessionId: string, messageId: string, result: boolean): Promise<Response> {
   if (!UUID.test(sessionId) || !UUID.test(messageId)) return reply({ message: "截图标识无效。" }, 400);
   try {
     const claims = await readBackendSessionClaims();
@@ -17,8 +25,9 @@ export async function desktopCaptureReceiptRoute(request: Request, sessionId: st
     if (request.headers.get("x-workspace-session") !== contactHandoffSessionVersion(claims)) {
       return reply({ code: "session_stale", message: "登录已改变；请重新读取截图状态。" }, 409);
     }
-    const receipt = await new TalentSignalClient(backendAuthBaseUrl(), claims.backendAccessToken)
-      .getDesktopCaptureReceipt(sessionId, messageId);
+    const client = new TalentSignalClient(backendAuthBaseUrl(), claims.backendAccessToken);
+    const receipt = result ? await client.getDesktopCaptureResult(sessionId, messageId)
+      : await client.getDesktopCaptureReceipt(sessionId, messageId);
     if (receipt.session_id !== sessionId || receipt.message_id !== messageId) {
       return reply({ code: "capture_receipt_mismatch", message: "截图状态与原始请求不一致。" }, 502);
     }
