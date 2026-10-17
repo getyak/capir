@@ -86,6 +86,52 @@ async function startTestBackend(options = {}) {
           request.socket.destroy();
           return;
         }
+        // Synthetic response faults after the route has already committed:
+        // body loss, malformed JSON, schema-invalid or a wrong-run success.
+        const firstMutation = record.method === "POST" && (
+          record.path === "/v1/capir/tests" && creates() === 1
+          || record.path.endsWith("/stop") && calls.filter((c) => c.method === "POST" && c.path.endsWith("/stop")).length === 1
+          || record.path.endsWith("/handoffs") && calls.filter((c) => c.method === "POST" && c.path.endsWith("/handoffs")).length === 1
+        );
+        const fault = record.path.endsWith("/stop") ? options.firstStopResponse
+          : record.path.endsWith("/handoffs") ? options.firstHandoffResponse : options.firstCreateResponse;
+        if (status === 200 && firstMutation && fault) {
+          record.responseFault = fault;
+          if (fault === "unexpected-status") {
+            response.writeHead(304);
+            return response.end();
+          }
+          response.writeHead(200, { "content-type": "application/json" });
+          if (fault === "partial") {
+            response.flushHeaders();
+            response.write('{"run":');
+            const timer = setTimeout(() => response.destroy(), 50);
+            response.once("close", () => clearTimeout(timer));
+            return;
+          }
+          if (fault === "json") return response.end("{");
+          if (fault === "schema") return response.end(JSON.stringify({ run: null }));
+          // Wrapper faults keep the EXACT valid committed run so only the
+          // success wrapper is wrong or missing.
+          if (fault === "wrong-wrapper") {
+            return response.end(JSON.stringify({ ...json, schema_version: "capir-test.wrong" }));
+          }
+          if (fault === "missing-wrapper") {
+            const { schema_version: _wrapper, ...unwrapped } = json;
+            return response.end(JSON.stringify(unwrapped));
+          }
+          const tampered = record.path.endsWith("/handoffs")
+            ? {
+                ...json,
+                ...(fault === "wrong-run" ? { run_id: randomUUID() } : {}),
+                ...(fault === "wrong-path" ? { entry_path: "/other-entry" } : {}),
+                ...(fault === "stale-expiry" ? { expires_at: "2000-01-01T00:00:00.000Z" } : {}),
+              }
+            : record.path.endsWith("/stop")
+              ? { ...json, run: { ...json.run, id: randomUUID() } }
+              : { ...json, run: { ...json.run, request_id: randomUUID() } };
+          return response.end(JSON.stringify(tampered));
+        }
         response.writeHead(status, { "content-type": "application/json" });
         response.end(JSON.stringify(json));
       };
@@ -111,6 +157,12 @@ async function startTestBackend(options = {}) {
         });
       }
       if (record.method === "POST" && record.path === "/v1/capir/tests") {
+        if (options.rejectFirstCreate && creates() === 1) {
+          // A definite rejection status with a malformed error body.
+          response.writeHead(400, { "content-type": "application/json" });
+          response.end("{");
+          return;
+        }
         const existing = runs.get(body.request_id);
         if (existing) {
           if (existing.password !== body.password) {
@@ -142,6 +194,19 @@ async function startTestBackend(options = {}) {
         }
         for (const entry of runs.values()) {
           if (entry.run.id === stop[1]) {
+            // A success body that proves nothing stopped: no state change
+            // commits and the run stays live and accessible.
+            if (
+              options.firstStopResponse === "ready" &&
+              calls.filter((c) => c.method === "POST" && c.path.endsWith("/stop")).length === 1
+            ) {
+              record.responseFault = "ready";
+              response.writeHead(200, { "content-type": "application/json" });
+              return response.end(JSON.stringify({
+                schema_version: "capir-test.v1",
+                run: { ...entry.run, state: "ready", cleanup_error: null },
+              }));
+            }
             entry.run = { ...entry.run, state: options.stopState ?? "deleted", cleanup_error: options.cleanupError ?? null };
             return send(200, { schema_version: "capir-test.v1", run: entry.run });
           }
@@ -478,6 +543,161 @@ describe("exact recovery and conflict boundaries", () => {
     assert.equal(Object.keys(keyringEntries(directory)).length, 1);
   });
 
+  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-wrapper", "missing-wrapper", "unexpected-status"]) {
+    it(`committed_create_${fault}_response_keeps_same_recovery_identity`, async (t) => {
+      const directory = scratch();
+      const backend = await startTestBackend({ firstCreateResponse: fault });
+      t.after(() => backend.close());
+      const env = prepared(directory, backend.origin);
+      // Exercise the ordinary default request ID: the error must disclose it.
+      const lost = await runCliBin(["test", "create", "--env", "t"], env);
+      assert.equal(lost.code, 3, lost.stdout);
+      const envelope = JSON.parse(lost.stdout);
+      assert.equal(
+        envelope.error.code,
+        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+      );
+      const requestId = envelope.error.recoverable_request_id;
+      assert.ok(requestId);
+      assert.equal(new OperationJournal(join(directory, "config")).find(requestId).status, "ambiguous");
+      const committed = backend.runs.get(requestId);
+      assert.ok(committed, "the server committed before sending the faulty response");
+      const creates = () => backend.calls.filter((c) => c.method === "POST" && c.path === "/v1/capir/tests");
+      assert.equal(creates().length, 1, "there is no automatic second allocation request");
+      assert.equal(creates()[0].responseFault, fault);
+      assert.equal(backend.runs.size, 1, "no second identity is allocated");
+      const passwords = Object.values(keyringEntries(directory));
+      assert.equal(passwords.length, 1);
+      assert.ok(!lost.stdout.includes(passwords[0]), "the generated password is never disclosed in failures");
+      assert.ok(!lost.stdout.includes(OPERATOR_TOKEN));
+      assert.ok(!lost.stdout.includes("no state was changed"), "a committed mutation is never claimed absent");
+      const recovered = await runCliBin(["test", "create", "--env", "t", "--request-id", requestId], env);
+      assert.equal(recovered.code, 0, recovered.stdout);
+      const replay = JSON.parse(recovered.stdout);
+      assert.equal(replay.run.id, committed.run.id);
+      assert.equal(replay.resumed, true);
+      assert.equal(replay.generated_credential.password, passwords[0], "the original password is reused on same-id retry");
+      assert.equal(creates().length, 2);
+      assert.equal(creates()[0].body.password, creates()[1].body.password);
+      assert.equal(creates()[0].body.request_id, creates()[1].body.request_id);
+      assert.equal(backend.runs.size, 1);
+    });
+
+    it(`committed_stop_${fault}_response_retains_credentials_until_validated_replay`, async (t) => {
+      const directory = scratch();
+      const backend = await startTestBackend({ firstStopResponse: fault });
+      t.after(() => backend.close());
+      const env = prepared(directory, backend.origin);
+      const createdResult = await runCliBin(["test", "create", "--env", "t"], env);
+      assert.equal(createdResult.code, 0, createdResult.stdout);
+      const created = JSON.parse(createdResult.stdout);
+      const lost = await runCliBin(["test", "stop", created.run.id, "--env", "t"], env);
+      assert.equal(lost.code, 3, lost.stdout);
+      const envelope = JSON.parse(lost.stdout);
+      assert.equal(
+        envelope.error.code,
+        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+      );
+      const requestId = envelope.error.recoverable_request_id;
+      assert.ok(requestId);
+      assert.equal(new OperationJournal(join(directory, "config")).find(requestId).status, "ambiguous");
+      assert.equal(backend.runs.get(created.request_id).run.state, "deleted", "the stop already committed");
+      const stops = () => backend.calls.filter((c) => c.method === "POST" && c.path.endsWith("/stop"));
+      assert.equal(stops().length, 1);
+      assert.equal(stops()[0].responseFault, fault);
+      assert.equal(Object.keys(keyringEntries(directory)).length, 1, "an unconfirmed body cannot prune the credential");
+      assert.ok(!lost.stdout.includes(created.generated_credential.password));
+      assert.ok(!lost.stdout.includes(OPERATOR_TOKEN));
+      assert.ok(!lost.stdout.includes("no state was changed"));
+      const recovered = await runCliBin(["test", "stop", created.run.id, "--env", "t", "--request-id", requestId], env);
+      assert.equal(recovered.code, 0, recovered.stdout);
+      assert.equal(JSON.parse(recovered.stdout).run.state, "deleted");
+      assert.equal(stops().length, 2);
+      assert.equal(stops()[0].body.request_id, stops()[1].body.request_id);
+      assert.deepEqual(keyringEntries(directory), {});
+    });
+  }
+
+  it("a definite rejection with malformed error JSON never becomes ambiguous", async (t) => {
+    const directory = scratch();
+    const backend = await startTestBackend({ rejectFirstCreate: true });
+    t.after(() => backend.close());
+    const requestId = randomUUID();
+    const rejected = await runCliBin(["test", "create", "--env", "t", "--request-id", requestId], prepared(directory, backend.origin));
+    assert.equal(rejected.code, 3, rejected.stdout);
+    const envelope = JSON.parse(rejected.stdout);
+    assert.equal(envelope.error.code, "CAPIR_TEST_UNAVAILABLE");
+    assert.equal(envelope.error.recoverable_request_id, undefined, "a definite refusal keeps its existing error path");
+    assert.equal(new OperationJournal(join(directory, "config")).find(requestId).status, "completed");
+    assert.equal(backend.runs.size, 0);
+    assert.equal(backend.calls.filter((c) => c.method === "POST" && c.path === "/v1/capir/tests").length, 1);
+    assert.ok(!rejected.stdout.includes(OPERATOR_TOKEN));
+  });
+
+  it("a ready stop response never proves revocation, preserves the credential and resumes the same stop", async (t) => {
+    const directory = scratch();
+    const backend = await startTestBackend({ firstStopResponse: "ready" });
+    t.after(() => backend.close());
+    const env = prepared(directory, backend.origin);
+    const createdResult = await runCliBin(["test", "create", "--env", "t"], env);
+    assert.equal(createdResult.code, 0, createdResult.stdout);
+    const created = JSON.parse(createdResult.stdout);
+    const password = created.generated_credential.password;
+    const requestId = randomUUID();
+    const unconfirmed = await runCliBin([
+      "test", "stop", created.run.id, "--env", "t", "--request-id", requestId,
+    ], env);
+    assert.equal(unconfirmed.code, 3, unconfirmed.stdout);
+    const envelope = JSON.parse(unconfirmed.stdout);
+    assert.equal(envelope.error.code, "CAPIR_TEST_CONTRACT_INVALID");
+    assert.equal(envelope.error.recoverable_request_id, requestId, "the SAME stop stays recoverable");
+    assert.equal(new OperationJournal(join(directory, "config")).find(requestId).status, "ambiguous");
+    assert.equal(Object.keys(keyringEntries(directory)).length, 1, "an unconfirmed stop never prunes the credential");
+    assert.equal(backend.runs.get(created.request_id).run.state, "ready", "the ready response proves no stop committed");
+    const stops = () => backend.calls.filter((c) => c.method === "POST" && c.path.endsWith("/stop"));
+    assert.equal(stops().length, 1);
+    assert.ok(!unconfirmed.stdout.includes(password), "redaction holds on the unconfirmed stop");
+    assert.ok(!unconfirmed.stdout.includes(OPERATOR_TOKEN));
+    assert.ok(!unconfirmed.stdout.includes("ok test stop"), "no success claim without revocation proof");
+    const recovered = await runCliBin([
+      "test", "stop", created.run.id, "--env", "t", "--request-id", requestId,
+    ], env);
+    assert.equal(recovered.code, 0, recovered.stdout);
+    assert.equal(JSON.parse(recovered.stdout).run.state, "deleted");
+    assert.equal(stops().length, 2);
+    assert.equal(stops()[0].body.request_id, stops()[1].body.request_id);
+    assert.deepEqual(keyringEntries(directory), {}, "the validated same-stop retry prunes the credential");
+  });
+
+  for (const [state, pending] of [["deleted", false], ["deleting", true], ["revoked", false], ["expired", false]]) {
+    it(`documented_${state}_stop_semantics_complete_and_prune`, async (t) => {
+      const directory = scratch();
+      const backend = await startTestBackend({ stopState: state });
+      t.after(() => backend.close());
+      const env = prepared(directory, backend.origin);
+      const created = JSON.parse((await runCliBin(["test", "create", "--env", "t"], env)).stdout);
+      const requestId = randomUUID();
+      const stopped = await runCliBin([
+        "test", "stop", created.run.id, "--env", "t", "--request-id", requestId,
+      ], env);
+      assert.equal(stopped.code, 0, stopped.stdout);
+      const envelope = JSON.parse(stopped.stdout);
+      assert.equal(envelope.run.state, state);
+      assert.equal(envelope.credential_removed, true);
+      assert.equal(new OperationJournal(join(directory, "config")).find(requestId).status, "completed");
+      assert.deepEqual(keyringEntries(directory), {});
+      const human = await runCliBin([
+        "test", "stop", created.run.id, "--env", "t", "--request-id", requestId, "--human",
+      ], env);
+      assert.equal(human.code, 0, human.stdout);
+      assert.equal(
+        human.stdout.includes("external cleanup pending"),
+        pending,
+        "the documented deleting/pending note stays exact",
+      );
+    });
+  }
+
   it("keyring_conflict_no_overwrite", async (t) => {
     const directory = scratch();
     const backend = await startTestBackend();
@@ -597,6 +817,37 @@ function inProcessDeps(directory, backendOrigin, extras = {}) {
 }
 
 describe("browser readiness is separate from creation", () => {
+  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-path", "stale-expiry", "unexpected-status"]) {
+    it(`uncertain_handoff_${fault}_keeps_separate_id_without_browser_or_automatic_retry`, async (t) => {
+      const directory = scratch();
+      const backend = await startTestBackend({ firstHandoffResponse: fault });
+      t.after(() => backend.close());
+      let launches = 0;
+      const deps = inProcessDeps(directory, backend.origin, {
+        spawnRunner: async () => { launches += 1; throw new Error("must not launch"); },
+      });
+      const result = await runCli(["test", "create", "--env", "t", "--open", "web"], deps);
+      assert.equal(result.exitCode, 3, result.output);
+      const envelope = JSON.parse(result.output);
+      assert.equal(
+        envelope.error.code,
+        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+      );
+      const createId = envelope.error.recoverable_request_id;
+      const handoffId = envelope.client_state.handoff_request_id;
+      assert.ok(createId && handoffId && createId !== handoffId, "the create id and the one-use handoff id stay separate");
+      assert.equal(deps.journal.find(createId).status, "completed");
+      assert.equal(deps.journal.find(handoffId).status, "ambiguous");
+      assert.equal(envelope.run.id, backend.runs.get(createId).run.id);
+      assert.equal(backend.runs.size, 1, "no second identity is allocated");
+      assert.equal(backend.calls.filter((c) => c.path.endsWith("/handoffs")).length, 1, "no automatic handoff retry");
+      assert.equal(launches, 0, "no browser is opened after an unverified handoff");
+      assert.ok(envelope.generated_credential, "the confirmed created run remains recoverable");
+      assert.ok(!envelope.error.message.includes(envelope.generated_credential.password));
+      assert.ok(!result.output.includes(OPERATOR_TOKEN));
+    });
+  }
+
   it("browser_failure_keeps_ready_run", async (t) => {
     const directory = scratch();
     const backend = await startTestBackend();
