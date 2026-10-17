@@ -2,7 +2,8 @@
 //
 // The composer add menu: unique ids, lazily loaded people directory, honest
 // starter staging (never submit, never authority), nested-view keyboard flow,
-// outside dismissal, and a portaled panel that keeps the workspace theme.
+// outside dismissal, and a portaled panel that keeps the workspace theme in
+// step with live source and OS colour-scheme changes.
 
 import { act, createElement, useEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -74,6 +75,131 @@ async function flushFrame(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
   });
+}
+
+/** Apply a live theme change and let MutationObserver deliveries run. */
+async function applyThemeChange(update: () => void): Promise<void> {
+  await act(async () => {
+    update();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** Live token values as the browser would report them for each source. */
+function stubTokens(
+  tokens:
+    | Record<string, string>
+    | ((element: Element) => Record<string, string>),
+): void {
+  vi.spyOn(window, "getComputedStyle").mockImplementation(
+    ((element: Element) => {
+      const values = typeof tokens === "function" ? tokens(element) : tokens;
+      return { getPropertyValue: (name: string) => values[name] ?? "" };
+    }) as unknown as typeof window.getComputedStyle,
+  );
+}
+
+type ColorScheme = "light" | "dark";
+
+/**
+ * A matchMedia stand-in that models query matching like a browser: a
+ * value-sensitive `prefers-color-scheme: dark|light` flips with the OS, a
+ * valueless `prefers-color-scheme` stays matched in both schemes and never
+ * reports a change, and unrelated queries never fire. A stub that blindly
+ * fires every query would hide a wrongly installed query, so change events
+ * are delivered only when a query's match state actually moves.
+ */
+function stubColorScheme(initial: ColorScheme = "light") {
+  let scheme = initial;
+  const queries: string[] = [];
+  const subscribed = new Set<string>();
+  const lists: Array<{ media: string; matches: boolean; listeners: Set<(event: unknown) => void> }> = [];
+
+  function evaluate(query: string): boolean {
+    const valued = /prefers-color-scheme\s*:\s*(dark|light)/i.exec(query);
+    if (valued) return valued[1].toLowerCase() === scheme;
+    // A valueless media feature matches whenever it is supported: in light
+    // and dark alike, so its match state can never change.
+    return /prefers-color-scheme/i.test(query);
+  }
+
+  vi.spyOn(window, "matchMedia").mockImplementation((query: string) => {
+    queries.push(query);
+    const listeners = new Set<(event: unknown) => void>();
+    const list = { media: query, matches: evaluate(query), listeners };
+    lists.push(list);
+    return {
+      media: query,
+      get matches() {
+        return list.matches;
+      },
+      addEventListener: (type: string, listener: (event: unknown) => void) => {
+        if (type !== "change") return;
+        subscribed.add(query);
+        listeners.add(listener);
+      },
+      removeEventListener: (_type: string, listener: (event: unknown) => void) => {
+        listeners.delete(listener);
+      },
+    } as unknown as MediaQueryList;
+  });
+
+  return {
+    queries,
+    subscribed,
+    listenerCount: () =>
+      lists.reduce((count, list) => count + list.listeners.size, 0),
+    setScheme(next: ColorScheme) {
+      scheme = next;
+      for (const list of lists) {
+        const matches = evaluate(list.media);
+        if (matches === list.matches) continue;
+        list.matches = matches;
+        for (const listener of list.listeners) {
+          listener({ matches, media: list.media });
+        }
+      }
+    },
+  };
+}
+
+type ObservedRecord = {
+  targets: Set<Node>;
+  callbacks: number;
+  disconnected: boolean;
+};
+
+/**
+ * Trace MutationObserver ownership: which nodes are observed, how often the
+ * callback runs, and whether cleanup really disconnected the observer.
+ */
+function trackObservers(): { records: ObservedRecord[] } {
+  const records: ObservedRecord[] = [];
+  const Base = window.MutationObserver;
+  class TrackedMutationObserver extends Base {
+    private record: ObservedRecord = {
+      targets: new Set(),
+      callbacks: 0,
+      disconnected: false,
+    };
+    constructor(callback: MutationCallback) {
+      super((entries, observer) => {
+        this.record.callbacks += 1;
+        callback(entries, observer);
+      });
+      records.push(this.record);
+    }
+    observe(target: Node, options?: MutationObserverInit) {
+      this.record.targets.add(target);
+      super.observe(target, options);
+    }
+    disconnect() {
+      this.record.disconnected = true;
+      super.disconnect();
+    }
+  }
+  vi.stubGlobal("MutationObserver", TrackedMutationObserver);
+  return { records };
 }
 
 function trigger(): HTMLButtonElement {
@@ -502,6 +628,281 @@ describe("composer add menu keyboard and dismissal", () => {
       listeners.forEach((listener) => listener());
     });
     expect(panel()).toBeNull();
+  });
+});
+
+describe("composer add menu portal theme liveness", () => {
+  it("follows ancestor light→dark→light while the same panel stays open", async () => {
+    const tokens: Record<string, string> = {
+      "--surface": "#fcfbf7",
+      "--ink": "#171715",
+      "--accent": "#a2491c",
+    };
+    stubTokens(tokens);
+    await render(
+      (p) => createElement(ComposerAddMenu, p),
+      "ts-workspace-theme quiet-workspace",
+    );
+    mount!.setAttribute("data-theme", "light");
+    await openMenu();
+    // Nest into a view first: theme changes must neither close the panel nor
+    // change what view it shows.
+    await act(async () => {
+      rowByLabel("工具与技能").click();
+    });
+    const element = panel()!;
+    expect(element.getAttribute("data-theme")).toBe("light");
+    expect(element.classList.contains("ts-workspace-theme")).toBe(true);
+    expect(element.classList.contains("quiet-workspace")).toBe(true);
+    expect(element.style.getPropertyValue("--surface")).toBe("#fcfbf7");
+
+    // Ancestor flips to dark under the still-open panel, and computed
+    // custom properties move with it.
+    await applyThemeChange(() => {
+      mount!.setAttribute("data-theme", "dark");
+      tokens["--surface"] = "#1b1b19";
+      tokens["--ink"] = "#f2f0ea";
+      delete tokens["--accent"];
+    });
+    expect(panel()).toBe(element);
+    expect(element.getAttribute("data-theme")).toBe("dark");
+    expect(element.style.getPropertyValue("--surface")).toBe("#1b1b19");
+    expect(element.style.getPropertyValue("--ink")).toBe("#f2f0ea");
+    expect(element.style.getPropertyValue("--accent")).toBe("");
+
+    // And back to light: the mirror round-trips instead of freezing.
+    await applyThemeChange(() => {
+      mount!.setAttribute("data-theme", "light");
+      tokens["--surface"] = "#fcfbf7";
+      tokens["--ink"] = "#171715";
+    });
+    expect(panel()).toBe(element);
+    expect(element.getAttribute("data-theme")).toBe("light");
+    expect(element.style.getPropertyValue("--surface")).toBe("#fcfbf7");
+    expect(element.style.getPropertyValue("--ink")).toBe("#171715");
+
+    // Same panel, same view: nothing closed, reopened, or navigated.
+    expect(panel()).toBe(element);
+    expect(panel()!.textContent).toContain("管理连接的应用与工具");
+    expect(panel()!.textContent).toContain("起稿提示只把文字插入草稿，发送由你决定。");
+  });
+
+  it("drops stale mirrored state on source removal and never mirrors from itself", async () => {
+    const fallback = document.createElement("div");
+    const mountTokens: Record<string, string> = {
+      "--surface": "#fcfbf7",
+      "--accent": "#a2491c",
+    };
+    const fallbackTokens: Record<string, string> = {
+      "--surface": "#e9e5da",
+      "--focus": "#2f5d50",
+    };
+    stubTokens((element) =>
+      element === mount
+        ? mountTokens
+        : element === fallback
+          ? fallbackTokens
+          : {},
+    );
+    await render(
+      (p) => createElement(ComposerAddMenu, p),
+      "ts-workspace-theme quiet-workspace",
+    );
+    mount!.setAttribute("data-theme", "light");
+    await openMenu();
+    const element = panel()!;
+    expect(element.getAttribute("data-theme")).toBe("light");
+    expect(element.style.getPropertyValue("--accent")).toBe("#a2491c");
+
+    // A second themed surface arrives after the open panel. In document
+    // order the panel itself already carries the mirrored classes and
+    // precedes this fallback, so source selection must skip the panel.
+    fallback.className = "ts-workspace-theme";
+    fallback.setAttribute("data-theme", "dark");
+    document.body.append(fallback);
+    try {
+      await applyThemeChange(() => {
+        mount!.classList.remove("ts-workspace-theme", "quiet-workspace");
+        mount!.removeAttribute("data-theme");
+        delete mountTokens["--accent"];
+      });
+      // Source classes, `data-theme`, and a copied token are gone; the
+      // fallback source wins instead of any stale panel output.
+      expect(panel()).toBe(element);
+      expect(element.classList.contains("ts-workspace-theme")).toBe(true);
+      expect(element.classList.contains("quiet-workspace")).toBe(false);
+      expect(element.getAttribute("data-theme")).toBe("dark");
+      expect(element.style.getPropertyValue("--surface")).toBe("#e9e5da");
+      expect(element.style.getPropertyValue("--focus")).toBe("#2f5d50");
+      expect(element.style.getPropertyValue("--accent")).toBe("");
+
+      // The changed nearest theme scope is watched from now on.
+      await applyThemeChange(() => {
+        fallback.setAttribute("data-theme", "light");
+        fallbackTokens["--surface"] = "#f6f4ee";
+      });
+      expect(element.getAttribute("data-theme")).toBe("light");
+      expect(element.style.getPropertyValue("--surface")).toBe("#f6f4ee");
+
+      // The last source goes away: the mirrored classes must fall off the
+      // panel even though the panel itself carries them — mirror output is
+      // never its own source.
+      await applyThemeChange(() => {
+        fallback.classList.remove("ts-workspace-theme");
+        fallback.removeAttribute("data-theme");
+      });
+      expect(element.classList.contains("ts-workspace-theme")).toBe(false);
+      expect(element.classList.contains("quiet-workspace")).toBe(false);
+      expect(element.hasAttribute("data-theme")).toBe(false);
+      expect(element.style.getPropertyValue("--surface")).toBe("");
+      expect(element.style.getPropertyValue("--focus")).toBe("");
+    } finally {
+      fallback.remove();
+    }
+  });
+
+  it("follows OS colour-scheme flips through an explicit dark query", async () => {
+    const tokens: Record<string, string> = {
+      "--surface": "#fcfbf7",
+      "--background": "#ffffff",
+    };
+    stubTokens(tokens);
+    const media = stubColorScheme("light");
+    await render((p) => createElement(ComposerAddMenu, p), "quiet-workspace");
+    await openMenu();
+    const element = panel()!;
+    expect(element.style.getPropertyValue("--surface")).toBe("#fcfbf7");
+
+    // The installed colour-scheme query must be value-sensitive and dark:
+    // a valueless `(prefers-color-scheme)` stays matched in light and dark
+    // alike and would never report this transition.
+    const schemeQueries = media.queries.filter((query) =>
+      query.includes("prefers-color-scheme"),
+    );
+    expect(schemeQueries).toContain("(prefers-color-scheme: dark)");
+    expect(schemeQueries).not.toContain("(prefers-color-scheme)");
+    expect(
+      [...media.subscribed].filter((query) =>
+        query.includes("prefers-color-scheme"),
+      ),
+    ).toEqual(["(prefers-color-scheme: dark)"]);
+
+    // Under this mock a valueless colour-scheme list stays matched in both
+    // schemes and never fires change: a wrong query cannot pass this suite.
+    const valuelessFired = vi.fn();
+    window
+      .matchMedia("(prefers-color-scheme)")
+      .addEventListener("change", valuelessFired);
+
+    // The OS flips with zero DOM mutation; only computed values move.
+    await act(async () => {
+      tokens["--surface"] = "#1b1b19";
+      delete tokens["--background"];
+      media.setScheme("dark");
+    });
+    expect(panel()).toBe(element);
+    expect(element.style.getPropertyValue("--surface")).toBe("#1b1b19");
+    expect(element.style.getPropertyValue("--background")).toBe("");
+
+    await act(async () => {
+      tokens["--surface"] = "#fcfbf7";
+      tokens["--background"] = "#ffffff";
+      media.setScheme("light");
+    });
+    expect(panel()).toBe(element);
+    expect(element.style.getPropertyValue("--surface")).toBe("#fcfbf7");
+    expect(element.style.getPropertyValue("--background")).toBe("#ffffff");
+    expect(valuelessFired).not.toHaveBeenCalled();
+  });
+
+  it("disposes every subscription on close and unmount and reopens fresh", async () => {
+    const tokens: Record<string, string> = { "--surface": "#fcfbf7" };
+    stubTokens(tokens);
+    const media = stubColorScheme("light");
+    const observers = trackObservers();
+    const active = () =>
+      observers.records.filter((record) => !record.disconnected);
+    await render((p) => createElement(ComposerAddMenu, p), "quiet-workspace");
+    await openMenu();
+    const element = panel()!;
+    expect(active().length).toBe(1);
+    expect(media.listenerCount()).toBe(1);
+
+    // Mirror output is never observed, so a sync can never feed back into
+    // itself and grow a callback loop.
+    for (const record of observers.records) {
+      for (const target of record.targets) {
+        expect(target === element || element.contains(target)).toBe(false);
+      }
+    }
+
+    // A view change must not touch the subscription set at all.
+    await act(async () => {
+      rowByLabel("工具与技能").click();
+    });
+    await press(panel()!, "Escape");
+    expect(active().length).toBe(1);
+    expect(media.listenerCount()).toBe(1);
+
+    // One source change is exactly one sync: no repeated-callback growth.
+    const callbacks = () =>
+      observers.records.reduce((count, record) => count + record.callbacks, 0);
+    const before = callbacks();
+    await applyThemeChange(() => {
+      mount!.setAttribute("data-theme", "dark");
+    });
+    expect(callbacks() - before).toBe(1);
+    await applyThemeChange(() => {});
+    expect(callbacks() - before).toBe(1);
+
+    // Close disposes every observer and listener.
+    await press(element, "Escape");
+    expect(panel()).toBeNull();
+    expect(active().length).toBe(0);
+    expect(media.listenerCount()).toBe(0);
+
+    // A closed panel is dead state: source or OS changes never reach it.
+    await applyThemeChange(() => {
+      mount!.classList.remove("quiet-workspace");
+      mount!.setAttribute("data-theme", "light");
+      tokens["--surface"] = "#1b1b19";
+    });
+    media.setScheme("dark");
+    expect(element.classList.contains("quiet-workspace")).toBe(true);
+    expect(element.getAttribute("data-theme")).toBe("dark");
+    expect(element.style.getPropertyValue("--surface")).toBe("#fcfbf7");
+
+    // Reopening attaches exactly one fresh subscription set.
+    await openMenu();
+    const reopened = panel()!;
+    expect(reopened).not.toBe(element);
+    expect(active().length).toBe(1);
+    expect(media.listenerCount()).toBe(1);
+    expect(observers.records.length).toBe(2);
+    const freshBefore = callbacks();
+    await applyThemeChange(() => {
+      mount!.setAttribute("data-theme", "dark");
+    });
+    expect(reopened.getAttribute("data-theme")).toBe("dark");
+    expect(callbacks() - freshBefore).toBe(1);
+
+    // Unmount with the panel open disposes just as completely.
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    expect(panel()).toBeNull();
+    expect(active().length).toBe(0);
+    expect(media.listenerCount()).toBe(0);
+    await applyThemeChange(() => {
+      mount!.setAttribute("data-theme", "dark");
+      tokens["--surface"] = "#f6f4ee";
+    });
+    media.setScheme("dark");
+    expect(reopened.getAttribute("data-theme")).toBe("dark");
+    // Frozen at the value mirrored while it was alive: the post-unmount
+    // `#f6f4ee` must never reach the detached panel.
+    expect(reopened.style.getPropertyValue("--surface")).toBe("#1b1b19");
   });
 });
 
