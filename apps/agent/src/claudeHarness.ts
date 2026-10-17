@@ -149,6 +149,14 @@ export interface ClaudeHarnessRequest {
   preparationReady?: () => boolean;
   /** New original input invalidates prepared output before any later display. */
   onPreparationSuperseded?: () => void;
+  /**
+   * Host-owned monotonic generation of the prepared output, starting at 0 and
+   * advanced only by accepted preparation staging or discard. Optional: a host
+   * without it stays fail-closed after steering, exactly as before. After an
+   * admitted original supersedes prepared output, only a strictly newer valid
+   * nonnegative safe generation can re-arm the preparation fast-stop.
+   */
+  preparationRevision?: () => number;
   systemPrompt: string;
   context?: string;
   images?: readonly AgentProviderInputPart[];
@@ -443,6 +451,33 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   const toolCompletions: HarnessToolCompletion[] = [];
   let preparationStopped = false;
   let preparationSuperseded = false;
+  /** Generation floor invalidated by the latest admitted steering batch, or
+   * null while no batch superseded prepared output / no valid floor exists. */
+  let preparationInvalidatedRevision: number | null = null;
+  /** High-water mark of admissible observations; they must never regress. */
+  let preparationRevisionHigh: number | null = null;
+  // Host generations are observed as nonnegative safe integers, monotonically.
+  // An invalid, regressing or thrown observation is never admissible and fails
+  // closed: it can never re-arm the preparation fast-stop.
+  const observePreparationRevision = (): number | null => {
+    if (!request.preparationRevision) return null;
+    let value: unknown;
+    try { value = request.preparationRevision(); } catch { return null; }
+    const revision = typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+    if (revision === null || (preparationRevisionHigh !== null && revision < preparationRevisionHigh)) return null;
+    preparationRevisionHigh = revision;
+    return revision;
+  };
+  // The fast-stop stays armed before the first admitted steering batch exactly
+  // as legacy hosts behave. After supersession, a legacy host stays fail-closed
+  // and a generation host re-arms only past the invalidated floor: an old or
+  // constant draft, unchanged readiness or unrelated success cannot stop.
+  const preparationArmed = (): boolean => {
+    if (!preparationSuperseded) return true;
+    if (!request.preparationRevision || preparationInvalidatedRevision === null) return false;
+    const current = observePreparationRevision();
+    return current !== null && current > preparationInvalidatedRevision;
+  };
   let primaryToolCompleted = false;
   let preparationToolFailed = false;
   let pendingSteering: HarnessSteeringBatch | null = null;
@@ -472,6 +507,9 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     }
     preparationSuperseded = true;
     request.onPreparationSuperseded?.();
+    // Host generation floor: capture only after the existing discard, so any
+    // later valid draft must carry a strictly newer generation to re-arm.
+    preparationInvalidatedRevision = observePreparationRevision();
     pendingSteering = batch;
     // Original human input is scoped task context. It creates no new grants
     // and cannot turn generated artifacts into approval for external writes.
@@ -711,7 +749,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
             await assertCurrent();
             assertBudget();
             const ready = !request.outputSchema && primaryToolCompleted && !preparationToolFailed
-              && !preparationSuperseded && request.preparationReady?.() === true;
+              && preparationArmed() && request.preparationReady?.() === true;
             const context = await steeringContext(ready);
             if (context) {
               // The old draft cannot terminate a task with newly admitted originals.
@@ -720,6 +758,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
             if (ready) {
               await assertCurrent();
               assertBudget();
+              // Re-read host generation and readiness after the async
+              // source/lease and budget fences: only the still-current valid
+              // preparation may terminate the task.
+              if (!preparationArmed() || request.preparationReady?.() !== true) return {};
               preparationStopped = true;
               // Stop after the entire batch, before another model call.
               // https://code.claude.com/docs/en/hooks#posttoolbatch

@@ -258,7 +258,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
         memory_inventory: request.context_blocks.map(block => ({ type: block.type, status: block.status })),
         allowed_citation_ids: request.allowed_citation_ids, response_preference_available: Boolean(request.responsePreference),
         assistant_service_preference: responsePreferenceContext(request.responsePreference) }),
-      ...(request.calendarContext ? { preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard } : {}),
+      ...(request.calendarContext ? { preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard, preparationRevision: calendar.preparationRevision } : {}),
       effort: "medium", budget: { ...DEFAULT_AGENT_BUDGET, maxDurationMs: 60_000 }, assertCurrent,
       // Give the native SDK time to recover a silent gateway stream inside the
       // same query/budget. Do not opt write-capable calls into that recovery.
@@ -365,7 +365,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
     const outcome = await this.execute(this.configuration, { ...((request.continuation && userImages.length === 0) ? { continuation: request.continuation } : {}), ...(trusted ? { observation: trusted } : {}), objective: request.objective,
       ...(request.messageID ? { messageID: request.messageID } : {}),
       ...(request.steering ? { steering: request.steering } : {}),
-      ...(request.calendarContext && request.outputMode !== "json" ? { preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard } : {}),
+      ...(request.calendarContext && request.outputMode !== "json" ? { preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard, preparationRevision: calendar.preparationRevision } : {}),
       ...(request.onToolCompletion ? { onToolCompletion: request.onToolCompletion } : {}),
       ...(onText ? { onText } : {}),
       ...(userImages.length > 0 ? { images: userImages } : {}),

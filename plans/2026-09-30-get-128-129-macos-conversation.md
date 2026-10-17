@@ -154,3 +154,52 @@ Existing durable queue and SSE remain authority; stage transitions must never im
 - Next: independent review, resident deployment, then one diagnosed actual
   retry at the unchanged 32000 budget before deciding functional fix vs
   blocker.
+
+## Preparation fast-stop generation fix (2026-10-18)
+
+- Confirmed separate bug, not a claim about the earlier arithmetic 32000
+  failure: `claudeHarness` latched `preparationSuperseded` permanently when
+  text steering was admitted. `calendar.discard` invalidated the old draft,
+  but a newly staged valid `finish_preparation:true` draft could never use
+  the PostToolBatch fast-stop; the existing test only rebuilt a
+  `finish_preparation:false` draft.
+- Resolved strictly by host generation, never by resetting the latch after
+  unrelated tools. `ClaudeHarnessRequest.preparationRevision?: () => number`
+  (optional and backwards compatible) is exposed by `calendarDraftCapability`
+  and supplied by both production `ClaudeChatProvider` call sites (answer and
+  natural-mode runInternal; the JSON adapter stays unchanged). The calendar
+  generation starts at 0 and advances atomically together with draft and
+  finishing state only on accepted staging or discard; rejected, failed and
+  duplicate staging never advance it. The write tool stays nondelegable.
+- The harness observes generations as nonnegative safe integers, monotonically.
+  Each admitted steering batch calls the existing discard first, then captures
+  that generation as the invalidated floor. The fast-stop re-arms only for a
+  strictly newer valid generation with `preparationReady()` true, with every
+  existing primary/tool-failure/outputSchema/current-source/lease/abort/budget
+  gate intact. Legacy hosts without a callback stay fail-closed after steering
+  exactly as before; invalid, unsafe, constant-old or regressing generations
+  cannot re-arm, and opaque draft IDs are never trusted. Generation and
+  readiness are re-read after the async source/budget fences immediately before
+  stopping. Behavior before the first supersession is unchanged.
+- Focused red/green tests run through the actual mocked SDK hooks and the actual
+  calendar capability: old finishing draft -> steering discards -> new finishing
+  draft quoted from the latest original -> fast-stop before another model call;
+  old draft, constant readiness/revision and unrelated primary success cannot
+  stop; repeated steering invalidates each new current preparation again; failed
+  staging never advances or re-arms; invalid, negative, fractional, unsafe and
+  regressing generations fail closed; legacy hosts remain safe; outputSchema,
+  failed-tool, source/lease, cancel and budget gates still block a re-armed
+  preparation. Steering tests pin discard-then-capture floor ordering at every
+  admitted batch and the Stop-admission re-arm path. Provider tests verify both
+  call sites actually supply the generation function while the JSON adapter
+  stays unchanged; calendar tests pin the generation lifecycle.
+- Unchanged on purpose: budgets and the 32000 maxTaskTokens cap, tool
+  capabilities and prompts, sticky `preparationToolFailed`, token aggregation,
+  SDK parameters, provisional/final text behavior and all d07e937e diagnostic
+  metadata. No retries, truth stores or grants were added.
+- Local verification: focused Agent tests (calendarDraft,
+  claudeHarnessPreparation, claudeHarnessSteering, claudeHarness) 96 passed,
+  Agent typecheck and docs checks pass. Remaining live acceptance stays open:
+  independent review, combined GET-128PR with current-head CI including
+  allAgent+backend+DB, resident backend deployment/readback, and the
+  parent-owned one unchanged-32000 diagnosed retry. No overallDone.
