@@ -117,3 +117,89 @@ Existing durable queue and SSE remain authority; stage transitions must never im
   legacy recovery compares the exact owned response and rejects body tampering.
 - Full Memory DB regression: 86 passed. Backend unit regression: 825 passed,
   393 optional fixture skips. No provisional failure was counted as success.
+
+## Bounded SDK usage diagnostics follow-up (2026-10-18)
+
+- First real-provider steering attempt recorded, not passed. Installed Mac
+  0.2.8 (125) with resident Web/backend 7f5dd62 observed two distinct SDK
+  assistant events; aggregate 39295 input / 9 output tokens hit the unchanged
+  32000 maxTaskTokens cap after 33s (`MODEL_RUN_TOKEN_BUDGET_EXHAUSTED`).
+  Supplements B/C were admitted into the same Run and stayed dispatching;
+  none was delivered and no final turn followed. There is no evidence yet of
+  double counting, and this record claims no root cause.
+- Confirmed evidence gap only: `claudeHarness.ts` flushes each assistant frame
+  with nested `metadata.usage` and raw `sdk_message_id`, while
+  `metadataOnlyProductSpan`/cleanupSQL retain only whitelisted flat primitive
+  values. Failed or source-less receipts therefore permanently lose per-frame
+  raw/cache usage and stable SDK identity.
+- This slice adds bounded flat primitive diagnostic keys beside the unchanged
+  full-source fields: `sdk_message_id_sha256` (lowercase 64-hex SHA-256 of the
+  actual SDK message ID, never the raw ID), `sdk_input_tokens` (provider raw
+  input excluding cache per the Anthropic contract), `sdk_output_tokens`,
+  `sdk_cache_read_input_tokens`, `sdk_cache_creation_input_tokens`,
+  `sdk_total_input_tokens` (raw+read+creation only when all three are
+  explicitly known and the sum is safe, otherwise null), fixed
+  `sdk_usage_basis`, and `sdk_stop_reason` from the known stop enum or null.
+  Missing or invalid values stay null; a genuine zero stays zero. The raw ID,
+  nested `metadata.usage`, full-source bodies and the existing
+  message-ID-upsert deduplication are unchanged.
+- Unchanged on purpose: `messageUsage` map/aggregate high-water accounting,
+  all runtime budgets and the 32000 maxTaskTokens cap, tool capabilities,
+  model/default selection, observation policy/exposure and retention/expiry.
+  No usage ledger, counter or fetch changes.
+- Focused red/green tests cover distinct and repeated SDK message IDs, hashed
+  identity, raw-vs-total counts, genuine-zero vs absent-null, unsafe-sum-null,
+  unknown/absent stop reasons, the failed-run leaf path, backend
+  metadataOnly/cleanup shared keys and unchanged aggregate exhaustion.
+- Next: independent review, resident deployment, then one diagnosed actual
+  retry at the unchanged 32000 budget before deciding functional fix vs
+  blocker.
+
+## Preparation fast-stop generation fix (2026-10-18)
+
+- Confirmed separate bug, not a claim about the earlier arithmetic 32000
+  failure: `claudeHarness` latched `preparationSuperseded` permanently when
+  text steering was admitted. `calendar.discard` invalidated the old draft,
+  but a newly staged valid `finish_preparation:true` draft could never use
+  the PostToolBatch fast-stop; the existing test only rebuilt a
+  `finish_preparation:false` draft.
+- Resolved strictly by host generation, never by resetting the latch after
+  unrelated tools. `ClaudeHarnessRequest.preparationRevision?: () => number`
+  (optional and backwards compatible) is exposed by `calendarDraftCapability`
+  and supplied by both production `ClaudeChatProvider` call sites (answer and
+  natural-mode runInternal; the JSON adapter stays unchanged). The calendar
+  generation starts at 0 and advances atomically together with draft and
+  finishing state only on accepted staging or discard; rejected, failed and
+  duplicate staging never advance it. The write tool stays nondelegable.
+- The harness observes generations as nonnegative safe integers, monotonically.
+  Each admitted steering batch calls the existing discard first, then captures
+  that generation as the invalidated floor. The fast-stop re-arms only for a
+  strictly newer valid generation with `preparationReady()` true, with every
+  existing primary/tool-failure/outputSchema/current-source/lease/abort/budget
+  gate intact. Legacy hosts without a callback stay fail-closed after steering
+  exactly as before; invalid, unsafe, constant-old or regressing generations
+  cannot re-arm, and opaque draft IDs are never trusted. Generation and
+  readiness are re-read after the async source/budget fences immediately before
+  stopping. Behavior before the first supersession is unchanged.
+- Focused red/green tests run through the actual mocked SDK hooks and the actual
+  calendar capability: old finishing draft -> steering discards -> new finishing
+  draft quoted from the latest original -> fast-stop before another model call;
+  old draft, constant readiness/revision and unrelated primary success cannot
+  stop; repeated steering invalidates each new current preparation again; failed
+  staging never advances or re-arms; invalid, negative, fractional, unsafe and
+  regressing generations fail closed; legacy hosts remain safe; outputSchema,
+  failed-tool, source/lease, cancel and budget gates still block a re-armed
+  preparation. Steering tests pin discard-then-capture floor ordering at every
+  admitted batch and the Stop-admission re-arm path. Provider tests verify both
+  call sites actually supply the generation function while the JSON adapter
+  stays unchanged; calendar tests pin the generation lifecycle.
+- Unchanged on purpose: budgets and the 32000 maxTaskTokens cap, tool
+  capabilities and prompts, sticky `preparationToolFailed`, token aggregation,
+  SDK parameters, provisional/final text behavior and all d07e937e diagnostic
+  metadata. No retries, truth stores or grants were added.
+- Local verification: focused Agent tests (calendarDraft,
+  claudeHarnessPreparation, claudeHarnessSteering, claudeHarness) 96 passed,
+  Agent typecheck and docs checks pass. Remaining live acceptance stays open:
+  independent review, combined GET-128PR with current-head CI including
+  allAgent+backend+DB, resident backend deployment/readback, and the
+  parent-owned one unchanged-32000 diagnosed retry. No overallDone.

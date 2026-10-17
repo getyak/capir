@@ -104,3 +104,59 @@ describe("primary SDK lifecycle steering", () => {
     expect(failure.receipt).toMatchObject({ inputTokens: 112, outputTokens: 27, usageComplete: false });
   });
 });
+
+describe("steering preparation generations", () => {
+  it("captures the invalidated generation floor after the host discard at every admitted steering batch", async () => {
+    const trace: string[] = [];
+    const acknowledge = vi.fn(async () => {});
+    let revision = 0;
+    let pulls = 0;
+    const feed: HarnessSteeringFeed = { nextBatchAtSafePoint: vi.fn(async () => ++pulls <= 2 ? { messages: fragments(), acknowledge } : null) };
+    await runClaudeHarness(config, request({
+      steering: feed,
+      onPreparationSuperseded: () => { trace.push("discard"); revision += 1; },
+      preparationRevision: () => { trace.push(`read:${revision}`); return revision; },
+    }), new AbortController().signal, sdk(async function* (prompt, options) {
+      for await (const _ of prompt) { /* eager SDK input */ }
+      const batch = await hook(options, "PostToolBatch")(event("PostToolBatch", { tool_calls: [] }));
+      expect(batch.hookSpecificOutput.additionalContext).toContain("Fragment 1");
+      const stop = await hook(options, "Stop")(event("Stop", { stop_hook_active: true }));
+      expect(stop.hookSpecificOutput.additionalContext).toContain("Fragment 2");
+      yield result();
+    }), null);
+    // Each admitted batch calls the host discard first, then captures its floor.
+    expect(trace).toEqual(["discard", "read:1", "discard", "read:2"]);
+    expect(acknowledge).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-arms the preparation fast-stop past the floor captured when Stop admits steering", async () => {
+    let revision = 0;
+    let ready = false;
+    let pulls = 0;
+    const nextBatchAtSafePoint = vi.fn(async () => ++pulls === 1 ? { messages: fragments() } : null);
+    const feed: HarnessSteeringFeed = { nextBatchAtSafePoint };
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "probe receipt" }] }));
+    await runClaudeHarness(config, request({ steering: feed,
+      tools: [{ name: "probe", description: "Synthetic probe", schema: z.strictObject({}), readOnly: true, execute }],
+      preparationReady: () => ready,
+      preparationRevision: () => revision,
+      onPreparationSuperseded: () => { ready = false; revision += 1; },
+    }), new AbortController().signal, sdk(async function* (prompt, options) {
+      for await (const _ of prompt) { /* eager SDK input */ }
+      const dispatch = options.mcpServers.talent_signal.instance.server._requestHandlers.get("tools/call");
+      await dispatch({ method: "tools/call", params: { name: "probe", arguments: {} } }, { signal: new AbortController().signal });
+      await hook(options, "PostToolUse")(event("PostToolUse", { tool_name: "mcp__talent_signal__probe", tool_input: {}, tool_response: {} }));
+      // A late original arrives at the final checkpoint and supersedes preparation.
+      const stop = await hook(options, "Stop")(event("Stop", { stop_hook_active: true }));
+      expect(stop.hookSpecificOutput.additionalContext).toContain("Fragment 1");
+      expect(revision).toBe(1);
+      // The model applies the late original and stages a strictly newer preparation.
+      ready = true;
+      revision += 1;
+      expect(await hook(options, "PostToolBatch")(event("PostToolBatch", { tool_calls: [] }))).toMatchObject({ continue: false });
+      yield result({ terminal_reason: "hook_stopped" });
+    }), null);
+    expect(nextBatchAtSafePoint.mock.calls).toEqual([[{ final: true }], [{ final: true }]]);
+    expect(revision).toBe(2);
+  });
+});
