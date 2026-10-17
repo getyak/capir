@@ -192,8 +192,9 @@ function serverFailure(error: unknown, secrets: string[]): CapirCliError {
  */
 function unconfirmedProvisioningResult(error: unknown): boolean {
   return !(error instanceof TalentSignalHttpError)
-    || error.status === 0
-    || (error.status >= 200 && error.status < 300);
+    || !Number.isInteger(error.status)
+    || error.status < 400
+    || error.status > 599;
 }
 
 function provisioningRecoveryCode(error: unknown): string {

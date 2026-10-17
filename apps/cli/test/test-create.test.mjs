@@ -97,6 +97,10 @@ async function startTestBackend(options = {}) {
           : record.path.endsWith("/handoffs") ? options.firstHandoffResponse : options.firstCreateResponse;
         if (status === 200 && firstMutation && fault) {
           record.responseFault = fault;
+          if (fault === "unexpected-status") {
+            response.writeHead(304);
+            return response.end();
+          }
           response.writeHead(200, { "content-type": "application/json" });
           if (fault === "partial") {
             response.flushHeaders();
@@ -539,7 +543,7 @@ describe("exact recovery and conflict boundaries", () => {
     assert.equal(Object.keys(keyringEntries(directory)).length, 1);
   });
 
-  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-wrapper", "missing-wrapper"]) {
+  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-wrapper", "missing-wrapper", "unexpected-status"]) {
     it(`committed_create_${fault}_response_keeps_same_recovery_identity`, async (t) => {
       const directory = scratch();
       const backend = await startTestBackend({ firstCreateResponse: fault });
@@ -551,13 +555,13 @@ describe("exact recovery and conflict boundaries", () => {
       const envelope = JSON.parse(lost.stdout);
       assert.equal(
         envelope.error.code,
-        fault === "partial" ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
       );
       const requestId = envelope.error.recoverable_request_id;
       assert.ok(requestId);
       assert.equal(new OperationJournal(join(directory, "config")).find(requestId).status, "ambiguous");
       const committed = backend.runs.get(requestId);
-      assert.ok(committed, "the server committed before sending the faulty 200 body");
+      assert.ok(committed, "the server committed before sending the faulty response");
       const creates = () => backend.calls.filter((c) => c.method === "POST" && c.path === "/v1/capir/tests");
       assert.equal(creates().length, 1, "there is no automatic second allocation request");
       assert.equal(creates()[0].responseFault, fault);
@@ -592,7 +596,7 @@ describe("exact recovery and conflict boundaries", () => {
       const envelope = JSON.parse(lost.stdout);
       assert.equal(
         envelope.error.code,
-        fault === "partial" ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
       );
       const requestId = envelope.error.recoverable_request_id;
       assert.ok(requestId);
@@ -813,7 +817,7 @@ function inProcessDeps(directory, backendOrigin, extras = {}) {
 }
 
 describe("browser readiness is separate from creation", () => {
-  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-path", "stale-expiry"]) {
+  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-path", "stale-expiry", "unexpected-status"]) {
     it(`uncertain_handoff_${fault}_keeps_separate_id_without_browser_or_automatic_retry`, async (t) => {
       const directory = scratch();
       const backend = await startTestBackend({ firstHandoffResponse: fault });
@@ -827,7 +831,7 @@ describe("browser readiness is separate from creation", () => {
       const envelope = JSON.parse(result.output);
       assert.equal(
         envelope.error.code,
-        fault === "partial" ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
       );
       const createId = envelope.error.recoverable_request_id;
       const handoffId = envelope.client_state.handoff_request_id;
