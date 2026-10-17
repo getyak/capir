@@ -52,3 +52,19 @@ jobs:
           scripts/macos/package-version.test.sh
           scripts/macos/publish-versioned-release.test.sh
           scripts/macos/check.sh
+      - name: Verify first-run keyboard and hidden-input boundaries
+        env:
+          MACOS_DERIVED_DATA: ${{ runner.temp }}/talent-signal-macos-check
+          MACOS_FIRST_RUN_RESULT: ${{ runner.temp }}/macos-first-run-pr.xcresult
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: scripts/macos/first-run-acceptance.sh
+      - name: Retain native first-run evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-first-run-pr-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/macos-first-run-pr.xcresult
+            ${{ runner.temp }}/macos-first-run-pr-summary.json
+          retention-days: 7
+          if-no-files-found: warn

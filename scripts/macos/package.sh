@@ -61,7 +61,7 @@ cp "$ROOT/docs/operations/macos-install.txt" "$STAGING/dmg/Install.txt"
 if [[ "$MODE" == preview ]]; then
   printf '\nPREVIEW: ad-hoc signed, not notarized by Apple.\n' >> "$STAGING/dmg/Install.txt"
 fi
-hdiutil create -quiet -volname 'Talent Signal' -srcfolder "$STAGING/dmg" -ov -format UDZO "$OUTPUT/$BASE.dmg"
+"$ROOT/scripts/macos/create-installer.sh" "$STAGING/dmg" "$OUTPUT/$BASE.dmg"
 if [[ "$MODE" == signed ]]; then
   codesign --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$OUTPUT/$BASE.dmg"
   xcrun notarytool submit "$OUTPUT/$BASE.dmg" --keychain-profile "$MACOS_NOTARY_PROFILE" --keychain "$MACOS_NOTARY_KEYCHAIN" --wait

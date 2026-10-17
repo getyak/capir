@@ -7,6 +7,7 @@ struct TalentSignalMacApp: App {
     @StateObject private var updater = DesktopUpdater.shared
     @StateObject private var model = AppModel.bootstrap()
     @StateObject private var capturePreferences = CaptureRuntime.shared.preferences
+    @ObservedObject private var connection = WorkspaceConnection.shared
 
     private var isQuickPanelPreview: Bool {
         ProcessInfo.processInfo.arguments.contains("--quick-panel-preview")
@@ -52,7 +53,7 @@ struct TalentSignalMacApp: App {
                     .background(DesktopBrowserLoginWorkspaceLink())
             }
             .frame(
-                minWidth: isQuickPanelPreview ? 520 : 760,
+                minWidth: isQuickPanelPreview ? 520 : (connection.origin == nil ? 600 : 760),
                 minHeight: isQuickPanelPreview ? 580 : 540
             )
         }
