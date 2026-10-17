@@ -79,6 +79,8 @@ function reducedMotion(): boolean {
 /**
  * Mirror the nearest workspace theme onto the portaled panel so scoped tokens
  * like `ts-workspace-theme quiet-workspace` survive leaving the shell DOM.
+ * The mirror is one-way and idempotent: classes, `data-theme` and copied
+ * tokens the source no longer carries are removed, never left behind stale.
  * Runs only while the panel is open: render never touches `document`.
  */
 const MIRRORED_TOKENS = [
@@ -106,35 +108,141 @@ const MIRRORED_TOKENS = [
   "--ease-out",
 ] as const;
 
-function applyPortalTheme(element: HTMLElement, anchor: HTMLElement | null) {
-  if (typeof document === "undefined") return;
-  const scope =
-    anchor?.closest<HTMLElement>(".ts-workspace-theme, .quiet-workspace") ??
-    document.querySelector<HTMLElement>(
+const THEME_CLASSES = ["ts-workspace-theme", "quiet-workspace"] as const;
+
+/**
+ * The panel and its own contents are mirror output, never a theme source.
+ * Without this guard the classes copied onto the panel would let it resolve
+ * as its own source the moment the original workspace theme class is removed.
+ */
+function isThemeSource(
+  element: HTMLElement,
+  node: Element | null,
+): node is HTMLElement {
+  return (
+    node instanceof HTMLElement && node !== element && !element.contains(node)
+  );
+}
+
+/**
+ * Resolve the live theme source for a portaled panel: the nearest scoped
+ * theme, then a `[data-theme]` scope, then the document. Never the panel.
+ */
+function resolveThemeSource(element: HTMLElement, anchor: HTMLElement | null) {
+  let scope =
+    anchor?.closest<HTMLElement>(".ts-workspace-theme, .quiet-workspace") ?? null;
+  if (!isThemeSource(element, scope)) scope = null;
+  if (!scope) {
+    for (const candidate of document.querySelectorAll<HTMLElement>(
       ".ts-workspace-theme, .quiet-workspace",
-    );
-  for (const name of ["ts-workspace-theme", "quiet-workspace"]) {
-    if (scope?.classList.contains(name)) element.classList.add(name);
+    )) {
+      if (isThemeSource(element, candidate)) {
+        scope = candidate;
+        break;
+      }
+    }
   }
-  const themeScope =
+  // The nearest `data-theme` wins: the anchor's own scope first, then the
+  // resolved source's (a fallback source still carries its theme), then the
+  // document. The panel is output and never resolves here either.
+  let themeScope =
     anchor?.closest<HTMLElement>("[data-theme]") ??
-    document.documentElement.closest<HTMLElement>("[data-theme]") ??
+    scope?.closest<HTMLElement>("[data-theme]") ??
     (document.documentElement.hasAttribute("data-theme")
       ? document.documentElement
       : null);
+  if (!isThemeSource(element, themeScope)) themeScope = null;
+  return {
+    scope,
+    themeScope,
+    source: scope ?? themeScope ?? document.documentElement,
+  };
+}
+
+function applyPortalTheme(element: HTMLElement, anchor: HTMLElement | null) {
+  if (typeof document === "undefined") return;
+  const { scope, themeScope, source } = resolveThemeSource(element, anchor);
+  for (const name of THEME_CLASSES) {
+    element.classList.toggle(name, scope?.classList.contains(name) ?? false);
+  }
   const theme = themeScope?.getAttribute("data-theme");
   if (theme) element.setAttribute("data-theme", theme);
+  else element.removeAttribute("data-theme");
   // Scoped token overrides live on ancestors; copy the values the panel
-  // needs so the portal cannot lose them.
+  // needs so the portal cannot lose them, and drop values the source no
+  // longer defines instead of serving a stale theme.
   if (typeof window === "undefined" || typeof window.getComputedStyle !== "function") {
     return;
   }
-  const source = scope ?? themeScope ?? document.documentElement;
   const computed = window.getComputedStyle(source);
   for (const token of MIRRORED_TOKENS) {
     const value = computed.getPropertyValue(token).trim();
     if (value) element.style.setProperty(token, value);
+    else element.style.removeProperty(token);
   }
+}
+
+/**
+ * Keep the theme mirror live for exactly the open panel's lifetime. Source
+ * theme classes, attributes and the OS colour scheme move underneath an open
+ * panel; only source elements are observed — never the portaled panel — so
+ * every sync is a one-way copy that cannot feed back into itself. Source
+ * observation is refreshed on each sync so a changed nearest theme scope is
+ * watched instead of becoming a blind spot. Returns the cleanup that drops
+ * every subscription.
+ */
+function watchPortalTheme(
+  element: HTMLElement,
+  anchor: HTMLElement | null,
+): () => void {
+  const cleanups: Array<() => void> = [];
+  const observed = new Set<Element>();
+  let observer: MutationObserver | null = null;
+  const refreshSources = () => {
+    if (!observer) return;
+    const { scope, themeScope } = resolveThemeSource(element, anchor);
+    const candidates: Array<Element | null> = [
+      scope,
+      themeScope,
+      document.documentElement,
+    ];
+    // The trigger's ancestors carry the nearest theme scope; an attribute
+    // change anywhere along them re-runs a full, idempotent sync.
+    for (let node: Element | null = anchor; node; node = node.parentElement) {
+      candidates.push(node);
+    }
+    for (const node of candidates) {
+      if (!isThemeSource(element, node) || observed.has(node)) continue;
+      observed.add(node);
+      // Attributes only, never a subtree: bounded and loop-free.
+      observer.observe(node, {
+        attributes: true,
+        attributeFilter: ["class", "style", "data-theme"],
+      });
+    }
+  };
+  const sync = () => {
+    applyPortalTheme(element, anchor);
+    refreshSources();
+  };
+  if (typeof MutationObserver !== "undefined") {
+    observer = new MutationObserver(sync);
+    cleanups.push(() => observer?.disconnect());
+  }
+  sync();
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    // The OS colour scheme moves computed tokens with no DOM mutation at all;
+    // an explicit, value-sensitive dark query is the only signal for it. A
+    // valueless `(prefers-color-scheme)` stays matched in light and dark and
+    // would silently stop reporting transitions.
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", sync);
+    cleanups.push(() => media.removeEventListener("change", sync));
+  }
+  return () => {
+    for (const cleanup of cleanups) cleanup();
+    observed.clear();
+  };
 }
 
 export function ComposerAddMenu({
@@ -362,8 +470,9 @@ export function ComposerAddMenu({
     });
   }, [position]);
 
-  // Theme mirroring and the first position happen before paint; observers
-  // then keep the panel glued to its trigger across scroll, resize, reflow.
+  // Theme mirroring and the first position happen before paint (the sizing
+  // reads a panel that already carries the mirrored theme); observers then
+  // keep the panel glued to its trigger across scroll, resize, reflow.
   useLayoutEffect(() => {
     if (!open) return;
     const element = panel.current;
@@ -389,6 +498,17 @@ export function ComposerAddMenu({
       window.visualViewport?.removeEventListener("scroll", schedulePosition);
     };
   }, [open, view, schedulePosition, position]);
+
+  // The theme mirror stays live while the panel is open: source theme
+  // classes/attributes and the OS colour scheme are watched, the portaled
+  // panel never is, and close or unmount drops every subscription. View
+  // changes do not touch it: the panel element outlives them unchanged.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const element = panel.current;
+    if (!element) return;
+    return watchPortalTheme(element, trigger.current);
+  }, [open]);
 
   // The menu is context-bound: losing the surface (disabled or a changed
   // workspace binding) discards it immediately.
