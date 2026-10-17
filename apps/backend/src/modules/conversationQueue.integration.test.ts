@@ -2987,6 +2987,9 @@ suite("durable conversation queue steering", () => {
     const seeded = await seedSession();
     const provider = new SteeringConversationProvider();
     provider.drainSignals.push(gate());
+    // Hold the final so the test observes closed intake while still running,
+    // rather than racing an immediately completed synthetic response.
+    provider.finishSignals.push(gate());
     const runner = await startRunner(provider);
     try {
       await admitConversationQueueEntry(pool!, seeded.auth, {
@@ -3005,6 +3008,7 @@ suite("durable conversation queue steering", () => {
         idempotency_key: randomUUID(), session_id: seeded.sessionId, message_id: randomUUID(), objective: "迟到消息",
       });
       expect(late.response.steers_run_id).toBeUndefined();
+      provider.finishSignals[0]!.release();
       await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId)).every((row) => row.status === "completed"));
       // Late input after the final runs as the next task with its own turn.
       expect(provider.calls).toEqual(["主任务", "迟到消息"]);
@@ -3012,6 +3016,8 @@ suite("durable conversation queue steering", () => {
       expect(session.payload?.turns.map((turn) => turn.objective)).toEqual(["主任务", "迟到消息"]);
       expect(session.payload?.turns[0]?.steeredMessages).toBeUndefined();
     } finally {
+      provider.drainSignals[0]!.release();
+      provider.finishSignals[0]!.release();
       await runner.close();
       await removeProofAccount(seeded.accountId);
     }
