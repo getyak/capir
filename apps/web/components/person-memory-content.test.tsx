@@ -123,6 +123,43 @@ describe("person document interactions", () => {
     expect(host.querySelector("[data-memory-item='not-retained']")).toBeNull();
     expect(document.activeElement).toBe(button("原始摘录"));
   });
+  it("waits for the committed DOM when a frame runs before the final raw-page render", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
+    await mount([memory()], true); await click("原始摘录"); button("继续加载记忆").focus();
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory({ id: "not-retained", evidence_retained: false })], has_more: false }));
+    await click("继续加载记忆");
+    expect(host.querySelector("[data-memory-load-more]")).toBeNull();
+    expect(document.activeElement).toBe(button("原始摘录"));
+  });
+  it("focuses the saved replacement only after its edit button is committed", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
+    await mount(); await click("修改"); await draft("核对并保存的修改");
+    const replacement = memory({ id: "replacement", display_text: "核对并保存的修改", supersedes_id: "old", version: 2 });
+    fetcher.mockResolvedValueOnce(Response.json({ status: "active", item: replacement }))
+      .mockResolvedValueOnce(Response.json({ person_id: personId, items: [replacement], has_more: false }));
+    await click("保存修改");
+    expect(document.activeElement).toBe(host.querySelector("[data-memory-edit='replacement']"));
+  });
+  it("does not reclaim an already restored focus when refreshed items arrive", async () => {
+    await mount(); await click("修改"); await click("取消");
+    expect(document.activeElement).toBe(host.querySelector("[data-memory-edit='old']"));
+    button("原始摘录").focus();
+    await mount([memory(), memory({ id: "refreshed" })]);
+    expect(document.activeElement).toBe(button("原始摘录"));
+  });
+  it("does not carry an old focus request into another account and person", async () => {
+    await mount(); await click("修改");
+    const outside = document.createElement("button"); document.body.append(outside);
+    try {
+      await act(async () => {
+        button("取消").click();
+        root.render(createElement(PersonMemoryContent, { personId: "22222222-2222-4222-8222-222222222222", binding: "another-account", entryCapability: "another-entry", initialItems: [memory({ id: "another-record" })] }));
+        outside.focus();
+      });
+      expect(host.querySelector("textarea")).toBeNull();
+      expect(document.activeElement).toBe(outside);
+    } finally { outside.remove(); }
+  });
   it("keeps the reader's new focus when a delayed page finishes", async () => {
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
