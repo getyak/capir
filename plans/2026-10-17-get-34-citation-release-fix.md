@@ -275,3 +275,40 @@ control for this delay. Do not manufacture a prompt edit to reopen a call. New
 actionable runtime/provider evidence or a source defect must support the next
 explicit design and independent review; absent that evidence, retain the
 checkpoint without repeating model/deployment attempts.
+
+## Human-requested timeout root cause and transport repair
+
+The user requested active causal diagnosis instead of another blocked report.
+The earlier no-instrumented-rerun choice was ours, not a user requirement; bounded
+causal experiments are now explicitly authorized. Preserve all old failures.
+Unchanged source completed instrumented gateway controls in about21/15/22seconds;
+these exclude a deterministic deadlock, not the historical transient event.
+
+Actual SDK0.3.287 with a loopback-only synthetic Anthropic SSE server reproduced
+the historical signature: read/cite each once, three partial model frames and
+three observed output tokens, then host deadline before an SDK result. The
+confirmed configuration gap is that the gateway's native byte-idle recovery
+window is300seconds while this answer's entire host deadline is60seconds. A
+10second byte-idle counterfactual recovered both an empty and visible-text stall
+inside one SDK session in about10.3seconds, preserving read/cite execution and
+returning the complete expected final result. This demonstrates that failure
+class; the original event lacked wire telemetry and cannot be attributed to a
+specific lost packet or gateway phase retrospectively.
+
+Use the separately documented byte watchdog, not the300second-clamped event
+watchdog: https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs.
+For the affected Hao gateway only, interactive answers with an entirely trusted
+read-only manifest get a20second byte-idle policy inside the unchanged60second
+overall deadline. Keep one SDK query and the existing model, effort and budgets;
+no outer replay or budget reset. Other endpoints, autonomous runs and calls with
+Memory/calendar/file write capabilities keep their policy. A byte pause can also
+be normal slow inference/buffering: this is a measured interactive latency
+tradeoff, not proof all such pauses are network faults. Interrupted provider
+usage remains a lower bound; same-session recovery is not full billing proof.
+
+Verify constructor-to-SDK wiring and negative eligibility, fail closed on invalid
+idle/budget combinations, preserve caller cancel and overall deadline, and use
+actual SDK SSE recovery/partial/terminal/keepalive fixtures. Never convert a
+partial block into a final answer. Add bounded source-free phase receipt fields
+only if necessary to diagnose another failure. Full Agent/type/docs and
+independent review then the unchanged five real-model cases remain required.

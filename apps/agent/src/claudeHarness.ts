@@ -160,6 +160,8 @@ export interface ClaudeHarnessRequest {
   outputSchema?: Record<string, unknown>;
   /** Host-selected effort for measured latency/quality tradeoffs. */
   effort?: "low" | "medium" | "high";
+  /** Host-owned transport policy, shorter than the overall task deadline. */
+  byteStreamIdleTimeoutMs?: number;
   /** Recheck the account, source generation and lease before every capability. */
   assertCurrent(): Promise<void>;
   onText?: (text: string) => void;
@@ -190,7 +192,7 @@ export interface ClaudeHarnessResult {
   permissionDenials: string[];
   /** Provider-reported identifiers; distinct from the requested gateway alias. */
   reportedModels: string[];
-  /** Completed unique SDK assistant messages, not transport attempts/retries. */
+  /** Observed unique assistant message IDs; their content/usage may still be partial. */
   modelResponses?: number;
   /** Time to first completed assistant content-block receipt; not TTFB or final answer latency. */
   sdkTiming?: { initializedAfterMs: number | null; firstModelResponseAfterMs: number | null };
@@ -223,6 +225,7 @@ const SAFE_NAME = /^[a-z][a-z0-9_-]{0,63}$/u;
 const INTERRUPTION_CODES = new Set([
   "WORKSPACE_CONVERSATION_TIMEOUT",
   "CLAUDE_HARNESS_TIMEOUT", "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED", "CLAUDE_HARNESS_TOOL_BUDGET",
+  "CLAUDE_HARNESS_ERROR_MAX_TURNS",
   "CLAUDE_HARNESS_SESSION_INVALIDATED", "CLAUDE_HARNESS_SESSION_MIRROR_FAILED", "CLAUDE_HARNESS_SESSION_ID_MISMATCH",
   "CLAUDE_HARNESS_PREPARATION_STOP_NOT_REQUESTED",
   "CLAUDE_HARNESS_RESULT_MISSING", "HARNESS_SOURCE_CHANGED", "HARNESS_SESSION_BUSY", "HARNESS_SESSION_UNAVAILABLE",
@@ -338,6 +341,11 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   signal: AbortSignal, sdkQuery: typeof query, observation: RuntimeObservationSession | null, continuation?: HarnessContinuation): Promise<ClaudeHarnessResult> {
   const assertCurrent = async () => { await request.assertCurrent(); await continuation?.assertCurrent(); };
   validBudget(request.budget);
+  if (request.byteStreamIdleTimeoutMs !== undefined &&
+      (!Number.isSafeInteger(request.byteStreamIdleTimeoutMs) || request.byteStreamIdleTimeoutMs < 10_000 ||
+       request.byteStreamIdleTimeoutMs >= request.budget.maxDurationMs)) {
+    throw new Error("CLAUDE_HARNESS_STREAM_IDLE_BUDGET_INVALID");
+  }
   signal.throwIfAborted();
   const images = imageBlocks(request.images);
   const names = request.tools.map((entry) => entry.name);
@@ -620,6 +628,12 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       [configuration.credential.name]: configuration.credential.value,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.min(4_000, request.budget.maxTaskTokens)),
+      // Separate byte watchdog: the event watchdog clamps short values to 5min.
+      // https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs
+      ...(request.byteStreamIdleTimeoutMs !== undefined ? {
+        CLAUDE_ENABLE_BYTE_WATCHDOG: "1",
+        CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: String(request.byteStreamIdleTimeoutMs),
+      } : {}),
     };
     const options: Options = {
       cwd: directory, env, abortController: controller,

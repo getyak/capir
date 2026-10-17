@@ -40,6 +40,48 @@ describe("Claude harness deployment configuration", () => {
     expect(listed.tools.map((entry:any)=>entry.name)).toEqual(expect.arrayContaining(["memory_review","contact_workspace_search","contact_workspace_read","contact_workspace_propose_create","contact_workspace_propose_update"]));
     expect(listed.tools.find((entry:any)=>entry.name==="memory_review").inputSchema.properties.items).toBeDefined();
   });
+  it("enables native recovery only for read-only Hao answers inside their existing budget", async () => {
+    const hao = claudeHarnessConfiguration({ HAO_ANTHROPIC_API_KEY: "synthetic-key",
+      ANTHROPIC_BASE_URL: "https://api.hao.ai/anthropic", TALENT_SIGNAL_AGENT_MODEL: "anthropic/claude-sonnet-5" });
+    let expectedIdle: string | undefined = "20000";
+    let environment: Record<string, string | undefined> = {};
+    const sdk = queryMock(async ({ options }) => { environment = options.env; });
+    const checkIdle = () => {
+      expect(environment.CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS).toBe(expectedIdle);
+      expect(environment.CLAUDE_ENABLE_BYTE_WATCHDOG).toBe(expectedIdle ? "1" : undefined);
+    };
+    const execute = vi.fn((configuration, input, signal) => {
+      expect(input.budget.maxDurationMs).toBe(60_000);
+      expect(input.budget.maxEstimatedUsd).toBe(1);
+      return runClaudeHarness(configuration, input, signal, sdk.run as any, null);
+    });
+    await new ClaudeChatProvider(hao, execute).answer({ objective: "Read the record", context_blocks: [], allowed_citation_ids: [] });
+    checkIdle();
+    expectedIdle = undefined;
+    await new ClaudeChatProvider(config, execute).answer({ objective: "Hello", context_blocks: [], allowed_citation_ids: [] });
+    checkIdle();
+    await new ClaudeChatProvider(hao, execute).answer({ objective: "Review memory", context_blocks: [], allowed_citation_ids: [], memoryReview: {} as any });
+    checkIdle();
+    await runClaudeHarness(hao, request(), new AbortController().signal, sdk.run as any, null);
+    checkIdle();
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(sdk.run).toHaveBeenCalledTimes(4);
+  });
+  it("rejects idle windows that the SDK would clamp or that consume the whole deadline", async () => {
+    const sdk = queryMock();
+    for (const byteStreamIdleTimeoutMs of [0, 9_999, 30_000, NaN, Infinity]) {
+      await expect(runClaudeHarness(config, { ...request(), byteStreamIdleTimeoutMs },
+        new AbortController().signal, sdk.run as any, null)).rejects.toThrow("CLAUDE_HARNESS_STREAM_IDLE_BUDGET_INVALID");
+    }
+    expect(sdk.run).not.toHaveBeenCalled();
+  });
+  it("preserves the actual budget failure when native stream recovery exceeds the turn cap", async () => {
+    const sdk = queryMock(undefined, result({ num_turns: 4 }));
+    await expect(runClaudeHarness(config, { ...request(), budget: { ...request().budget, maxTurns: 3 } },
+      new AbortController().signal, sdk.run as any, null)).rejects.toMatchObject({
+        message: "CLAUDE_HARNESS_ERROR_MAX_TURNS", receipt: { terminalReason: "CLAUDE_HARNESS_ERROR_MAX_TURNS" },
+      });
+  });
   it("exposes opt-in protocol metadata without text, arguments or ungranted names",async()=>{
     const onProtocolMetadata=vi.fn();
     const sdk=()=>({close:vi.fn(),async *[Symbol.asyncIterator](){

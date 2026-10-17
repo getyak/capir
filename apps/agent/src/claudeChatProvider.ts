@@ -260,6 +260,10 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
         assistant_service_preference: responsePreferenceContext(request.responsePreference) }),
       ...(request.calendarContext ? { preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard } : {}),
       effort: "medium", budget: { ...DEFAULT_AGENT_BUDGET, maxDurationMs: 60_000 }, assertCurrent,
+      // Give the native SDK time to recover a silent gateway stream inside the
+      // same query/budget. Do not opt write-capable calls into that recovery.
+      ...(this.configuration.baseUrl === "https://api.hao.ai/anthropic" && tools.every(tool => tool.readOnly)
+        ? { byteStreamIdleTimeoutMs: 20_000 } : {}),
     }, abort.signal);
     await assertCurrent();
     const parsedOutput = splitFirstTurnSessionTitle(result.text, request.objective);
