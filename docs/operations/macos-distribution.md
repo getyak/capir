@@ -235,6 +235,19 @@ session; do not terminate it to make a shared-store test green. This isolated
 build is test evidence, not a replacement for the published signed app's release
 and first-launch acceptance.
 
+`CFFIXED_USER_HOME` alone is not a preferences boundary on macOS: the preferences
+daemon can still use the real user's app domain. Published-app acceptance instead
+runs on the existing disposable GitHub-hosted Mac. PR CI runs the bounded native
+keyboard/hidden-input regressions; the release job downloads the published ZIP,
+compares its verified bytes, checks its unchanged signature/version, and launches
+that exact app in a task-owned installation. This must pass before the update feed
+is promoted. `first-run-acceptance.sh` refuses local/self-hosted execution before
+changing settings, refuses a preconfigured workspace, temporarily enables native
+Keyboard Navigation on that disposable host and restores its prior setting. It
+strips release/provider credentials before XCTest and retains the result bundle
+and screenshots as bounded Actions evidence. It never resets a product domain or
+re-signs the published app to manufacture an isolated identity.
+
 Sources: [Apple Developer ID](https://developer.apple.com/developer-id/),
 [notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
 [GitHub workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows).
