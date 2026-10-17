@@ -207,6 +207,26 @@ bundled private origin, and bundle signature. Preserve requested deliverables
 before removing task build products through the storage guard. Native unit tests
 run through `scripts/macos/check.sh`; no iOS simulator is needed.
 
+The installer now builds a writable scratch image, mounts it under its explicit
+output directory, and generates its paper background and Finder layout before
+converting to the immutable compressed image. The build-only Swift package in
+`scripts/macos/installer/` pins DSStore 1.0.0 and its resolved revision; it never
+enters the installed app. Its Carbon Alias is made on the mounted deliverable
+volume, so a staging-folder alias cannot substitute for real Finder acceptance.
+Layout failure detaches only that scratch mount and retains failed build inputs
+in the task artifact for diagnosis. Inspect the final image in Finder as well as
+the generated metadata; a successful tool exit does not prove visual placement.
+
+When a signed client is already running, local native tests must use a separate
+test application identity; the production login registry correctly refuses a
+second owner. For an isolated test build, pass a quoted build-setting override,
+for example `'PRODUCT_BUNDLE_IDENTIFIER=com.getyak.acceptance.get48.$(TARGET_NAME)'`,
+to `xcodebuild`, together with task-owned DerivedData. The per-target suffix keeps
+app and test bundles distinct. Preserve the signed client's registry and running
+session; do not terminate it to make a shared-store test green. This isolated
+build is test evidence, not a replacement for the published signed app's release
+and first-launch acceptance.
+
 Sources: [Apple Developer ID](https://developer.apple.com/developer-id/),
 [notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
 [GitHub workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows).
