@@ -342,3 +342,39 @@ fulfilled and unknown prerequisite behavior must remain useful and grounded.
 This is a general purpose-bound output rule, not permission to relax any previous
 criterion. Compile all three modules again and record their hashes. Preserve all
 failed receipts, and do not retry an unchanged behavioral candidate.
+
+
+## Qualified source and remaining release gates
+
+The final behavioral candidate is `37d0a14f2bbf18ec025879f1c1a270f7adecce80`.
+All five original fixed actual-model cases completed with the three compiled
+modules read back by hash, native byte watchdog20000/1 and the original60s
+overall budget. Independent Codex reviewer `/root/get34_review` and the parent
+confirmed5/5 semantic passes. Earlier failed candidates and their mechanical
+versus business assessments remain in the GET-34 delivery evidence.
+
+| Case | Provider request | Independent result |
+| --- | --- | --- |
+| Single | 2e55e714-2209-472d-a036-b99ebb8b1408 | Conditional next step preserves the missing scope |
+| Multiple | bc70d7c0-0275-484a-a8e8-3f1af83bffaf | Relevant citation only; no unrelated disclosure |
+| Known meeting | 1c7ebcd7-3e46-4eb4-9c78-daee620e8594 | Exact recorded time and full scope placeholder |
+| Fulfilled prerequisite | cf5fcbdf-625a-4fab-8bba-178881c72759 | Progresses to availability without reasking scope |
+| Unknown prerequisite | 2ff29f58-7bf4-4655-88b9-bf30bee60f04 | Preserves unknown state and asks conditionally |
+
+Final local checks: Agent435 passed/9 skipped (eight new offline integration
+cases are opt-in), typecheck, compilation and documentation/architecture checks
+passed. The actual pinned SDK causal experiment has13 retained passing protocol
+receipts. The reusable repository helper was then independently reviewed; its
+quick complete and corrected phase-specific cancellation cases passed. Do not
+claim all eight newest helper modes were rerun. Historical exact helper hashes
+and failed test assumptions are retained separately. The observed SDK late
+recreation of a tiny debug log after immediate workspace cleanup is recorded;
+it is not a model success and is not represented as final zero-residue proof.
+
+Independent source review has no unresolved P0/P1. The complete follow-up diff
+against0f9a4be4 has SHA256
+`ae651f45a51636d89c4ea341078398cf949ce83dbecb58860a19423198005af5`.
+This qualifies entry to PR, not release completion. Verify the latest PR head's
+full CI/security and ruleset, merge, build clean canonical affected resident
+artifacts, verify live revisions and the original screenshot/no-action business
+matrix, and clean up the isolated test run before marking GET-34 Done.
