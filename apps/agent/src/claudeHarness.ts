@@ -21,6 +21,8 @@ type ObservedSDKAssistant = {
   model: string;
   usage: { input_tokens: number; output_tokens: number;
     cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | null;
+  /** Last known fixed-enum stop reason; never free-form provider text. */
+  stopReason: string | null;
   firstAt: string;
   lastAt: string;
 };
@@ -147,6 +149,14 @@ export interface ClaudeHarnessRequest {
   preparationReady?: () => boolean;
   /** New original input invalidates prepared output before any later display. */
   onPreparationSuperseded?: () => void;
+  /**
+   * Host-owned monotonic generation of the prepared output, starting at 0 and
+   * advanced only by accepted preparation staging or discard. Optional: a host
+   * without it stays fail-closed after steering, exactly as before. After an
+   * admitted original supersedes prepared output, only a strictly newer valid
+   * nonnegative safe generation can re-arm the preparation fast-stop.
+   */
+  preparationRevision?: () => number;
   systemPrompt: string;
   context?: string;
   images?: readonly AgentProviderInputPart[];
@@ -258,6 +268,31 @@ export function claudeHarnessInterruptionCode(error: unknown): string {
   return candidate && INTERRUPTION_CODES.has(candidate) ? candidate : "CLAUDE_HARNESS_RUN_INTERRUPTED";
 }
 const FORBIDDEN_BUILT_INS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch"];
+
+/** Bounded flat usage diagnostics survive metadata-only retention. A genuine
+ * zero stays zero; absent or invalid values stay null, never invented zeros. */
+function safeUsageCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Provider per-message raw input excludes cache reads/creation per the
+ * Anthropic contract. The total exists only when all three parts are
+ * explicitly known and their sum is a safe integer; otherwise it stays null. */
+function flatUsageDiagnostics(usage: ObservedSDKAssistant["usage"]) {
+  const raw = safeUsageCount(usage?.input_tokens);
+  const read = safeUsageCount(usage?.cache_read_input_tokens);
+  const creation = safeUsageCount(usage?.cache_creation_input_tokens);
+  const parts = [raw, read, creation];
+  const sum = (raw ?? 0) + (read ?? 0) + (creation ?? 0);
+  return {
+    sdk_input_tokens: raw,
+    sdk_output_tokens: safeUsageCount(usage?.output_tokens),
+    sdk_cache_read_input_tokens: read,
+    sdk_cache_creation_input_tokens: creation,
+    sdk_total_input_tokens: parts.every(part => part !== null) && Number.isSafeInteger(sum) ? sum : null,
+    sdk_usage_basis: "per_message_provider_reported_input_excludes_cache",
+  };
+}
 
 function validBudget(budget: AgentBudget) {
   for (const [name, value] of Object.entries(budget)) {
@@ -374,6 +409,12 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         cache_creation_input_tokens: frame.usage.cache_creation_input_tokens ?? null, source: "provider" }
         : { source: "unavailable" },
       timing_basis: "sdk_message_frame_receipt_window",
+      // Flat primitives alongside the full-source fields above: a failed or
+      // source-less receipt keeps bounded usage identity. The raw SDK message
+      // ID never enters this block; only its lowercase SHA-256 does.
+      sdk_message_id_sha256: createHash("sha256").update(frame.id).digest("hex"),
+      ...flatUsageDiagnostics(frame.usage),
+      sdk_stop_reason: frame.stopReason,
     }, { startedAt: frame.firstAt, finishedAt: frame.lastAt, secrets: captureSecrets });
   };
   // Host-supplied request fields, explicitly not the SDK/provider wire request.
@@ -410,6 +451,33 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   const toolCompletions: HarnessToolCompletion[] = [];
   let preparationStopped = false;
   let preparationSuperseded = false;
+  /** Generation floor invalidated by the latest admitted steering batch, or
+   * null while no batch superseded prepared output / no valid floor exists. */
+  let preparationInvalidatedRevision: number | null = null;
+  /** High-water mark of admissible observations; they must never regress. */
+  let preparationRevisionHigh: number | null = null;
+  // Host generations are observed as nonnegative safe integers, monotonically.
+  // An invalid, regressing or thrown observation is never admissible and fails
+  // closed: it can never re-arm the preparation fast-stop.
+  const observePreparationRevision = (): number | null => {
+    if (!request.preparationRevision) return null;
+    let value: unknown;
+    try { value = request.preparationRevision(); } catch { return null; }
+    const revision = typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+    if (revision === null || (preparationRevisionHigh !== null && revision < preparationRevisionHigh)) return null;
+    preparationRevisionHigh = revision;
+    return revision;
+  };
+  // The fast-stop stays armed before the first admitted steering batch exactly
+  // as legacy hosts behave. After supersession, a legacy host stays fail-closed
+  // and a generation host re-arms only past the invalidated floor: an old or
+  // constant draft, unchanged readiness or unrelated success cannot stop.
+  const preparationArmed = (): boolean => {
+    if (!preparationSuperseded) return true;
+    if (!request.preparationRevision || preparationInvalidatedRevision === null) return false;
+    const current = observePreparationRevision();
+    return current !== null && current > preparationInvalidatedRevision;
+  };
   let primaryToolCompleted = false;
   let preparationToolFailed = false;
   let pendingSteering: HarnessSteeringBatch | null = null;
@@ -439,6 +507,9 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     }
     preparationSuperseded = true;
     request.onPreparationSuperseded?.();
+    // Host generation floor: capture only after the existing discard, so any
+    // later valid draft must carry a strictly newer generation to re-arm.
+    preparationInvalidatedRevision = observePreparationRevision();
     pendingSteering = batch;
     // Original human input is scoped task context. It creates no new grants
     // and cannot turn generated artifacts into approval for external writes.
@@ -678,7 +749,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
             await assertCurrent();
             assertBudget();
             const ready = !request.outputSchema && primaryToolCompleted && !preparationToolFailed
-              && !preparationSuperseded && request.preparationReady?.() === true;
+              && preparationArmed() && request.preparationReady?.() === true;
             const context = await steeringContext(ready);
             if (context) {
               // The old draft cannot terminate a task with newly admitted originals.
@@ -687,6 +758,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
             if (ready) {
               await assertCurrent();
               assertBudget();
+              // Re-read host generation and readiness after the async
+              // source/lease and budget fences: only the still-current valid
+              // preparation may terminate the task.
+              if (!preparationArmed() || request.preparationReady?.() !== true) return {};
               preparationStopped = true;
               // Stop after the entire batch, before another model call.
               // https://code.claude.com/docs/en/hooks#posttoolbatch
@@ -768,8 +843,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
           // Upsert by SDK message ID: repeated frames for one message are one span.
           const receivedAt = new Date().toISOString();
           const previous = modelFrames.get(message.message.id);
+          const stop = message.message.stop_reason && safeStops.has(message.message.stop_reason) ? message.message.stop_reason : null;
           modelFrames.set(message.message.id, { body: message.message, id: message.message.id,
             model: message.message.model, usage: message.message.usage ?? null,
+            stopReason: stop ?? previous?.stopReason ?? null,
             firstAt: previous?.firstAt ?? receivedAt, lastAt: receivedAt });
         }
         const usage = message.message.usage;

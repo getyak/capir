@@ -49,9 +49,15 @@ export async function saveProductRunOutput(client: Pool | PoolClient, match: { i
 }
 
 const omitted = () => ({ status: "unavailable" as const, original_bytes: 0, retained_bytes: 0, sha256: null });
+// One shared allowlist for both the sink placeholder and cleanupSQL. The flat
+// sdk_* usage keys are bounded numeric/string diagnostics hashed upstream; the
+// raw SDK message id and nested usage stay full-source only. Every value must
+// remain a flat primitive, so this list never widens retained metadata.
 const metadataKeys = ["model", "provider", "prompt_revision", "input_tokens", "output_tokens", "duration_ms", "usage", "cost_usd", "session_id", "message_id", "queue_entry_id", "run_id", "task_id", "attempt",
     "failure_code", "sdk_initialized_ms", "sdk_first_response_ms", "model_responses", "tool_calls", "usage_complete",
-    "api_retry_count", "last_api_status", "sdk_session_id", "phase"];
+    "api_retry_count", "last_api_status", "sdk_session_id", "phase",
+    "sdk_message_id_sha256", "sdk_input_tokens", "sdk_output_tokens", "sdk_cache_read_input_tokens",
+    "sdk_cache_creation_input_tokens", "sdk_total_input_tokens", "sdk_usage_basis", "sdk_stop_reason"];
 export function metadataOnlyProductSpan<T extends { input: unknown; output: unknown; error: string | null; metadata: Record<string, unknown> }>(span: T) {
 
   return { ...span, input: omitted(), output: omitted(), error: span.error ? "Operation failed" : null,

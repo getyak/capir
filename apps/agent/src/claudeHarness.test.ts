@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ClaudeChatProvider } from "./claudeChatProvider.js";
 import { WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES } from "./types.js";
 import { runClaudeHarness, claudeHarnessInterruptionCode, type ClaudeHarnessRequest } from "./claudeHarness.js";
+import { withProductRunCapture, type ProductRunSpan } from "./productRunCapture.js";
 import { claudeHarnessConfiguration, claudeHarnessConfigurationReceipt } from "./claudeHarnessConfiguration.js";
 
 const config = claudeHarnessConfiguration({ ANTHROPIC_API_KEY: "synthetic-secret", TALENT_SIGNAL_AGENT_MODEL: "synthetic-model" });
@@ -509,5 +510,116 @@ describe("SDK-owned harness", () => {
     });
     const overBudget = queryMock(undefined, result({ modelUsage: { synthetic: { inputTokens: 1200, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } } }));
     await expect(runClaudeHarness(config, request(), new AbortController().signal, overBudget.run as any)).rejects.toThrow("TOKEN_BUDGET_EXHAUSTED");
+  });
+});
+
+describe("bounded flat SDK usage diagnostics", () => {
+  // The new flat keys must never carry raw SDK identity or prose; only the
+  // hashed id and bounded counts survive metadata-only retention.
+  const flatKeys = (metadata: Record<string, unknown>) => Object.fromEntries(Object.entries(metadata)
+    .filter(([key]) => key.startsWith("sdk_") && key !== "sdk_message_id"));
+  const collector = () => { const spans: ProductRunSpan[] = []; return { spans, sink: { async append(span: ProductRunSpan) { spans.push(span); } } }; };
+
+  it("records one hashed flat-usage leaf per SDK message id with raw-vs-total counts and null-never-invented gaps", async () => {
+    const { spans, sink } = collector();
+    const sdk = vi.fn(() => ({ close: vi.fn(), async *[Symbol.asyncIterator]() {
+      yield { type: "assistant", message: { id: "assistant-one", model: "synthetic-model",
+        content: [{ type: "text", text: "PRIVATE_FRAME_PROSE" }],
+        usage: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 7, cache_creation_input_tokens: 2 } } };
+      // A repeated frame for one SDK message id upserts the same leaf with updated usage.
+      yield { type: "assistant", message: { id: "assistant-one", model: "synthetic-model",
+        content: [{ type: "text", text: "PRIVATE_FRAME_PROSE" }], stop_reason: "end_turn",
+        usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 7, cache_creation_input_tokens: 2 } } };
+      // Explicit genuine zeros are counts, not gaps.
+      yield { type: "assistant", message: { id: "assistant-two", model: "synthetic-model", content: [], stop_reason: "tool_use",
+        usage: { input_tokens: 4, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } };
+      // Each part is a nonnegative safe integer but the sum is not: the total stays null.
+      yield { type: "assistant", message: { id: "assistant-three", model: "synthetic-model", content: [],
+        usage: { input_tokens: Number.MAX_SAFE_INTEGER - 1, output_tokens: 2, cache_read_input_tokens: 2, cache_creation_input_tokens: 1 } } };
+      // Absent cache parts and an unknown stop reason stay null.
+      yield { type: "assistant", message: { id: "assistant-four", model: "synthetic-model", content: [], stop_reason: "PRIVATE_UNKNOWN_STOP",
+        usage: { input_tokens: 5, output_tokens: 2 } } };
+      yield result({ modelUsage: { synthetic: { inputTokens: 5, outputTokens: 7, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } } });
+    } }));
+    const outcome = await withProductRunCapture(sink, () => runClaudeHarness(config,
+      { ...request(), budget: { ...request().budget, maxTaskTokens: 10_000_000_000_000_000 } },
+      new AbortController().signal, sdk as any, null));
+    const leaves = spans.filter(span => span.name === "harness.sdk.assistant");
+    expect(leaves).toHaveLength(4);
+    const byID: Record<string, Record<string, unknown>> = Object.fromEntries(
+      leaves.map(span => [span.metadata.sdk_message_id as string, span.metadata] as const));
+    expect(Object.keys(byID).sort()).toEqual(["assistant-one", "assistant-three", "assistant-two", "assistant-four"].sort());
+    expect(byID["assistant-one"]!).toMatchObject({
+      sdk_message_id_sha256: createHash("sha256").update("assistant-one").digest("hex"),
+      sdk_input_tokens: 12, sdk_output_tokens: 4, sdk_cache_read_input_tokens: 7, sdk_cache_creation_input_tokens: 2,
+      sdk_total_input_tokens: 21, sdk_usage_basis: "per_message_provider_reported_input_excludes_cache", sdk_stop_reason: "end_turn",
+      // Existing full-source nested usage compatibility stays untouched.
+      usage: { input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 7, cache_creation_input_tokens: 2, source: "provider" },
+    });
+    expect(String(byID["assistant-one"]!.sdk_message_id_sha256)).toMatch(/^[0-9a-f]{64}$/);
+    expect(byID["assistant-two"]!).toMatchObject({ sdk_input_tokens: 4, sdk_output_tokens: 1,
+      sdk_cache_read_input_tokens: 0, sdk_cache_creation_input_tokens: 0, sdk_total_input_tokens: 4, sdk_stop_reason: "tool_use" });
+    expect(byID["assistant-two"]!.sdk_cache_read_input_tokens).toBe(0);
+    expect(byID["assistant-three"]!).toMatchObject({ sdk_input_tokens: Number.MAX_SAFE_INTEGER - 1, sdk_output_tokens: 2,
+      sdk_cache_read_input_tokens: 2, sdk_cache_creation_input_tokens: 1, sdk_total_input_tokens: null, sdk_stop_reason: null });
+    expect(byID["assistant-four"]!).toMatchObject({ sdk_input_tokens: 5, sdk_output_tokens: 2,
+      sdk_cache_read_input_tokens: null, sdk_cache_creation_input_tokens: null, sdk_total_input_tokens: null, sdk_stop_reason: null });
+    for (const metadata of Object.values(byID)) expect(metadata!.sdk_usage_basis).toBe("per_message_provider_reported_input_excludes_cache");
+    // No raw SDK message id or model prose may enter the new flat metadata.
+    const flat = JSON.stringify(Object.values(byID).map(flatKeys));
+    expect(flat).not.toContain("assistant-");
+    expect(flat).not.toContain("PRIVATE_");
+    // Aggregate map/high-water accounting is unchanged: raw leaves exclude
+    // cache while the observed totals still include it.
+    expect(outcome.modelResponses).toBe(4);
+    expect(outcome.outputTokens).toBe(4 + 1 + 2 + 2);
+    // assistant-four has no cache parts; the aggregate still counts its raw 5.
+    expect(outcome.inputTokens).toBe(21 + 4 + (Number.MAX_SAFE_INTEGER - 1 + 2 + 1) + 5);
+  });
+
+  it.each([
+    ["genuine zero", 0, 0], ["negative", -1, null], ["fractional", 0.5, null],
+    ["string", "3", null], ["unsafe integer", Number.MAX_SAFE_INTEGER + 1, null],
+    ["missing", undefined, null], ["explicit null", null, null],
+  ] as const)("preserves %s counts without coercion or invented zeros", async (_label, value, expected) => {
+    const { spans, sink } = collector();
+    const run = vi.fn(() => ({ close: vi.fn(), async *[Symbol.asyncIterator]() {
+      yield { type: "assistant", message: { id: "count-boundary", model: "synthetic-model", content: [],
+        usage: { input_tokens: value, output_tokens: value,
+          cache_read_input_tokens: value, cache_creation_input_tokens: value } } };
+      throw new Error("Synthetic interruption after one observed frame");
+    } }));
+    // A malformed provider count can independently trip the unchanged budget
+    // path. Either interruption must still retain exactly one diagnostic leaf.
+    await withProductRunCapture(sink, () => runClaudeHarness(config, request(),
+      new AbortController().signal, run as any, null)).catch(() => undefined);
+    const leaves = spans.filter(span => span.name === "harness.sdk.assistant");
+    expect(leaves).toHaveLength(1);
+    expect(leaves[0]!.metadata).toMatchObject({ sdk_input_tokens: expected, sdk_output_tokens: expected,
+      sdk_cache_read_input_tokens: expected, sdk_cache_creation_input_tokens: expected,
+      sdk_total_input_tokens: expected === 0 ? 0 : null });
+  });
+
+  it("keeps the bounded flat leaves on a failed run without a terminal SDK receipt", async () => {
+    const { spans, sink } = collector();
+    const run = vi.fn(() => ({ close: vi.fn(), async *[Symbol.asyncIterator]() {
+      yield { type: "assistant", session_id: "synthetic-partial-session", message: { id: "assistant-partial", model: "synthetic-model",
+        content: [{ type: "text", text: "PRIVATE_PARTIAL_PROSE" }],
+        usage: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 7, cache_creation_input_tokens: 2 } } };
+      throw new Error("transport detail containing private provider data");
+    } }));
+    await expect(withProductRunCapture(sink, () => runClaudeHarness(config, request(),
+      new AbortController().signal, run as any, null))).rejects.toMatchObject({
+        name: "ClaudeHarnessInterruption", message: "CLAUDE_HARNESS_RUN_INTERRUPTED" });
+    const leaves = spans.filter(span => span.name === "harness.sdk.assistant");
+    expect(leaves).toHaveLength(1);
+    expect(leaves[0]!.metadata).toMatchObject({
+      sdk_message_id_sha256: createHash("sha256").update("assistant-partial").digest("hex"),
+      sdk_input_tokens: 10, sdk_output_tokens: 3, sdk_cache_read_input_tokens: 7, sdk_cache_creation_input_tokens: 2,
+      sdk_total_input_tokens: 19, sdk_usage_basis: "per_message_provider_reported_input_excludes_cache", sdk_stop_reason: null,
+    });
+    const flat = JSON.stringify(flatKeys(leaves[0]!.metadata));
+    expect(flat).not.toContain("assistant-partial");
+    expect(flat).not.toContain("PRIVATE_");
   });
 });
