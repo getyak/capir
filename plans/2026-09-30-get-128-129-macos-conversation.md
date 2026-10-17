@@ -117,3 +117,40 @@ Existing durable queue and SSE remain authority; stage transitions must never im
   legacy recovery compares the exact owned response and rejects body tampering.
 - Full Memory DB regression: 86 passed. Backend unit regression: 825 passed,
   393 optional fixture skips. No provisional failure was counted as success.
+
+## Bounded SDK usage diagnostics follow-up (2026-10-18)
+
+- First real-provider steering attempt recorded, not passed. Installed Mac
+  0.2.8 (125) with resident Web/backend 7f5dd62 observed two distinct SDK
+  assistant events; aggregate 39295 input / 9 output tokens hit the unchanged
+  32000 maxTaskTokens cap after 33s (`MODEL_RUN_TOKEN_BUDGET_EXHAUSTED`).
+  Supplements B/C were admitted into the same Run and stayed dispatching;
+  none was delivered and no final turn followed. There is no evidence yet of
+  double counting, and this record claims no root cause.
+- Confirmed evidence gap only: `claudeHarness.ts` flushes each assistant frame
+  with nested `metadata.usage` and raw `sdk_message_id`, while
+  `metadataOnlyProductSpan`/cleanupSQL retain only whitelisted flat primitive
+  values. Failed or source-less receipts therefore permanently lose per-frame
+  raw/cache usage and stable SDK identity.
+- This slice adds bounded flat primitive diagnostic keys beside the unchanged
+  full-source fields: `sdk_message_id_sha256` (lowercase 64-hex SHA-256 of the
+  actual SDK message ID, never the raw ID), `sdk_input_tokens` (provider raw
+  input excluding cache per the Anthropic contract), `sdk_output_tokens`,
+  `sdk_cache_read_input_tokens`, `sdk_cache_creation_input_tokens`,
+  `sdk_total_input_tokens` (raw+read+creation only when all three are
+  explicitly known and the sum is safe, otherwise null), fixed
+  `sdk_usage_basis`, and `sdk_stop_reason` from the known stop enum or null.
+  Missing or invalid values stay null; a genuine zero stays zero. The raw ID,
+  nested `metadata.usage`, full-source bodies and the existing
+  message-ID-upsert deduplication are unchanged.
+- Unchanged on purpose: `messageUsage` map/aggregate high-water accounting,
+  all runtime budgets and the 32000 maxTaskTokens cap, tool capabilities,
+  model/default selection, observation policy/exposure and retention/expiry.
+  No usage ledger, counter or fetch changes.
+- Focused red/green tests cover distinct and repeated SDK message IDs, hashed
+  identity, raw-vs-total counts, genuine-zero vs absent-null, unsafe-sum-null,
+  unknown/absent stop reasons, the failed-run leaf path, backend
+  metadataOnly/cleanup shared keys and unchanged aggregate exhaustion.
+- Next: independent review, resident deployment, then one diagnosed actual
+  retry at the unchanged 32000 budget before deciding functional fix vs
+  blocker.

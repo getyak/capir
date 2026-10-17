@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { captureProductStep, captureObservationContent, withProductRunCapture } from "@talent-signal/agent";
 import { registerProductRunMonitoring, ProductRunService } from "./productRuns.js";
 import { inTransaction } from "../database/pool.js";
-import { saveProductRunOutput, productRunSink } from "./productRunStorage.js";
+import { saveProductRunOutput, productRunSink, metadataOnlyProductSpan, cleanupProductRunSources } from "./productRunStorage.js";
 import type { AuthContext } from "./auth.js";
 
 const database = process.env.PRODUCT_RUN_TEST_DATABASE_URL;
@@ -192,6 +192,34 @@ suite('product runs and durable feedback',()=>{
     await saveProductRunOutput(pool!,{id:initial.run.id,taskID:fixture.id},{task_id:fixture.id,revision:3,summary:marker},'running');
     const lateOutput=await pool!.query('SELECT output FROM product_runs WHERE id=$1',[initial.run.id]);
     expect(JSON.stringify(lateOutput.rows)).not.toContain(marker);
+  });
+  it('keeps the shared bounded usage diagnostics when cleanup strips failed source content',async()=>{
+    // Last on purpose: cleanup is account-wide and every earlier fixture keeps its own assertions.
+    const fixture=await run('web',true);
+    const runID=fixture.response.headers['x-talent-signal-run-id'] as string;
+    const timestamp=new Date().toISOString();
+    const full={id:randomUUID(),parent_id:null,name:'harness.sdk.assistant',kind:'llm',started_at:timestamp,finished_at:timestamp,status:'completed',
+      input:captureObservationContent({objective:'synthetic private body'},2000),
+      output:captureObservationContent({content:[{text:'synthetic private answer'}]},2000),
+      metadata:{model:'claude-sonnet-5',provider:'claude-agent-sdk',input_tokens:12,output_tokens:4,duration_ms:33020,
+        sdk_message_id:'synthetic-raw-sdk-id',
+        usage:{input_tokens:12,output_tokens:4,cache_read_input_tokens:7,cache_creation_input_tokens:2,source:'provider'},
+        sdk_message_id_sha256:'a'.repeat(64),sdk_input_tokens:12,sdk_output_tokens:4,sdk_cache_read_input_tokens:7,
+        sdk_cache_creation_input_tokens:2,sdk_total_input_tokens:21,
+        sdk_usage_basis:'per_message_provider_reported_input_excludes_cache',sdk_stop_reason:null,
+        synthetic_nested:{secret:'synthetic nested secret'},synthetic_unrecognized:'synthetic unrecognized key'},
+      error:null};
+    await pool!.query('INSERT INTO product_run_spans(id,run_id,span) VALUES($1,$2,$3::jsonb)',[full.id,runID,JSON.stringify(full)]);
+    await cleanupProductRunSources(pool!);
+    const row=(await pool!.query<{span:unknown}>('SELECT span FROM product_run_spans WHERE id=$1',[full.id])).rows[0];
+    // cleanupSQL and the read-side projection retain one shared key list.
+    expect(row?.span).toEqual(metadataOnlyProductSpan(full));
+    const serialized=JSON.stringify(row?.span??null);
+    expect(serialized).not.toContain('synthetic private body');
+    expect(serialized).not.toContain('synthetic private answer');
+    expect(serialized).not.toContain('synthetic-raw-sdk-id');
+    expect(serialized).not.toContain('synthetic nested secret');
+    expect(serialized).not.toContain('synthetic unrecognized key');
   });
 
 });

@@ -21,6 +21,8 @@ type ObservedSDKAssistant = {
   model: string;
   usage: { input_tokens: number; output_tokens: number;
     cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | null;
+  /** Last known fixed-enum stop reason; never free-form provider text. */
+  stopReason: string | null;
   firstAt: string;
   lastAt: string;
 };
@@ -259,6 +261,31 @@ export function claudeHarnessInterruptionCode(error: unknown): string {
 }
 const FORBIDDEN_BUILT_INS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch"];
 
+/** Bounded flat usage diagnostics survive metadata-only retention. A genuine
+ * zero stays zero; absent or invalid values stay null, never invented zeros. */
+function safeUsageCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Provider per-message raw input excludes cache reads/creation per the
+ * Anthropic contract. The total exists only when all three parts are
+ * explicitly known and their sum is a safe integer; otherwise it stays null. */
+function flatUsageDiagnostics(usage: ObservedSDKAssistant["usage"]) {
+  const raw = safeUsageCount(usage?.input_tokens);
+  const read = safeUsageCount(usage?.cache_read_input_tokens);
+  const creation = safeUsageCount(usage?.cache_creation_input_tokens);
+  const parts = [raw, read, creation];
+  const sum = (raw ?? 0) + (read ?? 0) + (creation ?? 0);
+  return {
+    sdk_input_tokens: raw,
+    sdk_output_tokens: safeUsageCount(usage?.output_tokens),
+    sdk_cache_read_input_tokens: read,
+    sdk_cache_creation_input_tokens: creation,
+    sdk_total_input_tokens: parts.every(part => part !== null) && Number.isSafeInteger(sum) ? sum : null,
+    sdk_usage_basis: "per_message_provider_reported_input_excludes_cache",
+  };
+}
+
 function validBudget(budget: AgentBudget) {
   for (const [name, value] of Object.entries(budget)) {
     if (!Number.isFinite(value) || value <= 0 || (name !== "maxEstimatedUsd" && !Number.isInteger(value))) {
@@ -374,6 +401,12 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         cache_creation_input_tokens: frame.usage.cache_creation_input_tokens ?? null, source: "provider" }
         : { source: "unavailable" },
       timing_basis: "sdk_message_frame_receipt_window",
+      // Flat primitives alongside the full-source fields above: a failed or
+      // source-less receipt keeps bounded usage identity. The raw SDK message
+      // ID never enters this block; only its lowercase SHA-256 does.
+      sdk_message_id_sha256: createHash("sha256").update(frame.id).digest("hex"),
+      ...flatUsageDiagnostics(frame.usage),
+      sdk_stop_reason: frame.stopReason,
     }, { startedAt: frame.firstAt, finishedAt: frame.lastAt, secrets: captureSecrets });
   };
   // Host-supplied request fields, explicitly not the SDK/provider wire request.
@@ -768,8 +801,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
           // Upsert by SDK message ID: repeated frames for one message are one span.
           const receivedAt = new Date().toISOString();
           const previous = modelFrames.get(message.message.id);
+          const stop = message.message.stop_reason && safeStops.has(message.message.stop_reason) ? message.message.stop_reason : null;
           modelFrames.set(message.message.id, { body: message.message, id: message.message.id,
             model: message.message.model, usage: message.message.usage ?? null,
+            stopReason: stop ?? previous?.stopReason ?? null,
             firstAt: previous?.firstAt ?? receivedAt, lastAt: receivedAt });
         }
         const usage = message.message.usage;
