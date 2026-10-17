@@ -99,6 +99,11 @@
 .stateText { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.7; margin: 12px 0 0; overflow-wrap: anywhere; }
 .main button:focus-visible, .main a:focus-visible, .main summary:focus-visible, .main textarea:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .memoryItem:focus-visible, .readingParagraph:focus-visible, .rawItem:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+/* Browser focus scrolling must leave room for the fixed workspace chrome. */
+.main :is(button, a, summary, textarea, [data-memory-item]) { scroll-margin-top: 88px; scroll-margin-bottom: 20px; }
+@media (max-width: 760px) {
+  .main :is(button, a, summary, textarea, [data-memory-item]) { scroll-margin-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
+}
 @media (max-width: 860px) {
   .main { padding: 20px 24px 76px; }
   .columns { gap: 32px; grid-template-columns: minmax(0, 1fr); margin-top: 23px; }

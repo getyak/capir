@@ -1,7 +1,7 @@
 import type { UnscopedChatTaskRequest } from "@talent-signal/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { createEnvironmentChatAnswerProvider, type RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
 import { executeUnscopedChatTask } from "./unscopedChat.js";
 import { readAgentSessionConversation } from "./agentSessions.js";
 import type { DatabaseClient } from "../database/pool.js";
@@ -26,6 +26,31 @@ describe("unscoped Agent conversation", () => {
     expect(execution.remoteStatus).toBe("fallback");
     expect(execution.remoteFailureCode).toBeUndefined();
     expect(execution.body.external_effects).toEqual([]);
+  });
+
+  it.each(["network", "http500", "wrong-model"])("does not retry the actual DeepSeek host provider after %s", async failure => {
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      if (failure === "network") throw new Error("synthetic transport failure");
+      if (failure === "http500") return new Response("synthetic failure", { status: 500 });
+      return Response.json({ model: "different-model", choices: [{ message: { content: JSON.stringify({
+        kind: "answer", title: "Synthetic", body: "Synthetic response", citation_ids: [],
+      }) } }] });
+    });
+    const provider = createEnvironmentChatAnswerProvider({ TALENT_SIGNAL_ALLOW_REMOTE_CHAT_PROCESSING: "true", TALENT_SIGNAL_CHAT_PROVIDER: "deepseek",
+      TALENT_SIGNAL_CHAT_MODEL: "deepseek-flash", DEEPSEEK_API_KEY: "synthetic-only" }, fetcher);
+    expect(provider?.providerId).toBe("deepseek-chat-completions");
+    const execution = await executeUnscopedChatTask({ request, provider });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(execution.remoteStatus).toBe("fallback");
+    expect(execution.body.external_effects).toEqual([]);
+  });
+
+  it("preserves the existing GLM host fallback attempt", async () => {
+    const answer = vi.fn(async () => { throw new Error("synthetic GLM failure"); });
+    await executeUnscopedChatTask({ request, provider: {
+      providerId: "zhipu-chat-completions", model: "glm-5.3", supportsImageInput: false, answer,
+    } });
+    expect(answer).toHaveBeenCalledTimes(2);
   });
 
   it("retains only a bounded timeout code from an SDK failure", async () => {

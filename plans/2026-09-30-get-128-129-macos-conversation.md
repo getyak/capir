@@ -1,4 +1,18 @@
 # GET-128 / GET-129 — macOS home and conversation
+## Installed Mac follow-up (2026-10-18)
+
+The signed/notarized installed Mac 0.2.8 (125), resident Web 44e1757, and the
+authorized default test workspace now have direct home, 248/72px sidebar,
+person-context readback and Escape-to-opener evidence. Fixtures are explicitly
+synthetic, with an empty saved conversation and no model request. They do not
+establish GET-128's real-provider steering acceptance.
+
+Independent review found dark sidebar labels at approximately 2.8:1 after a
+68% Web tint composited over light AppKit material. This follow-up makes the
+dark native tint dominant while retaining the light theme and opaque
+reduced-transparency fallback. Delivery still requires current-head CI, a clean
+resident Web deployment, and installed Mac contrast/motion revalidation.
+
 ## Outcome and boundary
 Deliver the referenced Figma desktop conversation composition and a quiet IM-style Agent execution surface on the resident Web workspace used by macOS. Keep shared Web behavior coherent. No iOS or native permissions/auth changes, no live customer records, and no execution authority from generated text.
 ## Baseline and references

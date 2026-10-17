@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PencilSimple, ArrowSquareOut, CaretDown } from "@phosphor-icons/react";
 import type { MemoryRecallItem, PersonDirectoryItem } from "@talent-signal/contracts";
@@ -12,6 +12,10 @@ import { validReturnSessionId, withReturnSession } from "./session-return-naviga
 import styles from "@/app/workspace/people/[id]/person-memory.module.css";
 
 type Mode = "memory" | "reading" | "raw";
+type FocusRequest = { binding: string; personId: string } & (
+  { kind: "edit"; id: string } |
+  { kind: "page"; previous: Set<string | undefined>; button: HTMLButtonElement | null | undefined }
+);
 
 function SourceExcerpts({ item }: { item: MemoryRecallItem }) {
   const refs = memorySources(item);
@@ -78,21 +82,36 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   const controller = usePersonMemory({ personId, binding, entryCapability, items: initialItems, hasMore, nextCursor });
   const [mode, setMode] = useState<Mode>("memory");
   const root = useRef<HTMLDivElement>(null);
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
+  const handledFocus = useRef<FocusRequest | null>(null);
   const ordinary = controller.items.filter(item => !researchNoteMetadata(item));
   const research = controller.items.filter(item => item.evidence_retained && researchNoteMetadata(item));
   const groups = memoryGroups(ordinary);
   const raw = ordinary.filter(item => memorySources(item).length > 0);
   const edit = controller.edit;
 
-  function restoreFocus(id: string) {
-    requestAnimationFrame(() => {
-      // Editing replaces the original button. Resolve its newly mounted node;
-      // a removed/superseded item returns to the active reading mode instead.
+  useLayoutEffect(() => {
+    if (!focusRequest || handledFocus.current === focusRequest) return;
+    if (focusRequest.kind === "edit" ? controller.edit !== null : controller.loadingMore) return;
+    handledFocus.current = focusRequest;
+    if (focusRequest.binding !== binding || focusRequest.personId !== personId) return;
+    const modeButton = root.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
+    if (focusRequest.kind === "edit") {
       const button = Array.from(root.current?.querySelectorAll<HTMLButtonElement>("[data-memory-edit]") ?? [])
-        .find(element => element.dataset.memoryEdit === id)
-        ?? root.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
-      button?.focus();
-    });
+        .find(element => element.dataset.memoryEdit === focusRequest.id);
+      (button ?? modeButton)?.focus();
+      return;
+    }
+    const active = document.activeElement;
+    if (active !== focusRequest.button && active !== document.body && active?.isConnected) return;
+    const firstNew = Array.from(root.current?.querySelectorAll<HTMLElement>("[data-memory-item]") ?? [])
+      .find(element => !focusRequest.previous.has(element.dataset.memoryItem));
+    (firstNew ?? root.current?.querySelector<HTMLElement>("[data-memory-load-more]") ?? modeButton)?.focus();
+  }, [focusRequest, controller.edit, controller.loadingMore, controller.items, controller.hasMore, binding, personId]);
+
+  function restoreFocus(id: string) {
+    // Wait for React's DOM commit, which may happen after the next frame.
+    setFocusRequest({ kind: "edit", id, binding, personId });
   }
   async function save() {
     const id = await controller.save();
@@ -103,16 +122,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
     const previous = new Set(Array.from(root.current?.querySelectorAll<HTMLElement>("[data-memory-item]") ?? [])
       .map(element => element.dataset.memoryItem));
     if (!await controller.loadMore()) return;
-    requestAnimationFrame(() => {
-      // Do not reclaim focus if the reader moved to another control while waiting.
-      const active = document.activeElement;
-      if (active !== loadingButton && active !== document.body && active?.isConnected) return;
-      const firstNew = Array.from(root.current?.querySelectorAll<HTMLElement>("[data-memory-item]") ?? [])
-        .find(element => !previous.has(element.dataset.memoryItem));
-      const target = firstNew ?? root.current?.querySelector<HTMLElement>("[data-memory-load-more]")
-        ?? root.current?.querySelector<HTMLElement>('button[aria-pressed="true"]');
-      target?.focus();
-    });
+    setFocusRequest({ kind: "page", previous, button: loadingButton, binding, personId });
   }
   function contextLink(item: MemoryRecallItem) {
     const context = contexts.find(entry => entry.id === item.relationship_context_id);
