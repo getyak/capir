@@ -76,6 +76,20 @@ describe("person document interactions", () => {
     expect(fetcher).not.toHaveBeenCalled(); expect(host.querySelector("textarea")).not.toBeNull();
     await click("取消"); expect(host.querySelector("textarea")).toBeNull(); expect(host.textContent).toContain(memory().display_text); expect(fetcher).not.toHaveBeenCalled();
   });
+  it.each(["Escape", "取消"])("returns focus to the remounted edit control after %s without writing", async action => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+    await mount();
+    const original = host.querySelector<HTMLButtonElement>("[data-memory-edit='old']")!;
+    await click("修改"); const textarea = await draft("尚未保存的修改");
+    if (action === "Escape") await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    else await click("取消");
+    await act(async () => { frames.splice(0).forEach(callback => callback(0)); });
+    const restored = host.querySelector<HTMLButtonElement>("[data-memory-edit='old']")!;
+    expect(restored).not.toBe(original); expect(original.isConnected).toBe(false);
+    expect(document.activeElement).toBe(restored); expect(fetcher).not.toHaveBeenCalled();
+    expect(host.textContent).toContain(memory().display_text); expect(host.querySelector("textarea")).toBeNull();
+  });
   it("retains the edited draft through an unknown result and exposes explicit same-request recovery", async () => {
     await mount(); await click("修改"); await draft("对方说改为下季度"); fetcher.mockRejectedValueOnce(new Error("lost"));
     await click("保存修改"); expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("对方说改为下季度");
@@ -88,11 +102,38 @@ describe("person document interactions", () => {
     expect(host.querySelector("[data-memory-edit='new']")).not.toBeNull(); expect(host.querySelector("[data-memory-edit='old']")).toBeNull();
     expect(fetcher.mock.calls[1]![1].body).toBe(fetcher.mock.calls[0]![1].body);
   });
-  it("shows remaining data and an actionable pagination control", async () => {
+  it.each(["逐条记忆", "阅读概览", "原始摘录"])("loads remaining data and focuses the first appended item in %s", async mode => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
     await mount([memory()], true); expect(host.textContent).toContain("1+ 条");
+    await click(mode);
     fetcher.mockResolvedValueOnce(Response.json({ surface: "people", person_id: personId, items: [memory({ id: "second", display_text: "第二条已确认记忆" })], has_more: false, next_cursor: null }));
     await click("继续加载记忆"); expect(host.textContent).toContain("第二条已确认记忆"); expect(host.textContent).toContain("2 条");
     expect(fetcher.mock.calls[0]![0]).toContain("cursor=signed-next");
+    await act(async () => { frames.splice(0).forEach(callback => callback(0)); });
+    expect(document.activeElement).toBe(host.querySelector("[data-memory-item='second']"));
+  });
+  it("returns to the active mode when the final raw page has no retained excerpts", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+    await mount([memory()], true); await click("原始摘录"); button("继续加载记忆").focus();
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory({ id: "not-retained", evidence_retained: false })], has_more: false }));
+    await click("继续加载记忆");
+    await act(async () => { frames.splice(0).forEach(callback => callback(0)); });
+    expect(host.querySelector("[data-memory-item='not-retained']")).toBeNull();
+    expect(document.activeElement).toBe(button("原始摘录"));
+  });
+  it("keeps the reader's new focus when a delayed page finishes", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+    await mount([memory()], true); button("继续加载记忆").focus();
+    let finish!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    await click("继续加载记忆");
+    button("阅读概览").focus(); await click("阅读概览");
+    await act(async () => finish(Response.json({ person_id: personId, items: [memory({ id: "second" })], has_more: false })));
+    await act(async () => { frames.splice(0).forEach(callback => callback(0)); });
+    expect(document.activeElement).toBe(button("阅读概览"));
   });
   it("preserves both active statements and their shared conflict label in every reading mode", async () => {
     const group = "22222222-2222-4222-8222-222222222222";
@@ -104,11 +145,15 @@ describe("person document interactions", () => {
     }
   });
   it("keeps a visible orphan draft after multiple supersessions and lets the user cancel explicitly", async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
     await mount(); await click("修改"); await draft("我的未保存草稿"); fetcher.mockResolvedValueOnce(Response.json({}, { status: 409 }));
     await click("保存修改"); fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory({ id: "v3", supersedes_id: "v2", version: 3 })], has_more: false }));
     await click("核对最新记忆"); expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("我的未保存草稿");
     expect(host.textContent).toContain("连续更新或不可用"); expect(host.querySelector("[data-memory-edit='old']")).toBeNull();
     await click("取消"); expect(host.querySelector("textarea")).toBeNull(); expect(host.querySelector("[data-memory-edit='v3']")).not.toBeNull();
+    await act(async () => { frames.splice(0).forEach(callback => callback(0)); });
+    expect(document.activeElement).toBe(button("逐条记忆"));
   });
   it("renders another owner's shared record without an edit control and retracts removed raw sources on refresh", async () => {
     await mount([memory({ can_edit: false })]); expect(host.textContent).toContain(memory().display_text); expect(host.querySelector("[data-memory-edit]")).toBeNull();
