@@ -1,8 +1,12 @@
 import {
   ScriptedAgentProvider,
+  CONTACT_RESEARCH_CONTRACT,
+  ContactResearchToolRequestSchema,
   type AgentProvider,
   type AgentToolResult,
+  type ContactResearchToolRequest,
 } from "@talent-signal/agent";
+import { createHash } from "node:crypto";
 import type { DatabaseClient } from "../database/pool.js";
 import { describe, expect, it, vi } from "vitest";
 
@@ -1611,5 +1615,119 @@ describe("canonical approved MCP result in host continuation", () => {
     const run = vi.spyOn(scripted,"run");
     await expect(executeWorkspaceConversationAgentCore({workspaceID:auth.accountId,objective:"Continue",contacts:{search:vi.fn(),read:vi.fn()},provider:scripted,hostResult,mcpConnections:{handle:read},assertCurrent:async()=>{if(readDone)throw new Error("SOURCE_WITHDRAWN");}})).rejects.toThrow("SOURCE_WITHDRAWN");
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+describe("authored research source lifecycle", () => {
+  const rootID = "10000000-0000-4000-8000-0000000000c1";
+  const sourceText = "研究 张三 的背景";
+  const publicSource = (url: string) => ({
+    source_id: createHash("sha256").update(`exa:${url}`).digest("hex"),
+    url,
+    title: "Public page",
+    text: "Public biography excerpt long enough to count as a real source receipt.",
+    channel: "web" as const,
+    provider_id: "exa" as const,
+    provider_request_id: "fixture",
+    content_hash: createHash("sha256").update(url).digest("hex"),
+    retrieved_at: "2026-10-18T00:00:00.000Z",
+    stage: "discovered" as const,
+  });
+  const fakeResearch = () => {
+    const requests: ContactResearchToolRequest[] = [];
+    const client = {
+      execute: vi.fn(async (input: unknown) => {
+        const request = ContactResearchToolRequestSchema.parse(input);
+        requests.push(request);
+        if (request.input.operation === "search") {
+          return {
+            contract_version: CONTACT_RESEARCH_CONTRACT,
+            task_id: request.task_id,
+            call_id: request.call_id,
+            sources: [publicSource("https://people.example.org/zhangsan")],
+            channels: [{ channel: "web" as const, provider: "exa" as const, status: "ok" as const,
+              result_count: 1, truncated: false, error_code: null }],
+            fetch_outcomes: [],
+            external_effects: [],
+          };
+        }
+        if (request.input.operation !== "fetch") throw new Error("unexpected operation");
+        return {
+          contract_version: CONTACT_RESEARCH_CONTRACT,
+          task_id: request.task_id,
+          call_id: request.call_id,
+          sources: request.input.sources.map((source) => ({ ...source, stage: "fetched" as const })),
+          channels: [],
+          fetch_outcomes: request.input.sources.map((source) => ({
+            source_id: source.source_id, channel: source.channel, provider: source.provider_id,
+            status: "ok" as const, error_code: null,
+          })),
+          external_effects: [],
+        };
+      }),
+    };
+    return { client, requests };
+  };
+  const scripted = (afterSearch: () => void, captured: Record<string, unknown>[]) => {
+    const provider = new ScriptedAgentProvider([], { outcome: "reply", title: "说明", body: "已处理。" });
+    vi.spyOn(provider, "run").mockImplementation(async (request, _invoke, signal) => {
+      const tools = request.supplementalTools ?? [];
+      const search = tools.find((tool) => tool.name === "search_public_subject")!;
+      const subjectID = /([0-9a-f]{24}) \(/u.exec(search.description)![1]!;
+      const found = JSON.parse(((await search.execute({ subject_id: subjectID }, signal)).content[0] as { text: string }).text);
+      captured.push({ found });
+      afterSearch();
+      const fetch = tools.find((tool) => tool.name === "fetch_public_sources")!;
+      const fetched = JSON.parse(((await fetch.execute(
+        { source_ids: [found.data.sources[0].source_id] }, signal,
+      )).content[0] as { text: string }).text);
+      captured.push({ fetched });
+      return { structuredOutput: { outcome: "reply", title: "说明", body: "来源生命周期已检查。" },
+        inputTokens: 1, outputTokens: 1, estimatedUsd: 0, turns: 1, permissionDenials: [] };
+    });
+    return provider;
+  };
+
+  it("revokes a text subject when its exact authored message text changes after await", async () => {
+    const { client, requests } = fakeResearch();
+    const messageSources = new Map([[rootID, sourceText]]);
+    const captured: Record<string, unknown>[] = [];
+    const result = await executeWorkspaceConversationAgentCore({
+      workspaceID: auth.accountId,
+      messageID: rootID,
+      objective: sourceText,
+      sourceText,
+      messageSources,
+      contacts: { search: vi.fn(), read: vi.fn() },
+      memory: { recall: vi.fn(async () => ({ items: [] })), stage: vi.fn(async () => null) },
+      researchClient: client as never,
+      provider: scripted(() => { messageSources.set(rootID, "研究 李四 的背景"); }, captured),
+    });
+    // The exact messageID/text binding (hash-checked) stops the fetch before
+    // any further provider read once the authored source changes.
+    expect((captured[1]!.fetched as { error?: { code?: string } }).error?.code)
+      .toBe("PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT");
+    expect(requests.map((request) => request.input.operation)).toEqual(["search"]);
+    expect(result.block.body).toContain("来源生命周期已检查");
+  });
+
+  it("composes the source guard with the host ownership assertion around tool awaits", async () => {
+    const { client, requests } = fakeResearch();
+    const captured: Record<string, unknown>[] = [];
+    let revoked = false;
+    await expect(executeWorkspaceConversationAgentCore({
+      workspaceID: auth.accountId,
+      messageID: rootID,
+      objective: sourceText,
+      sourceText,
+      contacts: { search: vi.fn(), read: vi.fn() },
+      memory: { recall: vi.fn(async () => ({ items: [] })), stage: vi.fn(async () => null) },
+      researchClient: client as never,
+      assertCurrent: async () => { if (revoked) throw new Error("SOURCE_WITHDRAWN"); },
+      provider: scripted(() => { revoked = true; }, captured),
+    })).rejects.toThrow("SOURCE_WITHDRAWN");
+    expect((captured[1]!.fetched as { error?: { code?: string } }).error?.code)
+      .toBe("PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT");
+    expect(requests.map((request) => request.input.operation)).toEqual(["search"]);
   });
 });

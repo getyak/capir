@@ -1035,3 +1035,103 @@ describe("untrusted exception diagnostics", () => {
     expect(JSON.stringify(result)).not.toContain("CANARY");
   });
 });
+
+describe("user-authored public homepage query anchor", () => {
+  it("derives the outbound query from the name plus its own admitted homepage", () => {
+    expect(
+      workspacePublicResearchQuery("Simon Willison", [], "https://simonwillison.net/"),
+    ).toBe("Simon Willison https://simonwillison.net/");
+    // An invalid authored homepage never degrades into name-only research.
+    expect(() =>
+      workspacePublicResearchQuery("Simon Willison", [], "https://simonwillison.net/about"),
+    ).toThrow();
+  });
+
+  it("searches with the admitted homepage in the query and provenance anchors", async () => {
+    const source = discovered("exa", "web", "https://simonwillison.net/");
+    const { client, execute } = fakeClient((request) =>
+      searchReply(request, [source], [okChannel("web", "exa", 1)]),
+    );
+    const research = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [
+        { id: "sub-1", name: "Simon Willison", authoredHomepage: "https://simonwillison.net/" },
+      ],
+    });
+
+    ok(await research.execute("search_public_subject", { subject_id: "sub-1" }));
+
+    const request = execute.mock.calls[0]![0] as ContactResearchToolRequest;
+    expect(request.input).toMatchObject({
+      operation: "search",
+      channels: ["web"],
+      query: "Simon Willison https://simonwillison.net/",
+    });
+    expect(request.anchors).toContain("https://simonwillison.net/");
+  });
+
+  it("keeps a discovered source bound to its original authority and never switches it", async () => {
+    const shared = discovered("exa", "web", "https://example.com/shared");
+    const flags = { first: true };
+    const { client, execute } = fakeClient((request) =>
+      searchReply(request, [shared], [okChannel("web", "exa", 1)]),
+    );
+    const research = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [
+        { id: "sub-1", name: "Person A", authoredHomepage: "https://persona.dev/", isCurrent: async () => flags.first },
+        { id: "sub-2", name: "Person B", authoredHomepage: "https://personb.dev/", isCurrent: async () => true },
+      ],
+    });
+
+    ok(await research.execute("search_public_subject", { subject_id: "sub-1" }));
+    ok(await research.execute("search_public_subject", { subject_id: "sub-2" }));
+    // The repeat receipt keeps the ORIGINAL authorizing subject.
+    flags.first = false;
+    const refused = failed(await research.execute("fetch_public_sources", {
+      source_ids: [shared.source_id],
+    }));
+    // A second authority can never borrow the first one's cached receipt.
+    expect(refused.error.code).toBe("PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT");
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("never silently drops an over-limit or invalid homepage into name-only research", async () => {
+    const longHome =
+      "https://christopher-alexander-architecture-archive.bibliography-and-complete-editions.org/";
+    expect(`Christopher Alexander ${longHome}`.length).toBeGreaterThan(100);
+    const { client, execute } = fakeClient((request) =>
+      searchReply(request, [], [okChannel("web", "exa", 0)]),
+    );
+
+    const over = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [
+        { id: "sub-1", name: "Christopher Alexander", authoredHomepage: longHome },
+      ],
+    });
+    const failedOver = failed(await over.execute("search_public_subject", { subject_id: "sub-1" }));
+    expect(failedOver.error.code).toBe("PUBLIC_RESEARCH_QUERY_INVALID");
+
+    const invalid = createWorkspacePublicResearch({
+      client,
+      taskID,
+      authorizedSubjects: () => [
+        { id: "sub-2", name: "Simon Willison", authoredHomepage: "https://simonwillison.net/about" },
+      ],
+    });
+    const failedInvalid = failed(await invalid.execute("search_public_subject", { subject_id: "sub-2" }));
+    expect(failedInvalid.error.code).toBe("PUBLIC_RESEARCH_QUERY_INVALID");
+
+    // The model cannot forge the homepage authority through tool arguments.
+    const forged = failed(await over.execute("search_public_subject", {
+      subject_id: "sub-1",
+      url: "https://evil.example/",
+    }));
+    expect(forged.error.code).toBe("PUBLIC_RESEARCH_TOOL_INPUT_INVALID");
+    expect(execute).not.toHaveBeenCalled();
+  });
+});
