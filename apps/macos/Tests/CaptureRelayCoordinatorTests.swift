@@ -1,3 +1,5 @@
+import AppKit
+import Combine
 import CoreGraphics
 import Foundation
 import XCTest
@@ -149,6 +151,47 @@ final class CaptureRelayCoordinatorTests: XCTestCase {
         XCTAssertEqual(transport.lastIntent?.objective, "核对公司文字")
         XCTAssertEqual(coordinator.relay?.thumbnail?.width, 16)
         XCTAssertNil(coordinator.relay?.origin, "Edited preview has no invented region origin")
+    }
+
+    @MainActor func testPreviewSendThroughSynchronousWindowObserverPreservesAdmissionAndRelay() async throws {
+        _ = NSApplication.shared
+        let (coordinator, transport, selector, _) = fixture(); selector.preview = true
+        let previewWindow = CapturePreviewWindowController()
+        // Match the production Runtime observer, including synchronous willSet delivery.
+        let observer = coordinator.$presentation.sink { state in
+            if case .previewReady = state { previewWindow.show(coordinator: coordinator) }
+            else { previewWindow.dismiss() }
+        }
+        defer { observer.cancel(); previewWindow.dismiss() }
+        await coordinator.startCapture()
+        XCTAssertNotNil(coordinator.previewImage)
+        await coordinator.submitPreview(selector.image, objective: "核对公司文字")
+        XCTAssertEqual(transport.admissions, 1)
+        guard case .processing = coordinator.presentation else { return XCTFail("The admitted screenshot must keep processing") }
+        XCTAssertEqual(coordinator.relay?.phase, .processing)
+        XCTAssertNil(coordinator.previewImage)
+    }
+
+    @MainActor func testClosingActualPreviewWindowDiscardsOnlyItsLocalDraftWithoutReentrancy() async throws {
+        _ = NSApplication.shared
+        let existingWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let (coordinator, transport, selector, _) = fixture(); selector.preview = true
+        let previewWindow = CapturePreviewWindowController()
+        let observer = coordinator.$presentation.sink { state in
+            if case .previewReady = state { previewWindow.show(coordinator: coordinator) }
+            else { previewWindow.dismiss() }
+        }
+        defer { observer.cancel(); previewWindow.dismiss() }
+        await coordinator.startCapture()
+        let window = try XCTUnwrap(NSApp.windows.first {
+            !existingWindows.contains(ObjectIdentifier($0)) && $0.title == "capri · 截图预览"
+        })
+        window.close()
+        XCTAssertEqual(coordinator.presentation, .idle)
+        XCTAssertNil(coordinator.previewImage)
+        XCTAssertNil(coordinator.relay)
+        XCTAssertEqual(transport.admissions, 0)
+        XCTAssertFalse(window.isVisible)
     }
 
     @MainActor func testLegacyProducerHasAnHonestNoClueResultAndLoginChangeClearsIt() async {

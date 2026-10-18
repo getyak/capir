@@ -155,14 +155,24 @@ final class CapturePreviewWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        if case .previewReady = coordinator?.presentation { coordinator?.discardPreview() }
+        guard let closing = notification.object as? NSWindow, closing === window else { return }
+        let previousCoordinator = coordinator
         window = nil
         coordinator = nil
+        closing.delegate = nil
+        if previousCoordinator?.previewImage != nil { previousCoordinator?.discardPreview() }
     }
 
     func dismiss() {
-        window?.close()
+        let previousWindow = window
+        let previousCoordinator = coordinator
         window = nil
         coordinator = nil
+        previousWindow?.delegate = nil
+        previousWindow?.close()
+        // @Published delivers before presentation is stored. A submitted
+        // preview has already released its pending image, so stale
+        // .previewReady cannot turn an admitted send back into .idle.
+        if previousCoordinator?.previewImage != nil { previousCoordinator?.discardPreview() }
     }
 }
