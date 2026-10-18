@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { Pool } from "pg";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { CONTRACT_VERSION } from "@talent-signal/contracts";
 
 import type {
   PersonSourceSyncMutationRequest,
@@ -22,6 +23,8 @@ import {
 import { inTransaction } from "../database/pool.js";
 import { runPublicResearch, type CrawledPage, type RecurringResearchCycleHooks } from "./research.js";
 import { decideCaptureSourceAuthorization, sweepDueSourceAuthorizations, runPendingSourceAuthorizationCompilationJobs } from "./sourceAuthorization.js";
+import { createResourceCapture } from "./resourceIntake.js";
+import { sweepDueSourceRetention } from "./sourceRetention.js";
 
 const database = process.env.TIME_WORKSPACE_TEST_DATABASE_URL;
 if (
@@ -136,6 +139,44 @@ async function makeSeed(
     [randomUUID(), auth.accountId, captureId, url],
   );
   return { captureId, resourceId, url };
+}
+
+async function makeWebSeed(
+  auth: AuthContext,
+  contact: { personId: string; contextId: string },
+  retained = false,
+): Promise<Seed> {
+  const stamp = new Date().toISOString();
+  const clientResourceId = `web-seed-${randomUUID()}`;
+  const url = "https://8.8.8.8/person";
+  const captured = await createResourceCapture(pool!, auth, {
+    contract_version: CONTRACT_VERSION,
+    idempotency_key: randomUUID(),
+    channel: "web_upload",
+    purpose: "Synthetic default Web public URL retention regression.",
+    captured_at: stamp,
+    source_timezone: "Asia/Shanghai",
+    person_scope: {
+      status: "confirmed", person_id: contact.personId,
+      relationship_context: { status: "existing", relationship_context_id: contact.contextId },
+      binding_basis: "Synthetic owner-reviewed public URL.",
+    },
+    resource: {
+      client_resource_id: clientResourceId, kind: "public_url",
+      display_name: "Synthetic Web public source", media_type: "text/html",
+      observed_at: stamp, source_timezone: "Asia/Shanghai",
+      content_hash: "f".repeat(64), source_locator: url,
+      retention: { requested_mode: retained ? "evidence_crop" : "ephemeral", source_scope: "reviewed_selected_text" },
+    },
+    fragments: [{
+      client_resource_id: clientResourceId, kind: "url_excerpt", sequence: 0,
+      text: "Reviewed synthetic public title.",
+      locator: { kind: "url_excerpt", canonical_url: url, retrieved_at: stamp },
+      attribution: { actor_kind: "public_source", status: "confirmed" },
+      review_status: "reviewed", parser: { name: "synthetic-web-title", version: "1.0.0" },
+    }],
+  });
+  return { captureId: captured.body.capture_id, resourceId: captured.body.resource.id, url };
 }
 
 function mutation(
@@ -776,6 +817,73 @@ suite("person source sync durable cycles (isolated PostgreSQL)", () => {
     // The same original cycle reconciles first; no overlapping or catch-up
     // cycle is materialized beside it.
     expect(after).toHaveLength(1);
+  });
+
+  it("keeps an authorized ephemeral Web URL manageable after its transport payload is purged", async () => {
+    const auth = await createAccount();
+    const contact = await makeContact(auth);
+    const seed = await makeWebSeed(auth, contact);
+    const url = seed.url;
+    // Use the actual producer, rather than an impossible available/ephemeral
+    // receipt inserted by a test fixture. Review removes transport bytes only.
+    const receipt = await pool!.query(
+      "SELECT source_access_state,source_access_reason,authorization_state FROM source_retention_receipts WHERE account_id=$1 AND capture_id=$2",
+      [auth.accountId, seed.captureId],
+    );
+    expect(receipt.rows[0]).toEqual({ source_access_state: "purged", source_access_reason: "review_completed", authorization_state: "authorized" });
+    const input = mutation(auth, contact, seed, { status: "paused" });
+    const created = await putPersonSourceSync(pool!, auth, randomUUID(), input);
+    const listed = await listPersonSourceSyncs(pool!, auth, { person_id: contact.personId, relationship_context_id: contact.contextId, seed_resource_id: seed.resourceId });
+    const direct = await getPersonSourceSync(pool!, auth, created.sync.id);
+    for (const record of [created.sync, listed.syncs[0]!, direct.sync]) {
+      expect(record.content_available).toBe(true);
+      expect(record.effective_state).toBe("paused");
+      expect(record.source_url).toBe(url);
+    }
+    await putPersonSourceSync(pool!, auth, created.sync.id, {
+      ...input, expected_revision: direct.sync.revision, idempotency_key: randomUUID(), status: "active",
+    });
+    await runDuePersonSourceSyncs(pool!, { loadPage: loaderFor({ "/person": "New public content from the authorized Web source." }) });
+    const runs = await runRows(auth, created.sync.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ status: "completed", content_available: true, source_url: url, observed_canonical_url: url, new_observations: 1 });
+  });
+
+  it.each(["purged deadline", "elapsed before sweep"] as const)("redacts a %s retention boundary without waiting for authorization sweep", async (state) => {
+    const auth = await createAccount();
+    const contact = await makeContact(auth);
+    const seed = await makeSeed(auth, contact);
+    const created = await putPersonSourceSync(pool!, auth, randomUUID(), mutation(auth, contact, seed));
+    await runDuePersonSourceSyncs(pool!, { loadPage: loaderFor({ "/person": "Retention boundary readback proof." }) });
+    if (state === "purged deadline") {
+      await pool!.query("UPDATE source_retention_receipts SET source_access_state='purged',source_access_reason='retention_deadline_elapsed' WHERE account_id=$1 AND capture_id=$2", [auth.accountId, seed.captureId]);
+    } else {
+      await pool!.query("UPDATE source_retention_receipts SET retention_until=statement_timestamp()-interval '1 second' WHERE account_id=$1 AND capture_id=$2", [auth.accountId, seed.captureId]);
+    }
+    const direct = await getPersonSourceSync(pool!, auth, created.sync.id);
+    const listed = await listPersonSourceSyncs(pool!, auth, { person_id: contact.personId, relationship_context_id: contact.contextId, seed_resource_id: seed.resourceId });
+    for (const record of [direct.sync, listed.syncs[0]!]) {
+      expect(record.content_available).toBe(false);
+      expect(record.source_url).toBeNull();
+    }
+    const runs = await runRows(auth, created.sync.id);
+    expect(runs[0]).toMatchObject({ content_available: false, source_url: null, observed_canonical_url: null });
+    expect((await deletePersonSourceSync(pool!, auth, created.sync.id, { expected_revision: direct.sync.revision, idempotency_key: randomUUID() })).sync.status).toBe("deleted");
+  });
+
+  it("keeps retired due retention receipts from blocking active-account cleanup", async () => {
+    const retired = await createAccount();
+    const active = await createAccount();
+    const retiredSeed = await makeWebSeed(retired, await makeContact(retired), true);
+    const activeSeed = await makeWebSeed(active, await makeContact(active), true);
+    await pool!.query("UPDATE source_retention_receipts SET retention_until=statement_timestamp()-interval '1 second' WHERE account_id=ANY($1::uuid[])", [[retired.accountId, active.accountId]]);
+    await pool!.query("UPDATE accounts SET retired_at=clock_timestamp() WHERE id=$1", [retired.accountId]);
+    await expect(sweepDueSourceRetention(pool!)).resolves.toBeGreaterThanOrEqual(1);
+    const rows = await pool!.query<{ capture_id: string; source_access_state: string; source_access_reason: string }>(
+      "SELECT capture_id,source_access_state,source_access_reason FROM source_retention_receipts WHERE account_id=ANY($1::uuid[])", [[retired.accountId, active.accountId]],
+    );
+    expect(rows.rows.find(row => row.capture_id === retiredSeed.captureId)?.source_access_state).toBe("available");
+    expect(rows.rows.find(row => row.capture_id === activeSeed.captureId)).toMatchObject({ source_access_state: "purged", source_access_reason: "retention_deadline_elapsed" });
   });
 
   it.each(["revoked", "expired", "elapsed before sweep"] as const)("redacts source authorization %s from list/get/runs while retaining owner deletion", async (state) => {

@@ -204,10 +204,17 @@ interface GrantRow {
   source_authorization_state: "authorized" | "revoked" | "expired" | null;
 }
 
-const LIVE_SOURCE_RECEIPT = `seed_receipt.source_access_state = 'available'
+// A default Web public-URL intake drops transient transport bytes on review,
+// while its reviewed evidence and independent source authorization remain live.
+// A retention deadline or deletion is a different, terminal source boundary.
+const LIVE_SOURCE_RECEIPT = `(seed_receipt.source_access_state = 'available'
+      OR (seed_receipt.source_access_state = 'purged'
+        AND seed_receipt.source_access_reason = 'review_completed'))
     AND seed_receipt.authorization_state = 'authorized'
     AND (seed_receipt.authorization_expires_at IS NULL
-      OR seed_receipt.authorization_expires_at > statement_timestamp())`;
+      OR seed_receipt.authorization_expires_at > statement_timestamp())
+    AND (seed_receipt.retention_until IS NULL
+      OR seed_receipt.retention_until > statement_timestamp())`;
 
 const GRANT_SOURCE_JOIN = `
   FROM person_source_sync_grants sync_grant
