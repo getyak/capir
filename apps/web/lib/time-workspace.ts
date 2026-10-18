@@ -5,7 +5,7 @@ export type TimeView = "timeline" | "week" | "month";
 export type TimeRange = "day" | "week" | "month" | "past7" | "next30" | "custom";
 export type TimePerson = { id: string; label: string; context: string; contextId: string | null };
 export const TIME_KINDS: Record<TimeActivityKind, string> = {
-  person_created: "联系人", session_activity: "对话", meeting_draft: "会议草稿", schedule: "安排",
+  person_created: "联系人", session_activity: "对话", meeting_draft: "会议草稿", schedule: "安排", public_source_update: "公开来源",
 };
 export const TIME_STATUSES: Record<TimeActivity["status"], string> = {
   recorded: "已记录", needs_review: "待核对", planned: "内部安排", completed: "已记录结果", cancelled: "已取消",

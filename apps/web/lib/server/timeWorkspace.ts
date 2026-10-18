@@ -2,9 +2,14 @@ import "server-only";
 
 import {
   TalentSignalHttpError, TimeActivityListResponseSchema, TimeScheduleResponseSchema,
-  TimeReviewResponseSchema, type TimeScope, type TimeActivityListResponse,
+  TimeReviewResponseSchema, PersonSourceSyncListResponseSchema,
+  PersonSourceSyncResponseSchema, PersonSourceSyncRunsResponseSchema,
+  type TimeScope, type TimeActivityListResponse,
   type TimeScheduleResponse, type TimeScheduleMutationRequest,
   type TimeScheduleDeleteRequest, type TimeReviewRequest, type TimeReviewResponse,
+  type PersonSourceSyncDeleteRequest, type PersonSourceSyncListQuery,
+  type PersonSourceSyncListResponse, type PersonSourceSyncMutationRequest,
+  type PersonSourceSyncResponse, type PersonSourceSyncRunsResponse,
 } from "@talent-signal/contracts";
 import { matchesTypeBox } from "@/lib/typebox-validation";
 import { authenticatedBackendClient } from "./backendAuth";
@@ -42,5 +47,32 @@ export async function removeTimeSchedule(id: string, input: TimeScheduleDeleteRe
 export async function reviewTimeScope(input: TimeReviewRequest): Promise<TimeReviewResponse> {
   const result = await (await client()).reviewTimeRange(input);
   if (!matchesTypeBox(TimeReviewResponseSchema, result)) invalid();
+  return result;
+}
+
+// ---- GET-131 one-person public source periodic observation (additive) ----
+
+function personSourceSync(result: PersonSourceSyncResponse): PersonSourceSyncResponse {
+  if (!matchesTypeBox(PersonSourceSyncResponseSchema, result)) invalid();
+  return result;
+}
+
+export async function loadPersonSourceSyncs(query: PersonSourceSyncListQuery): Promise<PersonSourceSyncListResponse> {
+  const result = await (await client()).listPersonSourceSyncs(query);
+  if (!matchesTypeBox(PersonSourceSyncListResponseSchema, result)) invalid();
+  return result;
+}
+export async function loadPersonSourceSync(id: string): Promise<PersonSourceSyncResponse> {
+  return personSourceSync(await (await client()).getPersonSourceSync(id));
+}
+export async function savePersonSourceSync(id: string, input: PersonSourceSyncMutationRequest): Promise<PersonSourceSyncResponse> {
+  return personSourceSync(await (await client()).putPersonSourceSync(id, input));
+}
+export async function removePersonSourceSync(id: string, input: PersonSourceSyncDeleteRequest): Promise<PersonSourceSyncResponse> {
+  return personSourceSync(await (await client()).deletePersonSourceSync(id, input));
+}
+export async function loadPersonSourceSyncRuns(id: string): Promise<PersonSourceSyncRunsResponse> {
+  const result = await (await client()).listPersonSourceSyncRuns(id);
+  if (!matchesTypeBox(PersonSourceSyncRunsResponseSchema, result)) invalid();
   return result;
 }
