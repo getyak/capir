@@ -113,10 +113,58 @@ architecture diagrams; 70 focused backend result/image-intent/schema tests;
 and 17 Agent current-image-inspection tests. All 104 current-main SQL files
 were independently compared byte-for-byte before freezing entry 105. A separate
 reviewer reproduced preview Send reentrancy through the actual AppKit window
-and synchronous Combine presentation sink. Repair that independently after the
-integration commit, with a failing real-window regression before the fix.
+and synchronous Combine presentation sink. The repairs below retain the
+failing actual-source regressions before recording their passing counterparts.
 
 This task does not publish, merge GitHub PRs, or deploy resident services. PR
 #366 remains draft; native real-flow, exact-head CI, signed publication and
 production/affected-service acceptance gates remain open under the existing
 matrix. Source-level checks do not satisfy those gates.
+
+### Confirmed P1 repairs and review prevention
+
+- Preview close detaches the owned window, coordinator and delegate before any
+  close/discard callback. A pending image, rather than stale `@Published`
+  presentation, decides whether a local draft remains to discard. The closing
+  view callback is bound to its original window identity.
+- A foreground capture/disclosure/retry owns a presentation generation. Older
+  status and recovery reads still update or retire their canonical intents,
+  while only the current generation may project visible state. Preview send and
+  explicit retry reserve the capture gesture until their admission/readback
+  resolves; an already-admitted processing task does not block a new capture.
+- The desktop submission boundary accepts an unchanged string of at most 1000
+  UTF-16 units and forwards it to the existing queue. The same stable operation
+  IDs, policy, owner, login, image and origin checks remain; unknown result or
+  confirmation fields are excluded from the delegated body.
+
+The real-window Send regression first crashed with signal 11. Deferred
+admission, deferred old receipt, stale hosted-view close, deferred retry,
+startup recovery and new-disclosure regressions each failed before their
+corresponding repair. The exact-source isolated native host now passes 42 tests
+across coordinator, relay, intent and payload coverage, including the real
+AppKit/Combine lifecycle. A synthetic PNG and instruction envelope produced by
+the actual Swift image/intent/transport encoders is checked by the existing
+Xcode payload test source and then consumed by the actual public Web POST,
+desktop wrapper and canonical queue routes, with only the final backend client
+and authentication boundary substituted. This regression first returned 400
+for valid instructions and now preserves the no-save text, whitespace, Chinese,
+emoji, newline, image hash and operation IDs. Empty/1000-unit acceptance,
+invalid/oversized rejection, unknown-field exclusion and conflict propagation
+are covered. This deterministic producer/consumer regression is the durable
+prevention; no broader always-on rule or duplicate canonical document is added.
+
+Web capture/queue tests pass 37/37; the final full Web suite passes 2493/2493
+across 302 files; Web typecheck and documentation/Wiki/architecture checks
+passed. Independent review reran all seven real-AppKit failure scenarios, the
+12-route integration tests and the actual Swift producer parity check, with no
+remaining P0/P1 in the reviewed repair paths. The three edited native test
+sources already belong to the original Xcode test target. The original-project
+`build-for-testing` attempt was bounded while SwiftPM cloned the pinned Sparkle
+dependency; it did not reach compilation and has no compiler verdict. Exact-head
+macOS CI must still confirm the full original target.
+
+Sanitized local logs, failing-before/passing-after evidence and independent
+review artifacts are preserved in ignored `output/evaluation/pr366-review-repair/`
+(including `reviewer/`). They are implementation review evidence, not real
+screenshot permission, configured-model production, hardware, or signed
+publication acceptance. The existing C1-C18 release gates remain open.

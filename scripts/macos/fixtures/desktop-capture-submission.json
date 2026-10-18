@@ -1,0 +1,18 @@
+{
+  "idempotency_key" : "a072ed54-6d56-413d-af4b-3ebc01ba646a",
+  "images" : [
+    {
+      "attachment_id" : "ae5d77d0-7cdf-420f-8c45-ecf317d05c6d",
+      "byte_size" : 159,
+      "content_hash" : "8f9bd9772f3e74eaf3a8b1337e3a2ea06e92ff69e7038f6b50c76dc491714cbf",
+      "data_base64" : "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAABKADAAQAAAABAAAABAAAAADmpNw4AAAAFUlEQVQIHWP8DwQMSIAJiQ1mEhYAAAZdBAQjjGwcAAAAAElFTkSuQmCC",
+      "file_name" : "capture.png",
+      "media_type" : "image/png"
+    }
+  ],
+  "message_id" : "a072ed54-6d56-413d-af4b-3ebc01ba646a",
+  "objective" : "  只分析截图，不保存 🕊️\n保留原文，不创建联系人。  ",
+  "owner_scope" : "9adafce302b5b34661dbc65e7f5097e0b269ac258c5d2eeceba0e6cada0c6cb0",
+  "policy_version" : "current-policy",
+  "session_id" : "72ce7ff4-a5a8-40d0-b1d7-d84a13adcd30"
+}
