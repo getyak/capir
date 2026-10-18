@@ -259,6 +259,28 @@ final class TodayScheduleTests: XCTestCase {
         store.invalidate()
     }
 
+    func testElapsedArrangementWithdrawsOpenDetailBeforePendingRefreshReturns() async throws {
+        let service = Service(); service.pages = [try page([activity()])]; service.detailRecord = try detail()
+        var instant = now
+        let store = TodayScheduleStore(currentDate: { instant }, currentTimeZone: { self.zone })
+        store.activate(scopeID: "A", service: service, expiresAt: nil, isCurrent: { true })
+        await store.refresh()
+        await store.openDetail(id: sourceID)
+        XCTAssertEqual(store.detail, .ready(try detail()))
+
+        instant = ISO8601DateFormatter().date(from: "2026-10-18T04:00:00Z")!
+        service.deferred = true
+        let refresh = Task { await store.refresh() }
+        try await service.entered()
+        XCTAssertNil(store.item)
+        XCTAssertEqual(store.detail, .unavailable,
+            "A known elapsed detail must be withdrawn before the new list response arrives")
+
+        service.pending?.resume(returning: try page()); service.pending = nil
+        await refresh.value
+        store.invalidate()
+    }
+
     func testListPermissionRevocationFencesAnOlderInFlightDetailResponse() async throws {
         let service = Service(); service.pages = [try page([activity()])]
         let store = TodayScheduleStore(currentDate: { self.now }, currentTimeZone: { self.zone })

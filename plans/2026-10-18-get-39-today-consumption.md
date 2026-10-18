@@ -103,3 +103,49 @@ Rejected: static mock production cards; enabling fixture mode as the feature; a 
 ## Execution notes
 
 Implementation has not started at plan freeze. The native parent execution method and independent-review gate are already authorized. Do not insert a generic brainstorming or plan-approval pause. Real missing permissions or necessary product inputs remain explicit; keep progressing on independent work while those are resolved.
+
+### Review repair, 2026-10-18
+
+The independent review found that an open native arrangement detail remained
+visible after its known end time while the next list request was pending. The
+store now withdraws a ready detail whose own end time has elapsed before waiting
+for that request. This repair changes only the store, its regression test and
+this delivery record.
+
+The repair worktree started at PR #364 head
+`9d2cc15122c15f740eaf030b3e23fd9020318dd0` and normally merged current `main`
+`f21ccf1a3451d5b2f99c39f9bf1e530da06cea6b` without conflicts in merge
+`c4690c62060a1b416a0298c3bc798c65669d81e0`.
+
+`testElapsedArrangementWithdrawsOpenDetailBeforePendingRefreshReturns` first
+failed with the real store still reporting `ready` instead of `unavailable`
+after the synthetic clock reached `2026-10-18T04:00:00Z`, while its next list
+request was deferred. The same test then passed after the three-line repair.
+The complete host harness passed all 26 existing/new Today store, projection,
+formatting and client tests with zero failures. The commands were
+`swift test --package-path output/evaluation/pr364-detail-expiry/host --jobs 1
+--filter TodayScheduleTests.testElapsedArrangementWithdrawsOpenDetailBeforePendingRefreshReturns`
+for RED/GREEN and the same command without `--filter` for the 26-test suite.
+`pnpm docs:check` passed documentation, Wiki and architecture checks.
+
+The ignored `output/evaluation/pr364-detail-expiry/` directory retains
+`red.log`, `green.log`, `host-suite.log`, source hashes and the host package.
+Production store, client, transport, formatting and test files are copied
+unchanged into that package. Its support file extracts the production contract
+version and timestamp decoder, and replaces the surrounding iOS networking
+diagnostics/maintenance wrapper with direct `URLSession` forwarding for
+synthetic `URLProtocol` tests. These are host behavior checks, not proof of App
+construction, native authentication, UI rendering or live canonical reads.
+
+The MacBook had 52 GiB available before this single-job host build. The
+`dev-storage-guard` executable was unavailable; disk, memory and process state
+were inspected directly. No Simulator was booted, no resident service was
+stopped and no live account was used.
+
+T12 and T14 remain required and unmet: verify the same actual authorized
+canonical arrangement ID/revision/zone on Web, Mac and iOS, then capture primary
+iPhone rendering, Dynamic Type, VoiceOver, reduced motion and read-only detail
+dismissal/recovery. The earlier Primary Simulator/API resource conflict remains
+an unresolved acceptance constraint. Keep the PR draft; host checks and green
+CI do not close these gates. Normal merge, affected-service deployment and live
+revision/behavior verification remain after those gates.

@@ -107,6 +107,9 @@ final class TodayScheduleStore: ObservableObject {
         clock = now
         guard active, isCurrent(), expiresAt.map({ now < $0 }) ?? true, let service else { invalidate(); return }
         if let end = item?.endsAt, end <= now { item = nil; coverage = .loading }
+        if case .ready(let record) = detail, let end = record.endsAt, end <= now {
+            fenceDetailRead(.unavailable)
+        }
         guard let scope = try? TodayScheduleScope.make(now: now, timeZone: timeZone) else { item = nil; coverage = .unavailable; return }
         if let readTask, readScope == scope { await readTask.value; return }
         readTask?.cancel()
