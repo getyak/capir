@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { CONTRACT_VERSION, type AgentSessionPayload } from "@talent-signal/contracts";
 
-import { captureProductStep } from "@talent-signal/agent";
+import { ArkCurrentImageInspector, captureProductStep } from "@talent-signal/agent";
 import { ProductRunService } from "./productRuns.js";
 import { cleanupProductRunSources } from "./productRunStorage.js";
 import type { AgentProviderInputPart, AgentProviderRequest, AgentProviderResult, HarnessSteeringBatch } from "@talent-signal/agent";
@@ -24,6 +24,7 @@ import {
 } from "./conversationQueue.js";
 import { ConversationQueueRunner } from "./conversationQueueRunner.js";
 import { readConversationMessageImage } from "./conversationMessageImages.js";
+import { readDesktopCaptureResult } from "./desktopCaptureResult.js";
 import { registerConversationQueueRoutes } from "./conversationQueueRoutes.js";
 import { ApiError } from "../lib/apiError.js";
 import { subscribeConversationQueueLive, type ConversationQueueLivePreview } from "./conversationQueueLive.js";
@@ -1910,6 +1911,78 @@ function pngUpload(bytes: Buffer, attachmentID = randomUUID()) {
 }
 
 suite("conversation message images", () => {
+  it("GET-130 retains only source-bound clues after the real queue scrub and retracts expired/deleted sources", async () => {
+    const seeded = await seedSession(), other = await seedSession();
+    const provider = new ScriptedConversationProvider();
+    const prior = { allow: process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING, key: process.env.ARK_API_KEY };
+    process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING = "true";
+    process.env.ARK_API_KEY = "synthetic-test-no-network";
+    const inspection = vi.spyOn(ArkCurrentImageInspector.prototype, "inspect").mockResolvedValue({
+      description: "Synthetic company text", visible_text: ["松禾设计"], uncertainties: [],
+      conversation_kind: "unknown", visible_entities: [{ kind: "company", text: "松禾设计", source_excerpt: "松禾设计" }],
+      model: "synthetic-existing-inspector", request_id: "synthetic-same-run-receipt",
+    });
+    const diagnostics: Array<{ code: unknown; name: unknown }> = [];
+    let phase = "start";
+    const runner = new ConversationQueueRunner({ pool: pool!, provider, pollIntervalMs: 50, heartbeatMs: 250, recoveryIntervalMs: 10_000,
+      logger: { info: () => undefined, error: (metadata: unknown) => {
+        const error = (metadata as { err?: { code?: unknown; name?: unknown } }).err;
+        diagnostics.push({ code: error?.code ?? null, name: error?.name ?? null });
+      }, warn: (metadata: unknown) => {
+        const error = (metadata as { err?: { code?: unknown; name?: unknown } }).err;
+        diagnostics.push({ code: error?.code ?? null, name: error?.name ?? null });
+      } } });
+    runner.start();
+    try {
+      const message = randomUUID(), bytes = pngBytes(3), upload = pngUpload(bytes);
+      await admitConversationQueueEntry(pool!, seeded.auth, {
+        session_id: seeded.sessionId, message_id: message, idempotency_key: randomUUID(), objective: "", images: [upload],
+      });
+      phase = "waiting for real completed queue";
+      await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "completed", 10_000);
+      expect(inspection).toHaveBeenCalledOnce(); expect(provider.calls).toHaveLength(1);
+      expect((await entryRow(seeded.sessionId, seeded.accountId))[0]).toMatchObject({ content_state: "scrubbed", result: null });
+      phase = "current result readback";
+      const result = await readDesktopCaptureResult(pool!, seeded.auth, seeded.sessionId, message);
+      expect(result).toMatchObject({ message_id: message, source: { attachment_id: upload.attachment_id, content_hash: upload.content_hash },
+        observation: { pending: true, inspection_request_id: "synthetic-same-run-receipt",
+          clues: [{ kind: "company", text: "松禾设计", source_excerpt: "松禾设计" }] } });
+      expect(JSON.stringify((await getAgentSession(pool!, seeded.auth, seeded.sessionId)).payload)).not.toContain("captureImageObservation");
+      phase = "owner denial";
+      await expect(readDesktopCaptureResult(pool!, other.auth, seeded.sessionId, message)).rejects.toMatchObject({ statusCode: 404 });
+      await expect(readDesktopCaptureResult(pool!, { ...seeded.auth, userId: other.userId }, seeded.sessionId, message)).rejects.toMatchObject({ statusCode: 404 });
+      phase = "artifact revocation isolation";
+      const secondMessage = randomUUID(), secondUpload = pngUpload(pngBytes(4));
+      await admitConversationQueueEntry(pool!, seeded.auth, { session_id: seeded.sessionId, message_id: secondMessage,
+        idempotency_key: randomUUID(), objective: "", images: [secondUpload] });
+      await waitFor(async () => {
+        const rows = await entryRow(seeded.sessionId, seeded.accountId);
+        return rows.length === 2 && rows.every(row => row.status === "completed");
+      }, 10_000);
+      expect((await readDesktopCaptureResult(pool!, seeded.auth, seeded.sessionId, secondMessage)).observation).not.toBeNull();
+      await pool!.query("INSERT INTO memory_source_revocations(id,account_id,source_kind,source_id,reason) VALUES($1,$2,'artifact',$3,'source_revoked')",
+        [randomUUID(), seeded.accountId, `conversation-image-${secondMessage}-0-${secondUpload.attachment_id}`]);
+      await expect(readDesktopCaptureResult(pool!, seeded.auth, seeded.sessionId, secondMessage)).rejects.toMatchObject({ statusCode: 410 });
+      expect(await readConversationMessageImage(pool!, seeded.auth, seeded.sessionId, secondMessage, 0)).toBeNull();
+      expect((await readDesktopCaptureResult(pool!, seeded.auth, seeded.sessionId, message)).observation).not.toBeNull();
+      phase = "expiry withdrawal";
+      await pool!.query("UPDATE conversation_message_images SET expires_at=now()-interval '1 second' WHERE account_id=$1 AND session_id=$2 AND message_id=$3", [seeded.accountId, seeded.sessionId, message]);
+      await expect(readDesktopCaptureResult(pool!, seeded.auth, seeded.sessionId, message)).rejects.toMatchObject({ statusCode: 410 });
+      expect(await readConversationMessageImage(pool!, seeded.auth, seeded.sessionId, message, 0)).toBeNull();
+      await pool!.query("DELETE FROM conversation_message_images WHERE account_id=$1 AND session_id=$2 AND message_id=$3", [seeded.accountId, seeded.sessionId, message]);
+      await expect(readDesktopCaptureResult(pool!, seeded.auth, seeded.sessionId, message)).rejects.toMatchObject({ statusCode: 410 });
+      expect(inspection).toHaveBeenCalledTimes(2);
+      phase = "verified";
+    } finally {
+      if (phase !== "verified") console.info("GET-130 synthetic queue diagnostic", { phase, diagnostics,
+        queue: (await entryRow(seeded.sessionId, seeded.accountId)).map(row => ({status:row.status,failure:row.failure_code,hasResult:row.result!==null})) });
+      await runner.close(); inspection.mockRestore();
+      for (const [key, value] of [["TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", prior.allow], ["ARK_API_KEY", prior.key]] as const) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      await removeProofAccount(seeded.accountId); await removeProofAccount(other.accountId);
+    }
+  });
   it("admits images-only inline, delivers exact pixels, and retains only a manifest", async () => {
     const seeded = await seedSession();
     const provider = new ScriptedConversationProvider();
@@ -2914,6 +2987,9 @@ suite("durable conversation queue steering", () => {
     const seeded = await seedSession();
     const provider = new SteeringConversationProvider();
     provider.drainSignals.push(gate());
+    // Hold the final so the test observes closed intake while still running,
+    // rather than racing an immediately completed synthetic response.
+    provider.finishSignals.push(gate());
     const runner = await startRunner(provider);
     try {
       await admitConversationQueueEntry(pool!, seeded.auth, {
@@ -2932,6 +3008,7 @@ suite("durable conversation queue steering", () => {
         idempotency_key: randomUUID(), session_id: seeded.sessionId, message_id: randomUUID(), objective: "迟到消息",
       });
       expect(late.response.steers_run_id).toBeUndefined();
+      provider.finishSignals[0]!.release();
       await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId)).every((row) => row.status === "completed"));
       // Late input after the final runs as the next task with its own turn.
       expect(provider.calls).toEqual(["主任务", "迟到消息"]);
@@ -2939,6 +3016,8 @@ suite("durable conversation queue steering", () => {
       expect(session.payload?.turns.map((turn) => turn.objective)).toEqual(["主任务", "迟到消息"]);
       expect(session.payload?.turns[0]?.steeredMessages).toBeUndefined();
     } finally {
+      provider.drainSignals[0]!.release();
+      provider.finishSignals[0]!.release();
       await runner.close();
       await removeProofAccount(seeded.accountId);
     }

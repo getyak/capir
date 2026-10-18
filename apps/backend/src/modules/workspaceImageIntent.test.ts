@@ -37,6 +37,18 @@ async function run(options: { objective?: string; sourceText?: string; messageID
 }
 
 describe("help-first current-image host boundary", () => {
+  it("returns same-inspection pending text outside the answer body and never runs a second model", async () => {
+    const { result, inspector, stage } = await run({ observation: { ...observation, conversation_kind: "unknown",
+      counterparty_name: null, visible_text: ["松禾设计"],
+      visible_entities: [{ kind: "company", text: "松禾设计", source_excerpt: "松禾设计" }] } });
+    expect(inspector.inspect).toHaveBeenCalledOnce();
+    expect(result.captureImageObservation).toMatchObject({ artifact_id: artifactID, content_hash: image.contentHash,
+      inspection_request_id: "inspection", pending: true, clues: [{ kind: "company", text: "松禾设计", source_excerpt: "松禾设计" }] });
+    expect(result.block).not.toHaveProperty("captureImageObservation");
+    expect(stage).not.toHaveBeenCalled();
+    const later = await run({ messageID: laterMessageID });
+    expect(later.result.captureImageObservation).toBeUndefined();
+  });
   it.each(["只分析这张图片", "no_action", "不要保存记忆，先给结论", "不做任何操作，只给建议",
     "Only explain this image", "Do not save anything"])("keeps the answer without automatic proposals: %s", async objective => {
     const { result, stage } = await run({ objective });

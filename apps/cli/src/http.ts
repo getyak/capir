@@ -27,6 +27,9 @@ registerContractFormats();
 
 export type FetchLike = typeof fetch;
 
+/** Local deadline provenance; the public transport code stays unchanged. */
+export class CapirRequestDeadlineError extends CapirCliError {}
+
 /** Default transport deadline when no duration was selected explicitly. */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -42,6 +45,7 @@ function requestDeadline(
   external?: AbortSignal,
 ): {
   signal: AbortSignal;
+  didTimeout(): boolean;
   race<T>(work: Promise<T>): Promise<T>;
   dispose(): void;
 } {
@@ -62,6 +66,9 @@ function requestDeadline(
   timer.unref?.();
   return {
     signal: controller.signal,
+    // Only our own timer can supply this exact reason. An external abort or
+    // an upstream error code never establishes a request deadline.
+    didTimeout: () => controller.signal.reason === expired,
     race: (work) => Promise.race([work, rejection]),
     dispose: () => {
       clearTimeout(timer);
@@ -140,7 +147,8 @@ export class CapirBackendClient {
           signal: deadline.signal,
         }));
       } catch {
-        throw new CapirCliError(
+        const TransportError = deadline.didTimeout() ? CapirRequestDeadlineError : CapirCliError;
+        throw new TransportError(
           "CAPIR_TRANSPORT",
           EXIT.INFRASTRUCTURE,
           `The capir backend at ${this.origin} could not be reached.`,
@@ -150,7 +158,8 @@ export class CapirBackendClient {
       try {
         text = await deadline.race(response.text());
       } catch {
-        throw new CapirCliError(
+        const TransportError = deadline.didTimeout() ? CapirRequestDeadlineError : CapirCliError;
+        throw new TransportError(
           "CAPIR_TRANSPORT",
           EXIT.INFRASTRUCTURE,
           `The capir backend at ${this.origin} interrupted its response.`,

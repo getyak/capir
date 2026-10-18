@@ -1,113 +1,6 @@
 import Foundation
 import WebKit
 
-struct CaptureAdmission: Decodable, Sendable {
-    let sessionId: UUID
-    let messageId: UUID
-    let queueEntryId: UUID
-    let status: String
-}
-
-struct CaptureImageManifest: Decodable, Sendable {
-    let attachmentId: UUID
-    let byteSize: Int
-    let contentHash: String
-}
-
-struct CaptureReceipt: Decodable, Sendable {
-    let sessionId: UUID
-    let messageId: UUID
-    let queueEntryId: UUID
-    let status: String
-    let imageManifest: [CaptureImageManifest]
-    let resultRecorded: Bool
-}
-
-enum CaptureTransportError: Error, Equatable {
-    case staleOrigin
-    case untrustedHost
-    case malformedResponse
-    case server(Int, String)
-    case unavailable
-}
-
-enum CaptureTransportPayload {
-    static func encode(_ intent: CaptureIntent) throws -> Data {
-        guard intent.hasRawImage, intent.imagePNG.count == intent.imageByteSize else {
-            throw CaptureIntentError.emptyImage
-        }
-        let image: [String: Any] = [
-            "attachment_id": intent.attachmentId.uuidString.lowercased(),
-            "file_name": "capture.png",
-            "media_type": "image/png",
-            "byte_size": intent.imageByteSize,
-            "content_hash": intent.contentHash,
-            "data_base64": intent.imagePNG.base64EncodedString(),
-        ]
-        let body: [String: Any] = [
-            "policy_version": intent.policyVersion,
-            "owner_scope": intent.ownerScope,
-            "idempotency_key": intent.idempotencyKey,
-            "session_id": intent.sessionId.uuidString.lowercased(),
-            "message_id": intent.messageId.uuidString.lowercased(),
-            "objective": "",
-            "images": [image],
-        ]
-        return try JSONSerialization.data(withJSONObject: body)
-    }
-}
-
-/// Later-started authenticated reads may finish first. Once a newer owner,
-/// login or processor policy is observed, an older response cannot restore
-/// authority merely because it arrives last.
-@MainActor
-final class CaptureContextReadFence {
-    private struct Identity: Equatable {
-        let origin: String
-        let ownerScope: String
-        let loginBinding: String
-        let policyVersion: String
-        init(_ context: CaptureContext) {
-            origin = context.origin
-            ownerScope = context.ownerScope
-            loginBinding = context.loginBinding
-            policyVersion = context.processing.policyVersion
-        }
-    }
-    private enum Latest { case context(Identity), signedOut }
-    private var nextSequence = 0
-    private var appliedSequence = 0
-    private var latest: Latest?
-
-    func begin() -> Int { nextSequence += 1; return nextSequence }
-
-    func accept(_ context: CaptureContext, sequence: Int) throws {
-        if sequence < appliedSequence {
-            guard case .some(.context(let current)) = latest, current == Identity(context) else {
-                throw CaptureTransportError.staleOrigin
-            }
-            return
-        }
-        appliedSequence = sequence
-        latest = .context(Identity(context))
-    }
-
-    @discardableResult
-    func signedOut(sequence: Int) -> Bool {
-        guard sequence >= appliedSequence else { return false }
-        appliedSequence = sequence
-        latest = .signedOut
-        return true
-    }
-}
-
-@MainActor
-protocol CaptureTransporting {
-    func context() async throws -> CaptureContext
-    func admit(_ intent: CaptureIntent, context: CaptureContext) async throws -> CaptureAdmission
-    func receipt(for intent: CaptureIntent, context: CaptureContext) async throws -> CaptureReceipt?
-}
-
 /** Only native code calls this fixed isolated-world fetch. The page gains no capture API. */
 @MainActor
 final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelegate {
@@ -116,7 +9,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     const host = '/api/desktop-capture/host';
     if (location.pathname !== host) throw new Error('capture host changed');
     const permitted = path === '/api/desktop-capture/context' || path === '/api/desktop-capture/recent-session' ||
-      /^\\/api\\/desktop-capture\\/[0-9a-f-]{36}\\/[0-9a-f-]{36}$/.test(path);
+      /^\\/api\\/desktop-capture\\/[0-9a-f-]{36}\\/[0-9a-f-]{36}(?:\\/result)?$/.test(path);
     if (!permitted) throw new Error('capture path unavailable');
     const destination = new URL(path, location.origin);
     if (destination.origin !== location.origin) throw new Error('capture origin changed');
@@ -134,6 +27,11 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
       return { status: response.status, text: await response.text() };
     } finally { clearTimeout(timer); }
     """
+
+    let automaticallyPollsStatus = true
+    func isOriginCurrent(_ value: String) -> Bool {
+        origin.url.absoluteString == value && (try? assertOrigin()) != nil
+    }
 
     let origin: WorkspaceOrigin
     private let webView: WKWebView
@@ -312,5 +210,31 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
         } catch CaptureTransportError.server(404, _) {
             return nil
         }
+    }
+
+    func result(for intent: CaptureIntent, context: CaptureContext) async throws -> CaptureResult? {
+        let fresh = try await self.context()
+        guard intent.canReadback(context: fresh, now: Date()) else { throw CaptureTransportError.staleOrigin }
+        let path = "/api/desktop-capture/\(intent.sessionId.uuidString.lowercased())/\(intent.messageId.uuidString.lowercased())/result"
+        let data = try await fetch(path: path, method: "GET", binding: fresh.loginBinding, account: fresh.workspaceAccountID)
+        guard data.count <= 24_000 else { throw CaptureTransportError.malformedResponse }
+        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let result = try decoder.decode(CaptureResult.self, from: data)
+        guard result.matches(intent: intent, queueEntryID: intent.queueEntryId) else {
+            throw CaptureTransportError.malformedResponse
+        }
+        return result
+    }
+
+    func originalSourceRequest(result: CaptureResult, context: CaptureContext) throws -> (URLRequest, LoginStoreSelection) {
+        try assertOrigin()
+        guard context.origin == origin.url.absoluteString, context.expiresAt > Date(), let storeSelection else {
+            throw CaptureTransportError.staleOrigin
+        }
+        let path = "api/workspace-sessions/\(result.sessionId.uuidString.lowercased())/conversation-images/\(result.messageId.uuidString.lowercased())/0"
+        var request = URLRequest(url: origin.url.appendingPathComponent(path), cachePolicy: .reloadIgnoringLocalCacheData)
+        request.setValue(context.loginBinding, forHTTPHeaderField: "x-workspace-session")
+        request.setValue(context.workspaceAccountID, forHTTPHeaderField: "x-talent-signal-workspace")
+        return (request, storeSelection)
     }
 }

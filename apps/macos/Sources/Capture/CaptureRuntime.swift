@@ -41,11 +41,14 @@ final class CaptureRuntime: ObservableObject {
     private let previewWindow = CapturePreviewWindowController()
     private let onboardingWindow = CaptureOnboardingWindowController()
     private let hint = CaptureHintController()
+    private let relayWindow = CaptureRelayWindowController()
+    private let originalWindow = CaptureOriginalWindowController()
     private var browser: CaptureWebSession?
     private var connectionObserver: AnyCancellable?
     private var storeObserver: AnyCancellable?
     private var shortcutObserver: AnyCancellable?
     private var presentationObserver: AnyCancellable?
+    private var relayObserver: AnyCancellable?
     private var openWorkspace: (() -> Void)?
     private var started = false
     private var shortcutInitiated = false
@@ -91,6 +94,7 @@ final class CaptureRuntime: ObservableObject {
             previewWindow.dismiss()
             onboardingWindow.dismiss()
             hint.dismiss()
+            relayWindow.dismiss(); originalWindow.dismiss()
             shortcutInitiated = false
         }
         guard let origin else {
@@ -98,7 +102,7 @@ final class CaptureRuntime: ObservableObject {
             recentRequestRevision += 1
             recentConversation = .unavailable
             resumingBrowser = nil
-            browser = nil; coordinator = nil; presentationObserver = nil
+            browser = nil; coordinator = nil; presentationObserver = nil; relayObserver = nil
             rescheduleLocalExpiry()
             return
         }
@@ -117,6 +121,20 @@ final class CaptureRuntime: ObservableObject {
                                                  self.captureOwnerVerified = true
                                              })
         self.coordinator = coordinator
+        relayObserver = coordinator.$relay.sink { [weak self, weak coordinator] _ in
+            Task { @MainActor in
+                guard let self, let coordinator, self.coordinator === coordinator else { return }
+                guard let next = coordinator.relay,
+                      coordinator.currentOwnerRevision == next.ownerRevision else {
+                    if coordinator.relay == nil { self.relayWindow.dismiss(); self.originalWindow.dismiss() }
+                    return
+                }
+                self.relayWindow.show(next, coordinator: coordinator,
+                    openSession: { [weak self] in self?.openSession($0) },
+                    inspectSource: { [weak self] in self?.inspectRelaySource() })
+                if self.relayWindow.isVisible { self.hint.dismiss() }
+            }
+        }
         rescheduleLocalExpiry()
         presentationObserver = coordinator.$presentation.sink { [weak self, weak coordinator] state in
             guard let self, let coordinator else { return }
@@ -131,8 +149,10 @@ final class CaptureRuntime: ObservableObject {
                 case .idle: break
                 }
             }
-            self.hint.show(state, topActivity: self.preferences.topActivityHint == .on) { [weak self] sessionID in
-                self?.openSession(sessionID)
+            if !self.relayWindow.isVisible {
+                self.hint.show(state, topActivity: self.preferences.topActivityHint == .on) { [weak self] sessionID in
+                    self?.openSession(sessionID)
+                }
             }
         }
         Task { await coordinator.restoreRecovery() }
@@ -204,6 +224,34 @@ final class CaptureRuntime: ObservableObject {
         Task { await openSessionAfterOwnerReadback(sessionID) }
     }
 
+    func startCaptureFromPet() {
+        shortcutInitiated = true
+        if let coordinator { Task { await coordinator.startCapture() } }
+        else { openWorkspace?() }
+    }
+
+    private func inspectRelaySource() {
+        guard let browser, let coordinator, let snapshot = coordinator.relay, snapshot.result != nil else { return }
+        Task { @MainActor in
+            await coordinator.refreshRelayResult()
+            guard self.browser === browser, self.coordinator === coordinator,
+                  coordinator.currentOwnerRevision == snapshot.ownerRevision,
+                  let current = coordinator.relay, current.intentID == snapshot.intentID,
+                  let result = current.result else { return }
+            do {
+                let context = try await browser.context()
+                guard self.browser === browser, self.coordinator === coordinator,
+                      coordinator.currentOwnerRevision == snapshot.ownerRevision,
+                      coordinator.relay?.intentID == snapshot.intentID else { return }
+                if reconcileCaptureOwner(context) { return }
+                guard coordinator.currentOwnerRevision == snapshot.ownerRevision,
+                      coordinator.relay?.intentID == snapshot.intentID else { return }
+                let (request, selection) = try browser.originalSourceRequest(result: result, context: context)
+                originalWindow.show(request: request, selection: selection)
+            } catch { originalWindow.dismiss() }
+        }
+    }
+
     private func openSessionAfterOwnerReadback(_ sessionID: UUID) async {
         guard let browser else { return }
         let ownerRevision = coordinator?.currentOwnerRevision
@@ -231,6 +279,7 @@ final class CaptureRuntime: ObservableObject {
         previewWindow.dismiss()
         onboardingWindow.dismiss()
         hint.dismiss()
+        relayWindow.dismiss(); originalWindow.dismiss()
         recentConversation = .needsSignIn
     }
 
@@ -243,6 +292,7 @@ final class CaptureRuntime: ObservableObject {
             previewWindow.dismiss()
             onboardingWindow.dismiss()
             hint.dismiss()
+            relayWindow.dismiss(); originalWindow.dismiss()
             if let coordinator { Task { await coordinator.restoreRecovery() } }
         }
         captureOwnerVerified = true

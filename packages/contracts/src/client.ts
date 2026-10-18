@@ -1365,6 +1365,10 @@ export class TalentSignalClient {
     return this.request(`/v1/desktop-capture/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}`, { method: "GET" });
   }
 
+  getDesktopCaptureResult(sessionId: string, messageId: string): Promise<import("./desktopCaptureSchemas.js").DesktopCaptureResult> {
+    return this.request(`/v1/desktop-capture/${encodeURIComponent(sessionId)}/${encodeURIComponent(messageId)}/result`, { method: "GET" });
+  }
+
   /** Anonymous, rate-limited preparation of one browser-owned macOS login grant. */
   prepareDesktopBrowserLogin(
     request: import("./desktopBrowserLoginSchemas.js").DesktopBrowserLoginPrepareRequest,

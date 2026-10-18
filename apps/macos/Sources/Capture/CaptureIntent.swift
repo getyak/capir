@@ -82,7 +82,7 @@ enum CapturePhase: String, Codable, Sendable {
 }
 
 enum CaptureIntentError: Error {
-    case invalidContext, emptyImage, imageTooLarge
+    case invalidContext, emptyImage, imageTooLarge, invalidObjective
 }
 
 /** One immutable image and one stable message identity across retries. */
@@ -101,6 +101,8 @@ struct CaptureIntent: Codable, Equatable, Sendable {
     var authorizedReplayLoginBinding: String?
     let policyVersion: String
     let capturedAt: Date
+    /// Optional for pre-instruction encrypted recovery compatibility.
+    let objective: String?
     var imagePNG: Data
     /// Retains exact receipt matching after verified admission releases pixels.
     /// Optional so recovery files written before this field existed still load.
@@ -110,12 +112,14 @@ struct CaptureIntent: Codable, Equatable, Sendable {
     var queueEntryId: UUID?
 
     init(imagePNG: Data, context: CaptureContext, capturedAt: Date = Date(),
-         id: UUID = UUID(), sessionId: UUID = UUID(), messageId: UUID = UUID(), attachmentId: UUID = UUID()) throws {
+         id: UUID = UUID(), sessionId: UUID = UUID(), messageId: UUID = UUID(), attachmentId: UUID = UUID(),
+         objective: String = "") throws {
         guard context.processing.available, !context.ownerScope.isEmpty, !context.loginBinding.isEmpty,
               !context.processing.policyVersion.isEmpty
         else { throw CaptureIntentError.invalidContext }
         guard !imagePNG.isEmpty else { throw CaptureIntentError.emptyImage }
         guard imagePNG.count <= 10_000_000 else { throw CaptureIntentError.imageTooLarge }
+        guard objective.utf16.count <= 1000 else { throw CaptureIntentError.invalidObjective }
         self.id = id
         self.sessionId = sessionId
         self.messageId = messageId
@@ -126,6 +130,7 @@ struct CaptureIntent: Codable, Equatable, Sendable {
         self.authorizedReplayLoginBinding = nil
         self.policyVersion = context.processing.policyVersion
         self.capturedAt = capturedAt
+        self.objective = objective.isEmpty ? nil : objective
         self.imagePNG = imagePNG
         recordedImageByteSize = nil
         contentHash = SHA256.hash(data: imagePNG).map { String(format: "%02x", $0) }.joined()

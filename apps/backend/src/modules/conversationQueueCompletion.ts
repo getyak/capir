@@ -58,6 +58,8 @@ export interface ConversationQueueSteeredMessage {
 
 /** Serializable execution truth needed to replay Session persistence once. */
 export interface ConversationQueueExecutionResult {
+  /** Host-owned observation, deliberately excluded from queueTurn/Session payload. */
+  captureImageObservation?: import("@talent-signal/contracts").CaptureImageObservation;
   body: UnscopedChatTaskResponse;
   conversationMessageIDs: string[];
   previousTaskIDs: string[];

@@ -11,7 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { CapirCliError, EXIT } from "./errors.js";
 import type { CapirEnvironment } from "./config.js";
-import { CapirBackendClient } from "./http.js";
+import { CapirBackendClient, CapirRequestDeadlineError } from "./http.js";
 import { CapirAuthV2Client, serializeAuthRecord, usableCredential, parseAuthRecord } from "./authV2.js";
 import {runAuthLogout} from "./auth.js";
 import type { CredentialStore, CredentialTxn } from "./keyring.js";
@@ -99,12 +99,14 @@ export async function runAuthLogin(
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
 
-  const expired = (): CapirCliError | null => {
+  const expired = (requestFailure?: unknown): CapirCliError | null => {
     if (deadlineError) return deadlineError;
-    if (Date.now() < deadlineAt) return null;
-    deadlineError = new CapirCliError("CAPIR_LOGIN_TIMEOUT", EXIT.INFRASTRUCTURE,
-      `Login did not complete within ${options.timeoutSeconds}s.`);
-    controller.abort();
+    // The remaining-budget request timer may fire before the login timer or
+    // Date.now's next millisecond. Keep its local timeout evidence instead of
+    // misreporting the exhausted login budget as a network failure.
+    if (Date.now() < deadlineAt && !(requestFailure instanceof CapirRequestDeadlineError)) return null;
+    terminate(new CapirCliError("CAPIR_LOGIN_TIMEOUT", EXIT.INFRASTRUCTURE,
+      `Login did not complete within ${options.timeoutSeconds}s.`));
     return deadlineError;
   };
 
@@ -323,6 +325,9 @@ export async function runAuthLogin(
       if(verified.state!=='active' || verified.grant?.id!==exchanged.grant.id || !verified.identity) throw new CapirCliError('CAPIR_LOGIN_UNVERIFIED',EXIT.INFRASTRUCTURE,'The new grant could not be verified; log in again.');
       verifiedIdentity=verified.identity;
     } catch(error) {
+      // Latch the first timeout before awaited compensation can receive a
+      // later SIGINT or outer timer. Cleanup still settles before returning.
+      expired(error);
       const cleanup=await cleanupMintedGrant(exchanged.access_token,exchanged.access_token,'refresh_token' in exchanged ? String(exchanged.refresh_token) : undefined);
       const terminal=expired();
       throw new CapirCliError(terminal?.code ?? 'CAPIR_LOGIN_UNVERIFIED',terminal?.exitCode ?? EXIT.INFRASTRUCTURE,terminal?.message ?? 'The login could not be verified; run auth login again.',{clientState:{remote_revoked:cleanup.remoteRevoked,local_minted_credential_absent:cleanup.localMintedAbsent}});
@@ -383,7 +388,7 @@ export async function runAuthLogin(
     environment: options.environment.name,
   };
   } catch(error) {
-    const terminal=expired();
+    const terminal=expired(error);
     if(terminal && !(error instanceof CapirCliError && error.code===terminal.code)) throw terminal;
     throw error;
   } finally {

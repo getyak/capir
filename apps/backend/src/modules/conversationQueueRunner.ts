@@ -107,6 +107,7 @@ function serializedResult(
   const toolCompletions = execution.agentProviderResult?.toolCompletions ?? [];
   return {
     body: execution.body,
+    ...(execution.captureImageObservation ? { captureImageObservation: execution.captureImageObservation } : {}),
     conversationMessageIDs: execution.conversationMessageIDs,
     previousTaskIDs: execution.previousTaskIDs,
     conversationSources: execution.conversationSources ?? [],
