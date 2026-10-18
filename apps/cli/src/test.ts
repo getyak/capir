@@ -188,13 +188,15 @@ function serverFailure(error: unknown, secrets: string[]): CapirCliError {
 /**
  * A dispatched mutation is unconfirmed whenever the outcome cannot be proven:
  * transport or body loss, an invalid success contract, or a local validation
- * failure after dispatch. Only a complete rejection status is definite.
+ * failure after dispatch. A server error can follow a committed mutation:
+ * create commits before replay/readback, and stop commits before status.
+ * Without no-commit authority, only a complete integer 4xx refusal is definite.
  */
 function unconfirmedProvisioningResult(error: unknown): boolean {
   return !(error instanceof TalentSignalHttpError)
     || !Number.isInteger(error.status)
     || error.status < 400
-    || error.status > 599;
+    || error.status >= 500;
 }
 
 function provisioningRecoveryCode(error: unknown): string {

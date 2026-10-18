@@ -67,6 +67,7 @@ function runFixture(overrides = {}) {
 async function startTestBackend(options = {}) {
   const calls = [];
   const runs = new Map(); // request_id -> { run, password }
+  const handoffs = new Map(); // request_id -> committed one-use handoff
   const server = createServer((request, response) => {
     const chunks = [];
     request.on("data", (chunk) => chunks.push(chunk));
@@ -97,6 +98,17 @@ async function startTestBackend(options = {}) {
           : record.path.endsWith("/handoffs") ? options.firstHandoffResponse : options.firstCreateResponse;
         if (status === 200 && firstMutation && fault) {
           record.responseFault = fault;
+          if (fault === "http-500" || fault === "http-599") {
+            // Production create commits before replay/readback; stop commits
+            // before status. A later failure becomes an INTERNAL_ERROR 500.
+            const owner = [...runs.values()].find((entry) => entry.run.id === (json.run?.id ?? json.run_id));
+            response.writeHead(fault === "http-500" ? 500 : 599, { "content-type": "application/json" });
+            return response.end(JSON.stringify({ error: {
+              code: "INTERNAL_ERROR",
+              message: `Untrusted post-commit failure ${owner?.password} ${OPERATOR_TOKEN} ${"h".repeat(43)}`,
+              request_id: randomUUID(),
+            } }));
+          }
           if (fault === "unexpected-status") {
             response.writeHead(304);
             return response.end();
@@ -159,7 +171,7 @@ async function startTestBackend(options = {}) {
       if (record.method === "POST" && record.path === "/v1/capir/tests") {
         if (options.rejectFirstCreate && creates() === 1) {
           // A definite rejection status with a malformed error body.
-          response.writeHead(400, { "content-type": "application/json" });
+          response.writeHead(options.rejectFirstCreateStatus ?? 400, { "content-type": "application/json" });
           response.end("{");
           return;
         }
@@ -225,14 +237,16 @@ async function startTestBackend(options = {}) {
             },
           });
         }
-        return send(200, {
+        const created = {
           schema_version: "capir-test.v1",
           handoff_id: randomUUID(),
           handoff_secret: "h".repeat(43),
           expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
           entry_path: "/capir/test-entry",
           run_id: handoff[1],
-        });
+        };
+        handoffs.set(body.request_id, created);
+        return send(200, created);
       }
       const status = record.path.match(/^\/v1\/capir\/tests\/([^/]+)$/);
       if (record.method === "GET" && status) {
@@ -250,6 +264,7 @@ async function startTestBackend(options = {}) {
     origin: `http://127.0.0.1:${port}`,
     calls,
     runs,
+    handoffs,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
@@ -543,7 +558,7 @@ describe("exact recovery and conflict boundaries", () => {
     assert.equal(Object.keys(keyringEntries(directory)).length, 1);
   });
 
-  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-wrapper", "missing-wrapper", "unexpected-status"]) {
+  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-wrapper", "missing-wrapper", "unexpected-status", "http-500", "http-599"]) {
     it(`committed_create_${fault}_response_keeps_same_recovery_identity`, async (t) => {
       const directory = scratch();
       const backend = await startTestBackend({ firstCreateResponse: fault });
@@ -555,7 +570,7 @@ describe("exact recovery and conflict boundaries", () => {
       const envelope = JSON.parse(lost.stdout);
       assert.equal(
         envelope.error.code,
-        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+        (fault === "partial" || fault === "unexpected-status" || fault.startsWith("http-")) ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
       );
       const requestId = envelope.error.recoverable_request_id;
       assert.ok(requestId);
@@ -596,7 +611,7 @@ describe("exact recovery and conflict boundaries", () => {
       const envelope = JSON.parse(lost.stdout);
       assert.equal(
         envelope.error.code,
-        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+        (fault === "partial" || fault === "unexpected-status" || fault.startsWith("http-")) ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
       );
       const requestId = envelope.error.recoverable_request_id;
       assert.ok(requestId);
@@ -618,21 +633,30 @@ describe("exact recovery and conflict boundaries", () => {
     });
   }
 
-  it("a definite rejection with malformed error JSON never becomes ambiguous", async (t) => {
-    const directory = scratch();
-    const backend = await startTestBackend({ rejectFirstCreate: true });
-    t.after(() => backend.close());
-    const requestId = randomUUID();
-    const rejected = await runCliBin(["test", "create", "--env", "t", "--request-id", requestId], prepared(directory, backend.origin));
-    assert.equal(rejected.code, 3, rejected.stdout);
-    const envelope = JSON.parse(rejected.stdout);
-    assert.equal(envelope.error.code, "CAPIR_TEST_UNAVAILABLE");
-    assert.equal(envelope.error.recoverable_request_id, undefined, "a definite refusal keeps its existing error path");
-    assert.equal(new OperationJournal(join(directory, "config")).find(requestId).status, "completed");
-    assert.equal(backend.runs.size, 0);
-    assert.equal(backend.calls.filter((c) => c.method === "POST" && c.path === "/v1/capir/tests").length, 1);
-    assert.ok(!rejected.stdout.includes(OPERATOR_TOKEN));
-  });
+  for (const [status, exitCode, errorCode] of [
+    [400, 3, "CAPIR_TEST_UNAVAILABLE"],
+    [401, 4, "CAPIR_TEST_AUTH_DENIED"],
+    [403, 4, "CAPIR_TEST_AUTH_DENIED"],
+    [409, 2, "CAPIR_TEST_CONFLICT"],
+    [429, 5, "CAPIR_TEST_QUOTA_EXCEEDED"],
+    [499, 3, "CAPIR_TEST_UNAVAILABLE"],
+  ]) {
+    it(`a definite ${status} rejection with malformed error JSON never becomes ambiguous`, async (t) => {
+      const directory = scratch();
+      const backend = await startTestBackend({ rejectFirstCreate: true, rejectFirstCreateStatus: status });
+      t.after(() => backend.close());
+      const requestId = randomUUID();
+      const rejected = await runCliBin(["test", "create", "--env", "t", "--request-id", requestId], prepared(directory, backend.origin));
+      assert.equal(rejected.code, exitCode, rejected.stdout);
+      const envelope = JSON.parse(rejected.stdout);
+      assert.equal(envelope.error.code, errorCode);
+      assert.equal(envelope.error.recoverable_request_id, undefined, "a definite refusal keeps its existing error path");
+      assert.equal(new OperationJournal(join(directory, "config")).find(requestId).status, "completed");
+      assert.equal(backend.runs.size, 0);
+      assert.equal(backend.calls.filter((c) => c.method === "POST" && c.path === "/v1/capir/tests").length, 1);
+      assert.ok(!rejected.stdout.includes(OPERATOR_TOKEN));
+    });
+  }
 
   it("a ready stop response never proves revocation, preserves the credential and resumes the same stop", async (t) => {
     const directory = scratch();
@@ -817,7 +841,7 @@ function inProcessDeps(directory, backendOrigin, extras = {}) {
 }
 
 describe("browser readiness is separate from creation", () => {
-  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-path", "stale-expiry", "unexpected-status"]) {
+  for (const fault of ["partial", "json", "schema", "wrong-run", "wrong-path", "stale-expiry", "unexpected-status", "http-500", "http-599"]) {
     it(`uncertain_handoff_${fault}_keeps_separate_id_without_browser_or_automatic_retry`, async (t) => {
       const directory = scratch();
       const backend = await startTestBackend({ firstHandoffResponse: fault });
@@ -831,7 +855,7 @@ describe("browser readiness is separate from creation", () => {
       const envelope = JSON.parse(result.output);
       assert.equal(
         envelope.error.code,
-        (fault === "partial" || fault === "unexpected-status") ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
+        (fault === "partial" || fault === "unexpected-status" || fault.startsWith("http-")) ? "CAPIR_TEST_TRANSPORT_AMBIGUOUS" : "CAPIR_TEST_CONTRACT_INVALID",
       );
       const createId = envelope.error.recoverable_request_id;
       const handoffId = envelope.client_state.handoff_request_id;
@@ -841,10 +865,49 @@ describe("browser readiness is separate from creation", () => {
       assert.equal(envelope.run.id, backend.runs.get(createId).run.id);
       assert.equal(backend.runs.size, 1, "no second identity is allocated");
       assert.equal(backend.calls.filter((c) => c.path.endsWith("/handoffs")).length, 1, "no automatic handoff retry");
+      assert.ok(backend.handoffs.has(handoffId), "the handoff committed before the response failed");
       assert.equal(launches, 0, "no browser is opened after an unverified handoff");
       assert.ok(envelope.generated_credential, "the confirmed created run remains recoverable");
       assert.ok(!envelope.error.message.includes(envelope.generated_credential.password));
       assert.ok(!result.output.includes(OPERATOR_TOKEN));
+      assert.ok(!result.output.includes("h".repeat(43)), "the committed handoff secret is never exposed");
+      if (fault.startsWith("http-")) {
+        // Reuse the CREATE identity and credential, but request a fresh
+        // one-use handoff instead of replaying the uncertain handoff.
+        deps.spawnRunner = async (message) => {
+          launches += 1;
+          return {
+            ok: true,
+            launched: true,
+            pid: 4242,
+            sandbox_id: message.sandbox_id,
+            entry_path: message.entry_path,
+            browser: { name: "chromium", version: "123", headless: false },
+            verification: {
+              banner_state: "active",
+              demo_expiry: message.sandbox_expires_at,
+              dataset_state: "ready",
+              dataset_counts: { contacts: 12, observations: 30, tasks: 4 },
+              settled: true,
+              settled_empty: false,
+              preset_expectation: "daily",
+              passed: true,
+              observations: [],
+            },
+          };
+        };
+        const recovered = await runCli(["test", "create", "--env", "t", "--request-id", createId, "--open", "web"], deps);
+        assert.equal(recovered.exitCode, 0, recovered.output);
+        const replay = JSON.parse(recovered.output);
+        assert.equal(replay.run.id, envelope.run.id);
+        assert.deepEqual(replay.generated_credential, envelope.generated_credential);
+        assert.notEqual(replay.handoff_request_id, handoffId);
+        assert.equal(deps.journal.find(handoffId).status, "ambiguous");
+        assert.equal(deps.journal.find(replay.handoff_request_id).status, "completed");
+        assert.equal(backend.handoffs.size, 2);
+        assert.equal(backend.runs.size, 1);
+        assert.equal(launches, 1);
+      }
     });
   }
 
