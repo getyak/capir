@@ -34,6 +34,7 @@ export * from "./accountSchemas.js";
 export * from "./mcpSchemas.js";
 export * from "./mcpInteractionSchemas.js";
 export * from "./timeWorkspaceSchemas.js";
+export * from "./personSourceSyncSchemas.js";
 export * from "./memorySchemas.js";
 
 // Legacy Stage A capir client contract definitions (auth/sandbox) adopted from

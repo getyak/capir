@@ -217,4 +217,28 @@ describe("confirmed Memory correction", () => {
       expect(controller.items).toEqual([nextItem]); expect(controller.edit).toBeNull(); expect(controller.notice).toBeNull(); expect(event).not.toHaveBeenCalled();
     } finally { window.removeEventListener("session-expired", event); }
   });
+  it.each(["mutation", "conflict page"])("stops old-scope requests when a %s body arrives after the account changes", async kind => {
+    await start();
+    if (kind === "conflict page") {
+      fetcher.mockResolvedValueOnce(Response.json({}, { status: 409 }));
+      await act(async () => controller.save());
+    }
+    let finishBody!: (body: unknown) => void;
+    const response = kind === "mutation" ? mutation() : page([], true, "old-next-page");
+    vi.spyOn(response, "json").mockImplementation(() => new Promise(resolve => { finishBody = resolve; }));
+    fetcher.mockResolvedValueOnce(response).mockResolvedValueOnce(Response.json({ code: "session_stale" }, { status: 409 }));
+    let pending!: Promise<unknown>;
+    await act(async () => { pending = kind === "mutation" ? controller.save() : controller.refreshConflict(); });
+    const nextItem = memory("new-account-record", { display_text: "新账号的记忆" });
+    await act(async () => root.render(createElement(Probe, { binding: "another-account", capability: "another-entry", entries: [nextItem] })));
+    const event = vi.fn(); window.addEventListener("session-expired", event);
+    try {
+      await act(async () => {
+        finishBody(kind === "mutation" ? { status: "active", item: corrected() } : { person_id: PERSON, items: [], has_more: true, next_cursor: "old-next-page" });
+        await pending;
+      });
+      expect(fetcher).toHaveBeenCalledTimes(kind === "mutation" ? 1 : 2);
+      expect(controller.items).toEqual([nextItem]); expect(controller.edit).toBeNull(); expect(event).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("session-expired", event); }
+  });
 });

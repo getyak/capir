@@ -14,6 +14,10 @@ trap cleanup EXIT
 python3 -m unittest discover -s "$REPOSITORY_ROOT/scripts/macos" -p '*_test.py'
 
 node --test "$REPOSITORY_ROOT/scripts/macos/summarize-companion-trials.test.mjs" "$REPOSITORY_ROOT/scripts/macos/release-policy.test.cjs"
+mkdir -p "$DERIVED_DATA/installer-tests"
+(cd "$REPOSITORY_ROOT" && MACOS_INSTALLER_TEST_ROOT="$DERIVED_DATA/installer-tests" \
+  node --test scripts/macos/installer.test.mjs scripts/macos/first-run-acceptance.test.mjs \
+    scripts/macos/installer-drag-acceptance.test.mjs scripts/macos/verify-installer-bundles.test.mjs)
 
 xcodebuild \
   -quiet \
