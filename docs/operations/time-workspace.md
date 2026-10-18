@@ -119,6 +119,13 @@ Grant and run content visibility checks the live source receipt as well as
 capture/resource state, including an elapsed authorization deadline before its
 expiry sweep runs. Filtered ownership remains available for deletion, while
 source URLs and observed locators are redacted after deauthorization.
+The default Web URL intake uses ephemeral transport retention. Purging that
+transport on `review_completed` preserves the reviewed evidence and its separate
+authorization, so it must not make a new grant appear revoked. Readbacks accept
+this specific purged state while still checking authorization and retention
+deadlines before sweeps run. Retention-deadline purges and deletion stay hidden.
+Regression coverage must create a public URL through the actual resource intake;
+an inserted `available` receipt cannot prove this default Web lifecycle.
 
 ## Verification
 
