@@ -246,6 +246,21 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Verify native SDK tool context and authority over loopback
+        env:
+          TALENT_SIGNAL_CLAUDE_OFFLINE_TEST: "true"
+          TALENT_SIGNAL_CLAUDE_OFFLINE_ARTIFACT_DIR: ${{ runner.temp }}/claude-tool-context-evidence
+        run: pnpm --filter @talent-signal/agent exec vitest run src/claudeHarnessToolContext.offline.test.ts --maxWorkers=1
+
+      - name: Preserve synthetic SDK protocol receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: claude-tool-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/claude-tool-context-evidence/tool-context-*/*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Build
         env:
           # Enables production-mode route evaluation in CI only; deployments use

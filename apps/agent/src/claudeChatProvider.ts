@@ -317,6 +317,10 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
     const sessionTitleRequested = request.sessionTitleRequested === true;
     const calendar = calendarDraftCapability(request.calendarContext, request.objective);
     let searched = false;
+    // GET-128 bounded tool context is opt-in for ordinary-text workspace
+    // conversation only. JSON, image and relationship configurations keep the
+    // legacy eager tool context exactly as before.
+    const boundedDiscovery = request.outputMode !== "json" && userImages.length === 0;
     const tools: HarnessTool[] = request.toolManifest.flatMap((name): HarnessTool[] => {
       const definition = AGENT_TOOL_CATALOG[name];
       // Each SDK tool receives its actual required fields, not the lossy union
@@ -330,7 +334,9 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
         })
         : [{ name, description: definition.description, schema: definition.schema, readOnly: definition.readOnly, operation: undefined }];
       return variants.map(variant => ({ name: variant.name, description: variant.description,
-        schema: variant.schema, readOnly: variant.readOnly, alwaysLoad: true,
+        // Deferred behind bounded discovery only; legacy configurations load
+        // the full admitted catalog eagerly, unchanged.
+        schema: variant.schema, readOnly: variant.readOnly, alwaysLoad: !boundedDiscovery,
         execute: async (input, executionSignal) => {
           executionSignal.throwIfAborted();
           if (name === "contact_workspace") {
@@ -363,6 +369,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
     const trusted = supplied?.run_id === request.runID && supplied.workspace_id === request.scopeSummary.workspaceID
       && supplied.authorization_scope === "workspace_conversation" ? supplied : undefined;
     const outcome = await this.execute(this.configuration, { ...((request.continuation && userImages.length === 0) ? { continuation: request.continuation } : {}), ...(trusted ? { observation: trusted } : {}), objective: request.objective,
+      ...(boundedDiscovery ? { toolDiscovery: "bounded" as const } : {}),
       ...(request.messageID ? { messageID: request.messageID } : {}),
       ...(request.steering ? { steering: request.steering } : {}),
       ...(request.calendarContext && request.outputMode !== "json" ? { preparationReady: calendar.preparationReady, onPreparationSuperseded: calendar.discard, preparationRevision: calendar.preparationRevision } : {}),
