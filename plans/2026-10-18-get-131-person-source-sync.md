@@ -356,3 +356,29 @@ integration **31**, Memory integration **87**, plus focused source-sync,
 research and lifecycle unit regressions. Backend typecheck passed. Independent
 incremental review closed all confirmed findings. The first head's failure is
 retained as evidence; a fresh PR head must pass all CI gates before merge.
+
+### Reopening a deauthorized source
+
+Production acceptance preparation exposed a real composition gap: revoked and
+expired source envelopes redact `source_locator`, which also prevented the
+whole periodic control from mounting after reload. Two real-envelope composer
+regressions first failed for the absent management control. Periodic management
+now mounts independently of the one-shot form's URL requirement, displays a
+redacted placeholder, and retains owner-scoped deletion without enabling new
+or resumed reads. The two regressions plus the existing control/composer suite
+passed **32 tests**; no hidden URL is restored from local state or a grant.
+Final current-head CI and actual resident reload/delete acceptance remain required.
+
+The related backend read model also needed the live source-retention receipt;
+active capture/resource rows alone do not prove current authorization. Three
+actual PG cases reproduced URL disclosure after real owner revocation, real
+system expiry, and a deadline elapsed before the sweep. The corrected read
+queries join the receipt in both grant and run views, fail closed on absent or
+unavailable/unauthorized/expired receipts, and derive revoked/expired state
+without changing the grant's owner binding or CAS deletion. The initial expiry
+fixture had inconsistent parent/child deadlines and was rejected by the real
+lineage guard; that log is retained separately from the corrected three-case
+RED. Feature/focused PG and unit regressions then passed **93 tests** across
+four files, including all **34** feature integration cases.
+The complete Memory integration and source-lifecycle files then passed **91**
+more tests, for **184** passing regressions across the same six-file scope.

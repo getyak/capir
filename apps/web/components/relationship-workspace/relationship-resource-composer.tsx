@@ -1803,9 +1803,7 @@ function ScopedRelationshipResourceComposer({
             </section>
           ) : null}
           {selectedResource.resource.kind === "public_url" &&
-          selectedResource.resource.input_channel !== "api_connector" &&
-          selectedResource.resource.source_locator ? (
-            <>
+          selectedResource.resource.input_channel !== "api_connector" ? (
               <PersonSourceSyncControl
                 personId={personId}
                 relationshipContextId={relationshipContextId}
@@ -1820,6 +1818,10 @@ function ScopedRelationshipResourceComposer({
                   onEvidenceChanged();
                 }}
               />
+          ) : null}
+          {selectedResource.resource.kind === "public_url" &&
+          selectedResource.resource.input_channel !== "api_connector" &&
+          selectedResource.resource.source_locator ? (
               <section className="context-research-approval">
               <div>
                 <p className="eyebrow">公开研究</p>
@@ -1972,7 +1974,6 @@ function ScopedRelationshipResourceComposer({
                 </button>
               </footer>
             </section>
-            </>
           ) : null}
           {selectedResource.resource.kind === "conversation_screenshot" &&
           selectedResource.resource.processing_state ===

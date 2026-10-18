@@ -778,6 +778,45 @@ suite("person source sync durable cycles (isolated PostgreSQL)", () => {
     expect(after).toHaveLength(1);
   });
 
+  it.each(["revoked", "expired", "elapsed before sweep"] as const)("redacts source authorization %s from list/get/runs while retaining owner deletion", async (state) => {
+    const auth = await createAccount();
+    const contact = await makeContact(auth);
+    const seed = await makeSeed(auth, contact);
+    const created = await putPersonSourceSync(pool!, auth, randomUUID(), mutation(auth, contact, seed));
+    await runDuePersonSourceSyncs(pool!, { loadPage: loaderFor({ "/person": "Source authorization readback proof." }) });
+    expect((await runRows(auth, created.sync.id))[0]!.source_url).toBe(seed.url);
+    if (state === "revoked") {
+      const capture = await pool!.query("SELECT version FROM captures WHERE account_id=$1 AND id=$2", [auth.accountId, seed.captureId]);
+      await decideCaptureSourceAuthorization(pool!, auth, seed.captureId, { idempotency_key: randomUUID(), expected_capture_version: capture.rows[0].version, decision: "revoke", reason: "Synthetic source readback revocation." });
+    } else {
+      await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=statement_timestamp()-interval '1 second' WHERE account_id=$1", [auth.accountId]);
+      if (state === "expired") await sweepDueSourceAuthorizations(pool!);
+    }
+    // Deauthorization leaves the source/capture rows active; availability must
+    // use the live receipt, including expiry before the system sweep runs.
+    const source = await pool!.query("SELECT captures.status,resources.processing_state FROM captures JOIN source_resources resources ON resources.account_id=captures.account_id AND resources.capture_id=captures.id WHERE captures.account_id=$1 AND captures.id=$2", [auth.accountId, seed.captureId]);
+    expect(source.rows[0]).toEqual({ status: "active", processing_state: "ready" });
+    const listed = await listPersonSourceSyncs(pool!, auth, { person_id: contact.personId, relationship_context_id: contact.contextId, seed_resource_id: seed.resourceId });
+    expect(listed.syncs).toHaveLength(1);
+    const direct = await getPersonSourceSync(pool!, auth, created.sync.id);
+    for (const record of [listed.syncs[0]!, direct.sync]) {
+      expect(record.id).toBe(created.sync.id);
+      expect(record.content_available).toBe(false);
+      expect(record.source_url).toBeNull();
+      expect(record.allowed_domain).toBeNull();
+      expect(record.person_id).toBeNull();
+      expect(record.effective_state).toBe(state === "revoked" ? "revoked" : "expired");
+    }
+    const runs = await runRows(auth, created.sync.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.content_available).toBe(false);
+    expect(runs[0]!.source_url).toBeNull();
+    expect(runs[0]!.observed_canonical_url).toBeNull();
+    const deleted = await deletePersonSourceSync(pool!, auth, created.sync.id, { expected_revision: direct.sync.revision, idempotency_key: randomUUID() });
+    expect(deleted.sync.status).toBe("deleted");
+    expect(deleted.sync.content_available).toBe(false);
+  });
+
   it("redacts frozen source content from grant and run readbacks after source deletion", async () => {
     const auth = await createAccount();
     const contact = await makeContact(auth);

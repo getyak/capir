@@ -6,6 +6,7 @@ import {
   CONTRACT_VERSION,
   type RelationshipResourceDetail,
   type RelationshipResourceListItem,
+  type PersonSourceSyncRecord,
 } from "@talent-signal/contracts";
 
 const fetcher = vi.hoisted(() => vi.fn());
@@ -91,6 +92,49 @@ afterEach(async () => {
 });
 
 describe("bound public source periodic observation in the composer", () => {
+  it.each(["revoked", "expired"] as const)("keeps delete available after reopening a %s source whose URL is redacted", async (state) => {
+    const redactedSeed = { ...seed, source_locator: null, source_authorization_state: state };
+    const syncId = "b1000000-0000-4000-8000-000000000002";
+    const record: PersonSourceSyncRecord = {
+      id: syncId, revision: 1, last_operation_id: syncId,
+      created_at: "2026-10-08T08:00:00Z", updated_at: "2026-10-08T08:00:00Z",
+      status: "paused", effective_state: state === "revoked" ? "revoked" : "expired", content_available: false,
+      person_id: null, person_label: null, relationship_context_id: null, seed_resource_id: null,
+      source_url: null, allowed_domain: null, purpose: null,
+      time_zone: "Asia/Shanghai", interval_seconds: 86400,
+      expires_at: "2026-11-08T08:00:00Z", next_due_at: null,
+      authority: "user_authored", external_effect: "none",
+    };
+    let deleted = false;
+    fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/local-integration/resources?resource_id=")) return Response.json({ ...detail, resource: redactedSeed });
+      if (url.includes("/api/local-integration/research")) return Response.json(null);
+      if (url.startsWith("/api/time/person-source-syncs?")) return Response.json({ contract_version: CONTRACT_VERSION, syncs: deleted ? [] : [record], session_version: "binding" });
+      if (url.endsWith("/runs")) return Response.json({ contract_version: CONTRACT_VERSION, grant_id: syncId, runs: [], complete: true, session_version: "binding" });
+      if (init?.method === "DELETE") {
+        deleted = true;
+        return Response.json({ contract_version: CONTRACT_VERSION, sync: { ...record, revision: 2, status: "deleted", effective_state: "deleted" }, session_version: "binding" });
+      }
+      return Response.json({ resources: [redactedSeed] });
+    });
+    await render();
+    await act(async () => host.querySelector<HTMLButtonElement>(".context-resource-ledger__list > button")!.click());
+    const region = host.querySelector<HTMLElement>('[aria-label="定期公开来源读取"]');
+    expect(region).not.toBeNull();
+    expect(host.textContent).not.toContain(sourceUrl);
+    expect(host.querySelector(".context-research-approval")).toBeNull();
+    expect(region!.querySelector('input[type="checkbox"]')).toBeNull();
+    const buttons = [...region!.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.some((button) => /开始定期读取|恢复|暂停/.test(button.textContent ?? ""))).toBe(false);
+    const remove = buttons.find((button) => button.textContent?.includes("删除定期观察"));
+    expect(remove).toBeDefined();
+    await act(async () => remove!.click());
+    const deletes = fetcher.mock.calls.filter(([, init]) => (init as RequestInit)?.method === "DELETE");
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0][0]).toBe(`/api/time/person-source-syncs/${syncId}`);
+    expect(JSON.parse(String((deletes[0][1] as RequestInit).body))).toEqual({ expected_revision: 1, idempotency_key: expect.any(String) });
+    expect(fetcher.mock.calls.some(([, init]) => (init as RequestInit)?.method === "PUT")).toBe(false);
+  });
   it("shows the periodic control beside the one-shot research approval", async () => {
     await render();
     const trigger = host.querySelector<HTMLButtonElement>(

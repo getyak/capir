@@ -97,7 +97,8 @@ export interface PersonSourceSyncControlProps {
   personId: string;
   relationshipContextId: string;
   seedResourceId: string;
-  sourceUrl: string;
+  /** Revoked or expired source readbacks deliberately redact the URL. */
+  sourceUrl: string | null;
   sourceAuthorizationState: "authorized" | "revoked" | "expired";
   /** Owner session binding required by the time workspace boundary. */
   sessionBinding: string | null;
@@ -208,7 +209,7 @@ function ScopedPersonSourceSyncControl({
   // Times render in the grant's actual IANA zone (a new grant uses the chosen
   // browser zone); the interval stays an exact 86400-second UTC duration.
   const zone = sync?.time_zone ?? displayZone;
-  const eligible = sourceAuthorizationState === "authorized";
+  const eligible = sourceAuthorizationState === "authorized" && Boolean(sourceUrl);
 
   async function reconcilePendingOperation(pending: NonNullable<typeof pendingRef.current>): Promise<boolean> {
     try {
@@ -250,6 +251,10 @@ function ScopedPersonSourceSyncControl({
     }
     const retry =
       pending !== null && pending.operation === operation ? pending : null;
+    if (!retry && (operation === "create" || operation === "resume") && !eligible) {
+      setError("此来源当前不可读取；仍可删除已有定期观察。");
+      return;
+    }
     if (!retry && operation === "create") {
       const expiryMs = Date.parse(`${expiryDay}T23:59:59.000Z`);
       const now = Date.now();
@@ -374,7 +379,7 @@ function ScopedPersonSourceSyncControl({
         <p className="eyebrow">定期公开来源读取</p>
         <h4>每 24 小时查看这个网址的新内容。</h4>
         <p>
-          来源：<strong>{sourceUrl}</strong>
+          来源：<strong>{sourceUrl ?? "网址已隐藏"}</strong>
           <br />
           间隔：<strong>每 24 小时（固定间隔）</strong> · 下列时间按{" "}
           <strong>{zone}</strong> 显示，夏令时不改变间隔。每次仅读这一页，新内容会作为
@@ -387,7 +392,9 @@ function ScopedPersonSourceSyncControl({
           <Warning aria-hidden="true" size={16} weight="fill" />
           {sourceAuthorizationState === "revoked"
             ? "此来源访问已撤销；恢复访问后才能定期读取。"
-            : "此来源授权已过期；续期访问后才能定期读取。"}
+            : sourceAuthorizationState === "expired"
+              ? "此来源授权已过期；续期访问后才能定期读取。"
+              : "此来源当前不可读取；仍可删除已有定期观察。"}
         </p>
       ) : null}
       {syncs === null ? (

@@ -111,6 +111,14 @@ nothing auto-enters Memory, contacts are never created, and
 `external_effect='none'` holds everywhere. Deleting a grant keeps an
 identity-only receipt with its operation id; deleted or deauthorized source
 content never reappears in grant/run readbacks or recovery.
+Reopening a revoked or expired manual public source still mounts the
+owner-scoped periodic management control even when its URL is redacted.
+The existing grant can be deleted; a missing URL or source authorization
+never enables a new grant or resume, and the one-shot research form stays hidden.
+Grant and run content visibility checks the live source receipt as well as
+capture/resource state, including an elapsed authorization deadline before its
+expiry sweep runs. Filtered ownership remains available for deletion, while
+source URLs and observed locators are redacted after deauthorization.
 
 ## Verification
 

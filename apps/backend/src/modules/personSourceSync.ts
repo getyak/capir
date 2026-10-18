@@ -201,7 +201,13 @@ interface GrantRow {
   deleted_at: Date | null;
   person_label: string | null;
   source_available: boolean | null;
+  source_authorization_state: "authorized" | "revoked" | "expired" | null;
 }
+
+const LIVE_SOURCE_RECEIPT = `seed_receipt.source_access_state = 'available'
+    AND seed_receipt.authorization_state = 'authorized'
+    AND (seed_receipt.authorization_expires_at IS NULL
+      OR seed_receipt.authorization_expires_at > statement_timestamp())`;
 
 const GRANT_SOURCE_JOIN = `
   FROM person_source_sync_grants sync_grant
@@ -214,14 +220,24 @@ const GRANT_SOURCE_JOIN = `
    AND seed.id = sync_grant.seed_resource_id
   LEFT JOIN captures seed_capture
     ON seed_capture.account_id = seed.account_id
-   AND seed_capture.id = seed.capture_id`;
+   AND seed_capture.id = seed.capture_id
+  LEFT JOIN source_retention_receipts seed_receipt
+    ON seed_receipt.account_id = seed_capture.account_id
+   AND seed_receipt.capture_id = seed_capture.id`;
 
 const GRANT_COLUMNS = `sync_grant.*,
   person.display_label AS person_label,
-  (
+  COALESCE((
     seed.processing_state <> 'deleted'
     AND seed_capture.status = 'active'
-  ) AS source_available`;
+    AND ${LIVE_SOURCE_RECEIPT}
+  ), false) AS source_available,
+  CASE
+    WHEN seed_receipt.authorization_state = 'authorized'
+      AND seed_receipt.authorization_expires_at <= statement_timestamp()
+    THEN 'expired'
+    ELSE seed_receipt.authorization_state
+  END AS source_authorization_state`;
 
 function grantNotFound(): ApiError {
   return new ApiError(
@@ -237,6 +253,9 @@ function effectiveGrantState(
 ): PersonSourceSyncEffectiveState {
   if (row.status === "deleted") return "deleted";
   if (row.status === "revoked") return "revoked";
+  if (row.source_available === false || row.source_available === null) {
+    return row.source_authorization_state === "expired" ? "expired" : "revoked";
+  }
   if (row.expires_at !== null && row.expires_at.valueOf() <= now.valueOf()) {
     return "expired";
   }
@@ -314,6 +333,7 @@ const RUN_SELECT = `SELECT run.*,
       grant_row.status <> 'deleted'
       AND seed.processing_state <> 'deleted'
       AND seed_capture.status = 'active'
+      AND ${LIVE_SOURCE_RECEIPT}
     ) AS content_available
   FROM person_source_sync_runs run
   JOIN person_source_sync_grants grant_row
@@ -324,7 +344,10 @@ const RUN_SELECT = `SELECT run.*,
    AND seed.id = run.frozen_seed_resource_id
   LEFT JOIN captures seed_capture
     ON seed_capture.account_id = seed.account_id
-   AND seed_capture.id = seed.capture_id`;
+   AND seed_capture.id = seed.capture_id
+  LEFT JOIN source_retention_receipts seed_receipt
+    ON seed_receipt.account_id = seed_capture.account_id
+   AND seed_receipt.capture_id = seed_capture.id`;
 
 /**
  * Honest run readback: an unexpired lease is "running"; an expired lease with
