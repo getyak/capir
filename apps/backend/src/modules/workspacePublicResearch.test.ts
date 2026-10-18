@@ -867,8 +867,8 @@ describe("provider channel failure recovery",()=>{
   expect(result.attempts).toEqual([{call_id:result.callID,status:"failed",error_code:"CONTACT_RESEARCH_CHANNEL_TRANSIENT",channel_failures:[{channel:"web",error_code}]},{call_id:expect.any(String),status:"ok"}]);
   expect(result.attempts![1]!.call_id).not.toBe(result.callID);
  });
- it("does not retry a provider authentication failure or call it success",async()=>{
-  const {client,execute}=fakeClient(request=>searchReply(request,[],[{channel:"web",provider:"exa",status:"failed",result_count:0,truncated:false,error_code:"AUTH_FAILED"}]));
+ it.each(["AUTH_FAILED","REJECTED"] as const)("does not retry a permanent provider %s failure or call it success",async error_code=>{
+  const {client,execute}=fakeClient(request=>searchReply(request,[],[{channel:"web",provider:"exa",status:"failed",result_count:0,truncated:false,error_code}]));
   const research=createWorkspacePublicResearch({client,taskID,authorizedSubjects:()=>[subject("one","Simon Willison")]});
   expect(failed(await research.execute("search_public_subject",{subject_id:"one"})).error.detail).toBe("CONTACT_RESEARCH_CHANNEL_FAILED");expect(execute).toHaveBeenCalledOnce();
  });

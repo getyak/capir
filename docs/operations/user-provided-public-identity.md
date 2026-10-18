@@ -88,6 +88,14 @@ own admitted homepage or context anchors; conversation text, screenshots and
 private notes never cross the boundary. Model tool arguments accept only a
 host subject id.
 
+Provider credit refusals are permanent failures for automatic retry policy,
+including errors whose name ends in `CREDIT_UNAVAILABLE`. They remain rejected
+instead of being treated as temporary transport unavailability. Genuine
+transport failures and rate limiting retain their existing bounded recovery.
+Correct failure classification neither restores provider credit nor proves a
+search or cited answer succeeded; live acceptance still requires those actual
+receipts.
+
 ## What the answer may claim
 
 - Discovered and fetched sources carry real same-run receipts (url, title,
