@@ -1,3 +1,5 @@
+import { FormatRegistry } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import type {
   CapirTestCapabilitiesResponse,
   CapirTestCreateRequest,
@@ -8,6 +10,27 @@ import type {
   CapirTestRun,
   CapirTestStopRequest,
 } from "./capirTestSchemas.js";
+import { CapirTestRunResponseSchema } from "./capirTestSchemas.js";
+
+/**
+ * `Value.Check` fails every unregistered `format`, so the contract's formats
+ * must be available wherever this client validates a typed success envelope.
+ * Existing registrations (the CLI and Web format modules) are never replaced.
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DATE_TIME_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+function ensureProvisioningFormats(): void {
+  if (!FormatRegistry.Has("uuid")) {
+    FormatRegistry.Set("uuid", (value) => UUID_PATTERN.test(value));
+  }
+  if (!FormatRegistry.Has("date-time")) {
+    FormatRegistry.Set(
+      "date-time",
+      (value) => DATE_TIME_PATTERN.test(value) && !Number.isNaN(Date.parse(value)),
+    );
+  }
+}
 import type { ProductRunDetail, ProductRunList, ProductRunFeedbackMutation } from "./productRunSchemas.js";
 import type { TimeScope, TimeActivityListResponse, TimeScheduleMutationRequest, TimeScheduleDeleteRequest, TimeScheduleResponse, TimeReviewRequest, TimeReviewResponse } from "./timeWorkspaceSchemas.js";
 import type {
@@ -1766,20 +1789,21 @@ export class CapirTestProvisioningClient {
     return this.request<{ run: CapirTestRun }>("/v1/capir/tests", {
       method: "POST",
       body: request,
+      responseSchema: CapirTestRunResponseSchema,
     }).then((response) => response.run);
   }
 
   status(runId: string): Promise<CapirTestRun> {
     return this.request<{ run: CapirTestRun }>(
       `/v1/capir/tests/${encodeURIComponent(runId)}`,
-      { method: "GET" },
+      { method: "GET", responseSchema: CapirTestRunResponseSchema },
     ).then((response) => response.run);
   }
 
   stop(runId: string, request: CapirTestStopRequest): Promise<CapirTestRun> {
     return this.request<{ run: CapirTestRun }>(
       `/v1/capir/tests/${encodeURIComponent(runId)}/stop`,
-      { method: "POST", body: request },
+      { method: "POST", body: request, responseSchema: CapirTestRunResponseSchema },
     ).then((response) => response.run);
   }
 
@@ -1814,6 +1838,8 @@ export class CapirTestProvisioningClient {
       method: "GET" | "POST";
       body?: unknown;
       headers?: Record<string, string>;
+      /** Typed success contract, enforced before any field is projected. */
+      responseSchema?: unknown;
     },
   ): Promise<T> {
     let response: Response;
@@ -1851,18 +1877,72 @@ export class CapirTestProvisioningClient {
       );
     }
     let payload: unknown = {};
+    let body: string | undefined;
     try {
-      payload = await response.json();
+      body = await response.text();
     } catch {
-      // Non-JSON failures still surface as a typed error below.
+      if (response.ok) {
+        // Headers are not completion evidence. The dispatched mutation may
+        // already have committed; callers must keep its operation identity,
+        // credential and journal for same-id recovery.
+        throw new TalentSignalHttpError(
+          0,
+          "CAPIR_TEST_TRANSPORT_FAILED",
+          "The provisioning response could not be read completely.",
+          undefined,
+        );
+      }
+      // A received rejection status stays authoritative even when its
+      // optional error body cannot be read.
+    }
+    if (body !== undefined) {
+      try {
+        payload = JSON.parse(body);
+      } catch {
+        if (response.ok) {
+          // An invalid success body is an unconfirmed result, never a silent
+          // empty projection.
+          throw new TalentSignalHttpError(
+            response.status,
+            "CAPIR_TEST_RESPONSE_INVALID",
+            "The provisioning response is not valid JSON; its result is unconfirmed.",
+            undefined,
+          );
+        }
+      }
+      if (response.ok && (payload === null || typeof payload !== "object")) {
+        throw new TalentSignalHttpError(
+          response.status,
+          "CAPIR_TEST_RESPONSE_INVALID",
+          "The provisioning response is not a typed result; its result is unconfirmed.",
+          undefined,
+        );
+      }
     }
     if (!response.ok) {
-      const envelope = payload as ErrorEnvelope;
+      const envelope = (payload && typeof payload === "object" ? payload : {}) as ErrorEnvelope;
       throw new TalentSignalHttpError(
         response.status,
         envelope.error?.code ?? "HTTP_ERROR",
         envelope.error?.message ?? `Request failed with ${response.status}.`,
         envelope.error?.details,
+      );
+    }
+    // Register lazily: importing the general client must not preempt the
+    // caller's format initialization (TypeSystem.Format rejects duplicates).
+    if (options.responseSchema !== undefined) ensureProvisioningFormats();
+    if (
+      options.responseSchema !== undefined &&
+      !Value.Check(options.responseSchema as never, payload)
+    ) {
+      // A success body that is not a fully typed result is an unconfirmed
+      // outcome at the received 2xx status: never a silent projection and
+      // never a completed mutation.
+      throw new TalentSignalHttpError(
+        response.status,
+        "CAPIR_TEST_RESPONSE_INVALID",
+        "The provisioning response is not a typed capir-test.v1 result; its result is unconfirmed.",
+        undefined,
       );
     }
     return payload as T;
