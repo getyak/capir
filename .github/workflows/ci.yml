@@ -377,6 +377,7 @@ jobs:
           pnpm --filter @talent-signal/backend exec vitest run src/modules/meetingDrafts.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/conversationQueue.integration.test.ts src/modules/conversationQueueStream.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/timeActivities.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run src/modules/personSourceSync.integration.test.ts --maxWorkers=1
           pnpm --filter @talent-signal/backend exec vitest run src/modules/people.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/memoryReview.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism src/modules/mcpInteractions.integration.test.ts src/modules/mcpConversation.integration.test.ts src/modules/mcpOauthCleanup.integration.test.ts src/modules/proposalWithdrawal.integration.test.ts

@@ -11,6 +11,7 @@ const nullableText = (maxLength: number) => Type.Union([Type.String({ maxLength 
 export const TimeActivityKindSchema = Type.Union([
   Type.Literal("person_created"), Type.Literal("session_activity"),
   Type.Literal("meeting_draft"), Type.Literal("schedule"),
+  Type.Literal("public_source_update"),
 ]);
 export type TimeActivityKind = Static<typeof TimeActivityKindSchema>;
 
