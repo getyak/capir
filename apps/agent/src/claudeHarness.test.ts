@@ -623,3 +623,164 @@ describe("bounded flat SDK usage diagnostics", () => {
     expect(flat).not.toContain("PRIVATE_");
   });
 });
+
+describe("bounded tool context discovery", () => {
+  const event = (hook_event_name: string, extra = {}) => ({ hook_event_name, session_id: "synthetic-session", transcript_path: "/synthetic", cwd: "/synthetic", ...extra });
+  const hook = (options: any, name: string) => options.hooks[name][0].hooks[0];
+  const search = (input: object, extra = {}) => ({ hook_event_name: "PreToolUse", tool_name: "ToolSearch", tool_input: input, ...extra });
+  const probeTool = (execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "synthetic receipt" }] }))) => ({
+    name: "probe", description: "Synthetic probe", schema: z.strictObject({}), readOnly: true, execute });
+
+  it("wires ToolSearch and explicit SDK tool search only for admitted opt-in Runs", async () => {
+    let bounded: any; let legacy: any;
+    const boundedSdk = queryMock(async ({ options }) => { bounded = options; });
+    const probe = { ...probeTool(), schema: z.strictObject({ value: z.string().optional() }) };
+    const essential = { name: "essential", description: "Small essential", schema: z.strictObject({}), readOnly: true, alwaysLoad: true, execute: vi.fn(async () => ({ content: [] })) };
+    await runClaudeHarness(config, { ...request(), toolDiscovery: "bounded", tools: [probe, essential] }, new AbortController().signal, boundedSdk.run as any, null);
+    expect(bounded.env.ENABLE_TOOL_SEARCH).toBe("true");
+    expect(bounded.tools).toContain("ToolSearch");
+    expect(bounded.allowedTools).toContain("ToolSearch");
+    expect(bounded.disallowedTools).not.toContain("ToolSearch");
+    // Discovery registers only this Run's own MCP catalog, nothing inherited.
+    expect(Object.keys(bounded.mcpServers)).toEqual(["talent_signal"]);
+    const legacySdk = queryMock(async ({ options }) => { legacy = options; });
+    await runClaudeHarness(config, { ...request(), tools: [probe, essential] }, new AbortController().signal, legacySdk.run as any, null);
+    expect(legacy.env.ENABLE_TOOL_SEARCH).toBeUndefined();
+    expect(legacy.tools).not.toContain("ToolSearch");
+    expect(legacy.allowedTools).not.toContain("ToolSearch");
+  });
+
+  it("rejects an unprovable discovery opt-in with child manifests and preserves legacy subagent behavior", async () => {
+    const sdk = queryMock();
+    const tools = [probeTool()];
+    const subagents = [{ name: "researcher", description: "Research", instructions: "Read only", tools: ["probe"] }];
+    await expect(runClaudeHarness(config, { ...request(), toolDiscovery: "bounded", tools, subagents },
+      new AbortController().signal, sdk.run as any, null)).rejects.toThrow("CLAUDE_HARNESS_TOOL_DISCOVERY_NOT_ADMITTED");
+    expect(sdk.run).not.toHaveBeenCalled();
+    const legacy = await runClaudeHarness(config, { ...request(), tools, subagents }, new AbortController().signal, sdk.run as any, null);
+    expect(legacy.toolCompletions).toEqual([]);
+    expect(sdk.run).toHaveBeenCalledOnce();
+  });
+
+  it("counts each actual discovery invocation exactly once against the shared tool-call cap", async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "synthetic receipt" }] }));
+    const sdk = queryMock(async ({ options }) => {
+      const gate = hook(options, "PreToolUse");
+      expect((await gate(search({ query: "select:probe" }))).hookSpecificOutput.permissionDecision).toBe("allow");
+      expect((await gate(search({ query: "contact memory review", max_results: 10 }))).hookSpecificOutput.permissionDecision).toBe("allow");
+      const call = options.mcpServers.talent_signal.instance.server._requestHandlers.get("tools/call");
+      await call({ method: "tools/call", params: { name: "probe", arguments: {} } }, { signal: new AbortController().signal });
+    });
+    const outcome = await runClaudeHarness(config, { ...request(), toolDiscovery: "bounded",
+      budget: { ...request().budget, maxToolCalls: 5 }, tools: [probeTool(execute)] },
+      new AbortController().signal, sdk.run as any, null);
+    // Two discoveries plus one genuine capability dispatch: each counted once.
+    expect(outcome.toolCalls).toBe(3);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("denies discovery past the tool-call cap and fails the Run on the shared budget", async () => {
+    let third: any;
+    const sdk = queryMock(async ({ options }) => {
+      const gate = hook(options, "PreToolUse");
+      expect((await gate(search({ query: "one" }))).hookSpecificOutput.permissionDecision).toBe("allow");
+      expect((await gate(search({ query: "two" }))).hookSpecificOutput.permissionDecision).toBe("allow");
+      third = await gate(search({ query: "three" }));
+    });
+    const error = await runClaudeHarness(config, { ...request(), toolDiscovery: "bounded",
+      budget: { ...request().budget, maxToolCalls: 2 } }, new AbortController().signal, sdk.run as any, null).catch(value => value);
+    expect(third.hookSpecificOutput).toMatchObject({ permissionDecision: "deny", permissionDecisionReason: "TOOL_BUDGET_EXHAUSTED" });
+    expect(error.message).toBe("CLAUDE_HARNESS_TOOL_BUDGET");
+    expect(error.receipt.toolCalls).toBe(3);
+  });
+
+  it("denies hostile, unbounded, child and ungranted discovery input before any execution", async () => {
+    const reasons: string[] = [];
+    const boundedSdk = queryMock(async ({ options }) => {
+      const gate = hook(options, "PreToolUse");
+      for (const input of [{ query: "memory", exfiltrate: "PRIVATE_HOSTILE" }, { query: "" }, { query: "x".repeat(4_001) },
+        { query: "memory", max_results: 51 }, { query: "memory", max_results: 0 }]) {
+        const denied = await gate(search(input));
+        expect(denied.hookSpecificOutput.permissionDecision).toBe("deny");
+        reasons.push(denied.hookSpecificOutput.permissionDecisionReason);
+      }
+      const child = await gate(search({ query: "memory" }, { agent_id: "child" }));
+      expect(child.hookSpecificOutput.permissionDecision).toBe("deny");
+      reasons.push(child.hookSpecificOutput.permissionDecisionReason);
+    });
+    const outcome = await runClaudeHarness(config, { ...request(), toolDiscovery: "bounded", tools: [] },
+      new AbortController().signal, boundedSdk.run as any, null);
+    expect(outcome.permissionDenials).toEqual(["TOOL_INPUT_INVALID", "TOOL_INPUT_INVALID", "TOOL_INPUT_INVALID",
+      "TOOL_INPUT_INVALID", "TOOL_INPUT_INVALID", "TOOL_NOT_AUTHORIZED"]);
+    // Denied discovery is never counted and never echoes hostile values.
+    expect(outcome.toolCalls).toBe(0);
+    expect(JSON.stringify(reasons)).not.toContain("PRIVATE_");
+    // A legacy Run never grants discovery at all.
+    let legacy: any;
+    const legacySdk = queryMock(async ({ options }) => { legacy = await hook(options, "PreToolUse")(search({ query: "memory" })); });
+    const legacyOutcome = await runClaudeHarness(config, request(), new AbortController().signal, legacySdk.run as any, null);
+    expect(legacy.hookSpecificOutput).toMatchObject({ permissionDecision: "deny", permissionDecisionReason: "Not granted for this Run or subagent." });
+    expect(legacyOutcome.permissionDenials).toEqual(["TOOL_NOT_AUTHORIZED"]);
+    expect(legacyOutcome.toolCalls).toBe(0);
+  });
+
+  it("stops revoked source authority before discovery without accepting a hook-stopped result", async () => {
+    let decision: any;
+    const execute = vi.fn(async () => ({ content: [] }));
+    const input = { ...request(), toolDiscovery: "bounded" as const, tools: [probeTool(execute)] };
+    const sdk = queryMock(async ({ options }) => {
+      input.assertCurrent = vi.fn(async () => { throw new Error("SOURCE_REVOKED"); });
+      decision = await hook(options, "PreToolUse")(search({ query: "memory" }));
+    }, result({ terminal_reason: "hook_stopped" }));
+    const failure = await runClaudeHarness(config, input, new AbortController().signal, sdk.run as any, null).catch(error => error);
+    // Assertions stay outside the simulated SDK callback: an authority failure
+    // must never mask a broken assertion as though it proved the hook protocol.
+    expect(failure.message).toBe("SOURCE_REVOKED");
+    expect(failure.receipt.toolCalls).toBe(0);
+    expect(decision).toEqual({ continue: false, stopReason: "Current source or session authority is no longer valid.",
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+        permissionDecisionReason: "Current source or session authority is no longer valid." } });
+    expect(input.assertCurrent).toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("never lets discovery satisfy primary completion or the preparation fast-stop", async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "synthetic receipt" }] }));
+    const sdk = queryMock(async ({ options }) => {
+      const gate = hook(options, "PreToolUse");
+      const post = hook(options, "PostToolUse");
+      const batch = hook(options, "PostToolBatch");
+      await gate(search({ query: "probe" }));
+      await post(event("PostToolUse", { tool_name: "ToolSearch", tool_input: { query: "probe" }, tool_response: {} }));
+      // Discovery alone never completes the task nor satisfies preparation.
+      expect(await batch(event("PostToolBatch", { tool_calls: [] }))).toEqual({});
+      const call = options.mcpServers.talent_signal.instance.server._requestHandlers.get("tools/call");
+      await call({ method: "tools/call", params: { name: "probe", arguments: {} } }, { signal: new AbortController().signal });
+      await post(event("PostToolUse", { tool_name: "mcp__talent_signal__probe", tool_input: {}, tool_response: {} }));
+      expect((await batch(event("PostToolBatch", { tool_calls: [] }))).continue).toBe(false);
+    }, result({ terminal_reason: "hook_stopped", result: "Prepared" }));
+    const outcome = await runClaudeHarness(config, { ...request(), toolDiscovery: "bounded", tools: [probeTool(execute)],
+      preparationReady: () => true }, new AbortController().signal, sdk.run as any, null);
+    expect(outcome.terminalReason).toBe("hook_stopped");
+    expect(outcome.toolCompletions.map(tool => tool.name)).toEqual(["probe"]);
+    expect(outcome.toolCalls).toBe(2);
+  });
+
+  it("keeps the real raw 39244 + 4 evidence failing the unchanged 32000 cap with discovery on", async () => {
+    const sdk = (({ options }: any) => ({ close: vi.fn(), async *[Symbol.asyncIterator]() {
+      expect(options.env.ENABLE_TOOL_SEARCH).toBe("true");
+      // The two distinct provider messages from real failed run 9c30d331:
+      // 18529 and 20715 total input, 2 + 2 output, against the same 32000 cap.
+      yield { type: "assistant", message: { id: "run-9c30d331-a", model: "synthetic-model", content: [],
+        usage: { input_tokens: 680, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 17849 } } };
+      yield { type: "assistant", message: { id: "run-9c30d331-b", model: "synthetic-model", content: [],
+        usage: { input_tokens: 2, output_tokens: 2, cache_read_input_tokens: 17553, cache_creation_input_tokens: 3160 } } };
+      yield result();
+    } })) as any;
+    const error = await runClaudeHarness(config, { ...request(), toolDiscovery: "bounded",
+      budget: { ...request().budget, maxTaskTokens: 32_000 } }, new AbortController().signal, sdk, null).catch(value => value);
+    expect(error.message).toBe("CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED");
+    expect(error.receipt).toMatchObject({ inputTokens: 39244, outputTokens: 4, usageComplete: false });
+    expect(error.receipt.inputTokens + error.receipt.outputTokens).toBeGreaterThan(32_000);
+  });
+});

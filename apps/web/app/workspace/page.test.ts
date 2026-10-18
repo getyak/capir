@@ -1,8 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
-const fixture = vi.hoisted(() => ({ auth: vi.fn(), load: vi.fn() }));
+const fixture = vi.hoisted(() => ({ auth: vi.fn(), load: vi.fn(), claims: vi.fn() }));
 vi.mock("@/auth", () => ({ auth: fixture.auth }));
 vi.mock("@/lib/server/localBackend", () => ({ isIntegrationMode: () => true, loadRelationshipWorkspaceInitialRead: fixture.load }));
-vi.mock("@/lib/server/backendAuth", () => ({ readBackendSessionClaims: async () => null, backendAuthBaseUrl: () => "http://127.0.0.1:4317" }));
+vi.mock("@/lib/server/backendAuth", () => ({ readBackendSessionClaims: fixture.claims, authSecret: () => "get131-synthetic-only-secret", backendAuthBaseUrl: () => "http://127.0.0.1:4317" }));
 vi.mock("@/lib/server/candidateWorkspace", () => ({ loadCandidateWorkspace: vi.fn() }));
 vi.mock("@/components/relationship-workspace-app", () => ({ RelationshipWorkspaceApp: () => null }));
 vi.mock("@/components/workspace-app", () => ({ WorkspaceApp: () => null }));
@@ -12,7 +12,7 @@ import { BackendSessionExpiredError } from "@/lib/backend-session";
 
 const parameters = { surface: "desk", intent: "create-contact", session: "33333333-3333-4333-8333-333333333333" };
 const callback = "/workspace?surface=desk&intent=create-contact&session=33333333-3333-4333-8333-333333333333";
-beforeEach(() => { vi.clearAllMocks(); fixture.auth.mockResolvedValue({ user: { id: "synthetic" } }); });
+beforeEach(() => { vi.clearAllMocks(); fixture.auth.mockResolvedValue({ user: { id: "synthetic" } }); fixture.claims.mockResolvedValue(null); });
 
 it("a signed-out identity entry resumes the draft locator after ordinary login", async () => {
   fixture.auth.mockResolvedValue(null);
@@ -46,4 +46,17 @@ it("retains the existing evidence locator and valid return Session during signed
   const caught = await WorkspacePage({ searchParams: Promise.resolve({ person, context, session: parameters.session }) }).then(() => null, (error: unknown) => error as { digest: string });
   const login = new URL(caught!.digest.split(";")[2]!, "https://workspace.invalid");
   expect(login.searchParams.get("callbackUrl")).toBe(`/workspace?person=${person}&context=${context}&session=33333333-3333-4333-8333-333333333333`);
+});
+
+import { workspaceSessionsBinding } from "@/lib/server/workspaceSessions";
+import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
+import type { BackendSessionClaims } from "@/lib/server/backendAuth";
+it("passes the actual owner time binding separately through the real workspace page", async () => {
+  const claims: BackendSessionClaims = { backendAccountId: "synthetic-account", backendAccountName: "Synthetic account", backendAccountSlug: "synthetic-account", backendUserId: "synthetic-user", backendUsername: "synthetic-owner", backendRole: "admin", backendAccessToken: "synthetic-test-token", backendExpiresAt: new Date(Date.now() + 3_600_000).toISOString() };
+  fixture.claims.mockResolvedValue(claims);
+  fixture.load.mockResolvedValue(null);
+  const result = await WorkspacePage({ searchParams: Promise.resolve(parameters) });
+  expect(result.props.initialSourceSyncBinding).toBe(workspaceSessionsBinding(claims));
+  expect(result.props.initialSessionVersion).toBe(contactHandoffSessionVersion(claims));
+  expect(result.props.initialSourceSyncBinding).not.toBe(result.props.initialSessionVersion);
 });

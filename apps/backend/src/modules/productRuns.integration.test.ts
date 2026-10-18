@@ -9,7 +9,7 @@ import { saveProductRunOutput, productRunSink, metadataOnlyProductSpan, cleanupP
 import type { AuthContext } from "./auth.js";
 
 const database = process.env.PRODUCT_RUN_TEST_DATABASE_URL;
-if (database && (!['127.0.0.1','localhost'].includes(new URL(database).hostname) || !['/get23_proof','/lab_regression_ci','/get9_eval','/opik_capture_test'].includes(new URL(database).pathname)))
+if (database && (!['127.0.0.1','localhost'].includes(new URL(database).hostname) || !['/get23_proof','/lab_regression_ci','/get9_eval','/opik_capture_test','/get37_trace_isolated'].includes(new URL(database).pathname)))
   throw new Error('Use the owned get23_proof disposable database.');
 const pool = database ? new Pool({ connectionString: database, max: 6 }) : null;
 const auth: AuthContext = { accountId: randomUUID(), accountSlug: `runs-${randomUUID()}`, userId: randomUUID(),

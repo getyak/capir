@@ -10,6 +10,14 @@ import type {
 } from "./capirTestSchemas.js";
 import type { ProductRunDetail, ProductRunList, ProductRunFeedbackMutation } from "./productRunSchemas.js";
 import type { TimeScope, TimeActivityListResponse, TimeScheduleMutationRequest, TimeScheduleDeleteRequest, TimeScheduleResponse, TimeReviewRequest, TimeReviewResponse } from "./timeWorkspaceSchemas.js";
+import type {
+  PersonSourceSyncDeleteRequest,
+  PersonSourceSyncListQuery,
+  PersonSourceSyncListResponse,
+  PersonSourceSyncMutationRequest,
+  PersonSourceSyncResponse,
+  PersonSourceSyncRunsResponse,
+} from "./personSourceSyncSchemas.js";
 import type { AccountSettings, AccountMutation, AccountOnboarding, AccountOnboardingMutation, AccountOnboardingPreview, AccountOnboardingPreviewRequest, CredentialChangeAttempt, CredentialChangeResult, CompleteCredentialChangeRequest, StartCredentialChangeRequest, PasswordRegistrationStartResponse, PasswordVerificationConfirmRequest, ReconciliationActionRequest, ReconciliationPrepareRequest, ReconciliationRecord } from "./accountSchemas.js";
 import type {
   McpClientGrantCreateRequest,
@@ -1505,6 +1513,33 @@ export class TalentSignalClient {
 
   reviewTimeRange(input: TimeReviewRequest): Promise<TimeReviewResponse> {
     return this.request("/v1/time/review", { method: "POST", body: input });
+  }
+
+  // ---- GET-131 one-person public source periodic observation (additive) ----
+
+  listPersonSourceSyncs(query: PersonSourceSyncListQuery): Promise<PersonSourceSyncListResponse> {
+    const params = new URLSearchParams({
+      person_id: query.person_id,
+      relationship_context_id: query.relationship_context_id,
+    });
+    if (query.seed_resource_id) params.set("seed_resource_id", query.seed_resource_id);
+    return this.request(`/v1/time/person-source-syncs?${params}`, { method: "GET" });
+  }
+
+  getPersonSourceSync(id: string): Promise<PersonSourceSyncResponse> {
+    return this.request(`/v1/time/person-source-syncs/${encodeURIComponent(id)}`, { method: "GET" });
+  }
+
+  putPersonSourceSync(id: string, input: PersonSourceSyncMutationRequest): Promise<PersonSourceSyncResponse> {
+    return this.request(`/v1/time/person-source-syncs/${encodeURIComponent(id)}`, { method: "PUT", body: input });
+  }
+
+  deletePersonSourceSync(id: string, input: PersonSourceSyncDeleteRequest): Promise<PersonSourceSyncResponse> {
+    return this.request(`/v1/time/person-source-syncs/${encodeURIComponent(id)}`, { method: "DELETE", body: input });
+  }
+
+  listPersonSourceSyncRuns(id: string): Promise<PersonSourceSyncRunsResponse> {
+    return this.request(`/v1/time/person-source-syncs/${encodeURIComponent(id)}/runs`, { method: "GET" });
   }
 
   // ---- GET-40 three-scope Memory review (additive) ----

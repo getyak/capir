@@ -53,11 +53,33 @@ const ModelOutputSchema = z.strictObject({
 interface ArkPayload {
   id?: string; model?: string;
   choices?: Array<{ message?: { content?: string | null } }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
 }
 
 const tokens = (value: unknown): number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
+
+const rawCount = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+/** Explicitly observed, safely validated raw provider usage. Missing, invalid
+ * or half-observed raw usage is unknown, never a normalized zero. */
+export interface ArkScreenshotUsageDiagnostics {
+  /** Provider-reported model identity, null when it was not observed. */
+  reported_model: string | null;
+  raw_usage_known: boolean;
+  raw_prompt_tokens: number | null;
+  raw_completion_tokens: number | null;
+}
+
+export interface ArkScreenshotPreprocessResult extends ScreenshotPreprocessResult, ArkScreenshotUsageDiagnostics {}
+
+function rawUsage(usage: ArkPayload["usage"]): Pick<ArkScreenshotUsageDiagnostics,
+  "raw_usage_known" | "raw_prompt_tokens" | "raw_completion_tokens"> {
+  const prompt = rawCount(usage?.prompt_tokens), completion = rawCount(usage?.completion_tokens);
+  const known = prompt !== null && completion !== null;
+  return { raw_usage_known: known, raw_prompt_tokens: known ? prompt : null, raw_completion_tokens: known ? completion : null };
+}
 
 function parseJSON(value: string): unknown {
   const content = value.trim().replace(/^```(?:json)?\s*/iu, "").replace(/\s*```$/u, "");
@@ -82,7 +104,7 @@ export class ArkScreenshotPreprocessor implements ScreenshotPreprocessor {
   }
 
   async preprocess(image: ScreenshotPreprocessImage, imageIndex: number, signal: AbortSignal,
-    authorizeDispatch:()=>Promise<void>): Promise<ScreenshotPreprocessResult> {
+    authorizeDispatch:()=>Promise<void>): Promise<ArkScreenshotPreprocessResult> {
     signal.throwIfAborted();
     const views = await prepareScreenshotViews(image, imageIndex);
     assertPreprocessViewBudget(views);
@@ -133,7 +155,8 @@ export class ArkScreenshotPreprocessor implements ScreenshotPreprocessor {
       { provider: "volcano_ark", model: this.model, contract: SCREENSHOT_PREPROCESS_CONTRACT });
     if (!source) throw new Error("SCREENSHOT_PREPROCESS_OUTPUT_INVALID");
     return { source, request_id: receipt.request_id, model: receipt.model,
-      input_tokens: tokens(receipt.usage?.prompt_tokens), output_tokens: tokens(receipt.usage?.completion_tokens) };
+      input_tokens: tokens(receipt.usage?.prompt_tokens), output_tokens: tokens(receipt.usage?.completion_tokens),
+      reported_model: receipt.model, ...rawUsage(receipt.usage) };
   }
 
   private async request(content: Array<Record<string, unknown>>, signal: AbortSignal): Promise<ArkPayload> {

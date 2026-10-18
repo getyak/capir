@@ -12,6 +12,7 @@ export function RelationshipResourceSection({
   personId,
   relationshipContextId,
   scopeLabel,
+  sessionBinding = null,
 }: {
   open: boolean;
   onCommitted: (receipts: ResourceCaptureResponse[]) => void;
@@ -30,6 +31,7 @@ export function RelationshipResourceSection({
   personId: string;
   relationshipContextId: string;
   scopeLabel: string;
+  sessionBinding?: string | null;
 }) {
   if (!open) {
     return null;
@@ -45,6 +47,7 @@ export function RelationshipResourceSection({
       personId={personId}
       relationshipContextId={relationshipContextId}
       scopeLabel={scopeLabel}
+      sessionBinding={sessionBinding}
     />
   );
 }

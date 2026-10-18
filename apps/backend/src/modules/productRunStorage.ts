@@ -1,6 +1,7 @@
 import { Pool, type PoolClient } from "pg";
+import { createHash } from "node:crypto";
 import { inTransaction } from "../database/pool.js";
-import type { ProductRunSpan } from "@talent-signal/agent";
+import { observationID, type ProductRunSpan } from "@talent-signal/agent";
 import { labHash } from "./labJobCases.js";
 
 /** Freeze the exact returned version. A resumed task cannot inherit its earlier rating. */
@@ -15,7 +16,7 @@ export async function saveProductRunOutput(client: Pool | PoolClient, match: { i
       AND ($1::uuid IS NOT NULL AND r.id=$1 OR $1 IS NULL AND r.account_id=$2::uuid) FOR SHARE OF t`,
     [match.id??null,match.accountID??null,match.taskID])).rows[0]:undefined;
   if(canonical && Number(output.revision??0)<canonical.revision)return;
-  const admitted=(await client.query<{task_id:string|null;task_kind:string;revision:number}>(`SELECT task_id,task_kind,
+  const admitted=(await client.query<{id:string;task_id:string|null;task_kind:string;revision:number}>(`SELECT id,task_id,task_kind,
     COALESCE((output->>'revision')::int,0) AS revision FROM product_runs
     WHERE ($1::uuid IS NOT NULL AND id=$1 OR $1 IS NULL AND account_id=$2::uuid AND task_id=$3::uuid) FOR UPDATE`,
     [match.id??null,match.accountID??null,match.taskID??null])).rows[0];
@@ -24,7 +25,9 @@ export async function saveProductRunOutput(client: Pool | PoolClient, match: { i
   const hash = labHash(output);
   // Screenshot checkpoints legitimately update their own source generation.
   // Rebind only to a currently admitted canonical screenshot, never to failure.
-  if (match.taskID && !["failed","deleted","expired","cancelled"].includes(status)) {
+  // The forward purge keeps only the strictly sanitized usage diagnostics that
+  // the narrow admission still allows; raw input/output stays generation-fenced.
+  if (match.taskID && !(["failed","deleted","expired","cancelled"] as string[]).includes(status)) {
     await client.query(`UPDATE product_runs r SET source_generation=g.generation
       FROM harness_source_generations g WHERE g.account_id=r.account_id AND r.task_kind='screenshot'
         AND r.task_id=$3::uuid AND ($1::uuid IS NOT NULL AND r.id=$1 OR $1 IS NULL AND r.account_id=$2::uuid)
@@ -57,12 +60,114 @@ const metadataKeys = ["model", "provider", "prompt_revision", "input_tokens", "o
     "failure_code", "sdk_initialized_ms", "sdk_first_response_ms", "model_responses", "tool_calls", "usage_complete",
     "api_retry_count", "last_api_status", "sdk_session_id", "phase",
     "sdk_message_id_sha256", "sdk_input_tokens", "sdk_output_tokens", "sdk_cache_read_input_tokens",
-    "sdk_cache_creation_input_tokens", "sdk_total_input_tokens", "sdk_usage_basis", "sdk_stop_reason"];
+    "sdk_cache_creation_input_tokens", "sdk_total_input_tokens", "sdk_usage_basis", "sdk_stop_reason",
+    "reported_model", "raw_usage_known", "raw_prompt_tokens", "raw_completion_tokens",
+    "source_image_index", "request_id_sha256"];
 export function metadataOnlyProductSpan<T extends { input: unknown; output: unknown; error: string | null; metadata: Record<string, unknown> }>(span: T) {
 
   return { ...span, input: omitted(), output: omitted(), error: span.error ? "Operation failed" : null,
     metadata: Object.fromEntries(Object.entries(span.metadata).filter(([key,value]) => metadataKeys.includes(key)
       && (typeof value === "number" || typeof value === "boolean" || typeof value === "string" || value === null))) };
+}
+
+// Strict per-field sanitizer for the two known source-safe usage span shapes:
+// `contact.screenshot.preprocess.usage` and `harness.sdk.assistant`, both
+// kind=llm. Allowed values and identifier shapes only; raw request or message
+// ids, nested usage, prose, credentials and arbitrary keys never pass. This is
+// the single schema behind detail projection, cleanup preservation, the
+// generation rebind purge and admitted writes (SQL twin:
+// screenshot_usage_diagnostic_metadata). Everything else is dropped.
+const ARK_USAGE_SPAN = "contact.screenshot.preprocess.usage";
+const SDK_ASSISTANT_SPAN = "harness.sdk.assistant";
+const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const SDK_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/;
+const HASH64_PATTERN = /^[a-f0-9]{64}$/;
+const SDK_USAGE_BASIS = "per_message_provider_reported_input_excludes_cache";
+const SDK_STOP_REASONS = new Set(["end_turn", "tool_use", "max_tokens", "stop_sequence", "pause_turn", "refusal"]);
+
+const boundedCount = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+export function usageDiagnosticMetadata(span: { name: string; kind: string; metadata: Record<string, unknown> }): Record<string, unknown> | null {
+  const metadata = span.metadata ?? {};
+  if (span.name === ARK_USAGE_SPAN && span.kind === "llm") {
+    const model = metadata.model, requestHash = metadata.request_id_sha256, sourceIndex = metadata.source_image_index;
+    if (metadata.provider !== "volcano_ark" || typeof model !== "string" || !MODEL_PATTERN.test(model)
+      || typeof requestHash !== "string" || !HASH64_PATTERN.test(requestHash)
+      || typeof sourceIndex !== "number" || !Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex > 9) return null;
+    const prompt = boundedCount(metadata.raw_prompt_tokens), completion = boundedCount(metadata.raw_completion_tokens);
+    const known = metadata.raw_usage_known === true && prompt !== null && completion !== null;
+    return { provider: "volcano_ark", model,
+      reported_model: typeof metadata.reported_model === "string" && MODEL_PATTERN.test(metadata.reported_model) ? metadata.reported_model : null,
+      raw_usage_known: known, raw_prompt_tokens: known ? prompt : null, raw_completion_tokens: known ? completion : null,
+      source_image_index: sourceIndex, request_id_sha256: requestHash };
+  }
+  if (span.name === SDK_ASSISTANT_SPAN && span.kind === "llm") {
+    const model = metadata.model, messageHash = metadata.sdk_message_id_sha256;
+    if (metadata.provider !== "claude-agent-sdk" || typeof model !== "string" || !SDK_MODEL_PATTERN.test(model)
+      || typeof messageHash !== "string" || !HASH64_PATTERN.test(messageHash)
+      || metadata.sdk_usage_basis !== SDK_USAGE_BASIS) return null;
+    return { provider: "claude-agent-sdk", model, sdk_message_id_sha256: messageHash,
+      sdk_input_tokens: boundedCount(metadata.sdk_input_tokens), sdk_output_tokens: boundedCount(metadata.sdk_output_tokens),
+      sdk_cache_read_input_tokens: boundedCount(metadata.sdk_cache_read_input_tokens),
+      sdk_cache_creation_input_tokens: boundedCount(metadata.sdk_cache_creation_input_tokens),
+      sdk_total_input_tokens: boundedCount(metadata.sdk_total_input_tokens), sdk_usage_basis: SDK_USAGE_BASIS,
+      sdk_stop_reason: typeof metadata.sdk_stop_reason === "string" && SDK_STOP_REASONS.has(metadata.sdk_stop_reason) ? metadata.sdk_stop_reason : null };
+  }
+  return null;
+}
+
+/** Strict metadata-only projection for the narrow usage-diagnostics read path. */
+export function usageDiagnosticProjection(span: ProductRunSpan): ProductRunSpan | null {
+  const metadata = usageDiagnosticMetadata({ name: span.name, kind: span.kind, metadata: span.metadata });
+  if (!metadata) return null;
+  return { ...span, input: omitted(), output: omitted(), error: span.error ? "Operation failed" : null, metadata };
+}
+
+/** Explicitly observed Ark raw usage, one bounded record per provider receipt. */
+export interface ScreenshotUsageDiagnostic {
+  provider: string;
+  model: string;
+  reported_model: string | null;
+  source_image_index: number;
+  request_id: string;
+  raw_usage_known: boolean;
+  raw_prompt_tokens: number | null;
+  raw_completion_tokens: number | null;
+}
+
+/** Persist source-safe usage diagnostics for the canonical admitted screenshot
+ * run. Counters only: raw input/output stays generation-fenced and every write
+ * revalidates the narrow same-owner source admission (SQL twin of the read,
+ * purge and cleanup paths), so a revoked, expired or deleted source can never
+ * be recreated. Absent or invalid raw usage is stored as explicitly unknown; a
+ * provider-reported zero stays an exact zero. */
+export async function saveProductRunUsageDiagnostics(client: Pool | PoolClient,
+  match: { accountID: string; taskID: string }, diagnostics: readonly ScreenshotUsageDiagnostic[]): Promise<void> {
+  for (const diagnostic of diagnostics) {
+    if (typeof diagnostic.request_id !== "string" || !diagnostic.request_id || diagnostic.request_id.length > 200) continue;
+    const metadata = usageDiagnosticMetadata({ name: ARK_USAGE_SPAN, kind: "llm", metadata: {
+      provider: diagnostic.provider, model: diagnostic.model,
+      reported_model: diagnostic.reported_model ?? null,
+      raw_usage_known: diagnostic.raw_usage_known === true,
+      raw_prompt_tokens: diagnostic.raw_prompt_tokens ?? null,
+      raw_completion_tokens: diagnostic.raw_completion_tokens ?? null,
+      source_image_index: diagnostic.source_image_index,
+      request_id_sha256: createHash("sha256").update(diagnostic.request_id).digest("hex"),
+    } });
+    if (!metadata) continue;
+    const timestamp = new Date().toISOString();
+    const span = { id: observationID(`${match.taskID}:usage:${diagnostic.request_id}`), parent_id: null,
+      name: ARK_USAGE_SPAN, kind: "llm", started_at: timestamp, finished_at: timestamp,
+      status: "completed", input: omitted(), output: omitted(), metadata, error: null };
+    await client.query(`INSERT INTO product_run_spans(id,run_id,span)
+      SELECT $1,r.id,$2::jsonb FROM product_runs r
+      WHERE r.account_id=$3 AND r.task_id=$4::uuid AND r.task_kind='screenshot'
+        AND screenshot_usage_diagnostics_available(r.id)
+      ON CONFLICT(id) DO UPDATE SET span=EXCLUDED.span
+      WHERE product_run_spans.run_id=EXCLUDED.run_id`,
+    [span.id,JSON.stringify(span),match.accountID,match.taskID]);
+  }
 }
 
 /** Content stays request-local until a committed product source admits it.
@@ -114,11 +219,27 @@ export function productRunSink(pool: Pool, id: string, onError: (error: unknown)
   };
 }
 
-/** Keep bounded diagnostic metadata for unsuccessful attempts, never revoked content. */
+/** Keep bounded diagnostic metadata for unsuccessful attempts, never revoked content.
+ * Usage diagnostics of a still admitted same-owner screenshot run survive
+ * unrelated account generation drift as strictly sanitized metadata-only
+ * spans; every other span and every raw field is removed exactly as before. */
 export async function cleanupProductRunSources(pool: Pool): Promise<void> {
   await inTransaction(pool, async client => {
+    await client.query(`UPDATE product_run_spans s SET span=(s.span-'input'-'output'-'error'-'metadata')
+      || jsonb_build_object('input',$1::jsonb,'output',$1::jsonb,
+        'error',CASE WHEN s.span->>'error' IS NULL THEN NULL ELSE 'Operation failed' END,
+        'metadata',COALESCE(screenshot_usage_diagnostic_metadata(s.span),'{}'::jsonb))
+      FROM product_runs r WHERE r.id=s.run_id AND r.status<>'failed'
+        AND NOT product_run_source_available(r.id)
+        AND screenshot_usage_diagnostics_available(r.id)`,[JSON.stringify(omitted())]);
+    await client.query(`DELETE FROM product_run_spans s USING product_runs r
+      WHERE r.id=s.run_id AND r.status<>'failed'
+        AND NOT product_run_source_available(r.id)
+        AND screenshot_usage_diagnostics_available(r.id)
+        AND screenshot_usage_diagnostic_metadata(s.span) IS NULL`);
     await client.query(`DELETE FROM product_run_spans WHERE run_id IN
       (SELECT id FROM product_runs WHERE NOT product_run_source_available(id)
+        AND NOT (status<>'failed' AND screenshot_usage_diagnostics_available(id))
         AND (expires_at<=clock_timestamp() OR (task_id IS NOT NULL AND status<>'failed')))`);
     await client.query(`UPDATE product_run_spans s SET span=(s.span-'input'-'output'-'error'-'metadata')
       || jsonb_build_object('input',$1::jsonb,'output',$1::jsonb,

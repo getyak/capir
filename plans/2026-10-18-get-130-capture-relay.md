@@ -96,3 +96,27 @@ Two real configured-model literal-text calls returned HTTP 200, the expected mod
 Keep the existing strict bounded schema, required observation fields, entity validation, top-level unknown-field rejection, provider/model/receipt checks, limits and budgets. At the model parsing boundary only, parse each row of an already-array, at-most-eight optional public-context-anchor list with its strict row schema and omit invalid rows. Never coerce unknown categories, promote them to roles, or relax downstream public-subject provenance. Invalid array type/oversize and invalid required fields still reject. Clarify the producer prompt's existing three anchor kinds, using role for an explicit professional organization/role. This prevents an unrelated optional enrichment from erasing valid OCR while granting invalid enrichment no authority.
 
 Freeze a regression replaying the actual observed response shape: required text and pending visible entities survive, the valid anchor survives and the organization row is omitted; >8 anchors and unknown top-level fields still fail. Re-run configured-model cases and independent backend review. C1–C18 remain unchanged. Initial failures remain evidence, not renamed passes.
+
+## PR #366 review repair — 2026-10-18
+
+The isolated `codex/pr366-review-repair-oct18` worktree merges current
+`origin/main` `f21ccf1a` into PR head `a1a5075f` with a normal merge. Main has
+already frozen `099_person_source_sync` and `100_screenshot_usage_diagnostics`.
+Preserve all 104 current-main migration filenames, manifest order, and SQL
+bytes; append this PR's unchanged image-observation SQL under the fresh
+`101_capture_image_observation` identity and freeze the resulting 105-entry
+digest. Do not reuse a current-main migration prefix or rewrite applied SQL.
+
+Integration verification passed: frozen dependency install; contracts and Agent
+build; 13 migration-boundary regressions; documentation, Wiki and all five
+architecture diagrams; 70 focused backend result/image-intent/schema tests;
+and 17 Agent current-image-inspection tests. All 104 current-main SQL files
+were independently compared byte-for-byte before freezing entry 105. A separate
+reviewer reproduced preview Send reentrancy through the actual AppKit window
+and synchronous Combine presentation sink. Repair that independently after the
+integration commit, with a failing real-window regression before the fix.
+
+This task does not publish, merge GitHub PRs, or deploy resident services. PR
+#366 remains draft; native real-flow, exact-head CI, signed publication and
+production/affected-service acceptance gates remain open under the existing
+matrix. Source-level checks do not satisfy those gates.

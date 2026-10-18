@@ -65,6 +65,7 @@ const CapturePanel = dynamic(() =>
 type Props = {
   initialAccountId: string | null;
   initialSessionVersion?: string | null;
+  initialSourceSyncBinding?: string | null;
   initialAgentHistory: RelationshipAgentHistory | null;
   initialIdentityResolutionCase: IdentityResolutionCase | null;
   initialKnowledgeSnapshot: KnowledgeSnapshot | null;
@@ -98,6 +99,7 @@ const createContactDraftScope = {
 export function RelationshipWorkspaceApp({
   initialAccountId,
   initialSessionVersion = null,
+  initialSourceSyncBinding = null,
   initialAgentHistory,
   initialIdentityResolutionCase,
   initialKnowledgeSnapshot,
@@ -1045,6 +1047,7 @@ export function RelationshipWorkspaceApp({
               <RelationshipExternalEffectReview history={agentHistory} />
 
               <RelationshipResourceSection
+                sessionBinding={initialSourceSyncBinding}
                 onCommitted={handleResourcesCommitted}
                 onEvidenceChanged={(announcement, relationshipRemoved) => {
                   if (relationshipRemoved) {
@@ -1173,6 +1176,7 @@ export function RelationshipWorkspaceApp({
               <RelationshipExternalEffectReview history={agentHistory} />
 
               <RelationshipResourceSection
+                sessionBinding={initialSourceSyncBinding}
                 onCommitted={handleResourcesCommitted}
                 onEvidenceChanged={async (
                   announcement,

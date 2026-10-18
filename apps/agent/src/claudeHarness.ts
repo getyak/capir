@@ -8,6 +8,7 @@ import { createClaudeHarnessWorkspace } from "./claudeHarnessWorkspace.js";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { createSdkMcpServer, query, startup, tool, type WarmQuery, type Options, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { claudeToolDiscoveryDecision, ToolSearchInputSchema, TOOL_SEARCH_NAME, type ClaudeToolDiscoveryMode } from "./claudeToolContextPolicy.js";
 import { z } from "zod";
 import type { AgentBudget, AgentProviderInputPart } from "./types.js";
 import type { ClaudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
@@ -162,6 +163,14 @@ export interface ClaudeHarnessRequest {
   images?: readonly AgentProviderInputPart[];
   /** Capabilities that may return pixels require the same ephemeral policy as image input. */
   imageToolResults?: boolean;
+  /**
+   * GET-128 bounded tool context: opt in only where scoped discovery over this
+   * Run's registered MCP catalog can be proven. Large admitted catalog tools
+   * are deferred behind the pinned SDK's native ToolSearch; every other
+   * configuration keeps the legacy eager tool context unchanged, and an
+   * unprovable opt-in request is rejected before the SDK stream opens.
+   */
+  toolDiscovery?: ClaudeToolDiscoveryMode;
   tools: readonly HarnessTool[];
   skills?: readonly HarnessSkill[];
   subagents?: readonly HarnessSubagent[];
@@ -397,6 +406,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       throw new Error("CLAUDE_HARNESS_SUBAGENT_TOOL_NOT_READ_ONLY");
     }
   }
+  // Scoped discovery is provable only without arbitrary child manifests; an
+  // opt-in request that cannot be proven is rejected, never silently expanded.
+  const discovery = claudeToolDiscoveryDecision(request.toolDiscovery, subagents.length);
+  if (discovery === "rejected") throw new Error("CLAUDE_HARNESS_TOOL_DISCOVERY_NOT_ADMITTED");
   await assertCurrent();
   const captureSecrets = [configuration.credential.value].filter(value => value.length > 0);
   const modelFrames = new Map<string, ObservedSDKAssistant>();
@@ -432,6 +445,13 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   const sdkTiming = { initializedAfterMs: null as number | null, firstModelResponseAfterMs: null as number | null };
   const apiRetries: SDKRetryEvidence[] = [];
   const controller = new AbortController();
+  let authorityFailure: { error: unknown } | undefined;
+  const abortAuthorityFailure = () => {
+    if (authorityFailure) {
+      controller.abort(authorityFailure.error);
+      controller.signal.throwIfAborted();
+    }
+  };
   const abort = () => controller.abort(signal.reason);
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) abort();
@@ -439,7 +459,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   let checking: Promise<void> | undefined;
   const heartbeat = setInterval(() => {
     if (checking) return;
-    checking = assertCurrent().catch(() => controller.abort(new Error("CLAUDE_HARNESS_SESSION_INVALIDATED")))
+    checking = assertCurrent().catch(() => controller.abort(authorityFailure?.error ?? new Error("CLAUDE_HARNESS_SESSION_INVALIDATED")))
       .finally(() => { checking = undefined; });
   }, 2_000);
   let stream: ReturnType<typeof query> | undefined;
@@ -554,7 +574,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       plugins.push({ type: "local", path: plugin });
     }
     const allowedTools = names.map((name) => `${HARNESS_MCP_PREFIX}${name}`);
-    const allowed = new Set(allowedTools);
+    const allowed = new Set([...allowedTools, ...(discovery === "admitted" ? [TOOL_SEARCH_NAME] : [])]);
     const errorContent = (code: string) => ({ content: [{ type: "text" as const, text: JSON.stringify({ error: code }) }], isError: true });
     // SDK 0.3.260 reconstructs a Zod object and rejects omitted ZodDefault
     // fields with our pinned Zod 4.5.4. Expose their optional input contract;
@@ -614,10 +634,45 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     const gate: NonNullable<Options["hooks"]>["PreToolUse"] = [{ hooks: [async (input) => {
       if (input.hook_event_name !== "PreToolUse") return { continue: true };
       controller.signal.throwIfAborted();
-      await assertCurrent();
-      assertBudget();
-      if (!input.agent_id) await acknowledgeSteering();
+      try {
+        await assertCurrent();
+        assertBudget();
+        if (!input.agent_id) await acknowledgeSteering();
+      } catch (error) {
+        // Cancellation and exhausted budgets already carry a latched abort.
+        if (controller.signal.aborted) throw error;
+        // Hook exceptions are non-fatal and abort closes stdin with a grace
+        // window. Send the CLI's stop+deny protocol first, then fail the host
+        // with the original authority error on the next frame or terminal.
+        authorityFailure ??= { error };
+        const reason = "Current source or session authority is no longer valid.";
+        return { continue: false, stopReason: reason,
+          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+            permissionDecisionReason: reason } };
+      }
       const args = input.tool_input as Record<string, unknown>;
+      // Bounded native discovery (opt-in only): the same abort/source/lease and
+      // budget fences above plus a bounded supported query, counted exactly
+      // once against the tool-call cap when it may execute. Discovery never
+      // satisfies primary product-tool completion or preparationReady and
+      // carries no product effect authority.
+      if (input.tool_name === TOOL_SEARCH_NAME) {
+        const search = ToolSearchInputSchema.safeParse(args);
+        if (discovery === "admitted" && !input.agent_id && search.success) {
+          if (++toolCalls > request.budget.maxToolCalls) {
+            controller.abort(new Error("CLAUDE_HARNESS_TOOL_BUDGET"));
+            return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+              permissionDecisionReason: "TOOL_BUDGET_EXHAUSTED" } };
+          }
+          return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow",
+            permissionDecisionReason: "Bounded discovery over this Run's registered tools." } };
+        }
+        preparationToolFailed = true;
+        denials.push(search.success ? "TOOL_NOT_AUTHORIZED" : "TOOL_INPUT_INVALID");
+        return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+          permissionDecisionReason: search.success ? "Not granted for this Run or subagent."
+            : schemaRepairHint(ToolSearchInputSchema, search.error) } };
+      }
       const permitted = allowed.has(input.tool_name) ||
         (input.tool_name === "Skill" && skills.some((skill) => args.skill === `talent-signal:${skill.name}` || args.skill === skill.name)) ||
         (input.tool_name === "Agent" && !input.agent_id && subagents.some((agent) => args.subagent_type === agent.name));
@@ -697,6 +752,9 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       // Explicit transport only: https://code.claude.com/docs/en/network-config
       ...(configuration.httpsProxy ? { HTTPS_PROXY: configuration.httpsProxy } : {}),
       [configuration.credential.name]: configuration.credential.value,
+      // Explicit opt-in only: a third-party baseUrl otherwise falls back to
+      // eager schemas, and an unsupported proxy must fail honestly here.
+      ...(discovery === "admitted" ? { ENABLE_TOOL_SEARCH: "true" } : {}),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.min(4_000, request.budget.maxTaskTokens)),
       // Separate byte watchdog: the event watchdog clamps short values to 5min.
@@ -717,8 +775,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       maxTurns: request.budget.maxTurns, maxBudgetUsd: request.budget.maxEstimatedUsd,
       ...(configuration.taskBudgetEnabled ? { taskBudget: { total: request.budget.maxTaskTokens } } : {}),
       ...(request.outputSchema ? { outputFormat: { type: "json_schema", schema: request.outputSchema } } : {}),
-      allowedTools: [...allowedTools, ...(skills.length ? ["Skill"] : []), ...(subagents.length ? ["Agent"] : [])],
-      tools: [...(skills.length ? ["Skill"] : []), ...(subagents.length ? ["Agent"] : [])],
+      allowedTools: [...allowedTools, ...(discovery === "admitted" ? [TOOL_SEARCH_NAME] : []),
+        ...(skills.length ? ["Skill"] : []), ...(subagents.length ? ["Agent"] : [])],
+      tools: [...(discovery === "admitted" ? [TOOL_SEARCH_NAME] : []),
+        ...(skills.length ? ["Skill"] : []), ...(subagents.length ? ["Agent"] : [])],
       // The SDK still aliases Agent as Task in its init tool registry. Denying
       // Task also removes admitted Agent delegation before our permission hook.
       disallowedTools: [...FORBIDDEN_BUILT_INS, ...(subagents.length ? [] : ["Agent", "Task"])],
@@ -807,6 +867,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       stream = warm.query(prompt());
     } else stream = sdkQuery({ prompt: prompt(), options });
     for await (const message of stream) {
+      abortAuthorityFailure();
       if (message.type === "system" && message.subtype === "init") {
         sdkTiming.initializedAfterMs ??= Date.now() - executionStarted;
         request.onProtocolMetadata?.({kind:"initialized",
@@ -886,6 +947,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         await acknowledgeSteering();
       }
     }
+    abortAuthorityFailure();
     controller.signal.throwIfAborted();
     await assertCurrent();
     controller.signal.throwIfAborted();
@@ -913,7 +975,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     }
     await flushObservedAssistantSpans();
     if (error instanceof ClaudeHarnessFailure) { primaryError = error; throw error; }
-    const reason = controller.signal.aborted ? controller.signal.reason : error;
+    const reason = authorityFailure?.error ?? (controller.signal.aborted ? controller.signal.reason : error);
     const code = claudeHarnessInterruptionCode(reason);
     const counts = observedCounts();
     primaryError = new ClaudeHarnessInterruption({ sessionID: result?.session_id ?? observedSessionID,

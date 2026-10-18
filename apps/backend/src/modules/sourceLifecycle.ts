@@ -10,6 +10,10 @@ import {
   runPendingPublicResearchJobs,
   type ResearchRetrievalWorkerResult,
 } from "./research.js";
+import {
+  runDuePersonSourceSyncs,
+  type PersonSourceSyncSweepResult,
+} from "./personSourceSync.js";
 import { sweepDueIdentityHandles } from "./identityHandles.js";
 import { sweepDueSourceRetention } from "./sourceRetention.js";
 
@@ -19,6 +23,7 @@ export interface SourceLifecycleSweepResult {
   identity_handles_expired: number;
   compilation_jobs: SourceAuthorizationCompilationWorkerResult;
   research_jobs: ResearchRetrievalWorkerResult;
+  person_source_syncs: PersonSourceSyncSweepResult;
 }
 
 const activeSweeps = new WeakMap<
@@ -41,6 +46,9 @@ async function executeSourceLifecycleSweep(
   const researchJobs = await runPendingPublicResearchJobs(pool, {
     now,
   });
+  // Recurring one-person public source cycles run after source-authorization
+  // expiry so an expired or revoked source stops before any dispatch.
+  const personSourceSyncs = await runDuePersonSourceSyncs(pool, { now });
   await purgeUnavailableRunArtifacts(pool);
   return {
     raw_sources_purged: rawSourcesPurged,
@@ -48,6 +56,7 @@ async function executeSourceLifecycleSweep(
     identity_handles_expired: expiredIdentityHandles.length,
     compilation_jobs: compilationJobs,
     research_jobs: researchJobs,
+    person_source_syncs: personSourceSyncs,
   };
 }
 
