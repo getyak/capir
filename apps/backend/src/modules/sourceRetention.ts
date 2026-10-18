@@ -1276,14 +1276,16 @@ export async function sweepDueSourceRetention(
 ): Promise<number> {
   return inTransaction(pool, async (client) => {
     const due = await client.query<{ account_id: string; capture_id: string }>(
-      `SELECT account_id, capture_id
-       FROM source_retention_receipts
-       WHERE source_access_state = 'available'
-         AND retention_until IS NOT NULL
-         AND retention_until <= $1
-       ORDER BY retention_until, capture_id
+      `SELECT receipts.account_id, receipts.capture_id
+       FROM source_retention_receipts receipts
+       JOIN accounts
+         ON accounts.id = receipts.account_id AND accounts.retired_at IS NULL
+       WHERE receipts.source_access_state = 'available'
+         AND receipts.retention_until IS NOT NULL
+         AND receipts.retention_until <= $1
+       ORDER BY receipts.retention_until, receipts.capture_id
        LIMIT 100
-       FOR UPDATE SKIP LOCKED`,
+       FOR UPDATE OF receipts SKIP LOCKED`,
       [now],
     );
     let purged = 0;

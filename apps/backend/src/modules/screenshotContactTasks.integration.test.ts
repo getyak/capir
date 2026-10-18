@@ -1,10 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
+import { request as httpRequest } from "node:http";
+import Fastify from "fastify";
 import { Pool } from "pg";
-import { ARK_SCREENSHOT_PREPROCESS_MODEL, SCREENSHOT_PREPROCESS_FOLLOW_UP_REGION_LIMIT, ContactResearchToolRequestSchema } from "@talent-signal/agent";
+import { ARK_SCREENSHOT_PREPROCESS_MODEL, SCREENSHOT_PREPROCESS_FOLLOW_UP_REGION_LIMIT, ContactResearchToolRequestSchema,
+  ArkScreenshotPreprocessor, captureObservationContent, captureProductStep, recordProductEvent, withProductRunCapture } from "@talent-signal/agent";
 import type { ContactAgentModel, ContactChatExtraction, ScreenshotContactTaskRequest, ScreenshotPreprocessor } from "@talent-signal/agent";
 import { CONTRACT_VERSION } from "@talent-signal/contracts";
 import { deleteContactCaptureTask, deleteScreenshotPreprocessingSource, linkScreenshotContactTaskCapture, loadBrowserCaptureTask, lookupScreenshotContactReceipt, createScreenshotContactTask, ScreenshotContactTaskRunner, loadScreenshotContactTask, loadContactIntelligence, resumeScreenshotContactTask, cancelScreenshotContactTask, expireScreenshotContactTasks, loadScreenshotContactImage, confirmScreenshotContactProfile } from "./screenshotContactTasks.js";
+import { registerProductRunMonitoring, ProductRunService } from "./productRuns.js";
+import { registerScreenshotContactRoutes } from "./screenshotContactRoutes.js";
+import { cleanupProductRunSources, productRunSink, saveProductRunOutput, saveProductRunUsageDiagnostics } from "./productRunStorage.js";
 import type { AuthContext } from "./auth.js";
 import type { ChatMediaStorage } from "./chatMediaStorage.js";
 import { executeGrantedContactArchive, restoreContactArchive } from "./contactArchive.js";
@@ -1490,5 +1496,483 @@ describe.skipIf(!pool)("durable multi-image contact sources",()=>{
     await expect(resumeScreenshotContactTask(pool!,auth,waiting.task_id,{expected_revision:waiting.revision,new_contact_name:"Different 1"})).rejects.toMatchObject({code:"CONTACT_BATCH_IDENTITY_CONFLICT"});
     await pool!.query("UPDATE screenshot_contact_tasks SET expires_at=now()-interval '1 second' WHERE id=$1",[waiting.task_id]);
     await expireScreenshotContactTasks(pool!,storage);expect(storage.objects.size).toBe(0);
+  });
+});
+
+// One real decodable 120x240 PNG fixture (white), generated once with sharp.
+const ARK_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAHgAAADwCAIAAABE5TcwAAAACXBIWXMAAAPoAAAD6AG1e1JrAAACF0lEQVR4nO3QQQ0AAAyEsPk3fXPRFzVAwi3EmUwajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijkUYjjUYajTQaaTTSaKTRSKORRiONRhqNNBppNNJopNFIo5FGI41GGo00Gmk00mik0UijZzwNbEIx8PhucwAAAABJRU5ErkJggg==";
+function arkImage():ScreenshotContactTaskRequest["image"]{
+  const bytes=Buffer.from(ARK_PNG_BASE64,"base64");
+  return {media_type:"image/png",byte_size:bytes.length,content_hash:createHash("sha256").update(bytes).digest("hex"),data_base64:ARK_PNG_BASE64};
+}
+function arkRequest(){
+  return {idempotency_key:randomUUID(),objective:"File this synthetic chat and analyze the evidence.",
+    image:arkImage(),allow_public_research:false,captured_at:new Date().toISOString()};
+}
+const ARK_MODEL_OUTPUT={platform:"WeChat",conversation_kind:"direct",contact_name:"Synthetic Ark Person",
+  participants:[{label:"我",side:"right",role_hint:"account_owner",visible_name:null}],
+  messages:[{sequence:0,text:"Synthetic private source message",speaker_label:"Synthetic Ark Person",speaker_side:"left",time_text:"09:30"}],
+  identity_clues:[{kind:"name",value:"Synthetic Ark Person",source_excerpt:"Synthetic Ark Person"}],
+  uncertainties:[],follow_up_regions:[]};
+function fakeArkFetcher(usage:unknown,onDispatch?:()=>Promise<void>|void){
+  return vi.fn(async()=>{
+    await onDispatch?.();
+    return new Response(JSON.stringify({id:`ark-${randomUUID()}`,model:ARK_SCREENSHOT_PREPROCESS_MODEL,
+      choices:[{message:{content:JSON.stringify(ARK_MODEL_OUTPUT)}}],...(usage===undefined?{}:{usage})}));
+  }) as typeof fetch;
+}
+function observeRunnerLookup(base:Pool,onLookup:(rows:number)=>void):Pool{
+  return new Proxy(base,{get(target,key){
+    if(key==="query")return async(...args:any[])=>{
+      const result=await (target.query as (...input:any[])=>Promise<unknown>).apply(target,args);
+      if(typeof args[0]==="string"&&args[0].includes("FROM product_runs WHERE account_id=$1 AND user_id=$2 AND task_id=$3"))
+        onLookup((result as {rows:unknown[]}).rows.length);
+      return result;
+    };
+    const value=Reflect.get(target,key);return typeof value==="function"?value.bind(target):value;
+  }}) as unknown as Pool;
+}
+function arkApp(runner:ScreenshotContactTaskRunner,storage:ChatMediaStorage,runnerPool:Pool=pool!){
+  const app=Fastify();
+  const authenticate=async(request:import("fastify").FastifyRequest)=>{request.auth=auth;};
+  registerProductRunMonitoring(app,pool!,authenticate);
+  registerScreenshotContactRoutes(app,runnerPool,authenticate,storage,runner);
+  return app;
+}
+async function settleRunner(runner:ScreenshotContactTaskRunner,taskID:string){
+  for(let attempt=0;attempt<100;attempt++){
+    await runner.drain();
+    const current=await pool!.query<{status:string}>("SELECT status FROM screenshot_contact_tasks WHERE id=$1",[taskID]);
+    if(current.rows[0]?.status!=="running")return;
+    await new Promise(resolve=>setTimeout(resolve,50));
+  }
+  throw new Error("TEST_RUNNER_DID_NOT_SETTLE");
+}
+async function runArkScreenshotTask(usage:unknown,options:{fetcher?:ReturnType<typeof fakeArkFetcher>;model?:ContactAgentModel;request?:Partial<ScreenshotContactTaskRequest>}={}){
+  const fetcher=options.fetcher??fakeArkFetcher(usage);
+  const storage=new TestImageStorage();
+  const preprocessor=new ArkScreenshotPreprocessor({apiKey:"synthetic",fetcher});
+  const sdk=options.model??sdkModel(async(admission,signal)=>{
+    await admission.invoke("ask_contact_clarification",{question:"Which visible person should own this source?"},signal);
+    return sdkReceipt();
+  });
+  const runner=new ScreenshotContactTaskRunner(pool!,{model:sdk,preprocessor,research:null},storage);
+  const app=arkApp(runner,storage);
+  await app.ready();
+  const request={...arkRequest(),...options.request};
+  const response=await app.inject({method:"POST",url:"/v1/contact-agent/tasks",payload:request});
+  const taskID=response.json().task_id as string;
+  const runID=response.headers["x-talent-signal-run-id"] as string;
+  await settleRunner(runner,taskID);
+  const detail=await new ProductRunService(pool!).detail(auth,taskID,true);
+  const waiting=await loadScreenshotContactTask(pool!,auth,taskID);
+  const generation=(await pool!.query<{source_generation:string}>("SELECT source_generation FROM product_runs WHERE id=$1",[runID])).rows[0]!.source_generation;
+  return {app,storage,fetcher,runner,taskID,runID,request,response,detail,waiting,generation};
+}
+
+describe.skipIf(!pool)("GET-37 source-safe screenshot usage diagnostics",()=>{
+  it("keeps exact raw Ark usage diagnostics readable after ordinary checkpoints on one canonical run",async()=>{
+    const fixture=await runArkScreenshotTask({prompt_tokens:12,completion_tokens:8});
+    try {
+      expect(fixture.response.statusCode).toBe(201);
+      expect(fixture.response.json().status).toBe("running");
+      // One canonical admitted run, bound to the task the background runner completed.
+      const runs=await pool!.query<{id:string}>("SELECT id FROM product_runs WHERE account_id=$1 AND user_id=$2 AND task_id=$3",[auth.accountId,auth.userId,fixture.taskID]);
+      expect(runs.rows.map(row=>row.id)).toEqual([fixture.runID]);
+      expect(fixture.waiting.status).toBe("waiting_for_user");
+      expect(fixture.waiting.revision).toBeGreaterThan(3); // several normal checkpoints
+      const diagnostics=fixture.detail.spans.filter(span=>span.name==="contact.screenshot.preprocess.usage");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]!.metadata).toMatchObject({provider:"volcano_ark",model:ARK_SCREENSHOT_PREPROCESS_MODEL,
+        reported_model:ARK_SCREENSHOT_PREPROCESS_MODEL,raw_usage_known:true,
+        raw_prompt_tokens:12,raw_completion_tokens:8,source_image_index:0});
+      expect(diagnostics[0]!.input).toEqual({status:"unavailable",original_bytes:0,retained_bytes:0,sha256:null});
+      expect(diagnostics[0]!.output).toEqual({status:"unavailable",original_bytes:0,retained_bytes:0,sha256:null});
+      // Raw request/response content stays under its original generation fence:
+      // only bounded counters are observable, never pixels or provider bodies.
+      const serialized=JSON.stringify(fixture.detail.spans);
+      expect(serialized).not.toContain(ARK_PNG_BASE64);
+      expect(serialized).not.toContain("Synthetic private source message");
+      await expect(new ProductRunService(pool!).detail({...auth,userId:randomUUID()},fixture.taskID,true))
+        .rejects.toMatchObject({statusCode:404});
+    } finally {await fixture.app.close();}
+  });
+
+  it.each([
+    ["a provider-reported zero",{prompt_tokens:0,completion_tokens:0},true,0,0,{input_tokens:0,output_tokens:0}],
+    ["missing usage",undefined,false,null,null,{input_tokens:0,output_tokens:0}],
+    ["invalid raw usage",{prompt_tokens:-1,completion_tokens:2},false,null,null,{input_tokens:0,output_tokens:2}],
+    ["half-observed raw usage",{prompt_tokens:7},false,null,null,{input_tokens:7,output_tokens:0}],
+  ] as const)("keeps %s explicitly known or unknown in product-run metadata",async(_label,usage,known,prompt,completion,packetUsage)=>{
+    const fixture=await runArkScreenshotTask(usage);
+    try {
+      const diagnostics=fixture.detail.spans.filter(span=>span.name==="contact.screenshot.preprocess.usage");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]!.metadata).toMatchObject({provider:"volcano_ark",model:ARK_SCREENSHOT_PREPROCESS_MODEL,
+        raw_usage_known:known,raw_prompt_tokens:prompt,raw_completion_tokens:completion});
+      // The frozen packet keeps normalized per-field counters; they can never
+      // claim a known zero. Only raw_usage_known/raw_* carry that exact claim.
+      expect(fixture.waiting.preprocessing?.usage).toEqual(packetUsage);
+    } finally {await fixture.app.close();}
+  });
+
+  it("binds the canonical run before background work and replays idempotently with one provider execution",async()=>{
+    const storage=new TestImageStorage();
+    const objective=`GET-37 binding proof ${randomUUID()}`;
+    let dispatched!:()=>void;let release!:()=>void;
+    const started=new Promise<void>(resolve=>{dispatched=resolve;});
+    const barrier=new Promise<void>(resolve=>{release=resolve;});
+    let bindingRowsAtDispatch=-1;
+    let observeBinding!: (value: { runID: string; taskID: string }) => void;
+    const bindingProbe=new Promise<{ runID: string; taskID: string }>(resolve=>{observeBinding=resolve;});
+    const fetcher=vi.fn(async()=>{
+      dispatched();
+      const {runID,taskID}=await bindingProbe;
+      bindingRowsAtDispatch=(await pool!.query("SELECT task_id FROM product_runs WHERE id=$1 AND task_id=$2",
+        [runID,taskID])).rowCount??-1;
+      await barrier;
+      return new Response(JSON.stringify({id:`ark-${randomUUID()}`,model:ARK_SCREENSHOT_PREPROCESS_MODEL,
+        choices:[{message:{content:JSON.stringify(ARK_MODEL_OUTPUT)}}],usage:{prompt_tokens:3,completion_tokens:2}}));
+    }) as typeof fetch;
+    const preprocessor=new ArkScreenshotPreprocessor({apiKey:"synthetic",fetcher});
+    let sdkCalls=0;
+    const sdk=sdkModel(async(admission,signal)=>{
+      sdkCalls++;
+      await admission.invoke("ask_contact_clarification",{question:"Which visible person should own this source?"},signal);
+      return sdkReceipt();
+    });
+    const lookups:number[]=[];
+    const runner=new ScreenshotContactTaskRunner(observeRunnerLookup(pool!,rows=>lookups.push(rows)),{model:sdk,preprocessor,research:null},storage);
+    const app=arkApp(runner,storage,observeRunnerLookup(pool!,rows=>lookups.push(rows)));
+    await app.ready();
+    try {
+      const request={...arkRequest(),objective};
+      const pending=app.inject({method:"POST",url:"/v1/contact-agent/tasks",payload:request});
+      const response=await pending;
+      expect(response.statusCode).toBe(201);
+      const runID=response.headers["x-talent-signal-run-id"] as string;
+      const taskID=response.json().task_id as string;
+      observeBinding({runID,taskID});
+      await started;
+      release();
+      await runner.drain();
+      // Background work observes the canonical run already bound before dispatch.
+      expect(bindingRowsAtDispatch).toBe(1);
+      // The runner starts from the admitted, bound run, never a response-lifetime sink.
+      expect(lookups.length).toBeGreaterThan(0);
+      expect(lookups[0]).toBe(1);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      const replay=await app.inject({method:"POST",url:"/v1/contact-agent/tasks",payload:request});
+      expect(replay.statusCode).toBe(200);
+      expect(replay.headers["idempotent-replayed"]).toBe("true");
+      expect(replay.json().task_id).toBe(taskID);
+      await runner.drain();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      const runs=await pool!.query<{id:string;attempts:number}>("SELECT id,attempts FROM product_runs WHERE account_id=$1 AND task_id=$2",[auth.accountId,taskID]);
+      expect(runs.rows).toEqual([{id:runID,attempts:2}]);
+      expect(sdkCalls).toBe(1);
+      const waiting=await loadScreenshotContactTask(pool!,auth,taskID);
+      const resumed=await app.inject({method:"POST",url:`/v1/contact-agent/tasks/${taskID}/resume`,
+        payload:{expected_revision:waiting.revision}});
+      expect(resumed.statusCode).toBe(200);
+      // A properly bound canonical run still supports real HTTP resume.
+      await vi.waitFor(()=>expect(sdkCalls).toBe(2));
+      await runner.drain();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect((await loadScreenshotContactTask(pool!,auth,taskID)).status).toBe("waiting_for_user");
+
+    } finally {await app.close();}
+  });
+
+  it("keeps usage diagnostics readable after unrelated task drift, cleanup and a later rebind without any replay",async()=>{
+    const first=await runArkScreenshotTask({prompt_tokens:9,completion_tokens:4});
+    const diagnostics=(detail:{spans:Array<{name:string;metadata:Record<string,unknown>}>})=>
+      detail.spans.filter(span=>span.name==="contact.screenshot.preprocess.usage");
+    try {
+      expect(first.detail.run.content_available).toBe(true);
+      expect(diagnostics(first.detail)).toHaveLength(1);
+      // A second ordinary screenshot task advances the account source generation.
+      const second=input();
+      const created=await createScreenshotContactTask(pool!,auth,second);
+      await new ScreenshotContactTaskRunner(pool!,{model:model(`Drift ${randomUUID().slice(0,8)}`),research:null}).start(auth,created.body.task_id,second.image);
+      // Direct read of the first task: no replay, no save, no rewrite of any kind.
+      const drifted=await new ProductRunService(pool!).detail(auth,first.taskID,true);
+      expect(drifted.run.content_available).toBe(false);
+      expect(diagnostics(drifted)).toHaveLength(1);
+      expect(diagnostics(drifted)[0]!.metadata).toMatchObject({provider:"volcano_ark",model:ARK_SCREENSHOT_PREPROCESS_MODEL,
+        reported_model:ARK_SCREENSHOT_PREPROCESS_MODEL,raw_usage_known:true,raw_prompt_tokens:9,raw_completion_tokens:4});
+      expect(Object.keys(diagnostics(drifted)[0]!.metadata).sort()).toEqual(["model","provider","raw_completion_tokens",
+        "raw_prompt_tokens","raw_usage_known","reported_model","request_id_sha256","source_image_index"]);
+      expect(JSON.stringify(drifted)).not.toContain(ARK_PNG_BASE64);
+      expect(JSON.stringify(drifted)).not.toContain("Synthetic private source message");
+      expect(JSON.stringify(drifted)).not.toContain('"request_id"');
+      // A real cleanup tick must not delete the only usage span before read.
+      await cleanupProductRunSources(pool!);
+      const cleaned=await new ProductRunService(pool!).detail(auth,first.taskID,true);
+      expect(cleaned.run.content_available).toBe(false);
+      expect(diagnostics(cleaned)).toHaveLength(1);
+      expect(diagnostics(cleaned)[0]!.metadata).toMatchObject({raw_usage_known:true,raw_prompt_tokens:9,raw_completion_tokens:4});
+      // A later first-run rebind across the drifted generation keeps them too.
+      await saveProductRunOutput(pool!,{id:first.runID,taskID:first.taskID},
+        first.waiting as unknown as Record<string,unknown>,first.waiting.status);
+      const rebound=await new ProductRunService(pool!).detail(auth,first.taskID,true);
+      // The rebind re-admits the latest checkpointed response (product
+      // semantics) but never raw request bytes or span content.
+      expect(rebound.input).toEqual({status:"unavailable",original_bytes:0,retained_bytes:0,sha256:null});
+      expect(diagnostics(rebound)).toHaveLength(1);
+      expect(diagnostics(rebound)[0]!.metadata).toMatchObject({raw_usage_known:true,raw_prompt_tokens:9,raw_completion_tokens:4});
+      expect(JSON.stringify(rebound.spans)).not.toContain(ARK_PNG_BASE64);
+      expect(JSON.stringify(rebound.spans)).not.toContain("Synthetic private source message");
+    } finally {await first.app.close();}
+  });
+
+  it("keeps the exact metadata-only SDK usage leaf across the final checkpoint purge",async()=>{
+    const hashOne=createHash("sha256").update("synthetic-raw-sdk-id").digest("hex");
+    const hashTwo=createHash("sha256").update("synthetic-raw-sdk-id-2").digest("hex");
+    const timestamp=new Date().toISOString();
+    const sdk=sdkModel(async(admission,signal)=>{
+      await recordProductEvent("harness.sdk.assistant","llm",undefined,{content:[{text:"Synthetic private answer"}]},{
+        sdk_message_id:"synthetic-raw-sdk-id",model:"synthetic-sdk-model",provider:"claude-agent-sdk",
+        usage:{input_tokens:12,output_tokens:4,cache_read_input_tokens:7,cache_creation_input_tokens:2,source:"provider"},
+        sdk_message_id_sha256:hashOne,sdk_input_tokens:12,sdk_output_tokens:4,sdk_cache_read_input_tokens:7,
+        sdk_cache_creation_input_tokens:2,sdk_total_input_tokens:21,
+        sdk_usage_basis:"per_message_provider_reported_input_excludes_cache",sdk_stop_reason:"end_turn"},
+        {startedAt:timestamp,finishedAt:timestamp});
+      await recordProductEvent("harness.sdk.assistant","llm",undefined,"Synthetic private source message",{
+        sdk_message_id:"synthetic-raw-sdk-id-2",model:"synthetic-sdk-model",provider:"claude-agent-sdk",
+        usage:{source:"unavailable"},sdk_message_id_sha256:hashTwo,sdk_input_tokens:null,sdk_output_tokens:null,
+        sdk_cache_read_input_tokens:null,sdk_cache_creation_input_tokens:null,sdk_total_input_tokens:null,
+        sdk_usage_basis:"per_message_provider_reported_input_excludes_cache",sdk_stop_reason:"synthetic prose stop reason"},
+        {startedAt:timestamp,finishedAt:timestamp});
+      await admission.invoke("ask_contact_clarification",{question:"Which visible person should own this source?"},signal);
+      return sdkReceipt();
+    });
+    const fixture=await runArkScreenshotTask({prompt_tokens:1,completion_tokens:1},{model:sdk});
+    try {
+      const leaves=fixture.detail.spans.filter(span=>span.name==="harness.sdk.assistant");
+      expect(leaves).toHaveLength(2);
+      const known=leaves.find(span=>span.metadata.sdk_message_id_sha256===hashOne)!;
+      expect(known.input).toEqual({status:"unavailable",original_bytes:0,retained_bytes:0,sha256:null});
+      expect(known.metadata).toMatchObject({provider:"claude-agent-sdk",model:"synthetic-sdk-model",
+        sdk_message_id_sha256:hashOne,sdk_input_tokens:12,sdk_output_tokens:4,sdk_cache_read_input_tokens:7,
+        sdk_cache_creation_input_tokens:2,sdk_total_input_tokens:21,
+        sdk_usage_basis:"per_message_provider_reported_input_excludes_cache",sdk_stop_reason:"end_turn"});
+      expect(Object.keys(known.metadata).sort()).toEqual(["model","provider","sdk_cache_creation_input_tokens",
+        "sdk_cache_read_input_tokens","sdk_input_tokens","sdk_message_id_sha256","sdk_output_tokens",
+        "sdk_stop_reason","sdk_total_input_tokens","sdk_usage_basis"]);
+      const unknown=leaves.find(span=>span.metadata.sdk_message_id_sha256===hashTwo)!;
+      expect(unknown.metadata).toMatchObject({sdk_input_tokens:null,sdk_output_tokens:null,
+        sdk_cache_read_input_tokens:null,sdk_cache_creation_input_tokens:null,sdk_total_input_tokens:null,sdk_stop_reason:null});
+      const serialized=JSON.stringify(fixture.detail.spans);
+      expect(serialized).not.toContain("synthetic-raw-sdk-id");
+      expect(serialized).not.toContain("Synthetic private answer");
+      expect(serialized).not.toContain("Synthetic private source message");
+      expect(serialized).not.toContain('"usage"');
+    } finally {await fixture.app.close();}
+  });
+
+  it("keeps real iOS post-review linked diagnostics while retired, expired and lost sources stay hidden",async()=>{
+    const person=randomUUID(),context=randomUUID(),seed=randomUUID();
+    await pool!.query("INSERT INTO subjects(id,account_id,external_ref,display_label) VALUES($1::uuid,$2,$1::text,'Transport person')",[person,auth.accountId]);
+    await pool!.query("INSERT INTO assignments(id,account_id,subject_id,external_ref,display_label) VALUES($1::uuid,$2,$3::uuid,$1::text,'Transport context')",[context,auth.accountId,person]);
+    const reviewed=await runArkScreenshotTask({prompt_tokens:7,completion_tokens:2},{request:{
+      idempotency_key:`ios:${seed}:preprocess-v3`,preprocess_only:true}});
+    const diagnostics=async()=>{const detail=await new ProductRunService(pool!).detail(auth,reviewed.taskID,true);
+      return {detail,count:detail.spans.filter(span=>span.name==="contact.screenshot.preprocess.usage").length};};
+    try {
+      expect(reviewed.waiting.status).toBe("completed");
+      expect(reviewed.detail.run.content_available).toBe(true);
+      const canonical=await createIOSCapture(seed,person,context);
+      const captureID=canonical.body.capture_id;
+      expect((await pool!.query("SELECT source_access_state,source_access_reason,authorization_state FROM source_retention_receipts WHERE capture_id=$1",[captureID])).rows[0])
+        .toMatchObject({source_access_state:"purged",source_access_reason:"review_completed",authorization_state:"authorized"});
+      // This is the real producer/link protocol, including preprocess_only,
+      // exact iOS request seed, source resource and completed idempotency record.
+      const linked=await linkScreenshotContactTaskCapture(pool!,auth,reviewed.taskID,{
+        expected_revision:reviewed.waiting.revision,capture_id:captureID,source_resource_id:canonical.body.resource.id});
+      expect(linked.capture_id).toBe(captureID);
+      expect((await loadScreenshotContactTask(pool!,auth,reviewed.taskID)).status).toBe("completed");
+      let read=await diagnostics();
+      expect(read.detail.run.content_available).toBe(false);
+      expect(read.count).toBe(1);
+      expect(read.detail.spans[0]!.metadata).toMatchObject({raw_usage_known:true,raw_prompt_tokens:7,raw_completion_tokens:2});
+      await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=now()-interval '1 second' WHERE capture_id=$1",[captureID]);
+      expect((await diagnostics()).count).toBe(0);
+      await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=now()+interval '30 days',retention_until=now()-interval '1 second' WHERE capture_id=$1",[captureID]);
+      expect((await diagnostics()).count).toBe(0);
+      await pool!.query("UPDATE source_retention_receipts SET retention_until=NULL WHERE capture_id=$1",[captureID]);
+      expect((await diagnostics()).count).toBe(1);
+      await pool!.query("UPDATE subjects SET status='deleted' WHERE id=$1",[person]);
+      expect((await diagnostics()).count).toBe(0);
+      await pool!.query("UPDATE subjects SET status='active' WHERE id=$1",[person]);
+      // A purge/revoke AFTER linking retires this original task through 047.
+      // Nothing revives its state, lease epoch or retraction record.
+      await pool!.query("UPDATE source_retention_receipts SET authorization_state='revoked' WHERE capture_id=$1",[captureID]);
+      expect((await loadScreenshotContactTask(pool!,auth,reviewed.taskID)).status).toBe("deleted");
+      expect((await diagnostics()).count).toBe(0);
+      await expect(new ProductRunService(pool!).detail({...auth,userId:randomUUID()},reviewed.taskID,true)).rejects.toMatchObject({statusCode:404});
+      await cleanupProductRunSources(pool!);
+      await saveProductRunUsageDiagnostics(pool!,{accountID:randomUUID(),taskID:reviewed.taskID},
+        [{provider:"volcano_ark",model:ARK_SCREENSHOT_PREPROCESS_MODEL,source_image_index:0,request_id:"ark-foreign",
+          reported_model:ARK_SCREENSHOT_PREPROCESS_MODEL,raw_usage_known:true,raw_prompt_tokens:7,raw_completion_tokens:2}]);
+      await saveProductRunUsageDiagnostics(pool!,{accountID:auth.accountId,taskID:reviewed.taskID},
+        [{provider:"volcano_ark",model:ARK_SCREENSHOT_PREPROCESS_MODEL,source_image_index:0,request_id:"ark-late",
+          reported_model:ARK_SCREENSHOT_PREPROCESS_MODEL,raw_usage_known:true,raw_prompt_tokens:7,raw_completion_tokens:2}]);
+      expect((await pool!.query("SELECT count(*)::int AS n FROM product_run_spans WHERE run_id=$1",[reviewed.runID])).rows[0]!.n).toBe(0);
+    } finally {await reviewed.app.close();}
+  });
+
+  it("never starts unbound background work through failed POST, GET recovery or resume",async()=>{
+    const storage=new TestImageStorage();
+    const fetcher=fakeArkFetcher({prompt_tokens:3,completion_tokens:2});
+    const sdk=vi.fn(async(admission:any,signal:AbortSignal)=>{
+      await admission.invoke("ask_contact_clarification",{question:"Which visible person should own this source?"},signal);return sdkReceipt();
+    });
+    const runner=new ScreenshotContactTaskRunner(pool!,{model:sdkModel(sdk),
+      preprocessor:new ArkScreenshotPreprocessor({apiKey:"synthetic",fetcher}),research:null},storage);
+    let starts=0;
+    const original=runner.start.bind(runner);
+    runner.start=(...args:Parameters<ScreenshotContactTaskRunner["start"]>)=>{starts++;return original(...args);};
+    const app=Fastify();
+    const authenticate=async(request:import("fastify").FastifyRequest)=>{request.auth=auth;};
+    app.addHook("onSend",async(request,reply,payload)=>{
+      if(!request.routeOptions.url?.includes("contact-agent"))return payload;
+      if(request.headers["x-test-failing-once"]==="done")return payload;
+      request.headers["x-test-failing-once"]="done";
+      throw new Error("SYNTHETIC_ONSEND_FAILURE");
+    });
+    registerProductRunMonitoring(app,pool!,authenticate);
+    registerScreenshotContactRoutes(app,pool!,authenticate,storage,runner);
+    await app.ready();
+    try {
+      const request=arkRequest();
+      const response=await app.inject({method:"POST",url:"/v1/contact-agent/tasks",payload:request,
+        headers:{"x-test-failing-once":"pending"}});
+      expect(response.statusCode).toBe(500);
+      await new Promise(resolve=>setTimeout(resolve,250));
+      expect(starts).toBe(0);
+      expect(fetcher).not.toHaveBeenCalled();
+      const run=(await pool!.query<{task_id:string|null;status:string}>(
+        "SELECT task_id,status FROM product_runs WHERE account_id=$1 ORDER BY created_at DESC LIMIT 1",[auth.accountId])).rows[0];
+      expect(run!.task_id).toBeNull();
+      expect(run!.status).toBe("failed");
+      const taskID=(await pool!.query("SELECT id FROM screenshot_contact_tasks WHERE account_id=$1 AND idempotency_key=$2",[auth.accountId,request.idempotency_key])).rows[0]!.id;
+      const recovered=await app.inject({method:"GET",url:`/v1/contact-agent/tasks/${taskID}`,headers:{"x-test-failing-once":"done"}});
+      expect(recovered.statusCode).toBe(200);
+      await new Promise(resolve=>setTimeout(resolve,250));
+      expect(starts).toBe(0);expect(fetcher).not.toHaveBeenCalled();expect(sdk).not.toHaveBeenCalled();
+      // Deliberate non-HTTP callers retain their existing contract. Use that
+      // supported producer to create a resumable orphan without inventing a run
+      // binding or rewriting task state; HTTP must still refuse to dispatch it.
+      await original(auth,taskID,request.image);
+      const waiting=await loadScreenshotContactTask(pool!,auth,taskID);
+      expect(waiting.status).toBe("waiting_for_user");
+      expect(fetcher).toHaveBeenCalledTimes(1);expect(sdk).toHaveBeenCalledTimes(1);
+      const resumed=await app.inject({method:"POST",url:`/v1/contact-agent/tasks/${taskID}/resume`,
+        payload:{expected_revision:waiting.revision},headers:{"x-test-failing-once":"done"}});
+      expect(resumed.statusCode).toBe(200);
+      await new Promise(resolve=>setTimeout(resolve,250));
+      expect(starts).toBe(0);expect(fetcher).toHaveBeenCalledTimes(1);expect(sdk).toHaveBeenCalledTimes(1);
+
+    } finally {await app.close();}
+  });
+
+  it("never starts background work on premature close or stream rejection of the real reply",async()=>{
+    const storage=new TestImageStorage();
+    const fetcher=fakeArkFetcher({prompt_tokens:4,completion_tokens:3});
+    const runner=new ScreenshotContactTaskRunner(pool!,{model:sdkModel(async()=>{throw new Error("UNEXPECTED_MODEL");}),
+      preprocessor:new ArkScreenshotPreprocessor({apiKey:"synthetic",fetcher}),research:null},storage);
+    let starts=0;
+    const original=runner.start.bind(runner);
+    runner.start=(...args:Parameters<ScreenshotContactTaskRunner["start"]>)=>{starts++;return original(...args);};
+    const app=Fastify();
+    const authenticate=async(request:import("fastify").FastifyRequest)=>{request.auth=auth;};
+    registerProductRunMonitoring(app,pool!,authenticate);
+    registerScreenshotContactRoutes(app,pool!,authenticate,storage,runner);
+    app.addHook("onSend",async(request,reply,payload)=>{
+      if(request.headers["x-test-mode"]==="reject"){
+        reply.raw.on("error",()=>{});
+        reply.raw.destroy(new Error("SYNTHETIC_STREAM_FAILURE"));
+      } else await new Promise(resolve=>setTimeout(resolve,400));
+      return payload;
+    });
+    await app.listen({port:0,host:"127.0.0.1"});
+    const port=(app.server.address() as {port:number}).port;
+    const post=(mode:"drop"|"reject")=>new Promise<void>(resolve=>{
+      const req=httpRequest({host:"127.0.0.1",port,path:"/v1/contact-agent/tasks",method:"POST",
+        headers:{"content-type":"application/json","x-test-mode":mode}},()=>{});
+      req.on("error",()=>{});
+      req.end(JSON.stringify(arkRequest()));
+      if(mode==="drop"){setTimeout(()=>{req.destroy();resolve();},100);} else {req.on("close",()=>resolve());}
+    });
+    try {
+      await post("drop");
+      await post("reject");
+      await new Promise(resolve=>setTimeout(resolve,500));
+      expect(starts).toBe(0);
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {await app.close();}
+  },20_000);
+
+  it("runs exactly one provider execution for concurrent same-key admissions",async()=>{
+    const storage=new TestImageStorage();
+    const fetcher=fakeArkFetcher({prompt_tokens:2,completion_tokens:1});
+    const preprocessor=new ArkScreenshotPreprocessor({apiKey:"synthetic",fetcher});
+    const sdk=sdkModel(async(admission,signal)=>{
+      await admission.invoke("ask_contact_clarification",{question:"Which visible person should own this source?"},signal);
+      return sdkReceipt();
+    });
+    const runner=new ScreenshotContactTaskRunner(pool!,{model:sdk,preprocessor,research:null},storage);
+    const app=arkApp(runner,storage);
+    await app.ready();
+    try {
+      const request=arkRequest();
+      const responses=await Promise.all([
+        app.inject({method:"POST",url:"/v1/contact-agent/tasks",payload:request}),
+        app.inject({method:"POST",url:"/v1/contact-agent/tasks",payload:request}),
+      ]);
+      expect(responses.map(response=>response.statusCode).sort()).toEqual([200,201]);
+      const taskID=responses[0]!.json().task_id as string;
+      expect(new Set(responses.map(response=>response.json().task_id))).toEqual(new Set([taskID]));
+      await settleRunner(runner,taskID);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      const runs=await pool!.query<{id:string;attempts:number}>("SELECT id,attempts FROM product_runs WHERE account_id=$1 AND task_id=$2",[auth.accountId,taskID]);
+      expect(runs.rows).toHaveLength(1);
+      expect(runs.rows[0]!.attempts).toBe(2);
+    } finally {await app.close();}
+  });
+
+  it("never restores raw or forbidden content after deletion, late flush or late diagnostics writes",async()=>{
+    const fixture=await runArkScreenshotTask({prompt_tokens:6,completion_tokens:3});
+    try {
+      expect(fixture.detail.run.content_available).toBe(true);
+      const deleted=await deleteContactCaptureTask(pool!,auth,fixture.taskID,fixture.waiting.revision,fixture.storage,()=>{});
+      expect(deleted.status).toBe("deleted");
+      await cleanupProductRunSources(pool!);
+      const after=await new ProductRunService(pool!).detail(auth,fixture.taskID,true);
+      expect(after.run.content_available).toBe(false);
+      expect(after.spans).toEqual([]);
+      const serialized=JSON.stringify(after);
+      expect(serialized).not.toContain(ARK_PNG_BASE64);
+      expect(serialized).not.toContain("Synthetic private source message");
+      // A late append/flush under the original generation cannot restore raw content.
+      const sink=productRunSink(pool!,fixture.runID,error=>{throw error;},fixture.generation);
+      const timestamp=new Date().toISOString();
+      await sink.append({id:randomUUID(),parent_id:null,name:"late.preprocess",kind:"llm",status:"completed",
+        started_at:timestamp,finished_at:timestamp,
+        input:captureObservationContent({source:"Synthetic private source message"},2000),
+        output:captureObservationContent({usage:{prompt_tokens:6,completion_tokens:3}},2000),
+        metadata:{provider:"volcano_ark",model:ARK_SCREENSHOT_PREPROCESS_MODEL},error:null});
+      await sink.flush();
+      // A late metadata-only diagnostics write cannot recreate revoked run content.
+      await saveProductRunUsageDiagnostics(pool!,{accountID:auth.accountId,taskID:fixture.taskID},
+        [{provider:"volcano_ark",model:ARK_SCREENSHOT_PREPROCESS_MODEL,source_image_index:0,request_id:"ark-late",
+          reported_model:ARK_SCREENSHOT_PREPROCESS_MODEL,raw_usage_known:true,raw_prompt_tokens:6,raw_completion_tokens:3}]);
+      const rows=await pool!.query<{content:string}>("SELECT span::text AS content FROM product_run_spans WHERE run_id=$1",[fixture.runID]);
+      expect(JSON.stringify(rows.rows)).not.toContain("Synthetic private source message");
+      expect(JSON.stringify(rows.rows)).not.toContain(ARK_PNG_BASE64);
+      const diagnostics=await pool!.query("SELECT id FROM product_run_spans WHERE run_id=$1 AND span->>'name'='contact.screenshot.preprocess.usage'",[fixture.runID]);
+      expect(diagnostics.rows).toEqual([]);
+    } finally {await fixture.app.close();}
   });
 });

@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import type { ScreenshotContactTaskRequest } from "@talent-signal/agent";
-import type { FastifyInstance, preHandlerHookHandler } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
 import type { Pool } from "pg";
 import { ApiError } from "../lib/apiError.js";
+import type { AuthContext } from "./auth.js";
 import type { ChatMediaStorage } from "./chatMediaStorage.js";
 import {
   cancelScreenshotContactTask,
@@ -19,6 +20,48 @@ import {
   resumeScreenshotContactTask,
   type ScreenshotContactTaskRunner,
 } from "./screenshotContactTasks.js";
+
+/** Start HTTP background work only after a successful completed reply
+ * whose canonical admitted product run is committed and bound to this task.
+ * Failed, rejected or prematurely closed responses never dispatch provider
+ * work: Fastify treats ERR_STREAM_PREMATURE_CLOSE as fulfillment, so
+ * fulfillment alone is not proof of a delivered admitted response. Internal
+ * non-HTTP runner callers keep their own deliberate contract. */
+export function startScreenshotTaskAfterCommittedReply(options: {
+  request: FastifyRequest; reply: FastifyReply; pool: Pool;
+  runner: ScreenshotContactTaskRunner; auth: AuthContext; taskID: string;
+  image?: ScreenshotContactTaskRequest["image"];
+}): void {
+  const { request, reply, pool, runner, auth, taskID } = options;
+  let finished = false;
+  // Registered before reply.then so a real finish is observed before Fastify's
+  // end-of-stream callback runs.
+  reply.raw.on("finish", () => { finished = true; });
+  const start = () => {
+    if (!finished) {
+      request.log.warn({ task_id: taskID }, "Contact task response did not complete; background work not started");
+      return;
+    }
+    if (reply.statusCode !== 200 && reply.statusCode !== 201) {
+      request.log.warn({ task_id: taskID, status_code: reply.statusCode },
+        "Contact task response was not an admitted success; background work not started");
+      return;
+    }
+    void (async () => {
+      const bound = await pool.query<{ id: string }>(`SELECT id FROM product_runs
+        WHERE account_id=$1 AND user_id=$2 AND task_id=$3::uuid AND task_kind='screenshot' AND status<>'failed'`,
+      [auth.accountId, auth.userId, taskID]).catch(() => null);
+      if (!bound?.rowCount) {
+        request.log.error({ task_id: taskID }, "Contact task has no committed canonical run; background work not started");
+        return;
+      }
+      void runner.start(auth, taskID, options.image).catch(() => request.log.error({ task_id: taskID }, "Contact task could not start"));
+    })();
+  };
+  void reply.then(start, error => {
+    request.log.error({ err: error, task_id: taskID }, "Contact task response failed; background work not started");
+  });
+}
 
 export function registerScreenshotContactRoutes(
   app: FastifyInstance,
@@ -49,8 +92,9 @@ export function registerScreenshotContactRoutes(
       chatMediaStorage,
       { preprocessingRequired: true },
     );
-    void screenshotRunner.start(request.auth, result.body.task_id)
-      .catch(() => request.log.error({ task_id: result.body.task_id }, "Contact task could not start"));
+    startScreenshotTaskAfterCommittedReply({
+      request, reply, pool, runner: screenshotRunner, auth: request.auth, taskID: result.body.task_id,
+    });
     return reply.header("idempotent-replayed", result.replayed)
       .status(result.replayed ? 200 : 201).send(result.body);
   });
@@ -140,12 +184,14 @@ export function registerScreenshotContactRoutes(
   app.get<{ Params: { id: string } }>("/v1/contact-agent/tasks/:id", {
     preHandler: authenticate,
     schema: { security, params: idParams },
-  }, async request => {
+  }, async (request, reply) => {
     const result = await loadScreenshotContactTask(pool, request.auth, request.params.id);
-    if (result.status === "running") {
-      void screenshotRunner?.start(request.auth, result.task_id).catch(() => {});
+    if (result.status === "running" && screenshotRunner) {
+      startScreenshotTaskAfterCommittedReply({
+        request, reply, pool, runner: screenshotRunner, auth: request.auth, taskID: result.task_id,
+      });
     }
-    return result;
+    return reply.send(result);
   });
 
   app.post<{
@@ -176,13 +222,16 @@ export function registerScreenshotContactRoutes(
         }, { additionalProperties: false })),
       }, { additionalProperties: false }),
     },
-  }, async request => {
+  }, async (request, reply) => {
     if (!screenshotRunner) {
       throw new ApiError(503, "CONTACT_AGENT_UNAVAILABLE", "Screenshot contact Agent is not configured.");
     }
     const result = await resumeScreenshotContactTask(pool, request.auth, request.params.id, request.body);
-    void screenshotRunner.start(request.auth, result.task_id, request.body.image).catch(() => {});
-    return result;
+    startScreenshotTaskAfterCommittedReply({
+      request, reply, pool, runner: screenshotRunner, auth: request.auth,
+      taskID: result.task_id, ...(request.body.image ? { image: request.body.image } : {}),
+    });
+    return reply.send(result);
   });
   app.post<{ Params: { id: string }; Body: unknown }>("/v1/contact-agent/tasks/:id/profile-confirmation", {
     preHandler: authenticate,

@@ -1,13 +1,13 @@
 "use client";
 import { useLayoutEffect, useRef } from "react";
 import type { TimeActivity } from "@talent-signal/contracts";
-import { CalendarBlank, ChatCircleDots, UserPlus, Clock, ArrowUpRight } from "@phosphor-icons/react";
+import { CalendarBlank, ChatCircleDots, Globe, UserPlus, Clock, ArrowUpRight } from "@phosphor-icons/react";
 import { addDays, dateInZone, formatDay, formatTime, monthDays, scheduleSegments, TIME_KINDS, TIME_STATUSES, weekStart } from "@/lib/time-workspace";
 import { calendarUTCFromLocal } from "@/lib/calendar-draft";
 import styles from "./time-workspace.module.css";
 
 export function TimeActivityIcon({ kind }: { kind: TimeActivity["kind"] }) {
-  const Icon = kind === "session_activity" ? ChatCircleDots : kind === "person_created" ? UserPlus : kind === "meeting_draft" ? CalendarBlank : Clock;
+  const Icon = kind === "session_activity" ? ChatCircleDots : kind === "person_created" ? UserPlus : kind === "meeting_draft" ? CalendarBlank : kind === "public_source_update" ? Globe : Clock;
   return <Icon aria-hidden="true" size={18} />;
 }
 export function TimeActivityRow({ activity, zone, selected, onSelect }: { activity: TimeActivity; zone: string; selected?: boolean; onSelect: (activity: TimeActivity) => void }) {

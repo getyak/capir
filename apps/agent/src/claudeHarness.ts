@@ -8,6 +8,7 @@ import { createClaudeHarnessWorkspace } from "./claudeHarnessWorkspace.js";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { createSdkMcpServer, query, startup, tool, type WarmQuery, type Options, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { claudeToolDiscoveryDecision, ToolSearchInputSchema, TOOL_SEARCH_NAME, type ClaudeToolDiscoveryMode } from "./claudeToolContextPolicy.js";
 import { z } from "zod";
 import type { AgentBudget, AgentProviderInputPart } from "./types.js";
 import type { ClaudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
@@ -21,6 +22,8 @@ type ObservedSDKAssistant = {
   model: string;
   usage: { input_tokens: number; output_tokens: number;
     cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } | null;
+  /** Last known fixed-enum stop reason; never free-form provider text. */
+  stopReason: string | null;
   firstAt: string;
   lastAt: string;
 };
@@ -147,11 +150,27 @@ export interface ClaudeHarnessRequest {
   preparationReady?: () => boolean;
   /** New original input invalidates prepared output before any later display. */
   onPreparationSuperseded?: () => void;
+  /**
+   * Host-owned monotonic generation of the prepared output, starting at 0 and
+   * advanced only by accepted preparation staging or discard. Optional: a host
+   * without it stays fail-closed after steering, exactly as before. After an
+   * admitted original supersedes prepared output, only a strictly newer valid
+   * nonnegative safe generation can re-arm the preparation fast-stop.
+   */
+  preparationRevision?: () => number;
   systemPrompt: string;
   context?: string;
   images?: readonly AgentProviderInputPart[];
   /** Capabilities that may return pixels require the same ephemeral policy as image input. */
   imageToolResults?: boolean;
+  /**
+   * GET-128 bounded tool context: opt in only where scoped discovery over this
+   * Run's registered MCP catalog can be proven. Large admitted catalog tools
+   * are deferred behind the pinned SDK's native ToolSearch; every other
+   * configuration keeps the legacy eager tool context unchanged, and an
+   * unprovable opt-in request is rejected before the SDK stream opens.
+   */
+  toolDiscovery?: ClaudeToolDiscoveryMode;
   tools: readonly HarnessTool[];
   skills?: readonly HarnessSkill[];
   subagents?: readonly HarnessSubagent[];
@@ -259,6 +278,31 @@ export function claudeHarnessInterruptionCode(error: unknown): string {
 }
 const FORBIDDEN_BUILT_INS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch"];
 
+/** Bounded flat usage diagnostics survive metadata-only retention. A genuine
+ * zero stays zero; absent or invalid values stay null, never invented zeros. */
+function safeUsageCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Provider per-message raw input excludes cache reads/creation per the
+ * Anthropic contract. The total exists only when all three parts are
+ * explicitly known and their sum is a safe integer; otherwise it stays null. */
+function flatUsageDiagnostics(usage: ObservedSDKAssistant["usage"]) {
+  const raw = safeUsageCount(usage?.input_tokens);
+  const read = safeUsageCount(usage?.cache_read_input_tokens);
+  const creation = safeUsageCount(usage?.cache_creation_input_tokens);
+  const parts = [raw, read, creation];
+  const sum = (raw ?? 0) + (read ?? 0) + (creation ?? 0);
+  return {
+    sdk_input_tokens: raw,
+    sdk_output_tokens: safeUsageCount(usage?.output_tokens),
+    sdk_cache_read_input_tokens: read,
+    sdk_cache_creation_input_tokens: creation,
+    sdk_total_input_tokens: parts.every(part => part !== null) && Number.isSafeInteger(sum) ? sum : null,
+    sdk_usage_basis: "per_message_provider_reported_input_excludes_cache",
+  };
+}
+
 function validBudget(budget: AgentBudget) {
   for (const [name, value] of Object.entries(budget)) {
     if (!Number.isFinite(value) || value <= 0 || (name !== "maxEstimatedUsd" && !Number.isInteger(value))) {
@@ -362,6 +406,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       throw new Error("CLAUDE_HARNESS_SUBAGENT_TOOL_NOT_READ_ONLY");
     }
   }
+  // Scoped discovery is provable only without arbitrary child manifests; an
+  // opt-in request that cannot be proven is rejected, never silently expanded.
+  const discovery = claudeToolDiscoveryDecision(request.toolDiscovery, subagents.length);
+  if (discovery === "rejected") throw new Error("CLAUDE_HARNESS_TOOL_DISCOVERY_NOT_ADMITTED");
   await assertCurrent();
   const captureSecrets = [configuration.credential.value].filter(value => value.length > 0);
   const modelFrames = new Map<string, ObservedSDKAssistant>();
@@ -374,6 +422,12 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         cache_creation_input_tokens: frame.usage.cache_creation_input_tokens ?? null, source: "provider" }
         : { source: "unavailable" },
       timing_basis: "sdk_message_frame_receipt_window",
+      // Flat primitives alongside the full-source fields above: a failed or
+      // source-less receipt keeps bounded usage identity. The raw SDK message
+      // ID never enters this block; only its lowercase SHA-256 does.
+      sdk_message_id_sha256: createHash("sha256").update(frame.id).digest("hex"),
+      ...flatUsageDiagnostics(frame.usage),
+      sdk_stop_reason: frame.stopReason,
     }, { startedAt: frame.firstAt, finishedAt: frame.lastAt, secrets: captureSecrets });
   };
   // Host-supplied request fields, explicitly not the SDK/provider wire request.
@@ -391,6 +445,13 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   const sdkTiming = { initializedAfterMs: null as number | null, firstModelResponseAfterMs: null as number | null };
   const apiRetries: SDKRetryEvidence[] = [];
   const controller = new AbortController();
+  let authorityFailure: { error: unknown } | undefined;
+  const abortAuthorityFailure = () => {
+    if (authorityFailure) {
+      controller.abort(authorityFailure.error);
+      controller.signal.throwIfAborted();
+    }
+  };
   const abort = () => controller.abort(signal.reason);
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) abort();
@@ -398,7 +459,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   let checking: Promise<void> | undefined;
   const heartbeat = setInterval(() => {
     if (checking) return;
-    checking = assertCurrent().catch(() => controller.abort(new Error("CLAUDE_HARNESS_SESSION_INVALIDATED")))
+    checking = assertCurrent().catch(() => controller.abort(authorityFailure?.error ?? new Error("CLAUDE_HARNESS_SESSION_INVALIDATED")))
       .finally(() => { checking = undefined; });
   }, 2_000);
   let stream: ReturnType<typeof query> | undefined;
@@ -410,6 +471,33 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   const toolCompletions: HarnessToolCompletion[] = [];
   let preparationStopped = false;
   let preparationSuperseded = false;
+  /** Generation floor invalidated by the latest admitted steering batch, or
+   * null while no batch superseded prepared output / no valid floor exists. */
+  let preparationInvalidatedRevision: number | null = null;
+  /** High-water mark of admissible observations; they must never regress. */
+  let preparationRevisionHigh: number | null = null;
+  // Host generations are observed as nonnegative safe integers, monotonically.
+  // An invalid, regressing or thrown observation is never admissible and fails
+  // closed: it can never re-arm the preparation fast-stop.
+  const observePreparationRevision = (): number | null => {
+    if (!request.preparationRevision) return null;
+    let value: unknown;
+    try { value = request.preparationRevision(); } catch { return null; }
+    const revision = typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+    if (revision === null || (preparationRevisionHigh !== null && revision < preparationRevisionHigh)) return null;
+    preparationRevisionHigh = revision;
+    return revision;
+  };
+  // The fast-stop stays armed before the first admitted steering batch exactly
+  // as legacy hosts behave. After supersession, a legacy host stays fail-closed
+  // and a generation host re-arms only past the invalidated floor: an old or
+  // constant draft, unchanged readiness or unrelated success cannot stop.
+  const preparationArmed = (): boolean => {
+    if (!preparationSuperseded) return true;
+    if (!request.preparationRevision || preparationInvalidatedRevision === null) return false;
+    const current = observePreparationRevision();
+    return current !== null && current > preparationInvalidatedRevision;
+  };
   let primaryToolCompleted = false;
   let preparationToolFailed = false;
   let pendingSteering: HarnessSteeringBatch | null = null;
@@ -439,6 +527,9 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     }
     preparationSuperseded = true;
     request.onPreparationSuperseded?.();
+    // Host generation floor: capture only after the existing discard, so any
+    // later valid draft must carry a strictly newer generation to re-arm.
+    preparationInvalidatedRevision = observePreparationRevision();
     pendingSteering = batch;
     // Original human input is scoped task context. It creates no new grants
     // and cannot turn generated artifacts into approval for external writes.
@@ -483,7 +574,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       plugins.push({ type: "local", path: plugin });
     }
     const allowedTools = names.map((name) => `${HARNESS_MCP_PREFIX}${name}`);
-    const allowed = new Set(allowedTools);
+    const allowed = new Set([...allowedTools, ...(discovery === "admitted" ? [TOOL_SEARCH_NAME] : [])]);
     const errorContent = (code: string) => ({ content: [{ type: "text" as const, text: JSON.stringify({ error: code }) }], isError: true });
     // SDK 0.3.260 reconstructs a Zod object and rejects omitted ZodDefault
     // fields with our pinned Zod 4.5.4. Expose their optional input contract;
@@ -543,10 +634,45 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     const gate: NonNullable<Options["hooks"]>["PreToolUse"] = [{ hooks: [async (input) => {
       if (input.hook_event_name !== "PreToolUse") return { continue: true };
       controller.signal.throwIfAborted();
-      await assertCurrent();
-      assertBudget();
-      if (!input.agent_id) await acknowledgeSteering();
+      try {
+        await assertCurrent();
+        assertBudget();
+        if (!input.agent_id) await acknowledgeSteering();
+      } catch (error) {
+        // Cancellation and exhausted budgets already carry a latched abort.
+        if (controller.signal.aborted) throw error;
+        // Hook exceptions are non-fatal and abort closes stdin with a grace
+        // window. Send the CLI's stop+deny protocol first, then fail the host
+        // with the original authority error on the next frame or terminal.
+        authorityFailure ??= { error };
+        const reason = "Current source or session authority is no longer valid.";
+        return { continue: false, stopReason: reason,
+          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+            permissionDecisionReason: reason } };
+      }
       const args = input.tool_input as Record<string, unknown>;
+      // Bounded native discovery (opt-in only): the same abort/source/lease and
+      // budget fences above plus a bounded supported query, counted exactly
+      // once against the tool-call cap when it may execute. Discovery never
+      // satisfies primary product-tool completion or preparationReady and
+      // carries no product effect authority.
+      if (input.tool_name === TOOL_SEARCH_NAME) {
+        const search = ToolSearchInputSchema.safeParse(args);
+        if (discovery === "admitted" && !input.agent_id && search.success) {
+          if (++toolCalls > request.budget.maxToolCalls) {
+            controller.abort(new Error("CLAUDE_HARNESS_TOOL_BUDGET"));
+            return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+              permissionDecisionReason: "TOOL_BUDGET_EXHAUSTED" } };
+          }
+          return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow",
+            permissionDecisionReason: "Bounded discovery over this Run's registered tools." } };
+        }
+        preparationToolFailed = true;
+        denials.push(search.success ? "TOOL_NOT_AUTHORIZED" : "TOOL_INPUT_INVALID");
+        return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny",
+          permissionDecisionReason: search.success ? "Not granted for this Run or subagent."
+            : schemaRepairHint(ToolSearchInputSchema, search.error) } };
+      }
       const permitted = allowed.has(input.tool_name) ||
         (input.tool_name === "Skill" && skills.some((skill) => args.skill === `talent-signal:${skill.name}` || args.skill === skill.name)) ||
         (input.tool_name === "Agent" && !input.agent_id && subagents.some((agent) => args.subagent_type === agent.name));
@@ -626,6 +752,9 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       // Explicit transport only: https://code.claude.com/docs/en/network-config
       ...(configuration.httpsProxy ? { HTTPS_PROXY: configuration.httpsProxy } : {}),
       [configuration.credential.name]: configuration.credential.value,
+      // Explicit opt-in only: a third-party baseUrl otherwise falls back to
+      // eager schemas, and an unsupported proxy must fail honestly here.
+      ...(discovery === "admitted" ? { ENABLE_TOOL_SEARCH: "true" } : {}),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.min(4_000, request.budget.maxTaskTokens)),
       // Separate byte watchdog: the event watchdog clamps short values to 5min.
@@ -646,8 +775,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       maxTurns: request.budget.maxTurns, maxBudgetUsd: request.budget.maxEstimatedUsd,
       ...(configuration.taskBudgetEnabled ? { taskBudget: { total: request.budget.maxTaskTokens } } : {}),
       ...(request.outputSchema ? { outputFormat: { type: "json_schema", schema: request.outputSchema } } : {}),
-      allowedTools: [...allowedTools, ...(skills.length ? ["Skill"] : []), ...(subagents.length ? ["Agent"] : [])],
-      tools: [...(skills.length ? ["Skill"] : []), ...(subagents.length ? ["Agent"] : [])],
+      allowedTools: [...allowedTools, ...(discovery === "admitted" ? [TOOL_SEARCH_NAME] : []),
+        ...(skills.length ? ["Skill"] : []), ...(subagents.length ? ["Agent"] : [])],
+      tools: [...(discovery === "admitted" ? [TOOL_SEARCH_NAME] : []),
+        ...(skills.length ? ["Skill"] : []), ...(subagents.length ? ["Agent"] : [])],
       // The SDK still aliases Agent as Task in its init tool registry. Denying
       // Task also removes admitted Agent delegation before our permission hook.
       disallowedTools: [...FORBIDDEN_BUILT_INS, ...(subagents.length ? [] : ["Agent", "Task"])],
@@ -678,7 +809,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
             await assertCurrent();
             assertBudget();
             const ready = !request.outputSchema && primaryToolCompleted && !preparationToolFailed
-              && !preparationSuperseded && request.preparationReady?.() === true;
+              && preparationArmed() && request.preparationReady?.() === true;
             const context = await steeringContext(ready);
             if (context) {
               // The old draft cannot terminate a task with newly admitted originals.
@@ -687,6 +818,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
             if (ready) {
               await assertCurrent();
               assertBudget();
+              // Re-read host generation and readiness after the async
+              // source/lease and budget fences: only the still-current valid
+              // preparation may terminate the task.
+              if (!preparationArmed() || request.preparationReady?.() !== true) return {};
               preparationStopped = true;
               // Stop after the entire batch, before another model call.
               // https://code.claude.com/docs/en/hooks#posttoolbatch
@@ -732,6 +867,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       stream = warm.query(prompt());
     } else stream = sdkQuery({ prompt: prompt(), options });
     for await (const message of stream) {
+      abortAuthorityFailure();
       if (message.type === "system" && message.subtype === "init") {
         sdkTiming.initializedAfterMs ??= Date.now() - executionStarted;
         request.onProtocolMetadata?.({kind:"initialized",
@@ -768,8 +904,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
           // Upsert by SDK message ID: repeated frames for one message are one span.
           const receivedAt = new Date().toISOString();
           const previous = modelFrames.get(message.message.id);
+          const stop = message.message.stop_reason && safeStops.has(message.message.stop_reason) ? message.message.stop_reason : null;
           modelFrames.set(message.message.id, { body: message.message, id: message.message.id,
             model: message.message.model, usage: message.message.usage ?? null,
+            stopReason: stop ?? previous?.stopReason ?? null,
             firstAt: previous?.firstAt ?? receivedAt, lastAt: receivedAt });
         }
         const usage = message.message.usage;
@@ -809,6 +947,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         await acknowledgeSteering();
       }
     }
+    abortAuthorityFailure();
     controller.signal.throwIfAborted();
     await assertCurrent();
     controller.signal.throwIfAborted();
@@ -836,7 +975,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     }
     await flushObservedAssistantSpans();
     if (error instanceof ClaudeHarnessFailure) { primaryError = error; throw error; }
-    const reason = controller.signal.aborted ? controller.signal.reason : error;
+    const reason = authorityFailure?.error ?? (controller.signal.aborted ? controller.signal.reason : error);
     const code = claudeHarnessInterruptionCode(reason);
     const counts = observedCounts();
     primaryError = new ClaudeHarnessInterruption({ sessionID: result?.session_id ?? observedSessionID,
