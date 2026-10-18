@@ -6,6 +6,14 @@ export interface AuthorizedPublicSubject {
   name:string;
   /** Typed source-grounded public context admitted from exact current excerpts. */
   anchors?:readonly PublicContextAnchor[];
+  /**
+   * The user-authored canonical public homepage for THIS research name,
+   * admitted only by the positive authored research clause. It is a search
+   * query anchor, never direct fetch permission, and never model-, image- or
+   * web-authored: registerImage, registerCounterparty and registerTentative
+   * cannot set this authority.
+   */
+  authoredHomepage?:string;
   /** A first-contact name observation, never a confirmed identity. */
   tentative?:boolean;
   isCurrent?:()=>Promise<boolean>;
@@ -14,6 +22,14 @@ export interface AuthorizedPublicSubject {
 // sentence. A single English first name is deliberately insufficient.
 export function isBoundedPublicName(value:string):boolean {
   return /^(?:[\p{Script=Han}]{2,4}|[A-Z][\p{Script=Latin}'’-]{1,24}(?: [A-Z][\p{Script=Latin}'’-]{1,24}){1,3})$/u.test(value);
+}
+// A research target is a person name, never a pronoun, generic target or time
+// word. Chinese forms need an explicit vocabulary: admitting Chinese names
+// must never admit "今天", "这个人" or "明天见面" style targets.
+const GENERIC_HAN_NAME_TARGET=/(?:我|你|您|他|她|它|今天|明天|昨天|后天|前天|刚才|现在|最近|目前|当时|那天|当天|今日|昨日|本周|上周|下周|本月|上月|下月|今年|去年|明年|时间|时候|我们|你们|他们|她们|它们|咱们|大家|本人|自己|某人|某位|此人|对方|该人|他人|有人|每人|什么|这个|那个|这些|那些|谁人|何人|同事|朋友|同学|老师|老板|客户|医生|律师|陌生人|候选人|应聘者|面试官|这个人|那个人|什么人)/u;
+const GENERIC_LATIN_NAME_TARGET=/\b(?:today|tomorrow|yesterday|tonight|this|that|these|those|he|she|they|him|her|them|his|hers|their|who|whom|whose)\b/iu;
+export function isBoundedPublicNameTarget(value:string):boolean {
+  return isBoundedPublicName(value)&&!GENERIC_HAN_NAME_TARGET.test(value)&&!GENERIC_LATIN_NAME_TARGET.test(value);
 }
 
 /**
@@ -24,6 +40,55 @@ export function isBoundedPublicName(value:string):boolean {
 export type PublicContextAnchorKind = "work"|"role"|"handle";
 export interface PublicContextAnchor {kind:PublicContextAnchorKind;text:string}
 export interface PublicContextAnchorInput {kind:PublicContextAnchorKind;text:string}
+
+/** The exact legacy platform profile paths; unchanged, shared with handles. */
+const PLATFORM_PROFILE_PATHS:Record<string,RegExp>={
+  "github.com":/^\/[A-Za-z0-9-]{1,39}(?:\/[A-Za-z0-9_.-]{1,80})?\/?$/u,
+  "www.linkedin.com":/^\/in\/[A-Za-z0-9-]{2,80}\/?$/u,
+  "linkedin.com":/^\/in\/[A-Za-z0-9-]{2,80}\/?$/u,
+  "x.com":/^\/[A-Za-z0-9_]{1,15}\/?$/u,
+  "twitter.com":/^\/[A-Za-z0-9_]{1,15}\/?$/u,
+};
+
+export const PUBLIC_HOMEPAGE_MAX_LENGTH=200;
+// Reserved, internal and pseudo host suffixes never name a canonical public
+// homepage (RFC-reserved example zones plus local/intranet tooling hosts).
+const PRIVATE_HOMEPAGE_SUFFIXES=["local","localdomain","localhost","internal","intranet","private","lan","home","corp","test","invalid","example","example.com","example.net","example.org","onion","i2p","arpa"];
+// Raw hostile forms are rejected BEFORE any parser normalization: controls,
+// whitespace, backslashes, percent-encoding, userinfo/contact separators,
+// queries, fragments and sentence punctuation can all smuggle contacts,
+// instructions or alternate authority into a URL-shaped clue.
+const HOMEPAGE_RAW_REJECTION=/[\u0000-\u0020\u007f-\u00a0\\%@#?，。！？；;…「」『』“”‘’]/u;
+
+/**
+ * Strict admission for the ONE user-authored canonical public homepage bound
+ * to a research name. Canonical public HTTPS roots (plus the exact legacy
+ * platform profile rules) are the only survivors; deep paths, credentials,
+ * non-default ports, queries, fragments, IP alternate representations,
+ * local/internal/pseudo suffixes, encoded contacts, instructions,
+ * backslashes, control characters and dot segments are rejected raw, before
+ * parser normalization. The admitted value is a SEARCH QUERY ANCHOR only.
+ */
+export function admitAuthoredPublicHomepage(rawInput:string):string|null {
+  const raw=rawInput??"";
+  if(typeof raw!=="string"||!raw||raw.length>PUBLIC_HOMEPAGE_MAX_LENGTH)return null;
+  if(HOMEPAGE_RAW_REJECTION.test(raw)||ANCHOR_INSTRUCTION_MARKERS.test(raw))return null;
+  if(/(?:^|[/.])\.{1,2}(?:[/.]|$)/u.test(raw))return null;
+  let url:URL;
+  try{url=new URL(raw);}catch{return null;}
+  if(url.protocol!=="https:"||url.username||url.password||url.port||url.search||url.hash)return null;
+  // Canonical form only: the authored clue must already be the parser's
+  // canonical URL; a missing root slash is the single tolerated difference.
+  if(raw!==url.href&&raw+"/"!==url.href)return null;
+  const host=url.hostname;
+  const labels=host.split(".");
+  if(labels.length<2||labels.some(label=>!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label)))return null;
+  // An alphabetic TLD rejects IPv4/decimal/hex/octal alternate forms.
+  if(!/^[a-z]{2,63}$/u.test(labels[labels.length-1]!))return null;
+  if(PRIVATE_HOMEPAGE_SUFFIXES.some(suffix=>host===suffix||host.endsWith("."+suffix)))return null;
+  if(url.pathname===""||url.pathname==="/")return url.href;
+  return PLATFORM_PROFILE_PATHS[url.hostname]?.test(url.pathname)?url.href:null;
+}
 
 export const PUBLIC_CONTEXT_ANCHOR_MAX_LENGTH = 120;
 export const PUBLIC_CONTEXT_ANCHORS_PER_SUBJECT = 4;
@@ -63,14 +128,7 @@ export function admitPublicContextAnchor(
     if(/^https?:\/\//iu.test(value)){
       try{
         const url=new URL(value);
-        const profilePaths:Record<string,RegExp>={
-          "github.com":/^\/[A-Za-z0-9-]{1,39}(?:\/[A-Za-z0-9_.-]{1,80})?\/?$/u,
-          "www.linkedin.com":/^\/in\/[A-Za-z0-9-]{2,80}\/?$/u,
-          "linkedin.com":/^\/in\/[A-Za-z0-9-]{2,80}\/?$/u,
-          "x.com":/^\/[A-Za-z0-9_]{1,15}\/?$/u,
-          "twitter.com":/^\/[A-Za-z0-9_]{1,15}\/?$/u,
-        };
-        if(url.protocol!=="https:"||url.username||url.password||url.port||url.search||url.hash||!profilePaths[url.hostname]?.test(url.pathname))return null;
+        if(url.protocol!=="https:"||url.username||url.password||url.port||url.search||url.hash||!PLATFORM_PROFILE_PATHS[url.hostname]?.test(url.pathname))return null;
       }catch{return null;}
     }else if(!/^@[A-Za-z0-9_.-]{2,40}$/u.test(value))return null;
     return {kind,text:value};
@@ -118,14 +176,22 @@ export function publicSearchDeclined(text:string):boolean {
 
 export function publicSubjectRegistry(objective:string) {
   const subjects=new Map<string,AuthorizedPublicSubject>();
-  const register=(name:string,binding:string,isCurrent?:()=>Promise<boolean>,anchors?:readonly PublicContextAnchor[],tentative?:boolean)=>{
+  const register=(name:string,binding:string,isCurrent?:()=>Promise<boolean>,anchors?:readonly PublicContextAnchor[],tentative?:boolean,authoredHomepage?:string)=>{
     if(!isBoundedPublicName(name))return null;
     const id=createHash("sha256").update(binding+"\0"+name).digest("hex").slice(0,24);
-    const item:AuthorizedPublicSubject={id,name,...(anchors?.length?{anchors:[...anchors]}:{}),...(tentative?{tentative:true}:{}),...(isCurrent?{isCurrent}:{})};subjects.set(id,item);return {id,name,...(anchors?.length?{anchors:[...anchors]}:{}),...(tentative?{tentative:true}:{})};
+    const extra={...(anchors?.length?{anchors:[...anchors]}:{}),...(authoredHomepage?{authoredHomepage}:{})};
+    const item:AuthorizedPublicSubject={id,name,...extra,...(tentative?{tentative:true}:{}),...(isCurrent?{isCurrent}:{})};subjects.set(id,item);return {id,name,...extra,...(tentative?{tentative:true}:{})};
   };
   // Text subjects bind to an explicit positive research clause. Names elsewhere
   // in the note (including a private contact) are not research authorization;
   // a validated first-contact proposal uses registerTentative below instead.
+  // One name keeps exactly ONE complete clue in one authored input (bounded
+  // name plus its optional canonical homepage). The subject authority is bound
+  // to that complete clue, so different clues never share an id, guard or
+  // receipt; a second conflicting clue for the same name fails closed for that
+  // name instead of a silent first/last win or a name-only downgrade.
+  const authoredClues=new Map<string,Set<string>>();
+  const authoredOrder:string[]=[];
   const prohibited=publicSearchDeclined(objective);
   if(!prohibited){
     for(const clause of objective.split(/[，。！？;；\n]/u)){
@@ -141,13 +207,66 @@ export function publicSubjectRegistry(objective:string) {
       if(!verb)continue;
       request=request.slice(verb.length).trimStart();
       if(request.startsWith("聊天提到的"))request=request.slice("聊天提到的".length).trimStart();
-      const suffixes=["的背景","的作品","的文章"].map(suffix=>request.indexOf(suffix)).filter(index=>index>=0);
-      if(suffixes.length)request=request.slice(0,Math.min(...suffixes));
-      const names=request.replace(/\s+/gu," ").trim().split(/ and | 和 |、|与/u);
-      // Every token must be a complete bounded name. Reject a whole ambiguous
-      // target phrase instead of finding capitalized substrings within it.
-      if(names.every(name=>/[\p{Script=Latin}]/u.test(name) && isBoundedPublicName(name.trim())))for(const name of names)register(name.trim(),"objective");
+      request=request.replace(/\s+/gu," ").trim();
+      // The positive clause consumes the WHOLE target and only a legitimate
+      // terminal suffix. A suffix elsewhere leaves hostile query or instruction
+      // tails inside the target, which must fail whole-target validation below
+      // instead of being sliced away into a clean name.
+      for(const suffix of ["的背景","的作品","的文章"]){
+        if(request.endsWith(suffix)){request=request.slice(0,-suffix.length).trimEnd();break;}
+      }
+      // Explicit homepage clues are separated from names before bounded-name
+      // parsing. Every name must be complete and bounded and each URL must be
+      // its own name's canonical public homepage; URL-only, malformed or
+      // ambiguously assigned targets are rejected WHOLE instead of silently
+      // degrading into unconstrained name-only research.
+      const parsed:{name:string;homepage:string|null}[]=[];
+      const seenNames=new Set<string>();
+      const seenHomepages=new Set<string>();
+      let targetOK=request.length>0;
+      let withHomepage=0;
+      for(const piece of request.split(/ and | 和 |、|与/u)){
+        if(!targetOK)break;
+        const tokens=piece.trim().split(/\s+/u).filter(Boolean);
+        const urlTokens=tokens.filter(token=>/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu.test(token));
+        const nameText=tokens.filter(token=>!/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu.test(token)).join(" ");
+        if(urlTokens.length>1||!nameText||!isBoundedPublicNameTarget(nameText)){targetOK=false;break;}
+        let homepage:string|null=null;
+        if(urlTokens.length===1){
+          homepage=admitAuthoredPublicHomepage(urlTokens[0]!);
+          if(!homepage||seenHomepages.has(homepage)){targetOK=false;break;}
+          seenHomepages.add(homepage);
+          withHomepage+=1;
+          // The combined name+homepage clue must already fit the existing
+          // 100-character person-research query bound; an over-limit target is
+          // rejected whole instead of dropping its homepage or widening the
+          // bound.
+          try{assertPersonResearchQuery(`${nameText} ${homepage}`);}catch{targetOK=false;break;}
+        }
+        if(seenNames.has(nameText)){targetOK=false;break;}
+        seenNames.add(nameText);
+        parsed.push({name:nameText,homepage});
+      }
+      // Multiple names each bind their own target URL; a mixed or repeated
+      // assignment is ambiguous and rejects the whole target.
+      if(!targetOK||!parsed.length||withHomepage&&withHomepage!==parsed.length)continue;
+      for(const {name,homepage} of parsed){
+        const clue=homepage??"";
+        const clues=authoredClues.get(name)??new Set<string>();
+        if(clues.size===0)authoredOrder.push(name);
+        clues.add(clue);
+        authoredClues.set(name,clues);
+      }
     }
+  }
+  // Commit authored clues only after the whole input is parsed: identical
+  // complete clues dedup onto one authority; conflicting clues for one name
+  // fail closed for that name alone, and independent names are unaffected.
+  for(const name of authoredOrder){
+    const clues=authoredClues.get(name);
+    if(!clues||clues.size!==1)continue;
+    const clue=[...clues][0]!;
+    register(name,clue?`objective\0${clue}`:"objective",undefined,undefined,undefined,clue||undefined);
   }
   return {subjects:()=>[...subjects.values()],
     // Third-party reading/research topics discussed in an admitted image. The
