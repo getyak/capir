@@ -13,6 +13,8 @@
  *    admitted brand/design, architecture-image, product-asset, and test
  *    fixture paths. Canonical architecture images, migration SQL, tests and
  *    fixtures, and release source are never rejected.
+ * 3. ADR numeric ids stay unique and migration numeric prefixes stay
+ *    forward-unique outside the grandfathered historical collision sets.
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -127,6 +129,65 @@ export function trackedFiles(root = process.cwd()) {
   return result.stdout.split("\0").filter(Boolean);
 }
 
+// Full migration filename is the migration identity; the migration-manifest
+// array is the execution-order authority and numeric prefixes may skip. Going
+// forward every numeric prefix names exactly one migration, except for the
+// exact historical collision sets already recorded in the manifest.
+export const HISTORICAL_MIGRATION_COLLISIONS = [
+  ["047_proposed_extracted_text.sql", "047_screenshot_contact_tasks.sql"],
+  ["058_account_management.sql", "058_claude_harness_sessions.sql", "058_product_run_monitor.sql"],
+  ["059_harness_identity_lifecycle.sql", "059_lab_account_cleanup.sql"],
+  ["073_account_onboarding.sql", "073_conversation_queue.sql"],
+].map((members) => [...members].sort());
+
+const MIGRATION_NAME = /^(\d{3})_.+\.sql$/;
+
+/** Pure migration-prefix uniqueness rule over explicit migration filenames. */
+export function checkMigrationPrefixes(paths) {
+  const byPrefix = new Map();
+  for (const path of [...paths].sort()) {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    const match = MIGRATION_NAME.exec(name);
+    if (!match) continue;
+    const members = byPrefix.get(match[1]) ?? [];
+    members.push(name);
+    byPrefix.set(match[1], members);
+  }
+  const errors = [];
+  for (const [prefix, members] of [...byPrefix.entries()].sort()) {
+    const names = [...members].sort();
+    if (names.length === 1) continue;
+    const grandfathered = HISTORICAL_MIGRATION_COLLISIONS.some(
+      (set) => set.length === names.length && set.every((name, index) => name === names[index]),
+    );
+    if (grandfathered) continue;
+    errors.push(
+      `migration prefix ${prefix} is not a grandfathered historical collision set: ${names.join(", ")}; a new migration must use a fresh numeric prefix`,
+    );
+  }
+  return errors;
+}
+
+/** Pure ADR numeric-id uniqueness rule over explicit decision-record paths. */
+export function checkAdrNumericIds(paths) {
+  const byId = new Map();
+  for (const path of [...paths].sort()) {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    if (/^\d{4}-\d{2}-\d{2}-/.test(name)) continue; // dated records carry no numeric id
+    const match = /^(\d{4})-/.exec(name);
+    if (!match) continue;
+    const members = byId.get(match[1]) ?? [];
+    members.push(path);
+    byId.set(match[1], members);
+  }
+  const errors = [];
+  for (const [id, members] of [...byId.entries()].sort()) {
+    if (members.length === 1) continue;
+    errors.push(`ADR numeric id ${id} is not unique: ${members.join(", ")}`);
+  }
+  return errors;
+}
+
 
 // Fingerprints identify complete duplicated benchmark messages without
 // embedding private case text in this public policy file.
@@ -169,13 +230,20 @@ export function checkTrackedCorpus(root = process.cwd(), paths = trackedFiles(ro
 
 function main() {
   const paths = trackedFiles();
-  const errors = [...checkHygiene(paths), ...checkTrackedCorpus(process.cwd(), paths)];
+  const errors = [
+    ...checkHygiene(paths),
+    ...checkTrackedCorpus(process.cwd(), paths),
+    ...checkAdrNumericIds(paths.filter((path) => path.startsWith("docs/decisions/"))),
+    ...checkMigrationPrefixes(
+      paths.filter((path) => path.startsWith("apps/backend/src/database/")),
+    ),
+  ];
   if (errors.length > 0) {
     for (const error of errors) console.error(`ERROR ${error}`);
     console.error(`Repository hygiene check failed with ${errors.length} error(s).`);
     process.exit(1);
   }
-  console.log("Repository hygiene check passed: no extracted evaluation payloads and no generated bundle/media/database artifacts are tracked.");
+  console.log("Repository hygiene check passed: no extracted evaluation payloads and no generated bundle/media/database artifacts are tracked, ADR numeric ids are unique, and migration prefixes are forward-unique.");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {

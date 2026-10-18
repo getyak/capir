@@ -3,6 +3,7 @@ import "@/components/workspace-theme.css";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
+import { ArrowRight } from "@phosphor-icons/react/dist/ssr";
 
 import { auth } from "@/auth";
 import { loadAccountSettings } from "@/lib/server/accountBackend";
@@ -12,9 +13,9 @@ import {
   WorkspaceMobileSourcesLink,
   WorkspaceShellNav,
 } from "@/components/workspace-shell-nav";
-import { WorkspaceRecentSessions } from "@/components/workspace-recent-sessions";
+import { WorkspaceSidebarContext } from "@/components/workspace-sidebar-context";
+import { WorkspaceNavigationContinuityProvider } from "@/components/workspace-navigation-continuity";
 import { WorkspaceGlobalSearchDialog } from "@/components/workspace-search";
-import { WorkspaceSidebarPeople } from "@/components/workspace-sidebar-people";
 import { WorkspacePrivacyEntry, WorkspaceRouteHeader } from "@/components/workspace-route-header";
 import { WorkspacePrivacyBoundary } from "@/components/workspace-privacy-boundary";
 import { WorkspaceSessionBoundary } from "@/components/workspace-session-boundary";
@@ -35,6 +36,8 @@ import accountStyles from "@/components/account-settings.module.css";
 import { SystemHealthProvider } from "@/components/system-health-provider";
 import { AvatarPreferencesProvider } from "@/components/avatar-preferences-provider";
 import { WorkspaceAccountMenu } from "@/components/workspace-account-menu";
+import { WorkspaceAccessRecovery } from "@/components/workspace-access-recovery";
+import { WorkspaceReauthenticationLink } from "@/components/workspace-reauthentication-link";
 import { MeetingDraftSessionBoundary } from "@/components/meeting-draft-session-boundary";
 import { WorkspaceDirectoryScope } from "@/components/workspace-directory-cache";
 import { SessionDraftSessionBoundary } from "@/components/session-draft-session-boundary";
@@ -138,19 +141,15 @@ export default async function WorkspaceLayout({
         <MeetingDraftSessionBoundary sessionVersion={null} />
         <SessionDraftSessionBoundary storageScope={null} />
         <WorkspaceDirectoryScope binding={null} />
-        <section className={accountStyles.section} aria-live="polite">
-          <h1>需要重新确认登录空间</h1>
-          <p className={accountStyles.error}>
-            登录空间已变化或会话已过期，暂不能显示工作区内容。
-          </p>
+        <WorkspaceAccessRecovery>
           {hasTestWorkspace ? (
             <form action={leaveTestWorkspace}>
-              <button type="submit">返回我的空间</button>
+              <button type="submit">返回我的空间<ArrowRight size={16} aria-hidden="true" /></button>
             </form>
           ) : (
-            <Link href="/login?reason=backend_session_expired">重新登录</Link>
+            <WorkspaceReauthenticationLink>重新登录<ArrowRight size={16} aria-hidden="true" /></WorkspaceReauthenticationLink>
           )}
-        </section>
+        </WorkspaceAccessRecovery>
       </>
     );
   }
@@ -178,6 +177,7 @@ export default async function WorkspaceLayout({
   return (
     <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
+      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope}>
       <PersonContextPanelProvider binding={pendingBinding}>
       <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
         {pendingBinding ? (
@@ -186,16 +186,9 @@ export default async function WorkspaceLayout({
         <SessionDraftSessionBoundary storageScope={pendingSessionDraftScope} />
         <WorkspaceDirectoryScope binding={pendingBinding} />
         <aside aria-label="capri 工作台" className={styles.sidebar}>
-          <WorkspaceShellNav binding={pendingBinding} />
+          <WorkspaceShellNav binding={pendingBinding} storageScope={pendingSessionDraftScope} />
           <div className={styles.sidebarScroll}>
-            {pendingBinding ? (
-              <WorkspaceRecentSessions
-                key={pendingBinding}
-                binding={pendingBinding}
-                storageScope={pendingSessionDraftScope}
-              />
-            ) : null}
-            <WorkspaceSidebarPeople binding={pendingBinding} />
+            <WorkspaceSidebarContext binding={pendingBinding} storageScope={pendingSessionDraftScope} />
           </div>
           <div className={styles.account}>
             {fixtureWorkspace ? (
@@ -258,6 +251,7 @@ export default async function WorkspaceLayout({
         </div>
       </div>
       </PersonContextPanelProvider>
+      </WorkspaceNavigationContinuityProvider>
       </AvatarPreferencesProvider>
     </WorkspacePrivacyBoundary></WorkspaceSessionBoundary>
   );

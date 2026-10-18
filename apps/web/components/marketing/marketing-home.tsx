@@ -8,7 +8,7 @@ import type { MarketingLocale } from "@/lib/marketing-locale";
 import { marketingAccessHref } from "@/lib/marketing-copy";
 import { siteConfig } from "@/lib/site";
 import { personalAgentHomeFaqs } from "@/lib/personal-agent-copy";
-import { PersonalAgentDemo } from "./personal-agent-demo";
+import { PersonalAgentDemo, PersonalAgentDemoCover } from "./personal-agent-demo";
 import s from "./personal-agent.module.css";
 
 export function MarketingHome({ locale }: { locale: MarketingLocale }) {
@@ -29,23 +29,42 @@ export function MarketingHome({ locale }: { locale: MarketingLocale }) {
     ["新的消息，让旧理解变新", "对方从“考虑换工作”变为“决定留在团队”。审阅更新当前背景，同时保留来往历史，不再把旧意向当成今天的事实。"],
     ["先别提醒，也是一种理解", "一句“等项目结束再聊”，可以保留背景并暂停提醒。不会把等待推断成不感兴趣，没有下一步也可以安心结束。"],
   ];
+  const timeline = en ? [
+    ["First time", "“I'll put it together.”", "See the understanding first, then keep the overview promise.", "Item 01 · waiting on you · no agreed deadline"],
+    ["Later", "“Got it. I'll review it this weekend.”", "A new capture proposes a state change for the same item; you still confirm it.", "Item 01: waiting on you → waiting on them · no duplicate"],
+    ["Next time", "Pick up without rereading everything.", "Shared context, reviewed changes, and what is still open stay beside the original words.", "Inspectable sources · time unconfirmed · waiting is valid"],
+  ] : [
+    ["第一次", "“好，我整理一下。”", "先看到理解，确认后留下产品介绍这件事。", "事项 01 · 等你整理 · 无约定截止日期"],
+    ["后来", "“收到，我周末看看。”", "新的截图提出同一事项的状态更新，仍然由你确认。", "事项 01：等你整理 → 等对方 · 不重复新建"],
+    ["下次", "接着聊，不必翻完所有记录。", "共同背景、已经变化的事和仍待确认的问题，都在原话旁边。", "原话可查 · 时间未确定 · 可以等待"],
+  ];
 
   return <main id="main-content" tabIndex={-1} className={s.page} lang={locale}>
     <section className={s.hero} aria-labelledby="personal-agent-title">
-      <p className={s.eyebrow}>{t("你的个人 Agent · 从一张聊天截图开始", "Your personal Agent · start with a chat screenshot")}</p>
       <div className={s.heroCopy}>
-        <h1 id="personal-agent-title">{t("重要的人，未完的事。", "People that matter.")}<br/>{en ? <>Unfinished things. <span>Kept close.</span></> : <>随手交给 <span>{siteConfig.name}。</span></>}</h1>
-        <div className={s.heroIntro}><p>{t("留下认识的背景、答应的事情和后来的变化。下一次交流，从这里接着聊。", "Keep the context, the promises, and what changed afterward. Pick up your next conversation where you left off.")}</p><div className={s.heroActions}><a className={s.primaryLink} href="#personal-agent-demo">{t("体验这段对话", "Try this conversation")}<ArrowRight size={16}/></a><Link className={s.secondaryLink} href="/download">{t(`下载 ${siteConfig.name}`, `Get ${siteConfig.name}`)}<ArrowUpRight size={15}/></Link></div></div>
+        <p className={s.eyebrow}>{t("你的个人 Agent · 从一段对话开始", "Your personal Agent · it starts with a conversation")}</p>
+        <h1 id="personal-agent-title">{en ? <>People that matter.<br/><em>Pick up where you left off.</em></> : <>重要的人，<br/><em>不用从头聊起。</em></>}</h1>
+        <p className={s.heroBody}>{t("留下认识的背景、答应的事和后来的变化。下次交流，接着上次聊。", "Keep how you met, what you promised, and what changed afterward. Your next conversation picks up where the last one ended.")}</p>
+        <div className={s.heroActions}>
+          <a className={s.primaryLink} href="#personal-agent-demo">{t("体验这段对话", "Try this conversation")}<ArrowRight size={16}/></a>
+          <Link className={s.secondaryLink} href="/download">{t(`下载 ${siteConfig.name}`, `Get ${siteConfig.name}`)}<ArrowUpRight size={15}/></Link>
+        </div>
+        <p className={s.heroCaption}>{t("macOS 公开下载 · iOS 受邀预览", "macOS public download · iOS invited preview")}</p>
       </div>
+      <PersonalAgentDemoCover locale={locale} state={demo}/>
     </section>
     <PersonalAgentDemo locale={locale} state={demo} dispatch={dispatchDemo}/>
     <section className={s.continuity} id="method" aria-labelledby="continuity-title"><div className={s.continuityInner}>
-      <div><p className={s.kicker}>{t("同一个人，同一件事", "Same person. Same unfinished thing.")}</p><h2 id="continuity-title">{t("今天留下的，", "What you keep today,")}<br/>{t("下次还接得起来。", "helps you next time.")}</h2><p>{t("价值在下一次交流时出现。新的截图接回旧承诺，变化经过审阅，留下可以继续的状态。", "The value returns with the next conversation. A new capture reconnects to an earlier promise; reviewed changes leave a state you can continue.")}</p></div>
-      <div className={s.timeThread}>
-        <article className={s.timeStep}><span>{t("昨天 · 一次托付", "Yesterday · a handoff")}</span><h3>{t("“好，我整理一下。”", "“I'll put it together.”")}</h3><p>{t("先看到理解，确认后留下产品介绍这件事。", "See the understanding, then review the product-overview commitment.")}</p><small>{t("事项 01 · 等你整理 · 无约定截止日期", "Item 01 · waiting on you · no agreed deadline")}</small></article>
-        <article className={s.timeStep}><span>{t("今天 · 新的回复", "Today · a new reply")}</span><h3>{t("“收到，我周末看看。”", "“Got it. I'll review it this weekend.”")}</h3><p>{t("你的新截图提出状态更新，仍由你确认。", "Your new capture proposes a state change for your review.")}</p><small>{t("事项 01 · 更新为等对方 · 不重复新建", "Item 01 · now waiting on them · no duplicate")}</small></article>
-        <article className={s.timeStep}><span>{t("下次 · 接着交流", "Next time · continue")}</span><h3>{t("“见面前，回顾什么？”", "“What should I recall before we meet?”")}</h3><p>{t("共同背景、已经变化的事和仍待确认的问题。", "Shared context, reviewed changes, and questions still open.")}</p><small>{t("原话可查 · 时间未确定 · 可以等待", "Inspectable sources · time unconfirmed · waiting is valid")}</small></article>
-      </div>
+      <div className={s.continuityCopy}><p className={s.kicker}>{t("同一个人，同一件事", "Same person. Same unfinished thing.")}</p><h2 id="continuity-title">{t("关系的背景，", "Relationship context,")}<br/>{t("跟着来往一起更新。", "updates with every exchange.")}</h2><p>{t("价值在下一次交流时出现。新的截图接回旧承诺，变化经过审阅，留下可以继续的状态。", "The value returns with the next conversation. A new capture reconnects to an earlier promise; reviewed changes leave a state you can continue.")}</p></div>
+      {demo.sourceAvailable ? <ol className={s.timeThread}>{timeline.map(([when, words, body, meta], i) =>
+        <li className={s.timeStep} key={when} data-change={i === 1 ? "reviewable" : undefined}>
+          <span className={s.timeLabel}>{when}</span>
+          <div><h3>{words}</h3><p>{body}</p>
+          {i === 1
+            ? <p className={s.changeLine}>{t("事项 01：", "Item 01: ")}<span className={s.changeFrom}>{t("等你整理", "waiting on you")}</span><span aria-hidden="true"> → </span><span className={s.changeTo}>{t("等对方", "waiting on them")}</span>{t(" · 不重复新建", " · no duplicate")}</p>
+            : <small>{meta}</small>}
+          </div>
+        </li>)}</ol> : <div className={s.timeThread}><div className={s.timeStep}><span className={s.timeLabel}>{t("来源已移除", "Source removed")}</span><div><h3>{t("这段接续，暂时不能回顾。", "This continuity example is unavailable.")}</h3><p>{t("依赖原话的示例已撤回。明确开始新的合成演示，才会重新载入样例。", "The source-dependent example has been withdrawn. Only starting a new synthetic demo reloads the sample.")}</p></div></div></div>}
     </div></section>
     <section className={s.personSection} id="product" aria-labelledby="person-context-title"><div className={s.sectionCopy}><p className={s.kicker}>{t("先接住一句话，再慢慢认识一个人", "Keep a conversation. Get to know a person over time.")}</p><h2 id="person-context-title">{t("每个人身边，", "Beside each person,")}<br/>{t("都有可以继续的背景。", "context you can continue.")}</h2><p>{t("人物页不必像一份完整履历。先回答三个日常问题，让下次见面不用从头翻记录。", "A person page need not begin with a complete biography. Start with three everyday questions so your next meeting needs less reconstruction.")}</p><Link className={s.secondaryLink} href="/product">{t("了解个人 Agent 的工作方式", "Explore the personal Agent")}<ArrowUpRight size={15}/></Link></div>
       <div className={s.personSheet}><div className={s.personIdentity}><span className={s.avatar} aria-hidden="true">{demo.sourceAvailable ? "夏" : "·"}</span><div><h3>{demo.sourceAvailable ? t("陈夏", "Chen Xia") : t("来源已移除", "Source removed")}</h3><p>{t("与上方演示使用同一份背景 · 仅本页", "Same context as the demo above · page only")}</p></div></div>

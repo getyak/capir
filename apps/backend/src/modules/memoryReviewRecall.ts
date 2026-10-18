@@ -190,7 +190,14 @@ export async function recallMemories(
     }
     for (const row of rows) {
       const sources = byMemory.get(row.id) ?? [];
-      if (sources.length) items.push(serializeRecallItem(row, sources, true));
+      if (sources.length) {
+        items.push({
+          ...serializeRecallItem(row, sources, true),
+          // Person Memory is readable by the account, but only its owner may
+          // mutate it. This hint never replaces the mutation authority check.
+          can_edit: row.owner_user_id === auth.userId,
+        });
+      }
     }
   }
   return {

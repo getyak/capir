@@ -1,7 +1,11 @@
+// @vitest-environment happy-dom
 import { beforeEach, expect, it, vi } from "vitest";
-const {claims,settings} = vi.hoisted(()=>({claims:vi.fn(),settings:vi.fn()}));
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
+const {claims,settings,testCookie} = vi.hoisted(()=>({claims:vi.fn(),settings:vi.fn(),testCookie:{present:true}}));
 vi.mock("@/auth",()=>({auth:async()=>({user:{name:"Owner"}})}));
-vi.mock("next/headers",()=>({cookies:async()=>({has:()=>true})}));
+vi.mock("next/headers",()=>({cookies:async()=>({has:()=>testCookie.present})}));
 vi.mock("@/app/login/actions",()=>({signOutOfWorkspace:vi.fn()}));
 vi.mock("@/app/workspace/settings/testing/actions",()=>({leaveTestWorkspace:vi.fn()}));
 vi.mock("@/lib/server/accountBackend",()=>({loadAccountSettings:settings}));
@@ -14,7 +18,7 @@ import WorkspaceLayout from "./layout";
 function snapshot(value: unknown): string {
  return JSON.stringify(value, (key,item) => key === "type" || key.startsWith("_") ? undefined : item);
 }
-beforeEach(()=>{vi.clearAllMocks();settings.mockRejectedValue(new Error("Settings unavailable"));});
+beforeEach(()=>{vi.clearAllMocks();testCookie.present=true;settings.mockRejectedValue(new Error("Settings unavailable"));});
 it("retains effective workspace scope when optional settings fail",async()=>{
  claims.mockResolvedValue({backendAccessToken:"synthetic-owned-session",backendRole:"member",backendUsername:"owner",backendAccountId:"rendered-test",backendUserId:"user-1",backendAccountName:"Test",backendAccountSlug:"lab-test",backendExpiresAt:new Date(Date.now()+60000).toISOString()});
  const rendered=snapshot(await WorkspaceLayout({children:"operational-child"}));
@@ -44,4 +48,48 @@ it("rejects labels returned for another identity",async()=>{
  const rendered=snapshot(await WorkspaceLayout({children:"operational-child"}));
  expect(rendered).not.toContain("Other user");
  expect(rendered).toContain('"accountName":"Owner"');
+});
+
+it("keeps reauthentication and all scope-clearing boundaries when no test cookie exists", async () => {
+  claims.mockResolvedValue(null);
+  testCookie.present = false;
+  const layout = await WorkspaceLayout({ children: "private-operational-child" });
+  const rendered = snapshot(layout);
+  expect(renderToStaticMarkup(layout)).toContain("/login?reason=backend_session_expired");
+  expect(rendered).not.toContain("返回我的空间");
+  expect(rendered).not.toContain("private-operational-child");
+  expect(rendered).toContain('"sessionVersion":null');
+  expect(rendered).toContain('"storageScope":null');
+  expect(rendered).toContain('"binding":null');
+});
+
+// A revoked outer layout must retain a bounded identity-entry locator while
+// continuing to remove all private content and its storage bindings.
+it.each([
+  ["/workspace?surface=desk&intent=create-contact&session=33333333-3333-4333-8333-333333333333&name=private&token=secret", "/workspace?surface=desk&intent=create-contact&session=33333333-3333-4333-8333-333333333333"],
+  ["/workspace?surface=desk&intent=create-contact&session=invalid", "/workspace?surface=desk&intent=create-contact"],
+  ["/workspace/people?surface=desk&intent=create-contact", null],
+  ["/workspace?surface=desk&intent=delete-person&name=private", null],
+  ["/workspace?surface=desk&intent=create-contact&intent=delete-person", null],
+])("reauthenticates from %s without retaining form content or arbitrary actions", async (location, expected) => {
+  claims.mockResolvedValue(null); testCookie.present = false;
+  window.history.replaceState(null, "", location);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const mount = document.createElement("div"); document.body.append(mount);
+  const root = createRoot(mount);
+  try {
+    const layout = await WorkspaceLayout({ children: createElement("p", null, "private child") });
+    await act(async () => root.render(layout));
+    const anchor = [...mount.querySelectorAll("a")].find(link => link.textContent?.includes("重新登录"));
+    const destination = new URL(anchor!.getAttribute("href")!, "https://workspace.invalid");
+    expect(destination.pathname).toBe("/login");
+    expect(destination.searchParams.get("reason")).toBe("backend_session_expired");
+    expect(destination.searchParams.get("callbackUrl")).toBe(expected);
+    expect(destination.href).not.toContain("private");
+    expect(destination.href).not.toContain("secret");
+    expect(mount.textContent).not.toContain("private child");
+  } finally {
+    await act(async () => root.unmount()); mount.remove();
+    window.history.replaceState(null, "", "/"); vi.unstubAllGlobals();
+  }
 });

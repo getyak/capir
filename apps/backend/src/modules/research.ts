@@ -12,7 +12,7 @@ import {
 import { Parser } from "htmlparser2";
 import type { Pool } from "pg";
 
-import { inTransaction } from "../database/pool.js";
+import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import { appendAudit } from "../lib/audit.js";
 import { sha256Bytes } from "../lib/hash.js";
@@ -42,6 +42,32 @@ interface ResearchSeed {
   displayName: string;
 }
 
+/**
+ * Fixed content-free research failure diagnostics. Untrusted exception text
+ * never enters task warnings, retrieval-job `last_error`, audit recovery
+ * metadata, or any other durable field; the approved source URL provenance is
+ * preserved alongside the fixed diagnostic.
+ */
+export const PUBLIC_RESEARCH_FETCH_FAILED = "PUBLIC_RESEARCH_FETCH_FAILED";
+export const PUBLIC_RESEARCH_CAPTURE_FAILED = "PUBLIC_RESEARCH_CAPTURE_FAILED";
+export const PUBLIC_RESEARCH_UNAVAILABLE = "PUBLIC_RESEARCH_UNAVAILABLE";
+export const PUBLIC_RESEARCH_RETRY_FAILED = "PUBLIC_RESEARCH_RETRY_FAILED";
+
+/**
+ * Public warnings are bounded to 500 characters by contract. Keep the fixed
+ * diagnostic complete and truncate only the approved source URL provenance so
+ * a long valid URL can never overflow the durable warning.
+ */
+const PUBLIC_RESEARCH_WARNING_LIMIT = 500;
+
+export function publicResearchWarning(
+  approvedUrl: string,
+  diagnostic: string,
+): string {
+  const suffix = `: ${diagnostic}`;
+  return `${approvedUrl.slice(0, Math.max(0, PUBLIC_RESEARCH_WARNING_LIMIT - suffix.length))}${suffix}`;
+}
+
 export interface CrawledPage {
   canonicalUrl: string;
   contentHash: string;
@@ -53,12 +79,86 @@ export interface CrawledPage {
 export type ResearchPageLoader = (
   url: URL,
   allowedHostname: string,
+  options?: { timeoutMs?: number },
 ) => Promise<CrawledPage>;
 
 export interface ResearchMutationResult {
   body: PublicResearchResponse;
   replayed: boolean;
   status: number;
+}
+
+/**
+ * Recurring-cycle authority is durable and re-derived from the database at
+ * every commit point. These hooks let one exact already-authorized public
+ * source re-read itself on an honest cadence through the SAME bounded
+ * research pipeline while the cycle's grant gate shares the actual database
+ * transaction with each page capture commit and the final completion.
+ */
+/** The authoritative terminal outcome of one recurring cycle (B3). */
+export interface RecurringCycleOutcome {
+  status: "completed" | "partial" | "failed" | "skipped";
+  /** Fixed content-free diagnostics merged into the research response. */
+  warnings: string[];
+}
+
+export interface RecurringResearchCycleHooks {
+  runId: string;
+  /** Immutable absolute cycle boundary carried through this entry (B2). */
+  boundary: { deadlineAt: Date };
+  /** Immutable approval provenance frozen from the ORIGINAL owner grant. */
+  approval: {
+    approvedByUserId: string;
+    approvedAt: Date;
+    authorizationScope: string;
+    grantId: string;
+  };
+  /**
+   * Live re-admission (lease, deadline, authority) from the database. Called
+   * after awaited reads and immediately before DNS, the research lease claim
+   * and bounded transport (B2). Throws when the cycle may no longer run.
+   */
+  admit(client?: DatabaseClient): Promise<void>;
+  /** Record the durable research task on the cycle row once claimed. */
+  recordTask(taskId: string): Promise<void>;
+  /**
+   * Commit one crawled page inside ONE database transaction shared with the
+   * recurring authority gate and lease check
+   * (createResourceCaptureInTransaction). `unchanged` marks a cross-cycle
+   * dedup skip; `stop` marks live authority ending the cycle before commit.
+   */
+  commitPage(
+    page: CrawledPage,
+    request: ResourceCaptureRequest,
+  ): Promise<{
+    committed: PublicResearchPage | null;
+    unchanged: boolean;
+    stop: boolean;
+  }>;
+  /**
+   * Finalize the cycle INSIDE the research completion transaction and BEFORE
+   * any research row mutation: re-derive live authority, record the honest run
+   * outcome and RETURN it so the research task, idempotent readback, audit and
+   * API result can never claim more than the cycle observed (B3).
+   */
+  finalize(
+    client: DatabaseClient,
+    input: {
+      taskId: string;
+      status: PublicResearchResponse["status"];
+      committedPages: PublicResearchPage[];
+      unchangedPages: number;
+      warnings: string[];
+    },
+  ): Promise<RecurringCycleOutcome>;
+}
+
+export interface PublicResearchRunOptions {
+  /** Durable job<->cycle round trip replacing closure-only authority. */
+  recurringRunId?: string;
+  recurring?: RecurringResearchCycleHooks;
+  /** Test seam at the actual DNS entry; production keeps the pinned lookup. */
+  hostnameLookup?: ResearchHostnameLookup;
 }
 
 function canonicalUrl(value: string): URL {
@@ -83,6 +183,11 @@ function canonicalUrl(value: string): URL {
   url.password = "";
   url.hash = "";
   return url;
+}
+
+/** Canonical form of one approved public URL (userinfo/fragment stripped). */
+export function canonicalPublicResearchUrl(value: string): URL {
+  return canonicalUrl(value);
 }
 
 function isPrivateIpv4(
@@ -145,7 +250,15 @@ export function isBlockedResearchAddress(
   return true;
 }
 
-async function assertPublicHostname(hostname: string): Promise<void> {
+export type ResearchHostnameLookup = (
+  hostname: string,
+) => Promise<Array<{ address: string; family: number }>>;
+
+async function assertPublicHostname(
+  hostname: string,
+  lookup: ResearchHostnameLookup = (name) =>
+    dns.lookup(name, { all: true, verbatim: true }),
+): Promise<void> {
   if (
     hostname === "localhost" ||
     hostname.endsWith(".localhost") ||
@@ -160,7 +273,7 @@ async function assertPublicHostname(hostname: string): Promise<void> {
   const directIp = isIP(hostname);
   const addresses =
     directIp === 0
-      ? await dns.lookup(hostname, { all: true, verbatim: true })
+      ? await lookup(hostname)
       : [{ address: hostname, family: directIp }];
   if (
     addresses.length === 0 ||
@@ -452,8 +565,16 @@ async function loadPublicResearchPage(
   };
 }
 
-async function loadPublicProfilePage(url: URL, allowedHostname: string): Promise<CrawledPage> {
-  const signal = AbortSignal.timeout(12_000);
+async function loadPublicProfilePage(
+  url: URL,
+  allowedHostname: string,
+  options?: { timeoutMs?: number },
+): Promise<CrawledPage> {
+  // A caller with a smaller remaining cycle budget may only shorten the
+  // existing per-fetch ceiling, never extend it.
+  const signal = AbortSignal.timeout(
+    Math.max(1, Math.min(12_000, options?.timeoutMs ?? 12_000)),
+  );
   const robots = await fetchProfileResource(new URL("/robots.txt", url.origin), url.origin, ROBOTS_BYTE_LIMIT, signal);
   const robotsText = robots.status === 404 || robots.status === 410 ? "" : new TextDecoder().decode(robots.bytes);
   if (robots.status !== 404 && robots.status !== 410) {
@@ -465,6 +586,20 @@ async function loadPublicProfilePage(url: URL, allowedHostname: string): Promise
   if (page.status < 200 || page.status >= 300) throw new Error("The public page is unavailable.");
   const extracted = extractResearchPage(page.url, String(page.headers["content-type"] ?? ""), page.bytes, allowedHostname);
   return { canonicalUrl: page.url.toString(), contentHash: sha256Bytes(page.bytes), retrievedAt: new Date(), text: extracted.text, links: [] };
+}
+
+/**
+ * The recurring-cycle page loader: DNS resolution is actually pinned at the
+ * TLS socket through the existing bounded onboarding public HTTP primitive
+ * (same-origin redirects, robots on every hop, byte/time limits), because the
+ * one-shot research fetch only resolves once before an unpinned fetch.
+ */
+export async function loadPinnedPublicResearchPage(
+  url: URL,
+  allowedHostname: string,
+  options?: { timeoutMs?: number },
+): Promise<CrawledPage> {
+  return loadPublicProfilePage(url, allowedHostname, options);
 }
 
 export interface PublicProfilePreview {
@@ -565,16 +700,22 @@ export async function crawlPublicResearch(
   const visited = new Set<string>();
   const pages: CrawledPage[] = [];
   const warnings: string[] = [];
+  // One loop iteration owns one distinct approved page attempt. The attempt is
+  // reserved and consumed before loader dispatch — including when it fails —
+  // so a failing page tree can never exceed the approved maximum_page_count
+  // per-invocation bound and a consumed attempt is never refunded.
+  let attempts = 0;
 
   while (
     queue.length > 0 &&
-    pages.length < request.authorization.maximum_page_count
+    attempts < request.authorization.maximum_page_count
   ) {
     const next = queue.shift();
     if (!next || visited.has(next.url)) {
       continue;
     }
     visited.add(next.url);
+    attempts += 1;
     try {
       const url = canonicalUrl(next.url);
       if (url.hostname.toLowerCase() !== allowedHostname) {
@@ -591,12 +732,11 @@ export async function crawlPublicResearch(
           }
         }
       }
-    } catch (error) {
-      warnings.push(
-        error instanceof Error
-          ? `${next.url}: ${error.message}`.slice(0, 500)
-          : `${next.url}: public research failed`,
-      );
+    } catch {
+      // Fixed content-free diagnostic: the raw exception never becomes a
+      // durable warning; the approved page URL keeps the provenance, bounded
+      // so the warning always fits the public schema.
+      warnings.push(publicResearchWarning(next.url, PUBLIC_RESEARCH_FETCH_FAILED));
     }
   }
   return { pages, warnings };
@@ -730,6 +870,7 @@ export async function getLatestPublicResearchTask(
       AND receipts.capture_id = captures.id
      WHERE jobs.account_id = $1
        AND tasks.seed_resource_id = $2
+       AND jobs.recurring_run_id IS NULL
        AND seeds.processing_state <> 'deleted'
        AND captures.status = 'active'
        AND receipts.authorization_state = 'authorized'
@@ -744,12 +885,48 @@ export async function getLatestPublicResearchTask(
   return result.rows[0]?.response_body ?? null;
 }
 
+async function admitRecurringCycle(
+  recurring: RecurringResearchCycleHooks,
+  client?: DatabaseClient,
+): Promise<void> {
+  // Both sides of awaited admission must remain inside the same immutable
+  // boundary: an authority read can wait beyond the deadline itself.
+  if (Date.now() >= recurring.boundary.deadlineAt.valueOf()) {
+    throw new ApiError(
+      409,
+      "PERSON_SOURCE_SYNC_DEADLINE_EXCEEDED",
+      "The periodic cycle deadline elapsed before research continued.",
+    );
+  }
+  await recurring.admit(client);
+  if (Date.now() >= recurring.boundary.deadlineAt.valueOf()) {
+    throw new ApiError(409, "PERSON_SOURCE_SYNC_DEADLINE_EXCEEDED",
+      "The periodic cycle deadline elapsed while research authority was checked.");
+  }
+}
+
+/** Maps the authoritative cycle outcome into the existing response schema. */
+export function mapRecurringCycleOutcome(
+  outcome: RecurringCycleOutcome["status"],
+  hasCommittedPages: boolean,
+): PublicResearchResponse["status"] {
+  if (outcome === "skipped") return hasCommittedPages ? "partial" : "failed";
+  return outcome;
+}
+
 export async function runPublicResearch(
   pool: Pool,
   auth: AuthContext,
   request: PublicResearchRequest,
+  loadPage: ResearchPageLoader = loadPublicResearchPage,
+  options: PublicResearchRunOptions = {},
 ): Promise<ResearchMutationResult> {
+  const recurring = options.recurring;
   const seed = await loadSeed(pool, auth, request);
+  if (recurring) {
+    // B2: re-admit after the awaited seed read, immediately before DNS.
+    await admitRecurringCycle(recurring);
+  }
   const seedUrl = canonicalUrl(seed.sourceUrl);
   const expectedUrl = canonicalUrl(request.expected_seed_url);
   const allowedHostname =
@@ -764,17 +941,29 @@ export async function runPublicResearch(
       "The seed URL or approved domain changed before research began.",
     );
   }
-  await assertPublicHostname(allowedHostname);
+  await assertPublicHostname(allowedHostname, options.hostnameLookup);
+  if (recurring) {
+    // B2: re-admit after the awaited DNS lookup, immediately before the
+    // research lease claim below.
+    await admitRecurringCycle(recurring);
+  }
 
   const proposedTaskId = randomUUID();
   const executionId = `public-research-worker:${randomUUID()}`;
   const createdAt = new Date();
   const leaseExpiresAt = new Date(createdAt.getTime() + 5 * 60_000);
+  // A recurring cycle stamps the ORIGINAL human grant (actor + authorization
+  // revision + time) instead of a fabricated per-cycle approval.
   const authorizationScope =
+    recurring?.approval.authorizationScope ??
     `Public HTTPS research approved by the user for ${allowedHostname}; ` +
     `maximum ${request.authorization.maximum_page_count} pages and link depth ` +
     `${request.authorization.maximum_link_depth}.`;
+  const approvedByUserId =
+    recurring?.approval.approvedByUserId ?? auth.userId;
+  const approvedAt = recurring?.approval.approvedAt ?? createdAt;
   const initial = await inTransaction(pool, async (client) => {
+    if (recurring) await admitRecurringCycle(recurring, client);
     const claim = await claimIdempotency(
       client,
       { accountId: auth.accountId, actorUserId: auth.userId },
@@ -784,6 +973,7 @@ export async function runPublicResearch(
     );
     if (claim.replay) {
       const replay = claim.replay.body as PublicResearchResponse;
+      if (recurring) await admitRecurringCycle(recurring, client);
       const leased = await client.query<{ id: string }>(
         `UPDATE research_retrieval_jobs
          SET status = 'running',
@@ -813,6 +1003,7 @@ export async function runPublicResearch(
           replay.task_id,
         ],
       );
+      if (recurring) await admitRecurringCycle(recurring, client);
       return {
         claimId: claim.id,
         replay: {
@@ -824,6 +1015,7 @@ export async function runPublicResearch(
         leaseAcquired: leased.rows.length === 1,
       };
     }
+    if (recurring) await admitRecurringCycle(recurring, client);
     await client.query(
       `INSERT INTO research_tasks(
          id, account_id, subject_id, assignment_id, created_by_user_id,
@@ -833,7 +1025,7 @@ export async function runPublicResearch(
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-         interval '7 days', $12, 'running', $5, $13, $13, $13
+         interval '7 days', $12, 'running', $14, $15, $13, $13
        )`,
       [
         proposedTaskId,
@@ -849,6 +1041,8 @@ export async function runPublicResearch(
         request.authorization.maximum_page_count,
         authorizationScope,
         createdAt,
+        approvedByUserId,
+        approvedAt,
       ],
     );
     const running: PublicResearchResponse = {
@@ -866,10 +1060,10 @@ export async function runPublicResearch(
       `INSERT INTO research_retrieval_jobs(
          id, account_id, task_id, idempotency_record_id,
          requested_by_user_id, request_body, status, attempt_count,
-         lease_owner, lease_expires_at, created_at, updated_at
+         lease_owner, lease_expires_at, recurring_run_id, created_at, updated_at
        )
        VALUES (
-         $1, $2, $3, $4, $5, $6, 'running', 1, $7, $8, $9, $9
+         $1, $2, $3, $4, $5, $6, 'running', 1, $7, $8, $10, $9, $9
        )`,
       [
         randomUUID(),
@@ -881,12 +1075,15 @@ export async function runPublicResearch(
         executionId,
         leaseExpiresAt,
         createdAt,
+        options.recurringRunId ?? null,
       ],
     );
     await appendAudit(
       client,
       { accountId: auth.accountId, actorUserId: auth.userId },
-      "public_research.approved",
+      recurring
+        ? "person_source_sync.dispatched_from_grant"
+        : "public_research.approved",
       "research_task",
       proposedTaskId,
       {
@@ -896,9 +1093,19 @@ export async function runPublicResearch(
           request.authorization.maximum_page_count,
         maximum_link_depth:
           request.authorization.maximum_link_depth,
+        ...(recurring
+          ? {
+              grant_id: recurring.approval.grantId,
+              recurring_run_id: recurring.runId,
+              external_effect: "none",
+            }
+          : {}),
       },
     );
     await completeIdempotency(client, claim, 202, running);
+    // Lock waits or any receipt await may have crossed the boundary. Refuse
+    // the transaction so no newly acquired research lease escapes COMMIT.
+    if (recurring) await admitRecurringCycle(recurring, client);
     return {
       claimId: claim.id,
       replay: null,
@@ -916,9 +1123,13 @@ export async function runPublicResearch(
   }
   const taskId = initial.taskId;
   const taskCreatedAt = initial.taskCreatedAt;
+  if (recurring) {
+    await recurring.recordTask(taskId);
+  }
 
-  const crawled = await crawlPublicResearch(seedUrl, request);
+  const crawled = await crawlPublicResearch(seedUrl, request, loadPage);
   const committedPages: PublicResearchPage[] = [];
+  let unchangedPages = 0;
   for (const [index, page] of crawled.pages.entries()) {
     try {
       const clientResourceId = `research:${taskId}:${index}`;
@@ -952,8 +1163,9 @@ export async function runPublicResearch(
             relationship_context_id:
               request.relationship_context_id,
           },
-          binding_basis:
-            "The authenticated user explicitly approved this bounded public research task.",
+          binding_basis: recurring
+            ? "The owner's expiring periodic observation grant approved re-reading this already-bound public URL."
+            : "The authenticated user explicitly approved this bounded public research task.",
         },
         resource: {
           client_resource_id: clientResourceId,
@@ -997,48 +1209,95 @@ export async function runPublicResearch(
           },
         ],
       };
-      const committed = await createResourceCapture(
-        pool,
-        auth,
-        resourceRequest,
-      );
-      committedPages.push({
-        canonical_url: page.canonicalUrl,
-        resource_id: committed.body.resource.id,
-        capture_id: committed.body.capture_id,
-        content_hash: page.contentHash,
-        retrieved_at: page.retrievedAt.toISOString(),
-      });
-    } catch (error) {
+      const committed = recurring
+        ? await (async () => {
+            // The gate, the cycle lease check and this capture commit share ONE
+            // database transaction; a pause/revoke can never commit new
+            // evidence, and an unchanged body creates no duplicate capture.
+            const outcome = await recurring.commitPage(page, resourceRequest);
+            if (outcome.stop) return "stop" as const;
+            if (outcome.unchanged) return "unchanged" as const;
+            return outcome.committed;
+          })()
+        : await createResourceCapture(pool, auth, resourceRequest).then(
+            (result) => ({
+              canonical_url: page.canonicalUrl,
+              resource_id: result.body.resource.id,
+              capture_id: result.body.capture_id,
+              content_hash: page.contentHash,
+              retrieved_at: page.retrievedAt.toISOString(),
+            }),
+          );
+      if (committed === "stop") break;
+      if (committed === "unchanged") {
+        unchangedPages += 1;
+        continue;
+      }
+      if (committed === null) {
+        crawled.warnings.push(
+          publicResearchWarning(page.canonicalUrl, PUBLIC_RESEARCH_CAPTURE_FAILED),
+        );
+        continue;
+      }
+      committedPages.push(committed);
+    } catch {
+      // Fixed content-free diagnostic: the raw capture exception never becomes
+      // a durable warning; the approved page URL keeps the provenance, bounded
+      // so the warning always fits the public schema.
       crawled.warnings.push(
-        `${page.canonicalUrl}: ${
-          error instanceof Error
-            ? error.message
-            : "the retrieved page could not be committed"
-        }`.slice(0, 500),
+        publicResearchWarning(page.canonicalUrl, PUBLIC_RESEARCH_CAPTURE_FAILED),
       );
     }
   }
 
   const completedAt = new Date();
-  const status: PublicResearchResponse["status"] =
-    committedPages.length === 0
+  const observedAnything = recurring
+    ? committedPages.length > 0 || unchangedPages > 0
+    : committedPages.length > 0;
+  const baseStatus: PublicResearchResponse["status"] =
+    !observedAnything
       ? "failed"
       : crawled.warnings.length > 0
         ? "partial"
         : "completed";
-  const body: PublicResearchResponse = {
+  const baseBody: PublicResearchResponse = {
     contract_version: CONTRACT_VERSION,
     task_id: taskId,
     seed_resource_id: seed.resourceId,
-    status,
+    status: baseStatus,
     authorization_scope: authorizationScope,
     pages: committedPages,
     warnings: crawled.warnings,
     created_at: taskCreatedAt.toISOString(),
     completed_at: completedAt.toISOString(),
   };
+  // B3: the recurring finalize hook's authoritative outcome governs every
+  // receipt below; nothing may claim more than the cycle actually observed.
+  let finalStatus: PublicResearchResponse["status"] = baseStatus;
+  let body: PublicResearchResponse = baseBody;
   await inTransaction(pool, async (client) => {
+    if (recurring) {
+      // The cycle's live authority gate and honest outcome share this exact
+      // completion transaction, and the recurring hook runs FIRST: its frozen
+      // ROOT→seed→grant→run→research lock order can never invert against
+      // DB-only reconciliation. No closure-only authority.
+      const outcome = await recurring.finalize(client, {
+        taskId,
+        status: baseStatus,
+        committedPages,
+        unchangedPages,
+        warnings: crawled.warnings,
+      });
+      finalStatus = mapRecurringCycleOutcome(
+        outcome.status,
+        committedPages.length > 0,
+      );
+      body = {
+        ...baseBody,
+        status: finalStatus,
+        warnings: [...new Set([...crawled.warnings, ...outcome.warnings])],
+      };
+    }
     for (const page of committedPages) {
       const freshnessUntil = new Date(
         new Date(page.retrieved_at).getTime() +
@@ -1071,7 +1330,7 @@ export async function runPublicResearch(
        SET status = $3,
            updated_at = $4
        WHERE account_id = $1 AND id = $2`,
-      [auth.accountId, taskId, status, completedAt],
+      [auth.accountId, taskId, finalStatus, completedAt],
     );
     await client.query(
       `UPDATE idempotency_records
@@ -1111,13 +1370,18 @@ export async function runPublicResearch(
     await appendAudit(
       client,
       { accountId: auth.accountId, actorUserId: null },
-      "public_research.completed",
+      recurring
+        ? "person_source_sync.cycle_settled"
+        : "public_research.completed",
       "research_task",
       taskId,
       {
-        status,
+        status: finalStatus,
         page_count: committedPages.length,
-        warning_count: crawled.warnings.length,
+        warning_count: body.warnings.length,
+        ...(recurring
+          ? { recurring_run_id: recurring.runId, external_effect: "none" }
+          : {}),
       },
     );
   });
@@ -1174,13 +1438,16 @@ async function nextRecoverableResearchJob(
      JOIN users
        ON users.account_id = jobs.account_id
       AND users.id = jobs.requested_by_user_id
-     WHERE (
-         jobs.status IN ('pending', 'retry')
-         AND jobs.available_at <= $1
-       )
-       OR (
-         jobs.status = 'running'
-         AND jobs.lease_expires_at <= $1
+     WHERE jobs.recurring_run_id IS NULL
+       AND (
+         (
+           jobs.status IN ('pending', 'retry')
+           AND jobs.available_at <= $1
+         )
+         OR (
+           jobs.status = 'running'
+           AND jobs.lease_expires_at <= $1
+         )
        )
      ORDER BY
        CASE WHEN jobs.status = 'running' THEN 0 ELSE 1 END,
@@ -1350,7 +1617,7 @@ export async function runPendingPublicResearchJobs(
         const completed = await completeUnavailableResearchJob(
           pool,
           job,
-          error.message,
+          PUBLIC_RESEARCH_UNAVAILABLE,
           new Date(),
         );
         if (completed) {
@@ -1362,9 +1629,7 @@ export async function runPendingPublicResearchJobs(
       await recordResearchRetry(
         pool,
         job,
-        error instanceof Error
-          ? error.message
-          : "Bounded public research recovery failed.",
+        PUBLIC_RESEARCH_RETRY_FAILED,
         now,
       );
       result.retried += 1;

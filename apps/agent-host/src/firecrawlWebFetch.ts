@@ -280,9 +280,9 @@ export function createFirecrawlWebFetch(
       }
       throw new AgentSafeWebFetchError(
         "WEB_FETCH_UNAVAILABLE",
-        error instanceof Error
-          ? `Firecrawl could not be reached: ${error.message}`
-          : "Firecrawl could not be reached.",
+        // Fixed operation message: an untyped transport exception message is
+        // untrusted and never enters a typed fetch error or model context.
+        "Firecrawl could not be reached.",
       );
     }
 

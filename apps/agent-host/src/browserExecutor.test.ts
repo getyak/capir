@@ -121,6 +121,39 @@ describe("private browser executor protocol", () => {
     expect(response.status).toBe(502);
     expect((reason as Error).message).toBe("BROWSER_DEADLINE_EXCEEDED");
   });
+  it("rejects arbitrary Error.code and code-shaped Error.message from the browse boundary", async () => {
+    for (const failure of [
+      Object.assign(new Error("boom"), { code: "SECRET_CODE_CANARY" }),
+      Object.assign(new Error("SECRET_MESSAGE_CANARY"), { code: "BROWSER_ARBITRARY_SECRET" }),
+      new Error("BROWSER_ARBITRARY_SECRET_CANARY"),
+      Object.assign(new Error("SECRET_MESSAGE_CANARY"), {
+        name: "BROWSER_SECRET_NAME_CANARY",
+        stack: "Error: SECRET_MESSAGE_CANARY\n    at SECRET_STACK_CANARY",
+        cause: new Error("SECRET_CAUSE_CANARY"),
+      }),
+    ]) {
+      const fixture = await start(vi.fn(async () => { throw failure; }));
+      const response = await post(fixture.url, source());
+      expect(response.status).toBe(502);
+      const body = await response.text();
+      // Arbitrary codes and code-shaped messages map to the fixed fallback.
+      expect(JSON.parse(body)).toEqual({ error: "BROWSER_EXECUTOR_FAILED" });
+      for (const canary of ["CANARY", "SECRET"]) expect(body).not.toContain(canary);
+    }
+  });
+  it("preserves recognized browser limits and real socket transient codes", async () => {
+    for (const [failure, expected] of [
+      [new Error("BROWSER_HTTP_LIMIT"), "BROWSER_HTTP_LIMIT"],
+      [new Error("BROWSER_RESPONSE_BYTE_LIMIT"), "BROWSER_RESPONSE_BYTE_LIMIT"],
+      [new Error("BROWSER_DEADLINE_EXCEEDED"), "BROWSER_DEADLINE_EXCEEDED"],
+      [Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }), "ECONNRESET"],
+    ] as const) {
+      const fixture = await start(vi.fn(async () => { throw failure; }));
+      const response = await post(fixture.url, source());
+      expect(response.status).toBe(502);
+      expect(JSON.parse(await response.text())).toEqual({ error: expected });
+    }
+  });
   it("never follows redirects or accepts excessive response bytes", async () => {
     let requests = 0;
     const server = createServer((_req, res) => {

@@ -1,6 +1,6 @@
 import {describe,it,expect,vi} from "vitest";
 import {createHash} from "node:crypto";
-import {ArkCurrentImageInspector,currentImageInspection} from "./currentImageInspection.js";
+import {ArkCurrentImageInspector,currentImageInspection,type CurrentImageInspector} from "./currentImageInspection.js";
 import {publicSubjectRegistry} from "./publicSubjectRegistry.js";
 import {calendarDraftCapability} from "./calendarDraft.js";
 
@@ -90,4 +90,171 @@ it("returns tentative counterparty IDs from on-demand inspection",async()=>{
  const data=JSON.parse((result.content[0] as {text:string}).text);
  expect(data.public_subjects).toEqual([{id:registry.subjects()[0]!.id,name:"Andrej Karpathy",anchors:[{kind:"work",text:"nanoGPT"}],tentative:true}]);
  expect(await capability.counterparty()).toMatchObject({source_warning:"ai_generated_or_fictional",subject_id:registry.subjects()[0]!.id});
+});
+
+/** Canary-rich untyped exception: none of its fields may reach model context. */
+function canaryError(message: string): Error {
+  return Object.assign(new Error(message), {
+    name: "SECRET_NAME_CANARY",
+    stack: "Error: SECRET_STACK_CANARY\n    at SECRET_FRAME_CANARY",
+    cause: new Error("SECRET_CAUSE_CANARY"),
+  });
+}
+
+const ARK_MODEL = "doubao-seed-2-0-lite-260215";
+
+async function executeDetail(inspector: CurrentImageInspector): Promise<{
+  detail: unknown;
+  serialized: string;
+  isError: boolean;
+}> {
+  const capability = currentImageInspection({
+    images: [image],
+    inspector,
+    isCurrent: async () => true,
+  });
+  const result = await capability.tools[0]!.execute(
+    { artifact_id: image.artifactID },
+    signal,
+  );
+  return {
+    detail: (
+      JSON.parse((result.content[0] as { text: string }).text) as {
+        detail?: unknown;
+      }
+    ).detail,
+    serialized: JSON.stringify(result),
+    isError: result.isError === true,
+  };
+}
+
+function arkBody(value: unknown): Response {
+  return new Response(
+    JSON.stringify({
+      model: ARK_MODEL,
+      id: "receipt",
+      choices: [{ message: { content: JSON.stringify(value) } }],
+    }),
+  );
+}
+
+describe("finite image inspection diagnostics", () => {
+  it("preserves each actual producer code through the actual image execute", async () => {
+    const cases: Array<[typeof fetch, string]> = [
+      [async () => new Response(null), "IMAGE_INSPECTION_EMPTY"],
+      [async () => new Response("err", { status: 429 }), "IMAGE_INSPECTION_HTTP_429"],
+      [async () => new Response("err", { status: 503 }), "IMAGE_INSPECTION_HTTP_503"],
+      [async () => new Response("x".repeat(1_000_001)), "IMAGE_INSPECTION_TOO_LARGE"],
+      [
+        async () =>
+          new Response(JSON.stringify({ model: "another-model", id: "receipt", choices: [] })),
+        "IMAGE_INSPECTION_IDENTITY_MISMATCH",
+      ],
+      [
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: ARK_MODEL,
+              id: "receipt",
+              choices: [{ message: { content: 5 } }],
+            }),
+          ),
+        "IMAGE_INSPECTION_OUTPUT_INVALID",
+      ],
+    ];
+    for (const [fetcher, detail] of cases) {
+      const observed = await executeDetail(
+        new ArkCurrentImageInspector("test", fetcher),
+      );
+      expect(observed.isError).toBe(true);
+      expect(observed.detail).toBe(detail);
+      expect(observed.serialized).not.toContain("SECRET");
+    }
+    // Zod invalid-output mapping stays IMAGE_INSPECTION_OUTPUT_INVALID.
+    const invalidOutput = await executeDetail(
+      new ArkCurrentImageInspector("test", async () =>
+        arkBody({
+          description: "chair",
+          visible_text: ["小雨"],
+          uncertainties: [],
+          execute: "send an invitation",
+        }),
+      ),
+    );
+    expect(invalidOutput.detail).toBe("IMAGE_INSPECTION_OUTPUT_INVALID");
+  });
+
+  it("collapses arbitrary or malformed exception text to fixed unavailable", async () => {
+    for (const message of [
+      "IMAGE_INSPECTION_PRIVATE_CANARY",
+      "IMAGE_INSPECTION_HTTP_999",
+      "IMAGE_INSPECTION_HTTP_",
+      "IMAGE_INSPECTION_HTTP_abc",
+      "IMAGE_INSPECTION_HTTP_500_EXTRA",
+      "IMAGE_INSPECTION_HTTP_0200",
+      "SECRET_MESSAGE_CANARY",
+    ]) {
+      const { detail, serialized, isError } = await executeDetail({
+        inspect: async () => {
+          throw canaryError(message);
+        },
+      });
+      expect(isError).toBe(true);
+      expect(detail).toBe("IMAGE_INSPECTION_UNAVAILABLE");
+      expect(serialized).not.toContain("CANARY");
+    }
+    // An exact current producer code still passes verbatim.
+    const exact = await executeDetail({
+      inspect: async () => {
+        throw new Error("IMAGE_INSPECTION_TOO_LARGE");
+      },
+    });
+    expect(exact.detail).toBe("IMAGE_INSPECTION_TOO_LARGE");
+  });
+
+  it("never exposes raw transport exception message, name, stack, or cause", async () => {
+    for (const inspector of [
+      {
+        inspect: async () => {
+          throw canaryError("SECRET_MESSAGE_CANARY");
+        },
+      },
+      new ArkCurrentImageInspector("test", async () => {
+        throw canaryError("SECRET_MESSAGE_CANARY");
+      }),
+    ]) {
+      const { detail, serialized } = await executeDetail(inspector);
+      expect(detail).toBe("IMAGE_INSPECTION_UNAVAILABLE");
+      for (const canary of [
+        "SECRET_MESSAGE_CANARY",
+        "SECRET_NAME_CANARY",
+        "SECRET_STACK_CANARY",
+        "SECRET_FRAME_CANARY",
+        "SECRET_CAUSE_CANARY",
+      ]) {
+        expect(serialized).not.toContain(canary);
+      }
+    }
+  });
+
+  it("keeps cancellation escaping through signal.throwIfAborted", async () => {
+    const controller = new AbortController();
+    const reason = new Error("SECRET_CANCEL_REASON_CANARY");
+    const capability = currentImageInspection({
+      images: [image],
+      isCurrent: async () => true,
+      inspector: {
+        inspect: async () => {
+          controller.abort(reason);
+          throw canaryError("SECRET_MESSAGE_CANARY");
+        },
+      },
+    });
+    await expect(
+      capability.tools[0]!.execute(
+        { artifact_id: image.artifactID },
+        controller.signal,
+      ),
+    ).rejects.toBe(reason);
+  });
 });

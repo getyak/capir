@@ -1,0 +1,103 @@
+.page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 40px;
+  color: var(--ink);
+}
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
+  gap: 72px;
+  align-items: center;
+  padding: 56px 0 64px;
+}
+.eyebrow { margin-bottom: 22px; font-size: 13px; color: var(--muted-strong); }
+.intro h1 { font-size: clamp(36px, 4.25vw, 56px); font-weight: 600; line-height: 1.2; letter-spacing: -.045em; }
+.intro h1 span { display: block; }
+.promise { max-width: 28em; margin: 24px 0 30px; font-size: 18px; line-height: 1.75; color: var(--muted-strong); }
+.folio { min-width: 0; padding: 26px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 6px 20px color-mix(in srgb, var(--ink) 5%, transparent); }
+.folioTop { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-bottom: 16px; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.6; color: var(--muted-strong); }
+.identity { margin: 22px 0; }
+.identity h2 { font-size: 28px; line-height: 1.3; font-weight: 600; letter-spacing: -.025em; }
+.identity p { margin-top: 6px; font-size: 14px; color: var(--muted-strong); }
+.context { display: grid; gap: 20px; }
+.context dt { font-size: 13px; color: var(--muted-strong); }
+.context dd { margin: 5px 0 0; font-size: 16px; line-height: 1.7; }
+.context dd span { display: block; color: var(--muted-strong); }
+.dependency { margin: 24px 0 20px; padding-left: 16px; border-left: 2px solid var(--accent-strong); }
+.dependency strong { font-size: 18px; line-height: 1.5; font-weight: 600; }
+.dependency p { margin-top: 8px; font-size: 13px; line-height: 1.7; color: var(--muted-strong); }
+.evidence { border-top: 1px solid var(--line); }
+.evidence summary { width: fit-content; max-width: 100%; min-height: 44px; padding: 12px 8px 12px 0; font-size: 14px; line-height: 1.5; cursor: pointer; border-radius: 4px; }
+.evidence summary:hover { color: var(--accent-strong); }
+.page :is(a, summary) { scroll-margin-top: 100px; scroll-margin-bottom: 20px; }
+.page :is(a, summary):focus-visible { outline: 3px solid var(--accent-strong); outline-offset: 4px; }
+.source { padding: 12px 0 6px; }
+.source > p { font-size: 13px; line-height: 1.7; color: var(--muted-strong); }
+.source blockquote { display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 12px; margin: 18px 0; font-size: 15px; line-height: 1.7; }
+.source cite { font-size: 13px; font-style: normal; color: var(--muted-strong); }
+.chapter { padding: 56px 0; border-top: 1px solid var(--line-strong); }
+.chapter > h2, .quiet h2, .closing h2 { max-width: 25em; font-size: clamp(26px, 2.75vw, 36px); font-weight: 600; letter-spacing: -.035em; line-height: 1.35; text-wrap: balance; }
+.lead { max-width: 44em; margin-top: 18px; font-size: 17px; line-height: 1.8; color: var(--muted-strong); }
+.change { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 64px; margin: 36px 0 30px; }
+.change article { padding: 4px 0; }
+.change .current { border-left: 2px solid var(--accent-strong); padding-left: 28px; }
+.date { font-size: 13px; color: var(--muted-strong); }
+.change blockquote { margin: 20px 0 26px; }
+.change blockquote p { font-size: 24px; line-height: 1.6; letter-spacing: -.02em; }
+.change cite { display: block; margin-top: 10px; font-size: 13px; font-style: normal; color: var(--muted-strong); }
+.change h3 { font-size: 18px; line-height: 1.5; font-weight: 600; }
+.change h3 + p { max-width: 30em; margin-top: 8px; font-size: 15px; line-height: 1.8; color: var(--muted-strong); }
+.sourceGrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 64px; }
+.reviewBoundary { max-width: 55em; padding: 16px 0; font-size: 14px; line-height: 1.8; color: var(--muted-strong); }
+.layers { margin-top: 28px; }
+.layers > div { display: grid; grid-template-columns: minmax(100px, .35fr) minmax(0, 1fr); gap: 36px; padding: 22px 0; }
+.layers > div + div { border-top: 1px solid var(--line); }
+.layers dt { font-size: 24px; letter-spacing: -.02em; }
+.layers dd { display: grid; grid-template-columns: minmax(0, .75fr) minmax(0, 1fr); gap: 36px; margin: 0; font-size: 16px; line-height: 1.8; }
+.layers strong { font-weight: 500; }
+.layers p { color: var(--muted-strong); }
+.quiet { padding: 36px 40px; border-radius: 10px; background: var(--surface-muted); }
+.quiet > p, .closing > p { max-width: 48em; margin: 18px 0 24px; font-size: 16px; line-height: 1.9; color: var(--muted-strong); }
+.removal { max-width: 48em; padding: 12px 0; font-size: 15px; line-height: 1.8; color: var(--muted-strong); }
+.closing { padding: 64px 0 72px; }
+.availability { display: inline-flex; align-items: center; gap: 12px; min-height: 44px; font-size: 15px; font-weight: 500; }
+.availability:hover { color: var(--accent-strong); }
+@media (max-width: 1023px) {
+  .hero { gap: 36px; }
+  .folio { padding: 22px; }
+  .change { gap: 36px; }
+  .layers dd { grid-template-columns: 1fr; gap: 8px; }
+}
+@media (max-width: 767px) {
+  .page { padding: 0 20px; }
+  .hero { grid-template-columns: 1fr; gap: 32px; padding: 34px 0 44px; }
+  .intro h1 { font-size: clamp(34px, 9vw, 42px); }
+  .eyebrow { margin-bottom: 16px; }
+  .promise { margin: 18px 0 24px; font-size: 16px; }
+  .folio { padding: 20px; }
+  .folioTop { gap: 6px; }
+  .folioTop span { flex-basis: 100%; }
+  .identity { margin: 20px 0; }
+  .identity h2 { font-size: 26px; }
+  .context { gap: 18px; }
+  .context dd { font-size: 15px; }
+  .dependency { padding-left: 12px; }
+  .dependency strong { font-size: 17px; }
+  .chapter { padding: 40px 0; }
+  .lead { font-size: 16px; }
+  .change { grid-template-columns: 1fr; gap: 28px; margin-top: 28px; }
+  .change .current { padding-left: 20px; }
+  .change blockquote { margin: 16px 0 20px; }
+  .change blockquote p { font-size: 21px; }
+  .sourceGrid { grid-template-columns: 1fr; gap: 10px; }
+  .source blockquote { grid-template-columns: 54px minmax(0, 1fr); gap: 10px; }
+  .layers > div { grid-template-columns: 1fr; gap: 10px; }
+  .layers dt { font-size: 22px; }
+  .layers dd { grid-template-columns: 1fr; gap: 8px; font-size: 15px; }
+  .quiet { padding: 28px 20px; }
+  .closing { padding: 44px 0 52px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page a { transition: none; transform: none; }
+}

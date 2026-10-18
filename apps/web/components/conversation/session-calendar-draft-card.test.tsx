@@ -31,8 +31,14 @@ function button(label: string) {
   return [...mount.querySelectorAll("button")].find((element) => element.textContent?.includes(label));
 }
 beforeEach(() => {
+  // Deterministic date-only clock (PH-16): fixtures keep their original
+  // 2026-10-12 expiry and production expiry enforcement runs unchanged; only
+  // Date is faked so real setTimeout/React scheduling is preserved.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   fetcher.mockReset();
+  sessionStorage.clear();
   fetcher.mockImplementation(() => Promise.resolve(Response.json({ draft: available, session_version: "binding-1" })));
   vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:calendar-test");
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
@@ -42,6 +48,8 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount()); mount.remove();
   vi.restoreAllMocks(); vi.unstubAllGlobals();
+  sessionStorage.clear();
+  vi.useRealTimers();
 });
 
 describe("Session calendar draft card", () => {

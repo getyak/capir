@@ -7,6 +7,10 @@ import {
   type ContactResearchToolResponse,
 } from "@talent-signal/agent";
 
+import {
+  CONTACT_RESEARCH_SERVER_ERROR_CODE_SET,
+} from "../lib/diagnosticCodes.js";
+
 export interface ContactResearchClient {
   execute(input: unknown, signal: AbortSignal): Promise<ContactResearchToolResponse>;
 }
@@ -72,7 +76,15 @@ export class LocalContactResearchClient implements ContactResearchClient {
             let code = `CONTACT_RESEARCH_HTTP_${response.statusCode}`;
             try {
               const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-              if (typeof body.error === "string" && /^(?:BROWSER|CONTACT_RESEARCH)_[A-Z_]+$/u.test(body.error)) code = body.error;
+              // Only the finite server-emitted vocabulary is accepted from a
+              // server error body. Client-owned codes (status-derived
+              // `CONTACT_RESEARCH_HTTP_*`, timeout, readback, socket, test
+              // injection) are never claimable by a server payload: a body
+              // claiming them is refused and the real status-derived
+              // diagnostic is kept unchanged.
+              if (typeof body.error === "string" && CONTACT_RESEARCH_SERVER_ERROR_CODE_SET.has(body.error)) {
+                code = body.error;
+              }
             } catch { /* Keep the bounded HTTP status when the error is not structured. */ }
             reject(new Error(code));
           }

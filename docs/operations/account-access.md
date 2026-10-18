@@ -95,8 +95,21 @@ requires authoritative backend settings readback.
 Unlink requires recent proof and cannot remove the final usable login method,
 including accounts with historical duplicate provider rows. Unbound OAuth with
 an existing email says to sign in with an existing method, then connect the new
-method in Settings; no empty second account is created. Public errors disclose
-no names, data counts, linked provider details, or workspace information.
+method in Settings; no empty second account is created. A rejected unbound
+sign-in seals only a short-lived provider hint (never a token, email or account
+detail), and only that sealed hint opens the neutral account-continuity panel,
+which explains that existing records are preserved and offers one explicit
+path: verify the original login method, then connect the provider on the
+authenticated Settings surface with its panel already open, clear consent,
+current-identity proof (password or linked provider, never a mandatory
+password), a fresh target-provider proof and authoritative settings readback. A
+quiet escape stays open to ordinary login. The original safe callback —
+including CLI and Mac browser confirmations — travels through login, onboarding
+and connection as a sanitized navigation hint and continues only after
+readback-verified success; cancellation, failure and expiry stay recoverable in
+place. Public query strings carry navigation hints only and are never proof of
+a collision, an account or a link result. Public errors disclose no names,
+emails, data counts, linked provider details, or workspace information.
 
 ## Verified secondary emails
 

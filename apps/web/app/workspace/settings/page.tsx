@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
 import { settingsReturnPath, settingsSectionFrom } from "@/lib/settings-return-path";
+import { settingsConnectHints, settingsConnectPath } from "@/lib/login-continuity";
 import { SettingsWorkspace } from "@/components/settings-workspace";
 import { readBackendSessionClaims } from "@/lib/server/backendAuth";
 import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
@@ -21,16 +22,37 @@ export const metadata: Metadata = {
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ section?: string | string[] }>;
+  searchParams: Promise<{
+    section?: string | string[];
+    connect?: string | string[];
+    returnTo?: string | string[];
+  }>;
 }) {
-  const requested = (await searchParams).section;
+  const parameters = await searchParams;
+  const requested = parameters.section;
+  // GET-141 navigation hints only: an allowlisted provider whose connecting
+  // panel opens preselected, and a sanitized same-origin target to continue
+  // after a verified link. Neither is proof of a collision or a link result.
+  const connectHints = settingsConnectHints({
+    connect: parameters.connect,
+    returnTo: parameters.returnTo,
+  });
   const session = await auth();
   if (!session?.user) {
-    // Preserve only a schema-validated section so returning from login opens
-    // the requested pane. The helper is the single place that builds this path,
-    // and it can only ever return a fixed same-origin settings route, so an
-    // unknown, repeated or malformed value cannot become a redirect target.
-    redirect(`/login?callbackUrl=${encodeURIComponent(settingsReturnPath(requested))}`);
+    // Preserve a schema-validated section AND the validated connect/return
+    // hints inside the callback URL, so a session expiry at the connection
+    // entry resumes the same journey after login. The helper can only ever
+    // return fixed same-origin settings paths; unknown or malformed values
+    // collapse instead of becoming a redirect target.
+    redirect(
+      `/login?callbackUrl=${encodeURIComponent(
+        settingsConnectPath({
+          returnPath: settingsReturnPath(requested),
+          connect: connectHints.connect,
+          returnTo: connectHints.returnTo,
+        }),
+      )}`,
+    );
   }
 
   let data: Awaited<ReturnType<typeof loadAccountSettings>> | null = null;
@@ -119,6 +141,8 @@ export default async function SettingsPage({
   return (
     <SettingsWorkspace recovery={recovery}
       initial={data}
+      connect={connectHints.connect}
+      connectReturnTo={connectHints.returnTo}
       avatarUrl={data?.user.kind === "lab_human" ? null : session.user.image ?? null}
       labEnabled={labEnabled}
       section={section}

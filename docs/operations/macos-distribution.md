@@ -12,9 +12,17 @@ collaboration, and recruiting. The downloadable client is `apps/macos`.
    the platform that changed. Preview releases are explicitly labeled.
 2. Compare the downloaded file with its `SHA256SUMS.txt` using
    `shasum -a 256 <downloaded-file>`. Drag **Talent Signal** to Applications.
-3. Open the app and enter the HTTPS workspace origin supplied by the workspace
-   owner, or paste a full `/workspace/...` link. The app shows the normalized origin.
+3. Open the app and choose **连接你的工作区**, then enter the HTTPS workspace
+   origin supplied by its owner, or paste a full `/workspace/...` link. The app
+   shows the normalized origin. The optional **先体验一个示例** is a fictional,
+   prewritten local example: inspect each result's exact words and explicitly
+   correct an interpretation before connecting. Corrections remain in that
+   example only; they neither contact a model nor create people, messages or
+   schedules. Returning to connection keeps an unfinished address draft.
    Choose **Sign in in your browser**, authenticate or confirm your own account in the system browser, and return to the Mac workspace. The Mac window never asks for your username or password.
+
+An already configured workspace opens normally. First-run motion never delays
+the connect/sample controls, and Reduce Motion displays the invitation directly.
 
 For an owner-operated private workspace, authorize the second Mac in the same
 Tailscale network and connect Tailscale before opening the app. The package
@@ -106,6 +114,13 @@ fails closed on missing credentials, signing, notarization, staple validation,
 or Gatekeeper assessment. It never falls back to a preview silently.
 Manual dispatch accepts only the current default branch and requires successful
 push CI for that exact revision.
+
+Publication also requires that the packaged revision still be the current
+`main` revision. When landing consecutive changes during a signed Mac release, wait
+for the signed downloads and latest appcast entry to be published and read back
+before advancing `main`. If `main` moves during packaging, publication fails
+closed and a later successful CI run evaluates the newer revision. Keep that
+guard intact; do not retag stale source or replace published package bytes.
 
 ## Signing configuration
 
@@ -199,6 +214,63 @@ The package script verifies both architectures, icon presence, absence of a
 bundled private origin, and bundle signature. Preserve requested deliverables
 before removing task build products through the storage guard. Native unit tests
 run through `scripts/macos/check.sh`; no iOS simulator is needed.
+
+The installer now builds a writable scratch image, mounts it under its explicit
+output directory, and generates its paper background and Finder layout before
+converting to the immutable compressed image. The build-only Swift package in
+`scripts/macos/installer/` pins DSStore 1.0.0 and its resolved revision; it never
+enters the installed app. Its Carbon Alias is made on the mounted deliverable
+volume, so a staging-folder alias cannot substitute for real Finder acceptance.
+Layout failure detaches only that scratch mount and retains failed build inputs
+in the task artifact for diagnosis. Inspect the final image in Finder as well as
+the generated metadata; a successful tool exit does not prove visual placement.
+
+When a signed client is already running, local native tests must use a separate
+test application identity; the production login registry correctly refuses a
+second owner. For an isolated test build, pass a quoted build-setting override,
+for example `'PRODUCT_BUNDLE_IDENTIFIER=com.getyak.acceptance.get48.$(TARGET_NAME)'`,
+to `xcodebuild`, together with task-owned DerivedData. The per-target suffix keeps
+app and test bundles distinct. Preserve the signed client's registry and running
+session; do not terminate it to make a shared-store test green. This isolated
+build is test evidence, not a replacement for the published signed app's release
+and first-launch acceptance.
+
+`CFFIXED_USER_HOME` alone is not a preferences boundary on macOS: the preferences
+daemon can still use the real user's app domain. Published-app acceptance instead
+runs on the existing disposable GitHub-hosted Mac. PR CI runs the bounded native
+keyboard/hidden-input regressions, then a separate real Finder drag from an ad-hoc
+compiled PR installer fixture. The release job downloads the published DMG and ZIP,
+compares both verified downloads, and drags the actual mounted app icon onto its
+actual Applications alias on the empty hosted Mac. It requires all bundle files
+and symlinks to match, verifies the installed signature/notarization and ZIP
+identity, then launches that exact installed app for the original first-run tests.
+One real drag test and three first-run tests, with no failures or skips, must pass before the update feed
+is promoted. `first-run-acceptance.sh` refuses local/self-hosted execution before
+changing settings, refuses a preconfigured workspace, temporarily enables native
+Keyboard Navigation on that disposable host and restores its prior setting. It
+strips release/provider credentials before XCTest and retains the result bundle
+and screenshots as bounded Actions evidence. It never resets a product domain or
+re-signs the published app to manufacture an isolated identity.
+
+`installer-drag-acceptance.sh` refuses local/self-hosted runs, a configured profile,
+an existing Applications destination, and inputs outside runner temp. It never
+removes an installed app. Its native XCTest uses Apple's
+[`click(forDuration:thenDragTo:)`](https://developer.apple.com/documentation/xcuiautomation/xcuielement)
+with real Finder elements and retains AX text, screenshots and installation
+identity. Failed or unavailable dragging stays a failed gate: copying with a shell
+or a keyboard command cannot substitute for this interaction. Cleanup detaches
+only the helper's own mount, including on failure.
+Finder's application accessibility root can have an empty frame despite visible,
+hittable installer windows and icons. Capture the actual screen for its UI test
+evidence; an application-root screenshot failure must not be mistaken for a failed
+drag or repaired by weakening the drag/installation assertions.
+
+For conditional first-run pages, request keyboard focus from the destination
+view's lifecycle after its controls mount, with a current-page guard. An outgoing
+button's focus assignment can leave focus on the window and swallow the next
+Space. Keep the real Tab/Space regression; pointer clicks cannot prove this path.
+Export the XCTest summary even after a failed invocation, preserve its nonzero
+status, and reject missing, malformed, failed or skipped acceptance results.
 
 Sources: [Apple Developer ID](https://developer.apple.com/developer-id/),
 [notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),

@@ -131,6 +131,43 @@ TS_TESTFLIGHT_REBUILD=false \
 
 Rebuild after backend or contract code changes.
 
+The backend image builder uses a 180000ms dependency-fetch deadline by default.
+For a measured slow connection, a clean-source prepared image may explicitly
+set `--build-arg PNPM_FETCH_TIMEOUT_MS=3600000` on `docker build`. The builder
+accepts only decimal integers from 180000 through 3600000ms; this is a finite
+build-only override, not a resident runtime setting. Keep the official registry,
+frozen lock/integrity checks, full supply-chain policy and required native
+runtime verification. A completed dependency install alone is insufficient:
+pnpm may omit a failed optional platform package that the runtime requires.
+The required Linux SDK archive is prefetched by exact registry name/version in
+a separate pnpm process and Docker layer before the complete frozen install.
+Its version comes from the Agent manifest; only Linux arm64 and x64 are admitted.
+This preserves registry cache identity and separates the large archive transfer
+from full-graph metadata residency. Both phases use the validated timeout and
+numeric transport configuration; the complete policy check and native execution
+gate still determine whether the image is usable. A cache hit or successful
+prefetch alone does not establish image or deployment success.
+For a prepared image on a constrained connection, the optional build-only
+`PNPM_DEPENDENCY_CACHE_IMAGE` argument can select a verified local dependency
+cache image. Its default is the Node24 base with an empty store. Admit only a
+trusted image for the target Linux architecture and pnpm11.18 store format;
+record and check its actual image ID before and after the build rather than
+trusting a mutable tag. The cache stage copies only the pnpm store, never
+installed modules, application source, dist or environment files. The builder
+explicitly enables store-file integrity verification; cache presence does not
+replace the current frozen graph, complete supply-chain policy or native gate.
+pnpm11.18 has a timestamp fast path, so the builder additionally streams and
+hashes incoming v11 content-addressed files before prefetch, independently of
+their modification times. This checks cache bytes without manufacturing or
+rewriting package indexes. Missing entries follow normal pnpm resolution;
+invalid cached content fails the builder. Keep this cache selection out
+of resident runtime configuration and retain its provenance in deployment proof.
+Content-address verification does not authenticate package-to-index mappings;
+trusted, immutable cache provenance remains necessary.
+After the complete image passes, select and verify the approved image/revision
+pair, then use the verified-image restart command above with
+`TS_TESTFLIGHT_REBUILD=false`.
+
 Only after that probe succeeds, store the same HTTPS URL as
 `staging:/release/TALENT_SIGNAL_API_BASE_URL`. It is a build-time value, but the
 endpoint remains tailnet-only.
@@ -183,6 +220,14 @@ pnpm install --frozen-lockfile
 ./scripts/deploy/web-local.sh build
 python3 scripts/deploy/install-web-launch-agent.py "$PWD"
 ```
+
+Confirm the project-pinned pnpm version through the same managed build context
+before starting the production build. A newer global shim may activate that
+version by fetching package-manager metadata and installing its missing CLI;
+this can fail before Next starts. Preserve that failure and the existing live
+release, then verify normal pinned-version activation before retrying the
+complete build. A successful version probe is not a build receipt. Keep service
+recovery on the launcher's direct Node entry, independent of this bootstrap.
 
 Keep a clean, detached backend/Opik deployment checkout in a directory shared with Colima,
 such as `~/data/talent-signal-runtime-releases/<revision>`. Web builds run on

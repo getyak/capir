@@ -83,26 +83,9 @@ export function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
 }
 
-export function safeRedirectTarget(
-  value: FormDataEntryValue | null | undefined,
-  fallback = "/workspace",
-) {
-  if (
-    typeof value !== "string" ||
-    !value.startsWith("/") ||
-    value.startsWith("//") ||
-    value.includes("\\") ||
-    /[\u0000-\u0020\u007f]/.test(value)
-  ) {
-    return fallback;
-  }
-
-  try {
-    const target = new URL(value, "https://redirect.invalid");
-    if (target.origin !== "https://redirect.invalid") return fallback;
-    return target.pathname + target.search + target.hash;
-  } catch { return fallback; }
-}
+// Re-exported for compatibility; the implementation is browser-safe and lives
+// in `safe-redirect` so client components never pull in Node/server modules.
+export { safeRedirectTarget } from "./safe-redirect";
 
 export function getDefaultAccount(
   environment: Environment = process.env,

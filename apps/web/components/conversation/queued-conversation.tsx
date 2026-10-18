@@ -21,6 +21,7 @@ import { ConversationImageStrip } from "./conversation-images";
 import { SessionSendTime } from "./session-execution-card";
 import { useConversation } from "./use-conversation";
 import { useConversationAxis } from "./use-conversation-axis";
+import { useConversationReadingPosition } from "./use-conversation-reading-position";
 import { usePreviewPacing } from "./use-preview-pacing";
 import { useRunMilestones } from "./use-run-milestones";
 import { sessionHumanMessages, sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
@@ -58,13 +59,16 @@ export function queueFailureText(code: string | null, hasImages: boolean): strin
   return "上次未完成，请重试或移除";
 }
 
-type Props = { bootstrap?: { sessionId: string; capability: string } | null; initialDetail?: SessionDetail; scope: string; chatBinding: string; detailBinding: string; meetingLinks?: Array<{id: string; title: string}>; meetingReadFailed?: boolean; legacyRecovery?: LegacyConversationRecovery | null; entryCapability?: string | null };
+type Props = { bootstrap?: { sessionId: string; capability: string } | null; focusComposer?: boolean; initialDetail?: SessionDetail; scope: string; chatBinding: string; detailBinding: string; meetingLinks?: Array<{id: string; title: string}>; meetingReadFailed?: boolean; legacyRecovery?: LegacyConversationRecovery | null; entryCapability?: string | null };
 export function QueuedConversation(props: Props) {
   const router = useRouter();
   const [id, setId] = useState<string | null>(props.initialDetail?.session_id ?? null);
   const [admitted, setAdmitted] = useState(Boolean(props.initialDetail));
   const handedOff = useRef(Boolean(props.initialDetail));
   const navigating = useRef(false);
+  // Home admits the exact draft's compose intent before bootstrap canonicalizes
+  // its URL. Keep it only for this mount, until the asynchronous editor is ready.
+  const focusRequested = useRef(props.focusComposer ?? false);
   useEffect(() => {
     // A Next Link can be pending while the old pathname is still visible.
     const leaving = () => { navigating.current = true; };
@@ -127,6 +131,9 @@ export function QueuedConversation(props: Props) {
   const [away, setAway] = useState(false);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
   useConversationAxis(viewport);
+  const reading = useConversationReadingPosition({ viewportRef: viewport, contentRef: content, followsLatestRef: follows, onAwayChange: setAway,
+    scope: props.scope, sessionId: id, binding: props.detailBinding, ready: chat.ready, unavailable: chat.unavailable,
+    expiresAt: chat.detail?.expires_at ?? props.initialDetail?.expires_at });
   const active = chat.snapshot?.active;
   const queued = useMemo(() => chat.snapshot?.queued ?? [], [chat.snapshot?.queued]);
   const turns = useMemo(() => chat.detail?.turns ?? [], [chat.detail?.turns]);
@@ -247,17 +254,25 @@ export function QueuedConversation(props: Props) {
   };
   useEffect(() => {
     const node = content.current; const scroll = viewport.current; if (!node || !scroll) return;
-    const observer = new ResizeObserver(() => { if (follows.current) scroll.scrollTop = scroll.scrollHeight; else setAway(true); });
+    const observer = new ResizeObserver(() => { if (reading.restoring.current) reading.restore(); else if (follows.current) scroll.scrollTop = scroll.scrollHeight; else setAway(true); });
     observer.observe(node); observer.observe(scroll); return () => observer.disconnect();
-  }, []);
-  useEffect(() => { if (chat.ready && chat.draft && props.initialDetail) document.getElementById("queued-conversation-composer")?.focus(); /* Restore focus only at initial hydration. */
+  }, [reading]);
+  useEffect(() => { if (chat.ready && chat.draft && props.initialDetail) document.getElementById("queued-conversation-composer")?.focus({ preventScroll: true }); /* Restore focus only at initial hydration. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.ready]);
-  function latest() { userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); }
-  async function send() { if (await chat.submit()) { userScroll.current = false; follows.current = true; setAway(false); } }
+  useEffect(() => {
+    if (!focusRequested.current || !chat.ready || chat.unavailable || props.initialDetail || navigating.current) return;
+    const composer = document.getElementById("queued-conversation-composer");
+    if (!(composer instanceof HTMLTextAreaElement) || composer.disabled) return;
+    focusRequested.current = false;
+    composer.focus({ preventScroll: true });
+  }, [chat.ready, chat.unavailable, props.initialDetail]);
+  function latest() { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
+  async function send() { if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
   function navigate(href: string) { navigating.current = true; router.push(href); }
   async function remove() {
     if (await chat.remove()) {
+      reading.forget();
       const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }));
       if (unhandled) router.replace("/workspace");
     }
@@ -294,9 +309,9 @@ export function QueuedConversation(props: Props) {
     </div></details></header>}
     <SessionRuntime key={`${props.chatBinding}:${id ?? "draft"}`} messages={projectedMessages} running={Boolean(activeVisible)}>
     <ThreadPrimitive.Root className={styles.runtimeRoot} data-session-runtime>
-    <ThreadPrimitive.Viewport autoScroll={false} className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onWheel={event => { userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { userScroll.current = true; }} onPointerDown={() => { userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) userScroll.current = true; if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); } }}>
+    <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} scrollToBottomOnRunStart={false} className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onWheel={event => { reading.cancelRestore(); userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { reading.cancelRestore(); userScroll.current = true; }} onPointerDown={() => { reading.cancelRestore(); userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) { reading.cancelRestore(); userScroll.current = true; } if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (!reading.restoring.current && viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); reading.remember(); } }}>
       <div className={styles.content} ref={content}>
-        {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><h2>今天想推进什么？</h2></div>}
+        {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><div><h2>把没聊完的，接着聊。</h2><p>带来一段聊天、一个人的近况，或一件还没结束的事。先理清，再决定留下什么。</p></div></div>}
         <ThreadPrimitive.Messages>{({ message }) => message.role === "user"
           ? <Fragment key={message.id}><SessionSendTime at={(message as { createdAt?: unknown }).createdAt}/><SessionUserMessage context={renderContext}/></Fragment>
           : <SessionAssistantMessage key={message.id} context={renderContext}/>}</ThreadPrimitive.Messages>
@@ -326,7 +341,7 @@ export function QueuedConversation(props: Props) {
         <WorkspaceComposer id="queued-conversation-composer" label="消息" value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? "继续补充，会并入当前任务…" : "继续补充，会按顺序处理…" : paused ? "继续输入，消息会加入暂停的队列…" : imageCount ? "可加一句话说明，或直接发送图片…" : "有什么想一起理清的？"} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
           footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} aria-label={acceptsSteering ? "补充当前任务" : active || queued.length || paused ? "加入队列" : "发送消息"} title={acceptsSteering ? "补充当前任务" : active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}><ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
-      {!hasContent && <div className={styles.starters} aria-label="开始一个话题">{["你可以帮我做什么？", "梳理今天需要跟进的人"].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
+      {!hasContent && <div className={styles.starters} aria-label="开始一个话题">{["你可以帮我做什么？", "准备下一次交流"].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
       <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>Enter 发送 · Shift+Enter 换行</span></div>
     </div>
   </main>;

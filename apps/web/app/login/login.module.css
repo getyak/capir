@@ -53,6 +53,14 @@
 
 .fixture { margin-top:20px; }
 .fixture button { border:1px dashed var(--line-strong); border-radius:8px; font-size:12px; background:transparent; color:var(--muted-strong); padding:10px; width:100%; }
+.connectPanel { max-width:520px; }
+.connectPanel h2 { color:var(--ink); font-size:26px; line-height:1.5; letter-spacing:-.02em; font-weight:550; margin:0 0 16px; }
+.connectPanel .story { font-size:14px; line-height:1.85; margin:0; }
+.connectNote { color:var(--muted-strong); font-size:12px; line-height:1.7; margin:8px 0 0; }
+.connectActions { display:grid; gap:12px; margin-top:26px; }
+.connectActions .submit { text-decoration:none; }
+.connectActions .textButton { justify-self:start; }
+.connectHint { margin:0 0 18px; padding:10px 14px; border-left:2px solid var(--line-strong); color:var(--muted-strong); font-size:13px; line-height:1.7; }
 .caption { font-size:13px; line-height:1.8; color:var(--muted-strong); margin-top:18px; }
 .page button:focus-visible,.page a:focus-visible { outline:2px solid var(--ink); outline-offset:4px; }
 .retry { background:transparent; border:0; color:var(--error); font-size:12px; min-height:40px; text-decoration:underline; }

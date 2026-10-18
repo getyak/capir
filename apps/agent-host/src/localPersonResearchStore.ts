@@ -5,18 +5,72 @@ import { join } from "node:path";
 import {
   fingerprint,
   type AgentBudget,
+  type AgentInputArtifactManifestItem,
   type AgentJournalEvent,
   type AgentJournalOutput,
   type AgentPersonResearchArtifactCandidate,
   type AgentPersonResearchCheckpoint,
   type AgentPersonResearchJournal,
   type AgentPersonResearchNoActionCandidate,
+  type AgentPersonResearchPlatform,
   type AgentPersonResearchScope,
   type AgentPersonResearchTerminalReceipt,
+  type AgentPersonResearchAuthorization,
+  type AgentPublicProfileResult,
 } from "@talent-signal/agent";
 
-const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const FINGERPRINT = /^[0-9a-f]{64}$/u;
+import {
+  assertLocalRunID,
+  isLocalRecordCounter,
+  isLocalRecordEnum,
+  isLocalRecordFingerprint,
+  isLocalRecordFingerprintArray,
+  isLocalRecordID,
+  isLocalRecordObject,
+  isLocalRecordTimestamp,
+  localRecordCorruptError,
+  publishImmutableJsonRecord,
+  readPersistedJsonRecord,
+  replaceMutableJsonRecord,
+} from "./localResearchFiles.js";
+import {
+  readLocalResearchJournal,
+  requireLocalRunMetadataForEvidence,
+  validateLocalResearchJournalAgreement,
+  type LocalResearchJournalReading,
+} from "./localResearchJournal.js";
+
+const TERMINAL_STATUSES = [
+  "artifact_created",
+  "no_action",
+  "quarantined",
+  "budget_exhausted",
+  "cancelled",
+  "failed",
+] as const;
+
+const PERSON_PLATFORMS = ["douyin", "tiktok", "weibo", "threads"] as const;
+const PERSON_IDENTITY_STATUSES = ["possible_match", "ambiguous"] as const;
+const PERSON_CLUE_KINDS = [
+  "display_name",
+  "handle",
+  "profile_url",
+  "platform",
+] as const;
+const PERSON_CLUE_OBSERVATION_STATUS =
+  "unreviewed_screenshot_observation" as const;
+const PERSON_EPISTEMIC_STATUSES = [
+  "provider_observation",
+  "agent_inference",
+] as const;
+const PERSON_NO_ACTION_REASON_CODES = [
+  "NO_VISIBLE_IDENTITY_CLUE",
+  "AMBIGUOUS_IDENTITY_CLUE",
+  "NO_PUBLIC_PROFILE_MATCH",
+  "UNTRUSTED_INSTRUCTION",
+  "PROHIBITED_PERSON_ASSESSMENT",
+  "PERSON_RESEARCH_UNAVAILABLE",
+] as const;
 
 export interface LocalPersonResearchRunRecord {
   scope: AgentPersonResearchScope;
@@ -60,29 +114,523 @@ function stableRunIdentity(record: LocalPersonResearchRunRecord) {
   });
 }
 
-async function readJson<T>(path: string): Promise<T | null> {
-  try {
-    return JSON.parse(await fs.readFile(path, "utf8")) as T;
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return null;
+function parsePlatforms(
+  value: unknown,
+  kind: string,
+): AgentPersonResearchPlatform[] {
+  if (!Array.isArray(value)) throw localRecordCorruptError(kind);
+  const platforms: AgentPersonResearchPlatform[] = [];
+  for (const platform of value) {
+    if (!isLocalRecordEnum(platform, PERSON_PLATFORMS)) {
+      throw localRecordCorruptError(kind);
     }
-    throw error;
+    platforms.push(platform);
   }
+  return platforms;
 }
 
-async function atomicJson(path: string, value: unknown): Promise<void> {
-  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await fs.rename(temporary, path);
-  await fs.chmod(path, 0o600);
+function parseAuthorization(
+  value: Record<string, unknown>,
+  kind: string,
+): AgentPersonResearchAuthorization {
+  const maximumProviderCalls = value.maximumProviderCalls;
+  const maximumResultsPerCall = value.maximumResultsPerCall;
+  if (
+    value.purpose !== "person_public_profile_research" ||
+    value.accessMode !== "visible_screenshot_identity_clues" ||
+    typeof maximumProviderCalls !== "number" ||
+    typeof maximumResultsPerCall !== "number"
+  ) {
+    throw localRecordCorruptError(kind);
+  }
+  return {
+    purpose: "person_public_profile_research",
+    accessMode: "visible_screenshot_identity_clues",
+    allowedPlatforms: parsePlatforms(value.allowedPlatforms, kind),
+    maximumProviderCalls,
+    maximumResultsPerCall,
+  };
+}
+
+function parseManifestItem(
+  value: unknown,
+  kind: string,
+): AgentInputArtifactManifestItem {
+  if (
+    !isLocalRecordObject(value) ||
+    typeof value.artifactID !== "string" ||
+    value.artifactID.length < 1 ||
+    !isLocalRecordEnum(value.kind, ["text", "image"] as const) ||
+    typeof value.mimeType !== "string" ||
+    typeof value.byteSize !== "number" ||
+    !isLocalRecordFingerprint(value.contentHash)
+  ) {
+    throw localRecordCorruptError(kind);
+  }
+  return {
+    artifactID: value.artifactID,
+    kind: value.kind,
+    mimeType: value.mimeType,
+    byteSize: value.byteSize,
+    contentHash: value.contentHash,
+  };
+}
+
+function parseManifest(
+  value: unknown,
+  kind: string,
+): readonly AgentInputArtifactManifestItem[] {
+  if (!Array.isArray(value)) throw localRecordCorruptError(kind);
+  return value.map((item) => parseManifestItem(item, kind));
+}
+
+function parseProfileResult(value: unknown): AgentPublicProfileResult {
+  if (
+    !isLocalRecordObject(value) ||
+    !isLocalRecordFingerprint(value.resultID) ||
+    !isLocalRecordEnum(value.platform, PERSON_PLATFORMS) ||
+    typeof value.providerID !== "string" ||
+    (value.providerRequestID !== null &&
+      typeof value.providerRequestID !== "string") ||
+    typeof value.profileID !== "string" ||
+    typeof value.displayName !== "string" ||
+    (value.handle !== null && typeof value.handle !== "string") ||
+    (value.biography !== null && typeof value.biography !== "string") ||
+    typeof value.profileUrl !== "string" ||
+    (value.avatarUrl !== null && typeof value.avatarUrl !== "string") ||
+    (value.verified !== null && typeof value.verified !== "boolean") ||
+    !isLocalRecordFingerprint(value.contentHash) ||
+    !isLocalRecordTimestamp(value.retrievedAt)
+  ) {
+    throw localRecordCorruptError("checkpoint");
+  }
+  return {
+    resultID: value.resultID,
+    platform: value.platform,
+    providerID: value.providerID,
+    providerRequestID: value.providerRequestID,
+    profileID: value.profileID,
+    displayName: value.displayName,
+    handle: value.handle,
+    biography: value.biography,
+    profileUrl: value.profileUrl,
+    avatarUrl: value.avatarUrl,
+    verified: value.verified,
+    contentHash: value.contentHash,
+    retrievedAt: value.retrievedAt,
+  };
+}
+
+function parseQueryObservation(
+  value: unknown,
+): AgentPersonResearchCheckpoint["queryObservations"][number] {
+  if (
+    !isLocalRecordObject(value) ||
+    !isLocalRecordEnum(value.platform, PERSON_PLATFORMS) ||
+    typeof value.query !== "string" ||
+    typeof value.sourceArtifactID !== "string" ||
+    value.sourceArtifactID.length < 1 ||
+    value.observationStatus !== PERSON_CLUE_OBSERVATION_STATUS
+  ) {
+    throw localRecordCorruptError("checkpoint");
+  }
+  return {
+    platform: value.platform,
+    query: value.query,
+    sourceArtifactID: value.sourceArtifactID,
+    observationStatus: "unreviewed_screenshot_observation",
+  };
+}
+
+function parseObservedClue(
+  value: unknown,
+): AgentPersonResearchArtifactCandidate["observedClues"][number] {
+  if (
+    !isLocalRecordObject(value) ||
+    !isLocalRecordEnum(value.kind, PERSON_CLUE_KINDS) ||
+    typeof value.value !== "string" ||
+    typeof value.sourceArtifactID !== "string" ||
+    value.sourceArtifactID.length < 1 ||
+    value.observationStatus !== PERSON_CLUE_OBSERVATION_STATUS
+  ) {
+    throw localRecordCorruptError("artifact");
+  }
+  return {
+    kind: value.kind,
+    value: value.value,
+    sourceArtifactID: value.sourceArtifactID,
+    observationStatus: "unreviewed_screenshot_observation",
+  };
+}
+
+function parseCandidateRef(
+  value: unknown,
+): AgentPersonResearchArtifactCandidate["candidates"][number] {
+  if (
+    !isLocalRecordObject(value) ||
+    !isLocalRecordFingerprint(value.resultID) ||
+    typeof value.matchBasis !== "string"
+  ) {
+    throw localRecordCorruptError("artifact");
+  }
+  return { resultID: value.resultID, matchBasis: value.matchBasis };
+}
+
+function parsePersonClaim(
+  value: unknown,
+): AgentPersonResearchArtifactCandidate["claims"][number] {
+  if (
+    !isLocalRecordObject(value) ||
+    typeof value.statement !== "string" ||
+    !isLocalRecordEnum(value.epistemicStatus, PERSON_EPISTEMIC_STATUSES) ||
+    !isLocalRecordFingerprintArray(value.sourceRefs)
+  ) {
+    throw localRecordCorruptError("artifact");
+  }
+  return {
+    statement: value.statement,
+    epistemicStatus: value.epistemicStatus,
+    sourceRefs: value.sourceRefs,
+  };
+}
+
+function parsePersonSource(
+  value: unknown,
+): AgentPersonResearchArtifactCandidate["sources"][number] {
+  if (
+    !isLocalRecordObject(value) ||
+    !isLocalRecordFingerprint(value.resultID) ||
+    !isLocalRecordEnum(value.platform, PERSON_PLATFORMS) ||
+    typeof value.profileUrl !== "string" ||
+    typeof value.displayName !== "string" ||
+    (value.handle !== null && typeof value.handle !== "string") ||
+    (value.biography !== null && typeof value.biography !== "string") ||
+    (value.avatarUrl !== null && typeof value.avatarUrl !== "string") ||
+    (value.verified !== null && typeof value.verified !== "boolean") ||
+    !isLocalRecordFingerprint(value.contentHash) ||
+    !isLocalRecordTimestamp(value.retrievedAt) ||
+    typeof value.providerID !== "string" ||
+    (value.providerRequestID !== null &&
+      typeof value.providerRequestID !== "string")
+  ) {
+    throw localRecordCorruptError("artifact");
+  }
+  return {
+    resultID: value.resultID,
+    platform: value.platform,
+    profileUrl: value.profileUrl,
+    displayName: value.displayName,
+    handle: value.handle,
+    biography: value.biography,
+    avatarUrl: value.avatarUrl,
+    verified: value.verified,
+    contentHash: value.contentHash,
+    retrievedAt: value.retrievedAt,
+    providerID: value.providerID,
+    providerRequestID: value.providerRequestID,
+  };
+}
+
+function parsePersonArtifactCandidate(
+  value: unknown,
+): AgentPersonResearchArtifactCandidate {
+  if (!isLocalRecordObject(value)) throw localRecordCorruptError("artifact");
+  const observedClues = value.observedClues;
+  const candidates = value.candidates;
+  const claims = value.claims;
+  const sources = value.sources;
+  if (
+    typeof value.title !== "string" ||
+    typeof value.summary !== "string" ||
+    typeof value.limitations !== "string" ||
+    !isLocalRecordEnum(value.identityStatus, PERSON_IDENTITY_STATUSES) ||
+    !Array.isArray(observedClues) ||
+    !Array.isArray(candidates) ||
+    !Array.isArray(claims) ||
+    !Array.isArray(sources)
+  ) {
+    throw localRecordCorruptError("artifact");
+  }
+  return {
+    title: value.title,
+    summary: value.summary,
+    limitations: value.limitations,
+    identityStatus: value.identityStatus,
+    observedClues: observedClues.map(parseObservedClue),
+    candidates: candidates.map(parseCandidateRef),
+    claims: claims.map(parsePersonClaim),
+    sources: sources.map(parsePersonSource),
+  };
+}
+
+function parsePersonNoActionCandidate(
+  value: unknown,
+): AgentPersonResearchNoActionCandidate {
+  if (
+    !isLocalRecordObject(value) ||
+    !isLocalRecordEnum(value.reasonCode, PERSON_NO_ACTION_REASON_CODES) ||
+    typeof value.reason !== "string"
+  ) {
+    throw localRecordCorruptError("no-action");
+  }
+  return { reasonCode: value.reasonCode, reason: value.reason };
+}
+
+function parseRunRecord(
+  runID: string,
+  value: unknown,
+): LocalPersonResearchRunRecord {
+  if (!isLocalRecordObject(value)) throw localRecordCorruptError("run");
+  const scope = value.scope;
+  const budget = value.budget;
+  if (
+    !isLocalRecordObject(scope) ||
+    scope.runID !== runID ||
+    typeof scope.objective !== "string" ||
+    typeof scope.providerID !== "string"
+  ) {
+    throw localRecordCorruptError("run");
+  }
+  const authorization = scope.authorization;
+  if (!isLocalRecordObject(authorization)) {
+    throw localRecordCorruptError("run");
+  }
+  const parsedAuthorization = parseAuthorization(authorization, "run");
+  if (
+    !isLocalRecordObject(budget) ||
+    typeof budget.maxTurns !== "number" ||
+    typeof budget.maxToolCalls !== "number" ||
+    typeof budget.maxDurationMs !== "number" ||
+    typeof budget.maxTaskTokens !== "number" ||
+    typeof budget.maxEstimatedUsd !== "number"
+  ) {
+    throw localRecordCorruptError("run");
+  }
+  const modelProviderID = value.modelProviderID;
+  const model = value.model;
+  const sdkVersion = value.sdkVersion;
+  const startedAt = value.startedAt;
+  if (
+    typeof modelProviderID !== "string" ||
+    typeof model !== "string" ||
+    typeof sdkVersion !== "string" ||
+    !isLocalRecordTimestamp(startedAt)
+  ) {
+    throw localRecordCorruptError("run");
+  }
+  return {
+    scope: {
+      runID,
+      objective: scope.objective,
+      providerID: scope.providerID,
+      authorization: parsedAuthorization,
+      inputArtifactManifest: parseManifest(scope.inputArtifactManifest, "run"),
+    },
+    budget: {
+      maxTurns: budget.maxTurns,
+      maxToolCalls: budget.maxToolCalls,
+      maxDurationMs: budget.maxDurationMs,
+      maxTaskTokens: budget.maxTaskTokens,
+      maxEstimatedUsd: budget.maxEstimatedUsd,
+    },
+    modelProviderID,
+    model,
+    sdkVersion,
+    startedAt,
+  };
+}
+
+function parseTerminalReceipt(
+  runID: string,
+  value: unknown,
+): AgentPersonResearchTerminalReceipt {
+  if (!isLocalRecordObject(value)) throw localRecordCorruptError("terminal");
+  const status = value.status;
+  const reasonCode = value.reasonCode;
+  const artifactID = value.artifactID;
+  const noActionID = value.noActionID;
+  const candidateFingerprint = value.candidateFingerprint;
+  const externalEffects = value.externalEffects;
+  const permissionDenials = value.permissionDenials;
+  const providerSessionID = value.providerSessionID;
+  const completedAt = value.completedAt;
+  const usage = value.usage;
+  if (
+    value.runID !== runID ||
+    !isLocalRecordEnum(status, TERMINAL_STATUSES) ||
+    typeof reasonCode !== "string" ||
+    (artifactID !== null && !isLocalRecordID(artifactID)) ||
+    (noActionID !== null && !isLocalRecordID(noActionID)) ||
+    (candidateFingerprint !== null &&
+      !isLocalRecordFingerprint(candidateFingerprint)) ||
+    !Array.isArray(externalEffects) ||
+    externalEffects.length !== 0 ||
+    !Array.isArray(permissionDenials) ||
+    !permissionDenials.every((denial) => typeof denial === "string") ||
+    (providerSessionID !== null && typeof providerSessionID !== "string") ||
+    !isLocalRecordTimestamp(completedAt) ||
+    !isLocalRecordObject(usage)
+  ) {
+    throw localRecordCorruptError("terminal");
+  }
+  // Status/ID relationships exactly as the runners produce them: a successful
+  // artifact/no-action carries its committed ID and candidate fingerprint and
+  // no competing output ID; other statuses claim no committed output ID while
+  // a candidate fingerprint may legitimately predate a failure.
+  if (status === "artifact_created") {
+    if (
+      artifactID === null ||
+      noActionID !== null ||
+      candidateFingerprint === null
+    ) {
+      throw localRecordCorruptError("terminal");
+    }
+  } else if (status === "no_action") {
+    if (
+      noActionID === null ||
+      artifactID !== null ||
+      candidateFingerprint === null
+    ) {
+      throw localRecordCorruptError("terminal");
+    }
+  } else if (artifactID !== null || noActionID !== null) {
+    throw localRecordCorruptError("terminal");
+  }
+  const inputTokens = usage.inputTokens;
+  const outputTokens = usage.outputTokens;
+  const totalTokens = usage.totalTokens;
+  const estimatedUsd = usage.estimatedUsd;
+  const turns = usage.turns;
+  const toolCalls = usage.toolCalls;
+  const durationMs = usage.durationMs;
+  if (
+    (inputTokens !== null && typeof inputTokens !== "number") ||
+    (outputTokens !== null && typeof outputTokens !== "number") ||
+    (totalTokens !== null && typeof totalTokens !== "number") ||
+    (estimatedUsd !== null && typeof estimatedUsd !== "number") ||
+    (turns !== null && typeof turns !== "number") ||
+    typeof toolCalls !== "number" ||
+    typeof durationMs !== "number"
+  ) {
+    throw localRecordCorruptError("terminal");
+  }
+  return {
+    runID,
+    status,
+    reasonCode,
+    artifactID,
+    noActionID,
+    candidateFingerprint,
+    externalEffects: [],
+    usage: {
+      inputTokens,
+      outputTokens,
+      totalTokens,
+      estimatedUsd,
+      turns,
+      toolCalls,
+      durationMs,
+    },
+    permissionDenials: [...permissionDenials] as string[],
+    providerSessionID,
+    completedAt,
+  };
+}
+
+function parseCheckpoint(
+  value: unknown,
+): AgentPersonResearchCheckpoint {
+  if (!isLocalRecordObject(value)) throw localRecordCorruptError("checkpoint");
+  const profileResults = value.profileResults;
+  const queryObservations = value.queryObservations;
+  const providerCalls = value.providerCalls;
+  const toolCalls = value.toolCalls;
+  const sequence = value.sequence;
+  if (
+    !Array.isArray(profileResults) ||
+    !Array.isArray(queryObservations) ||
+    !isLocalRecordCounter(providerCalls) ||
+    !isLocalRecordCounter(toolCalls) ||
+    !isLocalRecordCounter(sequence)
+  ) {
+    throw localRecordCorruptError("checkpoint");
+  }
+  return {
+    profileResults: profileResults.map(parseProfileResult),
+    queryObservations: queryObservations.map(parseQueryObservation),
+    providerCalls,
+    toolCalls,
+    sequence,
+  };
+}
+
+function parseArtifactRecord(
+  runID: string,
+  candidateFingerprint: string,
+  value: unknown,
+): LocalPersonResearchArtifactRecord {
+  if (!isLocalRecordObject(value)) throw localRecordCorruptError("artifact");
+  const artifactID = value.artifactID;
+  const objective = value.objective;
+  const authorization = value.authorization;
+  const candidate = value.candidate;
+  const createdAt = value.createdAt;
+  if (
+    !isLocalRecordID(artifactID) ||
+    value.runID !== runID ||
+    value.status !== "draft" ||
+    value.identityAuthority !== "unconfirmed" ||
+    value.publicationAuthority !== "none" ||
+    value.externalEffectAuthority !== "none" ||
+    value.candidateFingerprint !== candidateFingerprint ||
+    typeof objective !== "string" ||
+    !isLocalRecordObject(authorization) ||
+    !isLocalRecordObject(candidate) ||
+    !isLocalRecordTimestamp(createdAt)
+  ) {
+    throw localRecordCorruptError("artifact");
+  }
+  return {
+    artifactID,
+    runID,
+    status: "draft",
+    identityAuthority: "unconfirmed",
+    publicationAuthority: "none",
+    externalEffectAuthority: "none",
+    candidateFingerprint,
+    objective,
+    authorization: parseAuthorization(authorization, "artifact"),
+    inputArtifactManifest: parseManifest(value.inputArtifactManifest, "artifact"),
+    candidate: parsePersonArtifactCandidate(candidate),
+    createdAt,
+  };
+}
+
+function parseNoActionRecord(
+  runID: string,
+  candidateFingerprint: string,
+  value: unknown,
+): LocalPersonResearchNoActionRecord {
+  if (!isLocalRecordObject(value)) throw localRecordCorruptError("no-action");
+  const noActionID = value.noActionID;
+  const candidate = value.candidate;
+  const createdAt = value.createdAt;
+  if (
+    !isLocalRecordID(noActionID) ||
+    value.runID !== runID ||
+    value.candidateFingerprint !== candidateFingerprint ||
+    !isLocalRecordObject(candidate) ||
+    !isLocalRecordTimestamp(createdAt)
+  ) {
+    throw localRecordCorruptError("no-action");
+  }
+  return {
+    noActionID,
+    runID,
+    candidateFingerprint,
+    candidate: parsePersonNoActionCandidate(candidate),
+    createdAt,
+  };
 }
 
 export class LocalPersonResearchStore implements AgentPersonResearchJournal {
@@ -91,7 +639,7 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
   constructor(readonly stateRoot: string) {}
 
   private runDirectory(runID: string): string {
-    if (!RUN_ID.test(runID)) throw new Error("The local Run ID must be a UUID.");
+    assertLocalRunID(runID);
     return join(this.stateRoot, "person-runs", runID);
   }
 
@@ -111,29 +659,96 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
 
   async start(input: LocalPersonResearchRunRecord): Promise<void> {
     await this.ensureRunDirectories(input.scope.runID);
-    const path = this.path(input.scope.runID, "run.json");
-    const existing = await readJson<LocalPersonResearchRunRecord>(path);
-    if (existing) {
-      if (stableRunIdentity(existing) !== stableRunIdentity(input)) {
-        throw new Error(
-          "The Run ID already belongs to a different image, objective, authorization, provider, model, or budget.",
-        );
-      }
-    } else {
-      await atomicJson(path, input);
-    }
-    const checkpoint = await this.loadCheckpoint(input.scope.runID);
-    this.lastSequence.set(input.scope.runID, checkpoint?.sequence ?? 0);
+    const requested = parseRunRecord(input.scope.runID, input);
+    // Recorded evidence keeps its ORIGINAL immutable Run metadata: an
+    // orphaned checkpoint, journal, or terminal receipt never receives
+    // replacement metadata published from this incoming request.
+    await this.requireRunMetadata(input.scope.runID);
+    await publishImmutableJsonRecord(
+      this.path(input.scope.runID, "run.json"),
+      input,
+      (value) => {
+        const existing = parseRunRecord(input.scope.runID, value);
+        if (stableRunIdentity(existing) !== stableRunIdentity(requested)) {
+          throw new Error(
+            "The Run ID already belongs to a different image, objective, authorization, provider, model, or budget.",
+          );
+        }
+        return existing;
+      },
+    );
+    // Recovery validation runs before any model or gateway execution: an
+    // interrupted publication fails closed here instead of resuming from
+    // invented or partially journaled history.
+    await this.loadCheckpoint(input.scope.runID);
   }
 
-  loadCheckpoint(runID: string) {
-    return readJson<AgentPersonResearchCheckpoint>(
-      this.path(runID, "checkpoint.json"),
+  /**
+   * Reads the Run's journal and cross-checks it against the persisted
+   * terminal receipt. Called before recovery decisions so inconsistent or
+   * incomplete local evidence raises a fixed content-free error instead of
+   * being resumed or replayed.
+   */
+  private async validatedJournalEvidence(
+    runID: string,
+    checkpointSequence: number | null,
+  ): Promise<LocalResearchJournalReading> {
+    const receipt = await readPersistedJsonRecord(
+      this.path(runID, "terminal.json"),
+      (value) => parseTerminalReceipt(runID, value),
     );
+    const journal = await readLocalResearchJournal(
+      runID,
+      this.path(runID, "events.jsonl"),
+    );
+    await this.requireRunMetadata(runID);
+    validateLocalResearchJournalAgreement({
+      journal,
+      checkpointSequence,
+      receipt: receipt
+        ? {
+            status: receipt.status,
+            outputFingerprint: fingerprint(receipt),
+          }
+        : null,
+    });
+    return journal;
+  }
+
+  /**
+   * Recorded evidence must retain its original immutable Run record. Wired
+   * into every recovery entry point (start before publication,
+   * loadCheckpoint, readTerminal) so direct exported store use is covered.
+   */
+  private requireRunMetadata(runID: string): Promise<void> {
+    return requireLocalRunMetadataForEvidence({
+      runID,
+      runRecordPath: this.path(runID, "run.json"),
+      checkpointPath: this.path(runID, "checkpoint.json"),
+      journalPath: this.path(runID, "events.jsonl"),
+      terminalPath: this.path(runID, "terminal.json"),
+      parseRunRecord: (value) => parseRunRecord(runID, value),
+    });
+  }
+
+  async loadCheckpoint(runID: string) {
+    const checkpoint = await readPersistedJsonRecord(
+      this.path(runID, "checkpoint.json"),
+      parseCheckpoint,
+    );
+    const journal = await this.validatedJournalEvidence(
+      runID,
+      checkpoint?.sequence ?? 0,
+    );
+    // The validated journal, not the checkpoint, owns the next journal
+    // position: a checkpoint can legitimately trail a complete terminal.
+    this.lastSequence.set(runID, journal.lastSequence);
+    return checkpoint;
   }
 
   saveCheckpoint(runID: string, checkpoint: AgentPersonResearchCheckpoint) {
-    return atomicJson(this.path(runID, "checkpoint.json"), checkpoint);
+    parseCheckpoint(checkpoint);
+    return replaceMutableJsonRecord(this.path(runID, "checkpoint.json"), checkpoint);
   }
 
   async append(event: AgentJournalEvent): Promise<void> {
@@ -160,27 +775,48 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
   }
 
   async complete(receipt: AgentPersonResearchTerminalReceipt) {
-    const path = this.path(receipt.runID, "terminal.json");
-    const existing = await readJson<AgentPersonResearchTerminalReceipt>(path);
-    if (existing) {
-      if (fingerprint(existing) !== fingerprint(receipt)) {
-        throw new Error("The Run already has a different terminal receipt.");
-      }
-      return existing;
-    }
-    await atomicJson(path, receipt);
-    return receipt;
+    const requested = parseTerminalReceipt(receipt.runID, receipt);
+    const publication = await publishImmutableJsonRecord(
+      this.path(receipt.runID, "terminal.json"),
+      receipt,
+      (value) => {
+        const existing = parseTerminalReceipt(receipt.runID, value);
+        if (fingerprint(existing) !== fingerprint(requested)) {
+          throw new Error("The Run already has a different terminal receipt.");
+        }
+        return existing;
+      },
+    );
+    return publication.record;
   }
 
-  readTerminal(runID: string) {
-    return readJson<AgentPersonResearchTerminalReceipt>(
+  async readTerminal(runID: string) {
+    const receipt = await readPersistedJsonRecord(
       this.path(runID, "terminal.json"),
+      (value) => parseTerminalReceipt(runID, value),
     );
+    if (receipt !== null) {
+      // Complete terminal evidence is self-contained: the receipt must carry
+      // its matching final terminal event before it can be replayed as
+      // success, and the checkpoint offset is not consulted because the
+      // producers legitimately publish terminal checkpoints at different
+      // offsets.
+      await this.validatedJournalEvidence(runID, null);
+      return receipt;
+    }
+    // Nonterminal state must already agree with its checkpoint before the
+    // absent terminal is reported to a recovery decision.
+    const checkpoint = await readPersistedJsonRecord(
+      this.path(runID, "checkpoint.json"),
+      parseCheckpoint,
+    );
+    await this.validatedJournalEvidence(runID, checkpoint?.sequence ?? 0);
+    return null;
   }
 
   readRun(runID: string) {
-    return readJson<LocalPersonResearchRunRecord>(
-      this.path(runID, "run.json"),
+    return readPersistedJsonRecord(this.path(runID, "run.json"), (value) =>
+      parseRunRecord(runID, value),
     );
   }
 
@@ -189,19 +825,10 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
     candidate: AgentPersonResearchArtifactCandidate,
     candidateFingerprint: string,
   ) {
-    if (!FINGERPRINT.test(candidateFingerprint)) {
+    if (!isLocalRecordFingerprint(candidateFingerprint)) {
       throw new Error("The artifact fingerprint is invalid.");
     }
-    const path = this.artifactPath(scope.runID, candidateFingerprint);
-    const existing = await readJson<{ artifactID: string }>(path);
-    if (existing) {
-      return {
-        artifactID: existing.artifactID,
-        status: "draft" as const,
-        replayed: true,
-      };
-    }
-    const artifact = {
+    const record: LocalPersonResearchArtifactRecord = {
       artifactID: randomUUID(),
       runID: scope.runID,
       status: "draft",
@@ -215,11 +842,40 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
       candidate,
       createdAt: new Date().toISOString(),
     };
-    await atomicJson(path, artifact);
+    const requested = parseArtifactRecord(
+      scope.runID,
+      candidateFingerprint,
+      record,
+    );
+    const publication = await publishImmutableJsonRecord(
+      this.artifactPath(scope.runID, candidateFingerprint),
+      record,
+      (value) => {
+        const existing = parseArtifactRecord(
+          scope.runID,
+          candidateFingerprint,
+          value,
+        );
+        if (
+          existing.objective !== requested.objective ||
+          fingerprint(existing.authorization) !==
+            fingerprint(requested.authorization) ||
+          fingerprint(existing.inputArtifactManifest) !==
+            fingerprint(requested.inputArtifactManifest) ||
+          fingerprint(existing.candidate) !== fingerprint(requested.candidate)
+        ) {
+          throw new Error(
+            "The persisted person-research artifact conflicts with the requested candidate.",
+          );
+        }
+        return existing;
+      },
+    );
     return {
-      artifactID: artifact.artifactID,
+      artifactID: publication.record.artifactID,
       status: "draft" as const,
-      replayed: false,
+      replayed: publication.replayed,
+      createdAt: publication.record.createdAt,
     };
   }
 
@@ -228,29 +884,47 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
     candidate: AgentPersonResearchNoActionCandidate,
     candidateFingerprint: string,
   ) {
-    if (!FINGERPRINT.test(candidateFingerprint)) {
+    if (!isLocalRecordFingerprint(candidateFingerprint)) {
       throw new Error("The no-action fingerprint is invalid.");
     }
-    const path = join(
-      this.runDirectory(scope.runID),
-      "no-actions",
-      `${candidateFingerprint}.json`,
-    );
-    const existing = await readJson<{ noActionID: string }>(path);
-    if (existing) return { noActionID: existing.noActionID, replayed: true };
-    const noAction = {
+    const record: LocalPersonResearchNoActionRecord = {
       noActionID: randomUUID(),
       runID: scope.runID,
       candidateFingerprint,
       candidate,
       createdAt: new Date().toISOString(),
     };
-    await atomicJson(path, noAction);
-    return { noActionID: noAction.noActionID, replayed: false };
+    const requested = parseNoActionRecord(
+      scope.runID,
+      candidateFingerprint,
+      record,
+    );
+    const publication = await publishImmutableJsonRecord(
+      this.noActionPath(scope.runID, candidateFingerprint),
+      record,
+      (value) => {
+        const existing = parseNoActionRecord(
+          scope.runID,
+          candidateFingerprint,
+          value,
+        );
+        if (fingerprint(existing.candidate) !== fingerprint(requested.candidate)) {
+          throw new Error(
+            "The persisted person-research no-action record conflicts with the requested candidate.",
+          );
+        }
+        return existing;
+      },
+    );
+    return {
+      noActionID: publication.record.noActionID,
+      replayed: publication.replayed,
+      createdAt: publication.record.createdAt,
+    };
   }
 
   artifactPath(runID: string, candidateFingerprint: string): string {
-    if (!FINGERPRINT.test(candidateFingerprint)) {
+    if (!isLocalRecordFingerprint(candidateFingerprint)) {
       throw new Error("The artifact fingerprint is invalid.");
     }
     return join(
@@ -261,7 +935,7 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
   }
 
   noActionPath(runID: string, candidateFingerprint: string): string {
-    if (!FINGERPRINT.test(candidateFingerprint)) {
+    if (!isLocalRecordFingerprint(candidateFingerprint)) {
       throw new Error("The no-action fingerprint is invalid.");
     }
     return join(
@@ -272,26 +946,32 @@ export class LocalPersonResearchStore implements AgentPersonResearchJournal {
   }
 
   readArtifact(runID: string, candidateFingerprint: string) {
-    return readJson<LocalPersonResearchArtifactRecord>(
+    return readPersistedJsonRecord(
       this.artifactPath(runID, candidateFingerprint),
+      (value) => parseArtifactRecord(runID, candidateFingerprint, value),
     );
   }
 
   readNoAction(runID: string, candidateFingerprint: string) {
-    return readJson<LocalPersonResearchNoActionRecord>(
+    return readPersistedJsonRecord(
       this.noActionPath(runID, candidateFingerprint),
+      (value) => parseNoActionRecord(runID, candidateFingerprint, value),
     );
   }
 
   async artifactExists(runID: string, candidateFingerprint: string) {
     try {
-      await fs.access(
-        this.artifactPath(runID, candidateFingerprint),
-        constants.R_OK,
-      );
+      await fs.access(this.artifactPath(runID, candidateFingerprint), constants.R_OK);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        (error as NodeJS.ErrnoException).code === "ENOENT"
+      ) {
+        return false;
+      }
+      throw error;
     }
   }
 }

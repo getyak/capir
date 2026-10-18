@@ -53,18 +53,10 @@ const redactedDraft: MeetingDraftRecord = {
 };
 
 describe("meeting calendar projection", () => {
-  it("remounts local review and mutation state when the selected draft changes", () => {
-    const source = readFileSync(
-      resolve(import.meta.dirname, "../components/workspace-meetings.tsx"),
-      "utf8",
-    );
-    expect(source).toContain("<CalendarDraftReview");
-    expect(source).toContain("key={selected.id}");
-    expect(source).toContain("draftId: selected.id");
-    expect(source).toContain("revision: selected.revision");
-    expect(source).toContain("{!error ? (");
-    expect(source).toContain("<MeetingDraftPendingBoundary");
-    expect(source).toContain('draftId={selected.id}\n                    expiresAt={selected.expires_at}\n                    expiresLabel={meetingDraftExpiryLabel(selected)}\n                    key={selected.id}\n                    revision={selected.revision}\n                    returnHref={parameters({ month, day })}');
+  // Live review/persistence, conflict and handoff source invariants. Draft
+  // selection identity and state remount behavior are covered by real DOM
+  // tests in components/time-meeting-inspector.test.ts.
+  it("keeps live review persistence, conflict and handoff behavior in place", () => {
     const actionSource = readFileSync(
       resolve(import.meta.dirname, "../components/meeting-draft-actions.tsx"),
       "utf8",
@@ -98,15 +90,6 @@ describe("meeting calendar projection", () => {
     expect(reviewSource).toContain("setTitle(current.title)");
     expect(reviewSource).toContain("setStart(canonicalStart)");
     expect(reviewSource).toContain("setEnd(canonicalEnd)");
-    const gridSource = readFileSync(
-      resolve(import.meta.dirname, "../components/meeting-month-grid.tsx"),
-      "utf8",
-    );
-    expect(gridSource).toContain('role="grid"');
-    expect(gridSource).toContain('role="gridcell"');
-    expect(gridSource).toContain('role="row"');
-    expect(gridSource).toContain('tabIndex={item.date === selectedDay ? 0 : -1}');
-    expect(gridSource).toContain('event.key === "ArrowDown"');
     for (const legacySurface of [
       "../components/relationship-workspace/relationship-agent-panel.tsx",
       "../components/relationship-workspace/relationship-agent-start-panel.tsx",
@@ -145,12 +128,6 @@ describe("meeting calendar projection", () => {
     expect(adapterSource).toContain('"reviewable", 20');
     expect(adapterSource).toContain('"inactive", 1');
     expect(adapterSource).toContain("inactiveTruncated: inactive.truncated");
-    const meetingsSource = readFileSync(
-      resolve(import.meta.dirname, "../components/workspace-meetings.tsx"),
-      "utf8",
-    );
-    expect(meetingsSource).toContain("最近 ${inactive.length} 份草稿已处理或不可用");
-    expect(meetingsSource).toContain("重新读取");
   });
 
   it("validates real dates rather than accepting shape-only values", () => {

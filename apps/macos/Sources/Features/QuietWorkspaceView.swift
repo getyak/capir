@@ -594,7 +594,12 @@ private struct ConnectedQuietWorkspace: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            WorkspaceWebSurface(browser: browser, zoom: zoom)
+            // A covering view leaves WebKit controls reachable by accessibility
+            // and keyboard. Detach only its presentation; browser retains the
+            // same WebView and navigation/session ownership for recovery.
+            if !browser.signedOut && browser.failure == nil {
+                WorkspaceWebSurface(browser: browser, zoom: zoom)
+            }
             if browser.signedOut {
                 // Native signed-out surface only: the Web login page never
                 // paints inside the workspace window.
@@ -711,7 +716,7 @@ private struct FirstRunWindowFit: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async {
             guard let window = view.window else { return }
-            let size = NSSize(width: 480, height: 500)
+            let size = NSSize(width: 720, height: 650)
             window.setContentSize(size)
             window.center()
             window.toolbar = nil
@@ -723,6 +728,7 @@ private struct FirstRunWindowFit: NSViewRepresentable {
 }
 
 struct QuietWorkspaceView: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject private var connection = WorkspaceConnection.shared
     @StateObject private var login = DesktopBrowserLoginCoordinator.shared
     @Environment(\.openSettings) private var openSettings
@@ -742,13 +748,7 @@ struct QuietWorkspaceView: View {
                     }
                 }
         } else {
-            VStack(spacing: 0) {
-                Spacer(minLength: 28)
-                WorkspaceConnectionForm(mode: .firstRun, onConnected: {})
-                    .frame(maxWidth: 400)
-                    .padding(.horizontal, 44)
-                Spacer(minLength: 28)
-            }
+            FirstRunExperience(reduceMotionPreview: model.isReducedMotionPreview)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(TSBrand.canvas)
             .background(FirstRunWindowFit())

@@ -34,7 +34,7 @@ export async function sweepMeetingDraftRetention(
     );
   } catch (error) {
     app.log.warn(
-      { error: error instanceof Error ? error.name : "unknown" },
+      { err: error },
       "meeting draft list snapshot cleanup skipped",
     );
   }
@@ -51,7 +51,7 @@ export async function sweepMeetingDraftRetention(
       ]);
     } catch (error) {
       app.log.warn(
-        { error: error instanceof Error ? error.name : "unknown" },
+        { err: error },
         "meeting draft retention sweep skipped one account",
       );
     }

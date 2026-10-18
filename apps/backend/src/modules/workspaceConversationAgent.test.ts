@@ -1355,6 +1355,7 @@ describe("shared screenshot relationship review", () => {
     );
     const execution = await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
+      messageID: "44444444-4444-4444-8444-444444444444",
       objective: "The user sent one or more images without any accompanying text.",
       sourceText: "",
       contacts: { search, read: vi.fn() },
@@ -1403,6 +1404,7 @@ describe("shared screenshot relationship review", () => {
     let observed: readonly AgentToolResult[] = [];
     await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
+      messageID: "44444444-4444-4444-8444-444444444444",
       objective: "The user sent one or more images without any accompanying text.",
       sourceText: "",
       contacts: { search, read: vi.fn() },
@@ -1451,6 +1453,7 @@ describe("shared screenshot relationship review", () => {
     let observed: readonly AgentToolResult[] = [];
     await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
+      messageID: "44444444-4444-4444-8444-444444444444",
       objective: "The user sent one or more images without any accompanying text.",
       sourceText: "",
       contacts: { search: vi.fn(), read: vi.fn() },
@@ -1498,6 +1501,7 @@ describe("shared screenshot relationship review", () => {
     let observed: readonly AgentToolResult[] = [];
     await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
+      messageID: "44444444-4444-4444-8444-444444444444",
       objective: "The user sent one or more images without any accompanying text.",
       sourceText: "",
       contacts: { search: contactSearch, read: vi.fn() },
@@ -1529,6 +1533,7 @@ describe("shared screenshot relationship review", () => {
     let observed: readonly AgentToolResult[] = [];
     await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId,
+      messageID: "44444444-4444-4444-8444-444444444444",
       objective: "The user sent one or more images without any accompanying text.",
       sourceText: "",
       contacts: { search: vi.fn(), read: vi.fn() },

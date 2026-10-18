@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { authenticatedBackendClient, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
 import { completeLoginMethodChange, startLoginMethodChange } from "@/lib/server/loginMethods";
+import { continuityReturnTo } from "@/lib/login-continuity";
 import {
   LINK_COMPLETE_PATH,
   clearAuthRound,
@@ -18,9 +19,9 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const fail = async (): Promise<never> => {
+const fail = async (tail = ""): Promise<never> => {
   await clearStagedAuth();
-  redirect("/workspace/settings?link=error");
+  redirect(`/workspace/settings?section=account&link=error${tail}`);
 };
 
 /**
@@ -36,25 +37,35 @@ const fail = async (): Promise<never> => {
  */
 export async function GET(): Promise<never> {
   const operation = await readAuthOperation();
-  const proof = await readAuthProof();
+  await readAuthProof();
   const claims = await readPrimaryBackendSessionClaims();
-  if (!operation || !claims) return fail();
+  // GET-141 navigation hints only: the sanitized original callback continues
+  // after a verified link, and a failed link reopens the preselected
+  // connecting panel for a recoverable retry. Hints are never authority.
+  const returnHint = continuityReturnTo(operation?.returnTo);
+  const doneTail = returnHint ? `&returnTo=${encodeURIComponent(returnHint)}` : "";
+  const errorTail =
+    (operation?.intent === "link_provider" && operation.targetProvider
+      ? `&connect=${operation.targetProvider}`
+      : "") + doneTail;
+  if (!operation) return fail();
+  if (!claims) return fail(errorTail);
   // The exact original session must still be the caller's session, and the
   // flow must still be inside its frozen absolute lifetime.
   if (
     sessionFingerprint(claims.backendAccessToken) !== operation.sessionFingerprint ||
     !flowIsLive(operation)
   ) {
-    return fail();
+    return fail(errorTail);
   }
 
-  const client = await authenticatedBackendClient();
-  if (!client) return fail();
   let settings;
   try {
+    const client = await authenticatedBackendClient();
+    if (!client) return fail(errorTail);
     settings = await client.accountSettings();
   } catch {
-    return fail();
+    return fail(errorTail);
   }
   if (
     claims.backendAccountId !== operation.accountId ||
@@ -62,7 +73,7 @@ export async function GET(): Promise<never> {
     settings.workspace.revision !== operation.accountRevision ||
     settings.user.revision !== operation.userRevision
   ) {
-    return fail();
+    return fail(errorTail);
   }
 
   // The just-completed explicit round is the only authority here. Each role's
@@ -108,10 +119,10 @@ export async function GET(): Promise<never> {
         proof: await readAuthProof(recoverySlot),
         role: activeRound?.role === "duplicate" ? "duplicate" : "current",
       });
-      if (!recoveryValidation) return fail();
+      if (!recoveryValidation) return fail(errorTail);
       // The proof stays sealed and one-use; the authenticated recovery flow
       // that requested this reauthentication consumes it next.
-      redirect("/workspace/settings?link=verified");
+      redirect("/workspace/settings?section=account&link=verified");
     }
 
     if (operation.intent === "set_password" || operation.intent === "change_password") {
@@ -137,11 +148,11 @@ export async function GET(): Promise<never> {
         );
         redirect("/workspace/settings/link-complete/password");
       }
-      return fail();
+      return fail(errorTail);
     }
 
     if (operation.intent === "unlink_provider") {
-      if (!operation.attempt && (!reauthProof || !operation.unlinkProvider)) return fail();
+      if (!operation.attempt && (!reauthProof || !operation.unlinkProvider)) return fail(errorTail);
       const attempt = operation.attempt ??
         (await startLoginMethodChange({
           id: randomUUID(),
@@ -157,14 +168,14 @@ export async function GET(): Promise<never> {
       });
       await clearStagedAuth();
       redirect(
-        `/workspace/settings?link=done&method=${encodeURIComponent(operation.unlinkProvider ?? "")}&state=disconnected`,
+        `/workspace/settings?section=account&link=done&method=${encodeURIComponent(operation.unlinkProvider ?? "")}&state=disconnected${doneTail}`,
       );
     }
 
     // link_provider: current-provider proof and new-provider proof are
     // distinct purposes and distinct round trips.
     if (operation.step === "awaiting-reauth") {
-      if (!reauthProof || !operation.targetProvider) return fail();
+      if (!reauthProof || !operation.targetProvider) return fail(errorTail);
       const attempt = await startLoginMethodChange({
         id: randomUUID(),
         intent: "link_provider",
@@ -174,7 +185,7 @@ export async function GET(): Promise<never> {
         expected_user_revision: operation.userRevision,
       });
       const challenge = attempt.provider_challenge;
-      if (!challenge) return fail();
+      if (!challenge) return fail(errorTail);
       // The completed current round is retired here: a delayed error from the
       // finished round can no longer route into this flow. The target round is
       // sealed only by the explicit continue action.
@@ -207,7 +218,7 @@ export async function GET(): Promise<never> {
       targetValidation.round.purpose !== "target" ||
       targetValidation.round.provider !== operation.targetProvider
     ) {
-      return fail();
+      return fail(errorTail);
     }
     const targetProof = {
       identityToken: (await readAuthProof("current"))!.identityToken,
@@ -219,7 +230,7 @@ export async function GET(): Promise<never> {
     });
     await clearStagedAuth();
     redirect(
-      `/workspace/settings?link=done&method=${encodeURIComponent(operation.targetProvider ?? "")}&state=connected`,
+      `/workspace/settings?section=account&link=done&method=${encodeURIComponent(operation.targetProvider ?? "")}&state=connected${doneTail}`,
     );
   } catch (error) {
     if (
@@ -230,7 +241,7 @@ export async function GET(): Promise<never> {
     ) {
       throw error;
     }
-    return fail();
+    return fail(errorTail);
   }
 }
 

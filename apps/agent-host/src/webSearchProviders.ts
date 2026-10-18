@@ -66,11 +66,11 @@ async function searchProviderFetch(
     return await fetcher(input, init);
   } catch (error) {
     if (error instanceof AgentWebSearchProviderError) throw error;
+    // Fixed operation message: an untyped transport exception message is
+    // untrusted and never enters a typed provider error or model context.
     throw new AgentWebSearchProviderError(
       "WEB_SEARCH_PROVIDER_UNAVAILABLE",
-      error instanceof Error
-        ? `The search provider could not be reached: ${error.message}`
-        : "The search provider could not be reached.",
+      "The search provider could not be reached.",
     );
   }
 }

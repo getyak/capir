@@ -107,8 +107,14 @@ async function flush(times = 8): Promise<void> {
 }
 
 beforeEach(() => {
+  // Deterministic date-only clock (PH-16): fixtures keep their original
+  // expiry dates and production expiry enforcement runs unchanged; only Date
+  // is faked so the real setTimeout-based flush and React scheduling stay.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   localStorage.clear();
+  sessionStorage.clear();
   router.push.mockReset();
   fetcher.mockReset();
   fetcher.mockImplementation((url: string) => {
@@ -133,8 +139,10 @@ afterEach(async () => {
   mount?.remove();
   mount = null;
   localStorage.clear();
+  sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 it("composes the transcript: send time, user objective, observed status, execution draft and standalone result", async () => {

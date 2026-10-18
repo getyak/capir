@@ -1,0 +1,1210 @@
+# Project health audit — 2026-10-12
+
+## Completed delivery
+
+- Runtime audit and repair: complete at merged revision
+  `f18eafb232d1da5781ca0632672c2590703bea89`. Codex owns synthesis,
+  independent review and final verification. Nine initial Pi batches were
+  accepted; all subsequent work followed the user's native Codex sub-agent
+  instruction without further Pi/MiMo runs.
+- Scope: correctness, privacy, dependency safety, dead Web code, obsolete
+  scaffolding, knowledge ownership and deployment reliability across 2,882
+  tracked files. No confirmed P0/P1 remains open in the reviewed scope.
+- PRs325–331 are merged, with current-head applicable checks and merge readback.
+  The final runtime revision's CI and Security workflows succeeded on attempt1
+  after merge, including remote iOS smoke (16 success, seven skips).
+- The complete clean-source image and all four resident services passed;
+  independent root readback and one isolated daily workspace passed. The
+  workspace is deleted, credentials removed and owned browser stopped.
+- This archive closes task state. The final documentation PR carries the
+  archive and reusable Web package-manager bootstrap guidance; it changes no
+  runtime source and does not supersede the deployed revision.
+- Remaining limits: two upstream dependency advisories, incomplete Intel/Linux
+  offline graph evidence, and one retained BuildKit probe history are described
+  in final disposition below. No unknown-defect guarantee is made.
+
+All sections preceding **Final runtime acceptance and disposition** retain the
+sequence of audit observations, proposed repairs, failed samples and accepted
+batch receipts. Their frozen file paths, line numbers, pending gates and
+resource readings describe the recorded stage, not today's live state. Final
+acceptance below supersedes pending delivery status without rewriting failure
+evidence.
+
+## Frozen Pi audit observation
+
+- Scope: full tracked repository at frozen base `4ee04b1883b50d7d708e72378a5aa39487a7834f` (audit only; this report is the only created file).
+- Method: inventory and ownership scan of every tracked top-level area, deterministic read-only checks, static scans (imports, references, dependency usage, doc-command consistency), and detailed traces of representative risky entrypoints (Web API admission, unauthenticated model forwarding, backend lifecycle sweeps, lab account deletion, migration runner, CLI auth). No code, test, or documentation was modified; nothing was committed.
+- Honest limit: 2,882 tracked files were inventoried and statically scanned; a minority of risky entrypoints were traced in detail. This report does not claim every line was manually reviewed or that all defects are found. Large files are recorded as debt, not defects.
+
+## Verification performed
+
+| Check | Result |
+| --- | --- |
+| `node scripts/check-docs.mjs` | PASS — 11 canonical documents, 445 Markdown files |
+| `node scripts/wiki.mjs check` | PASS — 4 published pages |
+| `node scripts/check-repository-hygiene.mjs` | PASS |
+| `node scripts/check-brand-assets.mjs` | PASS — 5 SVG, 20 PNG |
+| `node scripts/check-architecture-diagrams.mjs` | PASS — 3 scenes checked (see PA-2026-10-12-08 for the 2 unchecked) |
+| `node scripts/check-architecture-boundaries.mjs` | BLOCKED — requires `typescript` from `node_modules`; dependency installation was out of scope (not a repository defect) |
+| `node --test scripts/wiki.test.mjs` | PASS 8/0 |
+| `node --test scripts/check-repository-hygiene.test.mjs` | PASS 7/0 |
+| `node --test scripts/ai-workspace-entry.test.mjs` | PASS 6/0, 1 skipped (existing skip) |
+| `node --test scripts/evaluation/*.test.mjs` | PASS 6/0 |
+| `node --test scripts/prompts/library.test.mjs` | PASS 5/0 (but never executed by CI — see PA-2026-10-12-07) |
+| Doc-vs-code claim spot checks (session title 32 chars, follow-up region cap 24, seven-/thirty-day retention language, `capir test create --preset daily`, all documented `pnpm`/`scripts/` paths) | consistent |
+| TODO/FIXME/HACK/XXX scan over `apps/`, `packages/`, `scripts/`, `deploy/` | none outside tests |
+
+Skipped honestly: `pnpm install`, typecheck/lint/build and all package test suites (dependency installation prohibited), backend/database runs, service startup, iOS/macOS/native builds (prohibited), evaluation harness runs (private `capir-evals` repository), and any model calls.
+
+## Coverage per owner area
+
+| Owner | Inventory | Static scan | Detailed trace | Unknowns / blockers |
+| --- | --- | --- | --- | --- |
+| Web (`apps/web`, 892 files) | full | imports/references for every `app`/`lib`/`components` file; all 103 API routes auth-pattern screened; dependency usage of all 25 runtime deps | `proxy.ts` admission boundary; `/api/analyze` model-forwarding path; dead-component family incl. mount points (`app/workspace/meetings/page.tsx` → `TimeWorkspace`); `lib/server/ai-analysis.ts` gating | runtime behavior of live pages unverified (no build); single-quote/dynamic-import edge cases mitigated by two independent scans |
+| Backend / domain / migrations (`apps/backend`, `packages/domain`, 478 files) | full | module reference scan (only entrypoints unimported, expected); SQL interpolation sites reviewed | `database/migrate.ts` + manifest integrity; `sourceLifecycle.ts` sweep wiring vs `docs/architecture.md` claims; `agentSessions` retention sweep registration; `labWorkspaces.ts` account-graph deletion (table allowlist, fail-closed schema guard, readback); `harnessSessions.ts` savepoints | no live DB exercised; integration tests not run (deps) |
+| Agent / host (`apps/agent`, `apps/agent-host`, 159 files) | full | package manifests, dependency usage, entrypoint scan | `screenshotPreprocess.ts` region-limit constant vs `docs/agent-system.md`; prompt registry entry (`prompts:sync` wiring) | SDK runtime behavior unverified |
+| CLI (`apps/cli`, 73 files) | full | manifest; `auth.ts`/`authV2.ts` relationship; `browser-runner.ts` spawn wiring | `help.ts` vs `docs/operations/capir-cli.md` examples | binary behavior unverified (no build) |
+| Contracts / shared UI (`packages/contracts`, `packages/workspace-ui`, 54 files) | full | manifest and version-pin consistency (react 19.3.0, typescript6 6.0.2 aligned across workspaces) | `packages/domain` placeholder ownership | — |
+| iOS / macOS / hybrid (`apps/ios`, `apps/macos`, `apps/macos-hybrid`, 473 files) | full | structure, manifest, `scripts/macos/check.sh` test wiring (unittest discover, `node --test` pairs) | `scripts/macos` release-tool reference graph | native builds/tests prohibited; Swift file-level dead-code analysis not possible statically |
+| Scripts / deploy / CI (126 files) | full | every documented and CI-referenced script path exists; CI `node --test` globs mapped to test files | `scripts/ci` scope scripts, `deploy/nango/configure-connect-ui.mjs` patch guard | release workflows not executed |
+| Docs / research / ADRs / `_index` / plans / plugins (371 files) | full | link and wiki checks; documented-command consistency; ADR numbering; plan inventory (220 files) | ADR 0017 duplication; `plugins/talent-signal` vs `.agents/skills` overlap; `evals/README.md` migration record classified as historical | subjective doc-quality beyond consistency not judged |
+
+## Confirmed findings
+
+### PA-2026-10-12-01 — Superseded Web components retained dead, with tests that assert dead source (Medium)
+
+- Owner area: Web. Root cause: superseded implementations were never retired, and their source-assertion tests were left running against unmounted files.
+- Exact paths / verified lines:
+  - `apps/web/components/integrated-workspace-app.tsx:112` (`export function IntegratedWorkspaceApp`) — 1,397 lines, not mounted by any route or component (repo-wide reference search matches only its own file plus two tests).
+  - `apps/web/components/workspace-meetings.tsx:64` (`export function WorkspaceMeetings`) — 239 lines; `app/workspace/meetings/page.tsx:5` mounts `TimeWorkspace` instead; the live meeting surface is `time-workspace.tsx` → `time-meeting-inspector.tsx` → `meeting-month-grid.tsx` / `meeting-draft-actions.tsx`.
+  - `apps/web/components/redline-workbench.tsx:246` — 455 lines, zero references.
+  - `apps/web/components/hero-signal-preview.tsx:27` — 208 lines, zero references.
+  - `apps/web/components/login-portraits.tsx:18` — 55 lines, zero references; builds the avatar path at `login-portraits.tsx:43`.
+  - `apps/web/components/faq-list.tsx:3` — 26 lines, zero references.
+  - `apps/web/lib/candidates.ts:17,33` (`CandidateRecord`, `candidateRecords`) — 216 lines, zero importers (verified by identifier search; `identity_candidates` matches elsewhere are unrelated strings).
+  - Dead-only assets: `apps/web/public/concepts/relationships/avatars/welcome-5.png` … `welcome-11.png` (7 files, ~1.5 MB) referenced only from `login-portraits.tsx:12-15`.
+  - Tests asserting dead source: `apps/web/lib/meeting-calendar.test.ts:56-58` (reads `workspace-meetings.tsx` and asserts strings in it), `apps/web/lib/integrationEvidenceNavigation.test.ts:5-11` (entirely about `integrated-workspace-app.tsx`), `apps/web/lib/workspaceLandmarks.test.ts:19-21` (one `it.each` case on `integrated-workspace-app.tsx`).
+- Triggering scenario: any developer trusts green CI as coverage of the workspace meetings view or integration evidence navigation; or any consumer of `public/concepts/relationships/avatars/` assumes the welcome portraits are live product assets.
+- Consequence: 2,596 dead lines plus ~1.5 MB dead assets drift from live conventions; three test files provide green coverage over unmounted code and will keep passing when the real surface (`time-workspace.tsx`) regresses.
+- Proof/reproduction: two independent reference scans (import-specifier scan with both quote styles, then identifier-name search across `apps/`, including `grep -rln` repo-wide) agree that each listed file is referenced only by itself and the named tests; mount-point trace above shows `workspace-meetings.tsx` is not the meetings page.
+- Proposed small repair: delete the seven files and the seven PNGs; remove the dead-file assertions from the three tests (keep `meeting-calendar.test.ts` assertions on live `meeting-draft-actions.tsx`, or re-point them at `time-meeting-inspector.tsx`); keep `welcome-1…4` iOS portraits untouched (they are separate platform bundles).
+- Relevant tests: `apps/web/lib/meeting-calendar.test.ts`, `apps/web/lib/integrationEvidenceNavigation.test.ts`, `apps/web/lib/workspaceLandmarks.test.ts`; acceptance via `pnpm --filter @talent-signal/web test` and `pnpm --filter @talent-signal/web build`.
+- Native/deployment implications: none for iOS/macOS. Per `AGENTS.md` work-to-proof rule 3 this is a Web runtime change and authorizes/needs a clean-source redeploy of the resident Web service by the delivery owner.
+
+### PA-2026-10-12-02 — Two decision records share stable ID `0017` (Low)
+
+- Owner area: docs/ADRs.
+- Paths / lines: `docs/decisions/0017-desktop-maintenance-controls.md:1` and `docs/decisions/0017-three-scope-memory-review.md:1`.
+- Scenario: prose references such as “ADR 0017” (`docs/architecture.md:26`, `docs/decisions/2026-09-24-one-click-desktop-updates.md:12`, `docs/decisions/0016-shared-desktop-workspace-surface.md:3`) resolve to a number that names two different decisions.
+- Consequence: the stable-ID contract the repository relies on for review and synthesis is ambiguous; a reviewer citing “ADR 0017” can silently mean the other record.
+- Proof: both titles in the files above; `docs/decisions/` numbering runs 0001–0023 plus dated records, with `0024` free.
+- Proposed small repair: renumber `0017-three-scope-memory-review.md` to `0024-three-scope-memory-review.md`, update its inbound links (search `0017-three-scope`), and run `node scripts/check-docs.mjs`.
+- Tests: `node scripts/check-docs.mjs` (link integrity).
+- Native/deployment: none.
+
+### PA-2026-10-12-03 — Duplicate and gapped migration numeric prefixes (Low)
+
+- Owner area: backend/migrations.
+- Paths / lines: `apps/backend/src/database/migration-manifest.json` entries at positions 47–48 (`047_proposed_extracted_text`, `047_screenshot_contact_tasks`), 59–63 (`058_product_run_monitor`, `058_account_management`, `059_lab_account_cleanup`, `058_claude_harness_sessions`, `059_harness_identity_lifecycle`), 77–78 (`073_conversation_queue`, `073_account_onboarding`); sequence jumps `086` → `088` (no `087`).
+- Scenario: a reviewer, incident response, or migration note says “migration 058” or “073”.
+- Consequence: the reference names up to three different migrations. Execution itself is safe (see checked suspicions), but human audit trails become ambiguous.
+- Proof: manifest positions listed above; directory listing shows the same duplicated prefixes and the 087 gap.
+- Proposed small repair (no renaming of applied migrations — see safety note in checked suspicions): add a forward-only uniqueness rule (new migration files must use a unique prefix) as an assertion in `apps/backend/src/database/schema.test.ts` or `scripts/check-repository-hygiene.mjs`, and one line in `apps/backend/AGENTS.md` or the migration manifest noting that the manifest array is the order authority and prefixes are historical labels only.
+- Tests: `node --test scripts/check-repository-hygiene.test.mjs` or backend `schema.test` after the assertion is added.
+- Native/deployment: none (no migration bytes change).
+
+### PA-2026-10-12-04 — Root `task.md` is a stale task artifact outside the documented plan surfaces (Low)
+
+- Owner area: docs/plans hygiene.
+- Path / lines: `task.md:1-12` (224-line slice definition, “Agent-first contact orchestration”, iOS composer outcome).
+- Scenario: a contributor reads the repository root and treats `task.md` as current scope, or replans work already delivered.
+- Consequence: `docs/documentation.md` requires task artifacts to be “consolidated, archived, or removed when the task ends”; `PLANS.md` is the documented plan contract and `plans/` the dated home. The file was added in `aa9e3302` (“Add Agent-first relationship CRM (#107)”) and never revised; its subject area is covered by `plans/2026-08-28-conversation-first-contact-intake.md`, which ends with completed, verified evidence.
+- Proof: `git log --oneline --all -- task.md` shows exactly one commit; no repository reference to `task.md` outside itself.
+- Proposed small repair: merge any still-unachieved outcome (e.g., the physical-device Foundation Models run that `plans/2026-08-28-…:317-320` still lists as a boundary) into the owning dated plan, then delete `task.md`, or move it under `plans/` with its date and completed status.
+- Tests: `node scripts/check-docs.mjs` after the move.
+- Native/deployment: none.
+
+### PA-2026-10-12-05 — `.top1-design/` is unreferenced working scaffolding (Low)
+
+- Owner area: abandoned temporary artifacts.
+- Paths: `.top1-design/` (11 tracked files: `GOAL.md`, `TASTE.md`, `QUALITY_TREE.json`, empty `ledger.jsonl`, `EVALUATION.example.json`, `PAIRS.example.jsonl`, `REFERENCE_CARD.example.json`, two `.gitkeep` directories, `references/rapid-home-sprint.md`).
+- Scenario: the directory is read as an active design-evaluation system (`Status: active` in `GOAL.md:3`) although no script, skill, doc, CI job, or plan references it.
+- Consequence: an empty ledger and example-only inputs present an abandoned workflow as active state; future agents may treat `QUALITY_TREE.json` as binding design policy with no owning process.
+- Proof: repo-wide search for `top1-design`/`top1` outside the directory finds no reference (the single plan-line hit is unrelated text).
+- Proposed small repair: if the design-taste workflow is retired, delete the directory; if it is owned by an external skill, move it out of the tracked tree and record the home in `docs/documentation.md`’s routing. Decision belongs to the design owner.
+- Tests: `node scripts/check-repository-hygiene.mjs`, `node scripts/check-docs.mjs`.
+- Native/deployment: none.
+
+### PA-2026-10-12-06 — Two candidate-signal skills with divergent output contracts and no stated ownership relation (Low)
+
+- Owner area: skills/plugins.
+- Paths / lines: `plugins/talent-signal/skills/analyze-candidate-signal/SKILL.md:1-62` with `references/output-contract.md` (input `authorization`/`messages`, output `prepare_question` proposal or `no_action`) versus `.agents/skills/candidate-signal-analysis/SKILL.md:1-23` with `references/output-contract.md` (output `facts`/`action_cards` (`create_contact`, `update_contact`, `create_meeting`) plus `verdict` `advance|resolve_blocker|at_risk|wait`).
+- Scenario: an agent or reviewer applies the wrong contract to the same input; the plugin contract forbids contact writes while the repo skill contract emits `create_contact`/`update_contact` cards and a momentum verdict.
+- Consequence: two “authoritative” shapes for one claim domain; artifacts validated against one contract are invalid under the other; guardrail wording (e.g., verdict vocabulary) diverges over time.
+- Proof: `plugins/talent-signal/.codex-plugin/plugin.json` describes the plugin as distributable, but nothing in `docs/`, `.agents/`, `.claude/`, `scripts/`, or CI states how the two relate; `docs/documentation.md` demands one authoritative home per claim.
+- Proposed small repair (small): add a short “relationship to `.agents/skills/candidate-signal-analysis`” section to the plugin SKILL (or a pointer in `docs/README.md`) stating which surface owns which contract. Larger unification is a proposal (see batches).
+- Tests: `node scripts/check-docs.mjs` after doc edits.
+- Native/deployment: none.
+
+### PA-2026-10-12-07 — `scripts/prompts/library.test.mjs` is never executed (Low)
+
+- Owner area: scripts/CI.
+- Path: `scripts/prompts/library.test.mjs` (tests `scripts/prompts/library.mjs`, the content-hash/version validation used by `scripts/prompts/opik.mjs` for prompt sync/import).
+- Scenario: a regression in prompt version validation lands; CI stays green.
+- Consequence: the prompt-release path (`prompts:sync`/`prompts:import`, which feeds the bundled prompt contract in ADR 0013) loses its deterministic guard silently.
+- Proof: the file is referenced by no package script and no workflow. `ci.yml` wires tests explicitly (`ci.yml:164-169`, `:203`, `:290-294`, `:343`, `release-macos.yml:66`) and none covers `scripts/prompts/`; the test passes standalone (5/0), confirming it is runnable but unwired.
+- Proposed small repair: add `scripts/prompts/library.test.mjs` to the `ci.yml:164` `node --test` list or to the `secrets:check:test` script list in `package.json:77`.
+- Tests: `node --test scripts/prompts/library.test.mjs`.
+- Native/deployment: none.
+
+### PA-2026-10-12-08 — Agent architecture diagrams: unwired generator, unchecked sources (Low)
+
+- Owner area: docs/automation.
+- Paths / lines: `package.json:18` (`architecture:generate` runs only `scripts/generate-architecture-diagrams.mjs`, which emits `talent-signal-product-architecture.excalidraw` and `talent-signal-system-architecture.excalidraw`, see `scripts/generate-architecture-diagrams.mjs:1458-1462`); `scripts/generate-agent-architecture-diagrams.mjs:1560-1568` emits the three agent scenes but is referenced by no package script, CI job, or doc; `scripts/check-architecture-diagrams.mjs:205,238,288-292` checks only product, system, and `talent-signal-agent-module-blueprint`.
+- Scenario: `docs/talent-signal-agent-control-plane.png` or `talent-signal-agent-runtime-flow.png` (both embedded in `docs/agent-system.md`) drift from their `.excalidraw` sources, or an editor changes those two sources.
+- Consequence: two of five checked-in diagram sources have no deterministic drift check and no documented regeneration path, contradicting the REVIEW.md principle “Are generated views rebuildable?”.
+- Proof: the three `checkScene` config entries above; `architecture:diagrams:check` output lists exactly three scenes; no reference to `generate-agent-architecture-diagrams` anywhere in `package.json`, `.github/`, `docs/`, or `scripts/`.
+- Proposed small repair: add `"architecture:agent-generate": "node scripts/generate-agent-architecture-diagrams.mjs"` (and an `architecture:generate` composition), and extend `check-architecture-diagrams.mjs` with scenes for `talent-signal-agent-control-plane.excalidraw` and `talent-signal-agent-runtime-flow.excalidraw` (phrase/font thresholds per existing pattern).
+- Tests: `node scripts/check-architecture-diagrams.mjs`.
+- Native/deployment: none.
+
+### PA-2026-10-12-09 — Unauthenticated model-forwarding endpoint: production gate and trust inputs undocumented (Low, becomes Medium if the public demo is enabled on a resident deployment)
+
+- Owner area: Web (privacy/cost boundary).
+- Paths / lines: `apps/web/app/api/analyze/route.ts:23-28` (`sameOrigin` returns true when the `Origin` header is absent or `NODE_ENV !== "production"`), `:39-44` (rate-limit identity from client-controllable `x-forwarded-for`/`x-real-ip`, fallback `"local"`), `:78-82` (forwards up to 12,000 chars of conversation text to a model); `apps/web/lib/server/ai-analysis.ts:36-50` (production enablement requires `TALENT_SIGNAL_ALLOW_PUBLIC_AI_DEMO === "true"` alongside `TALENT_SIGNAL_AI_ENABLED` and `OPENROUTER_API_KEY`); `apps/web/proxy.ts:8-9` documents the deliberate separate admission boundary.
+- Scenario: a deployment sets `TALENT_SIGNAL_ALLOW_PUBLIC_AI_DEMO=true` (the flag pair is registered in the Infisical contract, `config/infisical-secrets.json:141-143`). Any unauthenticated caller without an `Origin` header can POST arbitrary conversation text to a third-party model endpoint; the 8-requests-per-minute limit is keyed on a spoofable header.
+- Consequence: cost abuse is unauthenticated, and conversation content a visitor submits leaves to OpenRouter with no account, purpose record, or retention disclosure on the surface. The gate design itself is deliberate and fail-closed when unset; the defect is the missing operational documentation and the weak rate-limit identity.
+- Proof: code lines above; `docs/operations/secrets.md` and `.env.example` describe `OPENROUTER_API_KEY` but never `TALENT_SIGNAL_AI_ENABLED` or `TALENT_SIGNAL_ALLOW_PUBLIC_AI_DEMO`; tests (`apps/web/lib/server/bigModel.test.ts`) cover the flag for analysis but not the abuse path.
+- Proposed small repair: document both flags and the privacy boundary in `docs/operations/secrets.md` and `.env.example`; in `route.ts`, rate-limit on a non-spoofable identity (e.g., edge rate limiting or a signed demo session) and treat a missing `Origin` on POST as cross-origin in production. Whether the public demo keeps raw conversation input at all is a product choice (see proposals).
+- Tests: add a route test for missing-`Origin` in production and for rate-limit identity; existing `apps/web/lib/server/ai-analysis.test.ts`-family remains the gate evidence.
+- Native/deployment: any change to `apps/web` triggers the standard resident-Web redeploy requirement (delivery owner).
+
+### PA-2026-10-12-10 — `packages/domain` is a README-only placeholder with superseded intent (Low)
+
+- Owner area: contracts/shared.
+- Path / lines: `packages/domain/README.md:1-3` (“Keep Candidate, Evidence, ActionCard, and Insight contracts platform-neutral. Add code only after the iOS client and API agree on the first stable shape.”).
+- Scenario: a contributor looking for the platform-neutral domain contracts finds this package first, although `packages/contracts` (TypeBox schemas consumed by Web, backend, CLI, evaluation) has since become the actual contract home, and iOS carries its own `Sources/Domain` models.
+- Consequence: unclear ownership of the word “domain”; the stated gate (“after the iOS client and API agree”) is stale, since agreement is now expressed in `packages/contracts` and backend contract tests (`apps/backend/src/contracts.test.ts`).
+- Proof: `packages/domain` contains exactly one tracked file and no `package.json` (not a workspace package); no import references it.
+- Proposed small repair: delete the directory or convert the README into a two-line pointer to `packages/contracts` and `apps/ios/Sources/Domain` naming the current owner of each contract class.
+- Tests: `node scripts/check-docs.mjs` if the README is rewritten in place.
+- Native/deployment: none.
+
+## Checked suspicions that are not defects
+
+- Migration runner safety despite duplicate prefixes: `apps/backend/src/database/migrate.ts:13-58` applies migrations in `migration-manifest.json` array order with per-file SHA-256 checksums recorded in `schema_migrations`; the manifest is complete and in bijection with the 102 `.sql` files (verified). Renaming applied migrations would change the version key/checksum and is therefore explicitly not proposed.
+- `labWorkspaces.ts:270` interpolated `DELETE FROM "${t}"` statement: table names come from `this.tables()` (`labWorkspaces.ts:41-53`), which validates `^[a-z][a-z0-9_]*$`, requires the `lab_test_workspace_write_guard` trigger, and fails closed (503) on any unknown schema table. Not injectable as written.
+- `harnessSessions.ts:44-46` savepoint names: `harness_${randomUUID()}` — safe identifier interpolation.
+- Lifecycle sweep coverage matches documentation: `sourceLifecycle.ts:33-36` sweeps source retention, source authorization expiry, and identity-handle freshness; `app.ts:3178-3195` registers contact-task retention, source-lifecycle, and desktop-browser-login sweeps on `retentionSweepIntervalMs`; agent-session retention runs via `agentSessionRoutes.ts:171`; MCP OAuth cleanup has a restart-safe pump (`app.ts:3197-3200`). No orphaned lifecycle claim found in `docs/architecture.md`.
+- CLI `auth.ts` vs `authV2.ts`: complementary (`auth.ts` = `auth status`/`auth logout` commands; `authV2.ts` = versioned keyring protocol client), not duplicate implementations.
+- `apps/chrome-extension/` (2 files): thin repackaging of `apps/browser-extension/load-unpacked/` with an integrated test barrel; not abandoned.
+- `scripts/macos/validate_appcast_test.py` and other `*_test.py`: executed via `python3 -m unittest discover -p '*_test.py'` in `scripts/macos/check.sh:14`. `scripts/macos/prove-release-boundaries.mjs` is a manual proof tool — flagged as minor documentation gap only, not counted as a defect.
+- `/api/dev/agent-stream` (`route.ts:11-13`): returns 404 in production. Properly gated.
+- Welcome portraits duplicated across `apps/web/public/...` and `apps/ios/Resources/Assets.xcassets/...` with identical bytes: per-platform bundling, and iOS `WelcomePortrait1-4` are live there; only the Web copies listed in PA-2026-10-12-01 are dead.
+- `design-qa.md` (root, 2,165 lines): actively referenced by `plans/v1/04-proposal-review-apply.md:141`, `plans/2026-09-02-ios-today-inline-decisions.md:62`, and `plans/2026-08-28-conversation-first-contact-intake.md:329,381` as the design-adjudication record. Historical record in active use, not obsolete guidance.
+- `evals/README.md`: an accurate historical/compatibility record of the GET-134 extraction (paths and digests preserved, private-repo boundary explicit). Keep.
+- Root `index.html` + `css/opening.css` + `js/opening.js`: a tracked, intentionally archived design prototype from `159c6402` (#241), self-contained and not linked from any runtime surface. Borderline, but classified as a deliberate historical prototype; no action recommended beyond an owner decision if root cleanliness is desired.
+- Documented executable surface: every `pnpm <script>` named in docs/README/AGENTS/CONTRIBUTING resolves to a `package.json` script; every `./scripts/…` path named in docs resolves to a tracked file; every script path referenced by `.github/workflows` exists.
+- Dependency manifests: all 25 Web runtime dependencies and every backend/agent/CLI/workspace package dependency has at least one real import; workspace version pins (react 19.3.0, typescript6 6.0.2, playwright 1.63.0, typebox ^0.34.41) are consistent across packages.
+- Web API auth screen: all 103 `route.ts` handlers either call a session helper or delegate to `lib/server/*` route helpers that own authentication; the residual unauthenticated set is the documented separate-boundary family (`proxy.ts:8-25`: `/api/analyze`, `/api/mcp`, `/api/desktop-auth`, `/api/capir/*` POST, `/api/auth`, `/api/browser-extension`, `/api/dev`) plus thin delegates verified to authenticate inside `memoryReview`/`conversationQueue`/`timeWorkspace` helpers.
+- Large-file debt without defect claims: `apps/ios/Resources/Localizable.xcstrings` (784 KB), `apps/ios/Sources/Features/RelationshipAskView.swift` (378 KB), `apps/ios/UITests/CandidateSignalUITests.swift` (329 KB), `apps/web/app/globals.css` (304 KB), `apps/backend/src/modules/memoryReview.integration.test.ts` (200 KB). Size alone; no defect claimed.
+
+## Ordered implementation batches
+
+Batch 1 — Web dead-code retirement (concrete, fixable). Files owned: delete `apps/web/components/{integrated-workspace-app,workspace-meetings,redline-workbench,hero-signal-preview,login-portraits,faq-list}.tsx`, `apps/web/lib/candidates.ts`, `apps/web/public/concepts/relationships/avatars/welcome-{5,6,7,8,9,10,11}.png`; edit `apps/web/lib/meeting-calendar.test.ts`, `apps/web/lib/integrationEvidenceNavigation.test.ts`, `apps/web/lib/workspaceLandmarks.test.ts` (remove/re-point dead-file assertions only — never weaken assertions on live files).
+Acceptance: `pnpm install && pnpm --filter @talent-signal/web test && pnpm --filter @talent-signal/web lint && pnpm --filter @talent-signal/web build && node scripts/check-repository-hygiene.mjs` plus a grep proving zero remaining references to the deleted basenames.
+
+Batch 2 — Stable-ID hygiene (concrete, fixable). Files owned: `docs/decisions/0017-three-scope-memory-review.md` (renumber to `0024-…`), its inbound linkers, `apps/backend/src/database/schema.test.ts` or `scripts/check-repository-hygiene.mjs` (forward-only unique-prefix assertion), one note in `apps/backend/AGENTS.md` stating the manifest is the order authority. Do not rename or re-checksum applied migrations.
+Acceptance: `node scripts/check-docs.mjs && node scripts/wiki.mjs check && node --test scripts/check-repository-hygiene.test.mjs` and the touched backend test.
+
+Batch 3 — Test/tooling wiring (concrete, fixable). Files owned: `.github/workflows/ci.yml` or `package.json` (wire `scripts/prompts/library.test.mjs`), `package.json` (add `architecture:agent-generate`), `scripts/check-architecture-diagrams.mjs` (cover `talent-signal-agent-control-plane.excalidraw` and `talent-signal-agent-runtime-flow.excalidraw`).
+Acceptance: `node --test scripts/prompts/library.test.mjs scripts/check-architecture-boundaries.test.mjs` (after `pnpm install`), `node scripts/check-architecture-diagrams.mjs`, `pnpm docs:check`.
+
+Batch 4 — Documentation of the public-AI boundary (concrete, fixable). Files owned: `docs/operations/secrets.md`, `.env.example` (document `TALENT_SIGNAL_AI_ENABLED`, `TALENT_SIGNAL_ALLOW_PUBLIC_AI_DEMO`, and the unauthenticated-forwarding boundary). Rate-limit/`Origin` hardening in `apps/web/app/api/analyze/route.ts` with its tests is a follow-up that touches runtime.
+Acceptance: `node scripts/check-docs.mjs && node scripts/wiki.mjs check`, and if the route changes: `pnpm --filter @talent-signal/web test && pnpm --filter @talent-signal/web build` plus the resident-Web redeploy by the delivery owner.
+
+Proposals requiring a larger architectural or owner choice (not concrete fixes):
+- Disposition of `task.md` and `.top1-design/` (PA-04, PA-05): delete, archive under `plans/`, or declare an owner — requires the design/workflow owner’s decision on whether the top1 design-evaluation flow is still active.
+- Unification of the two candidate-signal contracts (PA-06): converging `plugins/talent-signal` and `.agents/skills/candidate-signal-analysis` on one output contract changes a distributable plugin interface and a repo skill contract simultaneously; only the pointer documentation is a small fix.
+- Whether the public demo should keep raw conversation input at all (PA-09): removing it changes a marketed surface (`Try the synthetic demo` in `README.md`) and needs a product decision; the gate, once documented, is already fail-closed.
+- Fate of `packages/domain` (PA-10): delete versus pointer depends on whether the “platform-neutral domain contracts” are expected to grow beyond `packages/contracts`.
+
+## Coverage honesty statement
+
+This audit covered every tracked owner area at inventory and static-scan depth and traced the risky entrypoints named above in detail. It does not establish that every line was manually reviewed, does not rule out runtime-only defects in the un-executed test suites and services, and carries the environment blockers listed in Verification as explicit unknowns. No high-severity correctness, security, privacy, or lifecycle defect was confirmed in the traced entrypoints; the Medium finding is maintenance/coverage integrity (PA-2026-10-12-01). All findings above are specific, path- and line-bounded, and independently reviewable; none was produced to meet a quota.
+
+
+## Independent delivery-owner findings
+
+The Pi report above is a frozen audit observation, not a delivery verdict.
+Independent synthetic probes and full dependency inspection add the following
+findings. These override any impression that the initial static audit established
+an absence of high-priority defects. No real-person data was used.
+
+| ID | Priority | Confirmed problem and proof | Repair and acceptance |
+| --- | --- | --- | --- |
+| PH-01 | P1 | `apps/agent-host/src/localResearchStore.ts` and `localPersonResearchStore.ts` read before unconditional atomic rename. Ten synthetic competing starts and ten conflicting terminal pairs were both accepted in 10/10 trials; the final writer replaces the earlier identity or receipt. | Exclusive immutable publication shared by both stores; conflict/readback, true concurrent-process, corruption, cleanup and restart tests. Preserve mutable checkpoint behavior and authorization/budget boundaries. |
+| PH-02 | P1 | `apps/backend/src/lib/requestLogger.ts` lacks a bounded error serializer. A real Fastify/Pino error carrying a synthetic private-content canary retains its message/stack despite body-field redaction; the production error handler logs raw `err`. | Central privacy-preserving error serialization plus actual logger/error-handler tests. Keep safe correlation and closed diagnostic codes. |
+| PH-03 | P2 | `scripts/check-docs.mjs` scans arbitrary filesystem Markdown. An ignored `output/` fixture with a missing local link fails the documentation gate. | Git index/tracked inventory with explicit failure handling; test tracked broken links, staged additions and ignored artifacts. |
+| PH-04 | P2 | Public analysis and screenshot-analysis routes duplicate unbounded Maps. Expired unique forwarded-address keys are never removed unless reused. | Shared bounded expiring limiter, finite keys, fail-closed capacity and preserved route limits/auth order; document trusted proxy and origin assumptions. |
+| PH-05 | P2 | `docs/architecture.md` still calls recruiting the flagship template; `docs/design-system.md` applies candidate terminology to general person/relationship pages. Current product/principles define the broader personal Agent. | Narrow canonical wording correction; retain dated recruiting research as history. |
+| PH-06 | P2 | `CONTRIBUTING.md` and `docs/operations/ci-cd.md` still direct contributors toward Codex-first model review. | One canonical current-head local MiMo review procedure, with independent Codex judgment and deterministic gates preserved. |
+| PH-07 | P1/P2 | Frozen production graph reports 1 high and 12 moderate advisory entries; the entire graph adds 2 high development advisories. Existing dependency review scans changed dependencies, not the complete resident graph. Resolved packages and upstream availability were checked independently. Presence is not proof of product exploitability. | Compatible dependency repairs, remove unused Mammoth CLI-only argparse graph, mitigate unpublished braces fix without fabricated versions or broad ignores, and add mandatory whole production graph audit. |
+
+Unavailable upstream versions matter: npm has no `sprintf-js@1.1.4` or
+`braces@3.0.4` at this audit date. Mammoth library use is separate from its unused
+CLI dependency. Any local braces mitigation must remain identified as a local
+patch; an upstream advisory may remain visible despite mitigation. Never report
+an audit suppression as a fixed upstream release.
+
+## Delivery-owner disposition
+
+Implementation order: dependency safety and gate; immutable research state;
+private error logging and Web admission resource bounds; confirmed dead Web
+code; deterministic knowledge/tooling ownership and stale guidance. Codex reviews
+each Pi diff and evidence before integration. Applied migration names/checksums
+remain stable. Historical design/evaluation records remain evidence, and large
+native files remain debt unless an observable failure justifies a native change.
+
+Final accepted dispositions and revision-bound checks will be recorded here
+before PR delivery. The initial report's proposed batches are recommendations;
+the actual contracts and final acceptance are owned by Codex.
+
+
+### Independent reference-graph correction and additional boundary finding
+
+A TypeScript AST/module-resolution traversal of 508 non-test Web modules from
+160 Next route/layout entrypoints found 17 unreachable component/helper modules
+(3,651 lines), after explicitly excluding Next metadata entrypoints and build
+configuration from dead-code conclusions. There were no nonliteral dynamic
+imports. The seven directly unreferenced modules in PA-01 are the roots of a
+larger dead closure: old meeting helpers, SignalJourney/reduced-motion hook,
+legacy Plugs UI/helpers, and synthetic integration/browser-handoff helpers.
+Five exclusively imported CSS modules add 4,102 dead lines. Actual native/
+marketing image consumers were checked independently; shared SignalJourney
+images and workspace-meetings CSS stay in use and must remain.
+
+The initial Pi trace mistakenly calls `meeting-month-grid.tsx` live: it is
+referenced only by the unmounted `workspace-meetings.tsx`. The live Time
+workspace uses its own grid. CalendarDraftReview state does remount during
+TimeMeetingInspector's loading boundary, so absence of an explicit React key
+alone is not a demonstrated state-leak defect.
+
+PH-08 (P2): `apps/web/components/time-meeting-inspector.tsx` validates the
+response's schema but not its draft identity against the selected/requested
+ID. A synthetic actual React render requested draft B and accepted a valid
+draft A into actionable CalendarDraftReview while persistence remained bound
+to B. The observation probe passed in the shipped happy-dom/React surface;
+its temporary test was removed after evidence capture. The backend normally
+filters by identity, so this is a missing client admission check, not proof of
+an exploited cross-account read. Repair with exact identity/revision admission
+and live-surface regression tests in the dead-code retirement batch.
+
+Both diagram generators were executed in a task-owned temporary directory.
+All five generated Excalidraw sources matched the committed bytes exactly.
+PA-08 is a wiring/coverage gap, not a confirmed current diagram-source drift.
+
+
+PH-09 (P2): failure metadata is a second private-data boundary. A synthetic
+shipped `uploadChatMediaContent` invocation proved that an arbitrary storage
+`Error.message` is persisted verbatim as `chat_media_assets.failure_reason`,
+although the client receives a fixed retry message. The same static pattern
+occurs in source-authorization compilation responses/job errors, public research
+warnings/retry metadata and MCP continuation outbox errors. Adjacent socket/tool
+adapters admit arbitrary code-shaped strings into failure responses/detail;
+uppercase or a prefix is not a closed diagnostic vocabulary. A second actual `createWorkspacePublicResearch.execute` synthetic probe showed a code-shaped private Error message copied into both model-facing error detail and attempt metadata. A separate Pi batch
+will replace untyped failure content with fixed operation diagnostics, preserve
+provenance/retry/lease/idempotency behavior, and exercise the actual producer and
+consumer boundaries with synthetic canaries. No real-person or credential leak
+was observed; historical stored metadata is outside this prevention change.
+
+The additional native sign-out controller reentrancy suspicion was not promoted
+to a defect: production callsites acquire the shared maintenance barrier and
+set the root store's `isWorking` before suspension. UI retries and environment
+activation honor that barrier. No native source change or simulator run is
+justified by this rejected suspicion.
+
+
+PH-10 (P2): the control-plane evaluator's `liveTrials` receipts report a
+hardcoded SDK version `0.3.241` in both missing-proof and completed branches,
+while the installed, validated SDK is `0.3.287`. This misattributes otherwise
+reviewable evaluation evidence. The tooling batch will reuse the existing
+package-manifest-derived `CLAUDE_SDK_VERSION` authority for both receipts, rather
+than substitute another drifting literal. Credential/model gates and actual
+trial outcomes remain unchanged; no new live model trial is authorized by
+this metadata repair.
+
+## Accepted dependency repair and independent receipt
+
+- Integrated `81324609`: compatible dependency repairs, removal of Mammoth's
+  unused CLI-only argparse graph, a frozen local braces depth patch, and a
+  mandatory full production audit in the existing Security required gate.
+- Codex reviewed all six files including untracked patch/tests, and required
+  the patch test to bind the active install to the current frozen digest while
+  tolerating unrelated stale package directories. No audit suppression added.
+- Pi repair: frozen offline install, production audit (zero advisories), Agent
+  and backend typechecks, real DOCX extraction 3/3, patch regressions 10/10,
+  workflow policy 6/6, docs check all passed.
+- Codex independent integration: an incremental frozen install retained old
+  unpatched package content under the new digest directory; the regression
+  gate correctly failed four tests. A clean minimal install reproduced proper
+  patch application, then a fresh complete frozen offline install passed
+  22/22 patch, workflow and existing CI scope-policy tests. Deployment must
+  use clean dependency trees and verify actual patch behavior. The failed run
+  is retained as evidence and is not counted as a pass.
+- Backend Docker dependency layer now includes `patches/` before install;
+  final clean image remains unverified. Codex real portable capir packaging
+  passes 6/6 tests: official Node download and SHA verification, production
+  dependency closure, confined archive extraction and relocated execution.
+  The patch regression gate still passes 10/10 after deploy-tree restoration.
+- Full graph still reports the development-only upstream braces advisory;
+  the local patch deliberately rejects nesting above 100 and is a mitigation,
+  not an upstream released fix. Product production graph is clean.
+- Full baseline Web lint passes with six unused-symbol warnings; those exact
+  bindings are assigned to the Web retirement batch without removing proof
+  reads or authentication behavior. ESLint10 peer-range warnings are a known
+  compatibility boundary: current Next configs already use @eslint/compat
+  and actual lint passes. No lint downgrade or suppression is planned.
+
+## Extended model-context diagnostic proof (PH-09)
+
+Two further actual synthetic probes confirm arbitrary error content reaches
+model-facing tool results: `currentImageInspection.execute` preserves a private
+`IMAGE_INSPECTION_*` string, and `runPublicResearchAgent` returns a generic
+gateway exception message to the actual scripted provider callback. Both
+observations pass in the corrected narrow probe (2/2). The initial probe also
+incorrectly expected that message in persisted journal output; it failed that
+assertion. Journal events/outputs are actually bounded and remain free of the
+canary, which the corrected probe explicitly verifies. No journal leak is
+claimed for this generic tool error.
+
+Static producer traces show untyped transport messages interpolated into typed
+search/direct-fetch/Firecrawl errors, then relayed by local gateways. PH-09 scope
+now includes fixed unknown-error fallbacks in all three Agent runners, a finite
+image diagnostic vocabulary, and fixed transport failures at those actual host
+producers. Existing typed policy feedback, approved evidence, cancellation,
+source revocation, budgets and terminal semantics remain required. No external
+provider was called. Temporary source probes were removed after evidence capture.
+
+The owned baseline browser was gracefully stopped after its rendered daily
+workspace receipt was retained. The baseline test run was then stopped and read
+back as `deleted`, with no cleanup error; capir confirmed removal of the local
+run credential. Its private credential projection was deleted after the
+sanitary lifecycle receipt was retained. Final deployment acceptance will use
+a fresh isolated run, followed by its own stop/readback cleanup.
+
+The newly confirmed model-context paths are assigned to a separate sequential
+`model-context` Pi batch after durable diagnostic retention. It owns the three
+Agent runner fallbacks, current image inspection and three host transport
+producers/tests. This keeps each reviewed change bounded while preserving one
+writer and one integration/review owner. The overall delivery remains pending.
+
+
+## Persistence review checkpoint — changes requested
+
+The first Pi implementation adds immutable hard-link publication and per-Run
+SQLite admission around the real CLI and person-image entrypoints. Its own
+118-test suite passes, but the runner initially stopped at scope validation:
+a strict TypeScript declaration companion to the owned MJS process fixture was
+necessary. The delivery owner inspected and narrowly approved that test-only
+companion; provider/model, base, limits and cumulative accounting are unchanged.
+This is not an accepted implementation receipt.
+
+Independent exact-source snapshots and synthetic probes reproduce further
+repair requirements in the new code:
+
+- Opening a FIFO with blocking `O_RDONLY` stalls before the regular-file check;
+  the owned probe child exited only at its explicit kill deadline.
+- Both writers delete a pre-existing, unowned temporary sentinel when exclusive
+  creation fails with `EEXIST`. Cleanup must follow successful ownership.
+- The person store accepts invalid nested candidates and manifest members;
+  terminal parsing accepts `artifact_created` without an artifact ID. These are
+  corrupt deserialization successes. The service response schema separately
+  rejects invalid artifact output; no escaped confirmed identity is claimed.
+- The test build fixture steals a lock based only on age and lacks general
+  owned-child cleanup before deleting temporary state after assertion failures.
+- The shared fingerprint guard newly accepts uppercase digests, unlike the
+  original canonical lowercase validators.
+
+Pi is repairing these five findings in the same task. Acceptance requires
+meaningful regressions, unfiltered required checks, and delivery-owner re-review
+and integration proof. No later implementation batch or PR has started.
+
+
+## Interrupted research-call budget recovery proof (PH-11, P2)
+
+Three additional synthetic probes use the shipped compiled public CLI and
+person-image entrypoints, real local stores, scripted models and mock provider
+callbacks. Each authorizes at most one operation, waits at an IPC barrier after
+the operation has been dispatched, kills only the owned child, waits for exit,
+and recovers the same immutable Run from a fresh child. Search, Web fetch and
+person-profile lookup each dispatch twice against a cap of one. Fetch preserves
+a checkpoint with `fetchCalls: 0`; search/person have no checkpoint yet. No
+external provider or model service was called. The first probe setup omitted
+an explicit synthetic fetch gateway and correctly hit the existing Firecrawl
+credential gate before any dispatch; that setup failure is not a source defect.
+
+The actual runners increment call counters in memory before dispatch but save
+checkpoints only after a tool result. A process interruption therefore loses a
+consumed allowance. Immutable files and kernel-owned live-process admission do
+not independently repair this counter boundary. A separate sequential Pi batch
+after persistence will save the existing checkpoint/counters before authorized
+search/fetch/profile dispatch, fail closed if that save fails, and conservatively
+keep possibly dispatched operations consumed after interruption. Existing
+checkpoint schemas, journal sequence, cap-denial codes and terminal semantics
+remain the authority; no automatic allowance refund or retry authorization is
+added. Actual forked command recovery and runner checkpoint-failure regressions
+are required. This finding concerns those call caps, not an exactly-once remote
+effect or cumulative model-billing guarantee.
+
+
+## Concurrent research-tool journal ordering proof (PH-12, P2)
+
+Synthetic providers enqueue two valid callbacks through the supported provider
+interface with `Promise.allSettled`. Both shipped public CLI and person-image
+commands use real stores, with a checkpoint wrapper holding the first write
+until the second has completed. Two operations are authorized and dispatched,
+but each command fails with a journal sequence mismatch. This is a reproducible
+callback-concurrency scenario; no live SDK/provider or production incident is
+claimed. The Claude adapter passes those callbacks independently and does not
+provide a Run serialization barrier.
+
+The research recovery batch will serialize whole tool execution within each Run
+through counter reservation, gateway dispatch, checkpoint and journal append,
+then drain admitted work before provider/terminal settlement. Different Runs
+remain independent; fatal execution rejection blocks later queued work. This
+ordering is also needed to keep PH-11's pre-dispatch checkpoints from replacing
+newer counter snapshots during concurrent callbacks. Existing denial, abort and
+terminal semantics remain covered by tests. The before probes intentionally
+require concurrent writes and are not valid after-fix tests; new regressions
+will explicitly verify queued execution and ordered journal results.
+
+## Accepted persistence repair
+
+- Integrated commit: `1f5d50a1`; Pi task `20261012-030523-ed97720c`, frozen
+  base `bbf75013b3980b4e1d85bc40742efac9aa91b2cd`.
+- Immutable run/artifact/no-action/terminal records publish complete exclusive
+  temporary files with no replacement; equivalent retries retain original IDs,
+  bytes and timestamps. Checkpoints alone remain mutable.
+- Both shipped research commands hold kernel-owned per-Run SQLite admission
+  before terminal replay/provider construction. Contention rejects; process
+  death releases admission without stale-lock stealing. Corrupt records fail
+  with content-free errors; FIFOs and symlinks are rejected.
+- Independent review required five Pi corrections (nonblocking reads, owned
+  temporary cleanup, nested/terminal validation, test-fixture lifecycle,
+  canonical digest case), then three bounded parent fixes: nonnegative safe
+  integer checkpoint counts, ownership transfer immediately after rename, and
+  canonical nil/max UUID compatibility for missing evidence references.
+- Parent verification of the final changed source: Agent build, host typecheck,
+  host build, all 133 host tests in 18 files, documentation check. Integration
+  replay/admission command checks passed. Synthetic SIGKILL probes confirmed
+  PH-11 still occurs after admission: search/fetch/profile each dispatched twice
+  with authorization maximum one. That separate finding remains for the next
+  batch; immutable publication does not imply durable call-budget reservation.
+- Scope remains local filesystem/process interruption, not distributed locking
+  or power-loss durability. Resident rollout remains pending final delivery.
+
+## Interrupted checkpoint/journal integrity proof (PH-13, P2)
+
+The parent held the actual public CLI and person-image store immediately after
+its result checkpoint was durably written at sequence 1, before its first tool
+event append. After SIGKILL of the owned child and fresh same-Run recovery, both
+returned `no_action` with journal sequences `[2, 3]`: the original tool event was
+absent. One synthetic provider operation had occurred. No live provider, private
+image or production incident was involved.
+
+This does not invalidate the accepted call-cap repair: the consumed allowance
+remains durable. It exposes a separate evidence-integrity boundary. The queued
+repair must reject inconsistent checkpoint/journal or terminal evidence before
+provider execution or successful replay, preserve valid reserved-call recovery,
+and avoid manufacturing missing events or automatically replaying operations.
+Arbitrary checkpoint/journal publication is not a crash-atomic transaction.
+
+Before evidence: `research-journal-interruption-before-proof.log` in the private
+task artifact directory; both actual commands were tested against the accepted
+integration build. The accepted repair and independent after-change evidence
+are recorded below.
+
+A second actual-command probe held publication after `terminal.json` was written
+but before the terminal-event append. Both commands replayed `no_action` from
+that receipt while the journal remained `[1, 2]`, with no terminal event. Public
+and person checkpoint offsets differ legitimately (`2` versus `3`); integrity
+validation must follow those producers and preserve valid completed replay.
+
+## Accepted error logging and Web admission receipt
+
+- Integrated `6953ebb8` after one Pi repair. A necessary adjacent meetingDrafts
+  test companion was approved after the scope guard stopped implementation;
+  frozen provider, model, base and cumulative limits were preserved.
+- Codex traced the actual shipped logger/global handler and Pino message
+  inference. Final error serialization exports only closed categories and
+  allowlisted codes. Message normalization compares both `err` and `error`,
+  including primitive strings, while preserving a distinct fixed operation
+  message. Parent actual Fastify/Pino output contains no synthetic canary.
+- Public analysis uses the existing production Origin boundary and shared
+  8/minute process budget. Screenshot analysis uses 6/minute per verified
+  backend account/user after workspace and revocation checks, before image,
+  model or receipt work. The bounded map retains active offenders at capacity,
+  evicts expired keys, rejects oversized identifiers and returns finite retry.
+  Invalid injected clocks fail closed before changing consumed state.
+- All five independent final-source checks passed: backend types and 54 tests
+  in four files; Web types and 36 tests in three files; docs check. Exact-source
+  hashes and sanitized parent before/after receipts are retained in the
+  permanent task artifact directory. No real personal evidence or live model
+  was used. No confirmed P0/P1 remains in this batch.
+- These budgets are per process; public deployments still need trusted edge
+  control. Resident AI admission flags were not enabled. Clean committed
+  final-source rollout and live acceptance remain outstanding.
+
+## Architecture guard regression (PH-14, P2)
+
+The first complete `pnpm docs:check` after integrating allowance/FIFO repair
+passes canonical links and wiki checks, then fails the architecture boundary
+gate: `personResearchRunner.ts` is 695 lines against its frozen maximum649.
+Earlier focused `node scripts/check-docs.mjs` receipts remain valid for link
+checking; they did not execute this guard. The complete command is failed,
+not a pass.
+
+This gate regression is assigned to the not-yet-started model-context batch: 
+move the existing person-research budget/image/scope preflight into its existing
+policy owner, preserving execution order and error semantics, and call it from
+the actual runner. Preserve shared FIFO, consumed allowances and journal
+integrity. Retain the original cap; do not raise the baseline, suppress the
+guard or compact formatting to meet it. Final architecture checks and the
+complete documentation command remain required before delivery. Accepted repair is recorded below.
+
+## Journal integrity review checkpoint — initial changes requested
+
+Pi `20261012-071431-6fee91cd` passes its four checks and 172 host tests, including
+the four real command publication-interruption cases. Codex traced both store
+readers, shared secure JSONL parsing, producer offsets and the original
+immutable-publication regressions. This is a review checkpoint, not acceptance.
+
+A further actual synthetic command proves an orphan-state gap: after a valid
+sequence0 reservation checkpoint is retained and its original `run.json` is
+removed, public research can invoke its model and republish immutable metadata
+under a changed objective for the same Run ID. The successful `no_action`
+receipt therefore hides missing authoritative identity. The permanent receipt
+is `research-orphan-state-before-proof.json`; it uses only a scripted provider
+and injected local gateway, with no credentials, live network or personal data.
+Completed-terminal replay already checks recorded scope in both commands; no
+completed-replay identity bypass or production incident is claimed.
+
+One same-task repair is requested within the existing scope and frozen limits:
+checkpoint, nonempty journal or terminal evidence requires its original Run
+metadata before provider work, and `start` must reject orphaned evidence before
+publishing replacement metadata. Keep fresh starts, valid original-metadata
+reservation recovery, completed replay, concurrent publication, consumed
+allowances and original evidence bytes. Fixed failures require manual
+inspection; do not fabricate identity, reset counts or reconstruct history.
+This first review was followed by the accepted repair below.
+
+## Accepted journal integrity and immutable identity repair
+
+- Integrated commit: `e09c730b`; worker commit `16e0bdb3`; Pi task
+  `20261012-071431-6fee91cd`, one repair, unchanged frozen model/base/limits.
+- Both actual stores read complete secure JSONL records, validate contiguous
+  Run-specific sequence, and require agreement with the checkpoint or matching
+  final terminal event before recovery or successful replay. Torn records and
+  interrupted publication fail with fixed content-free errors. No missing
+  event is reconstructed and consumed allowances remain consumed.
+- Any existing checkpoint, nonempty journal or terminal evidence requires the
+  original immutable `run.json`. The check runs before replacement metadata
+  could be published and at exported store recovery readers. Fresh state,
+  valid reservation recovery, completed replay and concurrent first publication
+  retain their positive coverage.
+- Parent final-source verification passed host typecheck, build, all 183 tests
+  in 21 files, and canonical documentation checking. The actual orphan-state
+  command now fails before model execution: zero model calls, metadata remains
+  absent, checkpoint bytes unchanged.
+- Independent integration-build process probes passed all four public/person
+  checkpoint/terminal publication interruptions. Fresh recovery fails with the
+  expected fixed diagnostic; journal sequences are unchanged, total synthetic
+  gateway dispatches remain one and additional model calls remain zero.
+- Private receipts: `research-journal-parent-final-verification.json`,
+  `research-orphan-state-after-proof.json` and
+  `research-journal-interruption-after-proof.log`. Synthetic fixtures only;
+  no live provider, private image or production incident is claimed. This is
+  fail-closed recovery, not arbitrary crash-atomic multi-file publication.
+
+## Public-crawl failure resource and response bounds (PH-15, P2)
+
+An independent synthetic probe uses the actual `extractResearchPage` to extract
+22 same-domain links from a small HTML page, then the actual
+`crawlPublicResearch` with `maximum_page_count: 5`, depth 1 and an injected
+loader whose child pages fail. It invokes the loader 23 times, retains one
+successful page and returns 22 warnings. The existing public response contract
+allows at most 20 warnings. No live network, provider or private evidence was
+used; no production incident is claimed.
+
+The loop counts only successful pages, so failed attempts do not consume its
+resource limit. Assign this confirmed boundary to the not-yet-started
+model-context/policy batch: each distinct approved page attempt consumes the
+per-invocation limit before loader dispatch, including failures. Preserve
+domain/DNS/redirect/byte/depth checks, duplicate suppression, partial success,
+capture/idempotency and retry lifecycle. Existing warning count and length
+limits stay unchanged. This does not claim a durable cross-worker retry cap
+or exactly-once remote reading, and does not change the active diagnostic
+batch's frozen contract.
+
+Private before receipt: `research-crawl-bounds-before-proof.json`. Actual HTML
+extraction and success/failure/duplicate/long-URL regressions are required
+before acceptance. Status: accepted in `a171c2ed`; receipt below.
+
+
+## Diagnostic privacy review checkpoint — changes requested
+
+The first diagnostic attempt, Pi `20261012-083418-4fa2ab76`, reached its
+120-minute deadline at 175 turns. Its 24 changed/new paths are within scope;
+source and session evidence are preserved. No final verification receipt or
+acceptance is claimed. The same task resumes with one consolidated feedback
+and unchanged frozen provider/model/base and cumulative limits.
+
+Independent actual-entry synthetic probes confirm three compatibility
+regressions in the intermediate source: a valid 620-character URL produces
+a 650-character warning against the existing 500-character bound; first-only
+recognized-code extraction loses transient classification when both fields
+carry distinct supported codes; an actual Unix HTTP server's 400 response
+with a client-owned `CONTACT_RESEARCH_HTTP_500` body is classified as 500.
+Repair warning bounds while retaining the fixed diagnostic, classify over
+all recognized fields with original detail priority, and accept server-body
+codes only from the actual server producer vocabulary. Preserve all budgets,
+authorization, retry limits and public schemas.
+
+The new conflict test also needs a dispatch barrier and unconditional owned
+request settlement so assertion failure cannot hang server cleanup. The owned
+`ph09-pg-4fa2ab76` synthetic container has `restart=no`; scoped cleanup remains
+required. Private review receipts: `diagnostic-compatibility-review-proof.json`
+and `diagnostic-http-ownership-review-proof.json`. No production incident or
+private evidence is claimed. Final-source checks and repaired actual probes
+remain required.
+
+
+## Accepted durable diagnostic and socket-boundary repair
+
+- Integrated `23751e6a`, worker `c83ac45a`; Pi task
+  `20261012-083418-4fa2ab76`, one resume. Its deadline and subsequent provider
+  `content_filter` stops were preserved, not counted as successful checks.
+  Codex completed only the deterministic test lifecycle and typed fixture
+  corrections, then independently verified all 24 final-source path hashes.
+- New media, Wiki compilation, research crawl/capture/recovery and MCP
+  continuation failure metadata carries fixed content-free diagnostics.
+  Screenshot span logging and task/Workspace diagnostics accept finite known
+  codes, preserving supported policy, browser, socket and retry conditions.
+- Server-body admission uses the actual server vocabulary; client-generated
+  status/timeout/readback/fault-injection codes cannot be claimed by the body.
+  Retry classification considers all recognized fields with original detail
+  priority. Warnings retain the original 500-character bound and fixed category.
+- All five final-source checks passed: 117 Backend tests in nine files, 192 Host
+  tests in 23 files, both typechecks and canonical documentation checking.
+  Independent actual-entry probes confirm the three compatibility repairs and
+  private-canary absence from upload SQL and complete Workspace tool receipts.
+- The owned synthetic PostgreSQL container and anonymous volume were removed
+  after zero connected clients; Docker context stayed unchanged. Final
+  PostgreSQL18, deployment and delivery remain outstanding. Historic customer
+  metadata was not rewritten; the model-context boundary remains open.
+- Private receipts: `diagnostic-parent-final-verification.json`,
+  `diagnostic-compatibility-after-proof.json`,
+  `diagnostic-http-ownership-after-proof.json`,
+  `backend-diagnostic-after-proof.json`, and
+  `diagnostic-owned-database-cleanup.json`.
+
+## Accepted model-context, policy and crawl repair
+
+- Integrated `a171c2ed`; worker `8e7422b9`; Pi `20261012-114341-39e2b8eb`, zero repairs.
+- Codex independently reviewed all19 scoped paths and the exact preflight move. Finite image diagnostics, fixed generic runner/transport messages preserve typed policy, revocation, cancellation and conservative consumed-call behavior.
+- All ten direct final-source commands passed without source changes: Agent427 tests and one existing skip, Host195, Backend26, types/builds/docs/original architecture guard. No P0/P1 remains in this batch.
+- Actual integration-source model-output probes exclude private canaries. Actual HTML22-child failure probe now dispatches5 at authorized max5, retains1 page and4 bounded fixed warnings. Pi tests cover full response schema, duplicate/success/depth behavior. `personResearchRunner`642 lines fits the original649 cap.
+- Synthetic injected providers/loaders only; no private image or live model used. Per-invocation crawl attempts do not imply durable cross-worker caps or exactly-once remote reading. Final PostgreSQL18/resident rollout/PR/merge remain outstanding.
+- Receipts: model-parent-final-verification.json, model-integration-source.json, agent-diagnostic-after-proof.json, research-crawl-bounds-after-proof.json.
+
+## Calendar recovery test date dependency (PH-16, P2)
+
+The unchanged integration Web source independently fails the original
+`SessionCalendarDraftCard` unresolved Not now retry assertion after its fixed
+`expires_at: 2026-10-12T00:00:00Z` passes. Ten other file tests pass. Production
+expiry enforcement is correct; this is a test-harness date assumption, not a
+Web retirement regression. Pi's first full Web suite failed2170/2171, preserved
+as failed evidence. Codex stopped automatic repair to approve only the two
+calendar/transcript test companions before resuming the same frozen task.
+
+Use a fixed date-only clock before the fixture expiration and restore it after
+each test; retain real asynchronous timers, original expiration and operation-key
+assertions. Do not extend a hardcoded deadline, weaken production expiry, skip
+tests or mark the failed gate passed. Full final-source verification remains
+required. Private before receipt: `web-date-baseline-before.log`. Accepted below.
+
+## Accepted Web retirement, exact draft identity and test clock
+
+- Integrated `624565ea`; worker `be7d7ffb`; Pi `20261012-121919-f4a7e76e`, two cumulative repairs (one automatic verification retry and one explicitly scoped resume), unchanged frozen provider/base/limits.
+- Codex reviewed all50 scoped paths. Retired17 unreachable modules,5 exclusive CSS files,4 dead-only tests and11 images (1,768,752 bytes). Added exact requested ID/revision admission and six actual React tests; retained live authority/auth/calendar behavior and compatibility redirect. Six unused bindings removed at source, lint0 warnings.
+- Independent five-command final-source receipt passed:2171 Web tests/275 files, types, lint, hygiene and docs, all50 path hashes unchanged. Clean committed production build passed. Actual independent React wrong-ID probe shows no private fields or mutation controls, with retry retained; ephemeral test removed.
+- Reference graph uses the actual frozen batch inventory512 ->495, with17 retired modules; seven residual graph non-roots are legitimate framework metadata, declarations and config. The initial inventory508 predates four upstream live modules. Its invalid direct-count comparison was preserved in web-retirement-after-attempt1.json and corrected; no source failure was hidden.
+- Native11 portraits and the live meeting stylesheet match protected baseline hashes; all16 scoped images/styles are absent.
+- PH16 original fixed-date fixture failed on the unchanged baseline after its expiry. The two narrowly approved test harnesses freeze only Date and restore it/clear scoped storage, keeping real async timers, original dates, production expiry and idempotency assertions. Before failure is preserved; no skip or deadline extension.
+- No confirmed P0/P1 remains in this batch. Final PostgreSQL18/current-head CI/merge/resident rollout and isolated live acceptance remain outstanding.
+- Receipts: web-parent-final-verification.json, web-parent-build.json, meeting-identity-after-proof.json, web-retirement-after-proof.json, web-integration-source.json, web-date-baseline-before.log.
+
+## Diagram contrast and gate integrity review (PH-17, P2)
+
+Adding the two omitted scene checks exposes three actual control-plane titles:
+`surface-rule-title`4.237792 on its red-tinted panel; `policy-title` and
+`inbox-title`4.026413 on the light surface. The original checker threshold is4.5.
+An independent strict checker copy fails on the frozen scene without editing
+active Pi source. The intermediate `textContrast:false` note branch suppresses
+all future low-contrast text in that scene and is rejected.
+
+At the ready checkpoint the parent scoped only the generator and this
+control-plane Excalidraw/SVG/derived PNG. Pi corrected the three title colors,
+preserved source geometry/text/other scenes and removed the bypass entirely.
+The strict five-scene gate passes at the original4.5 threshold. This is a concrete counterexample to the initial
+no-repaint boundary, not evidence of source drift in the original five diagrams.
+Private receipts: `diagram-contrast-before.log`,
+`diagram-contrast-review-proof.json`. Status: accepted in `d9d9f043`.
+
+
+## Accepted knowledge ownership and policy coverage
+
+- Integrated `d9d9f043`; worker `72331917`; Pi `20261012-132438-605a5dd0`, one repair. Codex reviewed50 final paths and all seven independent final-source commands passed without changes:21 docs/hygiene/prompt tests,6 scope tests,7 pinned-SDK provider tests, Agent/backend types and full docs/architecture gates.
+- Markdown inventory is Git tracked/index only and fails closed. Tests cover staged links, ignored output, missing canonical files, removed targets and Git failure. Policy CI and local check include the docs, hygiene and previously unwired prompt tests.
+- ADR memory identity becomes0024; migration rules grandfather only exact historical sets. All102 applied SQL files and the execution-order manifest are byte-identical. Archived task/design originals retain evidence and unresolved physical-device boundaries; current product/domain/skill/review ownership has one authoritative home.
+- Both generators reproduce all five scene sources. Only three control-plane stroke/fill colors changed; all12 other diagram artifacts remain byte-identical. Derived PNG keeps2582x1470 and was visually inspected; sharp/librsvg rasterization can differ in glyph detail from the original export. Strict contrast is now12.70366/5.630124/5.630124, with no NOTE bypass.
+- 49 paths match the reviewed worker hashes exactly; CI preserves the exact tested list edit over the newer upstream Actions pins. No unresolved confirmed P0/P1 remains in this batch. Final integration/database/live rollout/PR/merge evidence is still pending.
+- Private receipts: knowledge-parent-final-verification.json, knowledge-source-proof.json, knowledge-integration-source.json, knowledge-scope-amendment.json and preserved knowledge-attempt0 records.
+
+## Upstream Actions integration repair (PH-18, P2)
+
+Final integration passed the first13 check groups, then the CI policy suite
+failed49/50. The new production-audit job retained the earlier setup-node SHA,
+while upstream PR319 updated the existing CI jobs. The unchanged policy test
+correctly detects this mismatch. The delivery owner applies the one-line pin
+alignment to the already trusted upstream SHA; audit scope, thresholds and
+required success stay unchanged. Preserve the failed receipt and verify the
+policy/docs again. Runtime inputs and the audited lockfile remain identical to
+the passed integration checks; final PostgreSQL18 and delivery are outstanding.
+
+
+## Final local acceptance and native Codex review
+
+- Clean committed runtime source `23c44f6b`: Web2,174 tests/276 files, Agent427 plus one existing skip, Host195 and Backend research28 passed; applicable types and Web lint passed. Production audit reports zero advisories. Patch10, policy21 and secret-environment23 tests passed. After the diagnosed Actions pin correction, all50 CI policy tests and docs/architecture pass. Failed first receipt remains unchanged; all runtime inputs are identical across the workflow/documentation-only repair.
+- Owned PostgreSQL18 proof on this same head: migration, synthetic seed and213 integration tests across memory review, MCP interactions, screenshot contact tasks and meeting drafts passed. Source remained clean. Compose down with volume removal succeeded; empty project readback confirms cleanup.
+- Independent native Codex sub-agent `final_integration_review` reviewed the aggregate diff against upstream `3c3c2eff`, confirmed no actionable P0–P3, inspected recovery/privacy/admission/ownership boundaries, and independently checked103 SQL/manifest blobs, Web reference closure, action pins,22 policy tests and all five diagrams. The seven Web graph non-roots are framework/declaration/config owners, not dead product modules.
+- This establishes the listed scenarios and source boundaries, not unknown-defect absence, distributed exactly-once effects, model billing across power loss, live deployment, PR merge or native acceptance. All external delivery gates remain mandatory.
+- Permanent receipts: final-integration-combined-verification.json, final-integration-verification.json (original failed gate), final-integration-actions-repair-verification.json, postgres-final-proof/receipt.json, final-subagent-review.md and its inventory/migration manifests.
+
+
+## CodeQL synthetic fixture gate repair (PH-19)
+
+PR325 head `c4b6d799` received three high CodeQL potential filesystem-race
+annotations in two owned synthetic tests. The current scanner failure is
+preserved in codeql-test-fixture-before.json; it is not dismissed or relabeled
+as success. Native Codex worker `codeql_fixture_repair` replaces a terminal
+existence precheck with a direct ENOENT read assertion, and inspects published
+file mode through an opened FileHandle closed in finally. All corrupt replay,
+original timestamps,0600 mode and exact unchanged-byte assertions remain.
+Only the two test files change; no production or scanner rule changes.
+The worker and delivery owner independently pass all24 targeted tests; worker
+Host typecheck passes. Latest-head remote CodeQL and other CI gates remain
+required. Independent final review must bind to the new commit before delivery.
+
+
+The first pushed fixture repair removes two annotations; the actual scanner on
+`2bfb0e11` still reports one at the post-replay pathname read. The
+[primary CodeQL query](https://github.com/github/codeql/blob/main/javascript/ql/src/Security/CWE-367/FileSystemRace.ql)
+also classifies opening the pathname as a check. A closed descriptor followed
+by a later pathname read therefore retains that pattern. Preserve this failed
+scan in codeql-test-fixture-attempt1.json. The follow-up isolates initial0600
+publication verification in its own test and places the replay-mode check after
+all actual-path byte assertions. All original coverage remains; both worker and
+parent pass16 affected tests. The actual latest JavaScript/Actions analyses on
+`dbab1c0d` both report zero results and bind to its PR merge preview. The
+aggregate has zero annotations and is neutral solely because the existing path
+policy skips Swift; no Swift scan success is claimed. All applicable PR checks
+then passed, and PR325 merged as `0b7510dd`.
+
+
+## Resident image build-context correction (PH-20)
+
+The clean merged `0b7510dd` backend image build fails at `COPY patches patches`:
+`apps/backend/Dockerfile.dockerignore` starts with default-deny `**` and does not
+allow the tracked patch directory, even though the Dockerfile copies it and the
+frozen workspace requires it. The prior Dockerfile COPY repair alone was
+incomplete. No resident service, keeper or Infisical pair was changed before
+this failure. Preserve `resident-backend-image-build.json` and
+`resident-deploy-blocker-docker-context.json` as failed evidence.
+
+A sequential native Codex worker owns the narrow patch-directory allowlist and
+its existing dependency-policy regression. Preserve final node_modules, dist,
+secret and log exclusions. An actual BuildKit COPY probe must establish the
+context behavior; source-text checks alone are not production build proof.
+Independent review, current-head CI and confirmed merge are required before
+resuming the clean full-image build and resident rollout.
+
+
+The native correction admits only `patches/` and `patches/**`. Its actual
+BuildKit scratch probe fails before the correction and succeeds afterward with
+the same synthetic inputs. Exported registered patch bytes retain their digest;
+node_modules, dist, environment, log and unlisted canaries stay absent. Eleven
+dependency-policy tests pass. No source release or resident service was modified
+for the probe, no image/container was created, and the owned temporary subtree
+was removed. Four small cache candidates are recorded and retained because a
+snapshot alone cannot establish exclusive ownership. Full clean image and live
+rollout proof remain required after review and merge. Permanent evidence:
+`docker-context-fix-summary.md`, its before/after BuildKit receipts and exact
+ignore projections.
+
+
+## Cold metadata fetch timeout correction (PH-21)
+
+The clean `eaa22bc6` image install exits1 after471.94 seconds. Its supply-chain
+verifier checked990 entries, then reported `ERR_PNPM_BROKEN_METADATA_JSON` with
+an aborted-by-timeout cause. Patch COPY succeeded. Space and inode observations
+do not indicate exhaustion; successful HEAD responses did not prove complete
+metadata bodies. Actual eslint-plugin metadata is19.06MB: a controlled bridge
+GET completes in63.8 seconds and a host-mode GET in27.3 seconds. These are
+limited route samples, not proof that every request or complete install passes.
+All four owned network diagnostic containers were removed; resident services,
+keeper and managed saved configuration remain unchanged.
+
+Read-only native inspection of the installed pnpm11.18.0 traces default
+fetchTimeout60000ms through the resolution verifier to its response-body
+deadline. The verifier queues64 items; `network-concurrency` does not change
+that internal limit. CLI normalization defaults maxSockets to50, so lowering
+network concurrency alone does not establish a lower metadata connection cap.
+The recorded error23 comes from undici/AbortSignal TimeoutError, not a curl
+process error code. Preserve both failed complete builds and network evidence.
+
+A native source worker owns finite install-fetch settings and the existing
+dependency-policy regression. Keep the official registry, frozen lock, ignored
+scripts, release-age/trust checks and complete verifier intact. Independent
+review and current-head gates must pass before a new clean merged image build;
+no successful CLI parser check can substitute for that build or live acceptance.
+
+
+The native correction sets a finite180000ms fetch deadline, tarball network
+concurrency4 and an explicit maxSockets4. It preserves the current pnpm pin,
+official registry, frozen lock, ignored scripts and both scope filters. No
+prefer-offline or policy bypass was introduced. Thirteen dependency-policy
+tests pass, including offline CLI help parsing; actual package download and
+complete supply-chain success remain unverified until the new full image build.
+A local no-network timeout reproduction and the installed bundle hash/line
+trace are retained in `pnpm-metadata-diagnosis.md` and its evidence projection.
+
+
+## Strict install configuration entry correction (PH-22)
+
+The actual Node24/pnpm11.18 complete image build on `da1d8cb8` completed npm
+bootstrap in328.5 seconds, then rejected `--maxsockets=4` as an unknown install
+option. No install or supply-chain validation ran, and no resident service,
+keeper or saved configuration changed. The prior `install --help` returned
+success without establishing acceptance by the real install parser. The
+delivery owner acknowledges this verification omission; preserve that earlier
+receipt and the actual failed image rather than relabeling either as success.
+
+An isolated registered-TMP, zero-dependency offline install accepts
+`--config.maxsockets=4` together with the existing timeout/concurrency settings
+and reads back4. The native source owner must verify the normalized value's
+route to the transport, replace the unsupported option, and replace help-only
+proof with a real isolated offline install plus the old-option counterexample.
+Keep all frozen dependency, pin, registry, ignored-script and security-policy
+boundaries. Current-head review/gates/merge and a complete new image remain
+required; an empty fixture does not prove full cold dependency validation.
+
+
+The first `--config.maxsockets=4` candidate passes the isolated empty install,
+but version-bound normalized-value inspection reveals a string, not a number.
+The actual undici Pool requires finite numeric connections; the empty install
+never dispatched a request and therefore did not exercise that boundary. This
+candidate is rejected before source submission. The correction now requires a
+typed numeric value and an unchanged original-CLI dispatcher observation (or an
+explicitly bounded constructor/normalization proof); instrumented diagnostics
+remain labeled and cannot substitute for full cold-image acceptance.
+
+
+The accepted typed entry is builder-local `pnpm config set --location=project
+--json maxSockets 4`, followed by the unchanged finite timeout/network options.
+The source removes both unsupported/untypeable socket flags. Original unmodified
+pnpm11.18 completes the synthetic loopback metadata GET, lock generation and
+frozen tarball install with releaseAge1440 retained. A separate print-only
+version-bound clone observes numeric4 at createClient; its later missing-worker
+exit1 is retained as a failed clone install, not passed evidence. The committed
+regression uses an actual isolated zero-dependency frozen offline install,
+verifies JSON numeric4 and requires the old unsupported option to fail.
+Thirteen tests pass. Installed bundle and user configuration hashes are
+unchanged; owned fixture and three loopback listeners are cleaned up. Preserve
+`build-fetch-config-fix-summary.md` and the corrected/archived diagnosis. Final
+current-head review/gates/merge and full image/live verification remain required.
+
+
+### PH-23: Required native dependency download exceeds the cold-install deadline
+
+PR328 passed independent review and latest-head gates (18 pass, four existing
+skips) and merged as `5ff238f0c790423cdeac9befab8241dc22d5b945`.
+The complete cold Docker attempt on that clean revision ran1368.64 seconds.
+The full990-entry supply-chain policy check passed in15m29.5s; numeric project
+configuration and CLI parsing worked.263 of264 dependency packages installed.
+The remaining `claude-agent-sdk-linux-arm64@0.3.287` tarball exhausted pnpm's
+finite body-timeout retries. Because it is optional to pnpm, install proceeded;
+the required native-runtime verification correctly rejected the absent package
+with MODULE_NOT_FOUND. This is a failed image, not a failed supply-chain check
+or a passed resident deployment. All four services and keeper remain unchanged.
+
+Preserve `deployment-failures/5ff238f0/` and
+`resident-5ff238f0-native-package-failure.json`. Diagnosis is limited to that exact public tarball,
+with bounded sequential requests, discarded bodies and no credentials.
+Do not restart the build, skip the native check or weaken lock/integrity,
+registry, age/trust or supply-chain policies. Resolve the observed transfer
+boundary before another reviewed, gated merge and complete image attempt.
+
+
+The exact public tarball returns Content-Range `bytes0-0/109676765`.
+Sequential60-second discarded-body GETs received2457564 bytes on the host and
+3436499 bytes in Colima (40954/57274 B/s); neither completed. The existing
+credential-free proxy's15-second GET received757287 bytes (50476 B/s), so this
+bounded observation gives no improvement over direct transport. Tiny64KiB
+IPv4/IPv6/proxy probes cannot establish full-body throughput. Preserve the exact
+`resident-5ff238f0-SDK-tarball-diagnosis.json` and route/proxy receipt.
+
+The source correction keeps the180000ms default, adds one builder-only explicit
+finite download-deadline argument validated as a decimal integer in
+180000..3600000ms, and passes it through the actual install parser. Only this
+observed constrained-network deployment will opt into3600000ms. It does not
+guarantee transfer success. Preserve the official registry, frozen graph,
+integrity, policies, retry bounds, numeric sockets4, network concurrency4 and
+required native verification. No image-after-the-fact package repair or new
+proxy/registry is introduced. Actual option, invalid-input and cold-image
+acceptance remain required; do not relabel the failed attempt.
+
+### PH-24: Separate the native download from full-graph metadata residency
+
+PR329 merged as `8c10b5296a0c9dff879b871257403d1cc0cf1438` after
+independent review and current-head gates. Its clean image attempt passed the
+complete990-entry policy check in1735.9 seconds, but the required native
+archive's first3600000ms response-body deadline expired. The owned pnpm process
+incurred12689 major page faults in10 seconds; the6GiB VM had approximately
+134MiB available and152KiB of its2GiB swap free. The delivery owner cancelled
+only that owned build after5500.24 seconds (exit130), preserving the policy
+success, first timeout and cancellation reason. This did not exhaust all
+retries and did not switch any resident service. The host's16GiB RAM, existing
+6GiB and4GiB VMs and13.79GiB swap use did not support adding another8GiB builder.
+
+A bounded synthetic Boundary/CLI experiment rejects local-tarball seeding:
+pnpm11.18 indexes identical archive bytes under a different local package ID,
+so the original frozen registry lock cannot reuse them offline. Its separate
+positive control seeds only the exact registry `name@version` in a fresh store,
+then closes the synthetic registry. The unchanged frozen/offline install
+reuses that package without downloading, with matching module bytes and no
+lock/policy mutation. Wrong-content and empty-store cases do not falsely pass.
+Permanent discovery evidence is in `native-cache-boundary/`; its disposable
+scripts are not production tests or proof of real SDK transfer success.
+
+The next native implementation separates exact registry-native prefetch and
+the full frozen graph into distinct pnpm processes and Docker layers. Derive
+the SDK version from the existing Agent manifest and the supported Linux
+architecture from the builder. Preserve the existing official registry,
+numeric transport settings, finite deadlines, ignored lifecycle scripts,
+integrity, age/trust policies and final required-native verification. The
+memory improvement remains a hypothesis until the complete clean-source image
+and four-service live acceptance pass. Root owns review, documentation and
+delivery; the remaining implementation uses native Codex agents, not Pi.
+
+### PH-25: Reuse verified dependency-store input without carrying old application source
+
+PR330 passed18 current-head checks with four existing skips and merged as
+`4f1ce923c0dcfecdd5beeb4fa296de3c9c2d17d5`. Its independent SDK prefetch
+process stayed approximately160MiB RSS without process swap; the late10-second
+sample had zero additional major faults. The archive nevertheless reached its
+first3600000ms response-body timeout at3603.8 seconds. Root cancelled only the
+owned build after3799.58 seconds (exit130). The full990-entry install was not
+entered; all retries were not exhausted. Preserve the complete failure and
+resource receipts. All four resident services, keeper and Docker context remain
+healthy at their original versions.
+
+Read-only inspection finds a real cache candidate in the existing approved
+resident image `sha256:60c3beaeb8c67672ee144ee20fc3fdc3d461e4ded6f87b148bf2620214f86fc6`.
+Its pnpm11.18, SDK0.3.287 and Linux-arm64 native0.3.287 match the target; the
+Agent manifest hash matches both clean old and approved new source. The v11
+SQLite index contains the exact current frozen integrity plus registry package
+identity. Index presence does not validate every referenced file or prove the
+new image. No index, runtime container or installed application files were
+modified or copied for this inspection.
+
+The next slice admits an optional dependency-store cache image, with an empty
+default store and current application source kept separate. Only the pnpm
+store may enter the builder; installed modules, source, dist and environment
+files remain excluded. The original pinned pnpm must validate and consume the
+cache normally, with file-integrity checks, unchanged registry/frozen graph,
+complete supply-chain policy and required-native execution still enforced.
+Cache misses and corruption must refetch or fail rather than falsely pass.
+Review and current-head gates precede another complete clean-source image and
+live rollout. Native Codex agents own implementation and independent review.
+
+Postmerge CI on4f passes the Web/backend/CLI/security checks. The first
+phase-one job passes63 evaluation and45 runtime-observation tests, then cannot
+immediately download its successfully uploaded artifact; the artifact is
+independently read back by ID. Its second execution succeeds. The first remote
+iOS job passes648 unit tests and three UI cases, then fails at `app.launch()`
+while acquiring a background assertion. Native source and test blobs are
+unchanged, and that case's product assertions were not executed. Independent
+triage supports no specific source defect; the unchanged second CI execution
+completes successfully, including the iOS job and aggregate CI gate. All
+applicable latest4f checks are complete and accepted; the first
+failed attempt remains preserved. No local simulator or test bypass is introduced.
+
+### PH-26: Do not treat the pnpm timestamp fast path as complete cache-byte verification
+
+A real synthetic corruption control modifies a content file within100ms of
+store publication. Original pnpm11.18 with `verifyStoreIntegrity=true` reuses
+those altered bytes. Its pinned worker source explains the timestamp fast
+path; corruption outside that window is detected and fails the frozen offline
+consumer. Preserve both observations rather than retaining only the passing
+negative control. `store status` checks installed virtual-store modules: it
+rejects even good fresh input with no modules, and detects the altered module
+after installation. It cannot serve as input-CAFS verification.
+
+The cache boundary therefore requires a build-only streaming SHA512 check of
+incoming v11 content-addressed files against their source-confirmed path
+digests, independent of mtime. Default empty input is valid; invalid content,
+schema, symbolic links and read failures must fail closed. No package index,
+vendor bundle or registry identity is manufactured or edited. Pinned pnpm
+still performs its normal frozen/integrity/policy checks and the executable
+native gate remains required. The trusted immutable-image provenance contract
+also remains necessary; hashing cache files alone does not authenticate a
+package-to-index mapping. This guard closes the reviewed cache-input path and
+does not claim to repair all upstream pnpm behavior.
+
+The final cache slice passes15 host dependency-policy tests and seven real
+non-root Linux tests, including preserved-mtime corruption, invalid schemas,
+symbolic links and unreadable content. The immutable existing cache passes
+streaming verification of15742 files/405440909 bytes. The original pnpm's
+incorrectly reused synthetic byte set is rejected by the new guard. Default
+and explicit store-only COPY and exact-ignore guard admission probes pass;
+the full-cache COPY and complete image remain live deployment gates.
+
+Independent review closes one P2 by importing the seven behavior tests through
+the existing required Linux security entry. PR331's first CodeQL scan finds a
+High path-stat/write race in the synthetic corruption fixture. The fixture is
+repaired using one open descriptor for stat/write/utimes, finally cleanup and
+explicit same-size/mtime assertions, without suppressing the scanner or changing
+production guard bytes. Native independent review and seven fresh Linux tests
+accept the repair. The final head `935fc9155a7b7f2e933e290b37de94fb51c0f7a5`
+passes15 checks with four skips; JavaScript/Actions analyses have zero results
+and no open PR alerts. The actual Linux security job runs22 tests with zero
+skips. PR331 merges as `f18eafb232d1da5781ca0632672c2590703bea89`;
+all six reviewed file hashes match the merged source. Full image and four
+resident-service acceptance remain pending; do not infer them from these gates.
+
+
+## Final runtime acceptance and disposition
+
+### PH-27: Synthetic cache fixture race closed without scanner suppression
+
+PR331's High path-stat/write fixture finding is closed by the same-descriptor
+stat/write/utimes repair described above. Final head
+`935fc9155a7b7f2e933e290b37de94fb51c0f7a5` passed15 checks and four skips;
+JavaScript/Actions analyses returned zero results and open PR alerts. The Linux
+security job executed22 tests with zero skips. All six reviewed source hashes
+match merge `f18eafb232d1da5781ca0632672c2590703bea89`.
+
+### Complete image and four resident services
+
+The actual clean `f18eafb2` image build completed successfully in1432.5455
+seconds. Full dependency-store COPY, SHA512 verification of15742 files /
+405440909 bytes and exact SDK prefetch passed; guard/prefetch took9.3 seconds.
+The complete990-entry policy passed in926.9 seconds. Required Linux-arm64
+execution reported `2.1.287 (Claude Code)` from SDK package0.3.287. No old
+application source, installed modules, dist or environment entered the build.
+The trusted cache-image ID remained unchanged. These receipts establish the
+complete image; earlier failed builds and cancelled retries remain failures.
+
+API and Agent Host run image
+`sha256:f1932ade14e3f5da11330e5302042cb345d67ac3a3a973863bc7a4070b858953`.
+API readiness and public manifest return `f18eafb2`; Host and its socket are
+ready. Existing PostgreSQL data, Compose identity, Tailscale handlers and keeper
+remain preserved. The authorized deployment checks cover migration, synthetic
+Opik write/read/delete, Apple keys/auth, ASR and a cited synthetic Ask.
+
+Web runs clean detached `f18eafb2` with buildID `q1qtfJNhZh-k0dE7rRvfe`.
+Its active receipt, current release, physical process cwd, launchd ancestry,
+providers200 and HTTPS surface agree. Next rewrites its process title, so the
+independent readback's generic `expected_script_matched=false` field is not
+used as the Web source proof. Browser executor's exact entry argv does match
+its clean `f18eafb2` release; authenticated readiness is200/Chromium. Its daemon,
+pinned browser image, token permissions and launchd configuration are preserved.
+`example.invalid` produces bounded502/BROWSER_NAVIGATION_FAILED and no owned
+worker remains. Docker context stays `colima`.
+
+### PH-28: Managed Web pnpm bootstrap failure recovered through the original build
+
+The first canonical Web build exited1 before Next output with a generic
+operation-aborted timeout. The managed global pnpm11.22.0 shim needed project
+pnpm11.18.0, whose cached CLI was missing. Original shim source confirms normal
+version activation can fetch registry metadata and install that CLI before
+Next starts. Generic first stderr does not identify whether resolution or
+engine-identity failed; no exact failed substep is claimed.
+
+The first failure and healthy prior live Web were preserved. One normal version
+probe restored the pinned CLI with its previously verified source hash. The
+unchanged complete canonical build then succeeded on attempt2, followed by
+installation, process recovery and HTTPS readback. A version probe alone was
+never treated as production build proof. No source, global shim, runtime
+configuration, registry or policy was altered. Durable prevention belongs in
+the existing local-backend operations guide, not another configuration variant.
+
+### Independent live acceptance and cleanup
+
+Root's revision-bound resident readback succeeded. One real expiring daily test
+account was created through `capir test create --env staging --preset daily
+--open web`. Request `ba140859-e1ab-40fb-90fc-4d67edf16401` and run
+`75405a19-96da-4646-9214-542835aad5b0` bind the303 exchange, active banner and
+rendered ready counts12/30/4. The screenshot confirms the banner and main chat;
+it does not prove every sidebar is fully settled.
+
+A malformed synthetic login produced a correlated safe INTERNAL_ERROR log with
+no canary or raw error fields, before auth writes. The test account's first six
+empty screenshot requests returned503/ai_disabled and the seventh429 with
+Retry-After60 despite forged IPs. This verifies disabled/no-action and account
+rate budget; successful AI image processing was not exercised. No images or
+live model calls were sent by the final root probes. The retired welcome5 PNG
+returns404 while the retained synthetic marketing WebP returns200.
+
+`capir test stop` and status both exited0: state `deleted`, credential removed.
+The owned browser runner and private credential projection were removed;
+cleanup errors are empty. The temporary screenshot was copied to permanent
+sanitized evidence before registered output cleanup.
+
+### Resource lifecycle and remaining boundaries
+
+The completed old dependency backup was removed through one precise registered
+artifact after open-consumer checks. Its apparent1.1GiB size reclaimed only
+17588224 actual host bytes; apparent size does not establish reclaimed space.
+A later free-space recovery
+has no attributed cleanup cause. Two exact-ID prune attempts on this task's
+completed f18 cache records each returned0B; they are not claimed as reclamation.
+Supported ext4 free-block discard then reported11GiB logical trim and actual
+host free space increased28.811 to31.659GiB. Live revision, current/rollback
+images, keeper and Docker context remained unchanged; final delivery reads
+31.60GiB free. No shared VM restart, resize, volume removal or new simulator was
+used.
+
+The old90-second cache-export probe still has a BuildKit Running history record:
+COPY completed, export stopped at61150079 bytes, original host client absent.
+Installed BuildKit has no solver cancellation-by-ref API; deleting history would
+not cancel it. The record and failed probe are retained. Bounded load inspection
+found no evidence of continuing heavy work before the sole successful new image
+build. This limitation is not described as a cancelled solver.
+
+GitHub advisories remain open: braces High in the development graph (no released
+upstream fix; reviewed bounded local patch) and glib0.18.5 Medium in the
+Linux/BSD-gated GTK graph. Production npm audit is clean. ARM64 macOS locked
+reverse graph returned0 without glib; Intel/Linux offline attempts returned101
+for missing cache and are not passing evidence. No advisory was dismissed or
+unsupported native upgrade introduced. The audit establishes repaired findings
+and these checked paths, not the absence of all unknown bugs.
+
+Sanitized source-review, PR/gate, image, resident, root live and lifecycle
+receipts are retained in `~/.codex/task-artifacts/project-health-2026-10-12/`.
+Key final records are `postmerge-f18-final-checks.json`,
+`resident-f18eafb2-final-delivery.json`,
+`live-resident-independent-readback.json`, `live-final-acceptance.json`,
+`resident-f18eafb2-supported-data-trim.json` and `review-ledger.json`.

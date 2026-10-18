@@ -3,12 +3,30 @@ packages:
   - "packages/*"
 
 overrides:
-  "argparse@1.0.3>lodash": "4.18.0"
-  # https://github.com/fastify/fast-uri/security/advisories/GHSA-58mr-gqgx-xq4g
-  "fast-uri@3.1.5": "3.1.7"
-  "fast-uri@4.1.2": "4.1.4"
+  # Narrow security repairs for resolved transitive versions. Each override
+  # pins the minimal compatible patched release published on npm; registry
+  # release metadata is authoritative for target availability.
+  # https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-6qxp-vccf-f47h
+  "@modelcontextprotocol/sdk@^1.29.0": "1.31.0"
+  # https://github.com/honojs/hono/security/advisories/GHSA-hxh3-vqpv-xpqv
+  "hono@^4": "4.13.7"
+  # https://github.com/beaugunderson/ip-address/security/advisories/GHSA-h3mg-xc3c-68pw
+  "ip-address@^10": "10.7.1"
+  # https://github.com/fastify/fast-uri/security/advisories/GHSA-hrr3-gc8f-f4qj
+  # https://github.com/fastify/fast-uri/security/advisories/GHSA-jvvf-x445-j334
+  "fast-uri@^3": "3.1.8"
+  "fast-uri@^4": "4.1.5"
+  # https://github.com/advisories/GHSA-68fv-2mgg-jv7q
+  "source-map-js@^1": "1.2.2"
   # https://github.com/ljharb/qs/security/advisories/GHSA-4mjr-xmp4-gh2g
   "qs@6.15.3": "6.16.0"
+  # GHSA-hp3w-g68c-fv3c (sprintf-js, via argparse): sprintf-js@1.1.4 does not
+  # exist on npm. argparse is only reachable through mammoth's unused CLI
+  # entrypoint (bin/mammoth); the product calls mammoth.extractRawText from
+  # the library. Remove the CLI-only dependency instead of fabricating an
+  # upgrade. See pnpm overrides docs for the "-" removal syntax:
+  # https://pnpm.io/settings/dependency-resolution.md#overrides
+  "mammoth@1.13.0>argparse": "-"
 
 allowBuilds:
   esbuild: true
@@ -16,13 +34,10 @@ allowBuilds:
   unrs-resolver: true
 
 minimumReleaseAgeExclude:
-  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.241'
-  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.241'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.241'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.241'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.241'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.241'
-  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.241'
-  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.241'
-  - '@anthropic-ai/claude-agent-sdk@0.3.241'
+  # Anthropic agent SDK age exclusions for 0.3.241 were removed: that version
+  # is absent from the resolved graph (the SDK stays pinned at 0.3.287, which
+  # passes minimumReleaseAge unaided).
   - opik@2.2.45
+
+patchedDependencies:
+  braces@3.0.3: patches/braces@3.0.3.patch

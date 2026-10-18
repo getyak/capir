@@ -17,6 +17,7 @@ import {
 } from "@/lib/backend-session";
 import { SCREENSHOT_OWNER_ROLES } from "@/lib/screenshot-capture";
 import { isAllowedMutationOrigin } from "@/lib/request-origin";
+import { createRequestRateLimiter } from "@/lib/server/request-rate-limit";
 
 export const runtime = "nodejs";
 
@@ -29,7 +30,20 @@ const ACCEPTED_IMAGE_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
-const attempts = new Map<string, { count: number; resetAt: number }>();
+
+/**
+ * Screenshot analysis admits a bounded 6-per-minute budget per verified
+ * backend account and user, never caller-supplied forwarding headers: the same
+ * authenticated principal cannot buy extra image/model budget by churning IP
+ * headers, and distinct accounts stay isolated. The fixed-window map is
+ * bounded, evicts expired keys on consume, creates no timers, and is per
+ * process only; a multi-process deployment needs its own trusted edge control.
+ */
+const screenshotRateLimiter = createRequestRateLimiter({
+  limit: RATE_LIMIT_REQUESTS,
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  capacity: 256,
+});
 
 function noStoreHeaders() {
   return {
@@ -65,32 +79,6 @@ function boundedFormInteger(
     : null;
 }
 
-function rateLimitKey(request: NextRequest) {
-  return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip") ||
-    "local"
-  );
-}
-
-function consumeRateLimit(request: NextRequest) {
-  const now = Date.now();
-  const key = rateLimitKey(request);
-  const current = attempts.get(key);
-  if (!current || current.resetAt <= now) {
-    attempts.set(key, {
-      count: 1,
-      resetAt: now + RATE_LIMIT_WINDOW_MS,
-    });
-    return null;
-  }
-  if (current.count >= RATE_LIMIT_REQUESTS) {
-    return Math.max(1, Math.ceil((current.resetAt - now) / 1_000));
-  }
-  current.count += 1;
-  return null;
-}
-
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user) {
@@ -105,8 +93,10 @@ export async function POST(request: NextRequest) {
       { status: 403, headers: noStoreHeaders() },
     );
   }
-  // The rendered workspace header must match the effective backend session
-  // before any image or model processing; a stale tab must not analyze here.
+  // Authentication, rendered workspace binding, and revocation checks run
+  // before any image body, model, or receipt work; only then is the admitted
+  // account+user budgeted.
+  let admittedRateLimitKey = "";
   try {
     const claims = await readBackendSessionClaims();
     const expectedWorkspace = request.headers.get("x-talent-signal-workspace");
@@ -121,6 +111,8 @@ export async function POST(request: NextRequest) {
       if (current.account.id !== claims.backendAccountId || current.user.id !== claims.backendUserId) {
         throw new BackendSessionExpiredError();
       }
+      admittedRateLimitKey =
+        `screenshot-analysis:${current.account.id}:${current.user.id}`;
     } catch (error) {
       if (isBackendSessionExpiredError(error)
         || (error instanceof TalentSignalHttpError && (error.status === 401 || error.status === 403))) {
@@ -152,8 +144,8 @@ export async function POST(request: NextRequest) {
       { status: 413, headers: noStoreHeaders() },
     );
   }
-  const retryAfter = consumeRateLimit(request);
-  if (retryAfter !== null) {
+  const rateLimit = screenshotRateLimiter.consume(admittedRateLimitKey);
+  if (!rateLimit.allowed) {
     return NextResponse.json(
       {
         error:
@@ -164,7 +156,7 @@ export async function POST(request: NextRequest) {
         status: 429,
         headers: {
           ...noStoreHeaders(),
-          "Retry-After": String(retryAfter),
+          "Retry-After": String(rateLimit.retryAfterSeconds),
         },
       },
     );
@@ -300,14 +292,12 @@ export async function POST(request: NextRequest) {
     }
     const requestId = randomUUID();
     const failureCode = classifyScreenshotAnalysisFailure(error);
-    const reason =
-      error instanceof Error
-        ? error.message.replace(/\s+/g, " ").trim().slice(0, 500)
-        : "Unknown screenshot analysis failure.";
+    // Only closed failure classification and correlation are logged: raw error
+    // text can carry provider bodies or private screenshot content.
     console.error("Screenshot analysis failed.", {
       requestId,
       model: getScreenshotAnalysisAvailability().screenshot_model,
-      reason,
+      code: failureCode,
     });
     return NextResponse.json(
       {

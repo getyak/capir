@@ -141,4 +141,43 @@ describe("local public-web provider registry", () => {
       ),
     ).rejects.toMatchObject({ code: "WEB_SEARCH_PROVIDER_UNAVAILABLE" });
   });
+
+  it("keeps raw transport exception message, name, stack, and cause out of typed provider failures", async () => {
+    const provider = new TavilyWebSearchProvider({
+      apiKey: "secret-tavily-key",
+      fetcher: vi.fn<typeof fetch>().mockRejectedValue(
+        Object.assign(new Error("SECRET_MESSAGE_CANARY"), {
+          name: "SECRET_NAME_CANARY",
+          stack: "Error: SECRET_STACK_CANARY\n    at SECRET_FRAME_CANARY",
+          cause: new Error("SECRET_CAUSE_CANARY"),
+        }),
+      ),
+    });
+    let failure: unknown;
+    try {
+      await provider.search(
+        { ...scope, providerID: provider.id },
+        { query: "Example filing", maximumResults: 3, recencyDays: null },
+        new AbortController().signal,
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    // The typed code and fixed operation message survive; nothing from the
+    // raw transport exception does.
+    expect(failure).toMatchObject({
+      code: "WEB_SEARCH_PROVIDER_UNAVAILABLE",
+      message: "The search provider could not be reached.",
+    });
+    const error = failure as Error & { cause?: unknown };
+    const serialized = JSON.stringify({
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+      cause: error.cause,
+    });
+    expect(serialized).not.toContain("CANARY");
+    expect(serialized).not.toContain("secret-tavily-key");
+  });
 });

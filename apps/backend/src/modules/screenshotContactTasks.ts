@@ -1,5 +1,5 @@
 import { withProductRunCapture, captureProductStep } from "@talent-signal/agent";
-import { saveProductRunOutput, productRunSink } from "./productRunStorage.js";
+import { saveProductRunOutput, productRunSink, saveProductRunUsageDiagnostics, type ScreenshotUsageDiagnostic } from "./productRunStorage.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
@@ -33,6 +33,10 @@ import { contactImages, validateContactImage, reserveContactImages, persistConta
 import { mergeContactExtractions } from "./mergeContactExtractions.js";
 import { profileUnderstanding, saveReviewedContactProfile } from "./contactProfileDraft.js";
 import { LocalContactResearchClient, type ContactResearchClient } from "./contactResearchClient.js";
+import {
+  boundedDiagnosticCode,
+  RESEARCH_TOOL_ERROR_CODE_SET,
+} from "../lib/diagnosticCodes.js";
 
 type Response = ScreenshotContactTaskResponse;
 type Manifest = Omit<ScreenshotContactTaskRequest, "image" | "additional_images"> & { image?: ContactImageManifest; additional_images?: ContactImageManifest[]; text?: string };
@@ -52,7 +56,9 @@ interface TaskState {
   response: Response;
   searches: Array<{ query: string; candidates: Response["candidates"] }>;
   observations: Array<{ tool: string; result: unknown }>;
-  model_receipts: Array<{ model: string; request_id: string; input_tokens: number; output_tokens: number }>;
+  model_receipts: Array<{ model: string; request_id: string; input_tokens: number; output_tokens: number;
+    provider?: string; source_image_index?: number; reported_model?: string | null; raw_usage_known?: boolean;
+    raw_prompt_tokens?: number | null; raw_completion_tokens?: number | null }>;
   turns: number;
   tokens: number;
   selected: { person_id: string; relationship_context_id: string } | null;
@@ -126,10 +132,161 @@ function automaticIdentityEvidence(row:Row){
   return {contactName,clues};
 }
 function deny(code: string): never { throw new ApiError(409, code, code); }
-function codeOf(error: unknown): string {
-  if (error instanceof ApiError) return error.code;
-  return error instanceof Error && /^[A-Z][A-Z0-9_]+$/u.test(error.message)
-    ? error.message : "CONTACT_TASK_OPERATION_FAILED";
+/**
+ * Declared fixed policy codes of this task surface and the shared Agent
+ * contact-surface producers that reach it (intake extraction, screenshot
+ * preprocessing, model adapters, and evidence admission), plus the runner's
+ * abort reasons. Mapped only through this finite set: locally constructed
+ * typed policy errors never surface anything outside it, and unknown
+ * exception content maps to the stable fallback.
+ */
+const CONTACT_TASK_POLICY_CODES: readonly string[] = [
+  // Shared Agent contact intake / model adapter producers.
+  "CONTACT_AGENT_EXPECTED_ONE_TOOL_CALL",
+  "CONTACT_AGENT_OUTPUT_INVALID",
+  "CONTACT_AGENT_PROVIDER_EMPTY_RESPONSE",
+  "CONTACT_AGENT_PROVIDER_ENDPOINT_INVALID",
+  "CONTACT_AGENT_PROVIDER_IDENTITY_MISMATCH",
+  "CONTACT_AGENT_PROVIDER_INVALID_JSON",
+  "CONTACT_AGENT_PROVIDER_NOT_CONFIGURED",
+  "CONTACT_AGENT_PROVIDER_RESPONSE_TOO_LARGE",
+  "CONTACT_AGENT_TOKEN_BUDGET_EXHAUSTED",
+  "CONTACT_AGENT_TOOL_CALL_INVALID",
+  "CONTACT_IMAGE_FORMAT_INVALID",
+  "CONTACT_IMAGE_OVERVIEW_TOO_LARGE",
+  "CONTACT_IMAGE_REGION_OUT_OF_BOUNDS",
+  "CONTACT_IMAGE_VIEW_LIMIT",
+  "CONTACT_IMAGE_VIEW_SELECTION_INVALID",
+  "CONTACT_TEXT_EXTRACTION_NOT_SOURCE_GROUNDED",
+  // Evidence admission and original-pixel boundaries.
+  "EVIDENCE_IMAGE_SCOPE_MISMATCH",
+  "GENERATION_REVOKED",
+  "IMAGE_EXPIRED",
+  "ORIGINAL_MUST_NOT_BE_READ",
+  "SCREENSHOT_AUTHORITY_REVOKED",
+  "SOURCE_EXPIRED",
+  "SOURCE_REVOKED",
+  "TEXT_RUN_MUST_NOT_READ_PIXELS",
+  // Shared screenshot preprocessing producers.
+  "SCREENSHOT_PREPROCESS_CONTRACT_MISMATCH",
+  "SCREENSHOT_PREPROCESS_CREDENTIAL_REQUIRED",
+  "SCREENSHOT_PREPROCESS_IMAGE_FORMAT_INVALID",
+  "SCREENSHOT_PREPROCESS_IMAGE_INTEGRITY_MISMATCH",
+  "SCREENSHOT_PREPROCESS_IMAGE_TOO_LARGE",
+  "SCREENSHOT_PREPROCESS_MODEL_MISMATCH",
+  "SCREENSHOT_PREPROCESS_OUTPUT_INVALID",
+  "SCREENSHOT_PREPROCESS_OVERVIEW_TOO_LARGE",
+  "SCREENSHOT_PREPROCESS_PROMPT_MISMATCH",
+  "SCREENSHOT_PREPROCESS_PROVIDER_EMPTY_RESPONSE",
+  "SCREENSHOT_PREPROCESS_PROVIDER_IDENTITY_MISMATCH",
+  "SCREENSHOT_PREPROCESS_PROVIDER_INVALID_JSON",
+  "SCREENSHOT_PREPROCESS_PROVIDER_MISMATCH",
+  "SCREENSHOT_PREPROCESS_REGION_OUT_OF_BOUNDS",
+  "SCREENSHOT_PREPROCESS_RESPONSE_TOO_LARGE",
+  "SCREENSHOT_PREPROCESS_SCHEMA_MISMATCH",
+  "SCREENSHOT_PREPROCESS_TILE_LIMIT",
+  "SCREENSHOT_PREPROCESS_VIEW_BUDGET",
+  "SCREENSHOT_PREPROCESS_VIEW_TOO_LARGE",
+  // Screenshot contact task policy codes.
+  "CONTACT_AGENT_SERVER_STOPPED",
+  "CONTACT_BATCH_IDENTITY_CONFLICT",
+  "CONTACT_CHAT_HAS_NO_MESSAGES",
+  "CONTACT_CHAT_IDENTITY_AMBIGUOUS",
+  "CONTACT_CHAT_STORAGE_SCOPE_MISSING",
+  "CONTACT_CITATION_EXCERPT_MISMATCH",
+  "CONTACT_CITATION_SOURCE_UNAVAILABLE",
+  "CONTACT_CREATE_REQUIRES_EMPTY_SEARCH",
+  "CONTACT_CREATE_REQUIRES_VISIBLE_NAME",
+  "CONTACT_DIRECTORY_CHANGED_SEARCH_AGAIN",
+  "CONTACT_EXTRACTION_ALREADY_CHECKPOINTED",
+  "CONTACT_FETCH_SOURCE_DUPLICATE",
+  "CONTACT_FINISH_REQUIRES_STORAGE_READBACK",
+  "CONTACT_HANDOFF_NOT_FOUND",
+  "CONTACT_IMAGE_INTEGRITY_MISMATCH",
+  "CONTACT_IMAGE_REFERENCE_INVALID",
+  "CONTACT_IMAGE_UNAVAILABLE",
+  "CONTACT_IMAGE_UPLOAD_FAILED",
+  "CONTACT_ORIGINAL_IMAGE_REQUIRED",
+  "CONTACT_PREPROCESS_CAPTURE_CONFLICT",
+  "CONTACT_PREPROCESS_DELETE_REQUIRED",
+  "CONTACT_PREPROCESS_LINK_REQUIRED",
+  "CONTACT_PREPROCESS_NOT_LINKABLE",
+  "CONTACT_PREPROCESS_PROFILE_FILING_FORBIDDEN",
+  "CONTACT_PREPROCESS_SOURCE_MISMATCH",
+  "CONTACT_PROFILE_FIELD_LIMIT",
+  "CONTACT_PROFILE_NOT_REVIEWABLE",
+  "CONTACT_PROFILE_REQUIRES_EXACT_CITED_URL",
+  "CONTACT_PROFILE_REVIEW_INVALID",
+  "CONTACT_PROFILE_REVIEW_REQUIRED",
+  "CONTACT_PROFILE_SELECTED_SCOPE_REQUIRED",
+  "CONTACT_PUBLIC_IDENTITY_UNCORROBORATED",
+  "CONTACT_PUBLIC_QUERY_NOT_IDENTITY_ONLY",
+  "CONTACT_QUESTION_ESCAPED_TEXT",
+  "CONTACT_READ_REQUIRES_UNIQUE_SCOPE",
+  "CONTACT_RESEARCH_NOT_AUTHORIZED",
+  "CONTACT_RESEARCH_NOT_CONFIGURED",
+  "CONTACT_SEARCH_NOT_AN_IDENTITY_CLUE",
+  "CONTACT_SELECTED_REUSE_REQUIRED",
+  "CONTACT_SOURCE_DELETION_PENDING",
+  "CONTACT_SOURCE_NOT_DISCOVERED",
+  "CONTACT_SOURCE_STATEMENT_REQUIRES_LITERAL_VALUE",
+  "CONTACT_SUMMARY_ESCAPED_TEXT",
+  "CONTACT_TARGET_UNAVAILABLE",
+  "CONTACT_TASK_ALREADY_FILED",
+  "CONTACT_TASK_BUDGET_EXHAUSTED",
+  "CONTACT_TASK_CANCELLED",
+  "CONTACT_TASK_IDEMPOTENCY_CONFLICT",
+  "CONTACT_TASK_INPUT_INVALID",
+  "CONTACT_TASK_LEASE_LOST",
+  "CONTACT_TASK_NOT_FOUND",
+  "CONTACT_TASK_NOT_RESUMABLE",
+  "CONTACT_TASK_OPERATION_FAILED",
+  "CONTACT_TASK_REVISION_CHANGED",
+  "CONTACT_TASK_SCOPE_AMBIGUOUS",
+  "CONTACT_TASK_SCOPE_INCOMPLETE",
+  "CONTACT_TASK_SESSION_DELETED",
+  "CONTACT_TASK_SOURCE_UNAVAILABLE",
+  "CONTACT_TASK_TIMEOUT",
+  "CONTACT_TEXT_PROCESSOR_UNAVAILABLE",
+  "CONTACT_TEXT_REUSE_REQUIRES_SELECTION",
+  "CONTACT_TOOL_NOT_AUTHORIZED",
+  "CONTACT_UNDERSTANDING_ALREADY_USED",
+  "CONTACT_UNDERSTANDING_REQUIRED",
+  "CONTACT_UPDATE_REQUIRES_STORED_CHAT",
+  "CONTACT_WRITE_SCOPE_MISMATCH",
+  "SCREENSHOT_PREPROCESSOR_NOT_CONFIGURED",
+  "SCREENSHOT_PREPROCESS_CHECKPOINT_INCOMPLETE",
+  "SCREENSHOT_PREPROCESS_RECEIPT_MISMATCH",
+  "SCREENSHOT_PREPROCESS_RESPONSE_UNKNOWN",
+  "SCREENSHOT_PREPROCESS_SOURCE_REQUIRED",
+];
+/** Everything this task surface may legitimately report as a diagnostic. */
+export const CONTACT_TASK_DIAGNOSTIC_CODE_SET: ReadonlySet<string> = new Set([
+  ...RESEARCH_TOOL_ERROR_CODE_SET,
+  ...CONTACT_TASK_POLICY_CODES,
+]);
+/**
+ * Fixed bounded failure diagnostic. A code-shaped Error.message, an arbitrary
+ * error.code, or a raw Error.name never becomes a task diagnostic: unknown
+ * content maps to the stable fallback and cannot enter limitations,
+ * observations, or logging.
+ */
+export function contactTaskDiagnosticCode(error: unknown): string {
+  return boundedDiagnosticCode(
+    error,
+    CONTACT_TASK_DIAGNOSTIC_CODE_SET,
+    "CONTACT_TASK_OPERATION_FAILED",
+  );
+}
+/**
+ * Span-persistence failure logging uses only the fixed operation diagnostic:
+ * a raw Error.name or message never reaches the console.
+ */
+export function reportScreenshotSpanPersistenceFailure(error: unknown): void {
+  console.error(
+    "Product screenshot span persistence failed",
+    contactTaskDiagnosticCode(error),
+  );
 }
 function terminalResponse(row: Row, status: Response["status"]): Response {
   return { task_id: row.id,revision: row.revision,status,contact:null,capture_id:null,source_resource_id:null,
@@ -199,6 +356,29 @@ async function save(client: PoolClient, row: Row) {
   row.assignment_id=assignmentID;
   response.revision=row.revision;response.updated_at=result.rows[0].updated_at.toISOString();
   await saveProductRunOutput(client,{accountID:row.account_id,taskID:row.id},response as unknown as Record<string,unknown>,response.status);
+  // Refresh the source-safe usage counters after every admitted checkpoint so
+  // they survive the rebind purge of this same save and stay readable.
+  await saveProductRunUsageDiagnostics(client,{accountID:row.account_id,taskID:row.id},usageDiagnostics(row.state.model_receipts));
+}
+
+/** Carry explicitly observed raw usage from a preprocessing receipt into
+ * bounded diagnostics. Unknown, invalid or half-observed raw usage stays
+ * explicitly unknown; normalized packet counters never claim a known zero. */
+function arkUsageReceipt(output:ScreenshotPreprocessResult){
+  const fields=output as unknown as Record<string,unknown>;
+  const count=(value:unknown)=>typeof value==="number"&&Number.isSafeInteger(value)&&value>=0?value:null;
+  const prompt=count(fields.raw_prompt_tokens),completion=count(fields.raw_completion_tokens);
+  const observed=fields.raw_usage_known===true&&prompt!==null&&completion!==null;
+  return {reported_model:typeof fields.reported_model==="string"&&fields.reported_model?fields.reported_model.slice(0,200):null,
+    raw_usage_known:observed,raw_prompt_tokens:observed?prompt:null,raw_completion_tokens:observed?completion:null};
+}
+
+function usageDiagnostics(receipts:TaskState["model_receipts"]):ScreenshotUsageDiagnostic[]{
+  return receipts.filter(receipt=>receipt.provider==="volcano_ark").map(receipt=>({
+    provider:"volcano_ark",model:receipt.model,reported_model:receipt.reported_model??null,
+    source_image_index:typeof receipt.source_image_index==="number"?receipt.source_image_index:0,
+    request_id:receipt.request_id,raw_usage_known:receipt.raw_usage_known===true,
+    raw_prompt_tokens:receipt.raw_prompt_tokens??null,raw_completion_tokens:receipt.raw_completion_tokens??null}));
 }
 
 export async function loadScreenshotContactTask(pool: Pool, auth: AuthContext, id: string): Promise<Response> {
@@ -903,10 +1083,15 @@ export class ScreenshotContactTaskRunner {
     this.controllers.get(`${auth.accountId}:${id}`)?.abort(new Error(reason));
   }
   private async observedRun(auth:AuthContext,id:string,image:ScreenshotContactTaskRequest["image"]|undefined,signal:AbortSignal) {
-    const result=await this.pool.query<{id:string;source_generation:string|null}>("SELECT id,source_generation FROM product_runs WHERE account_id=$1 AND user_id=$2 AND task_id=$3 ORDER BY created_at LIMIT 1",[auth.accountId,auth.userId,id]);
+    const result=await this.pool.query<{id:string;source_generation:string|null}>("SELECT id,source_generation FROM product_runs WHERE account_id=$1 AND user_id=$2 AND task_id=$3 AND task_kind='screenshot' ORDER BY created_at LIMIT 1",[auth.accountId,auth.userId,id]);
     const runID=result.rows[0]?.id;
-    if(!runID) return this.run(auth,id,image,signal); // The initial POST already supplies its request-local sink.
-    const sink=productRunSink(this.pool,runID,error=>{ console.error("Product screenshot span persistence failed",error instanceof Error?error.name:"unknown"); },result.rows[0]?.source_generation);
+    if(!runID) {
+      // Background work never inherits a response-lifetime request sink: without
+      // a canonical admitted run there is nothing an early HTTP flush could
+      // honestly promote, and the admitted run binds before this work starts.
+      return withProductRunCapture({async append(){}},()=>this.run(auth,id,image,signal));
+    }
+    const sink=productRunSink(this.pool,runID,reportScreenshotSpanPersistenceFailure,result.rows[0]?.source_generation);
     try { await withProductRunCapture(sink,()=>this.run(auth,id,image,signal)); } finally { await sink.flush(); }
   }
   async drain(){await Promise.allSettled(this.active.values());}
@@ -979,7 +1164,8 @@ export class ScreenshotContactTaskRunner {
         if(!latest.state.preprocessing_parts.some(part=>part.source.source_image_index===index))latest.state.preprocessing_parts.push(committed);
         delete latest.state.preprocessing_inflight;
         latest.state.tokens+=output.input_tokens+output.output_tokens;
-        latest.state.model_receipts.push({model:output.model,request_id:output.request_id,input_tokens:output.input_tokens,output_tokens:output.output_tokens});
+        latest.state.model_receipts.push({model:output.model,request_id:output.request_id,input_tokens:output.input_tokens,output_tokens:output.output_tokens,
+          provider:preprocessor.provider,source_image_index:index,...arkUsageReceipt(output)});
         latest.state.response.events.push({sequence:latest.state.response.events.length+1,tool:"preprocess_screenshot",status:"completed",occurred_at:new Date().toISOString()});
         if(overRegionBudget&&!alreadyAbstained){
           latest.state.response.limitations.push("SCREENSHOT_PREPROCESS_FOLLOW_UP_BUDGET");
@@ -1024,7 +1210,7 @@ export class ScreenshotContactTaskRunner {
     // The authenticated cancellation transaction owns its terminal write. Its
     // early dispatch fence must not race runner failure bookkeeping into a new
     // revision. Timeouts and server shutdown still use the recovery path.
-    const ownerCancellationFenced=()=>shutdown?.aborted===true&&codeOf(shutdown.reason)==="CONTACT_TASK_CANCELLED";
+    const ownerCancellationFenced=()=>shutdown?.aborted===true&&contactTaskDiagnosticCode(shutdown.reason)==="CONTACT_TASK_CANCELLED";
     try{
       let row=await rowFor(this.pool,auth,id);
       if(!row.state.prompts){
@@ -1116,7 +1302,7 @@ export class ScreenshotContactTaskRunner {
         });
       }
       // Unknown public-read responses are visible; do not silently repeat billed requests after recovery.
-      await this.checkpoint(auth,id,epoch,async(_,r)=>{if(r.state.pending_research){r.state.observations.push({tool:r.state.pending_research,result:{error:"CONTACT_RESEARCH_RESPONSE_UNKNOWN"}});r.state.pending_research=null;}}).catch(error=>{if(codeOf(error)!=="CONTACT_TASK_LEASE_LOST")throw error;});
+      await this.checkpoint(auth,id,epoch,async(_,r)=>{if(r.state.pending_research){r.state.observations.push({tool:r.state.pending_research,result:{error:"CONTACT_RESEARCH_RESPONSE_UNKNOWN"}});r.state.pending_research=null;}}).catch(error=>{if(contactTaskDiagnosticCode(error)!=="CONTACT_TASK_LEASE_LOST")throw error;});
       while(!signal.aborted){
         row=await rowFor(this.pool,auth,id);if(row.status!=="running")return;
         if(row.state.turns>=18||row.state.tokens>=80_000)deny("CONTACT_TASK_BUDGET_EXHAUSTED");
@@ -1152,16 +1338,16 @@ export class ScreenshotContactTaskRunner {
               {tool:call.name,model:reply.model,provider_request_id:reply.providerRequestID,turn:r.state.turns});
           },personAuthoritiesForCall(call));
         }catch(error){
-          if(ownerCancellationFenced()||codeOf(error)==="CONTACT_TASK_LEASE_LOST")return;
-          await this.checkpoint(auth,id,epoch,async(_,r)=>{this.observe(r,call.name,{error:codeOf(error)},error instanceof ApiError?"denied":"failed");r.state.pending_research=null;});
+          if(ownerCancellationFenced()||contactTaskDiagnosticCode(error)==="CONTACT_TASK_LEASE_LOST")return;
+          await this.checkpoint(auth,id,epoch,async(_,r)=>{this.observe(r,call.name,{error:contactTaskDiagnosticCode(error)},error instanceof ApiError?"denied":"failed");r.state.pending_research=null;});
         }
       }
       deny("CONTACT_TASK_TIMEOUT");
     }catch(error){
-      if(ownerCancellationFenced()||codeOf(error)==="CONTACT_TASK_LEASE_LOST")return;
+      if(ownerCancellationFenced()||contactTaskDiagnosticCode(error)==="CONTACT_TASK_LEASE_LOST")return;
       await this.checkpoint(auth,id,epoch,async(_,r)=>{
         r.state.response.status=r.state.response.capture_id?"partial":"failed";
-        r.state.response.limitations.push(codeOf(error));
+        r.state.response.limitations.push(contactTaskDiagnosticCode(error));
         r.state.response.summary=r.state.response.capture_id?"聊天记录已保存，后续分析尚未完成。":"任务尚未完成，可重试继续。";
       }).catch(()=>{});
     }
@@ -1297,15 +1483,15 @@ export class ScreenshotContactTaskRunner {
               this.observe(r,name,value,"completed");return {...value as Record<string,unknown>,current_state:currentToolState(r)};
             },personAuthoritiesForCall(call));
           }catch(error){
-            if(signal.aborted||executionSignal.aborted||codeOf(error)==="CONTACT_TASK_LEASE_LOST")throw error;
-            const state=await this.checkpoint(auth,id,epoch,async(_,r)=>{this.observe(r,name,{error:codeOf(error)},"denied");return currentToolState(r);});
-            return {error:codeOf(error),current_state:state,instruction:codeOf(error)==="CONTACT_QUESTION_ESCAPED_TEXT"
+            if(signal.aborted||executionSignal.aborted||contactTaskDiagnosticCode(error)==="CONTACT_TASK_LEASE_LOST")throw error;
+            const state=await this.checkpoint(auth,id,epoch,async(_,r)=>{this.observe(r,name,{error:contactTaskDiagnosticCode(error)},"denied");return currentToolState(r);});
+            return {error:contactTaskDiagnosticCode(error),current_state:state,instruction:contactTaskDiagnosticCode(error)==="CONTACT_QUESTION_ESCAPED_TEXT"
               ? "Write one concise identity/source question using ordinary prose and actual line breaks, never literal backslash-n/backslash-r text. Previously completed work is unchanged; retry only ask_contact_clarification."
-              : codeOf(error)==="CONTACT_SUMMARY_ESCAPED_TEXT"
+              : contactTaskDiagnosticCode(error)==="CONTACT_SUMMARY_ESCAPED_TEXT"
               ? "Write ordinary prose with actual line breaks, not literal backslash-n/backslash-r escape text. Retry only the rejected finish call."
-              : codeOf(error)==="CONTACT_SOURCE_STATEMENT_REQUIRES_LITERAL_VALUE"
+              : contactTaskDiagnosticCode(error)==="CONTACT_SOURCE_STATEMENT_REQUIRES_LITERAL_VALUE"
               ? "A source_statement field value must copy a contiguous part of its exact cited excerpt. Keep only the supported source wording, or explicitly label a justified, qualified interpretation as inference. Discussing a topic does not prove work experience; separated dated roles do not establish a direct job transfer. Correct this update only; prior filing remains complete."
-              : codeOf(error)==="CONTACT_CITATION_EXCERPT_MISMATCH"
+              : contactTaskDiagnosticCode(error)==="CONTACT_CITATION_EXCERPT_MISMATCH"
               ? "Copy one contiguous exact excerpt from ONE cited source; never concatenate, translate, or insert ellipses. finish_contact_task findings can cite only original chat messages. Public claims belong in update_contact fields with their fetched page references. Correct the rejected call; completed filing must not be repeated."
               : "Choose from current allowed tools and use exact source tokens. Completed filing must not be repeated; no success is implied for this failed call."};
           }

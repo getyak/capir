@@ -16,6 +16,8 @@ import {
   proposeMcpToolCall,
   readMcpInteraction,
   readMcpToolCallReceipt,
+  withdrawMcpProposalsForRun,
+  type McpProposalWithdrawalResult,
   type McpChoiceOptionInput,
   type McpInteractionDependencies,
   type McpStagingAuthority,
@@ -47,6 +49,8 @@ export interface WorkspaceMcpConnections {
   handle(
     input: Record<string, unknown>,
   ): Promise<WorkspaceMcpConnectionsResult>;
+  /** Withdraw only proposals staged by this adapter, never listed history. */
+  withdrawPending?(): Promise<McpProposalWithdrawalResult>;
 }
 
 export interface WorkspaceMcpConnectionsOptions {
@@ -106,7 +110,21 @@ export function createWorkspaceMcpConnections(
 ): WorkspaceMcpConnections {
   const dependencies =
     options.dependencies ?? mcpInteractionDependencies();
+  const stagedRequests = new Map<string, number>();
+  const stagedSummary = (request: McpInteractionRequest) => {
+    stagedRequests.set(request.id, request.revision);
+    return requestSummary(request);
+  };
   return {
+    async withdrawPending() {
+      if (!options.authority) throw new ApiError(409, "MCP_WITHDRAWAL_AUTHORITY_REQUIRED", "Withdrawal needs the live run claim.");
+      const result = await withdrawMcpProposalsForRun(options.pool, options.auth, {
+        authority: options.authority,
+        requests: [...stagedRequests].map(([requestID, expectedRevision]) => ({ requestID, expectedRevision })),
+      });
+      for (const request of result.requests) stagedRequests.delete(request.requestID);
+      return result;
+    },
     async handle(input) {
       const operation = input.operation;
       try {
@@ -191,7 +209,7 @@ export function createWorkspaceMcpConnections(
             ok: true,
             data: {
               note: "The connection is not added yet. The user must approve it in the request card; continue the original task and reference this request.",
-              ...requestSummary(staged.request),
+              ...stagedSummary(staged.request),
             },
           };
         }
@@ -236,7 +254,7 @@ export function createWorkspaceMcpConnections(
             ok: true,
             data: {
               note: "No tool has run. The user must approve this exact call in the request card; the approved receipt will return to this conversation.",
-              ...requestSummary(staged.request),
+              ...stagedSummary(staged.request),
             },
           };
         }
@@ -340,7 +358,7 @@ export function createWorkspaceMcpConnections(
             ok: true,
             data: {
               note: "No decision was made. The user selects one option in the request card and the selection returns to this conversation.",
-              ...requestSummary(staged.request),
+              ...stagedSummary(staged.request),
             },
           };
         }

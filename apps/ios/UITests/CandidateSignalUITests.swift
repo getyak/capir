@@ -1768,6 +1768,111 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Nia Williams"].exists)
     }
 
+    func testPersonDetailLeadsWithContextAndRetainsProfileProvenance() {
+        for language in ["en", "zh-Hans"] {
+            let chinese = language == "zh-Hans"
+            app.launchArguments = [
+                "-AppleLanguages", chinese ? "(zh-Hans)" : "(en)",
+                "-AppleLocale", chinese ? "zh_CN" : "en_US",
+                "-talent-signal.interface-language", language,
+            ]
+            app.launch()
+            hittableButton("archive-tab-people", timeout: 8).tap()
+            let person = app.buttons["workspace-person-20000000-0000-4000-8000-000000000001"]
+            XCTAssertTrue(person.waitForExistence(timeout: 5))
+            person.tap()
+            XCTAssertTrue(element("workspace-person-detail").waitForExistence(timeout: 5))
+
+            let role = app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "person-detail-role-title-")
+            ).firstMatch
+            let about = element("person-detail-about")
+            preserveScreenshot("Person context initial viewport \(language)")
+            XCTAssertTrue(role.waitForExistence(timeout: 5))
+            XCTAssertEqual(role.label, "Chief Product Officer search")
+            XCTAssertTrue(app.windows.firstMatch.frame.contains(role.frame))
+            XCTAssertGreaterThan(role.frame.height, 0)
+            XCTAssertTrue(about.exists)
+            XCTAssertLessThan(role.frame.minY, about.frame.minY)
+            XCTAssertTrue(app.staticTexts["1 reviewed evidence reference"].exists)
+            XCTAssertTrue(element("person-detail-profile-provenance").label.contains(
+                chinese ? "由工作区所有者撰写" : "Written by the workspace owner"
+            ))
+            preserveScreenshot("Person context before authored biography \(language)")
+
+            app.buttons[chinese ? "关闭" : "Close"].tap()
+            XCTAssertTrue(element("workspace-person-detail").waitForNonExistence(timeout: 5))
+            XCTAssertTrue(person.isHittable)
+            XCTAssertTrue(app.buttons["archive-tab-people"].isSelected)
+            app.terminate()
+        }
+    }
+
+    func testPersonDetailKeepsIdentityAndProvenanceReachableInChineseDarkAX5() {
+        app.launchArguments = [
+            "--force-dark",
+            "-AppleLanguages", "(zh-Hans)",
+            "-AppleLocale", "zh_CN",
+            "-talent-signal.interface-language", "zh-Hans",
+            "-UIPreferredContentSizeCategoryName",
+            UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
+            "-UIAccessibilityReduceMotionEnabled", "YES",
+        ]
+        app.launchEnvironment["TS_IOS_UI_TEST_DISPLAY_PROBE"] = "true"
+        app.launch()
+        app.assertEffectiveAccessibility5()
+        hittableButton("archive-tab-people", timeout: 8).tap()
+        app.buttons["workspace-person-20000000-0000-4000-8000-000000000001"].tap()
+        XCTAssertTrue(element("workspace-person-detail").waitForExistence(timeout: 5))
+
+        let name = element("person-detail-name")
+        let role = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "person-detail-role-title-")
+        ).firstMatch
+        preserveScreenshot("Person initial Chinese dark AX5")
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        XCTAssertEqual(name.label, "Leila Hartmann")
+        XCTAssertTrue(app.windows.firstMatch.frame.contains(name.frame))
+        XCTAssertGreaterThan(name.frame.height, 0)
+        XCTAssertEqual(name.frame.minX, role.frame.minX, accuracy: 2)
+        preserveScreenshot("Person identity Chinese dark AX5")
+        scrollToReadablePersonText(role)
+        XCTAssertTrue(app.staticTexts["候选人 · 进行中 · 已确认"].exists)
+        let provenance = element("person-detail-profile-provenance")
+        scrollToReadablePersonText(provenance)
+        XCTAssertTrue(provenance.label.contains("由工作区所有者撰写"))
+        preserveScreenshot("Person authored provenance Chinese dark AX5")
+
+        let close = app.buttons["关闭"]
+        XCTAssertTrue(close.isHittable)
+        // Retain the platform navigation control; the separate 44pt edge
+        // discovery probe remains unmet and is not counted as acceptance here.
+        XCTAssertGreaterThanOrEqual(close.frame.width, 43.5)
+        XCTAssertGreaterThanOrEqual(close.frame.height, 35.5)
+        close.tap()
+        XCTAssertTrue(element("workspace-person-detail").waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["archive-tab-people"].isSelected)
+    }
+
+    private func scrollToReadablePersonText(_ text: XCUIElement) {
+        XCTAssertTrue(text.waitForExistence(timeout: 5))
+        let window = app.windows.firstMatch.frame
+        let navigation = app.navigationBars["人物"]
+        XCTAssertTrue(navigation.exists)
+        let top = navigation.frame.maxY + 8
+        let bounds = CGRect(
+            x: window.minX, y: top,
+            width: window.width, height: window.maxY - top - 20
+        )
+        for _ in 0..<12 {
+            if text.frame.height > 0, bounds.contains(text.frame) { return }
+            if text.frame.minY < bounds.minY { app.swipeDown() }
+            else { app.swipeUp() }
+        }
+        XCTAssertGreaterThan(text.frame.height, 0)
+        XCTAssertTrue(bounds.contains(text.frame), "The complete Person text must be readable below the navigation bar.")
+    }
+
     func testPeopleVisibleAndLongPressMenusKeepAskInsideVisibleScope() {
         app.launch()
 

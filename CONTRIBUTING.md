@@ -23,6 +23,10 @@ pnpm architecture:generate
 pnpm architecture:check
 ```
 
+`pnpm architecture:generate` composes both diagram generators (product/system
+and Agent families); `pnpm architecture:agent-generate` runs only the Agent
+generator.
+
 Commit the `.excalidraw`, `.svg`, and `.png` outputs together.
 
 For iOS changes, also run:
@@ -70,9 +74,12 @@ its app, shared UI, tooling, or dependency inputs changed. Repository policy,
 docs, and secret-hygiene gates always run. Never weaken or disable a required
 gate to make a change pass.
 
-Request a Codex review manually only on a stable, high-risk head. After a
-material P0/P1 fix, request at most one re-review of the new head rather than a
-review per intermediate push.
+First-pass pull-request review follows the canonical
+[User-directed model review](docs/operations/ci-cd.md#user-directed-model-review)
+procedure: one user-directed local MiMo review on the stable current head,
+inspected before it is published as a scoped comment. Independent Codex
+judgment stays mandatory for security, migration, and architecture issues, and
+a model comment is never a required approval or a CI success.
 
 New knowledge articles begin in `_index/inbox/`, and reviewed source pages live
 in `_index/pages/`. Generated `docs/` pages must be changed through their

@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClaudeChatProvider, splitFirstTurnSessionTitle, configuredClaudeChatPrompt } from "./claudeChatProvider.js";
+import { ClaudeChatProvider, splitFirstTurnSessionTitle, configuredClaudeChatPrompt, CLAUDE_WORKSPACE_OUTPUT_GUIDANCE } from "./claudeChatProvider.js";
 import { claudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
 import { ClaudeHarnessInterruption, type ClaudeHarnessRequest } from "./claudeHarness.js";
 import { createEnvironmentChatAnswerProvider } from "./chatAnswerProvider.js";
 import { harnessContinuationFingerprint } from "./claudeHarnessContinuation.js";
 import { createVisibleTextFilter } from "./visibleTextFilter.js";
+import { WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES } from "./types.js";
 import { bundledPrompt } from "./promptRegistry.js";
 import sharp from "sharp";
 import { createHash, randomUUID } from "node:crypto";
@@ -247,6 +248,40 @@ describe("Claude natural chat product adapter", () => {
     expect(answer.citation_ids).toEqual(["evidence-1"]);
   });
 
+  it("does not manufacture a citation when a model reads and uses a snapshot without selecting evidence", async () => {
+    const execute = async (_configuration: unknown, request: ClaudeHarnessRequest) => {
+      const read = request.tools.find(tool => tool.name === "read_relationship_memory")!;
+      await read.execute({ block_types: ["relationship_context"] }, new AbortController().signal);
+      return { ...outcome, text: "The record says the contact asked for role scope before choosing a meeting time." };
+    };
+    const answer = await new ClaudeChatProvider(configuration, execute).answer({
+      objective: "What is the safest next question to ask this synthetic contact?",
+      prompt_snapshot: bundledPrompt("assistant/relationship"),
+      context_blocks: [{ block_id: "synthetic-block-0001", block_key: "synthetic-follow-up-gap", type: "relationship_context",
+        status: "confirmed", headline: "Synthetic follow-up context",
+        summary: "The contact asked for role scope before choosing a meeting time.",
+        items: ["No role scope was included in the synthetic exchange."], evidence_fragment_ids: ["synthetic-evidence-0001"] }],
+      allowed_citation_ids: ["synthetic-evidence-0001"],
+    });
+    expect(answer.kind).toBe("clarification");
+    expect(answer.citation_ids).toEqual([]);
+  });
+
+  it("returns only selected successful evidence among multiple allowed sources", async () => {
+    const execute = async (_configuration: unknown, request: ClaudeHarnessRequest) => {
+      const cite = request.tools.find(tool => tool.name === "cite_evidence")!;
+      await cite.execute({ source_ids: ["scope-source"] }, new AbortController().signal);
+      await cite.execute({ source_ids: ["other-account"] }, new AbortController().signal);
+      return { ...outcome, text: "Send the requested role scope first." };
+    };
+    const answer = await new ClaudeChatProvider(configuration, execute).answer({
+      objective: "What should I ask next?", prompt_snapshot: bundledPrompt("assistant/relationship"),
+      context_blocks: [], allowed_citation_ids: ["scope-source", "unrelated-source"],
+    });
+    expect(answer.kind).toBe("answer");
+    expect(answer.citation_ids).toEqual(["scope-source"]);
+  });
+
   it("retrieves sourced Memory in a fresh Session without embedding it as prior dialogue", async () => {
     const memory = { block_id: "commitment", block_key: "commitment", type: "commitment", status: "confirmed",
       headline: "Prototype follow-up", summary: "周五给陈夏发原型", items: [], evidence_fragment_ids: ["source-commitment"] };
@@ -408,7 +443,7 @@ describe("inline user message images", () => {
     const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
       sawImages = harnessRequest.images;
       expect(harnessRequest.continuation).toBeUndefined();
-      expect(harnessRequest.systemPrompt).toContain("For a name-only screenshot, prepare the memory_review contact decision directly");
+      expect(harnessRequest.systemPrompt).toContain(CLAUDE_WORKSPACE_OUTPUT_GUIDANCE);
       expect(harnessRequest.systemPrompt).not.toContain("Cite relationship evidence through cite_evidence");
       expect(harnessRequest.budget).toEqual(request.budget);
       expect(JSON.parse(harnessRequest.context!).input_images).toEqual([
@@ -535,5 +570,68 @@ describe("Claude relationship Memory review tool", () => {
       default_selected_count: 0,
     });
     expect(answer.body).toBe("他要求先发一版文字方案。");
+  });
+});
+
+describe("bounded tool context opt-in policy", () => {
+  const budget = { maxTurns: 6, maxToolCalls: 6, maxDurationMs: 30_000, maxTaskTokens: 32_000, maxEstimatedUsd: 1 };
+  const calendarContext = { sourceRequestID: "10000000-0000-4000-8000-000000000031",
+    referenceTime: "2026-10-07T00:00:00Z", timeZone: "Asia/Shanghai" };
+  const workspaceRequest = {
+    runID: "synthetic", objective: "Remember my reply preference", systemPrompt: "Synthetic", sessionTitleRequested: false,
+    scopeSummary: { kind: "workspace_conversation" as const, workspaceID: "account", sessionID: null,
+      currentPersonID: null, currentRelationshipContextID: null },
+    toolManifest: WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES, budget,
+  };
+
+  it("opts in with a deferred admitted catalog only for ordinary-text workspace conversation", async () => {
+    const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
+      expect(harnessRequest.toolDiscovery).toBe("bounded");
+      const essential = new Set(["read_response_preference", "stage_calendar_draft"]);
+      const deferred = harnessRequest.tools.filter(tool => !essential.has(tool.name));
+      expect(deferred.map(tool => tool.name).sort()).toEqual(["contact_workspace_propose_create", "contact_workspace_propose_update",
+        "contact_workspace_read", "contact_workspace_search", "mcp_connections", "memory_review"]);
+      // Large admitted catalog tools defer; small essential tools stay upfront.
+      for (const tool of deferred) expect(tool.alwaysLoad ?? false).toBe(false);
+      for (const name of essential) expect(harnessRequest.tools.find(tool => tool.name === name)?.alwaysLoad).toBe(true);
+      return outcome;
+    });
+    await new ClaudeChatProvider(configuration, execute as never).run({ ...workspaceRequest,
+      responsePreference: { responseStyle: "conclusion_first", sourceID: "user-preference:10000000-0000-4000-8000-000000000032:1", updatedAt: "2026-10-01T00:00:00Z" },
+      calendarContext }, async () => ({ ok: true, callID: "noop", name: "noop" }), new AbortController().signal);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it.each(["json", "image"] as const)("keeps the legacy eager tool context for %s workspace configurations", async kind => {
+    const bytes = Buffer.from([137, 80, 78, 71, 1, 2, 3, 4]);
+    const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
+      expect(harnessRequest.toolDiscovery).toBeUndefined();
+      for (const tool of harnessRequest.tools) expect(tool.alwaysLoad ?? false).toBe(true);
+      return { ...outcome, text: kind === "json" ? '{"outcome":"no_action","reason_code":"x","reason":"x","missing_evidence_refs":[]}' : outcome.text };
+    });
+    const provider = new ClaudeChatProvider(configuration, execute as never, true);
+    await provider.run({ ...workspaceRequest,
+      ...(kind === "json" ? { outputMode: "json" as const }
+        : { inputParts: [{ kind: "image" as const, artifactID: "conversation-image-10000000-0000-4000-8000-000000000033",
+          mimeType: "image/png" as const, byteSize: bytes.length,
+          contentHash: createHash("sha256").update(bytes).digest("hex"), dataBase64: bytes.toString("base64") }] }),
+    }, async () => ({ ok: true, callID: "noop", name: "noop" }), new AbortController().signal);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("never opts relationship answers into bounded discovery", async () => {
+    const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
+      expect(harnessRequest.toolDiscovery).toBeUndefined();
+      expect(harnessRequest.tools.map(tool => tool.name).sort()).toEqual(["cite_evidence", "read_relationship_memory"]);
+      for (const tool of harnessRequest.tools) expect(tool.alwaysLoad ?? false).toBe(true);
+      return outcome;
+    });
+    await new ClaudeChatProvider(configuration, execute as never).answer({
+      objective: "What did the contact ask for?", allowed_citation_ids: ["synthetic-evidence-0001"],
+      context_blocks: [{ block_id: "synthetic-block-0001", block_key: "synthetic-gap", type: "relationship_context",
+        status: "confirmed", headline: "Synthetic", summary: "Synthetic summary",
+        items: ["Synthetic item"], evidence_fragment_ids: ["synthetic-evidence-0001"] }],
+    });
+    expect(execute).toHaveBeenCalledOnce();
   });
 });

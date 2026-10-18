@@ -218,14 +218,17 @@ p {
 
 .skip-link {
   background: var(--ink);
-  border-radius: 0 0 10px 10px;
+  border-radius: 8px;
   color: var(--background);
   font-size: 0.875rem;
   font-weight: 700;
   left: 24px;
+  max-width: calc(100vw - 48px);
+  min-height: 44px;
+  min-width: 44px;
   padding: 12px 16px;
   position: fixed;
-  top: 0;
+  top: 12px;
   transform: translateY(-140%);
   transition: transform 180ms ease;
   z-index: 100;
@@ -705,6 +708,16 @@ p {
   grid-template-columns: minmax(260px, 0.72fr) minmax(0, 1.28fr);
 }
 
+.site-footer .brand {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.site-footer a {
+  scroll-margin-top: 100px;
+  scroll-margin-bottom: 20px;
+}
+
 .site-footer__brand > p {
   color: var(--muted);
   font-size: 0.82rem;
@@ -724,12 +737,17 @@ p {
 .site-footer__links > div {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
 }
 
 .site-footer__links a {
-  color: var(--muted);
-  font-size: 0.78rem;
+  align-items: center;
+  color: var(--muted-strong);
+  display: flex;
+  font-size: 13px;
+  line-height: 1.6;
+  min-height: 44px;
+  padding-block: 2px;
   transition: color 150ms ease;
 }
 
@@ -15480,10 +15498,20 @@ article[data-state="unresolved"]
 .site-language { min-height: 44px; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; padding: 0 4px; max-width: 70px; }
 .site-language option { background: var(--background); color: var(--ink); }
 .site-language:disabled { cursor: progress; }
-@media(max-width: 760px) { .marketing-header .site-header__inner { gap: 10px; } .marketing-header .site-header__actions { gap: 5px; } .marketing-header .brand { gap: 6px; } .marketing-header .brand__name { font-size: 13px; } .marketing-header .icon-button { width: 44px; height: 44px; } }
-.marketing-header .site-header__inner { background: transparent; border: 0; border-radius: 0; box-shadow: none; max-width: 1280px; padding-inline: 40px; }
+@media(max-width: 760px) { .marketing-header .site-header__inner { gap: 10px; } .marketing-header .site-header__actions { gap: 5px; } .marketing-header .brand { gap: 6px; } .marketing-header .brand__name { font-size: 13px; } }
+.marketing-header .site-header__inner { background: transparent; border: 0; border-radius: 0; box-shadow: none; column-gap: 16px; grid-template-columns: minmax(80px, 1fr) auto minmax(max-content, 1fr); max-width: 1280px; padding-inline: 40px; }
 .marketing-header .desktop-nav a { font-size: 13px; min-height: 44px; display: inline-flex; align-items: center; }
+/* Keep the action track intrinsic so the desktop boundary cannot squeeze icons.
+   The control stays still; color feedback does not move its hit rectangle. */
+.marketing-header .icon-button { flex: none; width: 44px; height: 44px; }
+.marketing-header .brand { min-height: 44px; min-width: 44px; }
+.marketing-header .desktop-account-link { justify-content: center; min-height: 44px; min-width: 44px; }
+.marketing-header .icon-button,
+.marketing-header .button,
+.marketing-header .desktop-nav a { transform: none; }
 .marketing-header .site-header__actions .button { border-color: transparent; min-height: 44px; }
+.marketing-header .button:hover { background: var(--ink-soft); }
+.marketing-header .button:active { background: var(--muted-strong); }
 @media(max-width:1040px) { .marketing-header .site-header__inner { padding-inline: 20px; max-width: 100%; } }
 
 /* An unscoped conversation is a primary working surface, including editable

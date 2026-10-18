@@ -7,6 +7,27 @@ const input = { title: "与陈夏会谈", starts_at: "2026-09-10T15:00:00+08:00"
 const signal = new AbortController().signal;
 
 describe("review-only calendar capability", () => {
+  it("refuses a draft when the host rejects proposals", async () => {
+    const capability = calendarDraftCapability({ ...context, permitsDraft: () => false }, objective);
+    expect((await capability.tools[0]!.execute(input, signal)).isError).toBe(true);
+    expect(capability.draft()).toBeUndefined();
+  });
+  it("rechecks the host decision after an asynchronous image read", async () => {
+    let permitted = true;
+    const capability = calendarDraftCapability({ ...context, permitsDraft: () => permitted,
+      validateImageExcerpt: async () => { permitted = false; return { artifact_id: "image", content_hash: "a".repeat(64), inspection_request_id: "inspection" }; },
+    }, objective);
+    expect((await capability.tools[0]!.execute({ ...input, source_image_artifact_id: "image" }, signal)).isError).toBe(true);
+    expect(capability.draft()).toBeUndefined();
+  });
+  it("withholds a previously staged draft when a later host decision rejects it", async () => {
+    let permitted = true;
+    const capability = calendarDraftCapability({ ...context, permitsDraft: () => permitted }, objective);
+    expect((await capability.tools[0]!.execute({ ...input, finish_preparation: true }, signal)).isError).toBe(false);
+    permitted = false;
+    expect(capability.draft()).toBeUndefined();
+    expect(capability.preparationReady()).toBe(false);
+  });
   it("binds a supplemental exact quote to its original message without granting an external action", async () => {
     const messageID = "20000000-0000-4000-8000-000000000002";
     const capability = calendarDraftCapability({ ...context,
@@ -30,6 +51,7 @@ describe("review-only calendar capability", () => {
     const capability = calendarDraftCapability(context, objective);
     expect(capability.draft()).toBeUndefined();
     const tool = capability.tools[0]!;
+    expect(tool.readOnly).toBe(false);
     expect(tool.description).not.toContain(context.referenceTime);
     expect(capability.clock).toContain(context.referenceTime);
     expect((await tool.execute(input, signal)).isError).toBe(false);
@@ -57,8 +79,33 @@ describe("review-only calendar capability", () => {
     ).rejects.toThrow();
     expect(capability.draft()).toBeUndefined();
   });
+  it("advances the preparation revision only with accepted staging and discard", async () => {
+    const capability = calendarDraftCapability(context, objective);
+    expect(capability.preparationRevision()).toBe(0);
+    // Rejected, failed and duplicate staging never advance the generation.
+    expect((await capability.tools[0]!.execute({ ...input, source_excerpt: "a different message" }, signal)).isError).toBe(true);
+    expect(capability.preparationRevision()).toBe(0);
+    let permitted = true;
+    const declined = calendarDraftCapability({ ...context, permitsDraft: () => permitted }, objective);
+    permitted = false;
+    expect((await declined.tools[0]!.execute(input, signal)).isError).toBe(true);
+    expect(declined.preparationRevision()).toBe(0);
+    // Draft, finishing and revision commit together on accepted staging.
+    expect((await capability.tools[0]!.execute({ ...input, finish_preparation: true }, signal)).isError).toBe(false);
+    expect(capability.preparationRevision()).toBe(1);
+    expect(capability.preparationReady()).toBe(true);
+    expect((await capability.tools[0]!.execute(input, signal)).isError).toBe(true);
+    expect(capability.preparationRevision()).toBe(1);
+    capability.discard();
+    expect(capability.preparationRevision()).toBe(2);
+    expect(capability.preparationReady()).toBe(false);
+    expect((await capability.tools[0]!.execute({ ...input, title: "与陈夏改期会谈", finish_preparation: true }, signal)).isError).toBe(false);
+    expect(capability.preparationRevision()).toBe(3);
+    expect(capability.preparationReady()).toBe(true);
+  });
   it("does not guess a timezone or create an ambient capability", () => {
     expect(calendarDraftCapability(undefined, objective).tools).toEqual([]);
+    expect(calendarDraftCapability(undefined, objective).preparationRevision()).toBe(0);
     expect(() => calendarDraftCapability({ ...context, sourceRequestID: "forged" }, objective)).toThrow("CONTEXT_INVALID");
   });
   it("derives the next calendar date from the frozen zoned clock across month and year boundaries", () => {

@@ -30,6 +30,7 @@ import {
 } from "@/lib/server/workspaceSessions";
 import { WorkspaceNewConversation } from "@/components/new-conversation";
 import WorkspaceLoading from "./loading";
+import { isCreatePersonEntry } from "@/lib/workspace-create-entry";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +80,7 @@ export default async function WorkspacePage({
       ? parameters.identity_case
       : undefined;
   const requestedReturnSession = validReturnSessionId(parameters.session);
+  const requestedCreateEntry = isCreatePersonEntry(parameters);
   const session = await auth();
   if (!session?.user) {
     const callbackParameters = new URLSearchParams();
@@ -90,6 +92,10 @@ export default async function WorkspacePage({
     }
     if (requestedIdentityCase) {
       callbackParameters.set("identity_case", requestedIdentityCase);
+    }
+    if (requestedCreateEntry) {
+      callbackParameters.set("surface", "desk");
+      callbackParameters.set("intent", "create-contact");
     }
     if (requestedReturnSession) {
       callbackParameters.set("session", requestedReturnSession);
@@ -216,6 +222,10 @@ export default async function WorkspacePage({
         if (requestedIdentityCase) {
           callbackParameters.set("identity_case", requestedIdentityCase);
         }
+        if (requestedCreateEntry) {
+          callbackParameters.set("surface", "desk");
+          callbackParameters.set("intent", "create-contact");
+        }
         if (requestedReturnSession) {
           callbackParameters.set("session", requestedReturnSession);
         }
@@ -239,6 +249,7 @@ export default async function WorkspacePage({
     const browserClaims = await readBackendSessionClaims();
     return (
       <RelationshipWorkspaceApp
+        initialSourceSyncBinding={browserClaims ? workspaceSessionsBinding(browserClaims) : null}
         initialSessionVersion={browserClaims ? contactHandoffSessionVersion(browserClaims) : null}
         initialAccountId={initialRead?.accountId ?? null}
         initialAgentHistory={initialRead?.agentHistory ?? null}

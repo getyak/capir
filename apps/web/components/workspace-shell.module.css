@@ -1669,22 +1669,37 @@
    there the sidebar becomes transparent so the AppKit material behind the
    WKWebView shows through, while the reading canvas stays opaque. */
 :global(html[data-desktop-surface="workspace"]) .shell {
+  --native-sidebar-material-opacity: 68%;
+  --native-floating-sidebar-material-opacity: 72%;
   background: transparent;
 }
 :global(html[data-desktop-surface="workspace"]) .sidebar {
-  background: color-mix(in srgb, var(--ts-chrome-surface, var(--surface-muted)) 68%, transparent);
+  background: color-mix(in srgb, var(--ts-chrome-surface, var(--surface-muted)) var(--native-sidebar-material-opacity), transparent);
   border-right: 0;
 }
 :global(html[data-desktop-surface="workspace"]) .workspace {
   background: var(--background);
 }
 :global(html[data-desktop-surface="workspace"]) .sidebar[data-floating="true"] {
-  background: color-mix(in srgb, var(--ts-chrome-surface, var(--surface-muted)) 72%, transparent);
+  background: color-mix(in srgb, var(--ts-chrome-surface, var(--surface-muted)) var(--native-floating-sidebar-material-opacity), transparent);
   backdrop-filter: blur(24px) saturate(150%);
   -webkit-backdrop-filter: blur(24px) saturate(150%);
 }
 :global(html[data-desktop-surface="workspace"]) .sessionRowSlide {
   --session-row-surface: transparent;
+}
+
+/* The Web theme can be dark while AppKit's material remains light. Keep the
+   dark tint dominant so muted controls retain contrast over that material. */
+:global(html[data-desktop-surface="workspace"][data-theme="dark"]) .shell {
+  --native-sidebar-material-opacity: 94%;
+  --native-floating-sidebar-material-opacity: 94%;
+}
+@media (prefers-color-scheme: dark) {
+  :global(html[data-desktop-surface="workspace"]:not([data-theme="light"])) .shell {
+    --native-sidebar-material-opacity: 94%;
+    --native-floating-sidebar-material-opacity: 94%;
+  }
 }
 
 /* ── Accessibility fallbacks ────────────────────────────────────────── */
@@ -1759,17 +1774,6 @@
   :global(html[data-desktop-surface="workspace"]) :is(.searchDialog, .accountPopover, .sessionRowMenuPopover) { background: var(--surface); }
 }
 
-@media (min-width: 761px) {
-  .brandRow, .shell:has(.sidebarState[data-collapsed="true"]) .brandRow {
-    display: block; height: 110px; min-height: 110px; margin-bottom: 10px; position: relative;
-  }
-  .brand, .shell:has(.sidebarState[data-collapsed="true"]) .brand {
-    position: absolute; top: 0; left: 0; padding: 6px 7px; max-width: 220px;
-  }
-  .brandActions, .shell:has(.sidebarState[data-collapsed="true"]) .brandActions {
-    position: absolute; top: 40px; left: 3px; flex-direction: column; gap: 4px;
-  }
-}
 .brandMark { filter: grayscale(1); }
 
 .sessionRowSlide > a { flex: 1 1 auto; min-width: 0; }
@@ -1786,7 +1790,7 @@
 
 /* GET-129 compact composition: measured row/pill geometry, not a second route tree. */
 .brandRow { min-height:36px; margin-bottom:12px; }
-.brand { font-size:18px; line-height:20px; gap:8px; padding:6px 0; }
+.brand { font-size:18px; line-height:20px; gap:8px; padding:6px 8px; }
 .brandMark { height:20px; width:20px; }
 .brandActions .iconButton { height:36px; width:36px; }
 .railRow { align-items:center; display:flex; gap:1.5px; }
@@ -1800,8 +1804,9 @@
 .sidebarScroll { margin-top:20px; }
 .groupTitle { font-size:11px; line-height:18px; padding:0 10px; }
 .historyBar { align-items:center; display:flex; gap:2px; margin-bottom:4px; }
+.historyBar > .historyDisclosure { flex:1 1 auto; min-width:0; width:auto; }
 .historyHeader { flex:1; font-size:11px; min-width:0; }
-.newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; font-size:11px; gap:4px; height:32px; padding:0 6px; }
+.newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; font-size:11px; gap:4px; height:44px; padding:0 6px; }
 .newConversation:hover { background:var(--hover); color:var(--ink); }
 .personChips { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; padding:0 8px; }
 .personChip { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--ink); cursor:pointer; display:flex; font:inherit; font-size:12px; gap:6px; height:32px; width:100%; min-width:0; padding:4px 0; text-align:left; }
@@ -1809,17 +1814,18 @@
 .personChip:hover,.personChip[aria-pressed="true"] { background:var(--surface-selected); }
 .shell:has(.sidebarState[data-collapsed="true"]) .sidebarState { flex:1; min-height:0; }
 .shell:has(.sidebarState[data-collapsed="true"]) :is(.brandRow,.railRow) { display:none; }
-.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { align-items:center; display:flex; flex:1; flex-direction:column; min-height:0; }
+.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { align-items:center; display:flex; flex:1; flex-direction:column; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; }
 .railCollapsedTop { flex:none; }
-.railSessions { display:flex; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; overflow:auto; scrollbar-width:none; }
+.railSessions { display:flex; flex:none; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; overflow:auto; scrollbar-width:none; }
 .railSessionAvatar,.railIconLink { align-items:center; border-radius:12px; color:var(--muted-strong); display:flex; flex:none; height:44px; justify-content:center; text-decoration:none; width:44px; }
-.railSessionAvatar[aria-current="page"],.railSessionAvatar:hover,.railIconLink:hover { background:var(--surface-selected); color:var(--ink); }
+.railSessionAvatar[aria-current="page"],.railSessionAvatar:hover,.railIconLink[aria-current="page"],.railIconLink:hover { background:var(--surface-selected); color:var(--ink); }
+.railCollapsedTop { display:flex; flex-direction:column; align-items:center; }
+.railCollapsedTop .iconButton { height:44px; width:44px; }
 .railSessionAvatar .avatar { flex:none; height:28px; width:28px; }
-.railUtility { align-items:center; display:flex; flex-direction:column; gap:8px; margin-top:auto; padding-top:16px; }
+.railUtility { align-items:center; display:flex; flex:none; flex-direction:column; gap:8px; margin-top:auto; padding-top:16px; }
 .railUtility .iconButton,.railUtility .railControl { height:44px; width:44px; }
 .shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .connectPill { display:none; }
 .shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .accountTrigger { width:44px; }
-@media(min-width:1001px) { :global(body:has([data-person-context-panel])) .shell { margin-right:336px; } }
 @media(max-width:760px) {
   .shell:has(.sidebarState[data-collapsed="true"]) { grid-template-columns:minmax(0,1fr); }
   .shell:has(.sidebarState[data-collapsed="true"]) .sidebar { padding:7px; }

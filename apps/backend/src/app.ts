@@ -15,6 +15,7 @@ import { ConversationQueueRunner, type ConversationQueueProviderSelector } from 
 import { startMcpOAuthCleanupPump } from "./modules/mcpOauthCleanup.js";
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
+import { registerPersonSourceSyncRoutes } from "./modules/personSourceSyncRoutes.js";
 import { registerAgentPreferenceRoutes } from "./modules/agentPreferenceRoutes.js";
 import { registerWeeklyUsageRoutes } from "./modules/weeklyUsage.js";
 import { registerMcpExtensionRoutes } from "./modules/mcpRoutes.js";
@@ -100,7 +101,6 @@ import {
   RelationshipScopeSchema,
   RevokeApprovalRequestSchema,
   RevokeCapabilityRequestSchema,
-  PersonDirectoryResponseSchema,
   PersonMergePreviewSchema,
   PersonMergeRequestSchema,
   PersonMergeResponseSchema,
@@ -302,13 +302,11 @@ import {
 import {
   decideCaptureSourceAuthorization,
   persistSourceAuthorizationCompilation,
+  RELATIONSHIP_WIKI_COMPILATION_FAILED,
 } from "./modules/sourceAuthorization.js";
 import { runSourceLifecycleSweep } from "./modules/sourceLifecycle.js";
-import {
-  getRelationshipScope,
-  listPeople,
-  searchPeople,
-} from "./modules/people.js";
+import { getRelationshipScope } from "./modules/people.js";
+import { registerPeopleRoutes } from "./modules/peopleRoutes.js";
 import {
   completePursuitAction,
   createPursuit,
@@ -428,18 +426,6 @@ const WorkspaceReviewQuerySchema = Type.Object(
 const SourceLocatorQuerySchema = Type.Object(
   {
     source_locator: Type.String({ minLength: 1, maxLength: 500 }),
-  },
-  { additionalProperties: false },
-);
-const PeopleQuerySchema = Type.Object(
-  {
-    query: Type.Optional(Type.String({ maxLength: 160 })),
-  },
-  { additionalProperties: false },
-);
-const PeopleSearchSchema = Type.Object(
-  {
-    query: Type.String({ minLength: 1, maxLength: 500 }),
   },
   { additionalProperties: false },
 );
@@ -771,6 +757,7 @@ export async function buildApp(
   registerDesktopBrowserLogin(app, pool, config, authenticate);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);
+  registerPersonSourceSyncRoutes(app, pool, authenticate);
   registerFeedbackRoutes(app, pool, authenticate);
   const security = [{ bearerSession: [] }];
   registerAgentPreferenceRoutes(app, pool, authenticate, remoteChatProvider?.providerId === "claude-agent-sdk");
@@ -1812,40 +1799,7 @@ export async function buildApp(
     async (request) => getCapture(pool, request.auth, request.params.id),
   );
 
-  app.get<{ Querystring: { query?: string } }>(
-    "/v1/people",
-    {
-      preHandler: authenticate,
-      schema: {
-        tags: ["people"],
-        security,
-        querystring: PeopleQuerySchema,
-        response: {
-          200: PersonDirectoryResponseSchema,
-          "4xx": ErrorResponseSchema,
-        },
-      },
-    },
-    async (request) => listPeople(pool, request.auth, request.query.query),
-  );
-
-  app.post<{ Body: { query: string } }>(
-    "/v1/people/search",
-    {
-      preHandler: authenticate,
-      schema: {
-        tags: ["people"],
-        security,
-        body: PeopleSearchSchema,
-        response: {
-          200: PersonDirectoryResponseSchema,
-          "4xx": ErrorResponseSchema,
-        },
-      },
-    },
-    async (request) =>
-      searchPeople(pool, request.auth, request.body.query),
-  );
+  registerPeopleRoutes(app, pool, authenticate);
 
   app.get<{
     Params: { personId: string; contextId: string };
@@ -2220,13 +2174,13 @@ export async function buildApp(
               block_count: compilation.body.blocks.length,
             },
           };
-        } catch (error) {
+        } catch {
+          // Content-free fixed diagnostic: the raw exception never enters the
+          // durable response body or job metadata; compilation stays null and
+          // the compilation job remains retryable.
           body = {
             ...body,
-            compilation_error:
-              error instanceof Error
-                ? error.message.slice(0, 500)
-                : "Relationship Wiki recompilation failed.",
+            compilation_error: RELATIONSHIP_WIKI_COMPILATION_FAILED,
           };
         }
         await persistSourceAuthorizationCompilation(

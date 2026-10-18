@@ -5,6 +5,47 @@
   scroll-margin-block-end: 16px;
 }
 
+/* GET-131 person source sync: compact explicit confirmation and honest
+   status readback beside the bound source's one-shot research approval. */
+.sourceSync {
+  display: grid;
+  gap: 12px;
+  padding-block: 12px;
+  border-block-start: 1px solid var(--hairline, rgba(127, 127, 127, 0.24));
+}
+
+.sourceSync h4 {
+  margin-block: 4px;
+}
+
+.sourceSyncSetup,
+.sourceSyncActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.sourceSyncSetup label {
+  display: grid;
+  gap: 4px;
+}
+
+.sourceSyncStatus {
+  display: grid;
+  gap: 8px;
+}
+
+.sourceSyncNotice {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sourceSyncEmpty {
+  opacity: 0.8;
+}
+
 @media (max-width: 760px) {
   .review > .reviewHeader {
     padding-right: 0;

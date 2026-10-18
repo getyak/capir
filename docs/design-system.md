@@ -93,7 +93,7 @@ The primary surfaces answer different questions:
 | People | Who or what am I looking for? |
 | Time | What happened in this period, and what should I prepare for the next contact? |
 | Pursuit page | What outcome, milestone, gap, and action are current? |
-| Candidate page | What is currently true for this person in this Pursuit? |
+| Person / relationship page | What is currently true for this person in this Pursuit? |
 | Timeline | How did understanding and action change? |
 | Evidence review | What supports or contradicts this state? |
 | Relationship graph | Which connections matter to this question? |
@@ -224,11 +224,11 @@ The design must distinguish:
 
 Use plain language that describes what the user can do next. Never make a failed or uncertain state look complete. A forming streamed reply is not a citation, card, or completed answer; only validated blocks replace it, and a stopped run stays visibly incomplete.
 
-## Pursuit and candidate pages
+## Pursuit and person/relationship pages
 
 The Pursuit page explains one target outcome. It leads with outcome, deadline, milestone, supported blockers, and the smallest next step before the broader resource map.
 
-The living candidate page is a current, Pursuit-scoped explanation of the relationship. It should combine:
+The living person/relationship page is a current, Pursuit-scoped explanation of the relationship. It should combine:
 
 - the current dependency;
 - confirmed decision drivers;
@@ -283,7 +283,7 @@ action belongs after the information it commits.
 macOS entry defaults to the hosted service. Restore and validate the protected app session before exposing private content; a valid session enters the workspace directly, with renewal kept quiet. Otherwise offer browser sign-in and return to the initiating window after verified completion. Share current-account presentation within the app; browser and CLI authentication sessions remain independent. Keep custom-server configuration behind a named advanced menu, outside ordinary onboarding. Network failure preserves recovery and never alone establishes logout. This is the design contract; runtime persistence, renewal and return require their own acceptance under [ADR 0022](decisions/0022-browser-owned-macos-login.md). Desktop starts with the conversation canvas; Today stays directly reachable. Optimize for comparison, provenance, conflict resolution, research, and longitudinal editing. macOS uses native behind-window material under transparent WebKit chrome, an opaque reading canvas, and material/shadow elevation. Ordinary chrome stays grayscale; one short vermilion sweep marks an observed completion or new review, never historical loading. Selection and arrivals use scoped position springs. Row Archive/Pin are reversible, account-partitioned local preferences. Completed answer folding is extractive and leaves decisions/proposals visible. Preserve native history gestures and reduced motion/transparency and forced-color fallbacks. The current desktop sidebar design uses shared Web and macOS components.
 Source intake gives material and its next action the main canvas; an empty history does not reserve a second navigation column. Populated records earn an inbox and detail composition.
 Optional intent stays secondary; permission, uncertain saves, and recovery remain visible where they affect a decision.
-Verify rendered structure and interaction in both empty and populated full viewports; a CSS reskin alone is not fidelity. Settings uses stable named sections, a readable edit pane and explicit Edit, Save and Cancel actions. Failures retain drafts. Optional explanations and diagnostics sit behind named disclosures; unresolved failures remain visible. Web settings stays inside the workspace; macOS uses one independent settings window that preserves the main conversation and keeps device controls available offline. That window has one navigation owner and holds device controls only; account, appearance and account-connection management open in the default browser, which keeps the client independent of the Web release. A Web surface never redirects into the native window, the embedded workbench never paints the Web settings routes while the browser opens, and an ordinary route change or a refused history call stays visible instead of blanking the workbench. Version status distinguishes installed apps, running services and published releases, with source and check time; independently released components never become "current" merely because their numbers match or a health request succeeded.
+Verify native chrome contrast after compositing over AppKit material: the Web theme and native window appearance can differ. Muted controls must remain readable over the lightest supported material, with an opaque reduced-transparency fallback. Verify rendered structure and interaction in both empty and populated full viewports; a CSS reskin alone is not fidelity. Settings uses stable named sections, a readable edit pane and explicit Edit, Save and Cancel actions. Failures retain drafts. Optional explanations and diagnostics sit behind named disclosures; unresolved failures remain visible. Web settings stays inside the workspace; macOS uses one independent settings window that preserves the main conversation and keeps device controls available offline. That window has one navigation owner and holds device controls only; account, appearance and account-connection management open in the default browser, which keeps the client independent of the Web release. A Web surface never redirects into the native window, the embedded workbench never paints the Web settings routes while the browser opens, and an ordinary route change or a refused history call stays visible instead of blanking the workbench. Version status distinguishes installed apps, running services and published releases, with source and check time; independently released components never become "current" merely because their numbers match or a health request succeeded.
 
 ### Channel
 
@@ -293,7 +293,7 @@ review into a chat reply.
 ## Accessibility and privacy
 
 - Avatars aid recognition without verifying identity: authorized photo, readable name initials, then a stable abstract fallback. Account-scoped local choices support preview, cancel, save and reset. Explain the local-only persistence scope on demand and preserve source provenance, readable contrast and reduced motion.
-- Preserve meaning without relying on color alone.
+- Preserve meaning without relying on color alone. Explicit composer directory choices receive a text highlight and an avatar/check reference with a hover, keyboard or touch preview. Preview only the current account's directory labels and relationship labels; arbitrary typed names do not establish identity or authorize Memory access. Editing a reference or losing its authorized directory removes its presentation state. Active processing may use a restrained text light sweep; queued, stopping and terminal labels remain static, with reduced-motion and forced-colors fallbacks.
 - Keep text and controls legible at platform accessibility sizes.
 - Make focus, keyboard, screen-reader, and reduced-motion behavior first-class.
 - Avoid private conversation content in generic notifications or previews.

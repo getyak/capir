@@ -147,7 +147,7 @@ jobs:
           version: 11.18.0
 
       - name: Set up Node.js for repository checks
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -164,7 +164,7 @@ jobs:
           node --test scripts/verify-secret-environment.test.mjs scripts/infisical/manifest.test.mjs scripts/infisical/migrate.test.mjs scripts/infisical/run.test.mjs
           node --test scripts/macos/release-prerequisites.test.mjs
           node --test scripts/check-architecture-boundaries.test.mjs
-          node --test scripts/check-repository-hygiene.test.mjs scripts/evaluation/*.test.mjs
+          node --test scripts/check-docs.test.mjs scripts/check-repository-hygiene.test.mjs scripts/prompts/library.test.mjs scripts/evaluation/*.test.mjs
           node --test scripts/ci/*.test.mjs
           node --test scripts/ios/*.test.mjs
           find scripts -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
@@ -229,7 +229,7 @@ jobs:
           version: 11.18.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -245,6 +245,21 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: Verify native SDK tool context and authority over loopback
+        env:
+          TALENT_SIGNAL_CLAUDE_OFFLINE_TEST: "true"
+          TALENT_SIGNAL_CLAUDE_OFFLINE_ARTIFACT_DIR: ${{ runner.temp }}/claude-tool-context-evidence
+        run: pnpm --filter @talent-signal/agent exec vitest run src/claudeHarnessToolContext.offline.test.ts --maxWorkers=1
+
+      - name: Preserve synthetic SDK protocol receipts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: claude-tool-context-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/claude-tool-context-evidence/tool-context-*/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Build
         env:
@@ -271,7 +286,7 @@ jobs:
           version: 11.18.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -325,7 +340,7 @@ jobs:
           version: 11.18.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -362,19 +377,23 @@ jobs:
           pnpm --filter @talent-signal/backend exec vitest run src/modules/meetingDrafts.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/conversationQueue.integration.test.ts src/modules/conversationQueueStream.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/timeActivities.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run src/modules/personSourceSync.integration.test.ts --maxWorkers=1
+          pnpm --filter @talent-signal/backend exec vitest run src/modules/people.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/memoryReview.integration.test.ts
-          pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism src/modules/mcpInteractions.integration.test.ts src/modules/mcpConversation.integration.test.ts src/modules/mcpOauthCleanup.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism src/modules/mcpInteractions.integration.test.ts src/modules/mcpConversation.integration.test.ts src/modules/mcpOauthCleanup.integration.test.ts src/modules/proposalWithdrawal.integration.test.ts
 
       - name: Verify account authority and isolated workspace cleanup
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
           ACCOUNT_EVALUATION_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/account_proof
           ACCOUNT_SETTINGS_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/account_proof
+          ACCOUNT_IDENTITY_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/account_proof
         run: |
           pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE account_proof'); } finally { await pool.end(); }"
           DATABASE_URL="$ACCOUNT_EVALUATION_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
           pnpm --filter @talent-signal/backend exec tsx src/evaluation/runAccountManagementEvaluation.ts
           pnpm --filter @talent-signal/backend exec vitest run src/modules/accountSettingsIsolation.integration.test.ts src/modules/accountSettingsHttp.integration.test.ts
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 src/modules/accountIdentity.integration.test.ts
 
       - name: Verify capir authorization and test provisioning with PostgreSQL
         env:
@@ -417,7 +436,7 @@ jobs:
 
       - name: Preserve Lab regression fixture metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: lab-regression-fixture-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/lab-regression-report.json
@@ -442,7 +461,7 @@ jobs:
 
       - name: Preserve selected Lab regression consumption metadata
         if: always() && github.event_name == 'workflow_dispatch' && inputs.regression_case_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: lab-regression-consumption-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/lab-selected-regression/lab-regression-report.json
@@ -467,7 +486,7 @@ jobs:
           version: 11.18.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm
@@ -487,7 +506,7 @@ jobs:
           node --input-type=module -e 'import fs from "node:fs"; fs.mkdirSync("build", {recursive:true}); fs.writeFileSync("build/phase-one-ci.json", JSON.stringify({schemaVersion:"phase-one-ci-proof.v1", execution_integrity:"pass", deterministic_boundary:"pass", semantic_quality:"not_run", release_conditions:"not_run", private_case_evaluations:"not_run", private_semantic_evaluations:"not_run", private_release_evaluations:"not_run", private_evaluation_scope:"getyak/capir-evals private CI, not this public job", providerKind:"deterministic_fake", releaseAuthority:"none", revision:process.env.GITHUB_SHA}));'
 
       - name: Preserve control-plane verification status
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: phase-one-ci-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/phase-one-ci.json
@@ -495,7 +514,7 @@ jobs:
 
       # Exercise the same pinned downloader used to restore release IPAs.
       - name: Restore control-plane verification status
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: phase-one-ci-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/restored-phase-one
@@ -528,7 +547,7 @@ jobs:
 
       - name: Preserve failed test results
         if: failure() || cancelled()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ios-test-results-${{ github.run_id }}
           path: |
@@ -555,7 +574,7 @@ jobs:
           version: 11.18.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
           cache: pnpm

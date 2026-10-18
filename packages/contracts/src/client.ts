@@ -10,6 +10,14 @@ import type {
 } from "./capirTestSchemas.js";
 import type { ProductRunDetail, ProductRunList, ProductRunFeedbackMutation } from "./productRunSchemas.js";
 import type { TimeScope, TimeActivityListResponse, TimeScheduleMutationRequest, TimeScheduleDeleteRequest, TimeScheduleResponse, TimeReviewRequest, TimeReviewResponse } from "./timeWorkspaceSchemas.js";
+import type {
+  PersonSourceSyncDeleteRequest,
+  PersonSourceSyncListQuery,
+  PersonSourceSyncListResponse,
+  PersonSourceSyncMutationRequest,
+  PersonSourceSyncResponse,
+  PersonSourceSyncRunsResponse,
+} from "./personSourceSyncSchemas.js";
 import type { AccountSettings, AccountMutation, AccountOnboarding, AccountOnboardingMutation, AccountOnboardingPreview, AccountOnboardingPreviewRequest, CredentialChangeAttempt, CredentialChangeResult, CompleteCredentialChangeRequest, StartCredentialChangeRequest, PasswordRegistrationStartResponse, PasswordVerificationConfirmRequest, ReconciliationActionRequest, ReconciliationPrepareRequest, ReconciliationRecord } from "./accountSchemas.js";
 import type {
   McpClientGrantCreateRequest,
@@ -100,6 +108,7 @@ import type {
 } from "./schemas.js";
 import type {
   PersonDirectoryResponse,
+  PersonDetailResponse,
   CaptureIdentityCorrectionRequest,
   CaptureIdentityCorrectionResponse,
   EvidenceFragmentReviewRequest,
@@ -941,6 +950,10 @@ export class TalentSignalClient {
     return this.request(`/v1/people${search}`, { method: "GET" });
   }
 
+  getPerson(personId: string): Promise<PersonDetailResponse> {
+    return this.request(`/v1/people/${encodeURIComponent(personId)}`, { method: "GET" });
+  }
+
   searchPeople(query: string): Promise<PersonDirectoryResponse> {
     return this.request("/v1/people/search", {
       method: "POST",
@@ -1498,6 +1511,33 @@ export class TalentSignalClient {
     return this.request("/v1/time/review", { method: "POST", body: input });
   }
 
+  // ---- GET-131 one-person public source periodic observation (additive) ----
+
+  listPersonSourceSyncs(query: PersonSourceSyncListQuery): Promise<PersonSourceSyncListResponse> {
+    const params = new URLSearchParams({
+      person_id: query.person_id,
+      relationship_context_id: query.relationship_context_id,
+    });
+    if (query.seed_resource_id) params.set("seed_resource_id", query.seed_resource_id);
+    return this.request(`/v1/time/person-source-syncs?${params}`, { method: "GET" });
+  }
+
+  getPersonSourceSync(id: string): Promise<PersonSourceSyncResponse> {
+    return this.request(`/v1/time/person-source-syncs/${encodeURIComponent(id)}`, { method: "GET" });
+  }
+
+  putPersonSourceSync(id: string, input: PersonSourceSyncMutationRequest): Promise<PersonSourceSyncResponse> {
+    return this.request(`/v1/time/person-source-syncs/${encodeURIComponent(id)}`, { method: "PUT", body: input });
+  }
+
+  deletePersonSourceSync(id: string, input: PersonSourceSyncDeleteRequest): Promise<PersonSourceSyncResponse> {
+    return this.request(`/v1/time/person-source-syncs/${encodeURIComponent(id)}`, { method: "DELETE", body: input });
+  }
+
+  listPersonSourceSyncRuns(id: string): Promise<PersonSourceSyncRunsResponse> {
+    return this.request(`/v1/time/person-source-syncs/${encodeURIComponent(id)}/runs`, { method: "GET" });
+  }
+
   // ---- GET-40 three-scope Memory review (additive) ----
   stageMemoryProposal(body: MemoryProposalStageRequest): Promise<{ contract_version: string; replayed: boolean; proposal: unknown }> {
     return this.request("/v1/memory/proposals", { method: "POST", body });
@@ -1585,11 +1625,12 @@ export class TalentSignalClient {
     return this.request(`/v1/memory/commits/${encodeURIComponent(commitId)}/undo`, { method: "POST", body });
   }
 
-  recallMemories(query: { surface: "chat" | "people" | "relationship"; person_id?: string | null; relationship_context_id?: string | null; limit?: number }): Promise<MemoryRecallResponse> {
+  recallMemories(query: { surface: "chat" | "people" | "relationship"; person_id?: string | null; relationship_context_id?: string | null; limit?: number; cursor?: string | null }): Promise<MemoryRecallResponse> {
     const params = new URLSearchParams({ surface: query.surface });
     if (query.person_id) params.set("person_id", query.person_id);
     if (query.relationship_context_id) params.set("relationship_context_id", query.relationship_context_id);
     if (query.limit) params.set("limit", String(query.limit));
+    if (query.cursor) params.set("cursor", query.cursor);
     return this.request(`/v1/memory/items?${params.toString()}`, { method: "GET" });
   }
 

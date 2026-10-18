@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   AGENT_TOOL_NAMES,
+  CLAUDE_SDK_VERSION,
   ClaudeAgentSDKProvider,
   ScriptedAgentProvider,
   type AgentProvider,
@@ -536,7 +537,7 @@ async function liveTrials(
         : "not_run_missing_credentials",
       provider: "claude-agent-sdk",
       model: model ?? null,
-      sdk_version: "0.3.241",
+      sdk_version: CLAUDE_SDK_VERSION,
       trial_count: 0,
       required_trial_count: trialCount,
       passed: false,
@@ -584,7 +585,7 @@ async function liveTrials(
     status: "completed",
     provider: "claude-agent-sdk",
     model,
-    sdk_version: "0.3.241",
+    sdk_version: CLAUDE_SDK_VERSION,
     trial_count: trials.length,
     required_trial_count: trialCount,
     passed: trials.every((trial) => trial.passed),

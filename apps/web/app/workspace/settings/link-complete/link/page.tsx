@@ -14,7 +14,7 @@ export const metadata = { title: "连接登录方式", robots: { index: false, f
 export default async function StagedTargetLinkPage() {
   const operation = await readAuthOperation();
   if (!operation || !operation.attempt || operation.step !== "awaiting-target" || !operation.targetProvider) {
-    redirect("/workspace/settings?link=error");
+    redirect("/workspace/settings?section=account&link=error");
   }
   return (
     <StagedTargetLinkForm

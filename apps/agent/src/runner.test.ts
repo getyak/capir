@@ -18,6 +18,7 @@ import {
   type AgentRunRequest,
   type AgentRunScope,
   type AgentRuntimeDependencies,
+  type AgentToolResult,
 } from "./types.js";
 
 const ids = {
@@ -509,6 +510,60 @@ describe("bounded Agent control plane", () => {
     expect(receipt.status).toBe("budget_exhausted");
     expect(receipt.reasonCode).toBe("MAX_TASK_TOKENS_EXCEEDED");
     expect(gateway.proposalCommitCount).toBe(0);
+  });
+
+  it("returns only the fixed generic fallback to the model tool callback for untyped failures", async () => {
+    const gateway = new Gateway();
+    gateway.readEvidence = async () => {
+      throw Object.assign(new Error("SECRET_MESSAGE_CANARY"), {
+        name: "SECRET_NAME_CANARY",
+        stack: "Error: SECRET_STACK_CANARY\n    at SECRET_FRAME_CANARY",
+        cause: new Error("SECRET_CAUSE_CANARY"),
+      });
+    };
+    let toolResults: readonly AgentToolResult[] = [];
+    const provider = new ScriptedAgentProvider(
+      [{ tool: "read_evidence", input: { evidence_refs: [ids.evidence] } }],
+      (results) => {
+        toolResults = results;
+        return {
+          outcome: "no_action",
+          reason_code: "INSUFFICIENT_EVIDENCE",
+          reason: "The tool call failed.",
+          missing_evidence_refs: [],
+        };
+      },
+    );
+    const journal = new MemoryAgentRunJournal();
+    const receipt = await runBoundedAgent(request(provider, gateway, journal));
+
+    expect(toolResults[0]).toMatchObject({
+      ok: false,
+      error: {
+        code: "TOOL_INPUT_INVALID",
+        message:
+          "The tool input is invalid. Repair the call against the declared tool schema and retry.",
+      },
+    });
+    expect(receipt.status).toBe("quarantined");
+    expect(receipt.reasonCode).toBe("TOOL_INPUT_INVALID");
+    // No message, name, stack, or cause canary may reach the model tool result,
+    // the terminal receipt, or the durable journal.
+    const serialized = JSON.stringify({
+      toolResults,
+      receipt,
+      events: journal.events,
+      outputs: journal.outputs,
+    });
+    for (const canary of [
+      "SECRET_MESSAGE_CANARY",
+      "SECRET_NAME_CANARY",
+      "SECRET_STACK_CANARY",
+      "SECRET_FRAME_CANARY",
+      "SECRET_CAUSE_CANARY",
+    ]) {
+      expect(serialized).not.toContain(canary);
+    }
   });
 
 });

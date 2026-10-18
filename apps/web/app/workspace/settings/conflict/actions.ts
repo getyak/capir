@@ -12,7 +12,6 @@ import {
   readPrimaryBackendSessionClaims,
 } from "@/lib/server/backendAuth";
 import {
-  clearStagedAuth,
   flowIsLive,
   readAuthOperation,
   readAuthProof,

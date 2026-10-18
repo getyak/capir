@@ -19,7 +19,7 @@ import {
   UserPlus,
   X,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import {
   type AgentPersonOutcome,
@@ -110,6 +110,16 @@ function workspaceScopeValue(): string | null {
       : null) || null
   );
 }
+
+function subscribeWorkspaceScope(onChange: () => void) {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, {
+    subtree: true, childList: true, attributes: true,
+    attributeFilter: ["data-workspace-scope"],
+  });
+  return () => observer.disconnect();
+}
+const serverWorkspaceScope = () => undefined;
 
 // Committed is declared only on structurally valid receipts that are provably
 // associated with this frozen request (validated schema, matching
@@ -318,10 +328,13 @@ export function AgentCreatePersonCard({
   // source seals the form against duplicate writes.
   const [sessionBlockedState, setSessionBlocked] = useState(false);
   const [sealed, setSealed] = useState(false);
-  // Missing workspace scope fails closed (render-derived; every dispatch
-  // re-checks through admissionState()).
-  const scopeMissing = workspaceScopeValue() === null;
-  const sessionBlocked = sessionBlockedState || scopeMissing;
+  // The scope ancestor may mount in the same commit as this card. Subscribe to
+  // its committed DOM instead of freezing a render-time read of an absent ancestor.
+  // Every dispatch still re-checks the captured identity through admissionState().
+  const observedScope = useSyncExternalStore(subscribeWorkspaceScope, workspaceScopeValue, serverWorkspaceScope);
+  const scopeStatus = observedScope === undefined ? "checking" : observedScope ? "ready" : "missing";
+  const scopeMissing = scopeStatus === "missing";
+  const sessionBlocked = sessionBlockedState || scopeStatus !== "ready";
   // Mount admission: workspace identity captured once, alive only while
   // mounted and unexpired. Late continuations from a dead admission never
   // dispatch POSTs or invoke host callbacks.
@@ -1111,7 +1124,7 @@ export function AgentCreatePersonCard({
   return (
     <section
       aria-labelledby="agent-create-title"
-      className="context-agent-create"
+      className={`context-agent-create ${styles.card}`}
     >
       <header>
         <span>
@@ -1308,11 +1321,15 @@ export function AgentCreatePersonCard({
             {committedSource.scope.relationship_context.display_label}
             。不会再根据新的查找结果更改、合并或重新绑定此人物。
           </p>
-        ) : trackedRequest || sessionBlocked || sealed ? (
+        ) : scopeStatus === "checking" ? (
+          <p role="status">正在确认当前登录空间，确认后可填写人物信息。</p>
+        ) : trackedRequest || sealed ? (
           <p>
             提交处理中或结果未核实，身份与范围已锁定，避免重复写入。
             可在下方通知中重试核实，或关闭本卡片；关闭不会撤销任何已提交内容。
           </p>
+        ) : sessionBlocked ? (
+          <p>当前登录空间尚未通过核验，已停止提交。请重新打开工作台后继续。</p>
         ) : lookupState === "idle" ? (
           <p>
             选择新建或现有身份前，请输入姓名或已知身份线索。

@@ -77,6 +77,7 @@ import { labWorkspaceSessionActiveSQL } from "./labWorkspaceAccess.js";
 import { assertConversationQueueOwnedClaim } from "./conversationQueueState.js";
 import { recordOauthCleanup } from "./mcpOauthCleanup.js";
 import { mcpDirectoryEntry } from "./mcpDirectory.js";
+import { assertProposalWithdrawalRun, withProposalWithdrawalTransaction } from "./proposalWithdrawalAuthority.js";
 
 /**
  * Durable user-owned MCP human interactions.
@@ -1257,6 +1258,100 @@ interface ResolvedAction {
   claim: IdempotencyClaim | null;
 }
 
+/** Transaction-only rejection shared by human resolution and same-Run host
+ * withdrawal. Continuation delivery belongs to the caller; this transition
+ * never executes a tool and preserves late OAuth cleanup. */
+async function rejectPendingMcpInteraction(
+  client: PoolClient,
+  auth: AuthContext,
+  row: InteractionRow,
+  metadata: Record<string, unknown> = {},
+): Promise<InteractionRow> {
+  const updated = (
+    await client.query<InteractionRow>(
+      `UPDATE mcp_interaction_requests
+       SET state='rejected', resolved_at=clock_timestamp(), resolved_by_user_id=$3,
+           resolution_display='rejected', revision=revision+1, updated_at=clock_timestamp()
+       WHERE account_id=$1 AND id=$2 AND revision=$4 AND state IN ('pending','waiting')
+       RETURNING ${INTERACTION_COLUMNS}`,
+      [auth.accountId, row.id, auth.userId, row.revision],
+    )
+  ).rows[0];
+  if (!updated) throw new ApiError(409, "MCP_INTERACTION_CHANGED", "The request changed before rejection.");
+  if (row.kind === "oauth") {
+    await recordAttemptCleanup(client, updated, "withdrawn");
+    await client.query(
+      `UPDATE mcp_oauth_connect_requests
+       SET state='failed', revision=revision+1, updated_at=clock_timestamp()
+       WHERE account_id=$1 AND id=$2 AND state IN ('pending','waiting') AND nango_connection_id IS NULL`,
+      [row.account_id, row.id],
+    );
+  }
+  await appendAudit(client, { accountId: auth.accountId, actorUserId: auth.userId },
+    "mcp_interaction.rejected", "mcp_interaction_request", row.id,
+    { ...metadata, external_effect_count: 0, kind: row.kind });
+  return updated;
+}
+
+export interface McpProposalWithdrawalRequest {
+  requests: readonly { requestID: string; expectedRevision: number }[];
+  authority: McpStagingAuthority;
+}
+
+export interface McpProposalWithdrawalResult {
+  requests: Array<{
+    requestID: string;
+    revision: number;
+    state: McpInteractionRequest["state"];
+    status: "withdrawn" | "already_closed" | "already_submitted";
+  }>;
+}
+
+/** Host-only withdrawal of exact pending cards from this Run. Account, owner,
+ * source message, live lease and revisions are revalidated in one transaction.
+ * Unlike human card resolution, the current Run already carries the no-save
+ * instruction, so no second continuation is generated. */
+export function withdrawMcpProposalsForRun(
+  database: DatabaseClient,
+  auth: AuthContext,
+  request: McpProposalWithdrawalRequest,
+): Promise<McpProposalWithdrawalResult> {
+  return withProposalWithdrawalTransaction(database, async client => {
+    await assertProposalWithdrawalRun(client, auth, request.authority);
+    if (request.requests.length > 64 || new Set(request.requests.map(item => item.requestID)).size !== request.requests.length) {
+      throw new ApiError(409, "MCP_INTERACTION_INPUT_INVALID", "Withdrawal needs distinct exact request identities.");
+    }
+    const rows = new Map<string, InteractionRow>();
+    // Validate every card before the first write, including for PoolClient
+    // callers that own their surrounding transaction and handle errors there.
+    for (const expected of [...request.requests].sort((left, right) => left.requestID.localeCompare(right.requestID))) {
+      const row = await readInteraction(client, auth.accountId, expected.requestID, auth.userId, true);
+      if (!row || row.session_id !== request.authority.sessionId || row.message_id !== request.authority.messageId) {
+        throw new ApiError(409, "MCP_INTERACTION_SCOPE_MISMATCH", "This run cannot withdraw the requested card.");
+      }
+      if ((row.state === "pending" || row.state === "waiting") && row.revision !== expected.expectedRevision) {
+        throw new ApiError(409, "MCP_INTERACTION_CHANGED", "The request changed after this run staged it.");
+      }
+      rows.set(row.id, row);
+    }
+    const results: McpProposalWithdrawalResult["requests"] = [];
+    for (const expected of request.requests) {
+      const row = rows.get(expected.requestID)!;
+      if (row.state !== "pending" && row.state !== "waiting") {
+        results.push({ requestID: row.id, revision: row.revision, state: row.state,
+          status: row.state === "rejected" || row.state === "expired" ? "already_closed" : "already_submitted" });
+        continue;
+      }
+      const updated = await rejectPendingMcpInteraction(client, auth, row, {
+        source_task_id: request.authority.fence.runId, source_message_id: request.authority.messageId,
+        session_id: request.authority.sessionId, origin: "run_withdrawal",
+      });
+      results.push({ requestID: updated.id, revision: updated.revision, state: updated.state, status: "withdrawn" });
+    }
+    return { requests: results };
+  });
+}
+
 /**
  * Resolves one human request. The human decision is bound exactly to the
  * staged record: approve executes exactly the staged arguments once, submit
@@ -1323,30 +1418,7 @@ export async function resolveMcpInteraction(
       throw new ApiError(409, "MCP_INTERACTION_NOT_PENDING", "This request is no longer awaiting a decision.");
     }
     if (input.action === "reject") {
-      const updated = (
-        await client.query<InteractionRow>(
-          `UPDATE mcp_interaction_requests
-           SET state = 'rejected', resolved_at = clock_timestamp(),
-               resolved_by_user_id = $3, resolution_display = 'rejected',
-               revision = revision + 1, updated_at = clock_timestamp()
-           WHERE account_id = $1 AND id = $2 AND revision = $4
-           RETURNING ${INTERACTION_COLUMNS}`,
-          [auth.accountId, id, auth.userId, input.expected_revision],
-        )
-      ).rows[0]!;
-      if (row.kind === "oauth") {
-        // The generic rejection branch is the actual production entry for
-        // pending and waiting cards. Capture its durable late-grant watch in
-        // the same transaction before closing the unbound capability.
-        await recordAttemptCleanup(client, updated, "withdrawn");
-        await client.query(
-          `UPDATE mcp_oauth_connect_requests
-           SET state = 'failed', revision = revision + 1, updated_at = clock_timestamp()
-           WHERE account_id = $1 AND id = $2 AND state IN ('pending','waiting')
-             AND nango_connection_id IS NULL`,
-          [row.account_id, row.id],
-        );
-      }
+      const updated = await rejectPendingMcpInteraction(client, auth, row);
       await enqueueContinuationIntent(
         client,
         updated,
@@ -1354,10 +1426,6 @@ export async function resolveMcpInteraction(
         continuationText(updated, "rejected", null),
         humanResult(updated, auth.userId, "rejected"),
       );
-      await appendAudit(client, actor, "mcp_interaction.rejected", "mcp_interaction_request", id, {
-        external_effect_count: 0,
-        kind: row.kind,
-      });
       const body: McpInteractionResponse = {
         contract_version: CONTRACT_VERSION,
         request: interactionRecord(updated, null),
@@ -1968,6 +2036,13 @@ async function enqueueContinuationIntent(
   );
 }
 
+/**
+ * Fixed content-free diagnostic retained when a durable continuation enqueue
+ * fails. The raw exception never enters `last_error`; the row stays pending
+ * with its attempt count incremented so recovery can deliver exactly once.
+ */
+export const MCP_CONTINUATION_ENQUEUE_FAILED = "MCP_CONTINUATION_ENQUEUE_FAILED";
+
 interface OutboxRow {
   account_id: string;
   created_by_user_id: string;
@@ -2013,15 +2088,17 @@ async function deliverOutboxRow(
        WHERE account_id = $1 AND request_id = $2 AND state = 'pending'`,
       [row.account_id, row.request_id],
     );
-  } catch (error) {
+  } catch {
     // A transient enqueue failure stays pending and is retried by recovery;
-    // an unsent continuation is never labelled delivered.
+    // an unsent continuation is never labelled delivered. Only the fixed
+    // content-free diagnostic is retained: the raw exception never enters
+    // `last_error` or any other durable field.
     await pool
       .query(
         `UPDATE mcp_continuation_outbox
          SET attempts = attempts + 1, last_error = $3, updated_at = clock_timestamp()
          WHERE account_id = $1 AND request_id = $2 AND state = 'pending'`,
-        [row.account_id, row.request_id, String(error).slice(0, 240)],
+        [row.account_id, row.request_id, MCP_CONTINUATION_ENQUEUE_FAILED],
       )
       .catch(() => undefined);
   }

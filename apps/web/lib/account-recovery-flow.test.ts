@@ -96,9 +96,7 @@ import { decode } from "next-auth/jwt";
 import { buildAuthConfig } from "@/auth";
 import {
   AUTH_DUP_PROOF_COOKIE,
-  AUTH_OPERATION_COOKIE,
   AUTH_PROOF_COOKIE,
-  AUTH_ROUND_COOKIE,
   flowExpiresAt,
   sealAuthOperation,
   sealAuthRound,

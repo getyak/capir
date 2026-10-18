@@ -1,0 +1,20 @@
+.notebook { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 1.25rem; padding: 1rem 0 1.5rem; overflow-wrap: anywhere; }
+.notebook > * { min-width: 0; }
+.header h2 { font-size: var(--workspace-section-size); font-weight: 600; margin: 0 0 .4rem; }
+.header p, .note p, .platforms p, .sources p { line-height: 1.75; margin: .5rem 0 0; white-space: pre-wrap; font-size: var(--workspace-body-size); }
+.header p, .notebook small { color: var(--muted); font-size: var(--workspace-meta-size); }
+.note h3, .platforms h3 { font-size: var(--workspace-body-size); font-weight: 500; margin: 0; }
+.tableScroll { overflow-x: auto; margin-top: .75rem; }
+.notebook table { width: 100%; border-collapse: collapse; font-size: var(--workspace-meta-size); line-height: 1.65; }
+.notebook th, .notebook td { text-align: left; vertical-align: top; padding: .75rem .5rem; border-bottom: 1px solid var(--line-soft); }
+.notebook td { min-width: 8rem; }
+.notebook th:first-child, .notebook td:first-child { padding-left: 0; }
+.notebook a { color: var(--muted-strong); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.notebook small { display: block; margin-top: .3rem; line-height: 1.65; }
+.details > summary { padding: .75rem 0; cursor: pointer; font-weight: 500; min-height: 44px; }
+.notebook details details summary { cursor: pointer; margin-top: .5rem; min-height: 44px; }
+.notebook summary:focus-visible, .notebook a:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.sources { display: grid; gap: 1rem; padding-left: 1.2rem; }
+.markdown { font-size: var(--workspace-body-size); line-height: 1.85; overflow-wrap: anywhere; }
+.markdown pre { overflow-x: auto; }
+.markdown table { display: block; overflow-x: auto; }

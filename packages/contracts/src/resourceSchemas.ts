@@ -2010,7 +2010,7 @@ export const PersonDirectoryResponseSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
     people: Type.Array(PersonDirectoryItemSchema, {
-      maxItems: 20,
+      maxItems: 200,
     }),
   },
   { $id: "PersonDirectoryResponse", additionalProperties: false },
@@ -2032,6 +2032,31 @@ export const RelationshipContactPointSchema = Type.Object(
     valid_until: Type.Union([Timestamp, Type.Null()]),
   },
   { additionalProperties: false },
+);
+
+/** Explicitly reviewed structured contact evidence; each row retains its source. */
+export const ReviewedContactBasicFieldSchema = Type.Object(
+  {
+    field: Type.String({ minLength: 1, maxLength: 120 }),
+    value: Type.String({ minLength: 1, maxLength: 40_000 }),
+    evidence_fragment_id: Id,
+    capture_id: Id,
+    source_resource_id: Id,
+    observed_at: Timestamp,
+    relationship_context_id: Type.Union([Id, Type.Null()]),
+    source_label: Type.String({ minLength: 1, maxLength: 240 }),
+  },
+  { additionalProperties: false },
+);
+
+export const PersonDetailResponseSchema = Type.Object(
+  {
+    contract_version: Type.Literal(CONTRACT_VERSION),
+    person: PersonDirectoryItemSchema,
+    basic_fields: Type.Array(ReviewedContactBasicFieldSchema),
+    contact_points: Type.Array(RelationshipContactPointSchema, { maxItems: 20 }),
+  },
+  { $id: "PersonDetailResponse", additionalProperties: false },
 );
 
 export const RelationshipScopeSchema = Type.Object(
@@ -2345,6 +2370,9 @@ export type PersonDirectoryItem = Static<typeof PersonDirectoryItemSchema>;
 export type PersonDirectoryResponse = Static<
   typeof PersonDirectoryResponseSchema
 >;
+export type ReviewedContactBasicField = Static<typeof ReviewedContactBasicFieldSchema>;
+export type PersonDetailResponse = Static<typeof PersonDetailResponseSchema>;
+export type RelationshipContactPoint = Static<typeof RelationshipContactPointSchema>;
 export type RelationshipScope = Static<typeof RelationshipScopeSchema>;
 export type RelationshipAgentOperation = Static<
   typeof RelationshipAgentOperationSchema

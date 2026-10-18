@@ -93,7 +93,7 @@ describe("workspace conversation deadline", () => {
       throw new Error("A second full deadline must not be granted after inspection");
     });
     const bytes = Buffer.from("synthetic admitted image");
-    const result = executeWorkspaceConversationAgentCore({ workspaceID: "test", objective: "inspect", promptSnapshot,
+    const result = executeWorkspaceConversationAgentCore({ workspaceID: "test", messageID: "11111111-1111-4111-8111-111111111111", objective: "inspect", promptSnapshot,
       provider: { ...new ScriptedAgentProvider([], {}), id: "claude-agent-sdk", run },
       contacts: { search: async () => [], read: async () => { throw new Error("Unexpected read"); } },
       memory: { recall: async () => ({ items: [] }), stage: async () => null },
