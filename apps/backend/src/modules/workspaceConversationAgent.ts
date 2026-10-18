@@ -14,7 +14,7 @@ import {
   type AgentMemoryPage,
   resolveProductPrompt, promptReference, type PromptSnapshot,
   DEFAULT_AGENT_BUDGET,
-  currentImageInspection, ArkCurrentImageInspector, type CurrentImageInspector,
+  currentImageInspection, type CurrentImageInspector,
   publicSubjectRegistry, publicSearchDeclined, publicContextAnchorsFromText, WorkspacePublicSubjectSearchSchema, WorkspacePublicSourceFetchSchema,
   WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES,
   WorkspaceConversationFinalOutputSchema,
@@ -906,11 +906,6 @@ export async function executeWorkspaceConversationAgentCore(input: {
       }
       if (request.contact_decision === "new" && declinedContact()) return toolFailure(name,
         "CONTACT_ADD_DECLINED", "The current user declined adding contacts. Answer without a contact proposal.");
-      if (request.contact_decision === "new" && input.imageInspector && admittedImages.size > 0
-        && (!currentCounterparty || request.person_display_label?.trim() !== currentCounterparty.name)) {
-        return toolFailure(name, "CONTACT_COUNTERPARTY_NOT_GROUNDED",
-          "A screenshot contact must be the clearly observed direct-chat header, not a discussed public figure or a group. Use the host name or clarify.");
-      }
       if (request.contact_decision === "new" && currentCounterparty) {
         request.new_contact_source_locator = currentCounterparty.source_locator;
       }
@@ -979,6 +974,11 @@ export async function executeWorkspaceConversationAgentCore(input: {
           );
         }
       }
+      if (request.contact_decision === "new" && admittedImages.size > 0
+        && (!currentCounterparty || request.person_display_label?.trim() !== currentCounterparty.name)) {
+        return toolFailure(name, "CONTACT_COUNTERPARTY_NOT_GROUNDED",
+          "A screenshot contact must be the clearly observed direct-chat header, not a discussed public figure or a group. Use the host name or clarify.");
+      }
       if (request.contact_decision === "new" && newContactLocator?.kind === "image_region"
         && !currentImages.some(part => part.artifactID === newContactLocator.artifact_id)
         && !sourceTexts().some(explicitHistoricalContactRequest)) {
@@ -1017,7 +1017,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
       if (memorySourceID !== sourceMessageID && (imageRegions.length > 0))
         return toolFailure(name, "MEMORY_SOURCE_REVIEW_SPLIT", "Review the image and supplemental message separately.");
       for (const item of request.items) {
-        if (input.imageInspector && item.source_locator.kind === "image_region"
+        if (item.source_locator.kind === "image_region"
           && !await imageInspection.supportsExcerpt(item.source_locator.artifact_id, item.source_excerpt)) {
           return toolFailure(name, "MEMORY_SOURCE_UNGROUNDED", "Copy an exact visible image excerpt from the inspection; do not rewrite quotations. A contact-only card can use items: [].");
         }
@@ -2093,8 +2093,9 @@ export async function executeWorkspaceConversationAgent(input: {
     ...(input.sourceText === undefined ? {} : { sourceText: input.sourceText }),
     provider: input.provider,
     workspaceID: input.auth.accountId,
-    ...(process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING === "true" && process.env.ARK_API_KEY
-      ? { imageInspector: new ArkCurrentImageInspector(process.env.ARK_API_KEY) } : {}),
+    // This queue carries no persisted, source-bound authorization for a
+    // supplementary image processor. Global flags/credentials cannot grant it;
+    // leave inspection unavailable while the main provider can answer images.
     ...(process.env.TALENT_SIGNAL_WORKSPACE_PUBLIC_RESEARCH_ENABLED === "true" && process.env.TALENT_SIGNAL_PERSON_RESEARCH_SOCKET
       ? {researchClient: new LocalContactResearchClient(process.env.TALENT_SIGNAL_PERSON_RESEARCH_SOCKET)} : {}),
     imageIsCurrent: (artifactId, index, hash) => imageCurrent(input.database, artifactId, index, hash),
