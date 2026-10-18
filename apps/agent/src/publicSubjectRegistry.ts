@@ -29,7 +29,19 @@ export function isBoundedPublicName(value:string):boolean {
 const GENERIC_HAN_NAME_TARGET=/(?:我|你|您|他|她|它|今天|明天|昨天|后天|前天|刚才|现在|最近|目前|当时|那天|当天|今日|昨日|本周|上周|下周|本月|上月|下月|今年|去年|明年|时间|时候|我们|你们|他们|她们|它们|咱们|大家|本人|自己|某人|某位|此人|对方|该人|他人|有人|每人|什么|这个|那个|这些|那些|谁人|何人|同事|朋友|同学|老师|老板|客户|医生|律师|陌生人|候选人|应聘者|面试官|这个人|那个人|什么人)/u;
 const GENERIC_LATIN_NAME_TARGET=/\b(?:today|tomorrow|yesterday|tonight|this|that|these|those|he|she|they|him|her|them|his|hers|their|who|whom|whose)\b/iu;
 export function isBoundedPublicNameTarget(value:string):boolean {
-  return isBoundedPublicName(value)&&!GENERIC_HAN_NAME_TARGET.test(value)&&!GENERIC_LATIN_NAME_TARGET.test(value);
+  if(!isBoundedPublicName(value)||GENERIC_HAN_NAME_TARGET.test(value))return false;
+  // A leading EXACT capitalized "He"/"She" word is a legitimate romanized
+  // surname token (何/佘), not a pronoun. The exemption is deliberately
+  // narrow: only the first word, only that exact case, and only when every
+  // remaining word satisfies the existing complete Latin-name grammar and no
+  // generic/pronoun/time target remains. Single-name targets, lowercase
+  // forms, pronoun/time tails and every other occurrence stay rejected; this
+  // is name-form checking only, never identity validation.
+  const [lead,...rest]=value.split(" ");
+  const romanizedSurname=(lead==="He"||lead==="She")
+    &&rest.length>0
+    &&rest.every(word=>/^[A-Z][\p{Script=Latin}'’-]{1,24}$/u.test(word));
+  return !GENERIC_LATIN_NAME_TARGET.test(romanizedSurname?rest.join(" "):value);
 }
 
 /**
@@ -174,6 +186,79 @@ export function publicSearchDeclined(text:string):boolean {
   return /(?:不要|不用|不需要|不必|不许|别|禁止)[^，。！？;；\n]{0,12}(?:搜|查|检索|研究)|(?:do not|don['’]t|never|no need to)\s+(?:search|research|look up)/iu.test(text);
 }
 
+/** Explicit user-authored research target: one bounded name plus its own
+ * optional canonical homepage clue. */
+export interface AuthoredResearchTarget {name:string;homepage:string|null}
+
+/**
+ * Parse ONE full authored research clause into complete bounded research
+ * targets. Pure and fail-closed: every rejection path RETURNS an empty result
+ * before any admission work — an oversize clause (the exact 512-character raw
+ * input bound is kept and oversize input is never truncated), a non-positive
+ * clause, an unsafe or generic name, a URL-only target, a malformed or
+ * ambiguously assigned homepage, or a name+homepage combination over the
+ * person-research query bound all produce NO target. Only a fully validated
+ * clause returns its complete targets, each name bound to its own homepage
+ * clue; a long target is never normalized down to a valid-looking name.
+ */
+export function parseAuthoredResearchClause(clause:string):AuthoredResearchTarget[] {
+  // Parse bounded clauses in separate linear steps. Overlapping whitespace
+  // and optional suffix patterns can otherwise backtrack on hostile input.
+  if(clause.length>512)return [];
+  let request=clause.trim();
+  for(const prefix of ["请","帮我"])if(request.startsWith(prefix)){
+    request=request.slice(prefix.length).trimStart();break;
+  }
+  const verb=["查一下","查查","搜索","研究","了解一下","介绍一下","look up","research"]
+    .find(prefix=>request.toLowerCase().startsWith(prefix));
+  if(!verb)return [];
+  request=request.slice(verb.length).trimStart();
+  if(request.startsWith("聊天提到的"))request=request.slice("聊天提到的".length).trimStart();
+  request=request.replace(/\s+/gu," ").trim();
+  // The positive clause consumes the WHOLE target and only a legitimate
+  // terminal suffix. A suffix elsewhere leaves hostile query or instruction
+  // tails inside the target, which must fail whole-target validation below
+  // instead of being sliced away into a clean name.
+  for(const suffix of ["的背景","的作品","的文章"]){
+    if(request.endsWith(suffix)){request=request.slice(0,-suffix.length).trimEnd();break;}
+  }
+  // Explicit homepage clues are separated from names before bounded-name
+  // parsing. Every name must be complete and bounded and each URL must be
+  // its own name's canonical public homepage; URL-only, malformed or
+  // ambiguously assigned targets are rejected WHOLE instead of silently
+  // degrading into unconstrained name-only research.
+  const parsed:AuthoredResearchTarget[]=[];
+  const seenNames=new Set<string>();
+  const seenHomepages=new Set<string>();
+  let withHomepage=0;
+  if(!request.length)return [];
+  for(const piece of request.split(/ and | 和 |、|与/u)){
+    const tokens=piece.trim().split(/\s+/u).filter(Boolean);
+    const urlTokens=tokens.filter(token=>/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu.test(token));
+    const nameText=tokens.filter(token=>!/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu.test(token)).join(" ");
+    if(urlTokens.length>1||!nameText||!isBoundedPublicNameTarget(nameText))return [];
+    let homepage:string|null=null;
+    if(urlTokens.length===1){
+      homepage=admitAuthoredPublicHomepage(urlTokens[0]!);
+      if(!homepage||seenHomepages.has(homepage))return [];
+      seenHomepages.add(homepage);
+      withHomepage+=1;
+      // The combined name+homepage clue must already fit the existing
+      // 100-character person-research query bound; an over-limit target is
+      // rejected whole instead of dropping its homepage or widening the
+      // bound.
+      try{assertPersonResearchQuery(`${nameText} ${homepage}`);}catch{return [];}
+    }
+    if(seenNames.has(nameText))return [];
+    seenNames.add(nameText);
+    parsed.push({name:nameText,homepage});
+  }
+  // Multiple names each bind their own target URL; a mixed or repeated
+  // assignment is ambiguous and rejects the whole target.
+  if(!parsed.length||withHomepage&&withHomepage!==parsed.length)return [];
+  return parsed;
+}
+
 export function publicSubjectRegistry(objective:string) {
   const subjects=new Map<string,AuthorizedPublicSubject>();
   const register=(name:string,binding:string,isCurrent?:()=>Promise<boolean>,anchors?:readonly PublicContextAnchor[],tentative?:boolean,authoredHomepage?:string)=>{
@@ -193,64 +278,12 @@ export function publicSubjectRegistry(objective:string) {
   const authoredClues=new Map<string,Set<string>>();
   const authoredOrder:string[]=[];
   const prohibited=publicSearchDeclined(objective);
+  // Outer aggregation only ever merges COMPLETE validated clause results;
+  // every oversize/invalid/ambiguous clause contributes nothing.
+  const clauseTargets=objective.split(/[，。！？;；\n]/u).map(clause=>parseAuthoredResearchClause(clause));
   if(!prohibited){
-    for(const clause of objective.split(/[，。！？;；\n]/u)){
-      // Parse bounded clauses in separate linear steps. Overlapping whitespace
-      // and optional suffix patterns can otherwise backtrack on hostile input.
-      if(clause.length>512)continue;
-      let request=clause.trim();
-      for(const prefix of ["请","帮我"])if(request.startsWith(prefix)){
-        request=request.slice(prefix.length).trimStart();break;
-      }
-      const verb=["查一下","查查","搜索","研究","了解一下","介绍一下","look up","research"]
-        .find(prefix=>request.toLowerCase().startsWith(prefix));
-      if(!verb)continue;
-      request=request.slice(verb.length).trimStart();
-      if(request.startsWith("聊天提到的"))request=request.slice("聊天提到的".length).trimStart();
-      request=request.replace(/\s+/gu," ").trim();
-      // The positive clause consumes the WHOLE target and only a legitimate
-      // terminal suffix. A suffix elsewhere leaves hostile query or instruction
-      // tails inside the target, which must fail whole-target validation below
-      // instead of being sliced away into a clean name.
-      for(const suffix of ["的背景","的作品","的文章"]){
-        if(request.endsWith(suffix)){request=request.slice(0,-suffix.length).trimEnd();break;}
-      }
-      // Explicit homepage clues are separated from names before bounded-name
-      // parsing. Every name must be complete and bounded and each URL must be
-      // its own name's canonical public homepage; URL-only, malformed or
-      // ambiguously assigned targets are rejected WHOLE instead of silently
-      // degrading into unconstrained name-only research.
-      const parsed:{name:string;homepage:string|null}[]=[];
-      const seenNames=new Set<string>();
-      const seenHomepages=new Set<string>();
-      let targetOK=request.length>0;
-      let withHomepage=0;
-      for(const piece of request.split(/ and | 和 |、|与/u)){
-        if(!targetOK)break;
-        const tokens=piece.trim().split(/\s+/u).filter(Boolean);
-        const urlTokens=tokens.filter(token=>/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu.test(token));
-        const nameText=tokens.filter(token=>!/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu.test(token)).join(" ");
-        if(urlTokens.length>1||!nameText||!isBoundedPublicNameTarget(nameText)){targetOK=false;break;}
-        let homepage:string|null=null;
-        if(urlTokens.length===1){
-          homepage=admitAuthoredPublicHomepage(urlTokens[0]!);
-          if(!homepage||seenHomepages.has(homepage)){targetOK=false;break;}
-          seenHomepages.add(homepage);
-          withHomepage+=1;
-          // The combined name+homepage clue must already fit the existing
-          // 100-character person-research query bound; an over-limit target is
-          // rejected whole instead of dropping its homepage or widening the
-          // bound.
-          try{assertPersonResearchQuery(`${nameText} ${homepage}`);}catch{targetOK=false;break;}
-        }
-        if(seenNames.has(nameText)){targetOK=false;break;}
-        seenNames.add(nameText);
-        parsed.push({name:nameText,homepage});
-      }
-      // Multiple names each bind their own target URL; a mixed or repeated
-      // assignment is ambiguous and rejects the whole target.
-      if(!targetOK||!parsed.length||withHomepage&&withHomepage!==parsed.length)continue;
-      for(const {name,homepage} of parsed){
+    for(const targets of clauseTargets){
+      for(const {name,homepage} of targets){
         const clue=homepage??"";
         const clues=authoredClues.get(name)??new Set<string>();
         if(clues.size===0)authoredOrder.push(name);

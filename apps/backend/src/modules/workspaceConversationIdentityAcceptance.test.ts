@@ -274,12 +274,13 @@ function searchThenFetchReply(sources: ContactPublicSource[]): Handler {
   };
 }
 
-/** Route each search to its own clue's public source; fetch echoes receipts. */
-function routedReply(routes: Array<{ match: string; source: ContactPublicSource }>): Handler {
+/** Route each search to its own clue's public source by EXACT complete query
+ * equality (never a URL substring); fetch echoes receipts. */
+function routedReply(routes: Array<{ query: string; source: ContactPublicSource }>): Handler {
   return (request) => {
     if (request.input.operation !== "search") return fetchedReply(request);
     const query = request.input.query;
-    const hit = routes.find((route) => query.includes(route.match));
+    const hit = routes.find((route) => query === route.query);
     return {
       contract_version: CONTACT_RESEARCH_CONTRACT,
       task_id: request.task_id,
@@ -745,8 +746,8 @@ describe("GET-42 R1 same-name clue authority isolation", () => {
   const sourceA = publicSource("https://simonwillison.net/", "Simon Willison · bio");
   const sourceB = publicSource("https://craigmod.com/", "Simon Willison · second profile");
   const routes = [
-    { match: "craigmod.com", source: sourceB },
-    { match: "simonwillison.net", source: sourceA },
+    { query: "Simon Willison https://craigmod.com/", source: sourceB },
+    { query: "Simon Willison https://simonwillison.net/", source: sourceA },
   ];
 
   it("dispatches only the surviving authority's own clue when its same-name sibling is removed before search", async () => {
@@ -818,8 +819,10 @@ describe("GET-42 R1 same-name clue authority isolation", () => {
     expect(requests.map((request) => request.input.operation)).toEqual(["search", "search", "fetch"]);
     expect(requests[2]!.input).toMatchObject({ operation: "fetch" });
     expect((requests[2]!.input as { sources: ContactPublicSource[] }).sources[0]!.url).toBe("https://craigmod.com/");
-    expect(attempts.find((attempt) => attempt.query?.includes("simonwillison.net"))?.ok).toBe(false);
-    expect(attempts.find((attempt) => attempt.query?.includes("craigmod.com"))?.ok).toBe(true);
+    // Exact complete-query equality identifies each authority; no URL
+    // substring stands in for host validation.
+    expect(attempts.find((attempt) => attempt.query === "Simon Willison https://simonwillison.net/")?.ok).toBe(false);
+    expect(attempts.find((attempt) => attempt.query === "Simon Willison https://craigmod.com/")?.ok).toBe(true);
     expect(result.block.body).toContain("旧来源已失效");
     expect(stage).not.toHaveBeenCalled();
     expect(result.memoryProposal).toBeNull();
@@ -830,7 +833,7 @@ describe("GET-42 R1 same-name clue authority isolation", () => {
     const lilian = publicSource("https://lilianweng.github.io/", "Lilian Weng · blog");
     const { result, stage, requests } = await runCase({
       objective,
-      handler: routedReply([{ match: "lilianweng.github.io", source: lilian }]),
+      handler: routedReply([{ query: "Lilian Weng https://lilianweng.github.io/", source: lilian }]),
       script: async ({ tools, signal }) => {
         const search = toolNamed(tools, "search_public_subject");
         for (const entry of listedSubjects(tools)) {
@@ -917,7 +920,7 @@ describe("GET-42 R1 same-name clue authority isolation", () => {
         discussed_public_people: [{ name: "Simon Willison", source_excerpt: "正在读 Simon Willison 的文章" }],
       },
       imageCurrent: async () => imageCurrent,
-      handler: routedReply([...routes, { match: "biography official website", source: imageSource }]),
+      handler: routedReply([...routes, { query: "Simon Willison biography official website", source: imageSource }]),
       script: async ({ tools, signal }) => {
         const search = toolNamed(tools, "search_public_subject");
         const inspected = await callTool(toolNamed(tools, "inspect_current_image"), {
@@ -958,7 +961,7 @@ describe("GET-42 R1 same-name clue authority isolation", () => {
     const proposalSource = publicSource("https://people.example.org/simonw", "Simon Willison · public profile");
     const { result, stage, requests } = await runCase({
       objective: textA,
-      handler: routedReply([{ match: "biography official website", source: proposalSource }]),
+      handler: routedReply([{ query: "Simon Willison biography official website", source: proposalSource }]),
       script: async ({ invoke }) => {
         const proposal = await invoke("memory_review", {
           operation: "propose",

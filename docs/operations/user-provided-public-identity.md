@@ -15,11 +15,19 @@ subject; it never identifies a person in a photo and never confirms an identity.
   `research Simon Willison`, or `研究 Simon Willison https://simonwillison.net/ 的背景`.
 - The name must be a complete bounded name: two to four Han characters, or a
   full Latin name with at least two capitalized words. First-name-only English,
-  pronouns, generic targets and time words are rejected. A homepage is
-  optional and must be that name's own canonical public homepage.
+  pronouns, generic targets and time words are rejected. A leading exact
+  capitalized `He` or `She` word is read as a romanized surname (何/佘) when
+  the remaining words form a complete clean name with no generic, pronoun or
+  time word; this narrow allowance is name-form checking only, never identity
+  validation. A homepage is optional and must be that name's own canonical
+  public homepage.
 - The whole target is consumed together with only its legitimate terminal
   suffix (`的背景`, `的作品`, `的文章`). A hostile or instruction tail anywhere
-  else rejects the whole target instead of being sliced away.
+  else rejects the whole target instead of being sliced away. Each research
+  clause is parsed fail-closed as one unit: an overlong raw clause (over 512
+  characters) or any invalid, ambiguous or over-limit clue rejects that whole
+  clause — long input is never truncated or normalized into a valid target —
+  while other independent clauses still work normally.
 
 ## What runs
 

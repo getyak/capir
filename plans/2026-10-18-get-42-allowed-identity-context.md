@@ -174,3 +174,89 @@ Repair evidence (logs prefixed `repair1-` in the task artifact):
 - The reviewer's unchanged probe now exits 1 at its first buggy assertion
   (zero provider dispatch after the withdraw-before-search removal), so the
   reported reproduction no longer occurs (`repair1-reviewer-probe-after-fix.log`).
+
+## Repair 2 — exact-head CodeQL structure fixes (PR372 head 329b62fe)
+
+Exact-head CodeQL on PR372 reported three findings over the delivered slice
+(`initial-codeql.sarif.json`; authoritative diagnosis
+`codeql-alert-109-independent-diagnosis.md`). None was an observed security
+bypass; each was a structural misreading that the source must express
+accurately. No suppression, dismissal, removed guard, renamed security symbol
+or widened bound was used.
+
+- **109 `js/user-controlled-bypass`** (`publicSubjectRegistry.ts` L200): the
+  `if(clause.length>512)continue` skip guarded the pure validation call
+  `admitAuthoredPublicHomepage` (the CodeQL 2.27.2 SensitiveActions `auth`
+  heuristic misreads "Authored" as an authorization call). The official
+  conditional-bypass query recognizes `return`/`throw` early abort but not
+  `continue`, so the loop skip looked like a bypassable limit even though an
+  oversize clause contributes no registration. Source-backed resolution:
+  each full authored research clause is now parsed by the PURE helper
+  `parseAuthoredResearchClause`, which returns `[]` — a complete rejection —
+  on every oversize/invalid/ambiguous/over-limit input and returns only a
+  fully validated target array. All rejections are early `return []` aborts
+  inside the helper (recognized guard structure), the outer registry only
+  merges complete valid helper results, and the exact 512 raw-clause bound,
+  no-truncation rule, decline semantics, whole-target validation, canonical
+  URL rules, per-input same-name conflicting-clue fail-closed behavior and
+  independent unrelated clauses are unchanged. Input bounds and the
+  security-symbol names stay as they are; source guards and complete-clue
+  authority are untouched.
+- **107/108 `js/incomplete-url-substring-sanitization`** (acceptance test
+  L821/822): authority identification used `attempt.query?.includes(domain)`.
+  Resolution: exact equality against the complete expected queries
+  (`Simon Willison https://simonwillison.net/` and
+  `Simon Willison https://craigmod.com/`), and the fake-provider router now
+  also matches complete queries exactly — no URL substring stands in for host
+  validation anywhere in the test file. Real URL policy is unchanged.
+- **Boundary regressions added** for the extracted clause: exactly-512 raw
+  clause with a valid name+homepage still parses while 513 fails closed; a
+  ≥513 clause carrying a valid homepage and a hostile tail registers zero;
+  the hostile tail is never clipped to launder a target at or below the bound;
+  an overlong clause beside an independent valid clause registers only that
+  valid complete clue; and a long raw target is never normalized down to a
+  valid name even when whitespace collapsing would yield one.
+
+Repair-2 evidence (logs prefixed `repair2-` in the task artifact; all earlier
+RED/GREEN logs and the batch-1 nine-file hash freeze records are preserved):
+contracts/agent/evaluation builds OK in this worktree; `tsc6 --noEmit` clean
+for agent and backend; agent registry + currentImageInspection 40 passed; the
+backend five relevant files 154 passed (all R1 and original acceptance
+regressions preserved); docs/wiki/architecture checks and `git diff --check`
+pass. Hosted CodeQL on the new head is parent-owned and must rerun before any
+passing claim.
+
+## Repair 3 — narrow romanized surname targets (MiMo P3, COMMENT 5562528427)
+
+One confirmed small functional issue: the generic Latin pronoun/time filter
+(`/i`) rejected legitimate capitalized romanized surnames — `He Wei`,
+`He Ping`, `She Ping` (何/佘) — even though the complete Latin-name grammar
+accepted them (bounded=true, target=false, zero subjects).
+
+Conservative fix in `isBoundedPublicNameTarget` only: a leading EXACT
+capitalized `He`/`She` word is exempt from the pronoun filter when every
+remaining word satisfies the existing complete Latin-name grammar and no
+generic/pronoun/time target remains. Single-name minimum, lowercase forms,
+pronoun/time tails, non-leading `He`/`She` occurrences, hostile tails, Chinese
+generic rules and every source/homepage binding are unchanged — the filter is
+never globally relaxed and no arbitrary generic target is admitted. This is
+name-form checking only, not identity validation.
+
+RED/GREEN (`repair3-red-registry.log` / `repair3-green-registry.log`): the
+admission case failed on the old filter (1 failed / 29 passed — all rejection
+examples already held), then registry + currentImageInspection 43 passed.
+Builds (contracts/agent/evaluation), agent/backend typechecks, the backend
+five focused files (154 passed), docs/wiki/architecture/diagrams and
+`git diff --check` all pass (`repair3-*` logs).
+
+MiMo P0 (raw regex) and P2 (hostResult) claims were independently disproven
+on an isolated 329b snapshot with four actual fake-core probes; the
+production `hostResult` fallback is deliberately UNCHANGED and those
+false-positive findings are not reported as source fixes.
+
+Scope note: the runner's FAILED160repair2 verdict stands as the historical
+record; it failed only on scope accounting for 15 already-merged main8eb
+files (byte-verified in `repair-2-evidence/freeze-and-scope-amendment.json`),
+which are immutable read-only here and were hashed unchanged before and after
+this delta. Hosted CodeQL on the new head still awaits the parent push and is
+not claimed passed.
