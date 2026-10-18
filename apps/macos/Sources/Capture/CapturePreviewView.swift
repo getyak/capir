@@ -145,8 +145,9 @@ final class CapturePreviewWindowController: NSObject, NSWindowDelegate {
         new.title = "capri · 截图预览"
         self.coordinator = coordinator
         new.delegate = self
-        new.contentViewController = NSHostingController(rootView: CapturePreviewView(coordinator: coordinator) { [weak self] in
-            self?.window?.close(); self?.window = nil
+        new.contentViewController = NSHostingController(rootView: CapturePreviewView(coordinator: coordinator) { [weak self, weak new] in
+            guard let self, let new, self.window === new else { return }
+            self.dismiss()
         })
         new.center()
         window = new

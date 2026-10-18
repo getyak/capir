@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CoreGraphics
 import Foundation
+import SwiftUI
 import XCTest
 @testable import TalentSignalMac
 
@@ -22,12 +23,14 @@ private final class RelayMemoryRecovery: CaptureRecoveryPersisting {
 @MainActor private final class RelaySelector: CaptureSelecting {
     let image: CGImage
     var preview = false
+    var selections = 0
     init() {
         image = CGContext(data: nil, width: 640, height: 480, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
     }
     func select() async throws -> CaptureSelectionResult {
-        .init(image: image, capturedAt: Date(timeIntervalSince1970: 1_800_000_000), preview: preview)
+        selections += 1
+        return .init(image: image, capturedAt: Date(timeIntervalSince1970: 1_800_000_000), preview: preview)
     }
     func cancel() {}
 }
@@ -35,7 +38,12 @@ private final class RelayMemoryRecovery: CaptureRecoveryPersisting {
 @MainActor private final class RelayTransport: CaptureTransporting {
     var current: CaptureContext
     var admissions = 0
+    var suspendAdmission = false
+    var pendingAdmission: CheckedContinuation<Void, Never>?
     var resultReads = 0
+    var receiptReads = 0
+    var suspendReceipt = false
+    var pendingReceipt: CheckedContinuation<CaptureReceipt?, Error>?
     var canonical: CaptureReceipt?
     var lastIntent: CaptureIntent?
     var resultError: Error?
@@ -46,11 +54,16 @@ private final class RelayMemoryRecovery: CaptureRecoveryPersisting {
     func context() async throws -> CaptureContext { current }
     func admit(_ intent: CaptureIntent, context: CaptureContext) async throws -> CaptureAdmission {
         admissions += 1; lastIntent = intent.withoutRawImage()
+        if suspendAdmission { await withCheckedContinuation { pendingAdmission = $0 } }
         canonical = .init(sessionId: intent.sessionId, messageId: intent.messageId, queueEntryId: UUID(), status: "queued",
             imageManifest: [.init(attachmentId: intent.attachmentId, byteSize: intent.imageByteSize, contentHash: intent.contentHash)], resultRecorded: false)
         return .init(sessionId: intent.sessionId, messageId: intent.messageId, queueEntryId: canonical!.queueEntryId, status: "queued")
     }
-    func receipt(for intent: CaptureIntent, context: CaptureContext) async throws -> CaptureReceipt? { canonical }
+    func receipt(for intent: CaptureIntent, context: CaptureContext) async throws -> CaptureReceipt? {
+        receiptReads += 1
+        if suspendReceipt { return try await withCheckedThrowingContinuation { pendingReceipt = $0 } }
+        return canonical
+    }
     func complete() {
         let old = canonical!
         canonical = .init(sessionId: old.sessionId, messageId: old.messageId, queueEntryId: old.queueEntryId, status: "completed",
@@ -192,6 +205,81 @@ final class CaptureRelayCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.relay)
         XCTAssertEqual(transport.admissions, 0)
         XCTAssertFalse(window.isVisible)
+    }
+
+    @MainActor func testSecondShortcutCannotReplacePreviewWhileItsAdmissionIsUnresolved() async throws {
+        let (coordinator, transport, selector, _) = fixture(); selector.preview = true
+        await coordinator.startCapture()
+        transport.suspendAdmission = true
+        let send = Task { await coordinator.submitPreview(selector.image, objective: "只分析截图，不保存") }
+        for _ in 0..<100 where transport.pendingAdmission == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingAdmission)
+        await coordinator.startCapture()
+        let selectionsDuringAdmission = selector.selections
+        let previewDuringAdmission = coordinator.previewImage
+        transport.pendingAdmission?.resume(); transport.pendingAdmission = nil
+        await send.value
+        XCTAssertEqual(selectionsDuringAdmission, 1, "An unresolved preview send still owns the capture gesture")
+        XCTAssertNil(previewDuringAdmission, "A second local draft cannot replace the submitted preview")
+        XCTAssertEqual(transport.admissions, 1)
+        XCTAssertEqual(coordinator.relay?.phase, .processing)
+        guard case .processing = coordinator.presentation else { return XCTFail("Keep the original admitted screenshot") }
+        await coordinator.startCapture()
+        XCTAssertEqual(selector.selections, 2, "Verified admission releases the gesture for the next capture")
+        XCTAssertNotNil(coordinator.previewImage)
+    }
+
+    @MainActor func testOlderReceiptCompletesItsIntentWithoutClosingANewerLocalPreview() async throws {
+        _ = NSApplication.shared
+        let (coordinator, transport, selector, _) = fixture()
+        let previewWindow = CapturePreviewWindowController()
+        let observer = coordinator.$presentation.sink { state in
+            if case .previewReady = state { previewWindow.show(coordinator: coordinator) }
+            else { previewWindow.dismiss() }
+        }
+        defer { observer.cancel(); previewWindow.dismiss() }
+        await coordinator.startCapture()
+        let first = try XCTUnwrap(transport.lastIntent)
+        transport.suspendReceipt = true
+        let refresh = Task { await coordinator.refreshCurrentStatus() }
+        for _ in 0..<100 where transport.pendingReceipt == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingReceipt)
+        selector.preview = true
+        await coordinator.startCapture()
+        XCTAssertNotNil(coordinator.previewImage)
+        XCTAssertEqual(coordinator.presentation, .previewReady)
+        transport.complete()
+        transport.pendingReceipt?.resume(returning: transport.canonical); transport.pendingReceipt = nil
+        await refresh.value
+        XCTAssertEqual(coordinator.presentation, .previewReady, "Old canonical completion does not own the newer preview")
+        XCTAssertNotNil(coordinator.previewImage)
+        XCTAssertEqual(transport.admissions, 1)
+        let reads = transport.receiptReads
+        await coordinator.retry(intentID: first.id)
+        XCTAssertEqual(transport.receiptReads, reads, "The completed older intent must still be retired")
+        XCTAssertEqual(coordinator.presentation, .previewReady)
+    }
+
+    @MainActor func testOldPreviewCloseCallbackCannotDismissAReboundWorkspaceDraft() async throws {
+        _ = NSApplication.shared
+        let existingWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let (first, _, firstSelector, _) = fixture(); firstSelector.preview = true
+        let (second, secondTransport, secondSelector, _) = fixture(); secondSelector.preview = true
+        await first.startCapture(); await second.startCapture()
+        let previewWindow = CapturePreviewWindowController()
+        defer { previewWindow.dismiss() }
+        previewWindow.show(coordinator: first)
+        let firstWindow = try XCTUnwrap(NSApp.windows.first {
+            !existingWindows.contains(ObjectIdentifier($0)) && $0.title == "capri · 截图预览"
+        })
+        let oldRoot = try XCTUnwrap(firstWindow.contentViewController as? NSHostingController<CapturePreviewView>).rootView
+        previewWindow.show(coordinator: second)
+        XCTAssertNil(first.previewImage)
+        XCTAssertNotNil(second.previewImage)
+        oldRoot.close()
+        XCTAssertNotNil(second.previewImage, "A completed old Send callback does not own the new window")
+        XCTAssertEqual(second.presentation, .previewReady)
+        XCTAssertEqual(secondTransport.admissions, 0)
     }
 
     @MainActor func testLegacyProducerHasAnHonestNoClueResultAndLoginChangeClearsIt() async {

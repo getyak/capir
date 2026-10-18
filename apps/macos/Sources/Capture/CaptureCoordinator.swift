@@ -37,6 +37,9 @@ final class CaptureCoordinator: ObservableObject {
     private var lastVerifiedContext: CaptureContext?
     private var captureInFlight = false
     private var captureGeneration = 0
+    // New selections own presentation; older intents still reconcile their
+    // canonical receipts without dismissing the newer local draft.
+    private var presentationGeneration = 0
     private var ownerRevision = 0
     private var explicitlySignedOut = false
     private var readyRelayIntent: CaptureIntent?
@@ -120,6 +123,7 @@ final class CaptureCoordinator: ObservableObject {
 
     private func select(context: CaptureContext, generation: Int) async {
         guard generation == captureGeneration, boundOwnerScope == context.ownerScope else { return }
+        presentationGeneration += 1
         dismissRelay()
         presentation = .selecting
         do {
@@ -143,8 +147,10 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func submitPreview(_ image: CGImage, objective: String = "") async {
-        guard let preview = pendingPreview else { return }
+        guard !captureInFlight, let preview = pendingPreview else { return }
         guard objective.utf16.count <= 1000 else { return }
+        captureInFlight = true
+        defer { captureInFlight = false }
         let generation = captureGeneration
         pendingPreview = nil
         onRecoveryChanged?()
@@ -312,13 +318,16 @@ final class CaptureCoordinator: ObservableObject {
         }
     }
 
-    private func reconcile(_ intent: CaptureIntent, context: CaptureContext, generation: Int) async {
+    private func reconcile(_ intent: CaptureIntent, context: CaptureContext, generation: Int,
+                           presentationGeneration expectedPresentationGeneration: Int? = nil) async {
         guard intentIsCurrent(intent.id, generation: generation) else { return }
+        let expectedPresentationGeneration = expectedPresentationGeneration ?? presentationGeneration
         do {
             let currentReceipt = try await transport.receipt(for: intent, context: context)
             guard intentIsCurrent(intent.id, generation: generation) else { return }
+            let mayPresent = expectedPresentationGeneration == presentationGeneration
             guard let receipt = currentReceipt else {
-                presentation = .unknown(intent.id)
+                if mayPresent { presentation = .unknown(intent.id) }
                 return
             }
             guard receipt.sessionId == intent.sessionId, receipt.messageId == intent.messageId,
@@ -331,37 +340,40 @@ final class CaptureCoordinator: ObservableObject {
             do { try recovery.remove(intent) }
             catch {
                 intents[intent.id] = intent.withoutRawImage()
-                presentation = .deletionFailed(intent.id)
+                if mayPresent { presentation = .deletionFailed(intent.id) }
                 onRecoveryChanged?()
                 return
             }
             var admitted = intent.withoutRawImage()
             admitted.queueEntryId = receipt.queueEntryId
             if receipt.resultRecorded {
-                progressPoll?.cancel(); progressPoll = nil
+                if mayPresent { progressPoll?.cancel(); progressPoll = nil }
                 intents.removeValue(forKey: intent.id)
                 intentGenerations.removeValue(forKey: intent.id)
-                presentation = .viewable(intent.sessionId)
+                if mayPresent { presentation = .viewable(intent.sessionId) }
                 if relay?.intentID == intent.id, relay?.ownerRevision == ownerRevision {
                     readyRelayIntent = admitted
                     await refreshRelayResult()
                     startRelayResultPollIfNeeded()
                 }
             } else if receipt.status == "failed" || receipt.status == "interrupted" || receipt.status == "cancelled" {
-                progressPoll?.cancel(); progressPoll = nil
+                if mayPresent { progressPoll?.cancel(); progressPoll = nil }
                 var failed = admitted
                 failed.phase = .failed
                 intents[intent.id] = failed
-                presentation = .failed(intent.id, "Agent 未完成处理，可打开原会话查看或重试。")
+                if mayPresent { presentation = .failed(intent.id, "Agent 未完成处理，可打开原会话查看或重试。") }
             } else {
                 // The backend owns execution independently of this window.
                 intents[intent.id] = admitted
-                presentation = .processing(intent.sessionId)
-                startProgressPollIfNeeded()
+                if mayPresent {
+                    presentation = .processing(intent.sessionId)
+                    startProgressPollIfNeeded()
+                }
             }
             onRecoveryChanged?()
         } catch {
-            if intentIsCurrent(intent.id, generation: generation) { presentation = .unknown(intent.id) }
+            if expectedPresentationGeneration == presentationGeneration,
+               intentIsCurrent(intent.id, generation: generation) { presentation = .unknown(intent.id) }
         }
     }
 
@@ -369,18 +381,23 @@ final class CaptureCoordinator: ObservableObject {
         guard case .processing(let sessionID) = presentation,
               let intent = intents.values.first(where: { $0.sessionId == sessionID }) else { return }
         let generation = intentGenerations[intent.id] ?? 0
+        let expectedPresentationGeneration = presentationGeneration
         do {
             let current = try await transport.context()
             guard intentIsCurrent(intent.id, generation: generation) else { return }
             if boundOwnerScope != current.ownerScope { rebindOwner(to: current); return }
             onVerifiedContext?(current)
             guard intent.canReadback(context: current, now: now()) else {
-                presentation = .failed(intent.id, "工作区或处理方式已改变，请重新打开会话。")
+                if expectedPresentationGeneration == presentationGeneration {
+                    presentation = .failed(intent.id, "工作区或处理方式已改变，请重新打开会话。")
+                }
                 return
             }
-            await reconcile(intent, context: current, generation: generation)
+            await reconcile(intent, context: current, generation: generation,
+                            presentationGeneration: expectedPresentationGeneration)
         } catch {
-            if intentIsCurrent(intent.id, generation: generation) { presentation = .unknown(intent.id) }
+            if expectedPresentationGeneration == presentationGeneration,
+               intentIsCurrent(intent.id, generation: generation) { presentation = .unknown(intent.id) }
         }
     }
 
