@@ -249,6 +249,7 @@ export default async function WorkspacePage({
     const browserClaims = await readBackendSessionClaims();
     return (
       <RelationshipWorkspaceApp
+        initialSourceSyncBinding={browserClaims ? workspaceSessionsBinding(browserClaims) : null}
         initialSessionVersion={browserClaims ? contactHandoffSessionVersion(browserClaims) : null}
         initialAccountId={initialRead?.accountId ?? null}
         initialAgentHistory={initialRead?.agentHistory ?? null}

@@ -35,10 +35,15 @@ export function calendarDraftCapability(context: CalendarDraftContext | undefine
   let draft: CalendarDraft | undefined;
   let staged = false;
   let finishing = false;
+  /** Host preparation generation: starts at 0 and advances atomically with
+   * each accepted staging or discard. Rejected, failed or duplicate staging
+   * never advances it; draft, finishing and revision commit together. */
+  let revision = 0;
   const permitted = () => context?.permitsDraft?.() !== false;
   const preparationReady = () => Boolean(draft && finishing && permitted());
-  const discard = () => { draft = undefined; staged = false; finishing = false; };
-  if (!context) return { tools: [] as HarnessTool[], instructions: "", clock: undefined, draft: () => draft, preparationReady, discard };
+  const preparationRevision = () => revision;
+  const discard = () => { draft = undefined; staged = false; finishing = false; revision += 1; };
+  if (!context) return { tools: [] as HarnessTool[], instructions: "", clock: undefined, draft: () => draft, preparationReady, preparationRevision, discard };
   if (!z.uuid().safeParse(context.sourceRequestID).success || !Number.isFinite(Date.parse(context.referenceTime))) throw new Error("CALENDAR_DRAFT_CONTEXT_INVALID");
   new Intl.DateTimeFormat("en", { timeZone: context.timeZone });
   const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: context.timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(context.referenceTime));
@@ -73,8 +78,9 @@ export function calendarDraftCapability(context: CalendarDraftContext | undefine
       if (typeof grounded === "object") draft.source_image = grounded;
       staged = true;
       finishing = input.finish_preparation === true;
+      revision += 1;
       return content({ calendar_draft: draft, instruction: "Present the draft for human review in the attached calendar card. No calendar event has been created and nobody has been invited. The user must use that card's calendar action; a conversational reply is not approval and cannot save an event. Keep the reply brief because the card already shows the exact title and time." });
     },
   };
-  return { tools: [tool], instructions, clock, draft: () => permitted() ? draft : undefined, preparationReady, discard };
+  return { tools: [tool], instructions, clock, draft: () => permitted() ? draft : undefined, preparationReady, preparationRevision, discard };
 }

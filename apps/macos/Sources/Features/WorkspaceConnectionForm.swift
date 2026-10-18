@@ -8,6 +8,7 @@ struct WorkspaceConnectionForm: View {
     }
 
     var mode: Mode = .settings
+    var isActive = true
     var onConnected: () -> Void
     @ObservedObject private var connection = WorkspaceConnection.shared
     @State private var address = ""
@@ -20,6 +21,7 @@ struct WorkspaceConnectionForm: View {
     @State private var error: String?
     @State private var confirmSwitch = false
     @State private var copied = false
+    @FocusState private var addressFocused: Bool
 
     private var isFirstRun: Bool { mode == .firstRun }
     private var parsed: WorkspaceOrigin? { WorkspaceConnection.parseInput(address, allowLocalDevelopment: localDevelopment) }
@@ -46,6 +48,7 @@ struct WorkspaceConnectionForm: View {
                         .stroke(TSBrand.hairline.opacity(0.9), lineWidth: 1)
                 }
                 .accessibilityIdentifier("connection.address")
+                .focused($addressFocused)
                 .onSubmit { requestSave() }
                 .padding(.top, 8)
 
@@ -102,8 +105,7 @@ struct WorkspaceConnectionForm: View {
 
             HStack {
                 Spacer(minLength: 0)
-                Button(isFirstRun ? "打开工作区" : "保存连接", action: requestSave)
-                    .buttonStyle(TSPrimaryButtonStyle())
+                saveButton
                     .disabled(parsed == nil)
                     .accessibilityIdentifier("connection.save")
             }
@@ -121,18 +123,35 @@ struct WorkspaceConnectionForm: View {
             }
         }
         .padding(isFirstRun ? 0 : 4)
+        .disabled(!isActive)
         .onAppear {
             address = connection.origin?.url.absoluteString ?? ""
             localDevelopment = connection.allowsLocalDevelopment
         }
         .onChange(of: address) { _, _ in invalidateProbe() }
         .onChange(of: localDevelopment) { _, _ in invalidateProbe() }
+        .onChange(of: isActive) { _, active in
+            if !active {
+                addressFocused = false
+                invalidateProbe()
+            }
+        }
         .onDisappear { invalidateProbe() }
         .confirmationDialog("切换工作区服务？", isPresented: $confirmSwitch, titleVisibility: .visible) {
             Button("切换并重新载入") { save() }
             Button("取消", role: .cancel) {}
         } message: {
             Text("请先完成当前输入或上传。将打开 \(parsed?.url.absoluteString ?? "")，现有服务的登录状态会保留。")
+        }
+    }
+
+    @ViewBuilder private var saveButton: some View {
+        if isFirstRun {
+            Button("打开工作区", action: requestSave)
+                .buttonStyle(FirstRunPrimaryButtonStyle())
+        } else {
+            Button("保存连接", action: requestSave)
+                .buttonStyle(TSPrimaryButtonStyle())
         }
     }
 
@@ -243,7 +262,7 @@ struct WorkspaceConnectionForm: View {
     }
 
     private func testConnection() {
-        guard let origin = parsed else { return }
+        guard isActive, let origin = parsed else { return }
         invalidateProbe(); probing = true
         let id = probeID
         probeTask = Task {
@@ -254,6 +273,7 @@ struct WorkspaceConnectionForm: View {
     }
 
     private func requestSave() {
+        guard isActive else { return }
         guard parsed != nil else {
             error = "请输入 HTTPS 工作区地址。"
             return
@@ -263,6 +283,7 @@ struct WorkspaceConnectionForm: View {
     }
 
     private func save() {
+        guard isActive else { return }
         guard connection.save(address, allowLocalDevelopment: localDevelopment) else { return }
         onConnected()
     }

@@ -15,6 +15,7 @@ import { ConversationQueueRunner, type ConversationQueueProviderSelector } from 
 import { startMcpOAuthCleanupPump } from "./modules/mcpOauthCleanup.js";
 import { registerMeetingDraftRoutes } from "./modules/meetingDraftRoutes.js";
 import { registerTimeWorkspaceRoutes } from "./modules/timeWorkspaceRoutes.js";
+import { registerPersonSourceSyncRoutes } from "./modules/personSourceSyncRoutes.js";
 import { registerAgentPreferenceRoutes } from "./modules/agentPreferenceRoutes.js";
 import { registerWeeklyUsageRoutes } from "./modules/weeklyUsage.js";
 import { registerMcpExtensionRoutes } from "./modules/mcpRoutes.js";
@@ -756,6 +757,7 @@ export async function buildApp(
   registerDesktopBrowserLogin(app, pool, config, authenticate);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);
+  registerPersonSourceSyncRoutes(app, pool, authenticate);
   registerFeedbackRoutes(app, pool, authenticate);
   const security = [{ bearerSession: [] }];
   registerAgentPreferenceRoutes(app, pool, authenticate, remoteChatProvider?.providerId === "claude-agent-sdk");

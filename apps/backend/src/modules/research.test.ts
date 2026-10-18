@@ -10,6 +10,8 @@ import { FormatRegistry } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 
 import type { AuthContext } from "./auth.js";
+import { ApiError } from "../lib/apiError.js";
+import type { RecurringResearchCycleHooks } from "./research.js";
 import {
   crawlPublicResearch,
   extractResearchPage,
@@ -697,5 +699,640 @@ describe("bounded public research crawl attempt budget", () => {
     expect(dispatched).not.toContain("https://profile.example/grandchild");
     expect(oneHop.pages).toHaveLength(3);
     expect(oneHop.warnings).toEqual([]);
+  });
+});
+
+describe("recurring person source sync cycles through the bounded research pipeline", () => {
+  const auth = {
+    accountId: "44444444-4444-4444-8444-444444444444",
+    accountSlug: "synthetic",
+    userId: "55555555-5555-5555-8555-555555555555",
+    userEmail: "recruiter@example.test",
+    userKind: "simulated_human",
+    sessionId: "66666666-6666-6666-8666-666666666666",
+  } as AuthContext;
+  const grantId = "77777777-7777-4777-8777-777777777777";
+  const runId = "88888888-8888-4888-8888-888888888888";
+  const seedResourceId = "33333333-3333-4333-8333-333333333333";
+  const approvedAt = new Date("2026-08-01T00:00:00.000Z");
+  const grantActorId = "99999999-9999-4999-8999-999999999999";
+
+  function recurringRequest(): PublicResearchRequest {
+    return {
+      idempotency_key: `person-source-sync:${grantId}:2026-08-07T00:00:00.000Z`,
+      person_id: "11111111-1111-4111-8111-111111111111",
+      relationship_context_id: "22222222-2222-4222-8222-222222222222",
+      seed_resource_id: seedResourceId,
+      purpose: "Owner-confirmed periodic re-read of one bound public source for one person.",
+      expected_seed_url: "https://8.8.8.8/person",
+      authorization: {
+        decision: "approve_public_research",
+        allowed_domain: "8.8.8.8",
+        maximum_page_count: 1,
+        maximum_link_depth: 0,
+      },
+    };
+  }
+
+  function syntheticPage(path: string): CrawledPage {
+    return {
+      canonicalUrl: `https://8.8.8.8${path}`,
+      contentHash: path.padEnd(64, "a").slice(0, 64),
+      retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+      text: "Public professional profile excerpt.",
+      links: [],
+    };
+  }
+
+  function fakeHooks(overrides: {
+    commitPage?: RecurringResearchCycleHooks["commitPage"];
+    finalize?: RecurringResearchCycleHooks["finalize"];
+    recordTask?: RecurringResearchCycleHooks["recordTask"];
+    admit?: RecurringResearchCycleHooks["admit"];
+  } = {}): RecurringResearchCycleHooks {
+    return {
+      runId,
+      boundary: { deadlineAt: new Date(Date.now() + 15 * 60_000) },
+      approval: {
+        approvedByUserId: grantActorId,
+        approvedAt,
+        authorizationScope:
+          `Periodic public source observation authorized by the original owner ` +
+          `grant ${grantId} (revision 1) for 8.8.8.8; exactly 1 page at link ` +
+          `depth 0 on an honest 24-hour UTC interval.`,
+        grantId,
+      },
+      admit:
+        overrides.admit ??
+        (vi.fn(async () => undefined) as RecurringResearchCycleHooks["admit"]),
+      recordTask:
+        overrides.recordTask ??
+        vi.fn(async () => undefined) as RecurringResearchCycleHooks["recordTask"],
+      commitPage:
+        overrides.commitPage ??
+        vi.fn(async () => ({
+          committed: null,
+          unchanged: true,
+          stop: false,
+        })) as RecurringResearchCycleHooks["commitPage"],
+      finalize:
+        overrides.finalize ??
+        (vi.fn(async () => ({
+          status: "completed" as const,
+          warnings: [],
+        })) as RecurringResearchCycleHooks["finalize"]),
+    };
+  }
+
+  function poolWith(
+    dispatch: (sql: string, params?: unknown[]) => Promise<unknown>,
+  ) {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const wrapped = async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      return dispatch(sql, params);
+    };
+    const client = {
+      query: vi.fn(wrapped),
+      release: vi.fn(),
+    };
+    const pool = {
+      query: vi.fn(wrapped),
+      connect: vi.fn(async () => client),
+    } as unknown as Pool;
+    return { pool, calls };
+  }
+
+  function seedDispatch(sql: string): unknown {
+    if (sql.includes("resource_kind = 'public_url'")) {
+      return {
+        rows: [{
+          id: seedResourceId,
+          source_locator: "https://8.8.8.8/person",
+          display_name: "Synthetic seed",
+        }],
+        rowCount: 1,
+      };
+    }
+    return { rows: [], rowCount: 0 };
+  }
+
+  it("stamps the original grant approval and durable cycle id, never a per-cycle approval", async () => {
+    const hooks = fakeHooks();
+    const { pool, calls } = poolWith(async (sql) => {
+      if (sql.includes("INSERT INTO idempotency_records")) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("research_retrieval_jobs") && sql.includes("RETURNING")) {
+        return {
+          rows: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("INSERT INTO audit_events")) {
+        return { rows: [{ sequence: "1" }], rowCount: 1 };
+      }
+      return seedDispatch(sql);
+    });
+
+    const result = await runPublicResearch(
+      pool,
+      auth,
+      recurringRequest(),
+      async () => syntheticPage("/person"),
+      { recurring: hooks, recurringRunId: runId },
+    );
+
+    expect(result.status).toBe(201);
+    expect(hooks.recordTask).toHaveBeenCalledWith(expect.any(String));
+    expect(hooks.finalize).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ unchangedPages: 1, committedPages: [] }),
+    );
+    const taskInsert = calls.find((call) =>
+      call.sql.includes("INSERT INTO research_tasks"),
+    );
+    expect(taskInsert?.params).toContain(grantActorId);
+    expect(taskInsert?.params).toContain(approvedAt);
+    const jobInsert = calls.find((call) =>
+      call.sql.includes("INSERT INTO research_retrieval_jobs"),
+    );
+    // Durable job<->cycle round trip replaces closure-only authority.
+    expect(jobInsert?.params).toContain(runId);
+    const audit = calls.find((call) => call.sql.includes("INSERT INTO audit_events"));
+    expect(audit?.params[3]).toBe("person_source_sync.dispatched_from_grant");
+    expect(audit?.params[6]).toMatchObject({
+      grant_id: grantId,
+      recurring_run_id: runId,
+      external_effect: "none",
+    });
+  });
+
+  it("keeps an unchanged cycle at zero new observations with no duplicate capture", async () => {
+    const hooks = fakeHooks();
+    const { pool, calls } = poolWith(async (sql) => {
+      if (sql.includes("INSERT INTO idempotency_records")) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("research_retrieval_jobs") && sql.includes("RETURNING")) {
+        return {
+          rows: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("INSERT INTO audit_events")) {
+        return { rows: [{ sequence: "1" }], rowCount: 1 };
+      }
+      return seedDispatch(sql);
+    });
+
+    const result = await runPublicResearch(
+      pool,
+      auth,
+      recurringRequest(),
+      async () => syntheticPage("/person"),
+      { recurring: hooks, recurringRunId: runId },
+    );
+
+    // A genuinely unchanged body is a successful cycle with zero new
+    // observations: no capture, no snapshot row, truthful run audit.
+    expect(result.body.status).toBe("completed");
+    expect(result.body.pages).toEqual([]);
+    expect(hooks.commitPage).toHaveBeenCalledTimes(1);
+    expect(calls.some((call) => call.sql.includes("INSERT INTO captures"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("INSERT INTO source_resources"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("INSERT INTO research_snapshots"))).toBe(false);
+    expect(hooks.finalize).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ unchangedPages: 1 }),
+    );
+  });
+
+  it("stops the cycle at the shared-transaction gate instead of committing after authority ends", async () => {
+    const commitPage = vi.fn(async () => ({
+      committed: null,
+      unchanged: false,
+      stop: true,
+    })) as unknown as RecurringResearchCycleHooks["commitPage"];
+    const hooks = fakeHooks({ commitPage });
+    const request = {
+      ...recurringRequest(),
+      authorization: {
+        decision: "approve_public_research" as const,
+        allowed_domain: "8.8.8.8",
+        maximum_page_count: 2,
+        maximum_link_depth: 0,
+      },
+    };
+    const { pool, calls } = poolWith(async (sql) => {
+      if (sql.includes("INSERT INTO idempotency_records")) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("research_retrieval_jobs") && sql.includes("RETURNING")) {
+        return {
+          rows: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("INSERT INTO audit_events")) {
+        return { rows: [{ sequence: "1" }], rowCount: 1 };
+      }
+      return seedDispatch(sql);
+    });
+
+    const result = await runPublicResearch(
+      pool,
+      auth,
+      request,
+      async (url) => ({
+        ...syntheticPage(url.pathname),
+        links: url.pathname === "/person" ? ["https://8.8.8.8/second"] : [],
+      }),
+      { recurring: hooks, recurringRunId: runId },
+    );
+
+    // One stopped commit ends the loop: no later page may commit.
+    expect(commitPage).toHaveBeenCalledTimes(1);
+    expect(result.body.pages).toEqual([]);
+    expect(hooks.finalize).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ committedPages: [], unchangedPages: 0 }),
+    );
+    expect(calls.some((call) => call.sql.includes("INSERT INTO captures"))).toBe(false);
+  });
+
+  it("runs the recurring finalize hook before any research row mutation (lock order R6)", async () => {
+    const sequence: string[] = [];
+    const hooks = fakeHooks({
+      finalize: vi.fn(async () => {
+        sequence.push("finalize");
+        return { status: "completed" as const, warnings: [] };
+      }) as RecurringResearchCycleHooks["finalize"],
+    });
+    const { pool } = poolWith(async (sql) => {
+      if (
+        /^\s*(INSERT INTO research_snapshots|UPDATE research_tasks|UPDATE research_retrieval_jobs)/.test(
+          sql,
+        ) ||
+        sql.includes("SET response_status = 201")
+      ) {
+        sequence.push("research-row");
+      }
+      if (sql.includes("INSERT INTO idempotency_records")) {
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("research_retrieval_jobs") && sql.includes("RETURNING")) {
+        return {
+          rows: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }],
+          rowCount: 1,
+        };
+      }
+      if (sql.includes("INSERT INTO audit_events")) {
+        return { rows: [{ sequence: "1" }], rowCount: 1 };
+      }
+      return seedDispatch(sql);
+    });
+
+    await runPublicResearch(
+      pool,
+      auth,
+      recurringRequest(),
+      async () => syntheticPage("/person"),
+      { recurring: hooks, recurringRunId: runId },
+    );
+
+    // The cycle's frozen ROOT→seed→grant→run→research order: its run/authority
+    // locks are taken before any research task/job/idempotency row is touched.
+    expect(sequence[0]).toBe("finalize");
+    expect(sequence.filter((entry) => entry === "research-row").length).toBeGreaterThan(0);
+  });
+
+  // The SQL-level scenarios "recurring jobs are never replayed outside their
+  // counted cycle claim" and "the one-shot latest-task readback excludes
+  // recurring rows" need real WHERE semantics and are covered against the
+  // isolated PostgreSQL suite in personSourceSync.integration.test.ts.
+});
+
+describe("recurring cycle boundary propagation (B2/B3)", () => {
+  const auth = {
+    accountId: "44444444-4444-4444-8444-444444444444",
+    accountSlug: "synthetic",
+    userId: "55555555-5555-5555-8555-555555555555",
+    userEmail: "recruiter@example.test",
+    userKind: "simulated_human",
+    sessionId: "66666666-6666-6666-8666-666666666666",
+  } as AuthContext;
+  const grantId = "77777777-7777-4777-8777-777777777777";
+  const runId = "88888888-8888-4888-8888-888888888888";
+  const seedResourceId = "33333333-3333-4333-8333-333333333333";
+
+  function request(): PublicResearchRequest {
+    return {
+      idempotency_key: `person-source-sync:${grantId}:2026-08-07T00:00:00.000Z`,
+      person_id: "11111111-1111-4111-8111-111111111111",
+      relationship_context_id: "22222222-2222-4222-8222-222222222222",
+      seed_resource_id: seedResourceId,
+      purpose: "Owner-confirmed periodic re-read of one bound public source for one person.",
+      expected_seed_url: "https://8.8.8.8/person",
+      authorization: {
+        decision: "approve_public_research",
+        allowed_domain: "8.8.8.8",
+        maximum_page_count: 1,
+        maximum_link_depth: 0,
+      },
+    };
+  }
+
+  function hooks(overrides: {
+    finalize?: RecurringResearchCycleHooks["finalize"];
+    admit?: RecurringResearchCycleHooks["admit"];
+    commitPage?: RecurringResearchCycleHooks["commitPage"];
+  }): RecurringResearchCycleHooks {
+    return {
+      runId,
+      boundary: { deadlineAt: new Date(Date.now() + 15 * 60_000) },
+      approval: {
+        approvedByUserId: "99999999-9999-4999-8999-999999999999",
+        approvedAt: new Date("2026-08-01T00:00:00.000Z"),
+        authorizationScope: "Periodic grant scope.",
+        grantId,
+      },
+      admit: overrides.admit ?? (vi.fn(async () => undefined) as never),
+      recordTask: vi.fn(async () => undefined) as never,
+      commitPage:
+        overrides.commitPage ??
+        (vi.fn(async () => ({
+          committed: {
+            canonical_url: "https://8.8.8.8/person",
+            resource_id: seedResourceId,
+            capture_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            content_hash: "a".repeat(64),
+            retrieved_at: "2026-08-07T00:00:00.000Z",
+          },
+          unchanged: false,
+          stop: false,
+        })) as never),
+      finalize:
+        overrides.finalize ??
+        (vi.fn(async () => ({
+          status: "completed" as const,
+          warnings: [],
+        })) as never),
+    };
+  }
+
+  function poolWith(
+    dispatch: (sql: string, params?: unknown[]) => Promise<unknown>,
+  ) {
+    const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const wrapped = async (sql: string, params: unknown[] = []) => {
+      calls.push({ sql, params });
+      return dispatch(sql, params);
+    };
+    const client = { query: vi.fn(wrapped), release: vi.fn() };
+    const pool = {
+      query: vi.fn(wrapped),
+      connect: vi.fn(async () => client),
+    } as unknown as Pool;
+    return { pool, calls };
+  }
+
+  function standardDispatch(sql: string): unknown {
+    if (sql.includes("resource_kind = 'public_url'")) {
+      return {
+        rows: [{
+          id: seedResourceId,
+          source_locator: "https://8.8.8.8/person",
+          display_name: "Synthetic seed",
+        }],
+        rowCount: 1,
+      };
+    }
+    if (sql.includes("INSERT INTO idempotency_records")) return { rows: [], rowCount: 1 };
+    if (sql.includes("research_retrieval_jobs") && sql.includes("RETURNING")) {
+      return { rows: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }], rowCount: 1 };
+    }
+    if (sql.includes("INSERT INTO audit_events")) {
+      return { rows: [{ sequence: "1" }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  }
+
+  it("propagates a stopped cycle outcome into body, task, idempotency and audit (B3)", async () => {
+    const finalize = vi.fn(async () => ({
+      status: "skipped" as const,
+      warnings: ["PERSON_SOURCE_SYNC_AUTHORITY_LOST_BEFORE_COMPLETION"],
+    }));
+    const { pool, calls } = poolWith(async (sql) => standardDispatch(sql));
+
+    const result = await runPublicResearch(
+      pool,
+      auth,
+      request(),
+      async () => ({
+        canonicalUrl: "https://8.8.8.8/person",
+        contentHash: "a".repeat(64),
+        retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+        text: "Committed page body.",
+        links: [],
+      }),
+      { recurring: hooks({ finalize }), recurringRunId: runId },
+    );
+
+    // The existing response schema maps skipped→partial (a page was committed)
+    // and carries the fixed warning; nothing claims completed.
+    expect(result.body.status).toBe("partial");
+    expect(result.body.pages).toHaveLength(1);
+    expect(result.body.warnings).toContain(
+      "PERSON_SOURCE_SYNC_AUTHORITY_LOST_BEFORE_COMPLETION",
+    );
+    expect(finalize).toHaveBeenCalled();
+    const taskWrite = calls.find((call) =>
+      call.sql.includes("UPDATE research_tasks"),
+    );
+    expect(taskWrite?.params).toContain("partial");
+    expect(taskWrite?.params).not.toContain("completed");
+    const idempotencyWrite = calls.find(
+      (call) =>
+        call.sql.includes("UPDATE idempotency_records")
+        && call.sql.includes("response_status = 201"),
+    );
+    const idempotencyBody = idempotencyWrite?.params[2] as {
+      status: string;
+      warnings: string[];
+    };
+    expect(idempotencyBody.status).toBe("partial");
+    expect(idempotencyBody.warnings).toContain(
+      "PERSON_SOURCE_SYNC_AUTHORITY_LOST_BEFORE_COMPLETION",
+    );
+    const audit = calls
+      .filter((call) => call.sql.includes("INSERT INTO audit_events"))
+      .at(-1);
+    const metadata = audit?.params[6] as { status: string };
+    expect(metadata.status).toBe("partial");
+  });
+
+  it("maps an outcome of failed to a failed API result and receipts", async () => {
+    const finalize = vi.fn(async () => ({
+      status: "failed" as const,
+      warnings: ["PERSON_SOURCE_SYNC_DEADLINE_EXCEEDED"],
+    }));
+    const { pool, calls } = poolWith(async (sql) => standardDispatch(sql));
+
+    const result = await runPublicResearch(
+      pool,
+      auth,
+      request(),
+      async () => ({
+        canonicalUrl: "https://8.8.8.8/person",
+        contentHash: "a".repeat(64),
+        retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+        text: "Committed page body.",
+        links: [],
+      }),
+      { recurring: hooks({ finalize }), recurringRunId: runId },
+    );
+
+    expect(result.body.status).toBe("failed");
+    expect(result.body.warnings).toContain("PERSON_SOURCE_SYNC_DEADLINE_EXCEEDED");
+    const taskWrite = calls.find((call) =>
+      call.sql.includes("UPDATE research_tasks"),
+    );
+    expect(taskWrite?.params).toContain("failed");
+  });
+
+  it("prevents DNS and research lease creation when re-admission fails (B2)", async () => {
+    const admit = vi.fn(async () => {
+      throw new ApiError(
+        409,
+        "PERSON_SOURCE_SYNC_DEADLINE_EXCEEDED",
+        "deadline",
+      );
+    });
+    const hostnameLookup = vi.fn(async () => [
+      { address: "8.8.8.8", family: 4 },
+    ]);
+    const hostRequest: PublicResearchRequest = {
+      ...request(),
+      expected_seed_url: "https://profile.example/person",
+      authorization: {
+        decision: "approve_public_research",
+        allowed_domain: "profile.example",
+        maximum_page_count: 1,
+        maximum_link_depth: 0,
+      },
+    };
+    const { pool, calls } = poolWith(async (sql) => standardDispatch(sql));
+
+    await expect(
+      runPublicResearch(
+        pool,
+        auth,
+        hostRequest,
+        async () => {
+          throw new Error("must not fetch");
+        },
+        {
+          recurring: hooks({ admit }),
+          recurringRunId: runId,
+          hostnameLookup,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "PERSON_SOURCE_SYNC_DEADLINE_EXCEEDED" });
+
+    // The awaited seed read completed, re-admission refused, and NO DNS lookup
+    // and NO research lease/task were created afterwards.
+    expect(admit).toHaveBeenCalled();
+    expect(hostnameLookup).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.sql.includes("INSERT INTO research_tasks"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("INSERT INTO research_retrieval_jobs"))).toBe(false);
+    expect(calls.some((call) => call.sql.includes("INSERT INTO idempotency_records"))).toBe(false);
+  });
+
+  it("re-admits between the awaited DNS lookup and the research lease claim (B2)", async () => {
+    const order: string[] = [];
+    const admit = vi.fn(async () => {
+      order.push("admit");
+    });
+    const hostnameLookup = vi.fn(async () => {
+      order.push("dns");
+      return [{ address: "8.8.8.8", family: 4 }];
+    });
+    const hostRequest: PublicResearchRequest = {
+      ...request(),
+      expected_seed_url: "https://profile.example/person",
+      authorization: {
+        decision: "approve_public_research",
+        allowed_domain: "profile.example",
+        maximum_page_count: 1,
+        maximum_link_depth: 0,
+      },
+    };
+    const { pool } = poolWith(async (sql) => {
+      if (sql.includes("INSERT INTO research_retrieval_jobs")) order.push("lease");
+      if (sql.includes("resource_kind = 'public_url'")) {
+        return {
+          rows: [{
+            id: seedResourceId,
+            source_locator: "https://profile.example/person",
+            display_name: "Synthetic seed",
+          }],
+          rowCount: 1,
+        };
+      }
+      return standardDispatch(sql);
+    });
+
+    await runPublicResearch(
+      pool,
+      auth,
+      hostRequest,
+      async () => ({
+        canonicalUrl: "https://profile.example/person",
+        contentHash: "a".repeat(64),
+        retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+        text: "Body.",
+        links: [],
+      }),
+      {
+        recurring: hooks({ admit }),
+        recurringRunId: runId,
+        hostnameLookup,
+      },
+    );
+
+    // Admission runs before DNS and again after DNS, before the lease claim.
+    expect(order[0]).toBe("admit");
+    expect(order.filter((entry) => entry === "admit").length).toBeGreaterThanOrEqual(2);
+    expect(order.indexOf("admit")).toBeLessThan(order.indexOf("dns"));
+    const leaseIndex = order.indexOf("lease");
+    expect(order.slice(order.indexOf("dns") + 1, leaseIndex)).toContain("admit");
+    // The transaction also re-admits after all awaited receipt writes before
+    // COMMIT, so a late claim rolls back rather than publishing a live job.
+    expect(order.lastIndexOf("admit")).toBeGreaterThan(leaseIndex);
+    expect(order.indexOf("dns")).toBeLessThan(order.indexOf("lease"));
+  });
+
+  it("keeps one-shot capture-failure behavior unchanged without admission seams", async () => {
+    const { pool, calls } = poolWith(async (sql) => standardDispatch(sql));
+    // The one-shot path still runs the ordinary capture pipeline and reports
+    // its existing fixed diagnostic; no recurring outcome is applied.
+    const result = await runPublicResearch(pool, auth, request(), async () => ({
+      canonicalUrl: "https://8.8.8.8/person",
+      contentHash: "a".repeat(64),
+      retrievedAt: new Date("2026-08-07T00:00:00.000Z"),
+      text: "Body.",
+      links: [],
+    }));
+    expect(result.body.status).toBe("failed");
+    expect(result.body.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("PUBLIC_RESEARCH_CAPTURE_FAILED"),
+      ]),
+    );
+    const audit = calls
+      .filter((call) => call.sql.includes("INSERT INTO audit_events"))
+      .at(-1);
+    expect(audit?.params[3]).toBe("public_research.completed");
   });
 });

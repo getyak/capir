@@ -1,5 +1,5 @@
 import { withProductRunCapture, captureProductStep } from "@talent-signal/agent";
-import { saveProductRunOutput, productRunSink } from "./productRunStorage.js";
+import { saveProductRunOutput, productRunSink, saveProductRunUsageDiagnostics, type ScreenshotUsageDiagnostic } from "./productRunStorage.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import {
@@ -56,7 +56,9 @@ interface TaskState {
   response: Response;
   searches: Array<{ query: string; candidates: Response["candidates"] }>;
   observations: Array<{ tool: string; result: unknown }>;
-  model_receipts: Array<{ model: string; request_id: string; input_tokens: number; output_tokens: number }>;
+  model_receipts: Array<{ model: string; request_id: string; input_tokens: number; output_tokens: number;
+    provider?: string; source_image_index?: number; reported_model?: string | null; raw_usage_known?: boolean;
+    raw_prompt_tokens?: number | null; raw_completion_tokens?: number | null }>;
   turns: number;
   tokens: number;
   selected: { person_id: string; relationship_context_id: string } | null;
@@ -354,6 +356,29 @@ async function save(client: PoolClient, row: Row) {
   row.assignment_id=assignmentID;
   response.revision=row.revision;response.updated_at=result.rows[0].updated_at.toISOString();
   await saveProductRunOutput(client,{accountID:row.account_id,taskID:row.id},response as unknown as Record<string,unknown>,response.status);
+  // Refresh the source-safe usage counters after every admitted checkpoint so
+  // they survive the rebind purge of this same save and stay readable.
+  await saveProductRunUsageDiagnostics(client,{accountID:row.account_id,taskID:row.id},usageDiagnostics(row.state.model_receipts));
+}
+
+/** Carry explicitly observed raw usage from a preprocessing receipt into
+ * bounded diagnostics. Unknown, invalid or half-observed raw usage stays
+ * explicitly unknown; normalized packet counters never claim a known zero. */
+function arkUsageReceipt(output:ScreenshotPreprocessResult){
+  const fields=output as unknown as Record<string,unknown>;
+  const count=(value:unknown)=>typeof value==="number"&&Number.isSafeInteger(value)&&value>=0?value:null;
+  const prompt=count(fields.raw_prompt_tokens),completion=count(fields.raw_completion_tokens);
+  const observed=fields.raw_usage_known===true&&prompt!==null&&completion!==null;
+  return {reported_model:typeof fields.reported_model==="string"&&fields.reported_model?fields.reported_model.slice(0,200):null,
+    raw_usage_known:observed,raw_prompt_tokens:observed?prompt:null,raw_completion_tokens:observed?completion:null};
+}
+
+function usageDiagnostics(receipts:TaskState["model_receipts"]):ScreenshotUsageDiagnostic[]{
+  return receipts.filter(receipt=>receipt.provider==="volcano_ark").map(receipt=>({
+    provider:"volcano_ark",model:receipt.model,reported_model:receipt.reported_model??null,
+    source_image_index:typeof receipt.source_image_index==="number"?receipt.source_image_index:0,
+    request_id:receipt.request_id,raw_usage_known:receipt.raw_usage_known===true,
+    raw_prompt_tokens:receipt.raw_prompt_tokens??null,raw_completion_tokens:receipt.raw_completion_tokens??null}));
 }
 
 export async function loadScreenshotContactTask(pool: Pool, auth: AuthContext, id: string): Promise<Response> {
@@ -1058,9 +1083,14 @@ export class ScreenshotContactTaskRunner {
     this.controllers.get(`${auth.accountId}:${id}`)?.abort(new Error(reason));
   }
   private async observedRun(auth:AuthContext,id:string,image:ScreenshotContactTaskRequest["image"]|undefined,signal:AbortSignal) {
-    const result=await this.pool.query<{id:string;source_generation:string|null}>("SELECT id,source_generation FROM product_runs WHERE account_id=$1 AND user_id=$2 AND task_id=$3 ORDER BY created_at LIMIT 1",[auth.accountId,auth.userId,id]);
+    const result=await this.pool.query<{id:string;source_generation:string|null}>("SELECT id,source_generation FROM product_runs WHERE account_id=$1 AND user_id=$2 AND task_id=$3 AND task_kind='screenshot' ORDER BY created_at LIMIT 1",[auth.accountId,auth.userId,id]);
     const runID=result.rows[0]?.id;
-    if(!runID) return this.run(auth,id,image,signal); // The initial POST already supplies its request-local sink.
+    if(!runID) {
+      // Background work never inherits a response-lifetime request sink: without
+      // a canonical admitted run there is nothing an early HTTP flush could
+      // honestly promote, and the admitted run binds before this work starts.
+      return withProductRunCapture({async append(){}},()=>this.run(auth,id,image,signal));
+    }
     const sink=productRunSink(this.pool,runID,reportScreenshotSpanPersistenceFailure,result.rows[0]?.source_generation);
     try { await withProductRunCapture(sink,()=>this.run(auth,id,image,signal)); } finally { await sink.flush(); }
   }
@@ -1134,7 +1164,8 @@ export class ScreenshotContactTaskRunner {
         if(!latest.state.preprocessing_parts.some(part=>part.source.source_image_index===index))latest.state.preprocessing_parts.push(committed);
         delete latest.state.preprocessing_inflight;
         latest.state.tokens+=output.input_tokens+output.output_tokens;
-        latest.state.model_receipts.push({model:output.model,request_id:output.request_id,input_tokens:output.input_tokens,output_tokens:output.output_tokens});
+        latest.state.model_receipts.push({model:output.model,request_id:output.request_id,input_tokens:output.input_tokens,output_tokens:output.output_tokens,
+          provider:preprocessor.provider,source_image_index:index,...arkUsageReceipt(output)});
         latest.state.response.events.push({sequence:latest.state.response.events.length+1,tool:"preprocess_screenshot",status:"completed",occurred_at:new Date().toISOString()});
         if(overRegionBudget&&!alreadyAbstained){
           latest.state.response.limitations.push("SCREENSHOT_PREPROCESS_FOLLOW_UP_BUDGET");
