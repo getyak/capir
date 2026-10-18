@@ -21,7 +21,7 @@ import {
 } from "./personSourceSync.js";
 import { inTransaction } from "../database/pool.js";
 import { runPublicResearch, type CrawledPage, type RecurringResearchCycleHooks } from "./research.js";
-import { decideCaptureSourceAuthorization } from "./sourceAuthorization.js";
+import { decideCaptureSourceAuthorization, sweepDueSourceAuthorizations, runPendingSourceAuthorizationCompilationJobs } from "./sourceAuthorization.js";
 
 const database = process.env.TIME_WORKSPACE_TEST_DATABASE_URL;
 if (
@@ -1425,6 +1425,34 @@ suite("person source sync durable cycles (isolated PostgreSQL)", () => {
     const operations = await pool!.query("SELECT count(*)::int AS count FROM person_source_sync_operations WHERE account_id=$1", [auth.accountId]);
     expect(operations.rows[0].count).toBe(2);
     expect(await captureCount(auth)).toBe(0);
+  });
+
+  it.each(["before selection", "after selection"])("keeps natural source expiry progressing when an account retires %s", async (timing) => {
+    const retired = await createAccount(); const retiredPerson = await makeContact(retired); const retiredSeed = await makeSeed(retired, retiredPerson);
+    const active = await createAccount(); const activePerson = await makeContact(active); const activeSeed = await makeSeed(active, activePerson);
+    await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()-interval '1 second' WHERE account_id=ANY($1::uuid[])", [[retired.accountId, active.accountId]]);
+    const retire = async () => { await pool!.query("UPDATE accounts SET retired_at=clock_timestamp() WHERE id=$1", [retired.accountId]); };
+    if (timing === "before selection") await retire();
+    const testPool = timing === "after selection" ? delayedQueryPool("receipts.authorization_expires_at <= $1", retire) : pool!;
+    const outcomes = await sweepDueSourceAuthorizations(testPool);
+    expect(outcomes.some((result) => result.auth.accountId === retired.accountId)).toBe(false);
+    expect(outcomes.some((result) => result.auth.accountId === active.accountId && result.mutation.body.authorization_state === "expired")).toBe(true);
+    const retiredReceipt = await pool!.query("SELECT authorization_state FROM source_retention_receipts WHERE account_id=$1 AND capture_id=$2", [retired.accountId, retiredSeed.captureId]);
+    expect(retiredReceipt.rows[0].authorization_state).toBe("authorized");
+    const activeReceipt = await pool!.query("SELECT authorization_state FROM source_retention_receipts WHERE account_id=$1 AND capture_id=$2", [active.accountId, activeSeed.captureId]);
+    expect(activeReceipt.rows[0].authorization_state).toBe("expired");
+  });
+
+  it("leaves retired compilation queues untouched instead of aborting the worker", async () => {
+    const retired = await createAccount(); const retiredPerson = await makeContact(retired); await makeSeed(retired, retiredPerson);
+    await pool!.query("UPDATE source_retention_receipts SET authorization_expires_at=clock_timestamp()-interval '1 second' WHERE account_id=$1", [retired.accountId]);
+    await sweepDueSourceAuthorizations(pool!);
+    const before = await pool!.query("SELECT status,attempt_count FROM source_authorization_compilation_jobs WHERE account_id=$1", [retired.accountId]);
+    expect(before.rows).toHaveLength(1);
+    await pool!.query("UPDATE accounts SET retired_at=clock_timestamp() WHERE id=$1", [retired.accountId]);
+    await expect(runPendingSourceAuthorizationCompilationJobs(pool!, { limit: 5 })).resolves.toBeDefined();
+    const after = await pool!.query("SELECT status,attempt_count FROM source_authorization_compilation_jobs WHERE account_id=$1", [retired.accountId]);
+    expect(after.rows).toEqual(before.rows);
   });
 
   it("does not spend a bounded dispatch slot on a different live third attempt", async () => {

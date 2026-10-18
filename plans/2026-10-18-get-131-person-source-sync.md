@@ -330,3 +330,29 @@ head, normal merge, immutable resident Web/backend deployment, real HTTPS
 synthetic acceptance and cleanup remain required. No real 24-hour elapsed
 recurrence is claimed. DB-unresolved nonterminal cycles block materialization;
 settled terminal unknown is an honest outcome, not permanent suspension.
+
+
+### Full CI retirement regression and repair
+
+PR #368's first head `4505c7d4` passed the new 28-case PostgreSQL file,
+backend unit/build, Web quality, dependency/security/package checks, but the
+following Memory integration file failed five expiry cases. The global source
+expiry sweep selected already retired accounts and its idempotency write hit
+the retirement trigger, aborting unrelated active-account cleanup. Two real PG
+regressions reproduced retirement before and after selection. The expiry
+selection now excludes retired accounts and its system transaction takes the
+same account SHARE fence before idempotency; only known typed retirement or
+stale outcomes are skipped, ordinary DB errors still fail honestly.
+
+A separate actual PG regression showed the preceding compilation queue had the
+same retired-queue starvation. Its candidate now joins active accounts while
+retaining `FOR UPDATE OF jobs`; existing write fences and ordinary error
+propagation remain. Concurrent retirement can still abort the current tick,
+with the next tick filtering the retired account; no blanket error swallowing
+or complete absence-of-race claim is made.
+
+After the fixes, the combined six-file suite passed **181 tests**: feature
+integration **31**, Memory integration **87**, plus focused source-sync,
+research and lifecycle unit regressions. Backend typecheck passed. Independent
+incremental review closed all confirmed findings. The first head's failure is
+retained as evidence; a fresh PR head must pass all CI gates before merge.
