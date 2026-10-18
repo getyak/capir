@@ -67,6 +67,7 @@ final class CaptureCoordinator: ObservableObject {
         // must never enter the screen selector while either awaits that fetch.
         captureInFlight = true
         defer { captureInFlight = false }
+        presentationGeneration += 1
         var generation = captureGeneration
         do {
             let context = try await transport.context()
@@ -112,6 +113,7 @@ final class CaptureCoordinator: ObservableObject {
         guard !captureInFlight, case .needsDisclosure(let context) = presentation else { return }
         captureInFlight = true
         defer { captureInFlight = false }
+        presentationGeneration += 1
         let generation = captureGeneration
         preferences.acknowledgeProcessingScope(origin: context.origin, ownerScope: context.ownerScope,
                                                policyVersion: context.processing.policyVersion, at: now())
@@ -123,7 +125,6 @@ final class CaptureCoordinator: ObservableObject {
 
     private func select(context: CaptureContext, generation: Int) async {
         guard generation == captureGeneration, boundOwnerScope == context.ownerScope else { return }
-        presentationGeneration += 1
         dismissRelay()
         presentation = .selecting
         do {
@@ -415,8 +416,12 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func retry(intentID: UUID) async {
+        guard !captureInFlight, pendingPreview == nil else { return }
         if case .deletionFailed(let pending) = presentation, pending == intentID { return }
         guard let intent = intents[intentID] else { return }
+        captureInFlight = true
+        defer { captureInFlight = false }
+        presentationGeneration += 1
         let generation = intentGenerations[intentID] ?? 0
         presentation = intent.hasRawImage ? .uploading(intentID) : .unknown(intentID)
         do {
@@ -458,6 +463,7 @@ final class CaptureCoordinator: ObservableObject {
 
     func restoreRecovery() async {
         let expectedRevision = ownerRevision
+        let expectedPresentationGeneration = presentationGeneration
         do {
             let context = try await transport.context()
             guard expectedRevision == ownerRevision || sameAuthorization(as: context) else { return }
@@ -466,7 +472,9 @@ final class CaptureCoordinator: ObservableObject {
             let restored = try recovery.load(origin: context.origin, ownerScope: context.ownerScope, now: now())
             for intent in restored { intents[intent.id] = intent }
             for intent in restored { intentGenerations[intent.id] = 0 }
-            if let recent = restored.last { presentation = .unknown(recent.id) }
+            if expectedPresentationGeneration == presentationGeneration, let recent = restored.last {
+                presentation = .unknown(recent.id)
+            }
             onRecoveryChanged?()
         } catch CaptureTransportError.server(401, _) {
             guard expectedRevision == ownerRevision else { return }
@@ -486,7 +494,9 @@ final class CaptureCoordinator: ObservableObject {
             else { return }
             for intent in restored { intents[intent.id] = intent }
             for intent in restored { intentGenerations[intent.id] = 0 }
-            if let recent = restored.last { presentation = .unknown(recent.id) }
+            if expectedPresentationGeneration == presentationGeneration, let recent = restored.last {
+                presentation = .unknown(recent.id)
+            }
             onRecoveryChanged?()
         }
     }

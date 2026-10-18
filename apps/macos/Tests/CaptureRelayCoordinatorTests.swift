@@ -282,6 +282,52 @@ final class CaptureRelayCoordinatorTests: XCTestCase {
         XCTAssertEqual(secondTransport.admissions, 0)
     }
 
+    @MainActor func testUnresolvedExplicitRetryKeepsTheCaptureGestureUntilItsReceiptReturns() async throws {
+        let (coordinator, transport, selector, _) = fixture()
+        await coordinator.startCapture()
+        let first = try XCTUnwrap(transport.lastIntent)
+        transport.suspendReceipt = true
+        let retry = Task { await coordinator.retry(intentID: first.id) }
+        for _ in 0..<100 where transport.pendingReceipt == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingReceipt)
+        selector.preview = true
+        await coordinator.startCapture()
+        let selectionsDuringRetry = selector.selections
+        let previewDuringRetry = coordinator.previewImage
+        transport.suspendReceipt = false
+        transport.pendingReceipt?.resume(returning: transport.canonical); transport.pendingReceipt = nil
+        await retry.value
+        XCTAssertEqual(selectionsDuringRetry, 1, "Explicit retry still owns its unresolved operation")
+        XCTAssertNil(previewDuringRetry)
+        XCTAssertEqual(transport.admissions, 1, "Receipt reconciliation must not create a duplicate admission")
+        guard case .processing = coordinator.presentation else { return XCTFail("Keep the retried admitted screenshot") }
+        await coordinator.startCapture()
+        XCTAssertEqual(selector.selections, 2)
+        XCTAssertNotNil(coordinator.previewImage)
+        let reads = transport.receiptReads
+        await coordinator.retry(intentID: first.id)
+        XCTAssertEqual(transport.receiptReads, reads, "A pending preview cannot be silently replaced by another retry")
+        XCTAssertNotNil(coordinator.previewImage)
+        XCTAssertEqual(coordinator.presentation, .previewReady)
+    }
+
+    @MainActor func testOlderReceiptCannotReplaceANewerProcessingDisclosure() async throws {
+        let (coordinator, transport, _, _) = fixture()
+        await coordinator.startCapture()
+        transport.suspendReceipt = true
+        let refresh = Task { await coordinator.refreshCurrentStatus() }
+        for _ in 0..<100 where transport.pendingReceipt == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingReceipt)
+        coordinator.preferences.revokeProcessingScopeAcknowledgement()
+        await coordinator.startCapture()
+        guard case .needsDisclosure = coordinator.presentation else { return XCTFail("The new gesture requires disclosure") }
+        transport.complete()
+        transport.pendingReceipt?.resume(returning: transport.canonical); transport.pendingReceipt = nil
+        await refresh.value
+        guard case .needsDisclosure = coordinator.presentation else { return XCTFail("Older completion cannot replace the new disclosure") }
+        XCTAssertEqual(transport.admissions, 1)
+    }
+
     @MainActor func testLegacyProducerHasAnHonestNoClueResultAndLoginChangeClearsIt() async {
         let (coordinator, transport, _, _) = fixture(); transport.noClues = true
         await coordinator.startCapture(); transport.complete(); await coordinator.refreshCurrentStatus()
