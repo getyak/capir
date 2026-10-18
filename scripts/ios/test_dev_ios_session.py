@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import importlib.util
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -244,6 +245,7 @@ metadata = {
 }
 with open(lock, "w", encoding="utf-8") as handle:
     handle.write(str(owner) + "\\n")
+time.sleep(float(os.environ.get("OWNER_METADATA_DELAY", "0")))
 with open(lock + ".session.json", "w", encoding="utf-8") as handle:
     json.dump(metadata, handle)
 print("ready", flush=True)
@@ -1000,13 +1002,17 @@ class DevIOSSessionTest(unittest.TestCase):
     def test_copied_forged_session_env_is_rejected_without_waiting(self):
         holder = subprocess.Popen(
             [sys.executable, self.lock_holder],
-            env=self.env(OWNER_LOCK=self.lock_file, OWNER_DEVICE=PRIMARY, OWNER_PROFILE="primary"),
+            env=self.env(OWNER_LOCK=self.lock_file, OWNER_DEVICE=PRIMARY, OWNER_PROFILE="primary", OWNER_METADATA_DELAY="0.2"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
         try:
-            self.assertTrue(self.wait_until(lambda: self.lock_owner() is not None))
+            # The lock is written before the metadata. Wait for the fixture's
+            # explicit post-metadata barrier instead of racing that gap.
+            ready, _, _ = select.select([holder.stdout], [], [], 15.0)
+            self.assertTrue(ready, "lock holder did not become ready")
+            self.assertEqual(holder.stdout.readline().strip(), "ready")
             owner = self.lock_owner()
             with open(self.metadata_file, encoding="utf-8") as handle:
                 session_id = json.load(handle)["session_id"]
