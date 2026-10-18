@@ -32,6 +32,7 @@ import styles from "./relationship-resource-composer.module.css";
 
 import type { ConversationTranscriptMessage } from "@/lib/conversation-transcript";
 import { ConversationTranscriptComposer } from "./conversation-transcript-composer";
+import { PersonSourceSyncControl } from "./person-source-sync-control";
 import { fieldLabel, formatDate, reviewLabel, resourceKindLabel, resourceStateLabel, fragmentLocationLabel, fragmentReviewLabel, fragmentAttributionLabel } from "./relationship-display";
 import {
   relationshipIntegrationFetch,
@@ -103,6 +104,7 @@ function ScopedRelationshipResourceComposer({
   onIdentityCorrected,
   onReviewCapture,
   onScreenshot,
+  sessionBinding = null,
 }: {
   personId: string;
   relationshipContextId: string;
@@ -120,6 +122,8 @@ function ScopedRelationshipResourceComposer({
   }) => Promise<"opened" | "session_expired" | "unavailable">;
   onReviewCapture: (captureId: string) => void | Promise<void>;
   onScreenshot: () => void;
+  /** Owner session binding for the time workspace boundary. */
+  sessionBinding?: string | null;
 }) {
   const reviewTitleRef = useRef<HTMLHeadingElement | null>(null);
   const sourceAuthorizationTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1799,9 +1803,26 @@ function ScopedRelationshipResourceComposer({
             </section>
           ) : null}
           {selectedResource.resource.kind === "public_url" &&
+          selectedResource.resource.input_channel !== "api_connector" ? (
+              <PersonSourceSyncControl
+                personId={personId}
+                relationshipContextId={relationshipContextId}
+                seedResourceId={selectedResource.resource.id}
+                sourceUrl={selectedResource.resource.source_locator}
+                sourceAuthorizationState={
+                  selectedResource.resource.source_authorization_state
+                }
+                sessionBinding={sessionBinding}
+                onChanged={() => {
+                  void loadResources();
+                  onEvidenceChanged();
+                }}
+              />
+          ) : null}
+          {selectedResource.resource.kind === "public_url" &&
           selectedResource.resource.input_channel !== "api_connector" &&
           selectedResource.resource.source_locator ? (
-            <section className="context-research-approval">
+              <section className="context-research-approval">
               <div>
                 <p className="eyebrow">公开研究</p>
                 <h4>AI 读取种子之外内容前，请先选择边界。</h4>

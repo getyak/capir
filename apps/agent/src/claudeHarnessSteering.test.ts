@@ -19,6 +19,47 @@ function deferred() { let resolve!: () => void; const promise = new Promise<void
 const fragments = () => ids.slice(1).map((id, i) => ({ messageID: id, acceptedAt: `2026-10-01T01:00:00.${i}00Z`, text: `Fragment ${i + 1}` }));
 
 describe("primary SDK lifecycle steering", () => {
+  it("stops discovery when authority fails only inside a pending steering acknowledgement", async () => {
+    let atDiscovery = false;
+    let discoveryChecks = 0;
+    let decision: any;
+    let hookError: unknown;
+    let admitted: any;
+    const acknowledge = vi.fn(async () => {});
+    const execute = vi.fn(async () => ({ content: [] }));
+    const nextBatchAtSafePoint = vi.fn(async () => ({ messages: fragments(), acknowledge }));
+    const failure = await runClaudeHarness(config, request({ toolDiscovery: "bounded",
+      steering: { nextBatchAtSafePoint },
+      assertCurrent: async () => {
+        // The first PreToolUse fence passes. Only the second check inside
+        // acknowledgeSteering fails, and later checks would pass again.
+        if (atDiscovery && ++discoveryChecks === 2) throw new Error("SOURCE_REVOKED");
+      },
+      tools: [{ name: "probe", description: "Synthetic probe", schema: z.strictObject({}), readOnly: true, execute }],
+    }), new AbortController().signal, sdk(async function* (_prompt, options) {
+      admitted = await hook(options, "PostToolBatch")(event("PostToolBatch", { tool_calls: [] }));
+      atDiscovery = true;
+      try {
+        decision = await hook(options, "PreToolUse")(event("PreToolUse", {
+          tool_name: "ToolSearch", tool_input: { query: "probe" },
+        }));
+      } catch (error) { hookError = error; } // The actual SDK treats hook errors as non-fatal.
+      yield result({ terminal_reason: "hook_stopped" });
+    }), null).catch(error => error);
+    // Keep assertions outside the SDK callback; a latched error must not
+    // accidentally mask a failed assertion as expected host failure.
+    expect(admitted.hookSpecificOutput.additionalContext).toContain("Fragment 1");
+    expect(hookError).toBeUndefined();
+    expect(decision).toMatchObject({ continue: false, hookSpecificOutput: {
+      hookEventName: "PreToolUse", permissionDecision: "deny",
+      permissionDecisionReason: "Current source or session authority is no longer valid.",
+    } });
+    expect(failure.message).toBe("SOURCE_REVOKED");
+    expect(failure.receipt.toolCalls).toBe(0);
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("keeps eager input open for steering authority until the complete parallel tool batch, then folds once before the final", async () => {
     const release = deferred(); const started = deferred(); const trace: string[] = []; let pulls = 0;
     const acknowledge = vi.fn(async () => { trace.push("ack"); });
@@ -102,5 +143,90 @@ describe("primary SDK lifecycle steering", () => {
       abort.abort(new Error("USER_CANCELLED"));
     }), null); } catch (error) { failure = error; }
     expect(failure.receipt).toMatchObject({ inputTokens: 112, outputTokens: 27, usageComplete: false });
+  });
+});
+
+describe("steering preparation generations", () => {
+  it("captures the invalidated generation floor after the host discard at every admitted steering batch", async () => {
+    const trace: string[] = [];
+    const acknowledge = vi.fn(async () => {});
+    let revision = 0;
+    let pulls = 0;
+    const feed: HarnessSteeringFeed = { nextBatchAtSafePoint: vi.fn(async () => ++pulls <= 2 ? { messages: fragments(), acknowledge } : null) };
+    await runClaudeHarness(config, request({
+      steering: feed,
+      onPreparationSuperseded: () => { trace.push("discard"); revision += 1; },
+      preparationRevision: () => { trace.push(`read:${revision}`); return revision; },
+    }), new AbortController().signal, sdk(async function* (prompt, options) {
+      for await (const _ of prompt) { /* eager SDK input */ }
+      const batch = await hook(options, "PostToolBatch")(event("PostToolBatch", { tool_calls: [] }));
+      expect(batch.hookSpecificOutput.additionalContext).toContain("Fragment 1");
+      const stop = await hook(options, "Stop")(event("Stop", { stop_hook_active: true }));
+      expect(stop.hookSpecificOutput.additionalContext).toContain("Fragment 2");
+      yield result();
+    }), null);
+    // Each admitted batch calls the host discard first, then captures its floor.
+    expect(trace).toEqual(["discard", "read:1", "discard", "read:2"]);
+    expect(acknowledge).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-arms the preparation fast-stop past the floor captured when Stop admits steering", async () => {
+    let revision = 0;
+    let ready = false;
+    let pulls = 0;
+    const nextBatchAtSafePoint = vi.fn(async () => ++pulls === 1 ? { messages: fragments() } : null);
+    const feed: HarnessSteeringFeed = { nextBatchAtSafePoint };
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "probe receipt" }] }));
+    await runClaudeHarness(config, request({ steering: feed,
+      tools: [{ name: "probe", description: "Synthetic probe", schema: z.strictObject({}), readOnly: true, execute }],
+      preparationReady: () => ready,
+      preparationRevision: () => revision,
+      onPreparationSuperseded: () => { ready = false; revision += 1; },
+    }), new AbortController().signal, sdk(async function* (prompt, options) {
+      for await (const _ of prompt) { /* eager SDK input */ }
+      const dispatch = options.mcpServers.talent_signal.instance.server._requestHandlers.get("tools/call");
+      await dispatch({ method: "tools/call", params: { name: "probe", arguments: {} } }, { signal: new AbortController().signal });
+      await hook(options, "PostToolUse")(event("PostToolUse", { tool_name: "mcp__talent_signal__probe", tool_input: {}, tool_response: {} }));
+      // A late original arrives at the final checkpoint and supersedes preparation.
+      const stop = await hook(options, "Stop")(event("Stop", { stop_hook_active: true }));
+      expect(stop.hookSpecificOutput.additionalContext).toContain("Fragment 1");
+      expect(revision).toBe(1);
+      // The model applies the late original and stages a strictly newer preparation.
+      ready = true;
+      revision += 1;
+      expect(await hook(options, "PostToolBatch")(event("PostToolBatch", { tool_calls: [] }))).toMatchObject({ continue: false });
+      yield result({ terminal_reason: "hook_stopped" });
+    }), null);
+    expect(nextBatchAtSafePoint.mock.calls).toEqual([[{ final: true }], [{ final: true }]]);
+    expect(revision).toBe(2);
+  });
+});
+
+describe("steering with bounded tool discovery", () => {
+  it("delivers steering on the same Run and keeps one latest final alongside discovery", async () => {
+    let pulls = 0;
+    const acknowledge = vi.fn(async () => {});
+    const feed: HarnessSteeringFeed = { nextBatchAtSafePoint: vi.fn(async () => ++pulls === 1 ? { messages: fragments(), acknowledge } : null) };
+    const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "probe receipt" }] }));
+    const output = await runClaudeHarness(config, request({ messageID: ids[0], steering: feed, toolDiscovery: "bounded",
+      tools: [{ name: "probe", description: "Synthetic probe", schema: z.strictObject({}), readOnly: true, execute }] }),
+      new AbortController().signal, sdk(async function* (_prompt, options) {
+        expect(options.tools).toContain("ToolSearch");
+        expect(options.env.ENABLE_TOOL_SEARCH).toBe("true");
+        expect((await hook(options, "PreToolUse")(event("PreToolUse", { tool_name: "ToolSearch", tool_input: { query: "probe" } })))
+          .hookSpecificOutput.permissionDecision).toBe("allow");
+        const dispatch = options.mcpServers.talent_signal.instance.server._requestHandlers.get("tools/call");
+        await dispatch({ method: "tools/call", params: { name: "probe", arguments: {} } }, { signal: new AbortController().signal });
+        await hook(options, "PostToolUse")(event("PostToolUse", { tool_name: "mcp__talent_signal__probe", tool_input: {}, tool_response: {} }));
+        const batch = await hook(options, "PostToolBatch")(event("PostToolBatch", { tool_calls: [] }));
+        expect(batch.hookSpecificOutput.additionalContext).toContain("Fragment 1");
+        expect(batch.hookSpecificOutput.additionalContext).toContain("Fragment 2");
+        expect(await hook(options, "Stop")(event("Stop", { stop_hook_active: false }))).toEqual({});
+        yield result();
+      }), null);
+    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(output.toolCompletions.map(tool => tool.name)).toEqual(["probe"]);
+    expect(output.toolCalls).toBe(2);
+    expect(output.text).toBe("Final including both fragments");
   });
 });

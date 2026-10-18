@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PencilSimple, ArrowSquareOut, CaretDown } from "@phosphor-icons/react";
 import type { MemoryRecallItem, PersonDirectoryItem } from "@talent-signal/contracts";
@@ -12,6 +12,10 @@ import { validReturnSessionId, withReturnSession } from "./session-return-naviga
 import styles from "@/app/workspace/people/[id]/person-memory.module.css";
 
 type Mode = "memory" | "reading" | "raw";
+type FocusRequest = { binding: string; personId: string } & (
+  { kind: "edit"; id: string } |
+  { kind: "page"; previous: Set<string | undefined>; button: HTMLButtonElement | null | undefined }
+);
 
 function SourceExcerpts({ item }: { item: MemoryRecallItem }) {
   const refs = memorySources(item);
@@ -78,23 +82,47 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   const controller = usePersonMemory({ personId, binding, entryCapability, items: initialItems, hasMore, nextCursor });
   const [mode, setMode] = useState<Mode>("memory");
   const root = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement | null>(null);
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
+  const handledFocus = useRef<FocusRequest | null>(null);
   const ordinary = controller.items.filter(item => !researchNoteMetadata(item));
   const research = controller.items.filter(item => item.evidence_retained && researchNoteMetadata(item));
   const groups = memoryGroups(ordinary);
   const raw = ordinary.filter(item => memorySources(item).length > 0);
   const edit = controller.edit;
 
-  function restoreFocus(id?: string | null) {
-    requestAnimationFrame(() => {
-      const button = id ? Array.from(root.current?.querySelectorAll<HTMLButtonElement>("[data-memory-edit]") ?? [])
-        .find(element => element.dataset.memoryEdit === id) : trigger.current;
-      button?.focus();
-    });
+  useLayoutEffect(() => {
+    if (!focusRequest || handledFocus.current === focusRequest) return;
+    if (focusRequest.kind === "edit" ? controller.edit !== null : controller.loadingMore) return;
+    handledFocus.current = focusRequest;
+    if (focusRequest.binding !== binding || focusRequest.personId !== personId) return;
+    const modeButton = root.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
+    if (focusRequest.kind === "edit") {
+      const button = Array.from(root.current?.querySelectorAll<HTMLButtonElement>("[data-memory-edit]") ?? [])
+        .find(element => element.dataset.memoryEdit === focusRequest.id);
+      (button ?? modeButton)?.focus();
+      return;
+    }
+    const active = document.activeElement;
+    if (active !== focusRequest.button && active !== document.body && active?.isConnected) return;
+    const firstNew = Array.from(root.current?.querySelectorAll<HTMLElement>("[data-memory-item]") ?? [])
+      .find(element => !focusRequest.previous.has(element.dataset.memoryItem));
+    (firstNew ?? root.current?.querySelector<HTMLElement>("[data-memory-load-more]") ?? modeButton)?.focus();
+  }, [focusRequest, controller.edit, controller.loadingMore, controller.items, controller.hasMore, binding, personId]);
+
+  function restoreFocus(id: string) {
+    // Wait for React's DOM commit, which may happen after the next frame.
+    setFocusRequest({ kind: "edit", id, binding, personId });
   }
   async function save() {
     const id = await controller.save();
     if (id) restoreFocus(id);
+  }
+  async function loadMore() {
+    const loadingButton = root.current?.querySelector<HTMLButtonElement>("[data-memory-load-more]");
+    const previous = new Set(Array.from(root.current?.querySelectorAll<HTMLElement>("[data-memory-item]") ?? [])
+      .map(element => element.dataset.memoryItem));
+    if (!await controller.loadMore()) return;
+    setFocusRequest({ kind: "page", previous, button: loadingButton, binding, personId });
   }
   function contextLink(item: MemoryRecallItem) {
     const context = contexts.find(entry => entry.id === item.relationship_context_id);
@@ -102,7 +130,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   }
 
   const editor = edit ? <MemoryEditor edit={edit} onChange={controller.change} onSave={save}
-    onCancel={() => { controller.cancel(); restoreFocus(); }} onRefresh={controller.refreshConflict} /> : null;
+    onCancel={() => { controller.cancel(); restoreFocus(edit.itemId); }} onRefresh={controller.refreshConflict} /> : null;
 
   return <div ref={root}>
     <section className={styles.section} aria-labelledby="person-memory-accepted">
@@ -122,11 +150,11 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
         </div> : groups.map(group =>
           <article className={styles.scopeGroup} key={group.scope}>
             <h3 className={styles.scopeTitle}>{MEMORY_SCOPE_LABELS[group.scope]}</h3>
-            <ul className={styles.memoryList}>{group.items.map(item => <li className={styles.memoryItem} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}>
+            <ul className={styles.memoryList}>{group.items.map(item => <li className={styles.memoryItem} data-memory-item={item.id} tabIndex={-1} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}>
               {edit?.itemId === item.id ? editor : <>
                 <div className={styles.memoryLine}><p className={styles.memoryText}>{item.display_text}</p>
                   {canEditMemory(item) ? <button className={styles.editButton} data-memory-edit={item.id} disabled={Boolean(edit) || controller.loadingMore}
-                    aria-label={`修改记忆：${item.display_text}`} type="button" onClick={event => { trigger.current = event.currentTarget; controller.begin(item); }}>
+                    aria-label={`修改记忆：${item.display_text}`} type="button" onClick={() => controller.begin(item)}>
                     <PencilSimple size={15} aria-hidden="true" /><span>修改</span>
                   </button> : null}</div>
                 <div className={styles.memoryKind}><span>{memoryAttribution(item)}</span><MemoryTime item={item} />{contextLink(item)}</div>
@@ -141,13 +169,13 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
         <p className={styles.layerHelp}>按已确认记忆整理的阅读视图，不新增事实。修改请回到逐条记忆。</p>
         {!groups.length ? !controller.loadError && <p className={styles.quiet}>{controller.hasMore ? "当前已加载内容中还没有阅读概览，可继续加载查看。" : "确认记忆后，这里会形成阅读概览。"}</p> : groups.map(group => <article key={group.scope}>
           <h3 className={styles.scopeTitle}>{MEMORY_SCOPE_LABELS[group.scope]}</h3>
-          {group.items.map(item => <div className={styles.readingParagraph} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><p>{item.display_text}</p><small>{memoryAttribution(item)} · <MemoryTime item={item} /></small></div>)}
+          {group.items.map(item => <div className={styles.readingParagraph} data-memory-item={item.id} tabIndex={-1} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><p>{item.display_text}</p><small>{memoryAttribution(item)} · <MemoryTime item={item} /></small></div>)}
         </article>)}
       </div> : <div className={styles.raw}>
         <p className={styles.layerHelp}>仅显示仍在保留的来源摘录。原话和来源时间保留，不代替已确认记忆。</p>
-        {!raw.length ? !controller.loadError && <p className={styles.quiet}>{controller.hasMore ? "当前已加载内容中没有可读取的摘录，可继续加载查看。" : "暂无可读取的原始摘录。未保留、已删除或不可用的来源不会显示。"}</p> : raw.map(item => <article className={styles.rawItem} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><h3>{item.display_text}</h3>{item.conflict_group_id ? <p className={styles.conflictNote}>存在冲突 · 待核对</p> : null}<SourceExcerpts item={item} /></article>)}
+        {!raw.length ? !controller.loadError && <p className={styles.quiet}>{controller.hasMore ? "当前已加载内容中没有可读取的摘录，可继续加载查看。" : "暂无可读取的原始摘录。未保留、已删除或不可用的来源不会显示。"}</p> : raw.map(item => <article className={styles.rawItem} data-memory-item={item.id} tabIndex={-1} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><h3>{item.display_text}</h3>{item.conflict_group_id ? <p className={styles.conflictNote}>存在冲突 · 待核对</p> : null}<SourceExcerpts item={item} /></article>)}
       </div>}
-      {controller.hasMore ? <div className={styles.pagination}><Button variant="ghost" disabled={controller.loadingMore || Boolean(edit)} onClick={() => void controller.loadMore()}>{controller.loadingMore ? "正在加载…" : "继续加载记忆"}</Button><span>还有已保存内容</span></div> : null}
+      {controller.hasMore ? <div className={styles.pagination}><Button data-memory-load-more variant="ghost" disabled={controller.loadingMore || Boolean(edit)} onClick={() => void loadMore()}>{controller.loadingMore ? "正在加载…" : "继续加载记忆"}</Button><span>还有已保存内容</span></div> : null}
     </section>
     {research.length ? <details className={styles.researchDisclosure}><summary>研究笔记 <span>AI 整理 · 待复核</span><CaretDown size={14} aria-hidden="true" /></summary><ResearchNotebook items={research} /></details> : null}
   </div>;

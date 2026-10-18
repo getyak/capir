@@ -15,6 +15,7 @@ import {
   completeIdempotency,
 } from "../lib/idempotency.js";
 import type { AuthContext } from "./auth.js";
+import { assertAccountActive } from "./accountIdentity.js";
 import { invalidateMemoriesForCaptureIds } from "./memoryReviewRecall.js";
 import { compileRelationshipWiki } from "./wiki.js";
 
@@ -232,6 +233,10 @@ async function transitionCaptureSourceAuthorization(
   options: SourceAuthorizationTransitionOptions = {},
 ): Promise<SourceAuthorizationMutationResult> {
   return inTransaction(pool, async (client) => {
+    // The global expiry selection can race account retirement. Hold the same
+    // account SHARE fence as the subsequent writes and surface a typed skip
+    // before idempotency's database trigger rejects a retired account.
+    if (options.systemActor) await assertAccountActive(client, auth.accountId);
     const operationScope =
       `decide_source_authorization:${rootCaptureId}`;
     const idempotency = await claimIdempotency(
@@ -896,7 +901,7 @@ export async function sweepDueSourceAuthorizations(
        ON captures.account_id = receipts.account_id
       AND captures.id = receipts.capture_id
      JOIN accounts
-       ON accounts.id = receipts.account_id
+       ON accounts.id = receipts.account_id AND accounts.retired_at IS NULL
      JOIN users
        ON users.account_id = captures.account_id
       AND users.id = captures.created_by_user_id
@@ -987,6 +992,8 @@ export async function sweepDueSourceAuthorizations(
           "SOURCE_AUTHORIZATION_STALE",
           "SOURCE_AUTHORIZATION_NOT_DUE",
           "SOURCE_AUTHORIZATION_UNCHANGED",
+          "ACCOUNT_RETIRED",
+          "ACCOUNT_NOT_FOUND",
         ].includes(error.code)
       ) {
         continue;
@@ -1229,6 +1236,8 @@ async function claimSourceAuthorizationCompilationJob(
       `WITH candidate AS (
          SELECT jobs.id
          FROM source_authorization_compilation_jobs jobs
+         JOIN accounts active_account ON active_account.id=jobs.account_id
+           AND active_account.retired_at IS NULL
          WHERE (
              jobs.status IN ('pending', 'retry')
              AND jobs.available_at <= $1
@@ -1243,7 +1252,7 @@ async function claimSourceAuthorizationCompilationJob(
            jobs.created_at,
            jobs.id
          LIMIT 1
-         FOR UPDATE SKIP LOCKED
+         FOR UPDATE OF jobs SKIP LOCKED
        ),
        leased AS (
          UPDATE source_authorization_compilation_jobs jobs

@@ -64,3 +64,23 @@ Owned runtime test: `a50fcb29-dcc9-4f21-8fc0-67c425062e90`, request `68603489-f8
 - Updated UI evidence: 6 suites, 61 tests passed; owned ESLint and whole-Web TypeScript passed. Parent loader/BFF 30 tests, backend39 tests, real-SQL15 person tests plus1 permission test, docs/wiki/architecture checks passed.
 - All confirmed P0/P1 are closed at source review. Current-head CI, merge, clean-source resident deployments, browser acceptance and independent score remain pending.
 - Expired initial run stopped with state=deleted, cleanup_error=null and credential_removed=true. A fresh daily run is provisioning for post-deployment acceptance.
+
+## 2026-10-18 rendered acceptance and follow-up
+
+- PR #333 is merged. Resident Web/backend revision `fc371c07` contains that implementation; its relevant Web/backend/contracts/Agent source matches current `f46f0c22`. The earlier deployment blocker no longer describes the running service.
+- A new, expiring `capir test create --env staging --preset daily --open web` space is owned by the default account. Explicit synthetic fixtures provide 55 accepted Memory items, reviewed contact fields with conflicting sources, and 213 directory entries. Fixtures are not real human confirmations and never touch the primary workspace.
+- Real resident-browser checks found cancel and final-page focus falling to `BODY`, a 400-character original phrase overflowing a 390px viewport to 3014px, and a relationship-context link only 20.8px high. Follow-up resolves remounted edit controls by item ID with a reading-mode fallback, focuses newly appended items in all three reading modes, wraps original phrases, and provides a 44px context target.
+- Independent review identified a second asynchronous boundary: an old response body could arrive after an account change and initiate another old-scope request. Two regression tests reproduced it. Read pages/snapshots now retain their initiating epoch, and mutation/read bodies are checked before continuation.
+- Source review, current-head CI, normal merge, clean-source resident Web deployment, full rendered acceptance and independent scoring remain required. No 98/100 or issue completion is claimed from source checks alone. Only the Web service is affected by this follow-up; backend and native source remain unchanged.
+
+### DOM-commit focus follow-up
+
+PR #359 passed all current-head gates, merged as `0274144e`, and was deployed from clean source (Web build `pbDKNyCzvjAAVqkcBrkV4`). Real 390/768/1440 light/dark views, long original text, 200% CSS zoom, exact person beyond the directory's first 200 entries, 50-to-55 Memory pagination, keyboard correction/reload, genuine concurrent corrections and committed-response-loss/idempotent recovery passed.
+
+The final raw page with no retained excerpts exposed a timing gap: the animation-frame callback ran with the old 50-row DOM and a disabled loading control before React committed the final page. Two deterministic early-frame tests reproduced both pagination and saved-replacement focus loss. Focus requests now resolve once in a layout effect after the committed DOM is available, retain their account/person identity, and preserve any focus the reader moved elsewhere. Follow-up validation and deployment remain required; network fault injection is recorded separately from real server concurrency.
+
+### Fixed-chrome keyboard clearance
+
+PR #360 merged as `0ad5d212` and the clean resident Web build `Cc6oY4skjdxVMfb2gqLTM` passed actual save/cancel, three-mode pagination, orphan-draft recovery, retained-source filtering, delayed-page focus and late response-body checks. Stable mode screenshots, populated basic fields, and an explicitly equivalent 720 CSS-pixel reflow viewport supplement the earlier CSS-zoom stress check; neither is labeled browser-UI zoom.
+
+Independent visual review caught a gap in the keyboard test: viewport containment alone did not exclude fixed navigation. At 390px, the bottom navigation spans y=931–989 while a focused source disclosure spans y=907.58–951.58. A real-browser comparison of the same Tab sequence confirms that scoped scroll margins move the entire target above the cover. Person-page controls and appended Memory targets now reserve header clearance and, below the actual 760px navigation breakpoint, bottom clearance including the safe area. Final deployed geometry and independent scoring remain required.

@@ -108,6 +108,46 @@ export function loadedRelationshipTaskConfiguration(model: string, maxDurationMs
   return { configuration, taskConfigurationDigest: taskConfigurationDigest(configuration) };
 }
 
+/** The requestable DeepSeek text-task identity is a documented mutable alias. */
+export const DEEPSEEK_TEXT_TASK_MODEL = "deepseek-flash";
+/** Reported identities accepted only as exact documented strings. */
+export const DEEPSEEK_TEXT_TASK_REPORTED_MODELS = Object.freeze(["deepseek-flash", "DeepSeek-V4.1-Flash-1017"]);
+/**
+ * DeepSeek text-task runtime policy. This pins the documented request profile
+ * (https://api-docs.deepseek.com/zh-cn/, verified 2026-10-18) and an honest
+ * alias identity policy: `deepseek-flash` is a documented mutable alias, not a
+ * claim of immutable weights. Never reuse GLM digests for this profile.
+ */
+export const DEEPSEEK_TEXT_TASK_POLICY = Object.freeze({
+  adapterId: "deepseek-relationship-text-product-task.v1",
+  task: "assistant/relationship",
+  toolManifest: Object.freeze([]),
+  policyVersion: "deepseek-relationship-text.v1",
+  externalEffects: "none",
+  thinking: "disabled",
+  temperature: 0,
+  maxTokens: 1600,
+  responseFormat: "json_object",
+  stream: false,
+  maxDurationMs: 15000,
+  modelIdentityPolicy: Object.freeze({
+    requested: DEEPSEEK_TEXT_TASK_MODEL,
+    identity: "documented-mutable-alias",
+    immutableWeightsPinned: false,
+    reported: DEEPSEEK_TEXT_TASK_REPORTED_MODELS,
+  }),
+});
+export function deepSeekRelationshipTextTaskConfiguration(model: string, candidate: OptimizationCandidate = loadedCandidate,
+  examples: readonly OptimizationDevExample[] = loadedExamples): RelationshipTaskConfiguration {
+  if (model !== DEEPSEEK_TEXT_TASK_MODEL) throw new Error("Configure the DeepSeek relationship text model as deepseek-flash.");
+  const base = relationshipTaskConfiguration(model, candidate, examples, DEEPSEEK_TEXT_TASK_POLICY.maxDurationMs);
+  return { ...base, runtimePolicyDigest: taskConfigurationDigest(DEEPSEEK_TEXT_TASK_POLICY) };
+}
+export function deepSeekLoadedRelationshipTextTaskConfiguration(model: string) {
+  const configuration = deepSeekRelationshipTextTaskConfiguration(model);
+  return { configuration, taskConfigurationDigest: taskConfigurationDigest(configuration) };
+}
+
 /** Produce reviewable source; installing it requires the independent release controller. */
 export function renderRelationshipTaskSelectionModule(candidate: OptimizationCandidate, examples: readonly OptimizationDevExample[] = []): string {
   const checked = validateOptimizationCandidate(candidate, examples);

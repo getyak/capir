@@ -52,3 +52,37 @@ jobs:
           scripts/macos/package-version.test.sh
           scripts/macos/publish-versioned-release.test.sh
           scripts/macos/check.sh
+      - name: Verify first-run keyboard and hidden-input boundaries
+        env:
+          MACOS_DERIVED_DATA: ${{ runner.temp }}/talent-signal-macos-check
+          MACOS_FIRST_RUN_RESULT: ${{ runner.temp }}/macos-first-run-pr.xcresult
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: scripts/macos/first-run-acceptance.sh
+      - name: Verify actual Finder drag with the compiled PR fixture
+        env:
+          MACOS_DERIVED_DATA: ${{ runner.temp }}/talent-signal-macos-check
+          MACOS_INSTALLER_DRAG_RESULT: ${{ runner.temp }}/macos-installer-drag-pr.xcresult
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          fixture="$RUNNER_TEMP/macos-installer-drag-pr"
+          stage="$fixture/stage"
+          mkdir "$fixture" "$stage"
+          ditto "$MACOS_DERIVED_DATA/Build/Products/Debug/TalentSignalMac.app" "$stage/Talent Signal.app"
+          # Only this compiled PR fixture is ad-hoc signed. Published apps stay unchanged.
+          codesign --force --deep --sign - "$stage/Talent Signal.app"
+          ln -s /Applications "$stage/Applications"
+          cp docs/operations/macos-install.txt "$stage/Install.txt"
+          MACOS_OUTPUT_DIR="$fixture" scripts/macos/create-installer.sh "$stage" "$fixture/installer.dmg"
+          MACOS_INSTALLER_DMG="$fixture/installer.dmg" scripts/macos/installer-drag-acceptance.sh
+      - name: Retain native first-run evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-first-run-pr-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/macos-first-run-pr.xcresult
+            ${{ runner.temp }}/macos-first-run-pr-summary.json
+            ${{ runner.temp }}/macos-installer-drag-pr.xcresult
+            ${{ runner.temp }}/macos-installer-drag-pr-summary.json
+          retention-days: 7
+          if-no-files-found: warn

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const lifecycleMocks = vi.hoisted(() => ({
   compileAuthorizations: vi.fn(),
   research: vi.fn(),
+  personSourceSyncs: vi.fn(),
   sweepAuthorizations: vi.fn(),
   sweepIdentityHandles: vi.fn(),
   sweepRetention: vi.fn(),
@@ -18,6 +19,9 @@ vi.mock("./sourceAuthorization.js", () => ({
 }));
 vi.mock("./research.js", () => ({
   runPendingPublicResearchJobs: lifecycleMocks.research,
+}));
+vi.mock("./personSourceSync.js", () => ({
+  runDuePersonSourceSyncs: lifecycleMocks.personSourceSyncs,
 }));
 vi.mock("./identityHandles.js", () => ({
   sweepDueIdentityHandles: lifecycleMocks.sweepIdentityHandles,
@@ -42,6 +46,14 @@ const completedResearchJobs = {
   failed: 0,
   skipped: 0,
 };
+const completedPersonSourceSyncs = {
+  materialized: 0,
+  dispatched: 0,
+  completed: 0,
+  failed: 0,
+  skipped: 0,
+  unresolved: 0,
+};
 
 describe("source lifecycle sweep coordination", () => {
   beforeEach(() => {
@@ -53,6 +65,31 @@ describe("source lifecycle sweep coordination", () => {
       completedCompilationJobs,
     );
     lifecycleMocks.research.mockResolvedValue(completedResearchJobs);
+    lifecycleMocks.personSourceSyncs.mockResolvedValue(
+      completedPersonSourceSyncs,
+    );
+  });
+
+  it("runs person source sync cycles only after source-authorization expiry", async () => {
+    lifecycleMocks.sweepRetention.mockResolvedValue(0);
+    const order: string[] = [];
+    lifecycleMocks.sweepAuthorizations.mockImplementation(async () => {
+      order.push("expiry");
+      return [];
+    });
+    lifecycleMocks.personSourceSyncs.mockImplementation(async () => {
+      order.push("person-source-sync");
+      return completedPersonSourceSyncs;
+    });
+    const pool = {} as Pool;
+
+    await runSourceLifecycleSweep(pool);
+
+    expect(order).toEqual(["expiry", "person-source-sync"]);
+    expect(lifecycleMocks.personSourceSyncs).toHaveBeenCalledWith(
+      pool,
+      expect.objectContaining({ now: expect.any(Date) }),
+    );
   });
 
   it("coalesces overlapping sweeps for the same pool", async () => {

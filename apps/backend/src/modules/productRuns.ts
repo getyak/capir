@@ -1,8 +1,8 @@
 import { saveProductRunCase } from "./productRunCases.js";
-import { saveProductRunOutput, productRunSink, metadataOnlyProductSpan, cleanupProductRunSources } from "./productRunStorage.js";
+import { saveProductRunOutput, productRunSink, metadataOnlyProductSpan, cleanupProductRunSources, usageDiagnosticProjection } from "./productRunStorage.js";
 import { loadScreenshotContactTask } from "./screenshotContactTasks.js";
 import { randomUUID } from "node:crypto";
-import { withProductRunCapture, captureObservationContent, observationID } from "@talent-signal/agent";
+import { withProductRunCapture, captureObservationContent, observationID, type ProductRunSpan } from "@talent-signal/agent";
 import { CONTRACT_VERSION, ProductRunFeedbackMutationSchema, ProductRunListSchema,
   type ProductRunDetail, type ProductRunFeedback, type ProductRunFeedbackMutation, type ProductRunSummary } from "@talent-signal/contracts";
 import { Type } from "@sinclair/typebox";
@@ -48,7 +48,7 @@ type Row = {
   created_at: Date; updated_at: Date; finished_at: Date | null; expires_at: Date;
   feedback_revision: number; sentiment: "helpful" | "unhelpful" | null; reasons: string[]; comment: string;
   correction: string; selected_text: string; feedback_updated_at: Date | null;
-  span_count: number; model: string | null; content_available: boolean;
+  span_count: number; model: string | null; content_available: boolean; diagnostics_available: boolean;
 };
 function feedback(row: Row): ProductRunFeedback {
   return { revision: row.feedback_revision, sentiment: row.sentiment, reasons: row.reasons,
@@ -66,6 +66,7 @@ function summary(row: Row): ProductRunSummary {
 }
 const available = `product_run_source_available(r.id)`;
 const select = `SELECT r.*,${available} AS content_available,
+  screenshot_usage_diagnostics_available(r.id) AS diagnostics_available,
   (SELECT count(*)::int FROM product_run_spans s WHERE s.run_id=r.id) AS span_count,
   (SELECT s.span->'metadata'->>'model' FROM product_run_spans s WHERE s.run_id=r.id
     AND s.span->'metadata'->>'model' IS NOT NULL ORDER BY s.created_at DESC LIMIT 1) AS model FROM product_runs r`;
@@ -92,7 +93,18 @@ export class ProductRunService {
       ORDER BY r.created_at LIMIT 1`, [auth.accountId, auth.userId, id])).rows[0];
     if (!row) throw new ApiError(404, "PRODUCT_RUN_NOT_FOUND", "The run is not available in this account.");
     const spans = (await this.pool.query<{ span: ProductRunDetail["spans"][number] }>(
-      "SELECT span FROM product_run_spans WHERE run_id=$1 ORDER BY created_at,id", [row.id])).rows.flatMap(r => row.content_available ? [r.span] : !row.task_id || row.status === "failed" ? [metadataOnlyProductSpan(r.span)] : []);
+      "SELECT span FROM product_run_spans WHERE run_id=$1 ORDER BY created_at,id", [row.id])).rows.flatMap(entry => {
+        if (row.content_available) return [entry.span];
+        if (!row.task_id || row.status === "failed") return [metadataOnlyProductSpan(entry.span)];
+        // A still admitted same-owner screenshot source keeps only its strictly
+        // sanitized usage counters across unrelated generation drift. Raw
+        // input/output, history and every other span stay unavailable.
+        if (row.diagnostics_available) {
+          const diagnostic = usageDiagnosticProjection(entry.span as unknown as ProductRunSpan);
+          return diagnostic ? [diagnostic] : [];
+        }
+        return [];
+      });
     const history = row.content_available ? (await this.pool.query<ProductRunDetail["history"][number]>(
       "SELECT id,revision,output_hash,platform,sentiment,reasons,comment,correction,selected_text,updated_at,output FROM product_run_feedback_events WHERE run_id=$1 ORDER BY revision DESC", [row.id])).rows : [];
     const execution = row.content_available && row.task_id ? (await this.pool.query<{ snapshot: unknown }>(`SELECT snapshot FROM feedback_execution_snapshots

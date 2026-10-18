@@ -49,7 +49,7 @@ import {
 import { withdrawMemoryProposalForRun, type MemoryProposalWithdrawalResult } from "./memoryProposalWithdrawal.js";
 import { currentStableHandleOwner, type MemoryImageManifestEntry } from "./memoryReviewStore.js";
 import { LocalContactResearchClient, type ContactResearchClient } from "./contactResearchClient.js";
-import { createWorkspacePublicResearch } from "./workspacePublicResearch.js";
+import { createWorkspacePublicResearch, type WorkspacePublicResearchSubject } from "./workspacePublicResearch.js";
 import {
   createFirstContactResearch,
   firstContactNameCandidate,
@@ -438,6 +438,29 @@ export async function executeWorkspaceConversationAgentCore(input: {
   // Original task instructions remain valid lookup clues even when sourceText
   // carries a separate screenshot transcript. Memory still uses exact sources.
   const lookupTexts = () => [input.objective, ...sourceTexts()];
+  // Frozen source admissions: every user-authored source is bound ONCE at
+  // admission (Run start or steering admission) to its exact messageID/text
+  // identity; only a hash of the text is kept, the text is never re-emitted.
+  // A later message-map text change is a different source identity: the
+  // original binding stays revoked and can never be revived by re-registering
+  // the same clue under mutated text. Each text subject's currency guard
+  // composes the host ownership assertion with that frozen binding.
+  interface AuthoredAdmission {
+    messageID: string;
+    textHash: string;
+    subjects: readonly import("@talent-signal/agent").AuthorizedPublicSubject[];
+  }
+  const authoredAdmissions = new Map<string, AuthoredAdmission>();
+  const admitAuthoredSource = (admittedID: string, text: string) => {
+    if (authoredAdmissions.has(admittedID)) return;
+    authoredAdmissions.set(admittedID, {
+      messageID: admittedID,
+      textHash: sha256(text),
+      subjects: publicSubjectRegistry(text).subjects(),
+    });
+  };
+  admitAuthoredSource(sourceMessageID, input.sourceText ?? input.objective);
+  for (const [admittedID, admittedText] of messageSources) admitAuthoredSource(admittedID, admittedText);
   let reconcileDeclinedProposals: () => Promise<void> = async () => {};
   const steering = input.steering ? {
     nextBatchAtSafePoint: async (checkpoint?: { final?: boolean }) => {
@@ -451,6 +474,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         const existing = messageSources.get(message.messageID);
         if (existing !== undefined && existing !== message.text) throw new Error("STEER_MESSAGE_ID_CONFLICT");
         messageSources.set(message.messageID, message.text);
+        admitAuthoredSource(message.messageID, message.text);
       }
       await reconcileDeclinedProposals();
       return batch;
@@ -559,17 +583,75 @@ export async function executeWorkspaceConversationAgentCore(input: {
   // Queue admission is already acknowledged independently of this execution.
   const durationMs = workspaceConversationTimeoutMs(input.provider.id);
   const abort = new AbortController();
+  // Image/counterparty/tentative registrations keep their own evidence guard
+  // and can never carry the authored-homepage authority assigned only by the
+  // positive authored objective parser.
+  const authoredSourceGuard = (admission: AuthoredAdmission) => async (): Promise<boolean> => {
+    await input.assertCurrent?.();
+    const live = messageSources.get(admission.messageID);
+    if (live !== undefined) return sha256(live) === admission.textHash;
+    // A resolved human decision is host tool-result data, never a message
+    // source: only that hostResult continuation keeps its original task text
+    // bound while the ownership guard passes.
+    return Boolean(input.hostResult) && admission.messageID === sourceMessageID;
+  };
+  // ONLY an EXACT identical complete clue (same name, homepage and anchors)
+  // may share guards across admissions; anything else fails closed.
+  const sameCompleteClue = (
+    left: WorkspacePublicResearchSubject,
+    right: WorkspacePublicResearchSubject,
+  ): boolean =>
+    left.name === right.name
+    && (left.authoredHomepage ?? null) === (right.authoredHomepage ?? null)
+    && JSON.stringify(left.contextAnchors ?? []) === JSON.stringify(right.contextAnchors ?? []);
   const research = input.researchClient ? createWorkspacePublicResearch({
     client: input.researchClient, taskID: randomUUID(), authorizedSubjects: () => {
       if (lookupTexts().some(text => publicSearchDeclined(text))) return [];
-      return [...new Map([subjects.subjects(), ...sourceTexts().slice(1).map(text => publicSubjectRegistry(text).subjects())]
-        .flat().map(subject => [subject.id, subject])).values()]
-        .map(subject => ({
+      const merged = new Map<string, WorkspacePublicResearchSubject>();
+      const blocked = new Set<string>();
+      for (const admission of authoredAdmissions.values()) {
+        const guard = authoredSourceGuard(admission);
+        for (const subject of admission.subjects) {
+          // Text subjects carry no registry guard: the frozen authored-source
+          // binding replaces it. Registrations with their own guard are added
+          // separately below.
+          if (subject.isCurrent || blocked.has(subject.id)) continue;
+          const candidate: WorkspacePublicResearchSubject = {
+            id: subject.id,
+            name: subject.name,
+            ...(subject.anchors?.length ? { contextAnchors: subject.anchors } : {}),
+            ...(subject.authoredHomepage ? { authoredHomepage: subject.authoredHomepage } : {}),
+            isCurrent: guard,
+          };
+          const existing = merged.get(subject.id);
+          if (!existing) {
+            merged.set(subject.id, candidate);
+            continue;
+          }
+          // One complete clue admitted by multiple sources stays researchable
+          // while ANY exact unchanged source supports it (deduplicated
+          // guards). Different complete clues never borrow one another's
+          // guard, homepage or receipts and fail closed on a shared id.
+          if (!sameCompleteClue(existing, candidate)) {
+            merged.delete(subject.id);
+            blocked.add(subject.id);
+            continue;
+          }
+          const prior = existing.isCurrent ?? (async () => true);
+          existing.isCurrent = async () => (await prior()) || (await guard());
+        }
+      }
+      for (const subject of subjects.subjects()) {
+        if (!subject.isCurrent || merged.has(subject.id) || blocked.has(subject.id)) continue;
+        const own = subject.isCurrent;
+        merged.set(subject.id, {
           id: subject.id,
           name: subject.name,
           ...(subject.anchors?.length ? { contextAnchors: subject.anchors } : {}),
-          ...(subject.isCurrent ? { isCurrent: subject.isCurrent } : {}),
-        }));
+          isCurrent: async () => { await input.assertCurrent?.(); return own(); },
+        });
+      }
+      return [...merged.values()];
     }, signal: abort.signal,
   }) : null;
   const researchTools = research?.tools.map(tool => ({...tool,
@@ -623,12 +705,24 @@ export async function executeWorkspaceConversationAgentCore(input: {
     const target = name.normalize("NFKC").trim();
     if (!target || !groundingTexts.some(text => text.normalize("NFKC").includes(target))) return null;
     const contextAnchors = [...(anchors??[]), ...groundingTexts.flatMap(text=>publicContextAnchorsFromText(target,text))];
-    const existing = subjects.subjects().find(subject => subject.name.normalize("NFKC").trim() === target);
+    // A name+homepage authority is a DIFFERENT complete clue from this
+    // name-only (or name+anchored) tentative proposal: it is never borrowed as
+    // this proposal's authority. Identical complete clues still dedup.
+    const existing = subjects.subjects().find(subject => !subject.authoredHomepage && subject.name.normalize("NFKC").trim() === target);
     if (existing && (existing.anchors?.length || !contextAnchors.length)) return { id: existing.id, name: existing.name };
+    // The tentative subject stays bound to its exact source message text
+    // (hash-checked) and the host ownership guard; the model can widen
+    // neither. It never carries the authored-homepage authority.
+    const sourceNow = messageSources.get(binding);
+    const sourceHash = sourceNow === undefined ? null : sha256(sourceNow);
     const registered = subjects.registerTentative({
       name: target,
       binding,
-      isCurrent: async () => messageSources.has(binding),
+      isCurrent: async () => {
+        await input.assertCurrent?.();
+        const live = messageSources.get(binding);
+        return sourceHash !== null && live !== undefined && sha256(live) === sourceHash;
+      },
       ...(contextAnchors.length ? { anchors:contextAnchors } : {}),
       groundingTexts,
     });

@@ -3,12 +3,40 @@ import { describe, expect, it, vi } from "vitest";
 import { CONTACT_RESEARCH_CONTRACT } from "@talent-signal/agent";
 import { runContactResearchTool } from "./contactResearchService.js";
 import type { TikHubProvider } from "./tikHubProvider.js";
+import { ExaProvider } from "./exaProvider.js";
 
 const source={url:"https://www.linkedin.com/in/example/",title:"Example Person",text:"Engineer at Example Labs",publishedAt:null,
   retrievedAt:"2026-09-06T00:00:00.000Z",contentHash:"a".repeat(64),providerID:"exa" as const,providerRequestID:"public-request"};
 const request=(channels=["linkedin"],query="Example Person")=>({contract_version:CONTACT_RESEARCH_CONTRACT,task_id:randomUUID(),call_id:randomUUID(),anchors:["Example Person"],input:{operation:"search",channels,query,maximum_results_per_channel:2}});
 const exaFetch=(url:string,overrides:Partial<typeof source>={})=>({...source,...overrides,url,contentHash:createHash("sha256").update(url).digest("hex")});
 describe("public contact research boundary",()=>{
+  it.each([
+    [402,"REJECTED"], [401,"AUTH_FAILED"], [403,"AUTH_FAILED"],
+    [429,"RATE_LIMITED"], [500,"REJECTED"],
+  ] as const)("classifies actual Exa HTTP %s before generic transport errors",async(status,error_code)=>{
+    const fetcher=vi.fn(async()=>new Response('{"message":"provider-body-canary"}',{status}));
+    const exa=new ExaProvider({apiKey:"fixture-only",fetcher});
+    const result=await runContactResearchTool(request(["web"]),{},{exa});
+    expect(result.channels).toEqual([{channel:"web",provider:"exa",status:"failed",result_count:0,truncated:false,error_code}]);
+    expect(result.sources).toEqual([]);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).not.toContain("provider-body-canary");
+  });
+  it("preserves genuine Exa transport unavailability as retryable",async()=>{
+    const exa=new ExaProvider({apiKey:"fixture-only",fetcher:vi.fn(async()=>{throw new TypeError("fetch failed");})});
+    const result=await runContactResearchTool(request(["web"]),{},{exa});
+    expect(result.channels[0]).toMatchObject({status:"failed",error_code:"UNAVAILABLE"});
+  });
+  it("does not classify an Exa contents credit refusal as temporary missing content",async()=>{
+    const discovered={source_id:createHash("sha256").update(`exa:${source.url}`).digest("hex"),url:source.url,
+      title:source.title,text:source.text,channel:"web",provider_id:"exa",provider_request_id:source.providerRequestID,
+      content_hash:source.contentHash,retrieved_at:source.retrievedAt,stage:"discovered"};
+    const fetcher=vi.fn(async()=>new Response("{}",{status:402}));
+    const result=await runContactResearchTool({...request(),input:{operation:"fetch",sources:[discovered]}},{},
+      {exa:new ExaProvider({apiKey:"fixture-only",fetcher})});
+    expect(result.fetch_outcomes).toEqual([{source_id:discovered.source_id,channel:"web",provider:"exa",status:"failed",error_code:"REJECTED"}]);
+    expect(result.sources).toEqual([]);expect(fetcher).toHaveBeenCalledOnce();
+  });
   it("records browser provenance separately from discovery and forwards cancellation",async()=>{
     const exa={searchProfiles:vi.fn().mockResolvedValue([source]),searchWeb:vi.fn(),fetchContents:vi.fn()};
     const first=request();const discovered=await runContactResearchTool(first,{},{exa});

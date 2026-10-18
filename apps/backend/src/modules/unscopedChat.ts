@@ -316,10 +316,12 @@ export async function executeUnscopedChatTask(input: {
       }
       providerResult = null;
       agentProviderResult = null;
-      if (input.provider.providerId === "claude-agent-sdk" || input.signal?.aborted) {
+      if (input.provider.providerId === "claude-agent-sdk" || input.provider.providerId === "deepseek-chat-completions" || input.signal?.aborted) {
         // The SDK owns retries within the admitted Run. A second remote call
         // here would bypass its source/lease checks and reset the Run budget;
-        // a cancelled or revoked run must never start another provider call.
+        // DeepSeek's text profile likewise admits one attempt only. A host
+        // fallback must not start another billable request or reset its timeout.
+        // A cancelled or revoked run must never start another provider call.
         block = localFallbackBlock(input.request.objective, true);
       } else try {
         providerResult = await measureLabServerStage("model_adapter", () => input.provider!.answer({
