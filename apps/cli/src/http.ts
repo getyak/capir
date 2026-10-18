@@ -27,6 +27,49 @@ registerContractFormats();
 
 export type FetchLike = typeof fetch;
 
+/** Default transport deadline when no duration was selected explicitly. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * One request-scoped deadline covering the real fetch AND its body read.
+ *
+ * The timer and any forwarded abort listener are released as soon as the
+ * request settles; a settled request's signal is never aborted afterwards,
+ * and the timer alone never keeps the process alive.
+ */
+function requestDeadline(
+  timeoutMs: number,
+  external?: AbortSignal,
+): {
+  signal: AbortSignal;
+  race<T>(work: Promise<T>): Promise<T>;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const onExternalAbort = () => controller.abort(external?.reason);
+  if (external) {
+    if (external.aborted) controller.abort(external.reason);
+    else external.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  const expired = new Error("The request deadline elapsed.");
+  const rejection = new Promise<never>((_resolve, reject) => {
+    const signal = controller.signal;
+    const settle = () => reject(signal.reason ?? expired);
+    if (signal.aborted) settle();
+    else signal.addEventListener("abort", settle, { once: true });
+  });
+  const timer = setTimeout(() => controller.abort(expired), timeoutMs);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    race: (work) => Promise.race([work, rejection]),
+    dispose: () => {
+      clearTimeout(timer);
+      external?.removeEventListener("abort", onExternalAbort);
+    },
+  };
+}
+
 const LogoutResponseSchema = Type.Object(
   {
     schema_version: Type.String(),
@@ -64,10 +107,11 @@ export class CapirBackendClient {
     readonly origin: string,
     readonly fetchImpl: FetchLike,
     private readonly token?: string,
+    private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS,
   ) {}
 
   withToken(token: string | undefined): CapirBackendClient {
-    return new CapirBackendClient(this.origin, this.fetchImpl, token);
+    return new CapirBackendClient(this.origin, this.fetchImpl, token, this.timeoutMs);
   }
 
   async request<T>(
@@ -77,87 +121,90 @@ export class CapirBackendClient {
     body?: unknown,
     options: { headers?: Record<string, string>; signal?: AbortSignal; timeoutMs?: number } = {},
   ): Promise<T> {
-    let response: Response;
-    const signal = AbortSignal.any([
-      ...(options.signal ? [options.signal] : []),
-      AbortSignal.timeout(options.timeoutMs ?? 30_000),
-    ]);
+    // The selected request duration governs this request; a per-call
+    // deadline still narrows it. One deadline covers fetch and body read.
+    const deadline = requestDeadline(options.timeoutMs ?? this.timeoutMs, options.signal);
     try {
-      response = await this.fetchImpl(`${this.origin}${path}`, {
-        method,
-        redirect: "error",
-        headers: {
-          accept: "application/json",
-          ...(body !== undefined ? { "content-type": "application/json" } : {}),
-          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
-          ...options.headers,
-        },
-        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-        signal,
-      });
-    } catch {
-      throw new CapirCliError(
-        "CAPIR_TRANSPORT",
-        EXIT.INFRASTRUCTURE,
-        `The capir backend at ${this.origin} could not be reached.`,
-      );
-    }
-    let text: string;
-    try {
-      text = await response.text();
-    } catch {
-      throw new CapirCliError(
-        "CAPIR_TRANSPORT",
-        EXIT.INFRASTRUCTURE,
-        `The capir backend at ${this.origin} interrupted its response.`,
-      );
-    }
-    let parsed: unknown;
-    if (text) {
+      let response: Response;
       try {
-        parsed = JSON.parse(text);
+        response = await deadline.race(this.fetchImpl(`${this.origin}${path}`, {
+          method,
+          redirect: "error",
+          headers: {
+            accept: "application/json",
+            ...(body !== undefined ? { "content-type": "application/json" } : {}),
+            ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
+            ...options.headers,
+          },
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+          signal: deadline.signal,
+        }));
       } catch {
-        parsed = undefined;
+        throw new CapirCliError(
+          "CAPIR_TRANSPORT",
+          EXIT.INFRASTRUCTURE,
+          `The capir backend at ${this.origin} could not be reached.`,
+        );
       }
+      let text: string;
+      try {
+        text = await deadline.race(response.text());
+      } catch {
+        throw new CapirCliError(
+          "CAPIR_TRANSPORT",
+          EXIT.INFRASTRUCTURE,
+          `The capir backend at ${this.origin} interrupted its response.`,
+        );
+      }
+      let parsed: unknown;
+      if (text) {
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = undefined;
+        }
+      }
+      if (!response.ok) {
+        // Error responses are untrusted too: malformed fields must never reach
+        // the renderer, and an opaque credential is not a protocol error code.
+        const rawError = (parsed as ErrorEnvelope | null)?.error;
+        const envelope =
+          rawError && typeof rawError === "object" && !Array.isArray(rawError)
+            ? (rawError as { code?: unknown; message?: unknown })
+            : {};
+        const rawCode = envelope.code;
+        const code =
+          typeof rawCode === "string" &&
+          /^[A-Z][A-Z0-9_]{0,79}$/.test(rawCode) &&
+          redactText(rawCode) === rawCode
+            ? rawCode
+            : `HTTP_${response.status}`;
+        throw new CapirCliError(
+          code,
+          EXIT_BY_CODE.get(code) ??
+            (response.status === 401 || response.status === 403
+              ? EXIT.AUTH_DENIED
+              : response.status === 429
+                ? EXIT.CAPACITY
+                : response.status >= 500
+                  ? EXIT.INFRASTRUCTURE
+                  : EXIT.INVALID_ARGUMENTS),
+          typeof envelope.message === "string"
+            ? envelope.message
+            : `The capir backend returned HTTP ${response.status}.`,
+        );
+      }
+      if (!Value.Check(schema as never, parsed)) {
+        throw new CapirCliError(
+          "CAPIR_CONTRACT_DRIFT",
+          EXIT.INFRASTRUCTURE,
+          "The capir backend response does not match the capir.v1 contract.",
+        );
+      }
+      return parsed as T;
+    } finally {
+      deadline.dispose();
     }
-    if (!response.ok) {
-      // Error responses are untrusted too: malformed fields must never reach
-      // the renderer, and an opaque credential is not a protocol error code.
-      const rawError = (parsed as ErrorEnvelope | null)?.error;
-      const envelope =
-        rawError && typeof rawError === "object" && !Array.isArray(rawError)
-          ? (rawError as { code?: unknown; message?: unknown })
-          : {};
-      const rawCode = envelope.code;
-      const code =
-        typeof rawCode === "string" &&
-        /^[A-Z][A-Z0-9_]{0,79}$/.test(rawCode) &&
-        redactText(rawCode) === rawCode
-          ? rawCode
-          : `HTTP_${response.status}`;
-      throw new CapirCliError(
-        code,
-        EXIT_BY_CODE.get(code) ??
-          (response.status === 401 || response.status === 403
-            ? EXIT.AUTH_DENIED
-            : response.status === 429
-              ? EXIT.CAPACITY
-              : response.status >= 500
-                ? EXIT.INFRASTRUCTURE
-                : EXIT.INVALID_ARGUMENTS),
-        typeof envelope.message === "string"
-          ? envelope.message
-          : `The capir backend returned HTTP ${response.status}.`,
-      );
-    }
-    if (!Value.Check(schema as never, parsed)) {
-      throw new CapirCliError(
-        "CAPIR_CONTRACT_DRIFT",
-        EXIT.INFRASTRUCTURE,
-        "The capir backend response does not match the capir.v1 contract.",
-      );
-    }
-    return parsed as T;
   }
 
   capabilities() {
