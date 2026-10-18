@@ -41,7 +41,7 @@ export function serializeAuthRecord(environment: CapirEnvironment, credentials: 
 }
 export class CapirAuthV2Client extends CapirBackendClient {
   discovery(options:{signal?:AbortSignal;timeoutMs?:number}={}) { return this.request<import('@talent-signal/contracts').CapirAuthCapabilitiesResponse>(CapirAuthCapabilitiesResponseSchema, 'GET', '/v1/capir/auth/capabilities',undefined,options); }
-  exchangeV2(body: unknown, options: {signal?: AbortSignal} = {}) { return this.request<CapirAuthExchangeResponse>(CapirAuthExchangeResponseSchema, 'POST', '/v1/capir/auth/exchange', {schema_version:'capir-auth.v2', ...(body as object)}, options); }
+  exchangeV2(body: unknown, options: {signal?: AbortSignal;timeoutMs?:number} = {}) { return this.request<CapirAuthExchangeResponse>(CapirAuthExchangeResponseSchema, 'POST', '/v1/capir/auth/exchange', {schema_version:'capir-auth.v2', ...(body as object)}, options); }
   statusV2(options:{signal?:AbortSignal;timeoutMs?:number}={}) { return this.request<CapirAuthV2StatusResponse>(CapirAuthV2StatusResponseSchema, 'GET', '/v1/capir/auth/status',undefined,options); }
   refreshV2(refreshToken: string, environment: CapirEnvironment, options:{signal?:AbortSignal;timeoutMs?:number}={}) {
     return this.request<CapirAuthExchangeResponse>(CapirAuthRefreshResponseSchema, 'POST', '/v1/capir/auth/refresh', {

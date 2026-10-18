@@ -51,7 +51,7 @@ const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 export async function researchNotebookOwner(client: PoolClient, input: { email: string; displayName: string; password: string }) {
   const email = normalizeEmail(input.email);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !input.displayName.trim() || input.displayName.length > 200
-    || input.password.length < 8 || input.password.length > 128) throw new Error("INVALID_OWNER_INPUT");
+    || input.password.length < 1 || input.password.length > 128) throw new Error("INVALID_OWNER_INPUT");
   await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`research-owner:${email}`]);
   const prior = await client.query<{ id: string; account_id: string; password_scrypt: string | null; status: string; locked_until: Date | null }>(
     `SELECT u.id,u.account_id,u.status,p.password_scrypt,p.locked_until FROM users u
@@ -73,6 +73,9 @@ export async function researchNotebookOwner(client: PoolClient, input: { email: 
     await assertAccountActive(client, row.account_id);
     return { accountId: row.account_id, userId: row.id, created: false };
   }
+  // No matching user: new-owner creation keeps the current 8-128 minimum; a short
+  // legacy password above only proves an existing owner and never provisions one.
+  if (input.password.length < 8) throw new Error("INVALID_OWNER_INPUT");
   const accountId = randomUUID(), userId = randomUUID();
   await createRealIdentity(client, { accountId, userId, accountName: `${input.displayName} · 人物研究`,
     accountSlug: `personal-research-${accountId}`, email, displayName: input.displayName, kind: "password_human", username: email });

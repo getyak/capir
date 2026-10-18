@@ -181,8 +181,81 @@ function serverFailure(error: unknown, secrets: string[]): CapirCliError {
   return new CapirCliError(
     "CAPIR_TEST_INTERNAL_ERROR",
     EXIT.INFRASTRUCTURE,
-    "The test provisioning request failed locally; no state was changed.",
+    "The test provisioning request failed; its result is unconfirmed.",
   );
+}
+
+/**
+ * A dispatched mutation is unconfirmed whenever the outcome cannot be proven:
+ * transport or body loss, an invalid success contract, or a local validation
+ * failure after dispatch. A server error can follow a committed mutation:
+ * create commits before replay/readback, and stop commits before status.
+ * Without no-commit authority, only a complete integer 4xx refusal is definite.
+ */
+function unconfirmedProvisioningResult(error: unknown): boolean {
+  return !(error instanceof TalentSignalHttpError)
+    || !Number.isInteger(error.status)
+    || error.status < 400
+    || error.status >= 500;
+}
+
+function provisioningRecoveryCode(error: unknown): string {
+  return (error instanceof CapirCliError && error.code === "CAPIR_TEST_CONTRACT_INVALID")
+    || (error instanceof TalentSignalHttpError && error.code === "CAPIR_TEST_RESPONSE_INVALID")
+    ? "CAPIR_TEST_CONTRACT_INVALID"
+    : "CAPIR_TEST_TRANSPORT_AMBIGUOUS";
+}
+
+/**
+ * Post-dispatch identity gate: a success body completes THIS operation only
+ * when its typed run proves the exact request identity, the requested purpose
+ * and a live expiry. Anything else stays unconfirmed; the journal keeps its
+ * recoverable ambiguity instead of claiming completion.
+ */
+function verifyDispatchedRun(
+  run: CapirTestRun,
+  request: { requestId: string; preset: TestPreset; username?: string },
+): void {
+  const expiry = Date.parse(run.expires_at);
+  const holds =
+    run.request_id === request.requestId &&
+    run.preset === request.preset &&
+    run.email.endsWith("@lab.invalid") &&
+    (request.username === undefined || run.username === request.username) &&
+    Number.isFinite(expiry) &&
+    expiry > Date.now();
+  if (!holds) {
+    throw new CapirCliError(
+      "CAPIR_TEST_CONTRACT_INVALID",
+      EXIT.INFRASTRUCTURE,
+      "The returned run does not prove this operation's identity, purpose and live expiry; its result is unconfirmed and not reported.",
+    );
+  }
+}
+
+/**
+ * Post-dispatch stop gate: a success body completes this stop only when its
+ * run projection proves access is no longer live. The backend's canonical
+ * `runState` maps deleting/deleted (stop lifecycle) and revoked/expired
+ * (already inaccessible) exactly; `ready` is the live accessible state and
+ * never proves revocation, so it stays unconfirmed and the local credential
+ * is preserved for the SAME-stop recovery.
+ */
+const STOP_PROVEN_STATES = new Set<CapirTestRun["state"]>([
+  "deleting",
+  "deleted",
+  "revoked",
+  "expired",
+]);
+
+function verifyStoppedRun(run: CapirTestRun): void {
+  if (!STOP_PROVEN_STATES.has(run.state)) {
+    throw new CapirCliError(
+      "CAPIR_TEST_CONTRACT_INVALID",
+      EXIT.INFRASTRUCTURE,
+      "The returned run does not prove that access was revoked; the stop result is unconfirmed and the local credential is preserved.",
+    );
+  }
 }
 
 function validateRun(value: unknown): CapirTestRun {
@@ -485,11 +558,18 @@ export async function runTestCreate(
         web_origin: environment.webOrigin,
       }),
     );
+    // Validate identity, purpose and live expiry BEFORE the completed-journal
+    // transition; a wrong-run success is an uncertain outcome.
+    verifyDispatchedRun(run, {
+      requestId,
+      preset,
+      ...(username === undefined ? {} : { username }),
+    });
   } catch (error) {
-    if (error instanceof TalentSignalHttpError && error.status === 0) {
+    if (unconfirmedProvisioningResult(error)) {
       deps.journal.updateStatus(requestId, "ambiguous");
       throw new CapirCliError(
-        "CAPIR_TEST_TRANSPORT_AMBIGUOUS",
+        provisioningRecoveryCode(error),
         EXIT.INFRASTRUCTURE,
         "The create request may or may not have been accepted; resume the SAME operation with --request-id to reuse the preserved credential and avoid creating a copy.",
         {
@@ -585,12 +665,33 @@ async function openTestWeb(
   let handoff;
   try {
     handoff = await client.createHandoff(run.id, { request_id: handoffRequestId });
-    secrets.push(handoff.handoff_secret);
+    const handedSecret = (handoff as { handoff_secret?: unknown } | null)?.handoff_secret;
+    if (typeof handedSecret === "string") secrets.push(handedSecret);
+    // Runtime-verify the one-use handoff projection before any completed
+    // journal transition or IPC: typed contract, exact target run, the fixed
+    // entry path and a live handoff expiry within the run deadline.
+    const handoffExpiry = Value.Check(CapirTestHandoffResponseSchema, handoff)
+      ? Date.parse(handoff.expires_at)
+      : NaN;
+    if (
+      !Value.Check(CapirTestHandoffResponseSchema, handoff) ||
+      handoff.run_id !== run.id ||
+      handoff.entry_path !== TEST_ENTRY_PATH ||
+      !(handoffExpiry > Date.now()) ||
+      handoffExpiry > Date.parse(run.expires_at)
+    ) {
+      throw new CapirCliError(
+        "CAPIR_TEST_CONTRACT_INVALID",
+        EXIT.INFRASTRUCTURE,
+        "The one-use handoff did not verify against the target run (typed contract, run id, entry path, live expiry within the run deadline); no browser was opened.",
+        { run, handoffRequestId },
+      );
+    }
   } catch (error) {
-    if (error instanceof TalentSignalHttpError && error.status === 0) {
+    if (unconfirmedProvisioningResult(error)) {
       deps.journal.updateStatus(handoffRequestId, "ambiguous");
       throw new CapirCliError(
-        "CAPIR_TEST_TRANSPORT_AMBIGUOUS",
+        provisioningRecoveryCode(error),
         EXIT.INFRASTRUCTURE,
         "The one-use handoff request may or may not have been accepted; retry with a fresh --open web (handoffs are single-use).",
         {
@@ -604,24 +705,6 @@ async function openTestWeb(
     throw serverFailure(error, secrets);
   }
   deps.journal.updateStatus(handoffRequestId, "completed");
-  // Runtime-verify the one-use handoff projection before any IPC: typed
-  // contract, exact target run, the fixed entry path and a live handoff
-  // expiry within the run deadline.
-  const handoffExpiry = Date.parse(handoff.expires_at);
-  if (
-    !Value.Check(CapirTestHandoffResponseSchema, handoff) ||
-    handoff.run_id !== run.id ||
-    handoff.entry_path !== TEST_ENTRY_PATH ||
-    !(handoffExpiry > Date.now()) ||
-    handoffExpiry > Date.parse(run.expires_at)
-  ) {
-    throw new CapirCliError(
-      "CAPIR_TEST_CONTRACT_INVALID",
-      EXIT.INFRASTRUCTURE,
-      "The one-use handoff did not verify against the target run (typed contract, run id, entry path, live expiry within the run deadline); no browser was opened.",
-      { run, handoffRequestId },
-    );
-  }
   const message: RunnerLaunchMessage = {
     web_origin: environment.webOrigin,
     sandbox_id: run.id,
@@ -721,11 +804,22 @@ export async function runTestStop(
   let run: CapirTestRun;
   try {
     run = validateRun(await client.stop(runId, { request_id: requestId }));
+    // A success body for a different run never completes this stop.
+    if (run.id !== runId) {
+      throw new CapirCliError(
+        "CAPIR_TEST_CONTRACT_INVALID",
+        EXIT.INFRASTRUCTURE,
+        "The returned run does not prove this stop's target run identity; its result is unconfirmed and not reported.",
+      );
+    }
+    // Revocation/stop semantics are validated BEFORE the completed-journal
+    // transition and BEFORE any local credential pruning.
+    verifyStoppedRun(run);
   } catch (error) {
-    if (error instanceof TalentSignalHttpError && error.status === 0) {
+    if (unconfirmedProvisioningResult(error)) {
       deps.journal.updateStatus(requestId, "ambiguous");
       throw new CapirCliError(
-        "CAPIR_TEST_TRANSPORT_AMBIGUOUS",
+        provisioningRecoveryCode(error),
         EXIT.INFRASTRUCTURE,
         "The stop request may or may not have been accepted; resume the SAME stop with --request-id.",
         {
