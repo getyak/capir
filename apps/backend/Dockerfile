@@ -1,15 +1,18 @@
 ARG PNPM_DEPENDENCY_CACHE_IMAGE=node:24-bookworm-slim
 FROM ${PNPM_DEPENDENCY_CACHE_IMAGE} AS dependency-cache
 
-RUN mkdir -p /root/.local/share/pnpm/store
+RUN mkdir -p /root/.local/share/pnpm/store /root/.npm/_cacache
+RUN mkdir -p /root/.cache/pnpm && touch /root/.cache/pnpm/lockfile-verified.jsonl
 
 FROM node:24-bookworm-slim
 
-RUN npm install --global pnpm@11.18.0
+COPY --from=dependency-cache /root/.npm/_cacache /root/.npm/_cacache
+RUN npm install --global pnpm@11.18.0 --prefer-offline
 
 WORKDIR /app
 
 COPY --from=dependency-cache /root/.local/share/pnpm/store /root/.local/share/pnpm/store
+COPY --from=dependency-cache /root/.cache/pnpm/lockfile-verified.jsonl /root/.cache/pnpm/lockfile-verified.jsonl
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY patches patches
 COPY apps/backend/package.json apps/backend/package.json
@@ -36,7 +39,9 @@ RUN case "$PNPM_FETCH_TIMEOUT_MS" in ''|*[!0-9]*) \
     && node apps/agent/scripts/verify-dependency-cache.cjs \
     && node apps/agent/scripts/prefetch-native-runtime.cjs
 
-RUN pnpm install --frozen-lockfile --ignore-scripts \
+ARG PNPM_INSTALL_OFFLINE=false
+RUN case "$PNPM_INSTALL_OFFLINE" in true|false) ;; *) echo "PNPM_INSTALL_OFFLINE must be true or false" >&2; exit 1 ;; esac
+RUN pnpm install --offline="$PNPM_INSTALL_OFFLINE" --frozen-lockfile --ignore-scripts \
       --fetch-timeout="$PNPM_FETCH_TIMEOUT_MS" --network-concurrency=4 \
       --filter @talent-signal/backend... \
       --filter @talent-signal/agent-host... \
