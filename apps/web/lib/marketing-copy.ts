@@ -247,7 +247,9 @@ const en: Copy = {
   },
 };
 export function marketingCopy(locale: MarketingLocale): Copy {
-  return locale === "en" ? en : zh;
+  // Transitional fallback until every web string lives in the catalogs
+  // (web-i18n milestone): zh-TW reads the zh dictionary, ja/ko read en.
+  return locale.startsWith("zh") ? zh : en;
 }
 export const marketingNavigation = [
   "/product",

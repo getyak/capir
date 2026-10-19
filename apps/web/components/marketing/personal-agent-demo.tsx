@@ -49,7 +49,7 @@ function noteNarrative(state: PersonalAgentDemoState, t: Translate) {
  * one path onward; every interaction stays in the single full demo below.
  */
 export function PersonalAgentDemoCover({ locale, state }: { locale: MarketingLocale; state: PersonalAgentDemoState }) {
-  const en = locale === "en";
+  const en = !locale.startsWith("zh");
   const t: Translate = (zh, english) => en ? english : zh;
   const note = noteNarrative(state, t);
   const later = state.newReply || state.updateConfirmed;
@@ -84,7 +84,7 @@ export function PersonalAgentDemoCover({ locale, state }: { locale: MarketingLoc
 }
 
 export function PersonalAgentDemo({ locale, state, dispatch }: { locale: MarketingLocale; state: PersonalAgentDemoState; dispatch: Dispatch<PersonalAgentDemoEvent> }) {
-  const en = locale === "en";
+  const en = !locale.startsWith("zh");
   const t: Translate = (zh, english) => en ? english : zh;
   const [sourceOpen, setSourceOpen] = useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);

@@ -2,7 +2,8 @@ import type { MarketingLocale } from "./marketing-locale";
 
 /** The visible FAQ and its structured data share exactly one localized source. */
 export function personalAgentHomeFaqs(locale: MarketingLocale): readonly (readonly [string, string])[] {
-  const en = locale === "en";
+  // Transitional until web-i18n extracts this copy: zh-TW reads zh, ja/ko read en.
+  const en = !locale.startsWith("zh");
   return en ? [
     ["Is this connected to WeChat?", "No. The homepage is a page-local synthetic interaction using a WeChat-style transcript. It does not connect to WeChat, read your chats, save real records, or send messages."],
     ["What can I use now?", "Explore the public synthetic demonstration without signing in. macOS downloads have a dedicated release page; iOS is an invited preview. Request a real workspace by email and confirm its available features and data scope. The full screenshot continuity loop shown here is the product direction, not a universal release claim."],

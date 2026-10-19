@@ -53,7 +53,13 @@ Out of scope:
 - [x] M1 i18n architecture + locale model design doc —
       `docs/internationalization.md` +
       `docs/decisions/2026-10-19-core-locale-i18n-and-language-preferences.md`.
-- [ ] M2 Language preference model, persistence, settings UI (two controls).
+- [ ] M2 Language preference model, persistence, settings UI (two controls) —
+      DONE: contracts `i18nSchemas` + additive preference fields, migration
+      `101_user_language_preferences` (incl. audit kind allowlist),
+      display-language group in Appearance pane, prompt-output language on
+      `/workspace/preferences`, 5-locale language pickers (endonyms), web
+      catalog runtime + first slice; integration-tested on PostgreSQL 17
+      (17 tests incl. revision/idempotency/audit/lab-account cases).
 - [ ] M3 Web localization (core 5).
 - [ ] M4 iOS + macOS localization (core 5).
 - [ ] M5 Extensions localization (core 5).

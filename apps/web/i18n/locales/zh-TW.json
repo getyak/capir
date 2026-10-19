@@ -1,0 +1,13 @@
+{
+  "nav.skipToContent": "跳到主要內容",
+  "language.section.title": "語言",
+  "language.display.label": "介面語言",
+  "language.display.hint": "變更此帳號在所有裝置上的介面語言。預設跟隨系統語言。",
+  "language.option.system": "跟隨系統",
+  "language.prompt.label": "助手回覆語言",
+  "language.prompt.hint": "只變更助手寫作使用的語言。已保存的證據、來源摘錄與引用對話仍保持原文。",
+  "language.prompt.systemHint": "跟隨介面語言。",
+  "language.save": "儲存",
+  "language.saved": "已儲存。",
+  "language.unavailable": "此工作空間尚未啟用回覆偏好。"
+}

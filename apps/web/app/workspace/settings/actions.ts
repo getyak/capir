@@ -1,6 +1,6 @@
 'use server';
 
-import { TalentSignalHttpError, type AccountMutation, type AccountSettings } from '@talent-signal/contracts';
+import { TalentSignalHttpError, type AccountMutation, type AccountSettings, type LanguagePreference } from '@talent-signal/contracts';
 import { revalidatePath } from 'next/cache';
 import { readBackendSessionClaims } from '@/lib/server/backendAuth';
 import { updateAccountSettings } from '@/lib/server/accountBackend';
@@ -24,11 +24,16 @@ export async function saveAccountSettings(_previous: AccountActionState, form: F
     }
     case 'transfer': input={...common,kind,user_id:String(form.get('userId'))}; break;
     case 'revoke_session': input={id:common.id,kind,session_id:String(form.get('sessionId'))}; break;
+    case 'preferences': {
+      const display=String(form.get('display_language') ?? 'system');
+      if (display!=='system'&&display!=='en'&&display!=='zh-CN'&&display!=='zh-TW'&&display!=='ja'&&display!=='ko') return {error:'请选择有效的界面语言。'};
+      input={...common,kind,display_language:display as LanguagePreference}; break;
+    }
     default: return {error:'无法识别这次操作。'};
   }
   try {
     const data = await updateAccountSettings(input);
-    if (kind === 'profile' || kind === 'workspace') revalidatePath('/workspace', 'layout');
+    if (kind === 'profile' || kind === 'workspace' || kind === 'preferences') revalidatePath('/workspace', 'layout');
     return { data, saved:true };
   }
   catch(error) {

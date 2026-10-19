@@ -1,0 +1,13 @@
+{
+  "nav.skipToContent": "본문으로 건너뛰기",
+  "language.section.title": "언어",
+  "language.display.label": "표시 언어",
+  "language.display.hint": "이 계정으로 로그인한 모든 기기의 표시 언어를 변경합니다. 기본값은 시스템 언어를 따릅니다.",
+  "language.option.system": "시스템 설정 따르기",
+  "language.prompt.label": "어시스턴트 응답 언어",
+  "language.prompt.hint": "어시스턴트가 응답에 사용하는 언어만 변경합니다. 저장된 증거, 출처 발췌, 인용된 대화는 원문 그대로 유지됩니다.",
+  "language.prompt.systemHint": "표시 언어를 따릅니다.",
+  "language.save": "저장",
+  "language.saved": "저장했습니다.",
+  "language.unavailable": "이 작업 공간에서는 응답 환경설정이 아직 활성화되지 않았습니다."
+}

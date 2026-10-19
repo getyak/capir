@@ -20,6 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import { AccountSettingsPanel } from "./account-settings";
+import { DisplayLanguageSettings } from "./display-language-settings";
 import { AvatarDefaultSettings } from "./avatar-editor";
 import { SettingsVersionsPane, type WebReleaseView } from "./settings-versions-pane";
 import {
@@ -287,7 +288,7 @@ const THEME_OPTIONS = [
   Icon: typeof Sun;
 }[];
 
-function AppearancePane({ sessionVersion }: { sessionVersion: string | null }) {
+function AppearancePane({ sessionVersion, account }: { sessionVersion: string | null; account: AccountSettings | null }) {
   const timeZone = useSyncExternalStore(
     () => () => {},
     () => Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -337,6 +338,14 @@ function AppearancePane({ sessionVersion }: { sessionVersion: string | null }) {
 
   return (
     <div className={styles.pane}>
+      <Group title="语言">
+        {account ? (
+          <DisplayLanguageSettings account={account} />
+        ) : (
+          <p className={styles.notice}>当前无法读取账号设置，重新登录后才能更改界面语言。</p>
+        )}
+      </Group>
+
       <Group title="界面主题">
         <div className={styles.themes} role="radiogroup" aria-label="界面主题">
           {THEME_OPTIONS.map(({ value, label, hint, Icon }) => (
@@ -643,7 +652,7 @@ export function SettingsWorkspace({
             )
           ) : null}
           {section === "account" ? <p><Link href="/workspace/settings/cli">CLI 授权 · 查看与撤销</Link></p> : null}
-          {section === "appearance" ? <AppearancePane sessionVersion={sessionVersion} /> : null}
+          {section === "appearance" ? <AppearancePane sessionVersion={sessionVersion} account={initial} /> : null}
           {section === "connections" ? <ConnectionsPane workspaceName={workspaceName} /> : null}
           {section === "versions" ? (
             <SettingsVersionsPane

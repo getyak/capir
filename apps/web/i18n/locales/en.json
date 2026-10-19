@@ -1,0 +1,13 @@
+{
+  "nav.skipToContent": "Skip to main content",
+  "language.section.title": "Language",
+  "language.display.label": "Display language",
+  "language.display.hint": "Changes the interface language on every device signed in to this account. Default follows your system language.",
+  "language.option.system": "Follow system",
+  "language.prompt.label": "Assistant response language",
+  "language.prompt.hint": "Changes only the language the assistant writes in. Stored evidence, source excerpts, and quoted conversations stay in their original language.",
+  "language.prompt.systemHint": "Follow the display language.",
+  "language.save": "Save",
+  "language.saved": "Saved.",
+  "language.unavailable": "Reply preferences are not enabled for this workspace yet."
+}

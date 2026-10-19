@@ -1,0 +1,13 @@
+{
+  "nav.skipToContent": "メインコンテンツへ移動",
+  "language.section.title": "言語",
+  "language.display.label": "表示言語",
+  "language.display.hint": "このアカウントで使用するすべての端末の表示言語を変更します。既定ではシステムの言語に合わせます。",
+  "language.option.system": "システムに合わせる",
+  "language.prompt.label": "アシスタントの応答言語",
+  "language.prompt.hint": "アシスタントが応答に使用する言語のみを変更します。保存済みの証拠、引用元の抜粋、引用された会話は原文のままです。",
+  "language.prompt.systemHint": "表示言語に合わせます。",
+  "language.save": "保存",
+  "language.saved": "保存しました。",
+  "language.unavailable": "このワークスペースでは返信設定はまだ利用できません。"
+}

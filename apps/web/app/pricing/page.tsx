@@ -6,10 +6,11 @@ import {
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
+import { legacyCopyLocale } from "@/lib/marketing-locale";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getMarketingLocale();
-  const copy = subpageCopy[locale]["pricing"];
+  const copy = subpageCopy[legacyCopyLocale(locale)]["pricing"];
   return {
     title: copy.title,
     description: copy.description,

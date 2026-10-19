@@ -4,6 +4,7 @@ import { siteConfig } from "@/lib/site";
 import "./globals.css";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
 import { MarketingLocaleProvider } from "@/components/marketing/locale-provider";
+import { translate } from "@/lib/i18n";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteConfig.url),
@@ -84,8 +85,10 @@ export default async function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body lang="zh-CN">
+        {/* Body stays zh-CN while legacy hardcoded Chinese content remains;
+            the web-i18n extraction flips this to the display locale. */}
         <a lang={locale} className="skip-link" href="#main-content">
-          {locale === "en" ? "Skip to main content" : "跳到主要内容"}
+          {translate(locale, "nav.skipToContent")}
         </a>
         <MarketingLocaleProvider locale={locale}>
           {children}

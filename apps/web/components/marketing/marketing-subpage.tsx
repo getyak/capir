@@ -6,6 +6,7 @@ import {
   relationshipDemoHref,
 } from "@/lib/marketing-copy";
 import type { MarketingLocale } from "@/lib/marketing-locale";
+import { legacyCopyLocale } from "@/lib/marketing-locale";
 import styles from "./marketing.module.css";
 import { ProductStory, productStoryMeta } from "./product-story";
 import { TrustStory, trustStoryMeta } from "./trust-story";
@@ -89,7 +90,7 @@ export function MarketingSubpage({
   if (kind === "product") return <ProductStory locale={locale} />;
   if (kind === "trust") return <TrustStory locale={locale} />;
   const c = marketingCopy(locale);
-  const copy = subpageCopy[locale][kind];
+  const copy = subpageCopy[legacyCopyLocale(locale)][kind];
   const en = locale === "en";
   return (
     <main id="main-content" tabIndex={-1} className={styles.page} lang={locale}>

@@ -2,6 +2,7 @@ import { ArrowRight, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import { marketingCopy, relationshipDemoHref } from "@/lib/marketing-copy";
 import type { MarketingLocale } from "@/lib/marketing-locale";
+import { legacyCopyLocale } from "@/lib/marketing-locale";
 import shared from "./marketing.module.css";
 import styles from "./product-story.module.css";
 
@@ -120,14 +121,14 @@ const storyCopy = {
 };
 
 export function ProductStory({ locale }: { locale: MarketingLocale }) {
-  const copy = storyCopy[locale];
+  const copy = storyCopy[legacyCopyLocale(locale)];
   const c = marketingCopy(locale);
   return (
     <main id="main-content" tabIndex={-1} className={styles.page} lang={locale}>
       <section className={styles.hero} aria-labelledby="product-story-title">
         <div className={styles.intro}>
           <p className={styles.eyebrow}>{copy.eyebrow}</p>
-          <h1 id="product-story-title">{copy.title.map((line, index) => <span key={line}>{line}{locale === "en" && index < copy.title.length - 1 ? " " : ""}</span>)}</h1>
+          <h1 id="product-story-title">{copy.title.map((line, index) => <span key={line}>{line}{!locale.startsWith("zh") && index < copy.title.length - 1 ? " " : ""}</span>)}</h1>
           <p className={styles.promise}>{copy.promise}</p>
           <Link href={relationshipDemoHref} className={shared.primary}>
             {c.demo}<ArrowRight size={18} aria-hidden="true" />

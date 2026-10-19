@@ -2,6 +2,7 @@ import { ArrowDown, ArrowRight } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import { marketingCopy, relationshipDemoHref } from "@/lib/marketing-copy";
 import type { MarketingLocale } from "@/lib/marketing-locale";
+import { legacyCopyLocale } from "@/lib/marketing-locale";
 import styles from "./trust-story.module.css";
 
 export const trustStoryMeta = {
@@ -95,14 +96,14 @@ const storyCopy = {
 };
 
 export function TrustStory({ locale }: { locale: MarketingLocale }) {
-  const copy = storyCopy[locale];
+  const copy = storyCopy[legacyCopyLocale(locale)];
   const c = marketingCopy(locale);
   return (
     <main id="main-content" tabIndex={-1} className={styles.page} lang={locale}>
       <section className={styles.hero} aria-labelledby="trust-story-title">
         <div className={styles.intro}>
           <p className={styles.eyebrow}>{copy.eyebrow}</p>
-          <h1 id="trust-story-title">{copy.title.map((line, index) => <span key={line}>{line}{locale === "en" && index < copy.title.length - 1 ? " " : ""}</span>)}</h1>
+          <h1 id="trust-story-title">{copy.title.map((line, index) => <span key={line}>{line}{!locale.startsWith("zh") && index < copy.title.length - 1 ? " " : ""}</span>)}</h1>
         </div>
         <aside className={styles.source} aria-label={copy.caseLabel}>
           <p className={styles.sourceLabel}>{copy.caseLabel}<span>{copy.date}</span></p>
@@ -111,7 +112,7 @@ export function TrustStory({ locale }: { locale: MarketingLocale }) {
           <p className={styles.limit}>{copy.limit}</p>
         </aside>
         <div className={styles.overview}>
-          <p className={styles.lead}>{trustStoryMeta[locale].description}</p>
+          <p className={styles.lead}>{trustStoryMeta[legacyCopyLocale(locale)].description}</p>
           <a className={styles.textLink} href="#trust-boundaries">{copy.follow}<ArrowDown size={18} aria-hidden="true" /></a>
         </div>
       </section>
