@@ -97,7 +97,12 @@ require Opik to capture admitted product requests. Internal testing deployment
 also projects already captured, source-available runs into the private
 `<runtime-project>-product-runs` Opik project every 30 seconds. It preserves
 original timestamps and missing details; it never invokes a model to backfill
-history. Active Lab workspaces inherit only their admitted owner account scope.
+history. Account-owned active Lab workspaces inherit only their admitted owner
+account scope. A test-operator-principal workspace has no owner account and does
+not inherit account admission; its local runs remain inspectable, while Opik
+export needs explicit workspace admission. Keep production-owner readback
+separate from this isolated test-scope boundary rather than admitting every
+workspace to make a probe pass.
 Unbound failures remain metadata-only in the local monitor.
 
 The private evaluation harness implements Promptfoo's JavaScript provider
@@ -268,6 +273,13 @@ by its `x-talent-signal-run-id`, local spans, retained outbox receipt and exact
 Opik trace. A transport-only probe cannot prove model instrumentation. Claude
 SDK diagnostics identify host-supplied context separately from observed SDK
 messages; neither claims access to an unobserved provider wire request.
+
+Also compare the affected account's actual workspace ID with the configured
+source allowlist (or its active Lab owner inheritance). A healthy UI, successful
+transport probe and synchronized prompt library do not prove that account's
+runs are observed. Repair a missing owner scope by preserving the existing
+destination, scopes and retention; do not admit every workspace. Verify a new
+authenticated run and its child spans at the destination after activation.
 
 When reporting a deployment, name missing task-family coverage or unavailable
 fields explicitly. Product-run projections retain captured provider payloads but

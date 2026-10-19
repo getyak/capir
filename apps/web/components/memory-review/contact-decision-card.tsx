@@ -58,8 +58,9 @@ export function ContactDecisionCard({ displayLabel, relationshipContext, sourceE
       <div className={styles.actionButtons}><button className={styles.actionPrimary} type="submit" disabled={busy || !name.trim()}>{name.trim() !== displayLabel.trim() ? "核对新姓名" : "添加联系人"}</button><button type="button" onClick={() => { setName(displayLabel); setContext(relationshipContext); setEditing(false); }}>取消</button></div>
     </form> : null}
     {!sourceUnavailable && !outcome && !editing ? <div className={styles.actionButtons}>
-      {status === "pending" ? <button className={styles.actionPrimary} type="button" disabled={busy} onClick={() => onAdd(name.trim(), context.trim())}>添加联系人</button> : <p className={styles.actionHint}>发现同名人物，先核对是谁。</p>}
-      {status === "pending" ? <button type="button" disabled={busy} onClick={() => setEditing(true)}>改资料</button> : null}
+      {status === "ambiguous" ? <p className={styles.actionHint}>已有同名人物，可以查看已有记录，或添加为另一位联系人。</p> : null}
+      <button className={styles.actionPrimary} type="button" disabled={busy} onClick={() => onAdd(name.trim(), context.trim())}>{status === "ambiguous" ? "添加为新联系人" : "添加联系人"}</button>
+      <button type="button" disabled={busy} onClick={() => setEditing(true)}>改资料</button>
       <button type="button" disabled={busy} onClick={onCompare}>{status === "ambiguous" ? "核对人物" : "查找已有"}</button>
       <button type="button" disabled={busy} onClick={onPass}>暂不添加</button>
     </div> : null}

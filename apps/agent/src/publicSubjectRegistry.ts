@@ -126,6 +126,12 @@ const PROFESSIONAL_ROLE=/^(?:(?:OpenAI|Google|DeepMind|Anthropic|Microsoft|Meta|
  * addresses, background-check wording), raw chat, and arbitrary instructions
  * are rejected rather than transmitted.
  */
+function publicAnchorText(source:string):string {
+  // An email is private contact data in its entirety, including any local or
+  // domain fragment that happens to resemble an allowed work/role/handle.
+  return source.normalize("NFKC").replace(/[^\s@<>()[\]{}"'，,。！？；;]+@[^\s@<>()[\]{}"'，,。！？；;]+/gu," ");
+}
+
 export function admitPublicContextAnchor(
   kind:PublicContextAnchorKind,
   text:string,
@@ -134,7 +140,7 @@ export function admitPublicContextAnchor(
   if(kind!=="work"&&kind!=="role"&&kind!=="handle")return null;
   const value=text.normalize("NFKC").replace(/\s+/gu," ").trim();
   if(value.length<2||value.length>PUBLIC_CONTEXT_ANCHOR_MAX_LENGTH)return null;
-  if(!groundingTexts.some(source=>source.normalize("NFKC").replace(/\s+/gu," ").includes(value)))return null;
+  if(!groundingTexts.some(source=>publicAnchorText(source).replace(/\s+/gu," ").includes(value)))return null;
   if(ANCHOR_SENTENCE_MARKERS.test(value)||ANCHOR_INSTRUCTION_MARKERS.test(value)||ANCHOR_PRIVATE_PRONOUNS.test(value)||PRIVATE_CONTEXT.test(value))return null;
   if(kind==="handle"){
     if(/^https?:\/\//iu.test(value)){
@@ -142,7 +148,13 @@ export function admitPublicContextAnchor(
         const url=new URL(value);
         if(url.protocol!=="https:"||url.username||url.password||url.port||url.search||url.hash||!PLATFORM_PROFILE_PATHS[url.hostname]?.test(url.pathname))return null;
       }catch{return null;}
-    }else if(!/^@[A-Za-z0-9_.-]{2,40}$/u.test(value))return null;
+    }else {
+      if(!/^@[A-Za-z0-9_.-]{2,40}$/u.test(value))return null;
+      // Substrings of a private email are never public account handles.
+      const escaped=value.replace(/[.*+?^${}()|[\]\\]/gu,"\\$&");
+      const token=new RegExp(`(?<![\\p{L}\\p{N}_.+%\\-@])${escaped}(?![A-Za-z0-9_.-])`,"u");
+      if(!groundingTexts.some(source=>token.test(publicAnchorText(source))))return null;
+    }
     return {kind,text:value};
   }
   if(/^[a-z][a-z0-9+.-]*:\/\//iu.test(value))return null;
@@ -168,9 +180,9 @@ function admitAnchors(
 /** Minimal project/profile clues from the SAME authored name-bearing clause. */
 export function publicContextAnchorsFromText(name:string,text:string):PublicContextAnchor[] {
   const anchors:PublicContextAnchor[]=[];
-  for(const clause of text.split(/[。！？!?；;\n]/u)){
+  for(const clause of publicAnchorText(text).split(/[。！？!?；;\n]/u)){
     if(!clause.includes(name)||ANCHOR_INSTRUCTION_MARKERS.test(clause))continue;
-    const candidates=clause.match(/https:\/\/[^\s，,]+|@[A-Za-z0-9_.-]{2,40}|[A-Za-z][A-Za-z0-9_-]{1,60}/gu)??[];
+    const candidates=clause.match(/https:\/\/[^\s，,]+|(?<![\p{L}\p{N}_.+%\-@])@[A-Za-z0-9_.-]{2,40}(?![A-Za-z0-9_.-])|[A-Za-z][A-Za-z0-9_-]{1,60}/gu)??[];
     for(const candidate of candidates){
       const kind:PublicContextAnchorKind=/^(?:https:|@)/u.test(candidate)?"handle":"work";
       const anchor=admitPublicContextAnchor(kind,candidate,[clause]);
@@ -183,7 +195,8 @@ export function publicContextAnchorsFromText(name:string,text:string):PublicCont
 
 /** Explicit "do not search/research" wording removes all search authorization. */
 export function publicSearchDeclined(text:string):boolean {
-  return /(?:不要|不用|不需要|不必|不许|别|禁止)[^，。！？;；\n]{0,12}(?:搜|查|检索|研究)|(?:do not|don['’]t|never|no need to)\s+(?:search|research|look up)/iu.test(text);
+  const note=text.replace(/\s+/gu," ");
+  return /(?:不要|不用|不需要|不必|不许|别|禁止|请勿)[^，。！？;；\n]{0,12}(?:搜|查|检索|研究)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:["“']?automatically["”']?\s+)?(?:search|research|look\s+up)/iu.test(note);
 }
 
 /** Explicit user-authored research target: one bounded name plus its own
