@@ -160,7 +160,7 @@
   scroll-margin-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
   scroll-margin-top: 24px;
   text-decoration: none;
-  transition: background 140ms var(--ease-out);
+  transition: background var(--workspace-transition-duration, 180ms) var(--ease-out);
 }
 
 .personRow:hover {
@@ -248,7 +248,7 @@
 .personMeta svg {
   flex: 0 0 auto;
   opacity: 0;
-  transition: opacity 140ms var(--ease-out);
+  transition: opacity var(--workspace-transition-duration, 180ms) var(--ease-out);
 }
 
 .personRow:hover .personMeta svg,
@@ -338,19 +338,33 @@
   }
 
   .pageHeading {
-    flex-direction: column;
-    gap: 14px;
+    gap: 16px;
+  }
+
+  .pageHeading > div {
+    flex: 1;
+    min-width: 0;
   }
 
   .listTools {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 12px;
     padding: 0;
   }
 
   .search {
-    flex-basis: 100%;
+    flex: 1 1 0;
     min-height: 44px;
+    min-width: 0;
+  }
+
+  /* A committed query adds a clear control; give it the full input row. */
+  .listTools:has(.search[data-filter-active]) {
+    flex-wrap: wrap;
+  }
+
+  .search[data-filter-active] {
+    flex-basis: 100%;
   }
 
   .tableHeader {
@@ -465,6 +479,12 @@
 }
 
 @media (max-width: 760px) {
+  .listTools > span {
+    margin-left: auto;
+    max-width: 104px;
+    min-width: 0;
+  }
+
   .rowAvatar {
     left: 6px;
     top: 13px;

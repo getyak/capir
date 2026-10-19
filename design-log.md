@@ -48,7 +48,7 @@ Independent source review closed the initial P2 timing and font-weight findings 
 
 ### Loop 2 — Time controls recede behind the records
 
-**Decision:** accepted and deployed for Web; native normal-state proof remains open.
+**Decision:** accepted and deployed for Web; native Time empty state verified at both sizes. Today summary completion remains open.
 
 The date, independently boxed view controls and framed review row consumed the first mobile screen. The Time component now uses a single view track, quieter date and filter controls, inline range metadata and an unframed review disclosure. Add schedule remains the only filled toolbar action. This is one CSS module; no feature, record, URL or action logic changes.
 
@@ -62,3 +62,21 @@ The matched synthetic records begin at 594.17px instead of 703.67px at 390: 109.
 Actual forced-color screenshots exposed Canvas text backplates obscuring light labels. The final narrowly scoped rules use the user's system palette and disable backplates only for filled primary and selected/expanded controls. Their hover styles preserve those colors. [Verified result](design-log/2026-10-20/round-02/web-forced-colors-after.png). The existing small-calendar selected label has the same backplate problem outside this module and remains a separate follow-up. [MDN's forced-colors guidance](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/At-rules/%40media/forced-colors) supports this targeted treatment.
 
 All toolbar targets remain at least 44px tall. Enter opens/closes the native details disclosure with a 2px focus outline. Week/month state appears in the URL; the narrow week grid scrolls locally, while the page remains within 390px. Reduced motion removes transitions. Typecheck and 38 focused tests across Time views, workspace and date helpers passed; worker lint passed. Independent review found no new concrete P0/P1/P2 at final CSS diff `f8df2bec04331bc254c7a6a6cbc684a1ed5569eb01351b7be9a7e0663fd6a91c`. A clean detached production build, loopback authentication and certificate-validated HTTPS passed. Launchd recovery exceeded the initial 25-second readiness window, then recovered without another restart; subsequent authentication, HTTPS and protected records passed. Logs show delayed configuration injection before Next became ready. See [verification receipt](design-log/2026-10-20/round-02/verification.json).
+
+
+Native Time: [1123 × 865](design-log/2026-10-20/round-02/macos-default-after.png), [900 × 720](design-log/2026-10-20/round-02/macos-narrow-after.png). Normal quit/reopen restored navigation and ⌘K/Esc after an unresponsive WebView observation. This is actual empty-state proof, not a populated-record comparison. Narrow-window empty copy sits too low and is the next visual target. The Today summaries still load indefinitely in these observations; no runtime cause or product fix is claimed.
+
+### Loop 3 — People reaches the list sooner
+
+**Decision:** accepted in local visual QA; clean resident deployment pending.
+
+The mobile heading, Add contact and result count consumed three unnecessary rows. The heading and Add contact now share a row; default search and count share another. A committed query gives the input its full width so Clear and Submit remain usable. Long heading explanations and counts can wrap. No person field, search rule, route, return-session behavior or action changes. Row and arrow transitions use the shared 180ms duration.
+
+| Surface | Before | After |
+| --- | --- | --- |
+| Web · 390 × 844 | ![Before: stacked directory utilities](design-log/2026-10-20/round-03/web-390-before.jpg) | ![After: content-led directory](design-log/2026-10-20/round-03/web-390-after.jpg) |
+| Web · 1440 × 1000 | ![Before: desktop directory](design-log/2026-10-20/round-03/web-1440-before.jpg) | ![After: desktop directory retained](design-log/2026-10-20/round-03/web-1440-after.jpg) |
+
+The same 12 synthetic people remain visible. At 390px the first row starts at 394.38px instead of 483.88px: 89.5px earlier. Desktop composition remains intentionally stable. [Dark mobile](design-log/2026-10-20/round-03/web-dark-390-after.jpg), [dark desktop](design-log/2026-10-20/round-03/web-dark-1440-after.jpg), and [320px no results](design-log/2026-10-20/round-03/web-320-no-results.jpg) were checked. At 320 with a query, the input receives 119px and both actions remain 44 × 44px; clearing returns focus to the input with a 2px outline. The long query remains editable and stored in the URL. No page overflow was found. Normal-motion emulation yields 180ms; the current system reduced-motion preference reduces it to 0.00001s.
+
+Independent source review found no concrete P0/P1/P2 at diff `7bd130aeef92dec1182c07a509ead066cf3c97cb9e1f1dc25bc995c49f352219`. All 32 existing directory rendering/navigation/return tests and Web lint passed. [Verification receipt](design-log/2026-10-20/round-03/verification.json). The visual judgment follows Ambi's content priority and the reference products' restrained utility hierarchy; it does not establish overall reference parity. Remaining gaps include small sidebar typography, native repeated chrome and Today summary settling. Misrouted or partially painted captures were rejected; only route/theme/content/scroll-matched images are retained here.

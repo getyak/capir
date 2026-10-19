@@ -47,5 +47,26 @@
     "observation": "Infisical injection was delayed before Next became ready; no second restart or product change."
   },
   "resident_390_record_top_px": 594.171875,
-  "resident_sidebar_loaded": true
+  "resident_sidebar_loaded": true,
+  "native_time_empty_state": {
+    "verified": true,
+    "version": "0.2.8(125)",
+    "windows": [
+      [
+        1123,
+        865
+      ],
+      [
+        900,
+        720
+      ]
+    ],
+    "data": "actual empty Time state; primary authorized test workspace",
+    "command_k_and_escape": true,
+    "window_restored": [
+      1123,
+      865
+    ]
+  },
+  "native_today_summaries": "still loading; normal-state proof open"
 }
