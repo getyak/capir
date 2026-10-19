@@ -2049,8 +2049,11 @@ export async function executeWorkspaceConversationAgent(input: {
       const admittedText = messageSources.get(sourceMessageID);
       if (admittedText === undefined && !sourceParts.length) return null;
       if (sourceText !== undefined && sourceText !== admittedText) return null;
-      const authority: MemorySourceAuthority = input.sessionID && admittedText === undefined
-        ? await resolveSessionSourceAuthority(client, input.auth, input.sessionID, sourceMessageID)
+      // Only host-admitted authored text may use temporary Run authority.
+      // Missing text always resolves persisted source authority, even when a
+      // caller omits its Session ID (the resolver then fails closed to empty).
+      const authority: MemorySourceAuthority = admittedText === undefined
+        ? await resolveSessionSourceAuthority(client, input.auth, input.sessionID ?? null, sourceMessageID)
         : {
         text: admittedText ?? "",
         artifacts: [
