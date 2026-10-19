@@ -813,6 +813,60 @@ describe("conversation-only context and proactive contact drafts", () => {
   });
 
   it.each([
+    "请创建 Maya Chen 联系人，邮箱 maya@example.com。不要联网搜索。",
+    "今天认识了 Maya Chen，邮箱 maya@example.com。不要联网搜索。",
+    "Create Maya Chen with maya@example.com. Do not search the web.",
+    "Maya Chen, maya@example.com. Don't search online.",
+  ])("keeps the contact preview independent of a public-search refusal: %s", async objective => {
+    const search = vi.fn(async () => []);
+    const research = vi.fn(async () => { throw new Error("Research was explicitly refused"); });
+    const result = await executeWorkspaceConversationAgentCore({
+      workspaceID: auth.accountId, objective, messageID, researchClient: { execute: research },
+      contacts: { search, read: vi.fn() },
+      provider: new ScriptedAgentProvider([{ tool: "contact_workspace", input: draft }], results => results[0]?.ok ? {
+        outcome: "contact_change_proposal", candidate_fingerprint: results[0].candidateFingerprint,
+      } : clarify),
+    });
+    expect(result.event).toMatchObject({ kind: "contact_change_proposal", proposal_kind: "create",
+      source_message_id: messageID, source_excerpts: draft.source_excerpts, requires_user_confirmation: true });
+    expect(result.firstContactResearch).toMatchObject([{ status: "opted_out", citations: [] }]);
+    expect(research).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "Create Maya Chen with maya@example.com. Do not save contacts. Do not search the web.",
+    "Maya Chen，邮箱 maya@example.com，不要保存也不要联网搜索。",
+    "不要添加 Maya Chen，邮箱 maya@example.com。不要联网搜索。",
+    "Example: Maya Chen, maya@example.com. Do not search the web.",
+    "Maya Chen, maya@example.com. Don't search my contacts.",
+    "Maya Chen, maya@example.com. Don't search online contacts.",
+    "Maya Chen，邮箱 maya@example.com。不要联网搜索联系人。",
+    "Create Maya Chen with maya@example.com. Do not look  up the web.",
+    "Maya Chen，邮箱 maya@example.com。不要\n联网搜索。",
+    "Maya Chen，邮箱 maya@example.com。请勿联网搜索。",
+    "Maya Chen，邮箱 maya@example.com。请勿保存，不要联网搜索。",
+    "Maya Chen，邮箱 maya@example.com。禁止保存联系人，不要联网搜索。",
+    "Maya Chen, maya@example.com. No saving. Do not search the web.",
+    'Create Maya Chen with maya@example.com. Do not "automatically" search online.',
+    "Maya Chen, maya@example.com. No contact creation. Do not search the web.",
+    "Maya Chen，邮箱 maya@example.com。仅供分析，不要联网搜索。",
+  ])("retains contact refusal and uncertainty with a search constraint: %s", async objective => {
+    const search = vi.fn(async () => []);
+    const research = vi.fn(async () => { throw new Error("Research was explicitly refused"); });
+    const result = await executeWorkspaceConversationAgentCore({
+      workspaceID: auth.accountId, objective, researchClient: { execute: research },
+      contacts: { search, read: vi.fn() },
+      provider: new ScriptedAgentProvider([{ tool: "contact_workspace", input: draft }], results => {
+        expect(results[0]).toMatchObject({ ok: false, error: { code: "CONTACT_PROPOSAL_INTENT_UNGROUNDED" } });
+        return clarify;
+      }),
+    });
+    expect(result.event).toBeNull();
+    expect(search).not.toHaveBeenCalled();
+    expect(research).not.toHaveBeenCalled();
+  });
+
+  it.each([
     "Is Maya Chen at maya@example.com the right person?",
     "Example: Maya Chen, maya@example.com",
     "Someone said: Maya Chen, maya@example.com",
