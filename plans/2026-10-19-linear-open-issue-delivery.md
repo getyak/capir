@@ -208,3 +208,27 @@ observability gaps. The bounded, source-linked investigation and readback are in
 output/linear-delivery/2026-10-19/get40-root-cause/investigation.md. Fixing safe
 diagnostic retention is the next engineering step before any further paid SDK
 validation; this finding does not authorize more inference or complete GET-40.
+
+## One observed host SDK retest
+
+The owner next requested another test and log inspection. One new bounded
+synthetic host SDK execution was admitted, not a restart of the old phase.
+The actual SDK loopback503 preflight proved one request, max_tokens64 and no
+automatic retry. The live host SDK0.3.287 completed in5644ms withOK,
+input413/output4, zero tools and zero retries; SDK estimateUSD0.000866 is not
+an invoice. Low effort, disabled thinking and no tool catalog make this a
+connectivity diagnostic, not original Memory-case acceptance.
+
+The same real receipt is visible in private Opik trace
+e44ef267-147b-7aea-ab62-6031c70928b6 and SDK span
+5e658dbf-1c0d-727d-ac12-f01a8b7ac73b. API and actual browser readback agree on
+completed/OK/5.6s/417tokens. The outer55.1s includes preparation and is labelled
+accordingly. Export was repaired after a409 caused by missing project_name;
+this did not rerun the model. The collector is specific to sanitized synthetic
+diagnostics and does not change the production source allowlist or evaluator.
+
+The old stopped ledger is unchanged; owned process group and transient debug
+cleanup were verified. Exact scripts, receipts, failed preparation context,
+provisional-versus-terminal usage and the real UI proof are retained in
+output/linear-delivery/2026-10-19/get40-sdk-retest/report.md. No further model
+execution is admitted by this one-test scope; the original20cases remain stopped.
