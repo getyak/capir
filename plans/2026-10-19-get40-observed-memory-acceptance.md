@@ -96,3 +96,36 @@ old unknowns and consumed attempts. Complete private/source-bound checks remain.
 
 The primary425-file dirty work remains separate. No new acceptance case or paid
 provider request has been made under this continuation yet. GET-40 remains open.
+
+## Delivery rulings and current evidence
+
+Independent review found a host DEBUG privacy path in the new stderr callback.
+The follow-up removes that callback and reads only a bounded16KiB tail from the
+existing disposable CLI log.49 focused tests and the full serial576/203 tests,
+typechecks and builds pass. Actual SDK subprocess controls prove the raw host
+sink stays disabled without a callback; loopback503 still sends one request.
+
+Product PR384 CI and Security gates pass on2b3b10cc after one rerun of an
+unchanged CLI terminal-cancellation test. Its CodeQL review thread flags dynamic
+code construction in the synthetic debug fixture; replace it with a static child
+script and recheck the exact new head before merge. Do not bypass review rules.
+
+Private PR18 has full repository Node22/24 checks. The source-bound suite
+initially rejected an obsolete private lock; refreshed it from the exact product
+graph plus only the reachable private additions. Existing product nodes remain
+byte-identical, frozen offline pnpm verification and60 policy tests pass. The
+remote exact-source suite on2b3b10cc/fa6601f passed360 runner tests and continues.
+
+Another authorized chat is actively validating contact-intent changes on the
+same resident services: backendd155a79298d506e3e697fc0305b20e590bfaa5d2,
+Webce434ba03f118c261ed7f87c6fd178af419e5d5e. Do not replace them with this older
+candidate or interrupt its tests. Continue isolated acceptance first. Resident
+delivery requires compatible combined clean committed source and a safe handoff;
+it remains incomplete until that is verified. No cross-chat message was sent.
+
+The capir daily test account is ready: run7e439b94-e7ca-402e-825f-60d11984ea90,
+request566ca9dc-6bbd-4d01-9864-d12e15692664, account549b81b0-71af-4c88-a3d0-bceca7a3d49b,
+expires2026-10-19T13:02:45.921Z. CLI verified the actual isolated browser banner
+and12/30/4 dataset. Credentials remain only in Keychain; retained creation output
+is sanitized. Native CUA inspection timed out. Stop this run and verify cleanup
+before handoff, regardless of acceptance outcome.

@@ -20,14 +20,15 @@ for (const withCallback of [false, true]) {
   await mkdir(run, { recursive: true });
   const ready = join(run, 'ready');
   const marker = `SYNTHETIC_PRIVATE_STDERR_${withCallback ? 'WITH' : 'WITHOUT'}`;
-  const code = `process.stderr.write(String.fromCharCode(${[...marker + '\n'].map(char => char.charCodeAt(0)).join(',')}),()=>require('node:fs').writeFileSync(${JSON.stringify(ready)},'ready'));setInterval(()=>{},1000);`;
   const abortController = new AbortController();
   let callbackObserved = false;
   const stream = query({ prompt: 'Synthetic process transport only', options: {
-    cwd: run, env: { PATH: process.env.PATH, HOME: run, CLAUDE_CONFIG_DIR: join(run, 'configuration') },
+    cwd: run, env: { PATH: process.env.PATH, HOME: run, CLAUDE_CONFIG_DIR: join(run, 'configuration'),
+      CAPIR_CALLBACK_CONTROL: withCallback ? '1' : '0' },
     debugFile: join(run, 'sdk-debug.log'), settingSources: [], abortController,
     pathToClaudeCodeExecutable: join(sdkRoot, 'extractFromBunfs.js'),
-    executable: process.execPath, executableArgs: ['-e', code, '--'],
+    executable: process.execPath,
+    executableArgs: [fileURLToPath(new URL('./claudeSDKDebugChild.cjs', import.meta.url)), '--'],
     ...(withCallback ? { stderr() { callbackObserved = true; } } : {}),
   } });
   const consume = (async () => { try { for await (const _frame of stream) {} } catch {} })();
