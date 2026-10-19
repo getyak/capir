@@ -24,11 +24,35 @@ intentional capture
 → durable continuity
 ```
 
-The first response explains what was understood in ordinary language before
-asking the user to organize it. A source may contain acquaintance background,
+The first response gives a useful next step in ordinary language. A clear chat
+counterparty gets one editable contact review immediately, including an
+image-only turn or a thread containing a shared public post. Keep accompanying
+prose to one useful sentence instead of retelling the thread or asking whether
+to prepare the card. Explicit analysis-only/no-save requests take precedence.
+For unsolicited image-only intake, raw prose previews wait for the validated
+result while execution and tool progress remain visible. For a contact-only
+result, the host renders the short review hint only after a real staged-card
+receipt; model prose cannot add a transcript or speaker claims.
+The answer and first-turn Session titles use the staged display label and review
+action, without adding a sender or relationship claim.
+Authored questions, including earlier turns, and later steering retain their actual
+answer; an unsolicited run with later steering completes that answer without
+releasing an earlier unvalidated prose preview.
+A source may contain acquaintance background,
 a temporary plan, or an unfinished commitment; each can be kept independently.
 The user need not select a contact, relationship type, or folder before seeing
 value. Material ambiguity is resolved before its dependent state is confirmed.
+
+Any intentionally shared screenshot can start an editable contact draft for
+the person the user wants to add. A displayed name, nickname, or user-provided
+label is sufficient; source format, a private conversation, existing
+acquaintance, stable identity handles, professional details, and relationship
+background are not eligibility requirements. Guide target selection or missing
+labels instead of refusing creation. Namesakes are review choices: the user
+can select an existing record or explicitly create a separate person. A new
+record never establishes a verified identity, a relationship, or authority to
+read an existing person's private evidence. Contact-only drafts leave missing
+background empty and do not require inventing a Memory item.
 
 Purpose-bound intake and internal filing are distinct from confirming long-lived
 Memory or work. An admitted source or draft can be retained only under its
@@ -50,10 +74,14 @@ Session. Supplemental image processing requires verifiable, persisted
 processor authorization bound to each source; global configuration, available
 credentials, or an admitted screenshot are not that grant. The conversation
 queue does not yet carry this authorization, so production does not expose a
-supplemental inspector. The disclosed main provider may still answer the image.
-Missing inspection produces no text-clue projection and cannot ground an
-image-derived contact or Memory proposal; it must not be presented as a successful
-empty extraction. When authorized inspection is available, its clues remain
+supplemental inspector. The disclosed main provider may still answer the image
+and call the existing source-bound review tool for an editable tentative contact
+draft; no supplementary processing is required. Such a draft does not confirm
+identity or grant access to an existing person's private memory. Missing
+supplementary inspection produces no supplemental text-clue projection and must
+not be presented as a successful empty extraction. Memory items still require
+exact admitted-source excerpts and locators. When authorized inspection is
+available, its clues remain
 pending, source-linked and revocable. The bounded source projection shares the
 original image's retention; the temporary full queue result is still scrubbed
 on completion.

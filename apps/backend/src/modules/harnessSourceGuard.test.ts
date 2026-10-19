@@ -142,7 +142,18 @@ describe("harness source guard rejection diagnostics", () => {
     expectRejectionEvent(spans, "LAB_WORKSPACE_EXPIRED", "admission");
   });
 
-  it("keeps the one second Lab probe timeout fail closed and labels it", async () => {
+  it("waits for a slow current Lab authority without admitting private source reads early", async () => {
+    const probe = fakeClient(() => new Promise<QueryResult>(resolve => setTimeout(() => resolve({ rows: [workspaceRow()] }), 2_000)));
+    const database = fakeClient(async () => ({ rows: [sourceRow()] }));
+    const pending = createHarnessSourceGuard(database.client, auth(), sessionID, () => authority(), probe.client);
+    const result = pending.then(() => "admitted", () => "rejected");
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(database.query).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await result).toBe("admitted");
+  });
+
+  it("keeps a finite Lab probe timeout fail closed and labels it", async () => {
     const { spans, sink } = eventSink();
     const probe = fakeClient(() => new Promise<QueryResult>(() => {}));
     const database = fakeClient(async () => ({ rows: [sourceRow()] }));
@@ -150,7 +161,7 @@ describe("harness source guard rejection diagnostics", () => {
     await withProductRunCapture(sink, async () => {
       const pending = createHarnessSourceGuard(database.client, auth(), sessionID, () => authority(), probe.client);
       void pending.then(() => { settled = true; }, () => { settled = true; });
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(4_999);
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       const error = await pending.then(() => null, (caught: unknown) => caught);
@@ -159,6 +170,20 @@ describe("harness source guard rejection diagnostics", () => {
       expect((error as ApiError).code).toBe("HARNESS_SOURCE_CHANGED");
     });
     expectRejectionEvent(spans, "PROBE_TIMEOUT", "admission");
+  });
+
+  it("still denies authority that expires during the allowed probe wait", async () => {
+    const { spans, sink } = eventSink();
+    const probe = fakeClient(() => new Promise<QueryResult>(resolve => setTimeout(() => resolve({ rows: [workspaceRow({ expires_at: new Date(NOW.valueOf()+1_000) })] }), 2_000)));
+    const database = fakeClient(async () => ({ rows: [sourceRow()] }));
+    await withProductRunCapture(sink, async () => {
+      const pending = createHarnessSourceGuard(database.client, auth(), sessionID, () => authority(), probe.client);
+      const result = pending.then(() => null, error => error);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await result).toMatchObject({code:"HARNESS_SOURCE_CHANGED"});
+    });
+    expect(database.query).not.toHaveBeenCalled();
+    expectRejectionEvent(spans, "LAB_WORKSPACE_EXPIRED", "admission");
   });
 
   it("maps the exact NOWAIT conflict code to a static enum and never leaks it", async () => {

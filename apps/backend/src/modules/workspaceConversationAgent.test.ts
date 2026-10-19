@@ -144,7 +144,7 @@ describe("workspace conversation Agent", () => {
       const part = { kind: "image" as const, artifactID, mimeType: "image/png", byteSize: bytes.length,
         contentHash: hash, dataBase64: bytes.toString("base64") };
       const query = vi.fn(async (sql: string) => {
-        if (sql.includes("SELECT image.content_hash")) return { rows: [{ content_hash: hash, content: bytes }], rowCount: 1 };
+        if (sql.includes("SELECT image.content_hash")) return { rows: [{ content_hash: hash, content: bytes, content_state: "retained", status: "running" }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       });
       const inspection = vi.spyOn(ArkCurrentImageInspector.prototype, "inspect").mockResolvedValue({
@@ -177,20 +177,17 @@ describe("workspace conversation Agent", () => {
       } finally { inspection.mockRestore(); vi.unstubAllEnvs(); }
     });
 
-  it.each(["new-contact", "image-memory"] as const)(
-    "rejects production %s proposals without verified inspection while preserving the answer", async mode => {
+  it("rejects production image-memory proposals without verified inspection while preserving the answer", async () => {
       const bytes = Buffer.from("synthetic admitted image"), messageID = "a1000000-0000-4000-8000-000000000001";
       const artifactID = `conversation-image-${messageID}-0-a2000000-0000-4000-8000-000000000002`;
       const hash = createHash("sha256").update(bytes).digest("hex");
       const query = vi.fn(async (sql: string) => sql.includes("SELECT image.content_hash")
-        ? { rows: [{ content_hash: hash, content: bytes }], rowCount: 1 } : { rows: [], rowCount: 0 });
+        ? { rows: [{ content_hash: hash, content: bytes, content_state: "retained", status: "running" }], rowCount: 1 } : { rows: [], rowCount: 0 });
       const inspection = vi.spyOn(ArkCurrentImageInspector.prototype, "inspect").mockRejectedValue(new Error("synthetic unavailable"));
       vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", "true");
       vi.stubEnv("ARK_API_KEY", "synthetic-no-network");
       const locator = { kind: "image_region", artifact_id: artifactID, image_index: 0 };
-      const proposal = mode === "new-contact"
-        ? { operation: "propose", contact_decision: "new", person_display_label: "公司甲", new_contact_source_locator: locator, items: [] }
-        : { operation: "propose", contact_decision: "none", items: [{ scope: "self", operation: "add",
+      const proposal = { operation: "propose", contact_decision: "none", items: [{ scope: "self", operation: "add",
           statement_kind: "source_statement", display_text: "截图中的文字", source_excerpt: "未经核验的文字", source_locator: locator,
           time_status: "unknown", sensitivity: "normal", reason: "Synthetic image claim" }] };
       const provider = new ScriptedAgentProvider([], { outcome: "reply", title: "回答", body: "可以继续讨论图片，不保存推断。" });
@@ -205,7 +202,7 @@ describe("workspace conversation Agent", () => {
           auth, objective: "图片内容", sourceText: "", messageID, sessionID: "a3000000-0000-4000-8000-000000000003", provider,
           inputParts: [{ kind: "image", artifactID, mimeType: "image/png", byteSize: bytes.length, contentHash: hash, dataBase64: bytes.toString("base64") }] });
         expect(inspection).not.toHaveBeenCalled();
-        expect(rejection).toMatchObject({ ok: false, error: { code: mode === "new-contact" ? "CONTACT_COUNTERPARTY_NOT_GROUNDED" : "MEMORY_SOURCE_UNGROUNDED" } });
+        expect(rejection).toMatchObject({ ok: false, error: { code: "MEMORY_SOURCE_UNGROUNDED" } });
         expect(result.memoryProposal).toBeNull();
         expect(result.block.body).toContain("可以继续讨论图片");
         expect(query.mock.calls.some(([sql]) => /^(?:INSERT|UPDATE|DELETE|SAVEPOINT)/iu.test(sql.trim()))).toBe(false);
@@ -837,20 +834,12 @@ describe("conversation-only context and proactive contact drafts", () => {
     "Create Maya Chen with maya@example.com. Do not save contacts. Do not search the web.",
     "Maya Chen，邮箱 maya@example.com，不要保存也不要联网搜索。",
     "不要添加 Maya Chen，邮箱 maya@example.com。不要联网搜索。",
-    "Example: Maya Chen, maya@example.com. Do not search the web.",
-    "Maya Chen, maya@example.com. Don't search my contacts.",
-    "Maya Chen, maya@example.com. Don't search online contacts.",
-    "Maya Chen，邮箱 maya@example.com。不要联网搜索联系人。",
-    "Create Maya Chen with maya@example.com. Do not look  up the web.",
-    "Maya Chen，邮箱 maya@example.com。不要\n联网搜索。",
-    "Maya Chen，邮箱 maya@example.com。请勿联网搜索。",
     "Maya Chen，邮箱 maya@example.com。请勿保存，不要联网搜索。",
     "Maya Chen，邮箱 maya@example.com。禁止保存联系人，不要联网搜索。",
     "Maya Chen, maya@example.com. No saving. Do not search the web.",
-    'Create Maya Chen with maya@example.com. Do not "automatically" search online.',
     "Maya Chen, maya@example.com. No contact creation. Do not search the web.",
     "Maya Chen，邮箱 maya@example.com。仅供分析，不要联网搜索。",
-  ])("retains contact refusal and uncertainty with a search constraint: %s", async objective => {
+  ])("honors explicit contact refusal before any lookup or research: %s", async objective => {
     const search = vi.fn(async () => []);
     const research = vi.fn(async () => { throw new Error("Research was explicitly refused"); });
     const result = await executeWorkspaceConversationAgentCore({
@@ -867,30 +856,59 @@ describe("conversation-only context and proactive contact drafts", () => {
   });
 
   it.each([
+    'Example: Maya Chen, maya@example.com. Do not search the web.',
+    'Maya Chen, maya@example.com. Don\'t search my contacts.',
+    'Maya Chen, maya@example.com. Don\'t search online contacts.',
+    'Maya Chen，邮箱 maya@example.com。不要联网搜索联系人。',
+    'Create Maya Chen with maya@example.com. Do not look  up the web.',
+    'Maya Chen，邮箱 maya@example.com。不要\n联网搜索。',
+    'Maya Chen，邮箱 maya@example.com。请勿联网搜索。',
+    'Create Maya Chen with maya@example.com. Do not "automatically" search online.',
+  ])("keeps a draft while honoring the lookup opt-out: %s", async objective => {
+    const search=vi.fn(async()=>[]),research=vi.fn(async()=>{throw new Error("Synthetic lookup must remain disabled")});
+    const result=await executeWorkspaceConversationAgentCore({workspaceID:auth.accountId,objective,
+      contacts:{search,read:vi.fn()},researchClient:{execute:research},
+      provider:new ScriptedAgentProvider([{tool:"contact_workspace",input:draft}],results=>({
+        outcome:"contact_change_proposal",candidate_fingerprint:results[0]?.candidateFingerprint,
+      }))});
+    expect(result.event).toMatchObject({kind:"contact_change_proposal",requires_user_confirmation:true});
+    expect(research).not.toHaveBeenCalled();
+    if(/my contacts|online contacts|搜索联系人/u.test(objective))expect(search).not.toHaveBeenCalled();
+  });
+
+  it("does not send an authored private email or its suffix to public research",async()=>{
+    const research=vi.fn(async()=>{throw new Error("Synthetic unavailable research")});
+    await executeWorkspaceConversationAgentCore({workspaceID:auth.accountId,
+      objective:"Create Maya Chen with maya@private-client.com",contacts:{search:async()=>[],read:vi.fn()},researchClient:{execute:research},
+      provider:new ScriptedAgentProvider([{tool:"contact_workspace",input:{...draft,identity_clue:{type:"email",value:"maya@private-client.com"},
+        source_excerpts:["Maya Chen","maya@private-client.com"]}}],results=>({outcome:"contact_change_proposal",candidate_fingerprint:results[0]?.candidateFingerprint}))});
+    expect(research).toHaveBeenCalled();
+    expect(JSON.stringify(research.mock.calls)).not.toContain("private-client.com");
+    expect(JSON.stringify(research.mock.calls)).not.toContain("maya@");
+  });
+
+  it.each([
     "Is Maya Chen at maya@example.com the right person?",
     "Example: Maya Chen, maya@example.com",
     "Someone said: Maya Chen, maya@example.com",
     "Someone said: Add Maya Chen, maya@example.com",
     "转发：“Maya Chen，邮箱 maya@example.com”",
-    "Maya Chen，邮箱 maya@example.com，不要保存",
     "> Create Maya Chen with maya@example.com",
-  ])("rejects spurious draft intent: %s", async (objective) => {
+  ])("leaves draft eligibility to the Agent rather than command regexes: %s", async (objective) => {
     const search = vi.fn(async () => []);
     const result = await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId, objective,
       contacts: { search, read: vi.fn() },
       provider: new ScriptedAgentProvider([{ tool: "contact_workspace", input: draft }], (results) => {
-        expect(results[0]).toMatchObject({ ok: false, error: { code: "CONTACT_PROPOSAL_INTENT_UNGROUNDED" } });
-        return clarify;
+        expect(results[0]?.ok).toBe(true);
+        return {outcome:"contact_change_proposal",candidate_fingerprint:results[0]?.candidateFingerprint};
       }),
     });
-    expect(result.event).toBeNull();
-    expect(search).not.toHaveBeenCalled();
+    expect(result.event).toMatchObject({kind:"contact_change_proposal",requires_user_confirmation:true});
   });
 
-  it("rejects a name-only note and a fabricated default relationship", async () => {
-    for (const proposed of [{ ...draft, identity_clue: null, source_excerpts: ["Maya Chen"] },
-      { ...draft, relationship_context: "General relationship" }]) {
+  it("rejects a fabricated default relationship", async () => {
+    for (const proposed of [{ ...draft, relationship_context: "General relationship" }]) {
       await executeWorkspaceConversationAgentCore({
         workspaceID: auth.accountId, objective: "Maya Chen, maya@example.com",
         contacts: { search: vi.fn(), read: vi.fn() },
@@ -1386,7 +1404,7 @@ describe("conversation-only context and proactive contact drafts", () => {
     });
     expect(explicitStage).toHaveBeenCalledWith(
       expect.objectContaining({
-        newContact: expect.objectContaining({ relationship_context: "与陈宇的交流" }),
+        newContact: expect.objectContaining({ relationship_context: "" }),
       }),
     );
   });
@@ -1905,4 +1923,25 @@ describe("authored research source lifecycle", () => {
       .toBe("PUBLIC_RESEARCH_SUBJECT_NOT_CURRENT");
     expect(requests.map((request) => request.input.operation)).toEqual(["search"]);
   });
+});
+
+describe("contact lookup opt-out after steering",()=>{
+ it("does not repeat a previous stable-handle lookup after the user declines contact search",async()=>{
+  const id="11111111-1111-4111-8111-111111111111";
+  const search=vi.fn(async()=>[{personID:id,displayLabel:"Maya Chen",directoryRevision:1,contexts:[],exactIdentityMatch:true,
+    confirmedHandleType:"email" as const,confirmedHandleValue:"maya@example.com"}]);
+  const recall=vi.fn(async()=>({items:[]}));
+  const provider=new ScriptedAgentProvider([],{outcome:"reply",title:"已停止查找",body:"不再查询联系人。"});
+  vi.spyOn(provider,"run").mockImplementation(async(request,invoke)=>{
+    expect((await invoke("contact_workspace",{operation:"search",query:"maya@example.com",maximum_results:4})).ok).toBe(true);
+    await request.steering!.nextBatchAtSafePoint();
+    const result=await invoke("memory_review",{operation:"recall",person_id:id,scope:"person"});
+    expect(result).toMatchObject({ok:false,error:{code:"MEMORY_RECALL_NOT_AUTHORIZED"}});
+    expect(search).toHaveBeenCalledTimes(1);
+    return {structuredOutput:{outcome:"reply",title:"已停止查找",body:"不再查询联系人。"},inputTokens:1,outputTokens:1,estimatedUsd:0,turns:1,permissionDenials:[]};
+  });
+  await executeWorkspaceConversationAgentCore({workspaceID:auth.accountId,objective:"Find Maya Chen maya@example.com",provider,
+    contacts:{search,read:vi.fn()},memory:{recall,stage:vi.fn()},
+    steering:{nextBatchAtSafePoint:async()=>({messages:[{messageID:"22222222-2222-4222-8222-222222222222",acceptedAt:"2026-10-19T09:00:00Z",text:"Don't search my contacts."}]})}});
+ });
 });

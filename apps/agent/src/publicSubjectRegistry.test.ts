@@ -1,5 +1,5 @@
 import {describe,it,expect} from "vitest";
-import {publicSubjectRegistry,isBoundedPublicName,isBoundedPublicNameTarget,admitAuthoredPublicHomepage,parseAuthoredResearchClause} from "./publicSubjectRegistry.js";
+import {publicSubjectRegistry,isBoundedPublicName,isBoundedPublicNameTarget,admitAuthoredPublicHomepage,parseAuthoredResearchClause,publicContextAnchorsFromText,admitPublicContextAnchor,publicSearchDeclined} from "./publicSubjectRegistry.js";
 describe("public topic admission",()=>{
  it("registers requested full public names without forwarding the user's note",()=>{
   const registry=publicSubjectRegistry("查一下 Lilian Weng 和 Shunyu Yao 的背景，我准备离职还没告诉老板。");
@@ -227,4 +227,23 @@ describe("narrow capitalized romanized surname targets",()=>{
    expect(publicSubjectRegistry(objective).subjects()).toEqual([]);
   }
  });
+});
+
+
+describe("public context privacy and search opt-outs",()=>{
+ it("never derives a public handle from a private email suffix",()=>{
+  expect(publicContextAnchorsFromText("Maya Chen","Maya Chen, maya@private-client.com")).toEqual([]);
+  expect(admitPublicContextAnchor("handle","@private-client.com",["Maya Chen maya@private-client.com"])).toBeNull();
+  expect(admitPublicContextAnchor("handle","@maya.chen",["Maya Chen @maya.chen"])).toEqual({kind:"handle",text:"@maya.chen"});
+ });
+ it.each(['Do not look  up the web','不要\n联网搜索','请勿联网搜索','Do not "automatically" search online'])("honors the explicit search opt-out: %s",text=>{
+  expect(publicSearchDeclined(text)).toBe(true);
+ });
+});
+
+it("does not reuse any private email fragment as a public project or role",()=>{
+ expect(publicContextAnchorsFromText("Maya Chen","Maya Chen nanoGPT@private-client.com")).toEqual([]);
+ expect(admitPublicContextAnchor("work","nanoGPT",["Maya Chen nanoGPT@private-client.com"])).toBeNull();
+ expect(admitPublicContextAnchor("role","engineer",["Maya Chen engineer@private-client.com"])).toBeNull();
+ expect(admitPublicContextAnchor("work","nanoGPT",["Maya Chen nanoGPT"])).toEqual({kind:"work",text:"nanoGPT"});
 });
