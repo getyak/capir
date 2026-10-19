@@ -37,6 +37,11 @@ describe("web catalogs", () => {
     expect(translate("ko", "missing.key")).toBe("missing.key");
     expect(interpolate("Hello {name}, {missing} stays", { name: "Ada" })).toBe("Hello Ada, {missing} stays");
   });
+  it("resolves gettext-style Chinese-source keys to identity for zh locales", () => {
+    expect(translate("zh-CN", "保存偏好")).toBe("保存偏好");
+    expect(translate("zh-TW", "保存偏好")).toBe("保存偏好");
+    expect(translate("en", "保存偏好", undefined, "Save preference")).toBe("Save preference");
+  });
   it("keeps evidence-boundary wording in every locale", () => {
     for (const locale of SUPPORTED_LOCALES) {
       const hint = catalogs[locale]["language.prompt.hint"];

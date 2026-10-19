@@ -8,9 +8,14 @@ import ko from "@/i18n/locales/ko.json";
 /**
  * The web catalog runtime (docs/internationalization.md).
  *
- * Flat key -> string catalogs per canonical locale. Interpolation uses
- * `{name}` placeholders. A missing key falls back to `en`, then to the key
- * itself — rendering never blocks on translation state.
+ * Two key styles share one lookup:
+ * - semantic keys (`language.save`) — explicit labels, full entry per locale;
+ * - gettext-style keys — the zh-CN source string IS the key, so extraction
+ *   wraps a literal without renaming its meaning; zh-CN resolves to identity.
+ *
+ * Interpolation uses `{name}` placeholders. Resolution: active locale ->
+ * original Chinese for zh-family locales -> `en` -> caller fallback -> key.
+ * Rendering never blocks on translation state.
  */
 export type Catalog = Readonly<Record<string, string>>;
 
@@ -35,11 +40,19 @@ export function interpolate(
   );
 }
 
+const CJK = /[\u3040-\u30ff\u3400-\u9fff]/;
+
 export function translate(
   locale: LocaleTag,
   key: string,
   vars?: TranslateVars,
+  fallback?: string,
 ): string {
-  const template = catalogs[locale][key] ?? catalogs.en[key] ?? key;
-  return interpolate(template, vars);
+  const resolved =
+    catalogs[locale][key]
+    ?? (CJK.test(key) && locale.startsWith("zh") ? key : undefined)
+    ?? catalogs.en[key]
+    ?? fallback
+    ?? key;
+  return interpolate(resolved, vars);
 }

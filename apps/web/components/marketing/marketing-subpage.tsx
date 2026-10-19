@@ -6,7 +6,6 @@ import {
   relationshipDemoHref,
 } from "@/lib/marketing-copy";
 import type { MarketingLocale } from "@/lib/marketing-locale";
-import { legacyCopyLocale } from "@/lib/marketing-locale";
 import styles from "./marketing.module.css";
 import { ProductStory, productStoryMeta } from "./product-story";
 import { TrustStory, trustStoryMeta } from "./trust-story";
@@ -43,6 +42,102 @@ export const subpageCopy = {
       title: "先体验，再决定是否一起使用。",
       description:
         "公开演示现在就能打开。真实工作空间处于早期申请阶段，付费方案尚未公布。",
+      rows: [],
+    },
+  },
+  "zh-TW": {
+    product: { ...productStoryMeta["zh-TW"], rows: [] },
+    "how-it-works": {
+      title: "少重建一次背景，多認真交談一次。",
+      description:
+        "從一張你主動分享的聊天截圖開始。先看理解，再確認值得留下的內容，下一次繼續同一件事。",
+      rows: [
+        [
+          "選擇一段對話",
+          "只帶入當前關係需要的內容。",
+          "在首頁合成案例中，陳夏請你先發產品介紹，你回覆“好，我整理一下”。Agent 的理解保留說話人和時間；沒有約定截止日期，就不補一個。",
+        ],
+        [
+          "審閱發生的變化",
+          "區分對方說了什麼，與已經確認了什麼。",
+          "你選擇是否留作背景或記下承諾。人物身份有歧義時先確認，不讀取另一位同名人物的私有背景。待確認內容不會提前聲稱已經儲存。",
+        ],
+        [
+          "決定下一步",
+          "先提出一件有依據、可以審閱的事。",
+          "用新截圖提出“介紹已發，等對方看完”的更新，審閱後改變同一事項。沒有新進展可以等待，也可以暫停。傳送外部訊息仍需要單獨的人類決定。",
+        ],
+      ],
+    },
+    trust: { ...trustStoryMeta["zh-TW"], rows: [] },
+    pricing: {
+      title: "先體驗，再決定是否一起使用。",
+      description:
+        "公開演示現在就能打開。真實工作空間處於早期申請階段，付費方案尚未公佈。",
+      rows: [],
+    },
+  },
+  ja: {
+    product: { ...productStoryMeta.ja, rows: [] },
+    "how-it-works": {
+      title: "背景の引き直しを減らし、本気の会話を増やす。",
+      description:
+        "あなたが共有した一枚のチャットのスクリーンショットから始めます。まず理解を確認し、残す価値のある内容を選び、次回は同じことを続けます。",
+      rows: [
+        [
+          "会話を選ぶ",
+          "今の関係に必要な内容だけを持ち込みます。",
+          "ホームの合成ケースでは、Chen Xia がプロダクトの紹介を依頼し、あなたが「はい、まとめて送ります」と返信します。Agent の理解は話者と時刻を保持し、締め切りの合意がなければ創作しません。",
+        ],
+        [
+          "起きた変化を審査する",
+          "相手が何を言ったかと、何が確認されたかを分けます。",
+          "背景として残すか、約束として記録するかを選べます。身元に曖昧さがあれば先に確認し、同姓同名の别人の非公開背景は読み取りません。審査待ちの内容を保存済みと表現することはありません。" ,
+        ],
+        [
+          "次の一歩を決める",
+          "根拠があり、審査できる提案をひとつ。",
+          "新しいスクリーンショットが「紹介を送信済み、相手のレビュー待ち」という更新を提案。あなたの審査が同じ項目を変えます。待つこと・休むことも有効な結果です。外部メッセージには別の人間の決定が必要です。",
+        ],
+      ],
+    },
+    trust: { ...trustStoryMeta.ja, rows: [] },
+    pricing: {
+      title: "まず体験して、一緒に使うかを決める。",
+      description:
+        "公開デモは今すぐお試しいただけます。実際のワークスペースは早期アクセス申請制です。有料プランは未発表です。",
+      rows: [],
+    },
+  },
+  ko: {
+    product: { ...productStoryMeta.ko, rows: [] },
+    "how-it-works": {
+      title: "배경을 다시 만드는 일을 줄이고, 진짜 대화를 늘립니다.",
+      description:
+        "당신이 직접 공유한 채팅 스크린샷 한 장에서 시작합니다. 먼저 이해를 확인하고, 남길 가치가 있는 내용을 선택하고, 다음에는 같은 일을 이어갑니다.",
+      rows: [
+        [
+          "대화 선택",
+          "현재 관계에 필요한 내용만 가져옵니다.",
+          "홈의 합성 사례에서 Chen Xia가 제품 소개를 요청하고 당신은 「네, 정리해서 보낼게요」라고 답합니다. Agent의 이해는 화자와 시각을 유지하며, 마감 합의가 없으면 만들어내지 않습니다.",
+        ],
+        [
+          "발생한 변화 검토",
+          "상대가 무엇을 말했는지와 무엇이 확인되었는지를 구분합니다.",
+          "배경으로 남길지, 약속으로 기록할지 선택합니다. 신원이 모호하면 먼저 확인하고, 같은 이름의 다른 사람 비공개 배경은 읽지 않습니다. 검토 대기 내용을 저장 완료처럼 표현하지 않습니다.",
+        ],
+        [
+          "다음 단계 결정",
+          "근거가 있고 검토할 수 있는 제안 하나.",
+          "새 스크린샷이 「소개를 보냈고, 상대가 보길 기다리는 중」이라는 업데이트를 제안합니다. 당신의 검토가 같은 항목을 바꿉니다. 기다리기와 멈추기도 유효한 결과입니다. 외부 메시지는 별도의 사람의 결정이 필요합니다.",
+        ],
+      ],
+    },
+    trust: { ...trustStoryMeta.ko, rows: [] },
+    pricing: {
+      title: "먼저 체험하고, 함께 쓸지 정하세요.",
+      description:
+        "공개 데모는 지금 바로 열 수 있습니다. 실제 작업 공간은 조기 신청 단계이며, 유료 플랜은 아직 발표되지 않았습니다.",
       rows: [],
     },
   },
@@ -90,7 +185,7 @@ export function MarketingSubpage({
   if (kind === "product") return <ProductStory locale={locale} />;
   if (kind === "trust") return <TrustStory locale={locale} />;
   const c = marketingCopy(locale);
-  const copy = subpageCopy[legacyCopyLocale(locale)][kind];
+  const copy = subpageCopy[locale][kind];
   const en = locale === "en";
   return (
     <main id="main-content" tabIndex={-1} className={styles.page} lang={locale}>

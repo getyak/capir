@@ -57,11 +57,26 @@ language" behavior.
 
 | Surface | Mechanism | Catalog location |
 | --- | --- | --- |
-| Web (`apps/web`) | In-repo typed catalog runtime (`apps/web/lib/i18n`: `getT(locale)` for server components, `useT()` for client) | `apps/web/i18n/locales/{en,zh-CN,zh-TW,ja,ko}.json` |
+| Web (`apps/web`) | In-repo typed catalog runtime (`apps/web/lib/i18n`: `getT(locale)` for server components, `useT()` for client) | `apps/web/i18n/locales/{en,zh-CN,zh-TW,ja,ko}.json` plus locale-keyed copy modules (`lib/marketing-copy.ts`, `subpageCopy`, story dicts) |
 | iOS (`apps/ios`) | String Catalogs | `apps/ios/Resources/Localizable.xcstrings` (`zh-Hans` → also `zh-Hant`, `ja`, `ko`) |
 | macOS native (`apps/macos`) | String Catalog | `apps/macos/Resources/Localizable.xcstrings` |
 | macOS hybrid (`apps/macos-hybrid`) | Small JS dictionary keyed by canonical tag | alongside `index.html` / `quick-panel.html` |
 | Extensions | Chrome `_locales` + `chrome.i18n`, manifest `__MSG_*__` | `load-unpacked/_locales/{en,zh_CN,zh_TW,ja,ko}/messages.json` |
+
+### Web key styles
+
+The web catalogs use two key styles in one lookup:
+
+- **semantic keys** (`language.save`) for named UI labels, with an explicit
+  entry in every locale;
+- **gettext-style keys** — the zh-CN source string is the key. `zh-CN` is the
+  source language of the existing web UI, so extraction wraps a literal in
+  `t()`/`useT()` without renaming meaning, and zh-CN resolves to identity.
+
+Resolution order: active locale → original Chinese for zh-family locales →
+`en` → caller fallback → key. Locale-keyed copy modules (structured
+narrative copy with arrays and nested groups) count as catalogs; the guard
+suite treats values in those modules as extracted.
 
 Web interpolation uses `{name}` placeholders; plurals use `.one` / `.other`
 key suffixes with `Intl.PluralRules`. Dates, numbers, and lists format via
@@ -69,6 +84,8 @@ key suffixes with `Intl.PluralRules`. Dates, numbers, and lists format via
 
 ## Translation quality rules
 
+- Web source strings are zh-CN (the existing UI language); `en` is the
+  source language for iOS/macOS/extension keys.
 - `zh-TW` is Traditional Chinese authored for Taiwan readers (terminology
   and idiom), not converted `zh-CN`.
 - `ja` and `ko` are native-quality, respecting each locale's politeness

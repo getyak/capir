@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveMarketingLocale } from "./marketing-locale";
+import { resolveMarketingLocale, marketingLocales } from "./marketing-locale";
 import {
   marketingAccessHref,
   marketingCopy,
@@ -31,9 +31,11 @@ describe("public website locale negotiation", () => {
     },
   );
   it("keeps original evidence unchanged across translations", () => {
-    expect(marketingCopy("en").brief.quote).toBe(
-      marketingCopy("zh-CN").brief.quote,
-    );
+    for (const locale of marketingLocales) {
+      expect(marketingCopy(locale).brief.quote).toBe(
+        marketingCopy("zh-CN").brief.quote,
+      );
+    }
   });
   it("uses real subpages, a precise demo anchor, and an email-only access request", () => {
     expect(
