@@ -1,0 +1,35 @@
+{
+  "source_revision": "40166aaba56b90bd0ceb7acb2bf34abf49861dd9",
+  "preserved_live_parent": "067705264c6cec10d7e010a13b8df8144957af3c",
+  "build_id": "3eHsC9QkVQxOaQMMKZZfo",
+  "clean_detached_build": true,
+  "frozen_pnpm": "11.18.0",
+  "loopback_auth_status": 200,
+  "tailscale_https_login_status": 200,
+  "protected_synthetic_today_after_restart": true,
+  "launchd_restart_recovered": true,
+  "focused_tests": 39,
+  "native_summary_settled": false,
+  "native_summary_note": "Layout changed, but summary loading is under investigation; no confirmed CSS causation.",
+  "screenshots": {
+    "web_light_before_390": [
+      390,
+      844
+    ],
+    "web_light_after_390": [
+      390,
+      844
+    ],
+    "web_light_after_1440": [
+      1440,
+      1000
+    ],
+    "layout_fixture_dark_320": [
+      320,
+      844
+    ]
+  },
+  "layout_fixture_is_live_data": false,
+  "qa_session_cookie_secure": true,
+  "qa_session_cookie_http_only": true
+}

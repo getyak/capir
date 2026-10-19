@@ -312,7 +312,7 @@ review into a chat reply.
 Functional audits gate release but do not establish design quality or
 preference. For a consequential visual change, compare at least two rendered
 directions against product truth, logo-off ownability, five-second clarity, and
-accessibility risk before micro-detail. Review the uncropped viewport across themes, text sizes, and crossed attention states. Independent craft scores use frozen criteria and preserved deductions; they are subjective evidence and never replace functional proof or user judgment.
+accessibility risk before micro-detail. Compare uncropped, fully painted screenshots with matching content, viewport, theme and loading state; verify saved pixel dimensions after resizing or navigation. Independent craft scores preserve frozen criteria and deductions; they never replace functional proof or user judgment.
 
 See the [brand system](../brand/README.md) for approved marks and usage, and the
 [Design reference catalog](research/design-reference-catalog.md) and

@@ -19,7 +19,7 @@ Reference parity is a visual judgment, never established by passing functional t
 
 ### Pending decisions
 
-No structural change is approved by this log. Candidates discovered during inspection will be recorded here before implementation.
+The native window and Web sidebar both repeat branding and navigation chrome. A unified desktop title/navigation treatment may be worthwhile, but it changes window structure and remains deferred. The current session first improves shared content and control hierarchy without changing navigation architecture.
 
 ### Loop 0 — baseline inspection
 
@@ -28,7 +28,7 @@ The conversation canvas is already calm, with a single composer and secondary pr
 
 ### Loop 1 — Today becomes a brief, not a dashboard
 
-**Decision:** accepted after matched local visual inspection. Resident activation and installed macOS after-captures are still pending; this is not yet a deployment claim.
+**Decision:** accepted and deployed for Web; installed macOS layout is visible, with summary settling still under investigation.
 
 The oversized date and three rounded panels gave empty summaries more weight than the assigned action. The shared Today styles now use the workspace 24px title, quiet metadata, whitespace and one low-contrast separator. The actual task, outcome and milestone share one left edge. The target workspace link remains the sole filled primary action; optional Agent controls are secondary. No record, authority, route or action behavior changes.
 
@@ -39,8 +39,13 @@ At 390px, two short status summaries remain side by side. A populated title rece
 | Web · 1440 × 1000 | ![Before: boxed Today](design-log/2026-10-20/round-01/web-1440-before.jpg) | ![After: content-first Today](design-log/2026-10-20/round-01/web-1440-after.jpg) |
 | Web · 390 × 844 | ![Before: mobile Today](design-log/2026-10-20/round-01/web-390-before.jpg) | ![After: mobile Today](design-log/2026-10-20/round-01/web-390-after.jpg) |
 
-The matched synthetic workspace retains the same test banner and content. The mobile before-capture is from resident Web `20c0d64a`; the after-capture is the local candidate based on `1c7c9891`. The malformed local mobile image was rejected. At 390px the settled task heading begins at 469.89px instead of 625.30px (155.41px earlier); horizontal overflow is absent. Desktop task position and primary action also move upward. This establishes improved content visibility, not visual parity with the reference products.
+The matched synthetic workspace retains the same test banner and content. The mobile before-capture is from resident Web `20c0d64a`; the final light after-captures are resident `40166aab`, which preserves concurrently deployed `06770526`. The malformed local mobile image was rejected. At 390px the settled task heading begins at 469.89px instead of 625.30px (155.41px earlier); horizontal overflow is absent. Desktop task position and primary action also move upward. This establishes improved content visibility, not visual parity with the reference products.
 
 Additional states: [dark desktop](design-log/2026-10-20/round-01/web-dark-1440-after.jpg), [dark mobile](design-log/2026-10-20/round-01/web-dark-390-after.jpg), [unavailable summaries](design-log/2026-10-20/round-01/web-error-1440-after.jpg). Requests were blocked only within the local QA tab, then unblocked; keyboard Retry restored both summaries. Enter toggled the source disclosure without changing state. Reduced-motion emulation reduced the link transition to 0.00001s. A transient real health warning was observed and recovered independently; it is not attributed to this CSS change.
 
-Independent source review closed the initial P2 timing and font-weight findings and found no P0/P1. Final source diff fingerprint: `e6b3534d13f479474f7af4d6c2e2cfe077d0a29c68c773d2cf2b8e4324c23cf6`. Populated-summary mobile layout is source-reviewed but has not yet been visually exercised against live populated data. Final focused tests passed: 39 tests across Today context, its data helpers and pursuit Today rendering. `pnpm docs:check` passed. Production build, live revision, native screenshots and restart proof remain required.
+Independent source review closed the initial P2 timing and font-weight findings and found no P0/P1. Final source diff fingerprint: `e6b3534d13f479474f7af4d6c2e2cfe077d0a29c68c773d2cf2b8e4324c23cf6`. The populated-summary branch was also exercised with an isolated, clearly labeled [source-CSS layout fixture](design-log/2026-10-20/round-01/css-fixture-populated-390.jpg): titles receive 350px at 390 and 280px at 320, with no overflow and a visible 2px keyboard outline. This is synthetic layout proof, not a live populated-record claim. Final focused tests passed: 39 tests across Today context, its data helpers and pursuit Today rendering. `pnpm docs:check` passed. A clean detached production build and activation passed. [Verification receipt](design-log/2026-10-20/round-01/verification.json) binds revision `40166aab` to build ID `3eHsC9QkVQxOaQMMKZZfo`; loopback authentication, certificate-validated Tailscale login, protected synthetic Today and launchd restart recovery passed. The first activation safely refused another installer's lock; its completed `06770526` was merged before rebuilding rather than overwritten. Native 0.2.8 shows the new CSS and ⌘K/Esc works, but both summaries remain loading after background reload; normal native summary proof is outstanding. Independent static review found no CSS cause and identified the existing hidden-page early return as a hypothesis requiring runtime evidence.
+
+
+### Loop 2 — Time toolbar density (in progress)
+
+At 390px, the date, Today, three independently boxed view controls, Filter, wrapped Add schedule, range controls and framed review disclosure push the first actual record to approximately 730px. The next bounded CSS-only slice will group secondary controls, keep one filled Add schedule action, preserve 44px hit areas, and allow long filter labels to wrap. No control, data, URL state or feature will be removed. Acceptance requires matched settled screenshots and keyboard/filter/view checks; implementation has not yet been accepted.
