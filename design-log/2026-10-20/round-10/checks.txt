@@ -1,0 +1,4 @@
+Time inspector correction: 40 existing workspace tests passed, 2026-10-20 06:38:59 +08:00, 16.33s.
+Web lint passed, exit 0.
+Core source: 108 tests across 8 files, lint and typecheck passed.
+Strengthened real event-order regression failed the earlier microtask patch and passed final source.

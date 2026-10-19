@@ -267,3 +267,12 @@ All 108 relevant tests across 8 files, Web lint and typecheck pass. Actual390×8
 The in-app browser became unresponsive at its JavaScript confirmation and its dialog API returned no active dialog. That attempt is not counted as passed. An existing Chrome Guest process supplies a new task-only window through native UI, using the same isolated run at the exclusive loopback preview origin. The resident loopback also reads back the exact synthetic account; the existing HTTPS primary browser session is untouched. Only the task's owned window and approved fixture controls are inspected.
 
 [Matched resident390px Escape baseline](design-log/2026-10-20/round-10/web-390-escape-before.png) uses the same synthetic workspace at resident576a1b8b: pressing Escape on its blank title leaves the editor open. The post-deployment counterpart is pending.
+
+
+### Loop 10 follow-up — the closed inspector must leave no empty panel
+
+**Decision:** narrow correction reviewed and tested; resident proof pending.
+
+Core Escape/focus source `0dd21831`, build `SniPHYkFXvRdf_rI_dZEb`, now runs from clean committed resident source. Activation passed in 37.47 seconds without rollback; HTTPS login validates its certificate and the canonical API `/health/ready` returns200. The earlier `/health`404 was an incorrect probe, not readiness proof. Actual Chrome390px Escape removes the editor and returns Add focus; the [matched after-image](design-log/2026-10-20/round-10/web-390-escape-after.png) shows the settled synthetic list. The screenshot export moves browser focus, so keyboard focus is verified separately by the actual accessibility readback. A transient service notice subsequently cleared without a source change; its cause is unconfirmed.
+
+The installed macOS app also closes the editor and shows Add focus. At900px, however, an empty44px floating inspector remains until resize. The descendant-selector display rule is replaced by an explicit `data-open` attribute derived from the same existing editor/detail branches. Both narrow breakpoint rules use it. There is no new state, request, URL or persistence behavior. This observed rendering issue is not generalized to a proven WebKit root cause. Existing40 workspace tests and Web lint pass; independent review has no P0–P2 at diff `b4d5163508ba5997cc6a379f7f6da06427828a74024ba364c226af13effe8581`. The rejected empty-panel screenshot stays private; post-correction native proof and final restart are pending.
