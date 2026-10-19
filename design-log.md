@@ -213,3 +213,20 @@ Before-images use resident `916c104c` and current after-images use the reviewed 
 The isolated test identity cannot edit profile fields. A clearly labeled[exact-source CSS fixture](design-log/2026-10-20/round-07/source-css-recovery-fixture.html) therefore verifies readonly input 16px, error 15px, long-reference wrapping and 2px focus at[320px](design-log/2026-10-20/round-07/fixture-recovery-320.png),[390px](design-log/2026-10-20/round-07/fixture-recovery-390.png) and[forced dark320px](design-log/2026-10-20/round-07/fixture-forced-dark-320.png). It contains no account, external dependency or mutation and is not an actual product failure. Its task-only server has stopped.
 
 Independent review closed the mobile cascade and forced-palette/focus specificity findings. Parent runtime inspection also removed a nonexistent token reference and repaired narrow label wrapping. Final reviewed diff is `ab96d309cbf74cc5c7c231f04b06f59fe10fb6c0ad7827666039cad3aa00eaef`; all 58 relevant tests across 7 files pass. [Verification receipt](design-log/2026-10-20/round-07/verification.json). The installed device Settings window is pure native in 0.2.8 (125); this Web CSS batch does not claim to update that window.
+
+
+### Loop 11 — A small native window keeps a readable Person column
+
+**Decision:** accepted locally; resident and native after-proof pending.
+
+With the workspace rail expanded at 900px, Person kept two columns even though the memory column had only 272px. The same problem is visible in the installed macOS window: a short fictional memory breaks into many narrow lines. One existing responsive breakpoint moves from 860px to 1000px, reusing the established stacked layout. Memory stays first; all basic fields and the authored profile remain below it. There is no DOM, data, action or route change.
+
+|900 ×720, expanded rail|Before|After candidate|
+| --- | --- | --- |
+|Person reading width|![Before:272px](design-log/2026-10-20/round-11/web-900-before.png)|![After:604px](design-log/2026-10-20/round-11/web-900-after.png)|
+
+The current local after-image includes an intermittent service-health warning and will be replaced with resident normal-state readback; it is not yet a matched normal-state comparison. Measured memory width grows 272→604px with no horizontal overflow. With the[rail collapsed](design-log/2026-10-20/round-11/web-900-collapsed.png), it is 780px. The[full reference content](design-log/2026-10-20/round-11/web-900-reference.png) remains reachable. At 1000px the single column is 704px; at 1001px the original two columns are 373/256px. At 1440px the original 740/256px split remains; at 390px the original 350px reading width remains.
+
+[Dark900px keyboard reading mode](design-log/2026-10-20/round-11/web-dark-900-keyboard.png) retains its 2px focus and clear selected marker; original light and item mode are restored. The[390px layout](design-log/2026-10-20/round-11/web-390.png) is unchanged. Native expanded before-proof stays private because its sidebar contains an unrelated unmarked identity; the safe collapsed fictional-person baseline is already retained in Loop 9. Native after-proof remains required.
+
+All 41 existing Person Memory interaction/page-render tests pass. Independent review finds no concrete P0–P2 at diff `abd65ef91e6aefc44196d8c7afcdbe07f9906dbaac7bccf7193aee27034b98b2`. [Verification receipt](design-log/2026-10-20/round-11/verification.json).

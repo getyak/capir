@@ -104,7 +104,8 @@
 @media (max-width: 760px) {
   .main :is(button, a, summary, textarea, [data-memory-item]) { scroll-margin-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
 }
-@media (max-width: 860px) {
+/* Reuse the stacked reading layout before an expanded workspace rail squeezes it. */
+@media (max-width: 1000px) {
   .main { padding: 20px 24px 76px; }
   .columns { gap: 32px; grid-template-columns: minmax(0, 1fr); margin-top: 23px; }
   .contextColumn { border-left: 0; border-top: 1px solid var(--line-soft); padding: 24px 0 0; }

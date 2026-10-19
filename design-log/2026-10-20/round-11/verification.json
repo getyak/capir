@@ -1,0 +1,52 @@
+{
+  "status": "accepted locally; resident and native after-proof pending",
+  "change": "existing stacked layout breakpoint860->1000;oneCSSmodule,noDOM/data/actionchanges",
+  "review_diff_sha256": "abd65ef91e6aefc44196d8c7afcdbe07f9906dbaac7bccf7193aee27034b98b2",
+  "expanded_900_memory_before_px": 272,
+  "expanded_900_memory_after_px": 604,
+  "collapsed_900_memory_after_px": 780,
+  "boundary_metrics": [
+    {
+      "columns": "704px",
+      "memory": 704,
+      "overflow": false,
+      "viewport": 1000
+    },
+    {
+      "columns": "373px 256px",
+      "memory": 373,
+      "overflow": false,
+      "viewport": 1001
+    },
+    {
+      "columns": "740px 256px",
+      "memory": 740,
+      "overflow": false,
+      "viewport": 1440
+    },
+    {
+      "columns": "350px",
+      "memory": 350,
+      "overflow": false,
+      "viewport": 390
+    }
+  ],
+  "horizontal_overflow": false,
+  "reference_content": "basic info and full synthetic authored profile remain reachable below memories",
+  "dark_keyboard": "actual900 reading mode selected;2pxfocus;light/original mode restored",
+  "focused_tests": {
+    "passed": 41,
+    "files": 2,
+    "final_run": "2026-10-20 05:16:44"
+  },
+  "normal_comparison_limit": "local after currently includes intermittent service-health warning; geometry measured independently; replace normal after with resident readback",
+  "native_before": "actual900expanded private raw capture notcurated because unrelated unmarked identity; safe collapsed baseline reusesLoop9residentafter; native after pending",
+  "images": {
+    "11-person-web-900-expanded-before.png": "web-900-before.png",
+    "11-person-web-900-expanded-after.png": "web-900-after.png",
+    "11-person-web-900-collapsed-after.png": "web-900-collapsed.png",
+    "11-person-web-900-reference-after.png": "web-900-reference.png",
+    "11-person-web-dark-900-keyboard-after.png": "web-dark-900-keyboard.png",
+    "11-person-web-390-after.png": "web-390.png"
+  }
+}
