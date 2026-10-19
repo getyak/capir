@@ -1,0 +1,39 @@
+{
+  "status": "local QA passed; resident activation pending",
+  "base_revision": "b164728c",
+  "review_diff_sha256": "f8df2bec04331bc254c7a6a6cbc684a1ed5569eb01351b7be9a7e0663fd6a91c",
+  "mobile_width": 390,
+  "first_record_before_px": 703.671875,
+  "first_record_after_px": 594.171875,
+  "recovered_px": 109.5,
+  "page_horizontal_overflow": false,
+  "tested_widths": [
+    320,
+    390,
+    1440
+  ],
+  "toolbar_control_min_height_px": 44,
+  "active_filter_wrap": "three rows, complete label retained",
+  "typecheck": "passed",
+  "focused_tests": {
+    "passed": 38,
+    "files": 3
+  },
+  "reduced_motion_transition": "0s",
+  "forced_colors_primary_hover": {
+    "system_palette": true,
+    "opacity": 1,
+    "labels_visible": true
+  },
+  "native_normal_state_verified": false,
+  "screenshots": {
+    "02-time-web-light-390-before.jpg": "web-390-before.jpg",
+    "02-time-web-light-1440-before.jpg": "web-1440-before.jpg",
+    "02-time-web-light-390-candidate.jpg": "web-390-after.jpg",
+    "02-time-web-light-1440-candidate.jpg": "web-1440-after.jpg",
+    "02-time-web-dark-390-after.jpg": "web-dark-390-after.jpg",
+    "02-time-web-dark-1440-after.jpg": "web-dark-1440-after.jpg",
+    "02-time-web-390-filter-enabled.jpg": "web-390-filter-enabled.jpg",
+    "02-time-web-1440-forced-colors-after.png": "web-forced-colors-after.png"
+  }
+}

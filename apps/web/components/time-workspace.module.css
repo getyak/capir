@@ -3,14 +3,14 @@
  * Control radius 8px, bounded panels 12px, hairline dividers, quiet accent. */
 .page { color: var(--ink); font-size: var(--workspace-body-size); margin: 0 auto; max-width: 1120px; min-width: 0; padding: 40px 40px 56px; }
 .page button,.page input,.page select,.page textarea { font: inherit; }
-.page button { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); cursor: pointer; display: inline-flex; font-size: var(--workspace-body-size); gap: 7px; justify-content: center; min-height: 44px; padding: 8px 14px; }
-.page button:hover { background: var(--surface-muted); }
+.page button { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); cursor: pointer; display: inline-flex; font-size: var(--workspace-body-size); gap: 7px; justify-content: center; min-height: 44px; padding: 8px 14px; transition: opacity var(--workspace-transition-duration, 180ms) var(--ease-out),background var(--workspace-transition-duration, 180ms) var(--ease-out),border-color var(--workspace-transition-duration, 180ms) var(--ease-out),color var(--workspace-transition-duration, 180ms) var(--ease-out); }
+.page button:hover:not(:disabled) { background: var(--surface-muted); }
 .page button:disabled { cursor: default; opacity: .55; }
 .page :is(button,a,input,select,textarea):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .page summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 .page h1,.page h2,.page h3,.page p { margin: 0; }
 .page .primary { background: var(--ink); border-color: var(--ink); color: var(--background); }
-.page .primary:hover { background: var(--ink); opacity: .85; }
+.page .primary:hover:not(:disabled) { background: var(--ink); color: var(--background); opacity: .85; }
 .header { align-items: flex-start; display: flex; gap: 20px; justify-content: space-between; margin-bottom: 30px; }
 .header h1 { font-size: var(--workspace-title-size); font-weight: 600; line-height: 1.42; }
 .header p { color: var(--muted); font-size: var(--workspace-body-size); line-height: 1.6; margin-top: 6px; max-width: 62ch; }
@@ -21,16 +21,25 @@
 .dateTitle { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; }
 .dateTitle strong { font-size: 1.375rem; font-variant-numeric: tabular-nums; font-weight: 600; letter-spacing: 0; line-height: 1.45; }
 .dateTitle span { color: var(--muted); font-size: var(--workspace-meta-size); }
+/* Toolbar chrome stays quiet: borderless text/icon controls, one segmented
+ * view group on a shared track, one filled primary (添加日程). Selected states
+ * add a boundary as well as a fill, never color alone. */
 .toolbarActions { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
-.segmented { align-items: center; display: inline-flex; gap: 6px; }
-.segmented button { background: var(--surface); border-color: var(--line); min-height: 44px; padding: 8px 14px; }
-.segmented button[aria-pressed=true] { background: var(--surface-muted); border-color: var(--line); color: var(--ink); }
+.toolbarActions>button { background: transparent; border-color: transparent; color: var(--muted-strong); }
+.toolbarActions>button:hover:not(:disabled) { background: var(--surface-muted); color: var(--ink); }
+.toolbarActions>button[aria-expanded=true] { background: var(--surface-muted); border-color: var(--line); color: var(--ink); }
+.segmented { align-items: center; background: var(--surface-muted); border-radius: 8px; display: inline-flex; gap: 2px; padding: 2px; }
+.segmented button { background: transparent; border-color: transparent; color: var(--muted-strong); min-height: 44px; min-width: 44px; padding: 8px 14px; }
+.segmented button:hover:not(:disabled) { background: var(--surface); color: var(--ink); }
+.segmented button[aria-pressed=true] { background: var(--surface); border-color: var(--line); color: var(--ink); }
 .filterToggle { color: var(--muted-strong); }
-.scopeBar { align-items: center; color: var(--muted); display: flex; font-size: var(--workspace-meta-size); gap: 12px; justify-content: space-between; padding: 16px 0; }
+.scopeBar { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap; font-size: var(--workspace-meta-size); gap: 4px 12px; justify-content: space-between; padding: 16px 0; }
+.scopeBar>span { margin-left: auto; white-space: nowrap; }
 .quickRanges { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; }
 .quickRanges button { background: transparent; border-color: transparent; color: var(--muted-strong); font-size: var(--workspace-meta-size); min-height: 44px; padding: 6px 11px; }
+.quickRanges button:hover:not(:disabled) { background: var(--surface-muted); color: var(--ink); }
 .quickRanges button[aria-pressed=true] { background: var(--surface-muted); border-color: var(--line); color: var(--ink); }
-.quickRanges>span { border-left: 1px solid var(--line); margin-left: 4px; padding-left: 13px; }
+.quickRanges>span { border-left: 1px solid var(--line); margin-left: 4px; min-width: 0; overflow-wrap: anywhere; padding-left: 13px; }
 .filters { align-items: end; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 20px; padding: 16px; }
 .filters label,.formFields label { color: var(--muted-strong); display: flex; flex-direction: column; font-size: var(--workspace-body-size); gap: 7px; min-width: 0; }
 .page input,.page select,.page textarea { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-size: var(--workspace-body-size); min-height: 44px; min-width: 0; padding: 8px 10px; width: 100%; }
@@ -140,6 +149,14 @@
 .weekEvent span { color: var(--muted); font-size: var(--workspace-meta-size); font-variant-numeric: tabular-nums; }
 @media(min-width:1600px) { .page { padding: 48px 48px 64px; }.workspace { grid-template-columns: minmax(0,1fr) 330px; }.canvas { padding-right: 36px; }.inspector { padding-left: 32px; } }
 @media(max-width:1200px) { .page { padding: 24px 24px 48px; }.workspace { grid-template-columns: minmax(0,1fr) 265px; }.canvas { padding-right: 16px; }.inspector { padding-left: 18px; }.activityStatus { display: none; }.rowArrow { display: none; }.header p { font-size: var(--workspace-body-size); } }
-@media(max-width:1000px) { .workspace { grid-template-columns: minmax(0,1fr); }.canvas { padding-right: 0; }.contextIntro { display: none; }.editor,.detail { max-width: 600px; }.toolbar { gap: 12px; }.dateNavigation { flex-basis: 100%; }.toolbarActions { flex: 1; }.reviewDock { display: block; margin-bottom: 18px; }.reviewDock summary { align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; display: flex; gap: 8px; list-style: none; min-height: 44px; padding: 10px 14px; }.reviewDock summary::-webkit-details-marker { display: none; }.reviewDock summary svg { color: var(--muted); flex: 0 0 auto; }.reviewDockStatus { color: var(--muted); font-size: var(--workspace-meta-size); margin-left: auto; }.reviewDock .review { border-top: 0; max-width: 600px; padding-top: 12px; }.inspector { display: none; }.inspector .review { display: none; }.inspector:has(.editor),.inspector:has(.detail) { background: var(--background); border: 1px solid var(--line); border-radius: 12px; bottom: 18px; box-shadow: 0 12px 60px #00000020; display: block; max-height: 80dvh; overflow: auto; padding: 22px; position: fixed; right: 20px; width: min(420px,calc(100vw - 40px)); z-index: 60; } }
-@media(max-width:640px) { .page { padding: 20px 20px 80px; }.header { gap: 12px; margin-bottom: 24px; }.header p { max-width: 100%; line-height: 1.7; }.dateTitle { padding: 0 4px; }.dateTitle strong { font-size: 1.125rem; }.scopeBar { align-items: start; }.scopeBar>span { white-space: nowrap; }.quickRanges>span { border: 0; flex-basis: 100%; padding: 7px 0 0; }.monthCell { min-height: 96px; }.monthEvent strong { font-size: var(--workspace-meta-size); }.inspector:has(.editor),.inspector:has(.detail) { bottom: 70px; }.customRange { flex-wrap: wrap; }.page button { min-height: 44px; }.formFields .checkLabel,.page input:not([type=checkbox]),.page select { min-height: 44px; }.activityIcon { flex-basis: 32px; height: 32px; }.activityTime { flex-basis: 40px; } }
+@media(max-width:1000px) { .workspace { grid-template-columns: minmax(0,1fr); }.canvas { padding-right: 0; }.contextIntro { display: none; }.editor,.detail { max-width: 600px; }.toolbar { gap: 12px; }.dateNavigation { flex-basis: 100%; }.toolbarActions { flex: 1; }/* Quiet disclosure row: transparent 1px border keeps the collapsed height stable. */.reviewDock { display: block; margin-bottom: 12px; }.reviewDock summary { align-items: center; background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; gap: 8px; list-style: none; min-height: 44px; padding: 10px 12px; transition: background var(--workspace-transition-duration, 180ms) var(--ease-out); }.reviewDock summary:hover { background: var(--surface-muted); }.reviewDock summary::-webkit-details-marker { display: none; }.reviewDock summary svg { color: var(--muted); flex: 0 0 auto; }.reviewDockStatus { color: var(--muted); font-size: var(--workspace-meta-size); margin-left: auto; }.reviewDock .review { border-top: 0; max-width: 600px; padding-top: 12px; }.inspector { display: none; }.inspector .review { display: none; }.inspector:has(.editor),.inspector:has(.detail) { background: var(--background); border: 1px solid var(--line); border-radius: 12px; bottom: 18px; box-shadow: 0 12px 60px #00000020; display: block; max-height: 80dvh; overflow: auto; padding: 22px; position: fixed; right: 20px; width: min(420px,calc(100vw - 40px)); z-index: 60; } }
+@media(max-width:640px) { .page { padding: 20px 20px 80px; }.header { gap: 12px; margin-bottom: 24px; }.header p { max-width: 100%; line-height: 1.7; }/* Two compact toolbar rows via display:contents on the actions container; keyboard DOM order is unchanged. */.dateTitle { padding: 0 2px; }.dateTitle strong { font-size: 1.125rem; }.toolbar { gap: 8px 6px; padding-bottom: 12px; }.dateNavigation { flex: 1 1 200px; gap: 2px; }.toolbarActions { display: contents; }.segmented button,.toolbarActions>button { padding-left: 8px; padding-right: 8px; }.scopeBar { align-items: start; padding: 10px 0; }.quickRanges { gap: 5px; }.quickRanges>span { margin-left: 2px; padding-left: 8px; }.monthCell { min-height: 96px; }.monthEvent strong { font-size: var(--workspace-meta-size); }.inspector:has(.editor),.inspector:has(.detail) { bottom: 70px; }.customRange { flex-wrap: wrap; }.page button { min-height: 44px; }.formFields .checkLabel,.page input:not([type=checkbox]),.page select { min-height: 44px; }.activityIcon { flex-basis: 32px; height: 32px; }.activityTime { flex-basis: 40px; } }
+@media (forced-colors: active) {
+  /* These filled controls use the user's system palette. Disable only their
+   * text backplates so Canvas does not cover the light label on the fill. */
+  .page .primary,.page .primary:hover:not(:disabled) { background: ButtonText; border-color: ButtonText; color: ButtonFace; forced-color-adjust: none; opacity: 1; }
+  .dateNavigation>button,.toolbarActions>button,.quickRanges button,.reviewDock summary { border-color: ButtonBorder; }
+  .segmented { border: 1px solid ButtonBorder; }
+  .page .segmented button[aria-pressed=true],.page .quickRanges button[aria-pressed=true],.page .toolbarActions>button[aria-expanded=true] { background: Highlight; border-color: Highlight; color: HighlightText; forced-color-adjust: none; }
+}
 @media (prefers-reduced-motion: reduce) { .page *, .page *::before, .page *::after { animation: none !important; transition: none !important; } }
