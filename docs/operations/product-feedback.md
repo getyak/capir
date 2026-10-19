@@ -144,10 +144,12 @@ introducing another approval step.
 
 `POST /v1/agent-sessions/:id/conversation-queue` admits the message and original
 image bytes atomically; it does not await the model. The runner claims the next
-message, restores original bytes as base64, runs configured Ark image inspection,
-then Claude with the original base64 and inspection context, and finally commits
-the answer to the canonical session. Images are not converted into text-only
-model input. Queueing preserves ordering, idempotency and recoverability.
+message, restores original bytes as base64, invokes the configured main provider
+with the original images, and finally commits the answer to the canonical
+session. Supplemental processing follows the [source-bound processor
+policy](../capture-to-action.md#intentional-capture); current production exposes
+no supplemental inspector. Images are not converted into text-only model input.
+Queueing preserves ordering, idempotency and recoverability.
 
 Admission logs correlate `session_id`, `message_id` and `queue_entry_id`.
 Execution adds `run_id`, `task_id` and `attempt`. Each model attempt has one
@@ -164,10 +166,9 @@ base64 are excluded from ordinary logs. Failed/unbound local spans remain
 metadata-only through cleanup and expire with the run. Missing capture must
 never turn a successful product request into a failure.
 
-Workspace Claude has one total deadline, including image inspection, SDK
-startup and tools: `TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS`, default `1800000`,
-validated range `30000`–`1800000`. Ark retains its own 40-second ceiling within
-that deadline. Admitted current and historical images have a cumulative Claude
+Workspace Claude has one total deadline for SDK startup, the main provider and
+tools: `TALENT_SIGNAL_CONVERSATION_TIMEOUT_MS`, default `1800000`, validated
+range `30000`–`1800000`. Admitted current and historical images have a cumulative Claude
 allowance of 100,000,000 tokens, including repeated context and cache usage
 across tool rounds. This is not a single context-window or output limit.
 Ordinary text remains at 32,000 tokens; MCP-only context retains 96,000.

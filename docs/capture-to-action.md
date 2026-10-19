@@ -46,11 +46,17 @@ nonactivating relay can show a selected region travelling into a measured
 attachment slot, then admitted processing and pending literal text clues. Unknown
 origins, unsafe geometry and quiet motion use a fade; presentation never submits
 or completes work. Closing the relay leaves the Agent running in its original
-Session. Clues come from the same image inspection, remain linked to a current
-protected original and exact excerpt, and disappear when source authority is
-lost. They do not confirm identity or relationships. The bounded source projection
-shares the original image's retention; the temporary full queue result is still
-scrubbed on completion.
+Session. Supplemental image processing requires verifiable, persisted
+processor authorization bound to each source; global configuration, available
+credentials, or an admitted screenshot are not that grant. The conversation
+queue does not yet carry this authorization, so production does not expose a
+supplemental inspector. The disclosed main provider may still answer the image.
+Missing inspection produces no text-clue projection and cannot ground an
+image-derived contact or Memory proposal; it must not be presented as a successful
+empty extraction. When authorized inspection is available, its clues remain
+pending, source-linked and revocable. The bounded source projection shares the
+original image's retention; the temporary full queue result is still scrubbed
+on completion.
 
 Capture begins with a deliberate user action from mobile, web, a share surface,
 or an authorized channel.

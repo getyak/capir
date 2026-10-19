@@ -51,7 +51,7 @@ import { verifyPendingSourceAuthority } from "./memorySourceVerification.js";
 import { createHarnessSourceGuard } from "./harnessSourceGuard.js";
 import { loadAgentResponsePreference, saveAgentPreference } from "./agentPreferences.js";
 import { invalidateMemoriesForSessionIds } from "./memoryReview.js";
-import { ScriptedAgentProvider, type SelfMemoryContext } from "@talent-signal/agent";
+import { ArkCurrentImageInspector, ScriptedAgentProvider, type AgentProviderRequest, type SelfMemoryContext } from "@talent-signal/agent";
 
 const url = process.env.CONTACT_AGENT_TEST_DATABASE_URL;
 const pool = url
@@ -2811,146 +2811,62 @@ describe.skipIf(!pool)("Memory review integration", () => {
   });
 
 
-  it("runs the real host for an empty-objective image-only message and commits 17", async () => {
-    const auth = await makeAuth("image-host");
-    const sessionId = randomUUID();
-    const messageId = randomUUID();
-    const image0 = {
-      attachmentId: randomUUID(),
-      contentHash: createHash("sha256").update(Buffer.from([1, 2, 3, 4])).digest("hex"),
-    };
-    const image1 = {
-      attachmentId: randomUUID(),
-      contentHash: createHash("sha256").update(Buffer.from([2, 2, 3, 4])).digest("hex"),
-    };
-    await insertSourceSession(auth, sessionId, messageId, "", [image0, image1]);
-    const artifact0 = `conversation-image-${messageId}-0-${image0.attachmentId}`;
-    const artifact1 = `conversation-image-${messageId}-1-${image1.attachmentId}`;
-    const imageCandidate = (
-      artifactId: string,
-      imageIndex: number,
-      overrides: Partial<MemoryProposalCandidate>,
-    ) =>
-      candidate({
-        source_locator: {
-          kind: "image_region",
-          artifact_id: artifactId,
-          session_id: null,
-          image_index: imageIndex,
-          region: null,
-        },
-        source_excerpt: overrides.source_excerpt ?? "截图中的一句话",
-        ...overrides,
-      });
-    const items: MemoryProposalCandidate[] = [
-      imageCandidate(artifact0, 0, { display_text: "我要求回复先给结论" }),
-      imageCandidate(artifact0, 0, { display_text: "我做决定前喜欢看具体案例" }),
-      imageCandidate(artifact0, 0, { display_text: "这季度我在找设计合作者" }),
-      ...Array.from({ length: 8 }, (_v, i) =>
-        imageCandidate(artifact0, 0, {
-          scope: "person",
-          statement_kind: "source_statement",
-          speaker: "陈宇",
-          display_text: `陈宇说截图事实 ${i}`,
-        }),
-      ),
-      ...Array.from({ length: 6 }, (_v, i) =>
-        imageCandidate(artifact1, 1, {
-          scope: "relationship",
-          statement_kind: "source_statement",
-          speaker: "陈宇",
-          display_text: `我们约定截图事项 ${i}`,
-        }),
-      ),
-    ];
+  it("answers an empty-objective image-only message without supplemental consent or saved claims", async () => {
+    const auth = await makeAuth("image-host-no-consent");
+    const sessionId = randomUUID(), messageId = randomUUID();
+    const images = [Buffer.from([1, 2, 3, 4]), Buffer.from([2, 2, 3, 4])].map((data, imageIndex) => ({
+      messageId, imageIndex, attachmentId: randomUUID(), fileName: `image-${imageIndex}.png`,
+      mediaType: "image/png" as const, byteSize: data.length,
+      contentHash: createHash("sha256").update(data).digest("hex"), data,
+    }));
+    await insertSourceSession(auth, sessionId, messageId, "", images);
+    const artifactID = `conversation-image-${messageId}-0-${images[0]!.attachmentId}`;
+    const locator = { kind: "image_region" as const, artifact_id: artifactID, image_index: 0 };
+    const inspection = vi.spyOn(ArkCurrentImageInspector.prototype, "inspect").mockRejectedValue(new Error("must not inspect"));
+    const previous = { allow: process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING, key: process.env.ARK_API_KEY };
+    process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING = "true";
+    process.env.ARK_API_KEY = "synthetic-no-network";
+    const rejected: unknown[] = [];
     const provider = {
-      providerId: "zhipu-chat-completions" as const,
-      id: "image-host-scripted",
-      model: "image-host-scripted-v1",
-      sdkVersion: "image-host.v1",
-      supportsImageInput: true,
-      inputCapabilities: { text: true, image: true, imageUnderstanding: true },
-      answer: vi.fn(),
-      run: vi.fn(async (_request: unknown, invokeTool: (name: string, input: unknown, signal?: AbortSignal) => Promise<unknown>) => {
-        const toolResult = await invokeTool(
-          "memory_review",
-          {
-            operation: "propose",
-            contact_decision: "new",
-            person_display_label: "陈宇",
-            new_contact_source_locator: {
-              kind: "image_region",
-              artifact_id: artifact0,
-              session_id: null,
-              image_index: 0,
-              region: null,
-            },
-            items,
-          },
-        );
-        expect(toolResult).toMatchObject({ ok: true });
-        return {
-          structuredOutput: { outcome: "reply", title: "已记录", body: "这里是回答。" },
-          inputTokens: 1,
-          outputTokens: 1,
-          estimatedUsd: 0,
-          turns: 1,
-          permissionDenials: [],
-        };
+      providerId: "zhipu-chat-completions" as const, id: "image-host-scripted", model: "synthetic-image-host",
+      sdkVersion: "image-host.v1", supportsImageInput: true,
+      inputCapabilities: { text: true, image: true, imageUnderstanding: true }, answer: vi.fn(),
+      run: vi.fn(async (request: AgentProviderRequest, invoke: (name: string, input: unknown) => Promise<unknown>) => {
+        expect(request.inputParts?.filter(part => part.kind === "image").map(part => part.dataBase64))
+          .toEqual(images.map(image => image.data.toString("base64")));
+        expect(request.supplementalTools?.some(tool => tool.name === "inspect_current_image")).not.toBe(true);
+        rejected.push(await invoke("memory_review", { operation: "propose", contact_decision: "new",
+          person_display_label: "陈宇", new_contact_source_locator: locator, items: [] }));
+        rejected.push(await invoke("memory_review", { operation: "propose", contact_decision: "none",
+          items: [candidate({ source_excerpt: "未经核验的图片文字", source_locator: locator })] }));
+        return { structuredOutput: { outcome: "reply", title: "图片说明", body: "主模型正常回答图片内容。" },
+          inputTokens: 1, outputTokens: 1, estimatedUsd: 0, turns: 1, permissionDenials: [] };
       }),
     };
-    const execution = await executeUnscopedChatTask({
-      request: {
-        idempotency_key: randomUUID(),
-        objective: "",
-        session_id: sessionId,
-        message_id: messageId,
-      },
-      provider: provider as never,
-      database: pool!,
-      auth,
-      images: [
-        {
-          messageId,
-          imageIndex: 0,
-          attachmentId: image0.attachmentId,
-          fileName: "image-0.png",
-          mediaType: "image/png",
-          byteSize: 4,
-          contentHash: image0.contentHash,
-          data: Buffer.from([1, 2, 3, 4]),
-        },
-        {
-          messageId,
-          imageIndex: 1,
-          attachmentId: image1.attachmentId,
-          fileName: "image-1.png",
-          mediaType: "image/png",
-          byteSize: 4,
-          contentHash: image1.contentHash,
-          data: Buffer.from([1, 2, 3, 4]),
-        },
-      ],
-    });
-    expect(execution.body.memory_proposal).toBeTruthy();
-    const proposalId = execution.body.memory_proposal!.proposal_id;
-    const opened = await open(auth, proposalId, "chat");
-    expect(opened.review.visible_item_count).toBe(17);
-    // The host must supply a non-empty organizing label for a new contact so
-    // the browser's own commit (which uses the review label) can save all 17,
-    // including the six relationship items.
-    expect(opened.review.relationship_display_label).toBeTruthy();
-    const committed = await commit(auth, opened.review, opened.review_credential!, {
-      selected: opened.review.items.map((item) => item.id),
-      contactDecision: "new",
-      newContact: {
-        display_label: "陈宇",
-        relationship_context: opened.review.relationship_display_label ?? "",
-      },
-    });
-    expect(committed.body.receipt.item_count).toBe(17);
-    expect(committed.body.receipt.created_person_id).toBeTruthy();
-    expect(committed.body.receipt.created_relationship_context_id).toBeTruthy();
+    try {
+      const execution = await executeUnscopedChatTask({
+        request: { idempotency_key: randomUUID(), objective: "", session_id: sessionId, message_id: messageId },
+        provider: provider as never, database: pool!, auth, images,
+      });
+      expect(rejected).toMatchObject([
+        { ok: false, error: { code: "CONTACT_COUNTERPARTY_NOT_GROUNDED" } },
+        { ok: false, error: { code: "MEMORY_SOURCE_UNGROUNDED" } },
+      ]);
+      expect(inspection).not.toHaveBeenCalled();
+      expect(execution.body.memory_proposal).toBeUndefined();
+      expect(JSON.stringify(execution.body)).toContain("主模型正常回答图片内容。");
+      const persisted = await pool!.query(
+        `SELECT (SELECT count(*) FROM memory_proposals WHERE account_id=$1)::text AS proposals,
+                (SELECT count(*) FROM subjects WHERE account_id=$1)::text AS people,
+                (SELECT count(*) FROM memory_items WHERE account_id=$1)::text AS memories`, [auth.accountId]);
+      expect(persisted.rows[0]).toEqual({ proposals: "0", people: "0", memories: "0" });
+    } finally {
+      inspection.mockRestore();
+      if (previous.allow === undefined) delete process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING;
+      else process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING = previous.allow;
+      if (previous.key === undefined) delete process.env.ARK_API_KEY;
+      else process.env.ARK_API_KEY = previous.key;
+    }
   });
 
   it("dispatches a real Session proposal, then decides contact and Memory siblings separately", async () => {

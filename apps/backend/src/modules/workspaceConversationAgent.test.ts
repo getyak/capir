@@ -1,5 +1,6 @@
 import {
   ScriptedAgentProvider,
+  ArkCurrentImageInspector,
   CONTACT_RESEARCH_CONTRACT,
   ContactResearchToolRequestSchema,
   type AgentProvider,
@@ -134,6 +135,118 @@ describe("workspace conversation Agent", () => {
       mcpConnections: { handle: vi.fn() } });
     expect(run).toHaveBeenCalledOnce();
   });
+  it.each(["The user sent one or more images without any accompanying text.", "只分析截图，不保存记忆或联系人"])(
+    "keeps the production image answer without supplementary processor authority: %s", async objective => {
+      const bytes = Buffer.from("synthetic admitted image");
+      const messageID = "a1000000-0000-4000-8000-000000000001";
+      const artifactID = `conversation-image-${messageID}-0-a2000000-0000-4000-8000-000000000002`;
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      const part = { kind: "image" as const, artifactID, mimeType: "image/png", byteSize: bytes.length,
+        contentHash: hash, dataBase64: bytes.toString("base64") };
+      const query = vi.fn(async (sql: string) => {
+        if (sql.includes("SELECT image.content_hash")) return { rows: [{ content_hash: hash, content: bytes }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      });
+      const inspection = vi.spyOn(ArkCurrentImageInspector.prototype, "inspect").mockResolvedValue({
+        description: "Synthetic text", visible_text: ["公司甲"], uncertainties: [],
+        conversation_kind: "unknown", model: "synthetic-inspector", request_id: "synthetic-no-network",
+      });
+      vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", "true");
+      vi.stubEnv("ARK_API_KEY", "synthetic-no-network");
+      const provider = new ScriptedAgentProvider([], { outcome: "reply", title: "图片说明", body: "主模型正常回答图片内容。" });
+      const originalRun = provider.run.bind(provider);
+      const run = vi.spyOn(provider, "run").mockImplementation(async (request, invoke, signal) => {
+        expect(request.inputParts).toContainEqual(part);
+        // Exercise an offered inspector as a model could; never stub the core or production construction.
+        const inspect = request.supplementalTools?.find(tool => tool.name === "inspect_current_image");
+        if (inspect) await inspect.execute({ artifact_id: artifactID }, signal);
+        expect(inspect).toBeUndefined();
+        return originalRun(request, invoke, signal);
+      });
+      try {
+        const result = await executeWorkspaceConversationAgent({ database: { query, release() {} } as unknown as DatabaseClient,
+          auth, objective, sourceText: objective.startsWith("The user") ? "" : objective,
+          sessionID: "a3000000-0000-4000-8000-000000000003", messageID, inputParts: [part], provider });
+        expect(run).toHaveBeenCalledOnce();
+        expect(inspection).not.toHaveBeenCalled();
+        expect(result.block.body).toBe("主模型正常回答图片内容。");
+        expect(result.event).toBeNull();
+        expect(result.memoryProposal).toBeNull();
+        expect(result.captureImageObservation).toBeUndefined();
+        expect(query.mock.calls.some(([sql]) => /^(?:INSERT|UPDATE|DELETE|SAVEPOINT)/iu.test(sql.trim()))).toBe(false);
+      } finally { inspection.mockRestore(); vi.unstubAllEnvs(); }
+    });
+
+  it.each(["new-contact", "image-memory"] as const)(
+    "rejects production %s proposals without verified inspection while preserving the answer", async mode => {
+      const bytes = Buffer.from("synthetic admitted image"), messageID = "a1000000-0000-4000-8000-000000000001";
+      const artifactID = `conversation-image-${messageID}-0-a2000000-0000-4000-8000-000000000002`;
+      const hash = createHash("sha256").update(bytes).digest("hex");
+      const query = vi.fn(async (sql: string) => sql.includes("SELECT image.content_hash")
+        ? { rows: [{ content_hash: hash, content: bytes }], rowCount: 1 } : { rows: [], rowCount: 0 });
+      const inspection = vi.spyOn(ArkCurrentImageInspector.prototype, "inspect").mockRejectedValue(new Error("synthetic unavailable"));
+      vi.stubEnv("TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING", "true");
+      vi.stubEnv("ARK_API_KEY", "synthetic-no-network");
+      const locator = { kind: "image_region", artifact_id: artifactID, image_index: 0 };
+      const proposal = mode === "new-contact"
+        ? { operation: "propose", contact_decision: "new", person_display_label: "公司甲", new_contact_source_locator: locator, items: [] }
+        : { operation: "propose", contact_decision: "none", items: [{ scope: "self", operation: "add",
+          statement_kind: "source_statement", display_text: "截图中的文字", source_excerpt: "未经核验的文字", source_locator: locator,
+          time_status: "unknown", sensitivity: "normal", reason: "Synthetic image claim" }] };
+      const provider = new ScriptedAgentProvider([], { outcome: "reply", title: "回答", body: "可以继续讨论图片，不保存推断。" });
+      let rejection: AgentToolResult | undefined;
+      vi.spyOn(provider, "run").mockImplementation(async (_request, invoke) => {
+        rejection = await invoke("memory_review", proposal);
+        return { structuredOutput: { outcome: "reply", title: "回答", body: "可以继续讨论图片，不保存推断。" },
+          inputTokens: 1, outputTokens: 1, estimatedUsd: 0, turns: 1, permissionDenials: [] };
+      });
+      try {
+        const result = await executeWorkspaceConversationAgent({ database: { query, release() {} } as unknown as DatabaseClient,
+          auth, objective: "图片内容", sourceText: "", messageID, sessionID: "a3000000-0000-4000-8000-000000000003", provider,
+          inputParts: [{ kind: "image", artifactID, mimeType: "image/png", byteSize: bytes.length, contentHash: hash, dataBase64: bytes.toString("base64") }] });
+        expect(inspection).not.toHaveBeenCalled();
+        expect(rejection).toMatchObject({ ok: false, error: { code: mode === "new-contact" ? "CONTACT_COUNTERPARTY_NOT_GROUNDED" : "MEMORY_SOURCE_UNGROUNDED" } });
+        expect(result.memoryProposal).toBeNull();
+        expect(result.block.body).toContain("可以继续讨论图片");
+        expect(query.mock.calls.some(([sql]) => /^(?:INSERT|UPDATE|DELETE|SAVEPOINT)/iu.test(sql.trim()))).toBe(false);
+      } finally { inspection.mockRestore(); vi.unstubAllEnvs(); }
+    });
+
+  it.each(["current", "historical"] as const)(
+    "keeps a contact grounded in authored text when a %s image is also admitted", async imageScope => {
+      const messageID = "a1000000-0000-4000-8000-000000000001";
+      const imageMessageID = imageScope === "current" ? messageID : "a1000000-0000-4000-8000-000000000009";
+      const sessionID = "a3000000-0000-4000-8000-000000000003";
+      const source = { kind: "message" as const, session_id: sessionID, message_id: messageID };
+      const text = "陈宇负责设计系统，请整理联系人供我确认。";
+      const bytes = Buffer.from("synthetic incidental image");
+      const proposal = { proposalID: "88888888-8888-4888-8888-888888888888", proposalRevision: 1,
+        itemCount: 1, defaultSelectedCount: 1, scopeCounts: { self: 0, person: 1, relationship: 0 },
+        contactStatus: "pending" as const, personID: null, personDisplayLabel: "陈宇" };
+      const stage = vi.fn(async () => proposal);
+      let results: readonly AgentToolResult[] = [];
+      const result = await executeWorkspaceConversationAgentCore({
+        workspaceID: auth.accountId, sessionID, messageID, objective: text, sourceText: text,
+        contacts: { search: vi.fn(), read: vi.fn() }, memory: { recall: vi.fn(async () => ({ items: [] })), stage },
+        inputParts: [{ kind: "image", artifactID: `conversation-image-${imageMessageID}-0-incidental`,
+          mimeType: "image/png", byteSize: bytes.length, contentHash: createHash("sha256").update(bytes).digest("hex"),
+          dataBase64: bytes.toString("base64") }],
+        imageIsCurrent: async () => true,
+        provider: new ScriptedAgentProvider([{ tool: "memory_review", input: {
+          operation: "propose", contact_decision: "new", person_display_label: "陈宇",
+          new_contact_source_locator: source, items: [{ scope: "person", operation: "add",
+            statement_kind: "source_statement", speaker: "陈宇", display_text: "陈宇负责设计系统",
+            source_excerpt: "陈宇负责设计系统", source_locator: source, time_status: "unknown",
+            sensitivity: "normal", reason: "Current authored text" }],
+        } }], toolResults => { results = toolResults; return { outcome: "reply", title: "待确认", body: "请确认联系人信息。" }; }),
+      });
+      expect(results[0]).toMatchObject({ ok: true });
+      expect(result.memoryProposal?.proposal_id).toBe(proposal.proposalID);
+      expect(stage).toHaveBeenCalledWith(expect.objectContaining({ sourceMessageID: messageID, sourceText: text,
+        newContact: expect.objectContaining({ display_label: "陈宇", source_locator: source }) }));
+      expect(result.captureImageObservation).toBeUndefined();
+    });
+
   it("can reply without opening the contact workspace", async () => {
     const query = vi.fn();
     const execution = await executeWorkspaceConversationAgent({
@@ -1257,14 +1370,20 @@ describe("conversation-only context and proactive contact drafts", () => {
 describe("shared screenshot relationship review", () => {
   const artifactId = "conversation-image-44444444-4444-4444-8444-444444444444-0-55555555-5555-4555-8555-555555555555";
   const foreignArtifactId = "conversation-image-99999999-9999-4999-8999-999999999999-0-55555555-5555-4555-8555-555555555555";
+  const pixels = Buffer.from("synthetic screenshot relationship proof");
   const imagePart = {
     kind: "image" as const,
     artifactID: artifactId,
     mimeType: "image/jpeg" as const,
-    byteSize: 12,
-    contentHash: "a".repeat(64),
-    dataBase64: "AAAA",
+    byteSize: pixels.length,
+    contentHash: createHash("sha256").update(pixels).digest("hex"),
+    dataBase64: pixels.toString("base64"),
   };
+  const explicitInspector = (kind: "direct" | "unknown" = "direct") => ({ inspect: async () => ({
+    conversation_kind: kind, counterparty_name: kind === "direct" ? "周明" : null,
+    visible_text: ["周明", "I am Lin from 松风9月读书群（南街）", "Friday 20:18"],
+    description: "Synthetic screenshot evidence", uncertainties: [], model: "synthetic-inspector", request_id: "synthetic-evidence",
+  }) });
   const stagedProposal = {
     proposalID: "88888888-8888-4888-8888-888888888888",
     proposalRevision: 1,
@@ -1366,6 +1485,7 @@ describe("shared screenshot relationship review", () => {
       memory,
       inputParts: [imagePart],
       imageIsCurrent: async () => true,
+      imageInspector: explicitInspector(),
       provider,
     });
 
@@ -1415,6 +1535,7 @@ describe("shared screenshot relationship review", () => {
       memory: { recall: vi.fn(async () => ({ items: [] })), stage },
       inputParts: [imagePart],
       imageIsCurrent: async () => true,
+      imageInspector: explicitInspector("unknown"),
       provider: new ScriptedAgentProvider(
         [
           { tool: "contact_workspace", input: { operation: "search", query: "周明", source_clue: { clue: "周明", source_locator: imageLocator() } } },
