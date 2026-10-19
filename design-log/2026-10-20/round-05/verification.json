@@ -1,0 +1,87 @@
+{
+  "status": "accepted locally; combined resident and native after-proof pending",
+  "worker_task": "20261020-023601-a4e08a74",
+  "worker_frozen_base": "a991f7b3ba930929528409e5b90488440e9017dc",
+  "review_diff_sha256": "55e0177be0d2c5160cddfe0f2050dec8fc688d0e95c94b0e74d2e6aa08d57bb0",
+  "review_p2_closed": [
+    "archive title forced-color rule requires actual selection highlight",
+    "late reduced-motion override covers new conversation and rail controls",
+    "outside date excludes selected before applying GrayText"
+  ],
+  "parent_exceptions": [
+    "mobile search input remains16px",
+    "search initial/empty/error copy uses15px body"
+  ],
+  "utility_type_px": {
+    "body": 15,
+    "metadata": 13
+  },
+  "weights": [
+    400,
+    500,
+    600
+  ],
+  "sidebar_width_px": 248,
+  "person_row_height_px": 52.390625,
+  "calendar_cell_link_height_px": 28,
+  "mobile_nav_height_px": 44,
+  "mobile_people_first_row_px": 394.375,
+  "search_input_height_px": 44,
+  "search_dialog_width_320_px": 288,
+  "search_focus_outline_px": 2,
+  "search_shortcuts": [
+    "Meta+K",
+    "Control+K",
+    "ArrowDown",
+    "Enter",
+    "Escape"
+  ],
+  "normal_transition_seconds": 0.18,
+  "reduced_transition_seconds": 1e-05,
+  "tested_widths": [
+    320,
+    390,
+    900,
+    1440
+  ],
+  "horizontal_overflow": false,
+  "selected_outside_date_forced_colors": {
+    "selected": true,
+    "outside": true,
+    "color": "rgb(255, 255, 255)",
+    "background": "rgba(5, 0, 73, 0.8)",
+    "forced_color_adjust": "none"
+  },
+  "focused_parent_tests": {
+    "passed": 59,
+    "files": 5
+  },
+  "worker_contract_tests": {
+    "passed": 35,
+    "files": 3
+  },
+  "worker_lint": "passed",
+  "parent_lint": "passed",
+  "ordinary_time_comparison": "deferred to resident capture; local sidebar auth-error copy differs from resident state",
+  "archived_current_row": "source and independent review; no product records created to fabricate this state",
+  "native_before": "same primary workspace, empty Time day2026-10-20; reload makes selected date and saved pixels agree",
+  "native_after": "pending deployment",
+  "images": {
+    "05-shell-people-light-1440-before.png": "people-1440-before.png",
+    "05-shell-people-light-1440-candidate.png": "people-1440-after.png",
+    "05-shell-people-light-390-candidate.png": "people-390-after.png",
+    "05-shell-people-dark-1440-candidate.png": "people-dark-1440-after.png",
+    "05-shell-conversation-light-1440-before.png": "conversation-1440-before.png",
+    "05-shell-conversation-light-1440-candidate.png": "conversation-1440-after.png",
+    "05-shell-time-forced-colors-1440-candidate.png": "time-forced-colors-1440.png",
+    "05-shell-calendar-selected-outside-forced-1440.png": "calendar-selected-outside-forced-1440.png",
+    "05-shell-search-light-1440-candidate.png": "search-1440-after.png",
+    "05-shell-search-light-390-candidate.png": "search-390-after.png",
+    "05-shell-search-empty-light-320-candidate.png": "search-empty-320-after.png",
+    "05-shell-people-light-900-candidate.png": "people-900-after.png",
+    "05-shell-collapsed-light-900-candidate.png": "collapsed-900-after.png",
+    "05-shell-time-macos-default-before.png": "macos-default-before.png",
+    "05-shell-time-macos-narrow-before.png": "macos-narrow-before.png"
+  },
+  "docs_check": "passed"
+}
