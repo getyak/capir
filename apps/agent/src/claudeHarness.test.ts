@@ -38,8 +38,8 @@ describe("Claude harness deployment configuration", () => {
     await provider.run({runID:"synthetic",objective:"Remember my reply preference",systemPrompt:"Synthetic",
       scopeSummary:{kind:"workspace_conversation",workspaceID:"synthetic",sessionID:null,currentPersonID:null,currentRelationshipContextID:null},
       toolManifest:WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES,budget:request().budget},async()=>({ok:true,callID:"unused",name:"unused"}),new AbortController().signal);
-    expect(listed.tools.map((entry:any)=>entry.name)).toEqual(expect.arrayContaining(["memory_review","contact_workspace_search","contact_workspace_read","contact_workspace_propose_create","contact_workspace_propose_update"]));
-    expect(listed.tools.find((entry:any)=>entry.name==="memory_review").inputSchema.properties.items).toBeDefined();
+    expect(listed.tools.map((entry:any)=>entry.name)).toEqual(expect.arrayContaining(["memory_review_recall","memory_review_propose","contact_workspace_search","contact_workspace_read","contact_workspace_propose_create","contact_workspace_propose_update"]));
+    expect(listed.tools.find((entry:any)=>entry.name==="memory_review_propose").inputSchema.properties.items).toBeDefined();
   });
   it("enables native recovery only for read-only Hao answers inside their existing budget", async () => {
     const hao = claudeHarnessConfiguration({ HAO_ANTHROPIC_API_KEY: "synthetic-key",
