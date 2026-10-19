@@ -974,7 +974,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
           );
         }
       }
-      if (request.contact_decision === "new" && admittedImages.size > 0
+      if (request.contact_decision === "new" && newContactLocator?.kind === "image_region"
         && (!currentCounterparty || request.person_display_label?.trim() !== currentCounterparty.name)) {
         return toolFailure(name, "CONTACT_COUNTERPARTY_NOT_GROUNDED",
           "A screenshot contact must be the clearly observed direct-chat header, not a discussed public figure or a group. Use the host name or clarify.");

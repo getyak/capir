@@ -212,6 +212,41 @@ describe("workspace conversation Agent", () => {
       } finally { inspection.mockRestore(); vi.unstubAllEnvs(); }
     });
 
+  it.each(["current", "historical"] as const)(
+    "keeps a contact grounded in authored text when a %s image is also admitted", async imageScope => {
+      const messageID = "a1000000-0000-4000-8000-000000000001";
+      const imageMessageID = imageScope === "current" ? messageID : "a1000000-0000-4000-8000-000000000009";
+      const sessionID = "a3000000-0000-4000-8000-000000000003";
+      const source = { kind: "message" as const, session_id: sessionID, message_id: messageID };
+      const text = "陈宇负责设计系统，请整理联系人供我确认。";
+      const bytes = Buffer.from("synthetic incidental image");
+      const proposal = { proposalID: "88888888-8888-4888-8888-888888888888", proposalRevision: 1,
+        itemCount: 1, defaultSelectedCount: 1, scopeCounts: { self: 0, person: 1, relationship: 0 },
+        contactStatus: "pending" as const, personID: null, personDisplayLabel: "陈宇" };
+      const stage = vi.fn(async () => proposal);
+      let results: readonly AgentToolResult[] = [];
+      const result = await executeWorkspaceConversationAgentCore({
+        workspaceID: auth.accountId, sessionID, messageID, objective: text, sourceText: text,
+        contacts: { search: vi.fn(), read: vi.fn() }, memory: { recall: vi.fn(async () => ({ items: [] })), stage },
+        inputParts: [{ kind: "image", artifactID: `conversation-image-${imageMessageID}-0-incidental`,
+          mimeType: "image/png", byteSize: bytes.length, contentHash: createHash("sha256").update(bytes).digest("hex"),
+          dataBase64: bytes.toString("base64") }],
+        imageIsCurrent: async () => true,
+        provider: new ScriptedAgentProvider([{ tool: "memory_review", input: {
+          operation: "propose", contact_decision: "new", person_display_label: "陈宇",
+          new_contact_source_locator: source, items: [{ scope: "person", operation: "add",
+            statement_kind: "source_statement", speaker: "陈宇", display_text: "陈宇负责设计系统",
+            source_excerpt: "陈宇负责设计系统", source_locator: source, time_status: "unknown",
+            sensitivity: "normal", reason: "Current authored text" }],
+        } }], toolResults => { results = toolResults; return { outcome: "reply", title: "待确认", body: "请确认联系人信息。" }; }),
+      });
+      expect(results[0]).toMatchObject({ ok: true });
+      expect(result.memoryProposal?.proposal_id).toBe(proposal.proposalID);
+      expect(stage).toHaveBeenCalledWith(expect.objectContaining({ sourceMessageID: messageID, sourceText: text,
+        newContact: expect.objectContaining({ display_label: "陈宇", source_locator: source }) }));
+      expect(result.captureImageObservation).toBeUndefined();
+    });
+
   it("can reply without opening the contact workspace", async () => {
     const query = vi.fn();
     const execution = await executeWorkspaceConversationAgent({
