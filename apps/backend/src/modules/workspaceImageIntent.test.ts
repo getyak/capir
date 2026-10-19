@@ -124,9 +124,16 @@ describe("help-first current-image host boundary", () => {
       contactStatus: "pending", personID: null, personDisplayLabel: "小雨" }));
     const provider = new ScriptedAgentProvider([{ tool: "memory_review", input: contactProposal }],
       { outcome: "reply", title: "回答", body: "两张图片都在这次消息中。" });
+    const originalRun = provider.run.bind(provider);
+    vi.spyOn(provider, "run").mockImplementation(async (request, invoke, signal) => {
+      const inspect = request.supplementalTools?.find(tool => tool.name === "inspect_current_image");
+      expect(inspect).toBeDefined();
+      await inspect!.execute({ artifact_id: artifactID }, signal);
+      return originalRun(request, invoke, signal);
+    });
     const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: imageMessageID,
       objective: "图片内容", provider, inputParts: [image, { ...image, artifactID: `conversation-image-${imageMessageID}-1-second` }],
-      imageIsCurrent: async () => true, contacts: { search: async () => [], read: vi.fn() },
+      imageInspector: { inspect: async () => observation }, imageIsCurrent: async () => true, contacts: { search: async () => [], read: vi.fn() },
       memory: { recall: async () => ({ items: [] }), stage } });
     expect(stage).toHaveBeenCalledOnce();
     expect(result.memoryProposal?.revision).toBe(1);
