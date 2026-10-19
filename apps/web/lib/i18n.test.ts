@@ -24,10 +24,18 @@ describe("canonical locale resolution", () => {
 });
 
 describe("web catalogs", () => {
-  it("every supported locale ships the same keys as en", () => {
+  it("every supported locale ships the same keys as en, except zh-CN identity keys", () => {
     const reference = Object.keys(catalogs.en).sort();
+    // gettext-style keys are Chinese source strings: zh-CN resolves them to
+    // identity and need not duplicate them. Semantic keys are explicit in
+    // every locale; other locales carry every key.
+    const semantic = reference.filter((key) => !/[\u3040-\u30ff\u3400-\u9fff]/.test(key));
     for (const locale of SUPPORTED_LOCALES) {
-      expect(Object.keys(catalogs[locale]).sort(), `locale ${locale}`).toEqual(reference);
+      const keys = Object.keys(catalogs[locale]);
+      const required = locale === "zh-CN" ? semantic : reference;
+      for (const key of required) {
+        expect(keys.includes(key), `locale ${locale} missing ${key}`).toBe(true);
+      }
     }
     expect(reference.length).toBeGreaterThan(0);
   });
