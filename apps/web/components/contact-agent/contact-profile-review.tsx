@@ -37,7 +37,7 @@ function ContactProfileReviewFields({task,busy,onConfirm}: ReviewProps){
   function confirm(candidate?:ScreenshotContactTaskResponse["candidates"][number]){
     return onConfirm({decision:"save_reviewed_profile",expected_revision:task.revision,display_name:name.trim(),
       fields:draft.fields.filter(f=>values[f.clue_index]?.trim()).map(f=>({clue_index:f.clue_index,value:values[f.clue_index]!.trim()})),
-      ...(candidate?{selected_person_id:candidate.person_id,selected_relationship_context_id:candidate.relationship_context_id}:{})});
+      ...(candidate?{selected_person_id:candidate.person_id,selected_relationship_context_id:candidate.relationship_context_id}:{create_new:true})});
   }
   return <div className={styles.question}>
     <h3>{task.question??"核对联系人资料"}</h3>
@@ -52,6 +52,6 @@ function ContactProfileReviewFields({task,busy,onConfirm}: ReviewProps){
     <p>修改内容会记为你的核对结果，截图原文保留为来源。</p>
     {task.candidates.map(candidate=><button key={`${candidate.person_id}:${candidate.relationship_context_id}`}
       onClick={()=>void confirm(candidate)} disabled={busy||!name.trim()}>保存到 {candidate.display_name} · {candidate.relationship_label}</button>)}
-    <button className={styles.primary} onClick={()=>void confirm()} disabled={busy||!name.trim()}>{busy?"正在保存…":"确认资料并保存"}</button>
+    <button className={styles.primary} onClick={()=>void confirm()} disabled={busy||!name.trim()}>{busy?"正在保存…":task.candidates.length?"添加为新联系人":"确认资料并保存"}</button>
   </div>;
 }

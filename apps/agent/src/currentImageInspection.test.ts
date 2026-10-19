@@ -9,6 +9,12 @@ const image={kind:"image" as const,artifactID:"conversation-image-10000000-0000-
 const observation={description:"green chair",visible_text:["明天下午三点到四点"],uncertainties:[],model:"doubao",request_id:"receipt"};
 const signal=new AbortController().signal;
 describe("current image inspection",()=>{
+ it("keeps a wrapped profile name and its exact multiline source excerpt",async()=>{
+  const capability=currentImageInspection({images:[image],isCurrent:async()=>true,inspector:{inspect:async()=>({...observation,
+   visible_text:["Peter","Yang","Builder"],contact_candidates:[{name:"Peter Yang",source_excerpt:"Peter\nYang"}]})}});
+  await capability.prepare(signal);
+  expect(await capability.contactCandidate()).toMatchObject({name:"Peter Yang",source_excerpt:"Peter\nYang",source_locator:{artifact_id:image.artifactID}});
+ });
  it("hands registered image-only topic IDs to the preflight model context",async()=>{
   let current=true;const registry=publicSubjectRegistry("查一下截图提到的作者");
   const excerpt="我最近在读 Maggie Appleton 的文章";
@@ -89,7 +95,7 @@ it("returns tentative counterparty IDs from on-demand inspection",async()=>{
  const result=await capability.tools[0]!.execute({artifact_id:image.artifactID},signal);
  const data=JSON.parse((result.content[0] as {text:string}).text);
  expect(data.public_subjects).toEqual([{id:registry.subjects()[0]!.id,name:"Andrej Karpathy",anchors:[{kind:"work",text:"nanoGPT"}],tentative:true}]);
- expect(await capability.counterparty()).toMatchObject({source_warning:"ai_generated_or_fictional",subject_id:registry.subjects()[0]!.id});
+ expect(await capability.contactCandidate()).toMatchObject({source_warning:"ai_generated_or_fictional",subject_id:registry.subjects()[0]!.id});
 });
 
 /** Canary-rich untyped exception: none of its fields may reach model context. */

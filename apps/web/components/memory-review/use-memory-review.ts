@@ -1043,8 +1043,8 @@ export function useMemoryReview(options: {
     const credential = credentialRef.current;
     const scopeId = scopeRef.current;
     if (!binding || !proposalId || !current || !credential || !scopeId || inflight.current) return null;
-    if (current.contact_decision !== "new" || current.contact_status === "ambiguous") {
-      setError("请先核对同名联系人，再决定添加或关联。");
+    if (current.contact_decision !== "new") {
+      setError("请从新建联系人草稿中添加。");
       return null;
     }
     const label = input.displayLabel.trim();

@@ -62,12 +62,12 @@ describe("help-first current-image host boundary", () => {
   });
 
   it.each([
-    { objective: "今天聊点轻松的", allowed: false },
-    { objective: "保存我的回复偏好：以后先给结论", allowed: false },
-    { objective: "Save my response preference: conclusion first", allowed: false },
+    { objective: "今天聊点轻松的", allowed: true },
+    { objective: "保存我的回复偏好：以后先给结论", allowed: true },
+    { objective: "Save my response preference: conclusion first", allowed: true },
     { objective: "请保存联系人：历史图片里的小雨", allowed: true },
     { objective: "Save the contact from the previous image", allowed: true },
-  ])("uses current contact intent for a historical model proposal: $objective", async ({ objective, allowed }) => {
+  ])("allows an Agent-selected historical source without command regexes: $objective", async ({ objective, allowed }) => {
     const stage = vi.fn<WorkspaceMemoryLookup["stage"]>(async () => ({ proposalID: "10000000-0000-4000-8000-000000000003",
       proposalRevision: 1, itemCount: 0, defaultSelectedCount: 0, scopeCounts: { self: 0, person: 0, relationship: 0 },
       contactStatus: "pending", personID: null, personDisplayLabel: "小雨" }));

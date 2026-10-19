@@ -30,6 +30,17 @@ a temporary plan, or an unfinished commitment; each can be kept independently.
 The user need not select a contact, relationship type, or folder before seeing
 value. Material ambiguity is resolved before its dependent state is confirmed.
 
+Any intentionally shared screenshot can start an editable contact draft for
+the person the user wants to add. A displayed name, nickname, or user-provided
+label is sufficient; source format, a private conversation, existing
+acquaintance, stable identity handles, professional details, and relationship
+background are not eligibility requirements. Guide target selection or missing
+labels instead of refusing creation. Namesakes are review choices: the user
+can select an existing record or explicitly create a separate person. A new
+record never establishes a verified identity, a relationship, or authority to
+read an existing person's private evidence. Contact-only drafts leave missing
+background empty and do not require inventing a Memory item.
+
 Purpose-bound intake and internal filing are distinct from confirming long-lived
 Memory or work. An admitted source or draft can be retained only under its
 disclosed scope; processing does not make every extracted item permanent truth.

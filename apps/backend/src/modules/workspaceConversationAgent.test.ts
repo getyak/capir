@@ -701,25 +701,22 @@ describe("conversation-only context and proactive contact drafts", () => {
     "Someone said: Maya Chen, maya@example.com",
     "Someone said: Add Maya Chen, maya@example.com",
     "转发：“Maya Chen，邮箱 maya@example.com”",
-    "Maya Chen，邮箱 maya@example.com，不要保存",
     "> Create Maya Chen with maya@example.com",
-  ])("rejects spurious draft intent: %s", async (objective) => {
+  ])("leaves draft eligibility to the Agent rather than command regexes: %s", async (objective) => {
     const search = vi.fn(async () => []);
     const result = await executeWorkspaceConversationAgentCore({
       workspaceID: auth.accountId, objective,
       contacts: { search, read: vi.fn() },
       provider: new ScriptedAgentProvider([{ tool: "contact_workspace", input: draft }], (results) => {
-        expect(results[0]).toMatchObject({ ok: false, error: { code: "CONTACT_PROPOSAL_INTENT_UNGROUNDED" } });
-        return clarify;
+        expect(results[0]?.ok).toBe(true);
+        return {outcome:"contact_change_proposal",candidate_fingerprint:results[0]?.candidateFingerprint};
       }),
     });
-    expect(result.event).toBeNull();
-    expect(search).not.toHaveBeenCalled();
+    expect(result.event).toMatchObject({kind:"contact_change_proposal",requires_user_confirmation:true});
   });
 
-  it("rejects a name-only note and a fabricated default relationship", async () => {
-    for (const proposed of [{ ...draft, identity_clue: null, source_excerpts: ["Maya Chen"] },
-      { ...draft, relationship_context: "General relationship" }]) {
+  it("rejects a fabricated default relationship", async () => {
+    for (const proposed of [{ ...draft, relationship_context: "General relationship" }]) {
       await executeWorkspaceConversationAgentCore({
         workspaceID: auth.accountId, objective: "Maya Chen, maya@example.com",
         contacts: { search: vi.fn(), read: vi.fn() },
@@ -1215,7 +1212,7 @@ describe("conversation-only context and proactive contact drafts", () => {
     });
     expect(explicitStage).toHaveBeenCalledWith(
       expect.objectContaining({
-        newContact: expect.objectContaining({ relationship_context: "与陈宇的交流" }),
+        newContact: expect.objectContaining({ relationship_context: "" }),
       }),
     );
   });

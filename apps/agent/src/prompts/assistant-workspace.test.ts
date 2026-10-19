@@ -20,16 +20,6 @@ describe("assistant workspace prompt", () => {
     }
   });
 
-  it("searches the exact visible clue with an admitted image locator and never stable-matches a name", () => {
-    for (const clause of [
-      "source_clue with an image locator admitted to this Run",
-      "never invent a locator",
-      "never treat a name or face as a stable match",
-    ]) {
-      expect(prompt).toContain(clause);
-    }
-  });
-
   it("allows a human-selected name-only contact decision instead of auto-binding or stalling", () => {
     for (const clause of [
       'contact_decision "new" with person_display_label',
@@ -42,11 +32,7 @@ describe("assistant workspace prompt", () => {
     ]) {
       expect(prompt).toContain(clause);
     }
-    // The authored-text draft rule must not be read as banning an image-sourced
-    // Memory contact decision.
-    expect(prompt).toContain(
-      "a name-only counterparty in a shared screenshot is handled by the memory_review contact decision below instead",
-    );
+
   });
 
   it("retains the relationship origin and the first visible add-friend event", () => {

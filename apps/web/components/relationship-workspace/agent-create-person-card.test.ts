@@ -275,6 +275,19 @@ afterEach(async () => {
 });
 
 describe("create-contact mount admission", () => {
+  it("creates a name-only contact without requiring background, a clue or a directory read", async () => {
+    fetcher.mockImplementation((url: string) => String(url).includes("/people/search")
+      ? Promise.resolve(Response.json({ message: "lookup unavailable" }, { status: 503 }))
+      : Promise.resolve(Response.json({ receipts: [receipt()] })));
+    await render();
+    await type('input[placeholder="例如：陈雅宁"]', "小雨");
+    await flush();
+    await clickPrimary();
+    const posts = resourcePosts();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({scope_mode:"new_person",contact_name:"小雨",relationship_context_label:"联系人资料",value:"小雨"});
+    expect(mock.committed).toHaveBeenCalled();
+  });
   it("becomes editable when its authenticated scope mounts in the same React commit", async () => {
     delete scopeContainer.dataset.workspaceScope;
     await act(async () => root.render(createElement("div", { "data-workspace-scope": SYNTHETIC_WORKSPACE },

@@ -13,7 +13,7 @@ const normalized = (value:string) => value.normalize("NFKC").trim().toLowerCase(
 
 /** Profile images have no messages. Keep their interpretation separate from chat filing. */
 export function profileUnderstanding(parts:ContactChatExtraction[]): {extraction:ContactChatExtraction;draft:Draft}|null {
-  if (!parts.length || parts.some(p=>!["profile","not_chat"].includes(p.conversation_kind) || p.messages.length)) return null;
+  if (!parts.length || parts.some(p=>p.messages.length)) return null;
   if(new Set(parts.map(p=>normalized(p.platform))).size!==1)return null;
   const names=new Set(parts.map(p=>p.contact_name).filter((n):n is string=>Boolean(n)).map(normalized));
   // Different profiles require separate tasks, including incompatible stable account clues.
@@ -24,7 +24,7 @@ export function profileUnderstanding(parts:ContactChatExtraction[]): {extraction
   }
   if(names.size>1 || [...stable.values()].some(values=>values.size>1)) return null;
   const clues=parts.flatMap((p,index)=>p.identity_clues.map(c=>({...c,source_image_index:index}))).slice(0,12);
-  if(!clues.length)return null;
+  if(!clues.length && names.size===0)return null;
   const extraction=ContactChatExtractionSchema.parse({platform:parts[0]!.platform,conversation_kind:parts.every(p=>p.conversation_kind==="profile")?"profile":"not_chat",
     contact_name:parts.find(p=>p.contact_name)?.contact_name??null,identity_clues:clues,messages:[],
     uncertainties:[...new Set(parts.flatMap(p=>p.uncertainties))].slice(0,15)});
@@ -67,9 +67,11 @@ export async function saveReviewedContactProfile(client:PoolClient,auth:AuthCont
   if(selected){
     await getRelationshipScope(client,auth,selected.person_id,selected.relationship_context_id);
     if([...matches.values()].some(c=>c.person_id!==selected!.person_id))throw new ApiError(409,"CONTACT_PROFILE_HANDLE_CONFLICT","账号线索属于另一个联系人，请先核对。");
+  }else if(review.create_new && matches.size>0){
+    return {candidates:[...matches.values()].slice(0,10),saved:null};
   }else if(matches.size===1){selected=[...matches.values()][0]!;
   }else if(matches.size>1){return {candidates:[...matches.values()].slice(0,10),saved:null};}
-  if(!selected){
+  if(!selected&&!review.create_new){
     const sameName=await searchPeople(client,auth,review.display_name);
     const candidates=sameName.people.filter(p=>normalized(p.display_label)===normalized(review.display_name))
       .flatMap(p=>p.contexts.map(c=>({person_id:p.id,relationship_context_id:c.id,display_name:p.display_label,relationship_label:c.display_label})));

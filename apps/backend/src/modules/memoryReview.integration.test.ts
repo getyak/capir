@@ -301,6 +301,38 @@ async function insertSourceSession(
   }
 }
 
+describe.skipIf(!pool)("workspace screenshot contact source readback", () => {
+  it.each(["historical", "pending_current"] as const)("opens and saves a name-only draft from its %s source message", async mode => {
+    const auth = await makeAuth(`image-contact-${mode}`);
+    const sessionID = randomUUID(), imageMessageID = randomUUID(), attachmentID = randomUUID();
+    const bytes = Buffer.from([1,2,3,4]);
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    await insertSourceSession(auth, sessionID, imageMessageID, "", [{attachmentId:attachmentID,contentHash:hash}]);
+    const original = (await pool!.query("SELECT payload FROM agent_sessions WHERE account_id=$1 AND id=$2", [auth.accountId,sessionID])).rows[0]!.payload;
+    // The real queue does not append the current turn until execution finishes.
+    if(mode==="pending_current")await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns}','[]'::jsonb) WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID]);
+    const artifactID = `conversation-image-${imageMessageID}-0-${attachmentID}`;
+    const execution = await executeWorkspaceConversationAgent({database:pool!,auth,sessionID,
+      messageID:mode==="historical"?randomUUID():imageMessageID,
+      objective:"添加这个人的好友",sourceText:mode==="historical"?"添加这个人的好友":"",
+      inputParts:[{kind:"image",artifactID,mimeType:"image/png",byteSize:bytes.length,contentHash:hash,dataBase64:bytes.toString("base64")}],
+      provider:new ScriptedAgentProvider([{tool:"memory_review",input:{operation:"propose",contact_decision:"new",person_display_label:"Peter Yang",
+        new_contact_source_locator:{kind:"image_region",artifact_id:artifactID,image_index:0},items:[]}}],{outcome:"reply",title:"待添加",body:"可以在卡片中添加。"})});
+    expect(execution.memoryProposal).toBeTruthy();
+    if(mode==="pending_current")await pool!.query("UPDATE agent_sessions SET payload=$3::jsonb WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID,JSON.stringify(original)]);
+    const proposalID = execution.memoryProposal!.proposal_id;
+    const stored = (await pool!.query("SELECT source_message_id FROM memory_proposals WHERE account_id=$1 AND id=$2",[auth.accountId,proposalID])).rows[0]!;
+    expect(stored.source_message_id).toBe(imageMessageID);
+    const opened=await open(auth,proposalID,"chat");
+    const saved=await decideMemoryContactOnly(pool!,auth,opened.review.review_scope_id,opened.review_credential!,{
+      idempotency_key:randomUUID(),expected_proposal_revision:opened.review.proposal_revision,
+      display_label:"Peter Yang",relationship_context:"",reason:"Confirm the proposed separate contact."});
+    expect(saved.receipt.created_person_id).toBeTruthy();
+    const person=(await pool!.query("SELECT display_label FROM subjects WHERE account_id=$1 AND id=$2",[auth.accountId,saved.receipt.created_person_id])).rows[0];
+    expect(person).toEqual({display_label:"Peter Yang"});
+  });
+});
+
 async function stage(auth: AuthContext, options: StageOptions) {
   const idempotencyKey = randomUUID();
   const requestedSessionId =
@@ -650,7 +682,7 @@ describe.skipIf(!pool)("Memory review integration", () => {
     ).rejects.toThrow(/open|revision|frozen|rebase/i);
   });
 
-  it("refuses contact-dependent memory when the contact is skipped or ambiguous", async () => {
+  it("keeps skipped contacts unbound and permits a separately reviewed namesake", async () => {
     const auth = await makeAuth("skip");
     const { person } = draftProposalItems();
     const staged = await stage(auth, {
@@ -694,13 +726,13 @@ describe.skipIf(!pool)("Memory review integration", () => {
     });
     expect(ambiguous?.proposal.contact_status).toBe("ambiguous");
     const ambiguousOpen = await open(second, ambiguous!.proposal.proposal_id, "chat");
-    await expect(
-      commit(second, ambiguousOpen.review, ambiguousOpen.review_credential!, {
-        selected: ambiguousOpen.review.items.filter((item) => item.scope !== "self").map((item) => item.id),
-        contactDecision: "new",
-        newContact: { display_label: "Chen", relationship_context: "Design partner" },
-      }),
-    ).rejects.toThrow(/ambiguous/i);
+    const separate = await commit(second, ambiguousOpen.review, ambiguousOpen.review_credential!, {
+      selected: ambiguousOpen.review.items.filter((item) => item.scope !== "self").map((item) => item.id),
+      contactDecision: "new", newContact: { display_label: "Chen", relationship_context: "Design partner" },
+    });
+    expect(separate.body.receipt.created_person_id).toBeTruthy();
+    const namesakes = await pool!.query("SELECT id FROM subjects WHERE account_id = $1 AND display_label = 'Chen' AND status = 'active'", [second.accountId]);
+    expect(namesakes.rows).toHaveLength(3);
   });
 
   it("never strips a contact dependence from a sentence classified as self", async () => {

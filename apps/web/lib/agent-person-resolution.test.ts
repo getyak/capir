@@ -61,7 +61,7 @@ describe("Agent person resolution", () => {
     ).toEqual(contexts);
   });
 
-  it("requires an explicit distinct-person decision for an exact match", () => {
+  it("allows a separate contact despite an exact name match", () => {
     expect(
       canCreateDistinctPerson({
         differentPersonConfirmed: false,
@@ -69,7 +69,7 @@ describe("Agent person resolution", () => {
         matches: [person],
         name: "陈雅宁",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       canCreateDistinctPerson({
         differentPersonConfirmed: true,
@@ -80,7 +80,7 @@ describe("Agent person resolution", () => {
     ).toBe(true);
   });
 
-  it("blocks a duplicate person when a confirmed handle already has an owner", () => {
+  it("keeps record creation independent of optional handle confirmation", () => {
     const handleOwner: PersonDirectoryItem = {
       ...person,
       identity_matches: [
@@ -102,7 +102,7 @@ describe("Agent person resolution", () => {
         matches: [handleOwner],
         name: "Another display name",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("shows an expired handle as a review clue without treating it as a current owner", () => {
@@ -128,7 +128,7 @@ describe("Agent person resolution", () => {
         matches: [expiredHandleOwner],
         name: "Another display name",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       canCreateDistinctPerson({
         differentPersonConfirmed: true,
@@ -259,7 +259,7 @@ describe("Agent person resolution", () => {
     ).toBe(true);
   });
 
-  it("fails closed while identity lookup is unavailable", () => {
+  it("allows contact creation while optional directory lookup is unavailable", () => {
     expect(
       canCreateDistinctPerson({
         differentPersonConfirmed: true,
@@ -267,7 +267,7 @@ describe("Agent person resolution", () => {
         matches: [],
         name: "陈雅宁",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("binds a source to an existing person and context", () => {

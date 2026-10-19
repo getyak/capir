@@ -500,6 +500,7 @@ export function AgentCreatePersonCard({
     name,
   });
   const targetHasContext =
+    target.mode === "new_person" ||
     target.mode === "existing_context" ||
     contextLabel.trim().length > 0;
   const targetSelectable =
@@ -512,11 +513,11 @@ export function AgentCreatePersonCard({
     (matches.length > 1 || confirmedHandleMatches.length > 0);
   const ready =
     name.trim().length > 0 &&
-    (identityClue.trim().length === 0 ||
+    (!identityClueConfirmed ||
       parsedIdentityClue !== null) &&
     targetHasContext &&
     targetSelectable &&
-    firstNote.trim().length > 0 &&
+    (target.mode === "new_person" || firstNote.trim().length > 0) &&
     (target.mode !== "new_person" || newPersonAllowed);
   // Keep the complete match set; the intake contract admits 2–20 candidates.
   const reviewCandidateCountValid = matches.length >= 2 && matches.length <= 20;
@@ -603,9 +604,9 @@ export function AgentCreatePersonCard({
         type: "note",
         title:
           target.mode === "new_person"
-            ? "你提供的首条背景"
+            ? firstNote.trim() ? "你提供的首条背景" : "你填写的联系人名称"
             : "智能助理附加的、由你提供的背景",
-        value: firstNote.trim(),
+        value: firstNote.trim() || name.trim(),
       },
       personLabel:
         target.mode === "new_person"
@@ -614,7 +615,7 @@ export function AgentCreatePersonCard({
       contextLabel:
         target.mode === "existing_context"
           ? target.relationshipContext.display_label
-          : contextLabel.trim(),
+          : contextLabel.trim() || "联系人资料",
       outcome: agentPersonOutcome(target),
       resumeClue: Boolean(identityClueConfirmed && parsedIdentityClue),
     };
@@ -1554,8 +1555,8 @@ export function AgentCreatePersonCard({
               这与现有身份线索指向的不是同一个人
               <small>
                 {expiredHandleMatches.length > 0
-                  ? "这条线索曾有归属但已不再有效，因此必须确认。"
-                  : "账号范围内已存在完全相同的姓名，因此必须确认。"}
+                  ? "这条线索曾有归属但已不再有效，可查看历史记录或另建联系人。"
+                  : "账号范围内已有同名人物，也可以直接添加为另一位联系人。"}
               </small>
             </span>
           </label>
@@ -1582,7 +1583,7 @@ export function AgentCreatePersonCard({
                   ? `人物已固定为 ${committedSource.scope.person.display_label}。请核对这条线索是否属于此人；不确定时请取消确认，直接打开已保存的人物。`
                   : reviewCandidateCountValid
                     ? "请选择当前人物、移除线索，或将此来源保留为未解决。历史归属者仍可用于对比，但不能接收此来源。"
-                    : "如果确认是同一人，请选择当前人物；否则先移除线索，再继续核对。身份未确认前，此来源不会保存。"}
+                    : "如果确认是同一人，请选择当前人物；也可以移除线索或另建联系人；未确认的线索不会绑定到新人物。"}
               </small>
             </p>
           </div>
@@ -1689,7 +1690,7 @@ export function AgentCreatePersonCard({
                   ? "这会将备注附到所选的现有关系。"
                   : target.mode === "existing_person_new_context"
                     ? "这会保留现有人物，仅创建独立的关系背景。"
-                    : "只有完成账号范围内的身份检查后，才会创建一个独立人物。"}{" "}
+                    : "填写姓名即可创建，关系和首条来源可以稍后补充。"}{" "}
           它不会合并人物或联系任何人。
         </p>
         <div className="context-agent-create__footer-actions">
@@ -1741,7 +1742,7 @@ export function AgentCreatePersonCard({
               sessionBlocked ||
               (committedSource
                 ? !(
-                    identityClue.trim().length === 0 ||
+                    !identityClueConfirmed ||
                     parsedIdentityClue !== null
                   )
                 : !ready)
