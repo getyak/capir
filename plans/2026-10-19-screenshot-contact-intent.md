@@ -65,3 +65,71 @@ The broad all-database concurrent run exposed shared queue/MCP test interference
 its affected 74 tests pass in the serial follow-up. A full Web run initially had
 one obsolete button-label expectation; all affected UI tests now pass. Live
 acceptance remains required.
+
+## Harness observations
+
+The first test run (`799f8bd1-04e3-42ea-8eb6-9ec49d96c8ee`) was stopped and
+verified `deleted` before a second owned attempt began. It corrected native
+file-chooser interception; no Agent request was sent in that first attempt.
+Keep failed samples as harness evidence. During the second attempt, a stale
+file chooser after navigation was reselected through the actual menu before
+sending; no missing-image attempt is counted as product acceptance.
+
+## Resident release and live acceptance
+
+- Deployed runtime source: `ce434ba03f118c261ed7f87c6fd178af419e5d5e`.
+- Both the resident Web and API/Agent Host now use that clean committed source.
+  Recovery image/revision settings were read back from Infisical; the backend
+  current pointer was verified atomically. Previous releases remain available.
+- Bundled `assistant/workspace` and the Opik repository mirror both hash to
+  `e17f49def6c4df8cb2aac472a32b0cdc0f2107ed0e16dde75e55aec9e2c9e941`.
+- Owned temporary test run: `79128427-2cad-4ba6-9ebd-10850ebab30c`; create
+  request: `015128a3-b639-4f9b-a3dd-8f514062bae4`. The canonical entry banner and
+  ordinary password login have both been verified. Credentials remain in the
+  expiring run's OS keyring and the active private browser process only.
+- QA runs on the actual M4 Mac mini as `cubxxw`. The temporary driver under
+  `~/.cache/codex/contact-intent/` accepts ordered `command-N.json` files and
+  writes sanitized `response-N.json`. Inspect existing command/response files for the next sequence number. The
+  public-profile contact was saved, reloaded, and read on its actual Person
+  page. Group/namesake and historical-image cases are in progress. The driver must receive
+  `stop` and the cleanup readback must be verified before handoff.
+- LaunchAgent labels `com.talentsignal.contact-intent-probe`,
+  `com.talentsignal.contact-intent-deploy`, and `com.talentsignal.contact-intent-qa`
+  are temporary and must be unregistered after the owned test is stopped.
+
+- Live public-profile case: saved Person `ac09f4b3-9f3f-4c9d-a019-cfe9a1e3f745`,
+  reloaded its Session and opened its actual Person page with no relationship
+  context and zero accepted Memory.
+- Live group/namesake case: explicitly created a separate Person
+  `b8afb8d8-3215-49e6-a20d-dde901a75084` from the group participant and reloaded
+  the saved receipt. It did not bind to the earlier same-name person.
+- The analysis-only prelude of the historical-image case failed before model
+  execution: product run `4cb5ecf6-8b43-4c77-b41e-d61889543860` recorded
+  `harness.source_guard.rejected`, `failure_code=PROBE_TIMEOUT`,
+  `phase=admission`. This is the test-account authority probe's finite timeout,
+  not a contact eligibility rejection. The exact retained queue message is being
+  retried once through the actual Web recovery control. Do not hide this sample.
+
+## Live-discovered authority timing correction
+
+The retained analysis message reached the model after explicit retry/continue,
+but run `693f6ec9-eafa-4e08-b920-150410a4a6f4` was aborted by the same
+`PROBE_TIMEOUT` on recheck. Its SDK initialized and emitted one response; usage
+was incomplete, so no successful outcome or zero-cost claim is made. The owned
+workspace remained active and unexpired; direct database reads took 50/1/1/0 ms,
+and database activity showed no lock wait. The one-second bound includes shared
+pool and host scheduling delay and is too short for this resident environment.
+
+The backend-only correction permits a finite five-second authority wait. It
+preserves NOWAIT, stop, user/account, state, expiry, source generation and Session
+checks. Delayed successful authority does not permit private reads early;
+authority expiring during the wait still fails closed. The old implementation
+failed the delayed-admission regression; the corrected source passes it.
+Independent review found no security or correctness blocker. Re-deploy only the
+affected backend image/services, then retry the original retained message.
+
+Timing-correction checks: the 27 focused authority tests and backend typecheck
+passed. The standard backend run passed 1112 tests with one unrelated five-second
+application-test timeout; that complete application file passed all 28 tests when
+rerun alone. Documentation and architecture checks passed. Backend has no lint
+script; the existing Web lint had already passed for the feature release.
