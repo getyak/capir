@@ -1,5 +1,5 @@
 {
-  "status": "accepted locally; combined resident and native after-proof pending",
+  "status": "accepted and deployed; actual resident and native after-proof verified",
   "worker_task": "20261020-023601-a4e08a74",
   "worker_frozen_base": "a991f7b3ba930929528409e5b90488440e9017dc",
   "review_diff_sha256": "55e0177be0d2c5160cddfe0f2050dec8fc688d0e95c94b0e74d2e6aa08d57bb0",
@@ -62,10 +62,23 @@
   },
   "worker_lint": "passed",
   "parent_lint": "passed",
-  "ordinary_time_comparison": "deferred to resident capture; local sidebar auth-error copy differs from resident state",
+  "ordinary_time_comparison": "normal authenticated resident Time capture, empty schedule sidebar",
   "archived_current_row": "source and independent review; no product records created to fabricate this state",
   "native_before": "same primary workspace, empty Time day2026-10-20; reload makes selected date and saved pixels agree",
-  "native_after": "pending deployment",
+  "native_after": {
+    "app_version": "0.2.8 (125)",
+    "default_window_px": [
+      1123,
+      865
+    ],
+    "narrow_window_px": [
+      900,
+      720
+    ],
+    "restored_default_window": true,
+    "record_scope": "authorized primary workspace; empty Time or no MCP connections",
+    "proof": "saved actual resident pixels"
+  },
   "images": {
     "05-shell-people-light-1440-before.png": "people-1440-before.png",
     "05-shell-people-light-1440-candidate.png": "people-1440-after.png",
@@ -81,7 +94,30 @@
     "05-shell-people-light-900-candidate.png": "people-900-after.png",
     "05-shell-collapsed-light-900-candidate.png": "collapsed-900-after.png",
     "05-shell-time-macos-default-before.png": "macos-default-before.png",
-    "05-shell-time-macos-narrow-before.png": "macos-narrow-before.png"
+    "05-shell-time-macos-narrow-before.png": "macos-narrow-before.png",
+    "05-shell-time-resident-light-1440-after.png": "time-1440-after.png",
+    "05-shell-time-macos-default-after.png": "macos-default-after.png",
+    "05-shell-time-macos-narrow-after.png": "macos-narrow-after.png",
+    "05-shell-search-macos-default-after.png": "macos-search-after.png"
   },
-  "docs_check": "passed"
+  "docs_check": "passed",
+  "resident": {
+    "revision": "916c104c2526cbd0be088ce62ea6ebc66c934a68",
+    "buildID": "5PrRkQAfnP-lkomTIMDmF",
+    "clean_detached_production_build": "passed",
+    "activation": "passed",
+    "restart": {
+      "revision": "916c104c2526cbd0be088ce62ea6ebc66c934a68",
+      "buildID": "5PrRkQAfnP-lkomTIMDmF",
+      "ready": true,
+      "elapsed_seconds": 18.41,
+      "attempts": 7,
+      "process_changed": true,
+      "active_receipt_unchanged": true
+    },
+    "https_login": "200; certificate verification result0",
+    "protected_read": "isolated QA workspace returned all four canonical MCP directory entries after restart",
+    "api_health": "ready; database ready; unchanged API service"
+  },
+  "native_shortcuts": "Command+K opens actual empty search modal; Escape returns to Time"
 }

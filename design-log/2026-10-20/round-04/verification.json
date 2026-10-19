@@ -1,5 +1,5 @@
 {
-  "status": "local visual acceptance; combined resident deployment pending",
+  "status": "accepted and deployed; actual resident and native after-proof verified",
   "review_diff_sha256": "40b39082a7aea6cba48e61d8f09a54bfb148c644e26796bc9fb4fa199ba8c698",
   "mobile_empty_title_before_px": 728.28125,
   "mobile_empty_title_after_px": 639.921875,
@@ -20,7 +20,20 @@
   "network_error": "actual Time Fetch failed temporarily; Chinese display copy verified",
   "recovery": "interception cleared, keyboard Retry restored actual empty response",
   "disclosure_keyboard": "Enter toggles at320; disabled submission retained",
-  "native_after": "pending resident deployment",
+  "native_after": {
+    "app_version": "0.2.8 (125)",
+    "default_window_px": [
+      1123,
+      865
+    ],
+    "narrow_window_px": [
+      900,
+      720
+    ],
+    "restored_default_window": true,
+    "record_scope": "authorized primary workspace; empty Time or no MCP connections",
+    "proof": "saved actual resident pixels"
+  },
   "images": {
     "04-time-web-light-390-before.png": "web-390-before.png",
     "04-time-web-light-390-candidate.png": "web-390-after.png",
@@ -30,9 +43,33 @@
     "04-time-web-390-loading-candidate.png": "web-390-loading.png",
     "04-time-web-390-error-before-copy.png": "web-390-error-before.png",
     "04-time-web-390-error-candidate.png": "web-390-error-after.png",
-    "04-time-web-dark-320-expanded.png": "web-dark-320-expanded.png"
+    "04-time-web-dark-320-expanded.png": "web-dark-320-expanded.png",
+    "04-time-resident-light-390-after.png": "web-390-after.png",
+    "05-shell-time-resident-light-1440-after.png": "web-1440-after.png",
+    "05-shell-time-macos-default-before.png": "macos-default-before.png",
+    "05-shell-time-macos-narrow-before.png": "macos-narrow-before.png",
+    "05-shell-time-macos-default-after.png": "macos-default-after.png",
+    "05-shell-time-macos-narrow-after.png": "macos-narrow-after.png"
   },
   "web_lint": "passed",
   "web_typecheck": "passed",
-  "docs_check": "passed"
+  "docs_check": "passed",
+  "resident": {
+    "revision": "916c104c2526cbd0be088ce62ea6ebc66c934a68",
+    "buildID": "5PrRkQAfnP-lkomTIMDmF",
+    "clean_detached_production_build": "passed",
+    "activation": "passed",
+    "restart": {
+      "revision": "916c104c2526cbd0be088ce62ea6ebc66c934a68",
+      "buildID": "5PrRkQAfnP-lkomTIMDmF",
+      "ready": true,
+      "elapsed_seconds": 18.41,
+      "attempts": 7,
+      "process_changed": true,
+      "active_receipt_unchanged": true
+    },
+    "https_login": "200; certificate verification result0",
+    "protected_read": "isolated QA workspace returned all four canonical MCP directory entries after restart",
+    "api_health": "ready; database ready; unchanged API service"
+  }
 }
