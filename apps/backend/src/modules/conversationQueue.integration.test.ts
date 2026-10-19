@@ -35,6 +35,7 @@ import { executeUnscopedChatTask } from "./unscopedChat.js";
 import { getAgentSession, readAgentSessionConversation } from "./agentSessions.js";
 import { mutateAgentSession } from "./agentSessions.js";
 import { resolveSessionSourceAuthority } from "./memoryReviewStore.js";
+import { openMemoryReview } from "./memoryReviewRead.js";
 import { digestValue } from "../lib/hash.js";
 import type { AuthContext } from "./auth.js";
 
@@ -1917,6 +1918,43 @@ function pngUpload(bytes: Buffer, attachmentID = randomUUID()) {
     data_base64: bytes.toString("base64"),
   };
 }
+
+suite("queue contact review projection", () => {
+  it("persists an openable tentative review for a legacy contact tool without canonical writes", async () => {
+    const seeded = await seedSession(); const provider = new ScriptedConversationProvider();
+    vi.spyOn(provider, "run").mockImplementation(async (_request, invoke) => {
+      const result = await (invoke as (name: string, input: unknown) => Promise<{ ok: boolean; candidateFingerprint?: string }>)(
+        "contact_workspace", { operation: "propose_create", display_name: "Maya Chen", relationship_context: "",
+          identity_clue: { type: "email", value: "maya@example.com" }, source_excerpts: ["Maya Chen", "maya@example.com"], reason: "Explicit synthetic contact request" });
+      expect(result.ok).toBe(true);
+      return { structuredOutput: { outcome: "contact_change_proposal", candidate_fingerprint: result.candidateFingerprint },
+        inputTokens: 1, outputTokens: 1, estimatedUsd: 0, turns: 1, permissionDenials: [] };
+    });
+    const runner = await startRunner(provider); const message = randomUUID();
+    try {
+      await admitConversationQueueEntry(pool!, seeded.auth, { session_id: seeded.sessionId, message_id: message,
+        idempotency_key: randomUUID(), objective: "Create Maya Chen with maya@example.com. Do not search the web." });
+      await waitFor(async () => (await entryRow(seeded.sessionId, seeded.accountId))[0]?.status === "completed", 10_000);
+      expect((await entryRow(seeded.sessionId, seeded.accountId))[0]).toMatchObject({ content_state: "scrubbed", result: null });
+      const turn = (await getAgentSession(pool!, seeded.auth, seeded.sessionId)).payload!.turns[0]!;
+      expect(turn.response.memoryProposal).toMatchObject({ proposal_id: expect.any(String), revision: 1 });
+      const opened = await openMemoryReview(pool!, seeded.auth, turn.response.memoryProposal!.proposal_id,
+        { purpose: "chat", session_id: seeded.sessionId });
+      expect(opened.review).toMatchObject({ contact_status: "pending", source_message_id: message });
+      expect((await pool!.query("SELECT identity_authority FROM memory_proposals WHERE account_id=$1 AND id=$2",
+        [seeded.accountId, turn.response.memoryProposal!.proposal_id])).rows[0]).toEqual({ identity_authority: "tentative" });
+      expect(opened.review.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ statement_kind: "source_statement", source_excerpt: "Maya Chen" }),
+        expect.objectContaining({ statement_kind: "source_statement", source_excerpt: "maya@example.com",
+          sensitivity: "sensitive", judgment_kind: "sensitive", default_selected: false,
+          source_locator: expect.objectContaining({ kind: "message", session_id: seeded.sessionId, message_id: message }) }),
+      ]));
+      for (const table of ["subjects", "assignments", "identity_handles", "memory_items", "memory_commits", "memory_receipts"]) {
+        expect((await pool!.query(`SELECT count(*)::int AS n FROM ${table} WHERE account_id=$1`, [seeded.accountId])).rows[0]!.n).toBe(0);
+      }
+    } finally { await runner.close(); await removeProofAccount(seeded.accountId); }
+  });
+});
 
 suite("conversation message images", () => {
   it("keeps supplementary image inspection unavailable without source-bound consent through the real queue", async () => {
