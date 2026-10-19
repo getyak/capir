@@ -41,6 +41,7 @@ import type { AuthContext } from "./auth.js";
 import { createWorkspaceMcpConnections, type WorkspaceMcpConnections } from "./mcpAgentTools.js";
 import { getRelationshipScope, searchPeople, peopleIdentityQuery } from "./people.js";
 import { sha256 } from "../lib/hash.js";
+import { ApiError } from "../lib/apiError.js";
 import {
   recallMemories,
   stageMemoryProposal,
@@ -1778,21 +1779,34 @@ export async function executeWorkspaceConversationAgent(input: {
   const imageCurrent = async (client: DatabaseClient, artifactId: string, index: number, hash: string, lock = false) => {
       const parsed = artifactId.match(/^conversation-image-([0-9a-f-]{36})-(\d+)-(.+)$/u);
       if (!parsed || Number(parsed[2]) !== index || !input.sessionID) return false;
-      const result = await client.query<{ content_hash: string; content: Buffer }>(
-        `SELECT image.content_hash, image.content FROM conversation_message_images image
+      const result = await client.query<{ content_hash: string; content: Buffer; content_state: string; status: string }>(
+        `SELECT image.content_hash, image.content, entry.content_state, entry.status FROM conversation_message_images image
          JOIN agent_sessions session ON session.account_id = image.account_id AND session.id = image.session_id
          JOIN conversation_queue_entries entry ON entry.account_id = image.account_id AND entry.id = image.queue_entry_id
          WHERE image.account_id = $1 AND image.session_id = $2 AND image.message_id = $3
            AND image.image_index = $4 AND image.attachment_id = $5 AND image.expires_at > now()
            AND session.created_by_user_id = $6 AND session.deleted_at IS NULL AND session.expires_at > now()
-           AND entry.created_by_user_id = $6 AND entry.expires_at > now() AND entry.content_state = 'retained'
+           AND entry.created_by_user_id = $6 AND entry.expires_at > now()
            AND NOT EXISTS (SELECT 1 FROM memory_source_revocations r WHERE r.account_id = image.account_id
              AND ((r.source_kind = 'artifact' AND r.source_id = $7) OR (r.source_kind = 'session' AND r.source_id = image.session_id::text)))
          ${lock ? "FOR SHARE OF image, session, entry" : ""}`,
         [input.auth.accountId, input.sessionID, parsed[1], index, parsed[3], input.auth.userId, artifactId],
       );
       const row = result.rows[0];
-      return Boolean(row && row.content_hash === hash && createHash("sha256").update(row.content).digest("hex") === hash);
+      if (!row || row.content_hash !== hash || createHash("sha256").update(row.content).digest("hex") !== hash) return false;
+      if (row.content_state === "retained") return true;
+      // Completed queue entries clear their transient text after the original
+      // message is persisted in the Session. That is not source revocation.
+      // Reuse the durable original and immutable manifest; cancelled entries
+      // or removed/changed Session messages cannot regain image authority.
+      if (row.status !== "completed") return false;
+      try {
+        const authority = await resolveSessionSourceAuthority(client, input.auth, input.sessionID, parsed[1]!, { lock });
+        return authority.artifacts.some(artifact => artifact.artifactId === artifactId && artifact.contentHash === hash);
+      } catch (error) {
+        if (error instanceof ApiError) return false;
+        throw error;
+      }
   };
   const memory: WorkspaceMemoryLookup = {
     ...(input.hostAuthority ? { withdraw: (request: Parameters<NonNullable<WorkspaceMemoryLookup["withdraw"]>>[0]) =>

@@ -133,3 +133,24 @@ passed. The standard backend run passed 1112 tests with one unrelated five-secon
 application-test timeout; that complete application file passed all 28 tests when
 rerun alone. Documentation and architecture checks passed. Backend has no lint
 script; the existing Web lint had already passed for the feature release.
+
+## Live-discovered completed-source correction
+
+After the timing release, the exact retained analysis message completed in seven
+seconds with no proposal. Its later text-only add request correctly invoked
+`memory_review`, but the image validator rejected the historical source: normal
+queue completion had set `content_state=scrubbed` after persisting the original
+message in its Session. The image and Session were still retained and unexpired.
+The earlier integration fixture had used `completed/retained`, which concealed
+this real queue transition.
+
+The correction accepts a completed scrubbed queue entry only when the canonical
+Session resolver still finds the original human message and matching immutable
+image manifest. Ownership, expiry, image byte hash and revocation checks remain.
+Regression coverage now uses the actual completed/scrubbed state and rejects a
+cancelled entry, missing Session turn and changed manifest. The old source failed
+the new completed/scrubbed case. The corrected database and host suites passed
+199 tests; backend typecheck passed. The failed live sample remains in proof.
+
+Independent review found no critical, high or medium blocker, including no new
+lock-order inversion in the canonical source check.

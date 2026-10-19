@@ -302,7 +302,7 @@ async function insertSourceSession(
 }
 
 describe.skipIf(!pool)("workspace screenshot contact source readback", () => {
-  it.each(["historical", "pending_current"] as const)("opens and saves a name-only draft from its %s source message", async mode => {
+  it.each(["historical", "historical_scrubbed", "pending_current", "scrubbed_cancelled", "scrubbed_missing_turn", "scrubbed_changed_manifest"] as const)("opens and saves a name-only draft from its %s source message", async mode => {
     const auth = await makeAuth(`image-contact-${mode}`);
     const sessionID = randomUUID(), imageMessageID = randomUUID(), attachmentID = randomUUID();
     const bytes = Buffer.from([1,2,3,4]);
@@ -311,13 +311,17 @@ describe.skipIf(!pool)("workspace screenshot contact source readback", () => {
     const original = (await pool!.query("SELECT payload FROM agent_sessions WHERE account_id=$1 AND id=$2", [auth.accountId,sessionID])).rows[0]!.payload;
     // The real queue does not append the current turn until execution finishes.
     if(mode==="pending_current")await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns}','[]'::jsonb) WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID]);
+    if(mode==="historical_scrubbed" || mode.startsWith("scrubbed_"))await pool!.query("UPDATE conversation_queue_entries SET content_state='scrubbed',objective=NULL,status=$3 WHERE account_id=$1 AND message_id=$2",[auth.accountId,imageMessageID,mode==="scrubbed_cancelled"?"cancelled":"completed"]);
+    if(mode==="scrubbed_missing_turn")await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns}','[]'::jsonb) WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID]);
+    if(mode==="scrubbed_changed_manifest")await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns,0,images,0,content_hash}',to_jsonb($3::text)) WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID,"a".repeat(64)]);
     const artifactID = `conversation-image-${imageMessageID}-0-${attachmentID}`;
     const execution = await executeWorkspaceConversationAgent({database:pool!,auth,sessionID,
-      messageID:mode==="historical"?randomUUID():imageMessageID,
-      objective:"添加这个人的好友",sourceText:mode==="historical"?"添加这个人的好友":"",
+      messageID:mode==="pending_current"?imageMessageID:randomUUID(),
+      objective:"添加这个人的好友",sourceText:mode==="pending_current"?"":"添加这个人的好友",
       inputParts:[{kind:"image",artifactID,mimeType:"image/png",byteSize:bytes.length,contentHash:hash,dataBase64:bytes.toString("base64")}],
       provider:new ScriptedAgentProvider([{tool:"memory_review",input:{operation:"propose",contact_decision:"new",person_display_label:"Peter Yang",
         new_contact_source_locator:{kind:"image_region",artifact_id:artifactID,image_index:0},items:[]}}],{outcome:"reply",title:"待添加",body:"可以在卡片中添加。"})});
+    if(mode.startsWith("scrubbed_")) { expect(execution.memoryProposal).toBeNull(); return; }
     expect(execution.memoryProposal).toBeTruthy();
     if(mode==="pending_current")await pool!.query("UPDATE agent_sessions SET payload=$3::jsonb WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID,JSON.stringify(original)]);
     const proposalID = execution.memoryProposal!.proposal_id;
