@@ -1,7 +1,8 @@
 import {runFileTools} from "./runFileTools.js";
 import { z } from "zod";
 import { responsePreferenceTool, responsePreferenceContext, RESPONSE_PREFERENCE_INSTRUCTIONS } from "./responsePreference.js";
-import { MEMORY_CONTEXT_INSTRUCTIONS } from "./memoryContext.js";
+import { MEMORY_CONTEXT_INSTRUCTIONS, RELATIONSHIP_MEMORY_REVIEW_GUIDANCE, RELATIONSHIP_SNAPSHOT_FILE_GUIDANCE,
+  WORKSPACE_MEMORY_REVIEW_GUIDANCE } from "./memoryContext.js";
 import { evidenceImageTools } from "./evidenceImageTool.js";
 import { calendarDraftCapability } from "./calendarDraft.js";
 import { ClaudeHarnessFailure, ClaudeHarnessInterruption, runClaudeHarness, type ClaudeHarnessResult, type HarnessTool } from "./claudeHarness.js";
@@ -251,7 +252,10 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
       ...(request.observation ? { observation: request.observation } : {}),
       ...(request.continuation && !sourceImageTools.length ? { continuation: request.continuation } : {}),
       imageToolResults: Boolean(sourceImageTools.length),
-      objective: request.objective, systemPrompt: [prompt.text, calendar.instructions, request.responsePreference ? RESPONSE_PREFERENCE_INSTRUCTIONS : "", files.tools.length ? "For a requested calculation or file export, lead with the result and artifact name, and attribute the inputs to the record once. Read source review status from evidence_review; a proposed relationship block does not make the reviewed source excerpt unreviewed. Do not expose internal status words such as proposed or repeat an uncertainty caveat after already attributing the result to recorded data. Preserve any actual ambiguity that affects the calculation." : ""].filter(Boolean).join("\n\n"), tools, images,
+      objective: request.objective, systemPrompt: [prompt.text, calendar.instructions, request.responsePreference ? RESPONSE_PREFERENCE_INSTRUCTIONS : "",
+        request.memoryReview ? RELATIONSHIP_MEMORY_REVIEW_GUIDANCE : "",
+        files.tools.length ? RELATIONSHIP_SNAPSHOT_FILE_GUIDANCE : "",
+        files.tools.length ? "For a requested calculation or file export, lead with the result and artifact name, and attribute the inputs to the record once. Read source review status from evidence_review; a proposed relationship block does not make the reviewed source excerpt unreviewed. Do not expose internal status words such as proposed or repeat an uncertainty caveat after already attributing the result to recorded data. Preserve any actual ambiguity that affects the calculation." : ""].filter(Boolean).join("\n\n"), tools, images,
       context: JSON.stringify({ calendar_clock: calendar.clock, reference_time: request.reference_time, conversation: boundedConversationHistory(request.conversation_history),
         session_title_requested: sessionTitleRequested,
         run_files: files.inventory,
@@ -334,9 +338,9 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
         })
         : [{ name, description: definition.description, schema: definition.schema, readOnly: definition.readOnly, operation: undefined }];
       return variants.map(variant => ({ name: variant.name, description: variant.description,
-        // Deferred behind bounded discovery only; legacy configurations load
-        // the full admitted catalog eagerly, unchanged.
-        schema: variant.schema, readOnly: variant.readOnly, alwaysLoad: !boundedDiscovery,
+        // Core Memory must be usable without a discovery hop or a contact.
+        // Secondary capabilities defer; legacy contexts retain eager loading.
+        schema: variant.schema, readOnly: variant.readOnly, alwaysLoad: name === "memory_review" || !boundedDiscovery,
         execute: async (input, executionSignal) => {
           executionSignal.throwIfAborted();
           if (name === "contact_workspace") {
@@ -379,7 +383,8 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
       systemPrompt: [request.outputMode === "json" ? applyChatPreset(request.systemPrompt, preset).text
         : configuredClaudeChatPrompt(request.systemPrompt, preset, "workspace").text, calendar.instructions,
         request.responsePreference ? RESPONSE_PREFERENCE_INSTRUCTIONS : "",
-        request.selfMemoryContext ? MEMORY_CONTEXT_INSTRUCTIONS : ""].filter(Boolean).join("\n\n"), tools,
+        request.selfMemoryContext ? MEMORY_CONTEXT_INSTRUCTIONS : "",
+        request.toolManifest.includes("memory_review") ? WORKSPACE_MEMORY_REVIEW_GUIDANCE : ""].filter(Boolean).join("\n\n"), tools,
       context: JSON.stringify({ calendar_clock: calendar.clock, scope: request.scopeSummary, conversation: boundedConversationHistory(request.conversationHistory),
         session_title_requested: sessionTitleRequested,
         input_images: userImages.map(part => ({ artifact_id: part.artifactID, mime_type: part.mimeType, byte_size: part.byteSize, content_hash: part.contentHash })),

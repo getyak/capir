@@ -72,6 +72,34 @@ get40-policy.mjs, focused evaluation tests and source-bound execution controls.
 - Only close the issue if all original required evidence is present. Update
   dependent parent tasks from this evidence without declaring them all complete.
 
+## Task 4: repair core Memory routing and redundant snapshot guidance
+
+The funded continuation has stopped under its unknown-usage rule. Preserve the
+original reports, input/oracle bank, counters and every unknown; do not resume
+paid validation or deployment probes without a new explicit authorization.
+
+Approved product outcome remains unchanged: private owner Memory can be proposed
+without choosing a contact, and proposals never save accepted state. Treat core
+Memory as an upfront capability while secondary capabilities remain deferred.
+Keep assistant-service settings distinct from descriptions of the user's own
+writing preferences and time-limited goals. Direct simple relationship updates
+to one governed Memory read; an artifact mirror is not a second authority.
+
+Files: Claude provider, its Memory guidance and focused native SDK fixtures/tests.
+Do not copy private evaluation cases into public tests.
+
+- First prove the current native request defers core Memory. The same real SDK
+  fixture must dispatch a synthetic independent-self proposal without a contact
+  or ToolSearch hop after the fix; an attempted commit must stay denied before
+  host execution. This is protocol evidence, not real model-quality acceptance.
+- Keep current-message evidence, temporal limits, no-action, sensitive/conflict
+  review, and all account/source checks. Add no automatic accepted-state writes,
+  no extra retrieval, and no budget expansion.
+- Run focused/full Agent checks, native SDK protocol checks, independent source
+  review and CI. Prepare a concrete reviewable change before requesting any
+  renewed paid verification. Changed live behavior and resident delivery remain
+  incomplete until authorized tests and compatible deployment are verified.
+
 ## Review focus
 
 - A terminal error must not become zero complete usage merely because the SDK
@@ -83,49 +111,26 @@ get40-policy.mjs, focused evaluation tests and source-bound execution controls.
 
 ## Current state
 
-Task1 implemented: 49 focused harness tests, 576 Agent tests and 203 Agent Host
-tests pass; typechecks and builds pass. The real pinned SDK loopback503 case
-made exactly one request with apiRetryLimit0 and returned the provider failure
-code/status. Documentation and architecture checks pass. Independent source
-review is running. Logs remain in the task-owned ignored delivery output.
+The SDK diagnostics and bounded private observation safeguards are merged. The
+first implementation slice passed focused/full Agent checks and genuine native
+SDK loopback controls. Paid acceptance is stopped under the owner's existing
+unknown-usage condition; detailed inputs, outputs, journals and operational
+account identities stay in task-owned private artifacts outside Git.
 
-Task2 implemented in the separate private branch: 43 bounded-evaluator tests
-pass, including explicit synthetic observation forwarding, verified-export
-failure stopping further dispatch, and immutable continuation linkage preserving
-old unknowns and consumed attempts. Complete private/source-bound checks remain.
+Task4 is the active unpaid repair. Native SDK protocol tests first showed that
+ordinary-text requests exposed only discovery rather than the core Memory
+schema. The repaired request exposes Memory directly while retaining deferred
+secondary capabilities; direct self proposals work in the synthetic peer, and
+commit attempts stay denied before host execution. Agent576 and AgentHost203
+checks, both package builds/typechecks, source-bound native protocol2/2 and
+documentation/architecture checks pass. Independent public-source review is
+clear after fixing source binding and receipt typing in test evidence. The
+relationship prompt/task digests were deliberately re-frozen for the review-only
+clarification; runtime policy digests remain unchanged. These are engineering
+and protocol results, not real model-quality or human-utility acceptance.
 
-The primary425-file dirty work remains separate. No new acceptance case or paid
-provider request has been made under this continuation yet. GET-40 remains open.
-
-## Delivery rulings and current evidence
-
-Independent review found a host DEBUG privacy path in the new stderr callback.
-The follow-up removes that callback and reads only a bounded16KiB tail from the
-existing disposable CLI log.49 focused tests and the full serial576/203 tests,
-typechecks and builds pass. Actual SDK subprocess controls prove the raw host
-sink stays disabled without a callback; loopback503 still sends one request.
-
-Product PR384 CI and Security gates pass on2b3b10cc after one rerun of an
-unchanged CLI terminal-cancellation test. Its CodeQL review thread flags dynamic
-code construction in the synthetic debug fixture; replace it with a static child
-script and recheck the exact new head before merge. Do not bypass review rules.
-
-Private PR18 has full repository Node22/24 checks. The source-bound suite
-initially rejected an obsolete private lock; refreshed it from the exact product
-graph plus only the reachable private additions. Existing product nodes remain
-byte-identical, frozen offline pnpm verification and60 policy tests pass. The
-remote exact-source suite on2b3b10cc/fa6601f passed360 runner tests and continues.
-
-Another authorized chat is actively validating contact-intent changes on the
-same resident services: backendd155a79298d506e3e697fc0305b20e590bfaa5d2,
-Webce434ba03f118c261ed7f87c6fd178af419e5d5e. Do not replace them with this older
-candidate or interrupt its tests. Continue isolated acceptance first. Resident
-delivery requires compatible combined clean committed source and a safe handoff;
-it remains incomplete until that is verified. No cross-chat message was sent.
-
-The capir daily test account is ready: run7e439b94-e7ca-402e-825f-60d11984ea90,
-request566ca9dc-6bbd-4d01-9864-d12e15692664, account549b81b0-71af-4c88-a3d0-bceca7a3d49b,
-expires2026-10-19T13:02:45.921Z. CLI verified the actual isolated browser banner
-and12/30/4 dataset. Credentials remain only in Keychain; retained creation output
-is sanitized. Native CUA inspection timed out. Stop this run and verify cleanup
-before handoff, regardless of acceptance outcome.
+Preserve the primary checkout's unrelated work. Another authorized chat owns the
+resident contact-intent validation; coordinate compatible clean committed source
+rather than replacing its active candidate. Resident delivery, changed live
+behavior and renewed funded acceptance remain incomplete. Verify cleanup of the
+owned test account and synthetic database before final handoff.
