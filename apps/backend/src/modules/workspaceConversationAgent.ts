@@ -239,6 +239,17 @@ function authoredNote(objective: string): string {
     .replace(/"[^"\n]*"/gu, " ");
 }
 
+function contactIntentNote(objective: string): string {
+  // Only explicitly public research is a separate decision. Keep every other
+  // refusal (including private-contact search) in the contact intent checks.
+  // Never accept more opt-out spellings than the authoritative research gate.
+  const note = authoredNote(objective);
+  if (!publicSearchDeclined(objective)) return note;
+  return note
+    .replace(/(?:不要|不用|不需要|不必|不许|禁止|请勿|别)\s*(?:(?:去)?(?:联网|上网|网上|在线|网络|公开)(?:搜索|查询|检索|研究)|(?:搜索|查询|检索|研究)(?:网络|网页|互联网|公开资料|公开信息))(?=\s*(?:[，,。；;.!?！？\n]|$))/gu, clause => publicSearchDeclined(clause) ? " " : clause)
+    .replace(/\b(?:do not|don['’]t|never)\s+(?:search|research|look\s+up)\s+(?:the\s+)?(?:public\s+web|web|internet|online)\b(?=\s*(?:[，,。；;.!?！？\n]|$))/giu, clause => publicSearchDeclined(clause) ? " " : clause);
+}
+
 const CONTACT_DECLINE = /(?:不要|不用|别|不需要)[^，,。；;!?！？\n]{0,12}(?:添加|建|保存)\s*(?:到|为|新的?|任何|一个|这些|这位|这个)?(?:联系人|人物)(?!以外|之外)|(?:do not|don['’]t|no need to)[^,;.!?\n]{0,12}(?:add|create|save)\s+(?:(?:a|new|any)\s+)?contacts?\b/iu;
 
 /** Current authored intent only: never infer a refusal from pixels or host prose. */
@@ -249,10 +260,12 @@ function analysisOnlyOrNoSave(text: string): boolean {
     || /\b(?:no[\s_-]+(?:actions?|save|proposals?)|analysis[\s_-]+only|(?:just|only)\s+(?:analy[sz]e|describe|explain|summari[sz]e|translate)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:make|take|perform)\s+(?:any\s+)?(?:actions?|changes?)|save|record|remember|store|archive|create|add|update))\b/iu.test(note);
 }
 
+const CONTACT_INTENT_REFUSAL = /(?:仅供|只供)(?:分析|参考)|不要|不用|不需要|不必|不许|禁止|请勿|别(?:添加|创建|保存|更新)|do\s+not|don['’]t|never|no\s+need\s+to|\bno\s+(?:(?:contact|person)\s+)?(?:creation|saving|save)\b/iu;
+
 function explicitContactChange(objective: string): boolean {
-  const note = authoredNote(objective).replace(/https?:\/\/\S+|[^\s@]+@[^\s@]+/gu, " ");
+  const note = contactIntentNote(objective).replace(/https?:\/\/\S+|[^\s@]+@[^\s@]+/gu, " ");
   if (/\b(?:how|why|what|when|where)\b|如何|怎么|为什么/iu.test(note)) return false;
-  if (/不要|别(?:添加|创建|保存|更新)|do\s+not|don['’]t|never/iu.test(note)) return false;
+  if (CONTACT_INTENT_REFUSAL.test(note)) return false;
   return /^\s*(?:(?:please|can you|could you|would you|will you)\s+)*(?:create|add|save|update|record|register)\b/iu.test(note)
     || /^\s*(?:创建|新增|添加|保存|更新|建档|录入|记下)/u.test(note)
     || /^\s*(?:请|帮我|麻烦|我想|我要)[\s\S]{0,200}(?:创建|新增|添加|保存|更新|建档|录入|记下)/u.test(note);
@@ -281,9 +294,9 @@ function validStableClue(clue: { type: string; value: string }): boolean {
 }
 
 function permitsContactDraft(objective: string, name: string, clue: { type: string; value: string } | null): boolean {
-  if (/不要|别(?:添加|创建|保存|更新)|do\s+not|don['’]t|never/iu.test(authoredNote(objective))) return false;
+  if (CONTACT_INTENT_REFUSAL.test(contactIntentNote(objective))) return false;
   if (explicitContactChange(objective)) return true;
-  const note = authoredNote(objective);
+  const note = contactIntentNote(objective);
   if (!clue || !isGroundedExcerpt(name, note) || !isGroundedExcerpt(clue.value, note)) return false;
   const framing = note.replaceAll(clue.value, " ").replaceAll(name, " ");
   return !/[?？]/u.test(framing)
