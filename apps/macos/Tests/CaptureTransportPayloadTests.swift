@@ -3,6 +3,34 @@ import XCTest
 @testable import TalentSignalMac
 
 final class CaptureTransportPayloadTests: XCTestCase {
+    func testInstructionEnvelopeMatchesTheSharedWebAdmissionFixture() throws {
+        // The real encoder owns this fixture; Web runs it through the real
+        // desktop submit and canonical queue routes on every supported CI host.
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("scripts/macos/fixtures/desktop-capture-submission.json")
+        let expected = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as? NSDictionary)
+        let context = CaptureContext(origin: "https://workspace.example",
+            ownerScope: "9adafce302b5b34661dbc65e7f5097e0b269ac258c5d2eeceba0e6cada0c6cb0",
+            loginBinding: "synthetic-login", expiresAt: Date(timeIntervalSince1970: 1_900_000_000),
+            processing: .init(policyVersion: "current-policy", workspaceLabel: "Workspace",
+                processorLabels: ["Synthetic"], sourceRetentionDays: 30, available: true))
+        let images = try XCTUnwrap(expected["images"] as? [[String: Any]])
+        let encodedImage = try XCTUnwrap(images.first?["data_base64"] as? String)
+        let png = try XCTUnwrap(Data(base64Encoded: encodedImage))
+        let intent = try CaptureIntent(imagePNG: png, context: context,
+            capturedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            id: UUID(uuidString: "fe397a13-e018-48b9-ab09-0f6c866a4501")!,
+            sessionId: UUID(uuidString: "72ce7ff4-a5a8-40d0-b1d7-d84a13adcd30")!,
+            messageId: UUID(uuidString: "a072ed54-6d56-413d-af4b-3ebc01ba646a")!,
+            attachmentId: UUID(uuidString: "ae5d77d0-7cdf-420f-8c45-ecf317d05c6d")!,
+            objective: "  只分析截图，不保存 🕊️\n保留原文，不创建联系人。  ")
+        let actual = try XCTUnwrap(JSONSerialization.jsonObject(with: CaptureTransportPayload.encode(intent)) as? NSDictionary)
+        XCTAssertEqual(actual, expected)
+        XCTAssertEqual(intent.objective, "  只分析截图，不保存 🕊️\n保留原文，不创建联系人。  ")
+    }
+
     func testUploadEnvelopeReusesStableImageAndMessageIDsWithoutCredentials() throws {
         let context = CaptureContext(origin: "https://workspace.example", ownerScope: "scope-one", loginBinding: "login-one",
                                      expiresAt: Date(timeIntervalSince1970: 1_900_000_000),

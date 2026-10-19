@@ -37,6 +37,18 @@ async function run(options: { objective?: string; sourceText?: string; messageID
 }
 
 describe("help-first current-image host boundary", () => {
+  it("returns same-inspection pending text outside the answer body and never runs a second model", async () => {
+    const { result, inspector, stage } = await run({ observation: { ...observation, conversation_kind: "unknown",
+      counterparty_name: null, visible_text: ["松禾设计"],
+      visible_entities: [{ kind: "company", text: "松禾设计", source_excerpt: "松禾设计" }] } });
+    expect(inspector.inspect).toHaveBeenCalledOnce();
+    expect(result.captureImageObservation).toMatchObject({ artifact_id: artifactID, content_hash: image.contentHash,
+      inspection_request_id: "inspection", pending: true, clues: [{ kind: "company", text: "松禾设计", source_excerpt: "松禾设计" }] });
+    expect(result.block).not.toHaveProperty("captureImageObservation");
+    expect(stage).not.toHaveBeenCalled();
+    const later = await run({ messageID: laterMessageID });
+    expect(later.result.captureImageObservation).toBeUndefined();
+  });
   it.each(["只分析这张图片", "no_action", "不要保存记忆，先给结论", "不做任何操作，只给建议",
     "Only explain this image", "Do not save anything"])("keeps the answer without automatic proposals: %s", async objective => {
     const { result, stage } = await run({ objective });
@@ -112,9 +124,16 @@ describe("help-first current-image host boundary", () => {
       contactStatus: "pending", personID: null, personDisplayLabel: "小雨" }));
     const provider = new ScriptedAgentProvider([{ tool: "memory_review", input: contactProposal }],
       { outcome: "reply", title: "回答", body: "两张图片都在这次消息中。" });
+    const originalRun = provider.run.bind(provider);
+    vi.spyOn(provider, "run").mockImplementation(async (request, invoke, signal) => {
+      const inspect = request.supplementalTools?.find(tool => tool.name === "inspect_current_image");
+      expect(inspect).toBeDefined();
+      await inspect!.execute({ artifact_id: artifactID }, signal);
+      return originalRun(request, invoke, signal);
+    });
     const result = await executeWorkspaceConversationAgentCore({ workspaceID: "synthetic", messageID: imageMessageID,
       objective: "图片内容", provider, inputParts: [image, { ...image, artifactID: `conversation-image-${imageMessageID}-1-second` }],
-      imageIsCurrent: async () => true, contacts: { search: async () => [], read: vi.fn() },
+      imageInspector: { inspect: async () => observation }, imageIsCurrent: async () => true, contacts: { search: async () => [], read: vi.fn() },
       memory: { recall: async () => ({ items: [] }), stage } });
     expect(stage).toHaveBeenCalledOnce();
     expect(result.memoryProposal?.revision).toBe(1);

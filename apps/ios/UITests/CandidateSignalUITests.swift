@@ -3343,8 +3343,8 @@ final class CandidateSignalUITests: XCTestCase {
         ]
         app.launch()
 
-        XCTAssertTrue(element("workspace-empty").waitForExistence(timeout: 12))
-        XCTAssertTrue(app.staticTexts["Nothing needs attention"].exists)
+        XCTAssertTrue(element("canonical-pursuit-today").waitForExistence(timeout: 12))
+        XCTAssertTrue(app.staticTexts["No goal items need attention"].exists)
         XCTAssertFalse(app.staticTexts["Leila Hartmann"].exists)
         XCTAssertFalse(element("workspace-preview-boundary").exists)
         preserveScreenshot("Canonical empty Pursuit workspace")

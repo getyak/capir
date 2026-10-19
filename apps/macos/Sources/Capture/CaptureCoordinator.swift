@@ -19,7 +19,10 @@ enum CapturePresentation: Equatable {
 /** Owns one user-initiated capture and hands its immutable message to the durable queue. */
 @MainActor
 final class CaptureCoordinator: ObservableObject {
-    @Published private(set) var presentation: CapturePresentation = .idle
+    @Published private(set) var presentation: CapturePresentation = .idle {
+        didSet { projectRelayPhase() }
+    }
+    @Published private(set) var relay: CaptureRelaySnapshot?
     private let transport: CaptureTransporting
     private let selector: CaptureSelecting
     private let recovery: CaptureRecoveryPersisting
@@ -34,8 +37,14 @@ final class CaptureCoordinator: ObservableObject {
     private var lastVerifiedContext: CaptureContext?
     private var captureInFlight = false
     private var captureGeneration = 0
+    // New selections own presentation; older intents still reconcile their
+    // canonical receipts without dismissing the newer local draft.
+    private var presentationGeneration = 0
     private var ownerRevision = 0
     private var explicitlySignedOut = false
+    private var readyRelayIntent: CaptureIntent?
+    private var relayResultPoll: Task<Void, Never>?
+    private var relayReadRevision = 0
 
     init(transport: CaptureTransporting, selector: CaptureSelecting, recovery: CaptureRecoveryPersisting,
          preferences: CapturePreferences, now: @escaping () -> Date = Date.init,
@@ -50,7 +59,7 @@ final class CaptureCoordinator: ObservableObject {
         self.onVerifiedContext = onVerifiedContext
     }
 
-    deinit { progressPoll?.cancel() }
+    deinit { progressPoll?.cancel(); relayResultPoll?.cancel() }
 
     func startCapture(prepareToSelect: () -> Void = {}) async {
         guard !captureInFlight, pendingPreview == nil else { return }
@@ -58,6 +67,7 @@ final class CaptureCoordinator: ObservableObject {
         // must never enter the screen selector while either awaits that fetch.
         captureInFlight = true
         defer { captureInFlight = false }
+        presentationGeneration += 1
         var generation = captureGeneration
         do {
             let context = try await transport.context()
@@ -84,7 +94,7 @@ final class CaptureCoordinator: ObservableObject {
         } catch {
             guard generation == captureGeneration else { return }
             if let prior = lastVerifiedContext,
-               WorkspaceConnection.shared.origin?.url.absoluteString == prior.origin,
+               transport.isOriginCurrent(prior.origin),
                preferences.hasAcknowledgedProcessingScope(origin: prior.origin, ownerScope: prior.ownerScope,
                                                            policyVersion: prior.processing.policyVersion) {
                 // Capture can be staged under the last verified in-process
@@ -103,6 +113,7 @@ final class CaptureCoordinator: ObservableObject {
         guard !captureInFlight, case .needsDisclosure(let context) = presentation else { return }
         captureInFlight = true
         defer { captureInFlight = false }
+        presentationGeneration += 1
         let generation = captureGeneration
         preferences.acknowledgeProcessingScope(origin: context.origin, ownerScope: context.ownerScope,
                                                policyVersion: context.processing.policyVersion, at: now())
@@ -114,6 +125,7 @@ final class CaptureCoordinator: ObservableObject {
 
     private func select(context: CaptureContext, generation: Int) async {
         guard generation == captureGeneration, boundOwnerScope == context.ownerScope else { return }
+        dismissRelay()
         presentation = .selecting
         do {
             let selected = try await selector.select()
@@ -124,7 +136,7 @@ final class CaptureCoordinator: ObservableObject {
                 onRecoveryChanged?()
             } else {
                 await stageAndAdmit(selected.image, context: context, capturedAt: selected.capturedAt,
-                                    generation: generation)
+                                    generation: generation, origin: selected.origin)
             }
         } catch CaptureSelectionError.cancelled {
             guard generation == captureGeneration else { return }
@@ -135,13 +147,16 @@ final class CaptureCoordinator: ObservableObject {
         }
     }
 
-    func submitPreview(_ image: CGImage) async {
-        guard let preview = pendingPreview else { return }
+    func submitPreview(_ image: CGImage, objective: String = "") async {
+        guard !captureInFlight, let preview = pendingPreview else { return }
+        guard objective.utf16.count <= 1000 else { return }
+        captureInFlight = true
+        defer { captureInFlight = false }
         let generation = captureGeneration
         pendingPreview = nil
         onRecoveryChanged?()
         await stageAndAdmit(image, context: preview.context, capturedAt: preview.capturedAt,
-                            generation: generation)
+                            generation: generation, objective: objective)
     }
 
     func discardPreview() {
@@ -170,13 +185,14 @@ final class CaptureCoordinator: ObservableObject {
         let previous = boundOwnerScope
         guard previous != context?.ownerScope else {
             if let context {
-                if !sameAuthorization(as: context) { ownerRevision += 1 }
+                if !sameAuthorization(as: context) { ownerRevision += 1; dismissRelay() }
             } else {
                 ownerRevision += 1
             }
             lastVerifiedContext = context
             explicitlySignedOut = context == nil
             if context == nil {
+                dismissRelay()
                 captureGeneration += 1
                 selector.cancel()
                 presentation = .needsSignIn
@@ -185,6 +201,7 @@ final class CaptureCoordinator: ObservableObject {
         }
         captureGeneration += 1
         ownerRevision += 1
+        dismissRelay()
         selector.cancel()
         for id in intents.keys { intentGenerations[id, default: 0] += 1 }
         intents.removeAll()
@@ -200,7 +217,7 @@ final class CaptureCoordinator: ObservableObject {
     var nextLocalExpiry: Date? {
         let previewDeadline = pendingPreview?.capturedAt.addingTimeInterval(86_400)
         let intentDeadline = intents.values.filter(\.hasRawImage).map(\.localRecoveryDeadline).min()
-        return [previewDeadline, intentDeadline].compactMap { $0 }.min()
+        return [previewDeadline, intentDeadline, relay?.expiresAt].compactMap { $0 }.min()
     }
 
     func hasLocalImage(intentID: UUID) -> Bool { intents[intentID]?.hasRawImage == true }
@@ -210,6 +227,7 @@ final class CaptureCoordinator: ObservableObject {
     /// admissions so exact server readback remains possible without replay.
     func expireLocalImages(at deadline: Date) {
         var changed = false
+        if let relay, relay.expiresAt <= deadline { dismissRelay(); changed = true }
         if let preview = pendingPreview, preview.capturedAt.addingTimeInterval(86_400) <= deadline {
             pendingPreview = nil
             if case .previewReady = presentation {
@@ -237,13 +255,13 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     private func stageAndAdmit(_ image: CGImage, context: CaptureContext, capturedAt: Date,
-                               generation: Int) async {
+                               generation: Int, objective: String = "", origin: CaptureRegionOrigin? = nil) async {
         guard generation == captureGeneration, boundOwnerScope == context.ownerScope else { return }
         var stagedID: UUID?
         do {
             let encoded = try CaptureImageEncoder.encodePNG(image)
             guard generation == captureGeneration, boundOwnerScope == context.ownerScope else { return }
-            var intent = try CaptureIntent(imagePNG: encoded.data, context: context, capturedAt: capturedAt)
+            var intent = try CaptureIntent(imagePNG: encoded.data, context: context, capturedAt: capturedAt, objective: objective)
             guard !intent.isLocallyExpired(at: now()) else {
                 presentation = .failed(nil, "本机截图已过期，请重新选择。")
                 return
@@ -254,6 +272,9 @@ final class CaptureCoordinator: ObservableObject {
             try recovery.save(intent)
             intents[intent.id] = intent
             intentGenerations[intent.id] = 0
+            relay = CaptureRelaySnapshot(intentID: intent.id, sessionID: intent.sessionId, ownerRevision: ownerRevision,
+                origin: origin, thumbnail: CaptureRelaySnapshot.thumbnail(image),
+                expiresAt: min(now().addingTimeInterval(300), intent.localRecoveryDeadline), phase: .uploading)
             stagedID = intent.id
             onRecoveryChanged?()
             intent.phase = .uploading
@@ -298,13 +319,16 @@ final class CaptureCoordinator: ObservableObject {
         }
     }
 
-    private func reconcile(_ intent: CaptureIntent, context: CaptureContext, generation: Int) async {
+    private func reconcile(_ intent: CaptureIntent, context: CaptureContext, generation: Int,
+                           presentationGeneration expectedPresentationGeneration: Int? = nil) async {
         guard intentIsCurrent(intent.id, generation: generation) else { return }
+        let expectedPresentationGeneration = expectedPresentationGeneration ?? presentationGeneration
         do {
             let currentReceipt = try await transport.receipt(for: intent, context: context)
             guard intentIsCurrent(intent.id, generation: generation) else { return }
+            let mayPresent = expectedPresentationGeneration == presentationGeneration
             guard let receipt = currentReceipt else {
-                presentation = .unknown(intent.id)
+                if mayPresent { presentation = .unknown(intent.id) }
                 return
             }
             guard receipt.sessionId == intent.sessionId, receipt.messageId == intent.messageId,
@@ -317,31 +341,40 @@ final class CaptureCoordinator: ObservableObject {
             do { try recovery.remove(intent) }
             catch {
                 intents[intent.id] = intent.withoutRawImage()
-                presentation = .deletionFailed(intent.id)
+                if mayPresent { presentation = .deletionFailed(intent.id) }
                 onRecoveryChanged?()
                 return
             }
-            let admitted = intent.withoutRawImage()
+            var admitted = intent.withoutRawImage()
+            admitted.queueEntryId = receipt.queueEntryId
             if receipt.resultRecorded {
-                progressPoll?.cancel(); progressPoll = nil
+                if mayPresent { progressPoll?.cancel(); progressPoll = nil }
                 intents.removeValue(forKey: intent.id)
                 intentGenerations.removeValue(forKey: intent.id)
-                presentation = .viewable(intent.sessionId)
+                if mayPresent { presentation = .viewable(intent.sessionId) }
+                if relay?.intentID == intent.id, relay?.ownerRevision == ownerRevision {
+                    readyRelayIntent = admitted
+                    await refreshRelayResult()
+                    startRelayResultPollIfNeeded()
+                }
             } else if receipt.status == "failed" || receipt.status == "interrupted" || receipt.status == "cancelled" {
-                progressPoll?.cancel(); progressPoll = nil
+                if mayPresent { progressPoll?.cancel(); progressPoll = nil }
                 var failed = admitted
                 failed.phase = .failed
                 intents[intent.id] = failed
-                presentation = .failed(intent.id, "Agent 未完成处理，可打开原会话查看或重试。")
+                if mayPresent { presentation = .failed(intent.id, "Agent 未完成处理，可打开原会话查看或重试。") }
             } else {
                 // The backend owns execution independently of this window.
                 intents[intent.id] = admitted
-                presentation = .processing(intent.sessionId)
-                startProgressPollIfNeeded()
+                if mayPresent {
+                    presentation = .processing(intent.sessionId)
+                    startProgressPollIfNeeded()
+                }
             }
             onRecoveryChanged?()
         } catch {
-            if intentIsCurrent(intent.id, generation: generation) { presentation = .unknown(intent.id) }
+            if expectedPresentationGeneration == presentationGeneration,
+               intentIsCurrent(intent.id, generation: generation) { presentation = .unknown(intent.id) }
         }
     }
 
@@ -349,23 +382,28 @@ final class CaptureCoordinator: ObservableObject {
         guard case .processing(let sessionID) = presentation,
               let intent = intents.values.first(where: { $0.sessionId == sessionID }) else { return }
         let generation = intentGenerations[intent.id] ?? 0
+        let expectedPresentationGeneration = presentationGeneration
         do {
             let current = try await transport.context()
             guard intentIsCurrent(intent.id, generation: generation) else { return }
             if boundOwnerScope != current.ownerScope { rebindOwner(to: current); return }
             onVerifiedContext?(current)
             guard intent.canReadback(context: current, now: now()) else {
-                presentation = .failed(intent.id, "工作区或处理方式已改变，请重新打开会话。")
+                if expectedPresentationGeneration == presentationGeneration {
+                    presentation = .failed(intent.id, "工作区或处理方式已改变，请重新打开会话。")
+                }
                 return
             }
-            await reconcile(intent, context: current, generation: generation)
+            await reconcile(intent, context: current, generation: generation,
+                            presentationGeneration: expectedPresentationGeneration)
         } catch {
-            if intentIsCurrent(intent.id, generation: generation) { presentation = .unknown(intent.id) }
+            if expectedPresentationGeneration == presentationGeneration,
+               intentIsCurrent(intent.id, generation: generation) { presentation = .unknown(intent.id) }
         }
     }
 
     private func startProgressPollIfNeeded() {
-        guard transport is CaptureWebSession, progressPoll == nil else { return }
+        guard transport.automaticallyPollsStatus, progressPoll == nil else { return }
         progressPoll = Task { [weak self] in
             for _ in 0..<60 {
                 try? await Task.sleep(for: .seconds(5))
@@ -378,8 +416,12 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func retry(intentID: UUID) async {
+        guard !captureInFlight, pendingPreview == nil else { return }
         if case .deletionFailed(let pending) = presentation, pending == intentID { return }
         guard let intent = intents[intentID] else { return }
+        captureInFlight = true
+        defer { captureInFlight = false }
+        presentationGeneration += 1
         let generation = intentGenerations[intentID] ?? 0
         presentation = intent.hasRawImage ? .uploading(intentID) : .unknown(intentID)
         do {
@@ -421,6 +463,7 @@ final class CaptureCoordinator: ObservableObject {
 
     func restoreRecovery() async {
         let expectedRevision = ownerRevision
+        let expectedPresentationGeneration = presentationGeneration
         do {
             let context = try await transport.context()
             guard expectedRevision == ownerRevision || sameAuthorization(as: context) else { return }
@@ -429,7 +472,9 @@ final class CaptureCoordinator: ObservableObject {
             let restored = try recovery.load(origin: context.origin, ownerScope: context.ownerScope, now: now())
             for intent in restored { intents[intent.id] = intent }
             for intent in restored { intentGenerations[intent.id] = 0 }
-            if let recent = restored.last { presentation = .unknown(recent.id) }
+            if expectedPresentationGeneration == presentationGeneration, let recent = restored.last {
+                presentation = .unknown(recent.id)
+            }
             onRecoveryChanged?()
         } catch CaptureTransportError.server(401, _) {
             guard expectedRevision == ownerRevision else { return }
@@ -442,14 +487,16 @@ final class CaptureCoordinator: ObservableObject {
             // under the user's previously acknowledged origin/owner and keep
             // it explicitly unsent until authenticated context is fresh.
             guard let prior = preferences.onboardingAcknowledgement,
-                  prior.origin == WorkspaceConnection.shared.origin?.url.absoluteString,
+                  transport.isOriginCurrent(prior.origin),
                   !explicitlySignedOut,
                   boundOwnerScope == nil || boundOwnerScope == prior.ownerScope,
                   let restored = try? recovery.load(origin: prior.origin, ownerScope: prior.ownerScope, now: now())
             else { return }
             for intent in restored { intents[intent.id] = intent }
             for intent in restored { intentGenerations[intent.id] = 0 }
-            if let recent = restored.last { presentation = .unknown(recent.id) }
+            if expectedPresentationGeneration == presentationGeneration, let recent = restored.last {
+                presentation = .unknown(recent.id)
+            }
             onRecoveryChanged?()
         }
     }
@@ -479,5 +526,65 @@ final class CaptureCoordinator: ObservableObject {
     func dismissHint() {
         if case .processing = presentation { return }
         if case .viewable = presentation { presentation = .idle }
+    }
+
+    func dismissRelay() {
+        relayReadRevision += 1
+        relayResultPoll?.cancel(); relayResultPoll = nil
+        readyRelayIntent = nil
+        relay = nil
+    }
+
+    private func projectRelayPhase() {
+        guard var current = relay, current.ownerRevision == ownerRevision else { return }
+        switch presentation {
+        case .uploading(let id) where id == current.intentID: current.phase = .uploading
+        case .processing(let id) where id == current.sessionID: current.phase = .processing
+        case .viewable(let id) where id == current.sessionID: current.phase = .ready
+        case .unknown(let id) where id == current.intentID: current.phase = .unknown
+        case .failed(let id, _) where id == current.intentID: current.phase = .failed
+        case .idle, .needsSignIn, .deletionFailed: dismissRelay(); return
+        default: return
+        }
+        relay = current
+    }
+
+    /// A visible ready surface revalidates source authority for at most five
+    /// minutes. Loss of authority or connectivity retracts its private content.
+    func refreshRelayResult() async {
+        guard let intent = readyRelayIntent, let visible = relay,
+              visible.intentID == intent.id, visible.expiresAt > now() else { return }
+        relayReadRevision += 1
+        let readRevision = relayReadRevision, expectedOwner = ownerRevision
+        do {
+            let context = try await transport.context()
+            guard readRevision == relayReadRevision, expectedOwner == ownerRevision else { return }
+            if !sameAuthorization(as: context) { rebindOwner(to: context); dismissRelay(); return }
+            guard intent.canReadback(context: context, now: now()) else { dismissRelay(); return }
+            let result = try await transport.result(for: intent, context: context)
+            guard readRevision == relayReadRevision, expectedOwner == ownerRevision,
+                  var current = relay, current.intentID == intent.id, current.expiresAt > now() else { return }
+            guard let result, result.matches(intent: intent, queueEntryID: intent.queueEntryId) else {
+                dismissRelay(); return
+            }
+            current.result = result
+            relay = current
+        } catch {
+            guard readRevision == relayReadRevision, expectedOwner == ownerRevision else { return }
+            dismissRelay()
+        }
+    }
+
+    private func startRelayResultPollIfNeeded() {
+        guard transport.automaticallyPollsStatus, relay != nil, relayResultPoll == nil else { return }
+        relayResultPoll = Task { [weak self] in
+            for _ in 0..<60 {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, let self, let visible = self.relay else { return }
+                if visible.expiresAt <= self.now() { self.dismissRelay(); return }
+                await self.refreshRelayResult()
+            }
+            self?.dismissRelay()
+        }
     }
 }

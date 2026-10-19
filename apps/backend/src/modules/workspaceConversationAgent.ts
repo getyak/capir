@@ -14,7 +14,7 @@ import {
   type AgentMemoryPage,
   resolveProductPrompt, promptReference, type PromptSnapshot,
   DEFAULT_AGENT_BUDGET,
-  currentImageInspection, ArkCurrentImageInspector, type CurrentImageInspector,
+  currentImageInspection, type CurrentImageInspector,
   publicSubjectRegistry, publicSearchDeclined, publicContextAnchorsFromText, WorkspacePublicSubjectSearchSchema, WorkspacePublicSourceFetchSchema,
   WORKSPACE_CONVERSATION_AGENT_TOOL_NAMES,
   WorkspaceConversationFinalOutputSchema,
@@ -51,7 +51,7 @@ import {
 import { withdrawMemoryProposalForRun, type MemoryProposalWithdrawalResult } from "./memoryProposalWithdrawal.js";
 import { currentStableHandleOwner, type MemoryImageManifestEntry } from "./memoryReviewStore.js";
 import { LocalContactResearchClient, type ContactResearchClient } from "./contactResearchClient.js";
-import { createWorkspacePublicResearch } from "./workspacePublicResearch.js";
+import { createWorkspacePublicResearch, type WorkspacePublicResearchSubject } from "./workspacePublicResearch.js";
 import {
   createFirstContactResearch,
   firstContactNameCandidate,
@@ -188,6 +188,8 @@ function uniquelyGroundedScope(
 }
 
 export interface WorkspaceConversationAgentExecution {
+  /** Host-only same-inspection text; never Session-authored authority. */
+  captureImageObservation?: import("@talent-signal/contracts").CaptureImageObservation;
   block: ChatResponseBlock;
   event: WorkspaceConversationAgentEvent | null;
   /** Independent optional review reference; never the sole agent event. */
@@ -239,14 +241,20 @@ function authoredNote(objective: string): string {
     .replace(/"[^"\n]*"/gu, " ");
 }
 
-const CONTACT_DECLINE = /(?:不要|不用|别|不需要)[^，,。；;!?！？\n]{0,12}(?:添加|建|保存)\s*(?:到|为|新的?|任何|一个|这些|这位|这个)?(?:联系人|人物)(?!以外|之外)|(?:do not|don['’]t|no need to)[^,;.!?\n]{0,12}(?:add|create|save)\s+(?:(?:a|new|any)\s+)?contacts?\b/iu;
+/** A lookup opt-out does not prohibit an editable new contact draft. */
+function contactLookupDeclined(text: string): boolean {
+  const note = authoredNote(text).replace(/\s+/gu, " ");
+  return /(?:不要|不用|不需要|不必|不许|禁止|请勿|别)(?:联网|上网|公开|在线)?(?:搜索|查询|检索)(?:我的|已有|现有)?(?:联系人|通讯录)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:search|look\s+up|query)\s+(?:(?:my|the|existing|online)\s+)*(?:contacts?|contact\s+list|address\s+book|directory)\b/iu.test(note);
+}
+
+const CONTACT_DECLINE = /(?:不要|不用|别|不需要|不必|不许|禁止|请勿)[^，,。；;!?！？\n]{0,12}(?:添加|建|保存)\s*(?:到|为|新的?|任何|一个|这些|这位|这个)?(?:联系人|人物)(?!以外|之外)|(?:do not|don['’]t|no need to)[^,;.!?\n]{0,12}(?:add|create|save)\s+(?:(?:a|new|any)\s+)?contacts?\b|\bno\s+contact\s+creation\b/iu;
 
 /** Current authored intent only: never infer a refusal from pixels or host prose. */
 function analysisOnlyOrNoSave(text: string): boolean {
   // A contact-only refusal must not disable an explicitly requested self note.
   const note = authoredNote(text).replace(new RegExp(CONTACT_DECLINE.source, "giu"), " ");
-  return /(?:只|仅仅?)(?:需要|要|想|帮我|请|做)?(?:分析|解释|描述|总结|翻译|看看|看一下)|(?:不要|不用|别|不必|不需要|无需)[^，,。；;!?！？\n]{0,12}(?:保存|记录|记住|建档|归档|添加|创建|更新|操作|行动)|(?:不做|不进行)[^，,。；;!?！？\n]{0,8}(?:操作|更改|动作|行动)/u.test(note)
-    || /\b(?:no[\s_-]+(?:actions?|save|proposals?)|analysis[\s_-]+only|(?:just|only)\s+(?:analy[sz]e|describe|explain|summari[sz]e|translate)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:make|take|perform)\s+(?:any\s+)?(?:actions?|changes?)|save|record|remember|store|archive|create|add|update))\b/iu.test(note);
+  return /(?:仅供|只供)(?:分析|参考)|(?:只|仅仅?)(?:需要|要|想|帮我|请|做)?(?:分析|解释|描述|总结|翻译|看看|看一下)|(?:不要|不用|别|不必|不需要|无需|不许|禁止|请勿)[^，,。；;!?！？\n]{0,12}(?:保存|记录|记住|建档|归档|添加|创建|更新|操作|行动)|(?:不做|不进行)[^，,。；;!?！？\n]{0,8}(?:操作|更改|动作|行动)/u.test(note)
+    || /\b(?:no[\s_-]+(?:actions?|sav(?:e|ing)|proposals?)|analysis[\s_-]+only|(?:just|only)\s+(?:analy[sz]e|describe|explain|summari[sz]e|translate)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:make|take|perform)\s+(?:any\s+)?(?:actions?|changes?)|save|record|remember|store|archive|create|add|update))\b/iu.test(note);
 }
 
 function toolFailure(
@@ -357,6 +365,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
   sessionID?: string | null;
   messageID?: string;
   sessionTitleRequested?: boolean;
+  /** Host queue projection only; synchronous native callers keep their legacy card. */
+  contactReviewSurface?: "memory";
   conversationHistory?: readonly ConversationMessage[];
   promptSnapshot?: PromptSnapshot;
   runID?: string;
@@ -398,6 +408,29 @@ export async function executeWorkspaceConversationAgentCore(input: {
   // Original task instructions remain valid lookup clues even when sourceText
   // carries a separate screenshot transcript. Memory still uses exact sources.
   const lookupTexts = () => [input.objective, ...sourceTexts()];
+  // Frozen source admissions: every user-authored source is bound ONCE at
+  // admission (Run start or steering admission) to its exact messageID/text
+  // identity; only a hash of the text is kept, the text is never re-emitted.
+  // A later message-map text change is a different source identity: the
+  // original binding stays revoked and can never be revived by re-registering
+  // the same clue under mutated text. Each text subject's currency guard
+  // composes the host ownership assertion with that frozen binding.
+  interface AuthoredAdmission {
+    messageID: string;
+    textHash: string;
+    subjects: readonly import("@talent-signal/agent").AuthorizedPublicSubject[];
+  }
+  const authoredAdmissions = new Map<string, AuthoredAdmission>();
+  const admitAuthoredSource = (admittedID: string, text: string) => {
+    if (authoredAdmissions.has(admittedID)) return;
+    authoredAdmissions.set(admittedID, {
+      messageID: admittedID,
+      textHash: sha256(text),
+      subjects: publicSubjectRegistry(text).subjects(),
+    });
+  };
+  admitAuthoredSource(sourceMessageID, input.sourceText ?? input.objective);
+  for (const [admittedID, admittedText] of messageSources) admitAuthoredSource(admittedID, admittedText);
   let reconcileDeclinedProposals: () => Promise<void> = async () => {};
   const steering = input.steering ? {
     nextBatchAtSafePoint: async (checkpoint?: { final?: boolean }) => {
@@ -411,6 +444,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         const existing = messageSources.get(message.messageID);
         if (existing !== undefined && existing !== message.text) throw new Error("STEER_MESSAGE_ID_CONFLICT");
         messageSources.set(message.messageID, message.text);
+        admitAuthoredSource(message.messageID, message.text);
       }
       await reconcileDeclinedProposals();
       return batch;
@@ -473,6 +507,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
   const identityLookups = new Map<string, { query: string; image: { artifactId: string; index: number; hash: string } | null }>();
   const resolvedSubjectCurrent = async (personID: string): Promise<boolean> => {
     if (input.humanIdentityBinding?.personID === personID) return true;
+    if (sourceTexts().some(contactLookupDeclined)) return false;
     const lookup = identityLookups.get(personID);
     if (!lookup || !isResolvedSubject(personID)) return false;
     if (lookup.image && !await input.imageIsCurrent?.(lookup.image.artifactId, lookup.image.index, lookup.image.hash)) return false;
@@ -485,6 +520,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
   };
   const declinedProposals = () => sourceTexts().some(analysisOnlyOrNoSave);
   const declinedContact = () => declinedProposals() || sourceTexts().some(text => CONTACT_DECLINE.test(authoredNote(text)));
+  let stagedContactSource: { id: string; text: string } | null = null;
   let stagedMemorySourceID = sourceMessageID;
   let stagedMemoryHasContact = false;
   let mcpProposalsPending = false;
@@ -524,17 +560,75 @@ export async function executeWorkspaceConversationAgentCore(input: {
   // Queue admission is already acknowledged independently of this execution.
   const durationMs = workspaceConversationTimeoutMs(input.provider.id);
   const abort = new AbortController();
+  // Image/counterparty/tentative registrations keep their own evidence guard
+  // and can never carry the authored-homepage authority assigned only by the
+  // positive authored objective parser.
+  const authoredSourceGuard = (admission: AuthoredAdmission) => async (): Promise<boolean> => {
+    await input.assertCurrent?.();
+    const live = messageSources.get(admission.messageID);
+    if (live !== undefined) return sha256(live) === admission.textHash;
+    // A resolved human decision is host tool-result data, never a message
+    // source: only that hostResult continuation keeps its original task text
+    // bound while the ownership guard passes.
+    return Boolean(input.hostResult) && admission.messageID === sourceMessageID;
+  };
+  // ONLY an EXACT identical complete clue (same name, homepage and anchors)
+  // may share guards across admissions; anything else fails closed.
+  const sameCompleteClue = (
+    left: WorkspacePublicResearchSubject,
+    right: WorkspacePublicResearchSubject,
+  ): boolean =>
+    left.name === right.name
+    && (left.authoredHomepage ?? null) === (right.authoredHomepage ?? null)
+    && JSON.stringify(left.contextAnchors ?? []) === JSON.stringify(right.contextAnchors ?? []);
   const research = input.researchClient ? createWorkspacePublicResearch({
     client: input.researchClient, taskID: randomUUID(), authorizedSubjects: () => {
       if (lookupTexts().some(text => publicSearchDeclined(text))) return [];
-      return [...new Map([subjects.subjects(), ...sourceTexts().slice(1).map(text => publicSubjectRegistry(text).subjects())]
-        .flat().map(subject => [subject.id, subject])).values()]
-        .map(subject => ({
+      const merged = new Map<string, WorkspacePublicResearchSubject>();
+      const blocked = new Set<string>();
+      for (const admission of authoredAdmissions.values()) {
+        const guard = authoredSourceGuard(admission);
+        for (const subject of admission.subjects) {
+          // Text subjects carry no registry guard: the frozen authored-source
+          // binding replaces it. Registrations with their own guard are added
+          // separately below.
+          if (subject.isCurrent || blocked.has(subject.id)) continue;
+          const candidate: WorkspacePublicResearchSubject = {
+            id: subject.id,
+            name: subject.name,
+            ...(subject.anchors?.length ? { contextAnchors: subject.anchors } : {}),
+            ...(subject.authoredHomepage ? { authoredHomepage: subject.authoredHomepage } : {}),
+            isCurrent: guard,
+          };
+          const existing = merged.get(subject.id);
+          if (!existing) {
+            merged.set(subject.id, candidate);
+            continue;
+          }
+          // One complete clue admitted by multiple sources stays researchable
+          // while ANY exact unchanged source supports it (deduplicated
+          // guards). Different complete clues never borrow one another's
+          // guard, homepage or receipts and fail closed on a shared id.
+          if (!sameCompleteClue(existing, candidate)) {
+            merged.delete(subject.id);
+            blocked.add(subject.id);
+            continue;
+          }
+          const prior = existing.isCurrent ?? (async () => true);
+          existing.isCurrent = async () => (await prior()) || (await guard());
+        }
+      }
+      for (const subject of subjects.subjects()) {
+        if (!subject.isCurrent || merged.has(subject.id) || blocked.has(subject.id)) continue;
+        const own = subject.isCurrent;
+        merged.set(subject.id, {
           id: subject.id,
           name: subject.name,
           ...(subject.anchors?.length ? { contextAnchors: subject.anchors } : {}),
-          ...(subject.isCurrent ? { isCurrent: subject.isCurrent } : {}),
-        }));
+          isCurrent: async () => { await input.assertCurrent?.(); return own(); },
+        });
+      }
+      return [...merged.values()];
     }, signal: abort.signal,
   }) : null;
   const researchTools = research?.tools.map(tool => ({...tool,
@@ -588,12 +682,24 @@ export async function executeWorkspaceConversationAgentCore(input: {
     const target = name.normalize("NFKC").trim();
     if (!target || !groundingTexts.some(text => text.normalize("NFKC").includes(target))) return null;
     const contextAnchors = [...(anchors??[]), ...groundingTexts.flatMap(text=>publicContextAnchorsFromText(target,text))];
-    const existing = subjects.subjects().find(subject => subject.name.normalize("NFKC").trim() === target);
+    // A name+homepage authority is a DIFFERENT complete clue from this
+    // name-only (or name+anchored) tentative proposal: it is never borrowed as
+    // this proposal's authority. Identical complete clues still dedup.
+    const existing = subjects.subjects().find(subject => !subject.authoredHomepage && subject.name.normalize("NFKC").trim() === target);
     if (existing && (existing.anchors?.length || !contextAnchors.length)) return { id: existing.id, name: existing.name };
+    // The tentative subject stays bound to its exact source message text
+    // (hash-checked) and the host ownership guard; the model can widen
+    // neither. It never carries the authored-homepage authority.
+    const sourceNow = messageSources.get(binding);
+    const sourceHash = sourceNow === undefined ? null : sha256(sourceNow);
     const registered = subjects.registerTentative({
       name: target,
       binding,
-      isCurrent: async () => messageSources.has(binding),
+      isCurrent: async () => {
+        await input.assertCurrent?.();
+        const live = messageSources.get(binding);
+        return sourceHash !== null && live !== undefined && sha256(live) === sourceHash;
+      },
       ...(contextAnchors.length ? { anchors:contextAnchors } : {}),
       groundingTexts,
     });
@@ -887,7 +993,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
       if (imageMessageIDs.size && !imageMessageIDs.has(memorySourceID))
         return toolFailure(name, "MEMORY_SOURCE_REVIEW_SPLIT", "Keep each original source message and its images together.");
       for (const item of request.items) {
-        if (input.imageInspector && item.source_locator.kind === "image_region"
+        if (item.source_locator.kind === "image_region"
           && !await imageInspection.supportsExcerpt(item.source_locator.artifact_id, item.source_excerpt)) {
           return toolFailure(name, "MEMORY_SOURCE_UNGROUNDED", "Copy an exact visible image excerpt from the inspection; do not rewrite quotations. A contact-only card can use items: [].");
         }
@@ -1086,11 +1192,13 @@ export async function executeWorkspaceConversationAgentCore(input: {
       );
     }
     const request = parsed.data;
-    if ((request.operation === "propose_create" || request.operation === "propose_update") && declinedProposals()) {
+    if ((request.operation === "propose_create" || request.operation === "propose_update") && declinedContact()) {
       return toolFailure(name, "CONTACT_PROPOSAL_INTENT_UNGROUNDED",
         "The current user requested analysis only or declined saved changes. Answer without a proposal.");
     }
     if (request.operation === "search") {
+      if (sourceTexts().some(contactLookupDeclined)) return toolFailure(name,
+        "CONTACT_LOOKUP_DECLINED", "The user declined contact lookup; a separate editable new-contact draft remains available.");
       const query = normalized(request.query);
       const groundedInMessage = Boolean(query) && lookupTexts().some(text => normalized(text).includes(query));
       // An image observation authorizes only a minimal candidate lookup: the
@@ -1243,8 +1351,11 @@ export async function executeWorkspaceConversationAgentCore(input: {
 
     // Proposal fields and intent must belong to one original authored
     // message; fragments never become a fabricated combined source.
-    const proposalSource = [...messageSources].reverse().find(([, text]) =>
-      request.source_excerpts.every(excerpt => isGroundedExcerpt(excerpt, text)));
+    const matchesProposal = ([, text]: [string, string]) =>
+      request.source_excerpts.every(excerpt => isGroundedExcerpt(excerpt, text));
+    // Repeated names/clues in history cannot displace the current authored source.
+    const proposalSource = [...messageSources].filter(matchesProposal).find(([id]) => id === sourceMessageID)
+      ?? [...messageSources].reverse().find(matchesProposal);
     if (!proposalSource) {
       return toolFailure(
         name,
@@ -1318,7 +1429,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         "Source excerpts must include each proposed name, identity clue, and new relationship field.");
     }
 
-    const possibleDuplicates = request.operation === "propose_create"
+    const possibleDuplicates = request.operation === "propose_create" && !sourceTexts().some(contactLookupDeclined)
       ? (
           await input.contacts.search(request.identity_clue?.value ?? request.display_name)
         ).slice(0, 6)
@@ -1345,6 +1456,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
       accountID: input.workspaceID,
       sourceMessageID: proposalSource[0],
     });
+    stagedContactSource = { id: proposalSource[0], text: proposalSource[1] };
     runState.proposal = {
       kind: "contact_change_proposal",
       proposal_kind:
@@ -1544,6 +1656,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
       firstContactReceipts.length === 0 || firstContactResearchAnswerAlreadyCovered(body, firstContactReceipts)
         ? body
         : body + firstContactResearchAnswerSection(firstContactReceipts);
+    const captureImageObservation = defaultImageArtifactID
+      ? await imageInspection.preview(defaultImageArtifactID) : null;
     if (runState.memoryProposal?.contactStatus === "ambiguous" && "body" in output
       && !/同名|same.name/iu.test(output.body)) {
       output.body += /\p{Script=Han}/u.test(input.objective)
@@ -1593,6 +1707,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
             : null,
         memoryProposal: memoryRef(runState.memoryProposal),
         firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}),
         providerResult,
       };
     }
@@ -1626,6 +1741,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
           : null,
         memoryProposal: memoryRef(runState.memoryProposal),
         firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}),
         providerResult,
       };
     }
@@ -1665,6 +1781,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         },
         memoryProposal: memoryRef(runState.memoryProposal),
         firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}),
         providerResult,
       };
     }
@@ -1676,6 +1793,56 @@ export async function executeWorkspaceConversationAgentCore(input: {
       throw new Error(
         "The Agent proposal output did not match a same-Run Tool candidate.",
       );
+    }
+    if (input.contactReviewSurface === "memory" && runState.proposal.proposal_kind === "create") {
+      // The queue persists only durable Memory references, never the legacy
+      // native event. Reuse its existing grounded staging/withdrawal gates.
+      const proposal = runState.proposal;
+      const contactSource = stagedContactSource as { id: string; text: string } | null;
+      const hadReview = Boolean(runState.memoryProposal);
+      const sourceCurrent = () => contactSource !== null
+        && messageSources.get(contactSource.id) === contactSource.text;
+      if (!hadReview && sourceCurrent()) {
+        const locator = { kind: "message" as const, session_id: input.sessionID ?? null, message_id: contactSource!.id };
+        await invokeTool("memory_review", { operation: "propose", contact_decision: "new",
+          person_display_label: proposal.display_name, new_contact_source_locator: locator,
+          items: [
+            ...(proposal.identity_clue ? [{ scope: "person", operation: "add", statement_kind: "source_statement",
+              dependence_kind: "contact", display_text: `消息提供的联系线索（未确认）：${proposal.identity_clue.value}`,
+              source_excerpt: proposal.identity_clue.value, source_locator: locator,
+              time_status: "unknown", sensitivity: "sensitive", reason: "Review the exact authored contact clue; identity remains tentative." }] : []),
+            ...(proposal.relationship_context ? [{ scope: "relationship", operation: "add", statement_kind: "source_statement",
+              dependence_kind: "relationship", display_text: `消息提供的关系背景（未确认）：${proposal.relationship_context}`,
+              source_excerpt: proposal.relationship_context, source_locator: locator,
+              time_status: "unknown", sensitivity: "normal", reason: "Review the exact authored relationship context without confirming it." }] : []),
+          ],
+        });
+        // Recheck source and live claim before returning a new reference.
+        // Cleanup uses existing authority; failure must never become success.
+        try {
+          await assertProposalCurrent();
+          if (!sourceCurrent()) throw new Error("CONTACT_REVIEW_SOURCE_CHANGED");
+        } catch (error) {
+          if (runState.memoryProposal) {
+            if (!input.memory?.withdraw) throw new Error("MEMORY_WITHDRAWAL_UNAVAILABLE");
+            await input.memory.withdraw({ proposalID: runState.memoryProposal.proposalID,
+              expectedRevision: runState.memoryProposal.proposalRevision, sourceMessageID: contactSource!.id });
+            runState.memoryProposal = null;
+          }
+          if (!(error instanceof Error && error.message === "CONTACT_REVIEW_SOURCE_CHANGED")) throw error;
+        }
+      }
+      const available = Boolean(runState.memoryProposal);
+      return {
+        block: block(available ? "answer" : "clarification", available ? "待确认内容" : "审阅暂不可用",
+          withResearchSection(available
+            ? hadReview ? "已有一张待确认卡片，请先核对其中的内容；未另建联系人提议。" : "请核对下方待确认内容。确认前不会更改联系人或记忆。"
+            : "The contact review is unavailable. No contact or Memory was saved."), false),
+        event: null,
+        memoryProposal: memoryRef(runState.memoryProposal),
+        firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}), providerResult,
+      };
     }
     return {
       block: block(
@@ -1689,6 +1856,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
       event: runState.proposal,
       memoryProposal: memoryRef(runState.memoryProposal),
       firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}),
       providerResult,
     };
   } finally {
@@ -1958,9 +2126,11 @@ export async function executeWorkspaceConversationAgent(input: {
     objective: input.objective,
     ...(input.sourceText === undefined ? {} : { sourceText: input.sourceText }),
     provider: input.provider,
+    ...(input.hostAuthority ? { contactReviewSurface: "memory" as const } : {}),
     workspaceID: input.auth.accountId,
-    ...(process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING === "true" && process.env.ARK_API_KEY
-      ? { imageInspector: new ArkCurrentImageInspector(process.env.ARK_API_KEY) } : {}),
+    // This queue carries no persisted, source-bound authorization for a
+    // supplementary image processor. Global flags/credentials cannot grant it;
+    // leave inspection unavailable while the main provider can answer images.
     ...(process.env.TALENT_SIGNAL_WORKSPACE_PUBLIC_RESEARCH_ENABLED === "true" && process.env.TALENT_SIGNAL_PERSON_RESEARCH_SOCKET
       ? {researchClient: new LocalContactResearchClient(process.env.TALENT_SIGNAL_PERSON_RESEARCH_SOCKET)} : {}),
     imageIsCurrent: (artifactId, index, hash) => imageCurrent(input.database, artifactId, index, hash),

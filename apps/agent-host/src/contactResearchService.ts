@@ -35,6 +35,7 @@ function failureCode(error: unknown): ContactResearchFailureCode {
     ? error.code : error instanceof Error ? error.message : "";
   if (code.endsWith("AUTH_FAILED") || code.endsWith("CREDENTIAL_MISSING")) return "AUTH_FAILED";
   if (code.endsWith("RATE_LIMITED")) return "RATE_LIMITED";
+  if (code.endsWith("CREDIT_UNAVAILABLE")) return "REJECTED";
   if (code.endsWith("UNAVAILABLE")) return "UNAVAILABLE";
   if (code.includes("RESPONSE")) return "RESPONSE_INVALID";
   if (code.includes("LIMIT")) return "LIMIT_INVALID";

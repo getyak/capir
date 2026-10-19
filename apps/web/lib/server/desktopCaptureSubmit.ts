@@ -58,7 +58,7 @@ export async function desktopCaptureSubmitRoute(request: Request, sessionId: str
     catch { return reply({ message: "截图内容格式无效。" }, 400); }
     if (!input || input.session_id !== sessionId || input.message_id !== messageId || input.idempotency_key !== messageId ||
       input.owner_scope !== workspaceSessionDraftStorageScope(claims) ||
-      input.objective !== "" || !Array.isArray(input.images) || input.images.length !== 1) {
+      typeof input.objective !== "string" || input.objective.length > 1000 || !Array.isArray(input.images) || input.images.length !== 1) {
       return reply({ code: "capture_intent_invalid", message: "截图与当前工作区不匹配。" },
         input?.owner_scope !== workspaceSessionDraftStorageScope(claims) ? 409 : 400);
     }
@@ -69,7 +69,7 @@ export async function desktopCaptureSubmitRoute(request: Request, sessionId: str
     }
     const queueInput: ConversationQueueAdmitRequest = {
       session_id: sessionId, message_id: messageId,
-      idempotency_key: messageId, objective: "", images: input.images,
+      idempotency_key: messageId, objective: input.objective, images: input.images,
     };
     // Re-enter the same owner-checked durable queue path. It rechecks login and
     // image integrity; this wrapper owns only the explicit Mac capture scope.

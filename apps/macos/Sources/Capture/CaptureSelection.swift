@@ -1,50 +1,6 @@
 import AppKit
 import ScreenCaptureKit
 
-enum CaptureSelectionError: LocalizedError {
-    case busy, cancelled, empty, outsideDisplay, displayUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .busy: "已有一次截图正在进行。"
-        case .cancelled: "截图已取消，没有上传任何内容。"
-        case .empty: "请先框选要截取的区域。"
-        case .outsideDisplay: "选区超出了当前显示器，请在一块屏幕内重试。"
-        case .displayUnavailable: "显示器内容暂时无法获取，请重试截图。"
-        }
-    }
-}
-
-enum CaptureSelectionGeometry {
-    /// Selection is measured from the overlay's upper-left corner, then mapped
-    /// to the exact captured image. Reject cross-display drags and empty crops.
-    static func pixelRect(selection: CGRect, overlaySize: CGSize, imagePixelSize: CGSize) -> CGRect? {
-        guard overlaySize.width > 0, overlaySize.height > 0, imagePixelSize.width > 0, imagePixelSize.height > 0,
-              selection.width > 0, selection.height > 0, selection.minX >= 0, selection.minY >= 0,
-              selection.maxX <= overlaySize.width, selection.maxY <= overlaySize.height else { return nil }
-        let scaleX = imagePixelSize.width / overlaySize.width
-        let scaleY = imagePixelSize.height / overlaySize.height
-        let left = floor(selection.minX * scaleX)
-        let top = floor(selection.minY * scaleY)
-        let right = ceil(selection.maxX * scaleX)
-        let bottom = ceil(selection.maxY * scaleY)
-        guard right > left, bottom > top else { return nil }
-        return CGRect(x: left, y: top, width: right - left, height: bottom - top)
-    }
-}
-
-struct CaptureSelectionResult {
-    let image: CGImage
-    let capturedAt: Date
-    let preview: Bool
-}
-
-@MainActor
-protocol CaptureSelecting {
-    func select() async throws -> CaptureSelectionResult
-    func cancel()
-}
-
 private final class CaptureSelectionPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -131,12 +87,20 @@ final class CaptureOverlayController: CaptureSelecting {
     private var images: [ObjectIdentifier: CGImage] = [:]
     private var capturedAt = Date()
     private var selecting = false
+    private var selectionRevision = 0
+    private var sourceApplication: NSRunningApplication?
 
     func select() async throws -> CaptureSelectionResult {
         guard !selecting, continuation == nil else { throw CaptureSelectionError.busy }
         selecting = true
         defer { selecting = false }
+        let displayObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in Task { @MainActor in self?.cancel() } }
+        defer { NotificationCenter.default.removeObserver(displayObserver) }
+        let revision = selectionRevision
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard revision == selectionRevision else { throw CaptureSelectionError.cancelled }
         let screens = NSScreen.screens
         var pairs: [(NSScreen, CGImage)] = []
         for screen in screens {
@@ -149,10 +113,12 @@ final class CaptureOverlayController: CaptureSelecting {
             configuration.showsCursor = false
             configuration.capturesAudio = false
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            guard revision == selectionRevision else { throw CaptureSelectionError.cancelled }
             pairs.append((screen, image))
         }
         guard !pairs.isEmpty else { throw CaptureSelectionError.displayUnavailable }
         capturedAt = Date()
+        sourceApplication = NSWorkspace.shared.frontmostApplication
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             for (screen, image) in pairs {
@@ -161,14 +127,22 @@ final class CaptureOverlayController: CaptureSelecting {
                 panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
                 panel.backgroundColor = .clear
                 panel.isOpaque = false
+                panel.isReleasedWhenClosed = false
                 let view = CaptureSelectionView(frame: CGRect(origin: .zero, size: screen.frame.size), image: image)
-                bindSelectionCallbacks(to: view, image: image)
+                let display = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber).map {
+                    CaptureRelayDisplay(id: $0.uint32Value, frame: screen.frame,
+                                        visibleFrame: screen.visibleFrame, scale: screen.backingScaleFactor)
+                }
+                bindSelectionCallbacks(to: view, image: image, display: display)
                 panel.contentView = view
                 panels.append(panel)
                 images[ObjectIdentifier(panel)] = image
                 panel.makeKeyAndOrderFront(nil)
                 panel.makeFirstResponder(view)
             }
+            // Panels now own the frozen images. Do not keep a second full
+            // desktop array alive in this suspended async selection frame.
+            pairs.removeAll()
             NSApp.activate(ignoringOtherApps: true)
         }
     }
@@ -176,24 +150,26 @@ final class CaptureOverlayController: CaptureSelecting {
     /// Capture geometry by value. The view owns these closures and the full
     /// display image, so a closure that captures the view would retain both
     /// after the selection panel closes.
-    func bindSelectionCallbacks(to view: CaptureSelectionView, image: CGImage) {
+    func bindSelectionCallbacks(to view: CaptureSelectionView, image: CGImage, display: CaptureRelayDisplay? = nil) {
         let overlaySize = view.bounds.size
         view.didSelect = { [weak self] area, preview in
             guard let self else { return }
             guard let pixels = CaptureSelectionGeometry.pixelRect(selection: area, overlaySize: overlaySize,
                                                                   imagePixelSize: CGSize(width: image.width, height: image.height)),
-                  let cropped = image.cropping(to: pixels) else {
+                  let cropped = CaptureSelectedImage.copyRegion(image, pixels: pixels) else {
                 self.finish(.failure(area.isEmpty ? CaptureSelectionError.empty : CaptureSelectionError.outsideDisplay))
                 return
             }
-            self.finish(.success(.init(image: cropped, capturedAt: self.capturedAt, preview: preview)))
+            let origin = display.flatMap { CaptureRegionOrigin.region(selection: area, display: $0) }
+            self.finish(.success(.init(image: cropped, capturedAt: self.capturedAt, preview: preview, origin: origin)))
         }
         view.didCancel = { [weak self] in self?.finish(.failure(CaptureSelectionError.cancelled)) }
         view.didRequestWindow = { [weak self] in self?.selectWindowInstead() }
     }
 
     private func selectWindowInstead() {
-        for panel in panels { panel.orderOut(nil) }
+        let revision = selectionRevision
+        for panel in panels { panel.contentView = nil; panel.close() }
         panels.removeAll()
         images.removeAll()
         Task { @MainActor in
@@ -202,22 +178,38 @@ final class CaptureOverlayController: CaptureSelecting {
                 // native window pixels. The existing local tool keeps its
                 // historical 2560-pixel default.
                 let payload = try await SystemWindowCaptureService.shared.captureOneWindow(maximumDimension: nil)
+                guard revision == selectionRevision else { return }
                 guard let bitmap = NSBitmapImageRep(data: payload.imagePNG), let image = bitmap.cgImage else {
                     throw CaptureSelectionError.empty
                 }
                 finish(.success(.init(image: image, capturedAt: capturedAt, preview: false)))
-            } catch { finish(.failure(error)) }
+            } catch {
+                guard revision == selectionRevision else { return }
+                finish(.failure(error))
+            }
         }
     }
 
     func cancel() { finish(.failure(CaptureSelectionError.cancelled)) }
 
     private func finish(_ outcome: Result<CaptureSelectionResult, Error>) {
-        for panel in panels { panel.orderOut(nil) }
+        selectionRevision += 1
+        // Restore only the app displaced by our selector. A later user focus
+        // choice, preview editor, or system window picker owns its own focus.
+        let restore = panels.contains(where: \.isKeyWindow) &&
+            NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        let previousApplication = sourceApplication
+        sourceApplication = nil
+        for panel in panels { panel.contentView = nil; panel.close() }
         panels.removeAll()
         images.removeAll()
         let pending = continuation
         continuation = nil
+        if restore, let previousApplication,
+           previousApplication.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+           !previousApplication.isTerminated {
+            previousApplication.activate(options: [])
+        }
         pending?.resume(with: outcome)
     }
 }
