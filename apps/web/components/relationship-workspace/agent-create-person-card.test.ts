@@ -280,8 +280,10 @@ describe("create-contact mount admission", () => {
       ? Promise.resolve(Response.json({ message: "lookup unavailable" }, { status: 503 }))
       : Promise.resolve(Response.json({ receipts: [receipt()] })));
     await render();
+    expect(host.textContent).not.toContain("身份检查必需");
     await type('input[placeholder="例如：陈雅宁"]', "小雨");
     await flush();
+    expect(host.textContent).not.toContain("已暂停创建新人物");
     await clickPrimary();
     const posts = resourcePosts();
     expect(posts).toHaveLength(1);

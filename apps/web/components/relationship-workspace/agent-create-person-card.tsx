@@ -31,7 +31,6 @@ import {
   canSelectPersonForIdentityClue,
   confirmedHandlePersonMatches,
   exactPersonNameMatches,
-  expiredHandlePersonMatches,
   mergePersonDirectoryMatches,
   personIdentityTemporalRole,
 } from "@/lib/agent-person-resolution";
@@ -489,7 +488,6 @@ export function AgentCreatePersonCard({
     : [];
   const confirmedHandleMatches =
     confirmedHandlePersonMatches(matches);
-  const expiredHandleMatches = expiredHandlePersonMatches(matches);
   const visibleMatches = showAllMatches ? matches : matches.slice(0, 3);
   const newPersonAllowed = canCreateDistinctPerson({
     name,
@@ -1128,12 +1126,12 @@ export function AgentCreatePersonCard({
         </span>
         <div>
           <strong id="agent-create-title">
-            {initialDraft ? "新联系人草稿" : "创建前先确认人物身份"}
+            {initialDraft ? "新联系人草稿" : "添加联系人"}
           </strong>
           <p>
             {initialDraft
-              ? "智能助理从你的消息中提取了一个提议。任何内容变化前，请审阅身份结果。"
-              : "先查找现有身份，再绑定一段关系和一个来源。"}
+              ? "核对姓名后即可添加，其他信息可以稍后补充。"
+              : "填写姓名即可添加，现有匹配供你参考。"}
           </p>
         </div>
         <button
@@ -1150,7 +1148,7 @@ export function AgentCreatePersonCard({
         <div className="context-agent-create__draft-summary">
           <p>
             <strong>{name || "需要姓名"}</strong>
-            <span>{contextLabel || "需要关系背景"}</span>
+            <span>{contextLabel || "关系背景可稍后补充"}</span>
           </p>
           <small>{firstNote}</small>
           <i>{draftStateLine()}</i>
@@ -1292,7 +1290,7 @@ export function AgentCreatePersonCard({
         }
       >
         <header>
-          <span>身份检查</span>
+          <span>现有联系人匹配</span>
           <i>
             {committedSource
               ? "已确定"
@@ -1306,7 +1304,7 @@ export function AgentCreatePersonCard({
                     ? `${matches.length} 个可能匹配`
                     : lookupState === "error"
                       ? "不可用"
-                      : "必需"}
+                      : "可选"}
           </i>
         </header>
         {committedSource ? (
@@ -1326,7 +1324,7 @@ export function AgentCreatePersonCard({
           <p>当前登录空间尚未通过核验，已停止提交。请重新打开工作台后继续。</p>
         ) : lookupState === "idle" ? (
           <p>
-            选择新建或现有身份前，请输入姓名或已知身份线索。
+            填写姓名即可新建，也可以提供线索查找现有联系人。
           </p>
         ) : lookupState === "loading" ? (
           <p>
@@ -1336,7 +1334,7 @@ export function AgentCreatePersonCard({
         ) : lookupState === "error" ? (
           <div className="context-agent-identity-error">
             <p>
-              无法检查现有人物，已暂停创建新人物。
+              暂时无法查找现有联系人，仍可创建新联系人。
             </p>
             <button
               className="context-secondary-button"
