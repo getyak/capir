@@ -124,3 +124,28 @@ Do not reuse this allocation or retain plaintext test credentials in evidence.
 pnpm docs:check passed on this worktree. The new plan still requires a final
 check after its last edit. The primary checkout's 425 preexisting files have
 hashes recorded for final preservation readback.
+
+Final readback: all 425 protected file hashes and primary HEAD are unchanged.
+The owned CLI grant was revoked remotely and its local credential removed. Both
+authorization tabs were closed. Browser approval screenshot is retained as
+mac-login-confirmed.png; it establishes browser approval, while the separately
+observed native account/workspace establishes the Mac handoff.
+
+Native Computer Use remained unavailable after an explicit session reset.
+The browser connection still works, but its security policy rejected opening
+chrome://extensions because only HTTP/HTTPS protocols are allowed. Do not use
+raw browser commands, local profile inspection or another surface to bypass
+that rejection. Installed Chrome-extension acceptance remains unverified and
+requires an allowed, owner-assisted verification path.
+
+The canonical Agent context paragraph now captures the repeated natural-language
+feedback and the compatible-dated-updates rule. It changes product expectations,
+not shipped prompts or original frozen evaluation scores. The first documentation
+check exposed the existing 320-line canonical context ceiling; consolidating the
+paragraph kept the original line budget, and the complete docs/Wiki/architecture
+gate passed. No runtime code/configuration changed and no service redeploy was
+required by these documentation-only edits.
+
+Current whole-issue result is still zero newly Done. GET-40 renewal remains
+pending; its AI Ready label was removed and the exact paid-stop condition is
+recorded under Needs Human. All original acceptance gates remain in force.
