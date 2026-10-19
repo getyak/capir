@@ -1,0 +1,66 @@
+{
+  "status": "accepted locally; clean resident deployment pending",
+  "review_diff_sha256": "ab96d309cbf74cc5c7c231f04b06f59fe10fb6c0ad7827666039cad3aa00eaef",
+  "scope": [
+    "apps/web/components/settings-workspace.module.css",
+    "apps/web/components/account-settings.module.css"
+  ],
+  "body_help_error_actions_px": 15,
+  "metadata_px": 13,
+  "mobile_input_px": 16,
+  "mobile_navigation": "seven existing links, three columns,44px rows;6px side padding at<=760 avoids320label wrap; structure preserved",
+  "mobile_profile_heading_top_after_px": 503.890625,
+  "layout_tradeoff": "mobile title moves about11px lower with44px targets; three-row navigation remains deferred structural gap",
+  "widths": [
+    320,
+    390,
+    1440
+  ],
+  "horizontal_overflow": false,
+  "keyboard": "Meta+F focuses search;2px ring;ArrowDown+Enter opens actual Versions query;Escape clears and returns search focus",
+  "normal_transition_seconds": 0.18,
+  "reduced_transition_seconds": 0,
+  "forced_dark": "actual selected theme Highlight/HighlightText,2pxHighlight focus;actual Save primary ButtonText/ButtonFace withHighlight ring; no Save executed",
+  "theme_preference": "dark preview canceled;original light restored; no preference saved",
+  "source_css_fixture": "exact final account module; synthetic only, readonly input16/error15/focus2,longreference/email wrap; no account or mutation;server stopped",
+  "native_boundary": "installed0.2.8 device Settings is pure native; these shared Web CSS changes do not claim a pure native settings-window update",
+  "focused_tests": {
+    "passed": 58,
+    "files": 7,
+    "final_run": "2026-10-20 05:10:05"
+  },
+  "lint": "passed",
+  "review_findings_closed": [
+    "mobile16 overridden bylater15 rule",
+    "forced default/hover/active colors andfocus specificity",
+    "parent: nonexistent surface-selected token replaced with existing surface-strong",
+    "parent:320 label wrap fixed with sidepadding only"
+  ],
+  "worker": {
+    "id": "20261020-041350-79b98de3",
+    "base": "ff48d642",
+    "turns": 46,
+    "credits_estimate": 101468320,
+    "billing": "Token Plan Credits estimate;notUSD"
+  },
+  "images": {
+    "07-settings-resident-light-390-before.png": "profile-390-before.png",
+    "07-settings-resident-light-1440-before.png": "profile-1440-before.png",
+    "07-settings-local-light-390-after.png": "profile-390-after.png",
+    "07-settings-local-light-1440-after.png": "profile-1440-after.png",
+    "07-settings-appearance-resident-light-390-before.png": "appearance-390-before.png",
+    "07-settings-appearance-resident-light-1440-before.png": "appearance-1440-before.png",
+    "07-settings-appearance-local-light-390-after.png": "appearance-390-after.png",
+    "07-settings-appearance-local-light-1440-after.png": "appearance-1440-after.png",
+    "07-settings-search-390-after.png": "search-390.png",
+    "07-settings-empty-search-320-after.png": "search-empty-320.png",
+    "07-settings-profile-320-after.png": "profile-320.png",
+    "07-settings-account-320-after.png": "account-320.png",
+    "07-settings-appearance-dark-1440-after.png": "appearance-dark-1440.png",
+    "07-settings-forced-dark-1440-after.png": "appearance-forced-dark-1440.png",
+    "07-settings-forced-dark-save-after.png": "save-forced-dark.png",
+    "07-settings-source-css-recovery-320.png": "fixture-recovery-320.png",
+    "07-settings-source-css-recovery-390.png": "fixture-recovery-390.png",
+    "07-settings-source-css-forced-dark-320.png": "fixture-forced-dark-320.png"
+  }
+}
