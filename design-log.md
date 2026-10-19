@@ -19,7 +19,7 @@ Reference parity is a visual judgment, never established by passing functional t
 
 ### Pending decisions
 
-The native window and Web sidebar both repeat branding and navigation chrome. A unified desktop title/navigation treatment may be worthwhile, but it changes window structure and remains deferred. The current session first improves shared content and control hierarchy without changing navigation architecture.
+The native window and Web sidebar both repeat branding and navigation chrome. A unified desktop title/navigation treatment may be worthwhile, but it changes window structure and remains deferred. The current session first improves shared content and control hierarchy without changing navigation architecture. Mobile Settings currently places seven section links above the content in three rows. A compact section chooser or a single scrolling tab rail could improve first-screen access, but changes navigation structure and remains a pending decision.
 
 ### Loop 0 — baseline inspection
 
@@ -97,3 +97,20 @@ A desktop-height floor pushed the narrow empty-state explanation behind the mobi
 At 390px the empty heading moves from 728.28px to 639.92px, and its explanation ends at 704.42px. At 1440px the heading remains at 553.22px. [Dark empty state](design-log/2026-10-20/round-04/web-dark-390-after.png), [actual loading](design-log/2026-10-20/round-04/web-390-loading.png), and [320px keyboard-expanded review](design-log/2026-10-20/round-04/web-dark-320-expanded.png) were checked without page overflow. The expanded capture intentionally follows keyboard focus and is scrolled. Error/loading proof uses a temporarily paused or failed Time Fetch in the isolated QA tab, with interception cleared afterward; Enter on Retry restores the real response. No response fixture, record write or authentication bypass is used.
 
 Independent source review found no concrete issue at diff `40b39082a7aea6cba48e61d8f09a54bfb148c644e26796bc9fb4fa199ba8c698`. The 38 existing Time tests, Web lint, typecheck and documentation checks pass after the display-copy change. [Verification receipt](design-log/2026-10-20/round-04/verification.json) records local proof; production and native after-proof will be attached after the next clean combined build.
+
+
+### Loop 6 — Extension choices stop competing with their content
+
+**Decision:** accepted locally; resident deployment and native after-proof pending. Loop 5's separate shared-sidebar batch is still being verified.
+
+Four full-width black catalog buttons and a black selected direction tab gave utility controls more weight than the service descriptions. Direction tabs now use one fine selected underline. Catalog choices use compact secondary controls within the same existing grid. The outgoing-client empty state uses whitespace instead of another box. Body, error and empty copy use the shared 15px size, with 13px domain/auth metadata. Request, submission and confirmation primary controls remain distinct; no service, permission, route, record or business logic changes.
+
+| Surface | Before | After |
+| --- | --- | --- |
+| Web · 390 × 844 | ![Before: competing catalog actions](design-log/2026-10-20/round-06/web-390-before.png) | ![After: service content leads](design-log/2026-10-20/round-06/web-390-after.png) |
+| Web · 1440 × 1000 | ![Before: four black action bars](design-log/2026-10-20/round-06/web-1440-before.png) | ![After: quiet peer choices](design-log/2026-10-20/round-06/web-1440-after.png) |
+| Web · outgoing client empty state | ![Before: framed empty panel](design-log/2026-10-20/round-06/outbound-390-before.png) | ![After: clear next action](design-log/2026-10-20/round-06/outbound-390-after.png) |
+
+At 390px, the first service starts at 494.08px instead of 564.72px: 70.64px earlier. Catalog targets remain 90 × 44px; both direction tabs remain at least 44px tall and sit on one row at 320. The custom form stays within 320px, with 44px inputs and 16px input text. [Dark mobile](design-log/2026-10-20/round-06/web-dark-390-after.png), [dark desktop](design-log/2026-10-20/round-06/web-dark-1440-after.png), [forced colors](design-log/2026-10-20/round-06/web-forced-colors-390.png) and [real read failure](design-log/2026-10-20/round-06/web-error-390.png) were checked. Actual forced-color inspection caught transparent unselected tab borders becoming black; explicit Canvas/Highlight borders fix the ambiguous selection. Arrow keys move selection and focus, and the 2px outline remains visible. Reduced motion removes the 180ms transitions.
+
+A temporarily failed directory Fetch disables all four choices without creating a connection or token. After interception is cleared, keyboard Reload restores all four and removes the error. All 28 existing extension/directory/request tests, Web lint and documentation checks pass. Independent final source review found no concrete P0–P2 at diff `6fa45e851b5e0745b93feadbcbb5a8ab41de8a5b6a415ca601a8df161df45768`. [Verification receipt](design-log/2026-10-20/round-06/verification.json). Scrolled or stale-painted captures were rejected; the final comparison checks viewport, theme and scroll position before capture and visually verifies saved pixels. Production/native proof will follow the next clean combined build.
