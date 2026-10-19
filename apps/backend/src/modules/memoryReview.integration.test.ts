@@ -2907,6 +2907,50 @@ describe.skipIf(!pool)("Memory review integration", () => {
     }
   });
 
+  it.each(["available", "artifact", "session", "other-account"] as const)(
+    "rechecks %s revocation for a main-model image contact-only save", async revoked => {
+      const auth = await makeAuth(`empty-image-${revoked}`);
+      const sessionId = randomUUID(), messageId = randomUUID(), data = Buffer.from([1, 2, 3, 4]);
+      const image = { messageId, imageIndex: 0, attachmentId: randomUUID(), fileName: "synthetic-contact.png",
+        mediaType: "image/png" as const, byteSize: data.length,
+        contentHash: createHash("sha256").update(data).digest("hex"), data };
+      await insertSourceSession(auth, sessionId, messageId, "", [image]);
+      const artifactID = `conversation-image-${messageId}-0-${image.attachmentId}`;
+      const provider = {
+        providerId: "zhipu-chat-completions" as const, id: "synthetic-contact-revocation", model: "synthetic",
+        sdkVersion: "synthetic.v1", supportsImageInput: true,
+        inputCapabilities: { text: true, image: true, imageUnderstanding: true }, answer: vi.fn(),
+        run: vi.fn(async (_request: AgentProviderRequest, invoke: (name: string, input: unknown) => Promise<unknown>) => {
+          expect(await invoke("memory_review", { operation: "propose", contact_decision: "new", person_display_label: "Synthetic contact",
+            new_contact_source_locator: { kind: "image_region", artifact_id: artifactID, image_index: 0 }, items: [] }))
+            .toMatchObject({ ok: true });
+          return { structuredOutput: { outcome: "reply", title: "Review", body: "Review the contact." },
+            inputTokens: 1, outputTokens: 1, estimatedUsd: 0, turns: 1, permissionDenials: [] };
+        }),
+      };
+      const execution = await executeUnscopedChatTask({ request: { idempotency_key: randomUUID(), objective: "", session_id: sessionId, message_id: messageId },
+        provider: provider as never, database: pool!, auth, images: [image] });
+      const proposalID = execution.body.memory_proposal!.proposal_id;
+      const opened = await open(auth, proposalID, "chat");
+      expect(opened.review.items).toEqual([]);
+      if (revoked !== "available") {
+        const owner = revoked === "other-account" ? await makeAuth("unrelated-revocation") : auth;
+        await pool!.query("INSERT INTO memory_source_revocations(id,account_id,source_kind,source_id,reason) VALUES($1,$2,$3,$4,'source_revoked')",
+          [randomUUID(), owner.accountId, revoked === "session" ? "session" : "artifact", revoked === "session" ? sessionId : artifactID]);
+      }
+      const saved = commit(auth, opened.review, opened.review_credential!, { selected: [], contactDecision: "new",
+        newContact: { display_label: "Synthetic contact", relationship_context: "" } });
+      const blocked = revoked === "artifact" || revoked === "session";
+      if (blocked) await expect(saved).rejects.toMatchObject({ code: "MEMORY_SOURCE_UNAVAILABLE" });
+      else expect((await saved).body.receipt.item_count).toBe(0);
+      const persisted = await pool!.query(`SELECT
+        (SELECT count(*)::int FROM subjects WHERE account_id=$1) AS people,
+        (SELECT count(*)::int FROM memory_commits WHERE account_id=$1) AS commits,
+        (SELECT count(*)::int FROM memory_items WHERE account_id=$1) AS memories`, [auth.accountId]);
+      expect(persisted.rows[0]).toEqual({ people: blocked ? 0 : 1, commits: blocked ? 0 : 1, memories: 0 });
+    },
+  );
+
   it("dispatches a real Session proposal, then decides contact and Memory siblings separately", async () => {
     const auth = await makeAuth("session-card-dispatch");
     const sessionId = randomUUID();
