@@ -1,0 +1,45 @@
+{
+  "question": "Can a window-scoped SwiftUI preferredColorScheme follow explicit Web appearance and release back to system without changing app-wide or account state?",
+  "mode": "Boundary",
+  "alternatives": [
+    "window preference follows explicit choice and nil restores system",
+    "native/Web appearance remains mismatched or system reset stays pinned"
+  ],
+  "decisive_evidence": [
+    "actual titlebar and synthetic WKWebView screenshot for light,dark,system",
+    "read-only native effective appearance and Web matchMedia result after explicit Inspect"
+  ],
+  "smallest_failure": "System reset keeps previous explicit dark palette, or invalid value changes preference",
+  "timebox_minutes": 20,
+  "stop_rule": "stop after normal, reset and invalid cases or20minutes; no production code based on inconclusive probe",
+  "scope": "local synthetic app only, no network, no account data, no persistent preferences, no native system appearance changes",
+  "cases": [
+    {
+      "id": "explicit-dark",
+      "case_type": "normal",
+      "source": "synthetic",
+      "split": "discovery",
+      "review": {
+        "status": "unreviewed"
+      }
+    },
+    {
+      "id": "system-after-dark",
+      "case_type": "edge",
+      "source": "synthetic",
+      "split": "discovery",
+      "review": {
+        "status": "unreviewed"
+      }
+    },
+    {
+      "id": "invalid-keeps-state",
+      "case_type": "failure",
+      "source": "synthetic",
+      "split": "discovery",
+      "review": {
+        "status": "unreviewed"
+      }
+    }
+  ]
+}

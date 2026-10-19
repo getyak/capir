@@ -31,5 +31,24 @@
   },
   "layout_fixture_is_live_data": false,
   "qa_session_cookie_secure": true,
-  "qa_session_cookie_http_only": true
+  "qa_session_cookie_http_only": true,
+  "native_later_observation": {
+    "resident_revision": "916c104c2526cbd0be088ce62ea6ebc66c934a68",
+    "app": "0.2.8 (125)",
+    "day": "2026-10-20",
+    "default_window_px": [
+      1123,
+      865
+    ],
+    "narrow_window_px": [
+      900,
+      720
+    ],
+    "schedule": "complete empty",
+    "unread": "complete empty",
+    "recovery": "observed after Finder activation and normal native Reload; causal step unconfirmed",
+    "data": "primary authorized workspace tasks visibly labeled fictional; distinct from isolated Web QA",
+    "dark_mode": "body verified; white native titlebar remains known gap",
+    "source_change_for_loading": "none"
+  }
 }

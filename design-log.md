@@ -19,7 +19,7 @@ Reference parity is a visual judgment, never established by passing functional t
 
 ### Pending decisions
 
-The native window and Web sidebar both repeat branding and navigation chrome. A unified desktop title/navigation treatment may be worthwhile, but it changes window structure and remains deferred. The current session first improves shared content and control hierarchy without changing navigation architecture. Mobile Settings currently places seven section links above the content in three rows. A compact section chooser or a single scrolling tab rail could improve first-screen access, but changes navigation structure and remains a pending decision.
+The native window and Web sidebar both repeat branding and navigation chrome. A unified desktop title/navigation treatment may be worthwhile, but it changes window structure and remains deferred. The current session first improves shared content and control hierarchy without changing navigation architecture. Mobile Settings currently places seven section links above the content in three rows. A compact section chooser or a single scrolling tab rail could improve first-screen access, but changes navigation structure and remains a pending decision. Native dark content also retains a white titlebar in the installed client. A window-scoped appearance contract is pending: the disposable Loop 8 probe did not establish reliable system-mode reset, so no production bridge is added.
 
 ### Loop 0 — baseline inspection
 
@@ -151,3 +151,20 @@ Native Time uses the same authorized empty workspace and explicit date before an
 | 900 × 720 | ![Narrow before](design-log/2026-10-20/round-04/macos-narrow-before.png) | ![Narrow after](design-log/2026-10-20/round-04/macos-narrow-after.png) |
 
 The build preparation also inspected host and Docker-VM capacity. Only individually rechecked unused, unshared, reproducible BuildKit records were reclaimed by exact ID. Image, volume and running-container sets remain identical; Docker context stays `colima`. VM free space increased from 2,417,340 to 4,396,992 KiB. Host free space remained above the 30 GiB build threshold. Current and rollback release sources were preserved. Raw cleanup receipts stay in the private task artifact.
+
+
+### Native Today readback — recovered without a source change
+
+The installed 0.2.8 (125) client eventually returned complete empty schedule and unread summaries after opening the precise installed app through Finder and using its normal Reload control. [1123 × 865](design-log/2026-10-20/round-01/macos-default-settled.png) and [900 × 720](design-log/2026-10-20/round-01/macos-narrow-settled.png) show the settled state at resident `916c104c`. These captures use the primary authorized workspace with visibly labeled fictional tasks, distinct from the isolated Web comparison. The window is restored to default size.
+
+The earlier persistent-loading observations remain real, but neither the hidden-page hypothesis nor a permanent defect was established. The existing shared coordinator already listens for foreground events and bounds visible polling; the sidebar's initial manual read does not use the same hidden guard. No speculative polling, visibility or projection change was made. Independent review and actual recovery close the missing normal-state screenshot, while the precise recovery cause remains uncertain.
+
+### Loop 8 — native appearance boundary, held from production
+
+**Decision:** inconclusive; no production code change.
+
+[Actual native dark Today](design-log/2026-10-20/round-01/macos-dark-settled.png) reveals a white titlebar above dark content. Synchronizing the existing Web preference with just its native window is a worthwhile follow-up, but it must release correctly when the user returns to system appearance. The product was restored to its original light preference after inspection.
+
+A disposable, no-network SwiftUI/WKWebView probe tested window-scoped appearance against synthetic content. It preserves [one decision contract](design-log/2026-10-20/round-08/decision-contract.json), source variants and [observations](design-log/2026-10-20/round-08/verification.json). [Explicit SwiftUI dark](design-log/2026-10-20/round-08/probe-dark.png) reported DarkAqua and Web dark. [Reset to system](design-log/2026-10-20/round-08/probe-system-reset.png) reported native Aqua while Web remained dark on repeated inspection; explicit light restored both. Invalid input retained the current choice. Direct action-time and lifecycle-owner AppKit assignments also produced a mismatch in this probe. Their timing/hosting cause remains a hypothesis. No observed state is called an automated pass, human choice or regression case. The probe process was quit, with no account, network, system preference or production changes.
+
+Apple documents [presentation-scoped preferredColorScheme](https://developer.apple.com/documentation/swiftui/view/preferredcolorscheme(_:)) and [window/view-specific AppKit appearance](https://developer.apple.com/documentation/appkit/choosing-a-specific-appearance-for-your-macos-app). Those interfaces establish the available mechanism; they do not establish correct reset behavior in this host. A stable ownership/reset contract and actual installed-app verification are required before implementation.
