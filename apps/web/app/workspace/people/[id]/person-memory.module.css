@@ -29,9 +29,9 @@
 .profileSummary p { font-size: var(--workspace-body-size); line-height: 1.75; margin: 12px 0 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .profileSummary small { color: var(--muted); font-size: var(--workspace-meta-size); line-height: 1.6; }
 .contexts { margin-bottom: 28px; }
-.contextHint { color: var(--muted); font-size: var(--workspace-meta-size); line-height: 1.7; margin: 6px 0 0; }
+.contextHint { color: var(--muted); font-size: var(--workspace-body-size); line-height: 1.7; margin: 6px 0 0; }
 .contextList { display: flex; flex-wrap: wrap; gap: 2px 16px; list-style: none; margin: 8px 0 0; padding: 0; }
-.contextRow { align-items: center; border-bottom: 1px solid var(--line); color: var(--ink); display: inline-flex; font-size: var(--workspace-body-size); gap: 20px; min-height: 44px; padding: 0 1px; text-decoration: none; transition: color 140ms var(--ease-out); }
+.contextRow { align-items: center; border-bottom: 1px solid var(--line); color: var(--ink); display: inline-flex; font-size: var(--workspace-body-size); gap: 20px; min-height: 44px; padding: 0 1px; text-decoration: none; transition: color 180ms var(--ease-out); }
 .contextRow:hover { color: var(--muted-strong); }
 .contextLabel { overflow-wrap: anywhere; }
 .contextRow svg { color: var(--muted); flex: 0 0 auto; }
@@ -75,12 +75,12 @@
 .saveButton { background: var(--ink); color: var(--surface); }
 .saveButton[data-slot='button']:hover { background: var(--muted-strong); }
 .saveButton:disabled { opacity: .55; }
-.error { color: var(--danger, var(--ink)); font-size: var(--workspace-meta-size); line-height: 1.7; margin: 10px 0; overflow-wrap: anywhere; }
+.error { color: var(--danger, var(--ink)); font-size: var(--workspace-body-size); line-height: 1.7; margin: 10px 0; overflow-wrap: anywhere; }
 .saveNotice { color: var(--muted-strong); font-size: var(--workspace-meta-size); line-height: 1.6; margin: 8px 0 16px; }
-.quiet, .layerHelp { color: var(--muted); font-size: var(--workspace-meta-size); line-height: 1.7; margin: 12px 0 0; overflow-wrap: anywhere; }
+.quiet, .layerHelp { color: var(--muted); font-size: var(--workspace-body-size); line-height: 1.7; margin: 12px 0 0; overflow-wrap: anywhere; }
 .emptyMemory { border-bottom: 1px solid var(--line-soft); padding: 22px 0 24px; }
 .emptyMemory h3 { font-size: var(--workspace-body-size); font-weight: 500; line-height: 1.6; margin: 0 0 8px; }
-.emptyMemory p { color: var(--muted-strong); font-size: var(--workspace-meta-size); line-height: 1.8; margin: 0; max-width: 44ch; overflow-wrap: anywhere; }
+.emptyMemory p { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.8; margin: 0; max-width: 44ch; overflow-wrap: anywhere; }
 .layerHelp { margin: 0 0 18px; }
 .reading article + article { margin-top: 22px; }
 .readingParagraph { margin-top: 10px; }
@@ -123,6 +123,11 @@
   .sourceMetadata { grid-template-columns: minmax(0, 1fr); gap: 1px; }
   .sourceMetadata dd { margin-bottom: 5px; }
   .editor { padding-left: 10px; }
+  .editor textarea { font-size: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { .contextRow { transition: none; } }
-.conflictNote { color: var(--muted-strong); font-size: var(--workspace-meta-size); font-weight: 500; line-height: 1.6; margin: 3px 0 12px; }
+@media (forced-colors: active) {
+  .layer { background: Canvas; border-bottom-color: Canvas; color: ButtonText; }
+  .layer[aria-pressed='true'] { border-bottom-color: Highlight; color: ButtonText; }
+}
+.conflictNote { color: var(--muted-strong); font-size: var(--workspace-body-size); font-weight: 500; line-height: 1.6; margin: 3px 0 12px; }
