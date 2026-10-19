@@ -1,0 +1,47 @@
+{
+  "status": "reviewed; local UI partly verified; resident deployment and native proof pending",
+  "review_diff_sha256": "e2c1b31de7b2725d3a9610dfca1be7f5b119a81257ded1f179b1685aeacb9da6",
+  "pi_task": "20261020-050334-0975503a",
+  "pi_final_credits_estimate": 95779072,
+  "credit_unit": "MiMo Token Plan Credits estimate, not USD",
+  "parent_tests": {
+    "files": 8,
+    "tests": 108,
+    "started_local": "2026-10-20 06:07:50 +08:00",
+    "passed": true
+  },
+  "parent_lint": "passed",
+  "parent_typecheck": "passed",
+  "tdd_capture_checkpoint": "Old patch fails strengthened real-event-order regression; final patch passes.",
+  "actual_ui": {
+    "local_390_chrome": "Escape dirty confirm cancel preserves exact synthetic title; confirm close removes editor and returns Add; no Save performed. Native select Escape closes its menu first.",
+    "local_390_iab": "Pristine Escape closes editor and focuses Add. Dirty confirm blocks IAB control; not counted as passed and target retained.",
+    "unknown_save_fallback": "Unit integration only: unchanged pending receipt and enabled recovery-action focus; no actual save attempted."
+  },
+  "screenshot": {
+    "web-390-dirty-cancel.png": {
+      "viewport_css": [
+        390,
+        844
+      ],
+      "png": [
+        780,
+        1688
+      ],
+      "dpr": 2,
+      "source": "Chrome native DevTools Capture screenshot"
+    },
+    "web-390-escape-before.png": {
+      "viewport_css": [
+        390,
+        844
+      ],
+      "png": [
+        780,
+        1688
+      ],
+      "dpr": 2,
+      "source": "resident576a1b8b; Chrome native DevTools capture; pristine Escape retains editor"
+    }
+  }
+}

@@ -252,3 +252,18 @@ Clean detached source `576a1b8b914fdeb2494273690f04f88b589cf43e`, build `Uxvgajr
 | Same fictional person and two memories | ![Before: narrow reading column](design-log/2026-10-20/round-09/macos-narrow-collapsed-after.png) | ![After: full reading width](design-log/2026-10-20/round-11/macos-narrow-after.png) |
 
 Host free bytes after dependency preparation were 39,102,816,256 and after build 38,720,045,056, above 30 GiB. The Docker VM retains 4,399,532KiB of free space; Docker context stays `colima`. The storage audit's existing unsafe-Git-root warning was not treated as cleanup authority. The owned development and synthetic-fixture servers are stopped; the resident source and rollback releases remain preserved.
+
+
+### Loop 10 — Escape and focus respect the editing boundary
+
+**Decision:** independently reviewed and locally verified; resident deployment and native readback pending.
+
+The schedule editor previously ignored Escape and left keyboard focus on the page body after its close control. Escape now uses the same existing close/dirty/unknown confirmation path. It stays local to the editor, respects IME composition, native-handled/defaultPrevented events and child propagation, and never submits. Explicit close returns focus to the actual originating control. A missing origin falls back to Add; an unresolved save that disables Add falls back to the existing enabled recovery action, then the focusable page. URL, requests, stored operation receipts and recovery semantics remain unchanged.
+
+The first independent review found that WebKit mouse clicks need not focus their button, and that a connected disabled Add is not a usable target. A subsequent review exposed capture/bubble microtask ordering hidden by JS `.click()` tests. The final source captures the native click, consumes it synchronously during that event and uses identity-guarded task cleanup. The strengthened regression fails the earlier patch and passes final source. Final reviewed diff: `e2c1b31de7b2725d3a9610dfca1be7f5b119a81257ded1f179b1685aeacb9da6`; both P2 findings are closed.
+
+All 108 relevant tests across 8 files, Web lint and typecheck pass. Actual390×844 Chrome input tests cancel dirty-close without losing the synthetic title, then confirm close and return focus to Add. The native select's first Escape closes its menu before the editor. No Save or record write was performed. Unknown-save recovery focus is covered by integration tests with an unchanged receipt, not by a live save attempt. [Dirty-cancel screenshot](design-log/2026-10-20/round-10/web-390-dirty-cancel.png) is a 780×1688 Retina export of the 390×844 viewport. [Earlier320px focused Save baseline](design-log/2026-10-20/round-10/web-320-save-before.png) confirms the Save action was reachable; no Save-layering defect is claimed. [Verification receipt](design-log/2026-10-20/round-10/verification.json).
+
+The in-app browser became unresponsive at its JavaScript confirmation and its dialog API returned no active dialog. That attempt is not counted as passed. An existing Chrome Guest process supplies a new task-only window through native UI, using the same isolated run at the exclusive loopback preview origin. The resident loopback also reads back the exact synthetic account; the existing HTTPS primary browser session is untouched. Only the task's owned window and approved fixture controls are inspected.
+
+[Matched resident390px Escape baseline](design-log/2026-10-20/round-10/web-390-escape-before.png) uses the same synthetic workspace at resident576a1b8b: pressing Escape on its blank title leaves the editor open. The post-deployment counterpart is pending.
