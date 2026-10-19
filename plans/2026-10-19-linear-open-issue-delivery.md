@@ -146,6 +146,47 @@ paragraph kept the original line budget, and the complete docs/Wiki/architecture
 gate passed. No runtime code/configuration changed and no service redeploy was
 required by these documentation-only edits.
 
-Current whole-issue result is still zero newly Done. GET-40 renewal remains
-pending; its AI Ready label was removed and the exact paid-stop condition is
-recorded under Needs Human. All original acceptance gates remain in force.
+Current whole-issue result is still zero newly Done. GET-40's AI Ready label was
+removed and the exact paid-stop condition recorded under Needs Human. The new
+authorization below supersedes the pending-decision status only for its two
+diagnostic requests. All original acceptance gates remain in force.
+
+## New GET-40 diagnostic authorization
+
+The owner answered "允许这 2 次有限诊断" to the exact pending question in this
+chat. The scope is at most two requests to the unchanged Hao endpoint and
+anthropic/claude-sonnet-5, synthetic short text only, at most64 output tokens
+per request, no client automatic retry, and immediate stop on unknown usage.
+It does not restart the old20-case phase or settle any historical unknown.
+
+The probe compares ordinary messages first with streaming messages second.
+The second request is admitted only after the first has a complete matching-model
+terminal/provider token receipt. Both calls are direct protocol diagnostics;
+they do not exercise the product SDK, tools, queue or Memory acceptance.
+No model/provider fallback or production configuration change is admitted.
+
+The new durable journal is outside Git on the existing resident host:
+~/.local/state/capir-linear-delivery-20261019/get40-diagnostic-call804c7897/.
+It binds the explicit answer, source hash and original stopped ledger hash,
+persists issued before dispatch, rejects duplicate steps or changed source,
+and stops on missing/unknown receipts. Historical estimateUSD0.3863075 and both
+unknown outcomes remain unchanged. Five offline diagnostic tests passed before
+the first request, covering exact request limits, missing usage, rejection,
+SSE termination and model/configuration mismatch.
+
+Both allowed requests are complete; no further diagnostic dispatch is admitted.
+The ordinary request returned HTTP200 in5055ms, OK/end_turn, input27/output4;
+the streaming request returned HTTP200 in3345ms with message_stop and the same
+token counts. Cache read/creation are0 in both real provider receipts. Aggregate
+input54/output8 counts the top-level usage once, not its duplicate iterations.
+Actual invoiced cost remains unknown; it is not inferred as zero. Both requested
+the original prefixed model and reported claude-sonnet-5. The original stopped
+journal's SHA256 stayed unchanged, and the separate diagnostic journal is complete.
+
+These direct protocol checks ran inside the existing resident API container.
+The old interrupted evaluation ran through the host SDK, so its SDK/host-network,
+queue and Memory integration remain unverified. Current provider protocol and
+alias availability do not establish the cause or recovery of that historical
+failure. No production code/configuration was changed, no original20-case run
+was resumed, and GET-40 remains In Progress/Needs Human. A fresh actual product
+execution needs a separately bounded scope after offline investigation.
