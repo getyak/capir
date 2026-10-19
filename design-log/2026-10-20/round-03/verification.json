@@ -1,5 +1,5 @@
 {
-  "status": "local visual QA accepted; resident activation pending",
+  "status": "resident Web verified",
   "review_diff_sha256": "7bd130aeef92dec1182c07a509ead066cf3c97cb9e1f1dc25bc995c49f352219",
   "mobile_first_row_before_px": 483.875,
   "mobile_first_row_after_px": 394.375,
@@ -35,5 +35,11 @@
     "03-people-web-dark-390-candidate.jpg": "web-dark-390-after.jpg",
     "03-people-web-dark-1440-candidate.jpg": "web-dark-1440-after.jpg",
     "03-people-web-light-320-empty-candidate.jpg": "web-320-no-results.jpg"
-  }
+  },
+  "resident_revision": "46cc6ab3a248fa8556c6eb4bdc62f19e4234fd5f",
+  "build_id": "4Uabjz41gjNtHpWJL6ZiT",
+  "resident_mobile_first_row_px": 394.375,
+  "resident_desktop_first_row_px": 329.875,
+  "clean_production_build": "passed",
+  "activation": "passed"
 }

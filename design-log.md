@@ -68,7 +68,7 @@ Native Time: [1123 × 865](design-log/2026-10-20/round-02/macos-default-after.pn
 
 ### Loop 3 — People reaches the list sooner
 
-**Decision:** accepted in local visual QA; clean resident deployment pending.
+**Decision:** accepted and deployed for Web.
 
 The mobile heading, Add contact and result count consumed three unnecessary rows. The heading and Add contact now share a row; default search and count share another. A committed query gives the input its full width so Clear and Submit remain usable. Long heading explanations and counts can wrap. No person field, search rule, route, return-session behavior or action changes. Row and arrow transitions use the shared 180ms duration.
 
@@ -79,4 +79,21 @@ The mobile heading, Add contact and result count consumed three unnecessary rows
 
 The same 12 synthetic people remain visible. At 390px the first row starts at 394.38px instead of 483.88px: 89.5px earlier. Desktop composition remains intentionally stable. [Dark mobile](design-log/2026-10-20/round-03/web-dark-390-after.jpg), [dark desktop](design-log/2026-10-20/round-03/web-dark-1440-after.jpg), and [320px no results](design-log/2026-10-20/round-03/web-320-no-results.jpg) were checked. At 320 with a query, the input receives 119px and both actions remain 44 × 44px; clearing returns focus to the input with a 2px outline. The long query remains editable and stored in the URL. No page overflow was found. Normal-motion emulation yields 180ms; the current system reduced-motion preference reduces it to 0.00001s.
 
-Independent source review found no concrete P0/P1/P2 at diff `7bd130aeef92dec1182c07a509ead066cf3c97cb9e1f1dc25bc995c49f352219`. All 32 existing directory rendering/navigation/return tests and Web lint passed. [Verification receipt](design-log/2026-10-20/round-03/verification.json). The visual judgment follows Ambi's content priority and the reference products' restrained utility hierarchy; it does not establish overall reference parity. Remaining gaps include small sidebar typography, native repeated chrome and Today summary settling. Misrouted or partially painted captures were rejected; only route/theme/content/scroll-matched images are retained here.
+Independent source review found no concrete P0/P1/P2 at diff `7bd130aeef92dec1182c07a509ead066cf3c97cb9e1f1dc25bc995c49f352219`. All 32 existing directory rendering/navigation/return tests and Web lint passed. Clean production build and activation passed at `46cc6ab3`, build `4Uabjz41gjNtHpWJL6ZiT`; final light comparisons use resident captures with all 12 synthetic people. [Verification receipt](design-log/2026-10-20/round-03/verification.json). The visual judgment follows Ambi's content priority and the reference products' restrained utility hierarchy; it does not establish overall reference parity. Remaining gaps include small sidebar typography, native repeated chrome and Today summary settling. Misrouted or partially painted captures were rejected; only route/theme/content/scroll-matched images are retained here.
+
+
+### Loop 4 — Empty and failed Time states stay within reach
+
+**Decision:** accepted locally; combined resident deployment and native after-proof pending.
+
+A desktop-height floor pushed the narrow empty-state explanation behind the mobile navigation and below the short macOS window. Below 1000px, stacked rows now follow their content and the status area uses a 224px floor. Desktop composition remains stable. The Time error panel translates three known browser network-failure strings into “暂时连不上服务，请重试。”; other errors and all request, authorization and retry behavior remain unchanged.
+
+| Surface | Before | After |
+| --- | --- | --- |
+| Web · 390 × 844 · same empty day | ![Before: empty copy too low](design-log/2026-10-20/round-04/web-390-before.png) | ![After: visible empty explanation](design-log/2026-10-20/round-04/web-390-after.png) |
+| Web · 1440 × 1000 | ![Before: desktop empty state](design-log/2026-10-20/round-04/web-1440-before.png) | ![After: desktop rhythm retained](design-log/2026-10-20/round-04/web-1440-after.png) |
+| Web · network failure | ![Before: browser error text](design-log/2026-10-20/round-04/web-390-error-before.png) | ![After: concrete recovery copy](design-log/2026-10-20/round-04/web-390-error-after.png) |
+
+At 390px the empty heading moves from 728.28px to 639.92px, and its explanation ends at 704.42px. At 1440px the heading remains at 553.22px. [Dark empty state](design-log/2026-10-20/round-04/web-dark-390-after.png), [actual loading](design-log/2026-10-20/round-04/web-390-loading.png), and [320px keyboard-expanded review](design-log/2026-10-20/round-04/web-dark-320-expanded.png) were checked without page overflow. The expanded capture intentionally follows keyboard focus and is scrolled. Error/loading proof uses a temporarily paused or failed Time Fetch in the isolated QA tab, with interception cleared afterward; Enter on Retry restores the real response. No response fixture, record write or authentication bypass is used.
+
+Independent source review found no concrete issue at diff `40b39082a7aea6cba48e61d8f09a54bfb148c644e26796bc9fb4fa199ba8c698`. The 38 existing Time tests, Web lint, typecheck and documentation checks pass after the display-copy change. [Verification receipt](design-log/2026-10-20/round-04/verification.json) records local proof; production and native after-proof will be attached after the next clean combined build.

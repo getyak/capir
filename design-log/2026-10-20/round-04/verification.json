@@ -1,0 +1,38 @@
+{
+  "status": "local visual acceptance; combined resident deployment pending",
+  "review_diff_sha256": "40b39082a7aea6cba48e61d8f09a54bfb148c644e26796bc9fb4fa199ba8c698",
+  "mobile_empty_title_before_px": 728.28125,
+  "mobile_empty_title_after_px": 639.921875,
+  "recovered_px": 88.359375,
+  "mobile_description_bottom_px": 704.421875,
+  "desktop_empty_title_before_and_after_px": 553.21875,
+  "tested_widths": [
+    320,
+    390,
+    1440
+  ],
+  "horizontal_overflow": false,
+  "focused_tests": {
+    "passed": 38,
+    "files": 3
+  },
+  "loading": "actual Time Fetch paused temporarily",
+  "network_error": "actual Time Fetch failed temporarily; Chinese display copy verified",
+  "recovery": "interception cleared, keyboard Retry restored actual empty response",
+  "disclosure_keyboard": "Enter toggles at320; disabled submission retained",
+  "native_after": "pending resident deployment",
+  "images": {
+    "04-time-web-light-390-before.png": "web-390-before.png",
+    "04-time-web-light-390-candidate.png": "web-390-after.png",
+    "04-time-web-light-1440-before.png": "web-1440-before.png",
+    "04-time-web-light-1440-candidate.png": "web-1440-after.png",
+    "04-time-web-dark-390-candidate.png": "web-dark-390-after.png",
+    "04-time-web-390-loading-candidate.png": "web-390-loading.png",
+    "04-time-web-390-error-before-copy.png": "web-390-error-before.png",
+    "04-time-web-390-error-candidate.png": "web-390-error-after.png",
+    "04-time-web-dark-320-expanded.png": "web-dark-320-expanded.png"
+  },
+  "web_lint": "passed",
+  "web_typecheck": "passed",
+  "docs_check": "passed"
+}
