@@ -190,3 +190,21 @@ alias availability do not establish the cause or recovery of that historical
 failure. No production code/configuration was changed, no original20-case run
 was resumed, and GET-40 remains In Progress/Needs Human. A fresh actual product
 execution needs a separately bounded scope after offline investigation.
+
+## Read-only log and Opik investigation
+
+The user next requested the cause, hypotheses and Opik logs. No model was called.
+The exact executed SDK0.3.287 defines a null retry HTTP status as a connection
+error without an HTTP response. All9 recorded statuses are null. SDK/MCP init
+succeeded; the first8 scheduled backoffs total105312ms of120717ms elapsed.
+The immediate failure is repeated connection error plus exhausted deadline,
+while the underlying host-network/TLS/proxy/gateway cause remains unproven.
+
+Opik2.2.45 health and HTTPS are reachable, but the queried project/run returns
+zero and the derived trace404. Executed private source explicitly disables the
+harness observer and excludes Opik environment. SDK debug logs are disposable
+scratch; the preserved retry receipt omits its error field. These are concrete
+observability gaps. The bounded, source-linked investigation and readback are in
+output/linear-delivery/2026-10-19/get40-root-cause/investigation.md. Fixing safe
+diagnostic retention is the next engineering step before any further paid SDK
+validation; this finding does not authorize more inference or complete GET-40.
