@@ -1,5 +1,5 @@
 {
-  "status": "local QA passed; resident activation pending",
+  "status": "resident Web passed; native proof open",
   "base_revision": "b164728c",
   "review_diff_sha256": "f8df2bec04331bc254c7a6a6cbc684a1ed5569eb01351b7be9a7e0663fd6a91c",
   "mobile_width": 390,
@@ -35,5 +35,17 @@
     "02-time-web-dark-1440-after.jpg": "web-dark-1440-after.jpg",
     "02-time-web-390-filter-enabled.jpg": "web-390-filter-enabled.jpg",
     "02-time-web-1440-forced-colors-after.png": "web-forced-colors-after.png"
-  }
+  },
+  "resident_revision": "38fa6c007545250273e9e7c9e8d7fb1a89890c06",
+  "build_id": "MakeWxrw-wksqlK0dm4LM",
+  "loopback_auth_providers": 200,
+  "certificate_validated_https_login": 200,
+  "launchd_restart_recovery": {
+    "eventual_recovery": true,
+    "initial_25_second_window": "failed: connection refused",
+    "subsequent_auth_https_and_protected_records": "passed",
+    "observation": "Infisical injection was delayed before Next became ready; no second restart or product change."
+  },
+  "resident_390_record_top_px": 594.171875,
+  "resident_sidebar_loaded": true
 }
