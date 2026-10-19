@@ -21,6 +21,8 @@ const SOURCE = 'synthetic-evidence-0001';
 const CATALOG = ['contact_workspace_search', 'contact_workspace_read', 'contact_workspace_propose_create',
   'contact_workspace_propose_update', 'memory_review', 'mcp_connections'];
 const ESSENTIAL = ['read_response_preference', 'stage_calendar_draft'];
+const CORE = ['memory_review'];
+const DEFERRED = CATALOG.filter(name => !CORE.includes(name));
 const ANSWER_TOOLS = ['cite_evidence', 'read_relationship_memory'];
 
 export const TOOL_CONTEXT_MODES = ['natural', 'json', 'answer'];
@@ -381,9 +383,13 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
       assert(sdkOptions.allowedTools.includes('ToolSearch'));
       assert.equal(first.toolSearchVisible, true, 'ToolSearch must be visible in the first request');
       assert.deepEqual(first.catalogVisibility, Object.fromEntries(CATALOG.map(name => [name, true])),
-        'every deferred capability remains discoverable by its original catalog name');
-      assert(catalogTools.every(tool => tool.schemaBytes === 0),
-        `deferred catalog schemas must stay out of the first request: ${JSON.stringify(catalogTools)}`);
+        'every admitted capability remains visible by its original catalog name');
+      const deferredTools = catalogTools.filter(tool => DEFERRED.includes(originalName(tool)));
+      assert(deferredTools.every(tool => tool.schemaBytes === 0),
+        `secondary catalog schemas must stay out of the first request: ${JSON.stringify(deferredTools)}`);
+      const coreTools = catalogTools.filter(tool => CORE.includes(originalName(tool)));
+      assert.deepEqual(coreTools.map(originalName), CORE, 'core Memory must be present without discovery');
+      for (const tool of coreTools) assert(tool.schemaBytes > 0, `${tool.name} must stay visible upfront`);
       for (const tool of essentialTools) assert(tool.schemaBytes > 0, `${tool.name} must stay visible upfront`);
       // Discoverability by actual original names and operation semantics,
       // resolved only over this Run's registered MCP catalog.
@@ -393,7 +399,7 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
       assert(references.every(name => name !== 'NotRegisteredTool'), 'unknown names must never resolve to a tool');
       assert((traces[1]?.toolResults ?? []).some(entry => /contact_workspace|memory_review/.test(`${entry.text}${entry.raw}`)),
         'semantic discovery must surface catalog capabilities');
-      for (const name of CATALOG) assert(references.includes(PREFIX + name), `discovery must reference ${name}`);
+      for (const name of DEFERRED) assert(references.includes(PREFIX + name), `discovery must reference ${name}`);
       // Dynamic discovery loads the selected capability's real schema.
       const loaded = requests.slice(1).flatMap(entry => entry.tools)
         .filter(tool => (tool.name ?? '').endsWith('mcp_connections'));
