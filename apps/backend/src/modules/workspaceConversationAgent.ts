@@ -1388,8 +1388,11 @@ export async function executeWorkspaceConversationAgentCore(input: {
 
     // Proposal fields and intent must belong to one original authored
     // message; fragments never become a fabricated combined source.
-    const proposalSource = [...messageSources].reverse().find(([, text]) =>
-      request.source_excerpts.every(excerpt => isGroundedExcerpt(excerpt, text)));
+    const matchesProposal = ([, text]: [string, string]) =>
+      request.source_excerpts.every(excerpt => isGroundedExcerpt(excerpt, text));
+    // Repeated names/clues in history cannot displace the current authored source.
+    const proposalSource = [...messageSources].filter(matchesProposal).find(([id]) => id === sourceMessageID)
+      ?? [...messageSources].reverse().find(matchesProposal);
     if (!proposalSource) {
       return toolFailure(
         name,
@@ -2053,7 +2056,12 @@ export async function executeWorkspaceConversationAgent(input: {
     }) => withDatabaseTransaction(async (client) => {
       const admittedText = messageSources.get(sourceMessageID);
       if (admittedText === undefined || (sourceText !== undefined && sourceText !== admittedText)) return null;
-      const sourceParts = sourceMessageID === rootMessageID ? input.inputParts ?? [] : [];
+      // Historical images remain model context, never attachments of this text
+      // message's immutable Memory source manifest.
+      const sourceParts = sourceMessageID === rootMessageID
+        ? (input.inputParts ?? []).filter(part => part.kind !== "image"
+          || part.artifactID.toLowerCase().startsWith(`conversation-image-${sourceMessageID.toLowerCase()}-`))
+        : [];
       const authority: MemorySourceAuthority = {
         text: admittedText,
         artifacts: [

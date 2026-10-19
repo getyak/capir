@@ -39,6 +39,16 @@ describe("queue contact proposals use the existing durable review", () => {
     });
   });
 
+  it("binds repeated contact excerpts to the current message before matching history", async () => {
+    const { input, stage } = fixture();
+    const oldID = "77777777-7777-4777-8777-777777777780";
+    const sources = new Map([[messageID, objective], [oldID, objective]]);
+    await executeWorkspaceConversationAgentCore({ ...input, messageSources: sources, contactReviewSurface: "memory" });
+    expect(stage).toHaveBeenCalledOnce();
+    expect(stage.mock.calls[0]![0].sourceMessageID).toBe(messageID);
+    expect(stage.mock.calls[0]![0].newContact?.source_locator).toMatchObject({ message_id: messageID });
+  });
+
   it("keeps an authored relationship context as an unconfirmed source statement", async () => {
     const { input, stage } = fixture();
     await executeWorkspaceConversationAgentCore({ ...input, objective: objective + " We discussed Acme.", contactReviewSurface: "memory",
