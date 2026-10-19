@@ -9,9 +9,11 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ClaudeChatProvider } from "./claudeChatProvider.js";
+import { claudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
 import * as runtime from "./claudeHarness.js";
 import { CLAUDE_SDK_VERSION } from "./claudeSdkVersion.js";
 import { runOfflineSSECase, type OfflineSSEMode } from "./testing/claudeOfflineSSEFixture.mjs";
+import { runMemoryCoreProtocolCase } from "./testing/claudeMemoryCoreFixture.mjs";
 
 // Real pinned SDK/native CLI, synthetic credentials, no remote model or database.
 // Run explicitly with TALENT_SIGNAL_CLAUDE_OFFLINE_TEST=true and an absolute
@@ -46,7 +48,8 @@ describe("Claude harness offline SDK integration", { skip: !enabled, concurrent:
     // Keep SDK workspace creation/sweeping inside this run's owned artifact.
     process.env.TMPDIR = temporaryDirectory;
     sourceHashes = Object.fromEntries(await Promise.all([
-      "./claudeHarness.ts", "./claudeChatProvider.ts", "./testing/claudeOfflineSSEFixture.mjs",
+      "./claudeHarness.ts", "./claudeChatProvider.ts", "./memoryContext.ts",
+      "./testing/claudeOfflineSSEFixture.mjs", "./testing/claudeMemoryCoreFixture.mjs",
     ].map(async path => [path, createHash("sha256").update(await readFile(new URL(path, import.meta.url))).digest("hex")])));
     console.info(`Offline SDK evidence: ${evidenceDirectory}`);
   });
@@ -55,6 +58,28 @@ describe("Claude harness offline SDK integration", { skip: !enabled, concurrent:
     if (originalTmpdir === undefined) delete process.env.TMPDIR;
     else process.env.TMPDIR = originalTmpdir;
   });
+
+  it.each([false, true])("core Memory is upfront and commit remains forbidden (invalid=%s)", async invalidCommit => {
+    const result = await runMemoryCoreProtocolCase({ runtime, ChatProvider: ClaudeChatProvider,
+      configurationFactory: claudeHarnessConfiguration, invalidCommit });
+    await writeFile(join(evidenceDirectory, `memory-core-${invalidCommit ? "denied" : "propose"}.json`), JSON.stringify({
+      ...result, sdkVersion: CLAUDE_SDK_VERSION, nodeVersion: process.version, sourceHashes,
+    }, null, 2) + "\n");
+    expect(result.failure).toBeNull();
+    expect(result.completed).toBe(true);
+    expect(result.requests).toHaveLength(2);
+    expect(result.requests[0]).toMatchObject({ memoryPresent: true, memoryDeferred: false });
+    expect(result.requests[0]!.contactSchemaPresent).toBe(false);
+    if (invalidCommit) {
+      expect(result.hostCalls).toEqual([]);
+      expect(result.receipt?.permissionDenials).toContain("TOOL_INPUT_INVALID");
+    } else {
+      expect(result.hostCalls).toHaveLength(1);
+      expect(result.hostCalls[0]).toMatchObject({ name: "memory_review", input: { operation: "propose", scope: "self", contact_decision: "none" } });
+      expect(result.receipt?.permissionDenials).toEqual([]);
+    }
+    expect(result.receipt?.apiRetries).toEqual([]);
+  }, 55_000);
 
   it("host DEBUG cannot add raw stderr retention without an opted-in callback", async () => {
     const root = await mkdtemp(join(evidenceDirectory, "sdk-debug-probe-"));
