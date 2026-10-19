@@ -1,5 +1,5 @@
 {
-  "status": "accepted locally; resident and native after-proof pending",
+  "status": "accepted and deployed; resident and restart verified;nativePersonverified",
   "change": "existing stacked layout breakpoint860->1000;oneCSSmodule,noDOM/data/actionchanges",
   "review_diff_sha256": "abd65ef91e6aefc44196d8c7afcdbe07f9906dbaac7bccf7193aee27034b98b2",
   "expanded_900_memory_before_px": 272,
@@ -39,14 +39,46 @@
     "files": 2,
     "final_run": "2026-10-20 05:16:44"
   },
-  "normal_comparison_limit": "local after currently includes intermittent service-health warning; geometry measured independently; replace normal after with resident readback",
-  "native_before": "actual900expanded private raw capture notcurated because unrelated unmarked identity; safe collapsed baseline reusesLoop9residentafter; native after pending",
+  "native_before": "safe matchedcollapsed900baseline isLoop9/macOSnarrowafter;expandedprimarysidebarrawremainsprivate",
   "images": {
     "11-person-web-900-expanded-before.png": "web-900-before.png",
-    "11-person-web-900-expanded-after.png": "web-900-after.png",
     "11-person-web-900-collapsed-after.png": "web-900-collapsed.png",
     "11-person-web-900-reference-after.png": "web-900-reference.png",
     "11-person-web-dark-900-keyboard-after.png": "web-dark-900-keyboard.png",
-    "11-person-web-390-after.png": "web-390.png"
-  }
+    "11-person-web-390-after.png": "web-390.png",
+    "11-person-resident-light-900-after.png": "web-900-after.png",
+    "11-person-macos-default-collapsed-after.png": "macos-default-after.png",
+    "11-person-macos-narrow-collapsed-after.png": "macos-narrow-after.png",
+    "11-person-macos-narrow-reference-after.png": "macos-narrow-reference-after.png"
+  },
+  "deployment": {
+    "revision": "576a1b8b914fdeb2494273690f04f88b589cf43e",
+    "buildID": "UxvgajrhHxCNn5Rblbdcu",
+    "clean_detached_source": true,
+    "pinned_pnpm": "11.18.0",
+    "frozen_offline_install": "passed",
+    "production_compile_typecheck_static_generation": "passed",
+    "activation_seconds": 22.26,
+    "activation_rollback": false,
+    "restart": {
+      "revision": "576a1b8b914fdeb2494273690f04f88b589cf43e",
+      "buildID": "UxvgajrhHxCNn5Rblbdcu",
+      "started_utc": "2026-10-19T21:37:28.405465+00:00",
+      "ready": true,
+      "elapsed_seconds": 17.3,
+      "attempts": 7,
+      "process_changed": true,
+      "active_receipt_unchanged": true,
+      "https_login_http_and_certificate_verify": "200 0",
+      "api_readiness": {
+        "status": "ready",
+        "database": "ready",
+        "migration": "079_memory_source_authority"
+      }
+    },
+    "protected_read_after_restart": "same isolated Person,604px memory column900 viewport,noalert,nooverflow",
+    "native_binary": "installed0.2.8/125 unchanged;sharedCSS reachesWKWebView"
+  },
+  "normal_comparison": "beforelocalreviewed9,afterresident576afterrestart;bothsameQA900light,noalert/overflow",
+  "native_after": "samefictionalPerson2existingmemories;collapsed1123x865/900x720;full2memories/sources/basicinfo verifiedbyscroll;defaultwindowrestored"
 }

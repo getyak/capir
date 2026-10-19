@@ -194,7 +194,7 @@ Resident `7c526fb058933d0ffdb057efcbfa00379c1ef42a`, build `SWJjqSYI4_Q3wxzgBvQs
 
 ### Loop 7 — Settings reading hierarchy and complete control states
 
-**Decision:** accepted locally; clean resident deployment pending. This bounded batch began before Loops 8 and 9 and is committed afterward.
+**Decision:** accepted and deployed; resident and restart proof verified. This bounded batch began before Loops 8 and 9 and is committed afterward.
 
 Substantive settings instructions, field values, labels, actions and recovery errors now use 15px reading type. Metadata remains 13px, titles 24px and weights 400/500/600. Mobile editable search/forms use 16px; search has one 2px container focus ring. Existing seven category links, permission boundaries, native-surface ownership selectors and theme preview illustrations remain intact. Ordinary transitions use 180ms; reduced motion removes them. Pressed states reuse the existing light/dark `surface-strong` token.
 
@@ -204,7 +204,7 @@ Substantive settings instructions, field values, labels, actions and recovery er
 | Profile ·1440 ×1000 | ![Before](design-log/2026-10-20/round-07/profile-1440-before.png) | ![After](design-log/2026-10-20/round-07/profile-1440-after.png) |
 | Appearance ·1440 ×1000 | ![Before](design-log/2026-10-20/round-07/appearance-1440-before.png) | ![After](design-log/2026-10-20/round-07/appearance-1440-after.png) |
 
-Before-images use resident `916c104c` and current after-images use the reviewed local candidate in the same isolated synthetic workspace. Earlier local captures containing a transient service-health warning were rejected for the normal comparison; the final profile capture has no alert. The 390px profile heading starts 503.89px down, approximately 11px lower as all navigation/search targets become 44px. This is an explicit readability/target-size tradeoff; the three-row category block remains a structural gap. At[320px](design-log/2026-10-20/round-07/profile-320.png), 6px horizontal navigation padding keeps all seven labels on one line and each row 44px tall. The long synthetic email wraps without overflow. No category is removed or hidden.
+Before-images use resident `916c104c`; final light profile/appearance after-images use resident `576a1b8b` in the same isolated synthetic workspace. Search, dark and forced-state captures use the reviewed local candidate. Earlier local captures containing a transient service-health warning were rejected for the normal comparison; the final profile capture has no alert. The 390px profile heading starts 503.89px down, approximately 11px lower as all navigation/search targets become 44px. This is an explicit readability/target-size tradeoff; the three-row category block remains a structural gap. At[320px](design-log/2026-10-20/round-07/profile-320.png), 6px horizontal navigation padding keeps all seven labels on one line and each row 44px tall. The long synthetic email wraps without overflow. No category is removed or hidden.
 
 [Search390px](design-log/2026-10-20/round-07/search-390.png) and[no-results320px](design-log/2026-10-20/round-07/search-empty-320.png) exercise Meta+F, ArrowDown, Enter and Escape. The selected result opens the real `section=versions` URL; Escape clears the query and returns input focus. Search input is 16px, empty copy 15px and the focus outline 2px. [Actual account320px](design-log/2026-10-20/round-07/account-320.png) preserves the existing sign-in and session controls. Its neighboring sign-in-method component has separate typography and is outside this two-file batch.
 
@@ -217,7 +217,7 @@ Independent review closed the mobile cascade and forced-palette/focus specificit
 
 ### Loop 11 — A small native window keeps a readable Person column
 
-**Decision:** accepted locally; resident and native after-proof pending.
+**Decision:** accepted and deployed; resident, native and restart proof verified.
 
 With the workspace rail expanded at 900px, Person kept two columns even though the memory column had only 272px. The same problem is visible in the installed macOS window: a short fictional memory breaks into many narrow lines. One existing responsive breakpoint moves from 860px to 1000px, reusing the established stacked layout. Memory stays first; all basic fields and the authored profile remain below it. There is no DOM, data, action or route change.
 
@@ -225,8 +225,30 @@ With the workspace rail expanded at 900px, Person kept two columns even though t
 | --- | --- | --- |
 |Person reading width|![Before:272px](design-log/2026-10-20/round-11/web-900-before.png)|![After:604px](design-log/2026-10-20/round-11/web-900-after.png)|
 
-The current local after-image includes an intermittent service-health warning and will be replaced with resident normal-state readback; it is not yet a matched normal-state comparison. Measured memory width grows 272→604px with no horizontal overflow. With the[rail collapsed](design-log/2026-10-20/round-11/web-900-collapsed.png), it is 780px. The[full reference content](design-log/2026-10-20/round-11/web-900-reference.png) remains reachable. At 1000px the single column is 704px; at 1001px the original two columns are 373/256px. At 1440px the original 740/256px split remains; at 390px the original 350px reading width remains.
+The final after-image now uses resident `576a1b8b` after restart, with the same synthetic Person, viewport and light theme and no service alert. The earlier local candidate containing a transient service warning was replaced. Measured memory width grows 272→604px with no horizontal overflow. With the[rail collapsed](design-log/2026-10-20/round-11/web-900-collapsed.png), it is 780px. The[full reference content](design-log/2026-10-20/round-11/web-900-reference.png) remains reachable. At 1000px the single column is 704px; at 1001px the original two columns are 373/256px. At 1440px the original 740/256px split remains; at 390px the original 350px reading width remains.
 
-[Dark900px keyboard reading mode](design-log/2026-10-20/round-11/web-dark-900-keyboard.png) retains its 2px focus and clear selected marker; original light and item mode are restored. The[390px layout](design-log/2026-10-20/round-11/web-390.png) is unchanged. Native expanded before-proof stays private because its sidebar contains an unrelated unmarked identity; the safe collapsed fictional-person baseline is already retained in Loop 9. Native after-proof remains required.
+[Dark900px keyboard reading mode](design-log/2026-10-20/round-11/web-dark-900-keyboard.png) retains its 2px focus and clear selected marker; original light and item mode are restored. The[390px layout](design-log/2026-10-20/round-11/web-390.png) is unchanged. Native expanded before-proof stays private because its sidebar contains an unrelated unmarked identity; the safe collapsed fictional-person baseline is already retained in Loop 9. Native after-proof verifies the same two existing fictional memories at [1123 × 865](design-log/2026-10-20/round-11/macos-default-after.png) and [900 × 720](design-log/2026-10-20/round-11/macos-narrow-after.png), plus [both memories, sources and basic information after scrolling](design-log/2026-10-20/round-11/macos-narrow-reference-after.png). The default window size is restored.
 
 All 41 existing Person Memory interaction/page-render tests pass. Independent review finds no concrete P0–P2 at diff `abd65ef91e6aefc44196d8c7afcdbe07f9906dbaac7bccf7193aee27034b98b2`. [Verification receipt](design-log/2026-10-20/round-11/verification.json).
+
+
+### Global reread — retain good structure, repair an observed composer boundary
+
+The actual isolated [History desktop](design-log/2026-10-20/global-reread/history-1440.png), [History mobile](design-log/2026-10-20/global-reread/history-390.png) and [forced-dark primary/focus](design-log/2026-10-20/global-reread/history-forced-dark.png) remain readable with one primary action. The installed native History list also settles normally after its skeleton; its private raw capture is not published because some titles are unmarked source material. No new record was created. History structure is retained.
+
+[Reply preferences desktop](design-log/2026-10-20/global-reread/preferences-1440.png) and [mobile](design-log/2026-10-20/global-reread/preferences-390.png) use the existing 24px title and restrained single form. Its 14px body/select are a later typography candidate; no preference was changed or saved. [Conversation desktop](design-log/2026-10-20/global-reread/conversation-1440.png) and [mobile](design-log/2026-10-20/global-reread/conversation-390.png) preserve a quiet canvas. The shared inline entry is 14px; this is a more important readability target than adding decoration.
+
+A real keyboard defect is now reproduced: opening slash suggestions on 390 ×844 positions the menu at y75–435 while the nearest scroll-clipping canvas begins at 185. The selected first option is at y82–138.83; hit-testing its center does not reach the option. [Screenshot](design-log/2026-10-20/global-reread/composer-clipped-first-390.png), [geometry](design-log/2026-10-20/global-reread/composer-clipping-before.json). The existing placement measures the textarea wrapper rather than its absolute-positioning composer box and ignores clipping ancestors. The next bounded batch will correct those bounds and input type; it is prepared but has not started alongside the active Time writer. Actual ArrowDown does move a visible selection background; the inherited `surface-selected` token works here, so no missing-token defect is claimed. The slash test was cleared without sending. Existing focus allocated a blank local draft URL; no server record or model call was made.
+
+macOS [native text context menu](design-log/2026-10-20/global-reread/macos-native-context-menu.png) exposes the normal Lookup, Translate, Copy, Share and Services entries on the explicitly fictional person. It was canceled without executing any action; temporary text selection was cleared. The default 1123 ×865 window is restored. [Inspection receipt](design-log/2026-10-20/global-reread/verification.json).
+
+
+### Combined resident proof — Loops 7 and 11
+
+Clean detached source `576a1b8b914fdeb2494273690f04f88b589cf43e`, build `UxvgajrhHxCNn5Rblbdcu`, passes production compilation, type checking and static generation with pinned pnpm 11.18.0. Activation passes in 22.26 seconds without rollback. A locked launchd restart passes in 17.30 seconds, changes its process and preserves the same revision/build receipt. HTTPS login validates its certificate, password-account readiness returns and API/database remain ready. The real isolated Person page still shows 604px of memory reading width at 900px after restart, with no alert or overflow. Settings reads 15px substantive text, 16px mobile search and 2px focus. No backend or native binary change was needed.
+
+| Native Person ·900 ×720 · collapsed rail | Before (resident7c526fb0) | After (resident576a1b8b) |
+| --- | --- | --- |
+| Same fictional person and two memories | ![Before: narrow reading column](design-log/2026-10-20/round-09/macos-narrow-collapsed-after.png) | ![After: full reading width](design-log/2026-10-20/round-11/macos-narrow-after.png) |
+
+Host free bytes after dependency preparation were 39,102,816,256 and after build 38,720,045,056, above 30 GiB. The Docker VM retains 4,399,532KiB of free space; Docker context stays `colima`. The storage audit's existing unsafe-Git-root warning was not treated as cleanup authority. The owned development and synthetic-fixture servers are stopped; the resident source and rollback releases remain preserved.

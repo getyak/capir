@@ -1,0 +1,65 @@
+{
+  "centerHitOwn": false,
+  "clips": [
+    {
+      "class": "_825xVG_list",
+      "overflow": "auto",
+      "rect": {
+        "bottom": 434,
+        "height": 358,
+        "left": 18,
+        "right": 372,
+        "top": 76,
+        "width": 354,
+        "x": 18,
+        "y": 76
+      },
+      "scrollTop": 0
+    },
+    {
+      "class": "_825xVG_menu",
+      "overflow": "hidden",
+      "rect": {
+        "bottom": 435,
+        "height": 360,
+        "left": 17,
+        "right": 373,
+        "top": 75,
+        "width": 356,
+        "x": 17,
+        "y": 75
+      },
+      "scrollTop": 0
+    },
+    {
+      "class": "GI3Jna_canvas",
+      "overflow": "auto",
+      "rect": {
+        "bottom": 766,
+        "height": 581,
+        "left": 0,
+        "right": 390,
+        "top": 185,
+        "width": 390,
+        "x": 0,
+        "y": 185
+      },
+      "scrollTop": 0
+    }
+  ],
+  "option": {
+    "bottom": 138.828125,
+    "height": 56.828125,
+    "left": 24,
+    "right": 366,
+    "top": 82,
+    "width": 342,
+    "x": 24,
+    "y": 82
+  },
+  "selected": "true",
+  "viewport": {
+    "height": 844,
+    "width": 390
+  }
+}

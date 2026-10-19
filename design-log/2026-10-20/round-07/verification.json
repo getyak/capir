@@ -1,5 +1,5 @@
 {
-  "status": "accepted locally; clean resident deployment pending",
+  "status": "accepted and deployed; resident and restart verified;pure native deviceSettings outsideCSSscope",
   "review_diff_sha256": "ab96d309cbf74cc5c7c231f04b06f59fe10fb6c0ad7827666039cad3aa00eaef",
   "scope": [
     "apps/web/components/settings-workspace.module.css",
@@ -46,12 +46,8 @@
   "images": {
     "07-settings-resident-light-390-before.png": "profile-390-before.png",
     "07-settings-resident-light-1440-before.png": "profile-1440-before.png",
-    "07-settings-local-light-390-after.png": "profile-390-after.png",
-    "07-settings-local-light-1440-after.png": "profile-1440-after.png",
     "07-settings-appearance-resident-light-390-before.png": "appearance-390-before.png",
     "07-settings-appearance-resident-light-1440-before.png": "appearance-1440-before.png",
-    "07-settings-appearance-local-light-390-after.png": "appearance-390-after.png",
-    "07-settings-appearance-local-light-1440-after.png": "appearance-1440-after.png",
     "07-settings-search-390-after.png": "search-390.png",
     "07-settings-empty-search-320-after.png": "search-empty-320.png",
     "07-settings-profile-320-after.png": "profile-320.png",
@@ -61,6 +57,38 @@
     "07-settings-forced-dark-save-after.png": "save-forced-dark.png",
     "07-settings-source-css-recovery-320.png": "fixture-recovery-320.png",
     "07-settings-source-css-recovery-390.png": "fixture-recovery-390.png",
-    "07-settings-source-css-forced-dark-320.png": "fixture-forced-dark-320.png"
+    "07-settings-source-css-forced-dark-320.png": "fixture-forced-dark-320.png",
+    "07-settings-resident-light-1440-after.png": "profile-1440-after.png",
+    "07-settings-resident-light-390-after.png": "profile-390-after.png",
+    "07-settings-appearance-resident-light-1440-after.png": "appearance-1440-after.png",
+    "07-settings-appearance-resident-light-390-after.png": "appearance-390-after.png"
+  },
+  "deployment": {
+    "revision": "576a1b8b914fdeb2494273690f04f88b589cf43e",
+    "buildID": "UxvgajrhHxCNn5Rblbdcu",
+    "clean_detached_source": true,
+    "pinned_pnpm": "11.18.0",
+    "frozen_offline_install": "passed",
+    "production_compile_typecheck_static_generation": "passed",
+    "activation_seconds": 22.26,
+    "activation_rollback": false,
+    "restart": {
+      "revision": "576a1b8b914fdeb2494273690f04f88b589cf43e",
+      "buildID": "UxvgajrhHxCNn5Rblbdcu",
+      "started_utc": "2026-10-19T21:37:28.405465+00:00",
+      "ready": true,
+      "elapsed_seconds": 17.3,
+      "attempts": 7,
+      "process_changed": true,
+      "active_receipt_unchanged": true,
+      "https_login_http_and_certificate_verify": "200 0",
+      "api_readiness": {
+        "status": "ready",
+        "database": "ready",
+        "migration": "079_memory_source_authority"
+      }
+    },
+    "protected_read_after_restart": "same isolated Person,604px memory column900 viewport,noalert,nooverflow",
+    "native_binary": "installed0.2.8/125 unchanged;sharedCSS reachesWKWebView"
   }
 }
