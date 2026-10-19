@@ -1,15 +1,111 @@
-.context { margin: 0 0 2rem; }
-.header { margin-bottom: 24px; }
-.date { color: var(--ink); margin: 0; font-size: clamp(28px, 4vw, 40px); font-weight: 600; line-height: 1.4; }
-.date time { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; }
+/*
+ * Today brief header — one editorial daily header on the shared workspace
+ * scale. The date uses the shared 24px title (same on desktop and mobile,
+ * never a marketing hero). The two contexts group by whitespace with one
+ * low-contrast separator instead of card boxes, radii or backgrounds.
+ */
+
+.context { margin: 0 0 var(--ts-space-xxl, 32px); }
+.header { margin-bottom: var(--ts-space-xl, 24px); }
+.date {
+  color: var(--ink);
+  font-size: var(--workspace-title-size, 1.5rem);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.42;
+  margin: 0;
+}
+.date time { align-items: baseline; display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .date small { color: var(--muted); font-size: var(--workspace-meta-size, 13px); font-weight: 400; }
-.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
-.card { min-width: 0; border: 1px solid var(--line); border-radius: var(--ts-radius-frame, 12px); padding: 1.25rem; background: var(--surface); }
-.card h2 { font-size: var(--workspace-meta-size, 13px); font-weight: 500; color: var(--muted); margin: 0 0 .8rem; }
-.title { display: block; font-size: 1.1rem; font-weight: 550; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
-.card p { font-size: .85rem; line-height: 1.6; overflow-wrap: anywhere; }
+
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.card { min-width: 0; padding-right: var(--ts-space-xxl, 32px); }
+.card + .card {
+  border-left: 1px solid var(--line-soft);
+  padding-left: var(--ts-space-xxl, 32px);
+  padding-right: 0;
+}
+.card h2 {
+  color: var(--muted);
+  font-size: var(--workspace-meta-size, 13px);
+  font-weight: 500;
+  margin: 0 0 .8rem;
+}
+.title {
+  color: inherit;
+  display: block;
+  font-size: var(--workspace-section-size, 1.125rem);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition: text-decoration-color var(--workspace-transition-duration, 180ms) var(--ease-out);
+}
+.title:hover,
+.title:focus-visible {
+  text-decoration-color: currentColor;
+}
+.card p {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .note { color: var(--muted); }
-.more { display: inline-block; margin-top: .5rem; font-size: .8rem; color: inherit; text-underline-offset: 4px; }
-.retry { margin-top: 1rem; border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 8px; padding: .5rem .8rem; font: inherit; min-height: 44px; cursor: pointer; }
-.context a:focus-visible, .retry:focus-visible { outline: 2px solid currentColor; outline-offset: 4px; }
-@media (max-width: 640px) { .cards { grid-template-columns: minmax(0, 1fr); } }
+.more {
+  color: inherit;
+  display: inline-block;
+  font-size: var(--ts-type-nav, 0.875rem);
+  margin-top: .5rem;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition: text-decoration-color var(--workspace-transition-duration, 180ms) var(--ease-out);
+}
+.more:hover,
+.more:focus-visible {
+  text-decoration-color: currentColor;
+}
+.retry {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--ts-radius-control, 8px);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  margin-top: 1rem;
+  min-height: 44px;
+  padding: .5rem .8rem;
+  transition: background var(--workspace-transition-duration, 180ms) var(--ease-out);
+}
+.retry:hover { background: var(--surface-muted); }
+.context a:focus-visible,
+.retry:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+
+/* Short status summaries stay compact; a real title earns full reading width. */
+@media (max-width: 640px) {
+  .card { padding-right: var(--ts-space-lg, 16px); }
+  .card + .card { padding-left: var(--ts-space-lg, 16px); }
+  .cards:has(.title) { grid-template-columns: minmax(0, 1fr); }
+  .cards:has(.title) .card { padding-right: 0; }
+  .cards:has(.title) .card + .card {
+    border-left: 0;
+    border-top: 1px solid var(--line-soft);
+    margin-top: var(--ts-space-lg, 16px);
+    padding-left: 0;
+    padding-top: var(--ts-space-lg, 16px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .retry,
+  .title,
+  .more {
+    transition: none;
+  }
+}

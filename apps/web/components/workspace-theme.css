@@ -20,6 +20,7 @@
   --workspace-meta-size: 0.8125rem;
   --workspace-page-padding: clamp(20px, 3vw, 40px);
   --workspace-section-gap: 24px;
+  --workspace-transition-duration: 180ms;
   --button-radius: 8px;
   --input-radius: 8px;
   --card-radius: 12px;
