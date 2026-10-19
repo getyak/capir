@@ -250,14 +250,14 @@ function contactIntentNote(objective: string): string {
     .replace(/\b(?:do not|don['’]t|never)\s+(?:search|research|look\s+up)\s+(?:the\s+)?(?:public\s+web|web|internet|online)\b(?=\s*(?:[，,。；;.!?！？\n]|$))/giu, clause => publicSearchDeclined(clause) ? " " : clause);
 }
 
-const CONTACT_DECLINE = /(?:不要|不用|别|不需要)[^，,。；;!?！？\n]{0,12}(?:添加|建|保存)\s*(?:到|为|新的?|任何|一个|这些|这位|这个)?(?:联系人|人物)(?!以外|之外)|(?:do not|don['’]t|no need to)[^,;.!?\n]{0,12}(?:add|create|save)\s+(?:(?:a|new|any)\s+)?contacts?\b/iu;
+const CONTACT_DECLINE = /(?:不要|不用|别|不需要|不必|不许|禁止|请勿)[^，,。；;!?！？\n]{0,12}(?:添加|建|保存)\s*(?:到|为|新的?|任何|一个|这些|这位|这个)?(?:联系人|人物)(?!以外|之外)|(?:do not|don['’]t|no need to)[^,;.!?\n]{0,12}(?:add|create|save)\s+(?:(?:a|new|any)\s+)?contacts?\b|\bno\s+contact\s+creation\b/iu;
 
 /** Current authored intent only: never infer a refusal from pixels or host prose. */
 function analysisOnlyOrNoSave(text: string): boolean {
   // A contact-only refusal must not disable an explicitly requested self note.
   const note = authoredNote(text).replace(new RegExp(CONTACT_DECLINE.source, "giu"), " ");
-  return /(?:只|仅仅?)(?:需要|要|想|帮我|请|做)?(?:分析|解释|描述|总结|翻译|看看|看一下)|(?:不要|不用|别|不必|不需要|无需)[^，,。；;!?！？\n]{0,12}(?:保存|记录|记住|建档|归档|添加|创建|更新|操作|行动)|(?:不做|不进行)[^，,。；;!?！？\n]{0,8}(?:操作|更改|动作|行动)/u.test(note)
-    || /\b(?:no[\s_-]+(?:actions?|save|proposals?)|analysis[\s_-]+only|(?:just|only)\s+(?:analy[sz]e|describe|explain|summari[sz]e|translate)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:make|take|perform)\s+(?:any\s+)?(?:actions?|changes?)|save|record|remember|store|archive|create|add|update))\b/iu.test(note);
+  return /(?:仅供|只供)(?:分析|参考)|(?:只|仅仅?)(?:需要|要|想|帮我|请|做)?(?:分析|解释|描述|总结|翻译|看看|看一下)|(?:不要|不用|别|不必|不需要|无需|不许|禁止|请勿)[^，,。；;!?！？\n]{0,12}(?:保存|记录|记住|建档|归档|添加|创建|更新|操作|行动)|(?:不做|不进行)[^，,。；;!?！？\n]{0,8}(?:操作|更改|动作|行动)/u.test(note)
+    || /\b(?:no[\s_-]+(?:actions?|sav(?:e|ing)|proposals?)|analysis[\s_-]+only|(?:just|only)\s+(?:analy[sz]e|describe|explain|summari[sz]e|translate)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:make|take|perform)\s+(?:any\s+)?(?:actions?|changes?)|save|record|remember|store|archive|create|add|update))\b/iu.test(note);
 }
 
 const CONTACT_INTENT_REFUSAL = /(?:仅供|只供)(?:分析|参考)|不要|不用|不需要|不必|不许|禁止|请勿|别(?:添加|创建|保存|更新)|do\s+not|don['’]t|never|no\s+need\s+to|\bno\s+(?:(?:contact|person)\s+)?(?:creation|saving|save)\b/iu;
@@ -412,6 +412,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
   sessionID?: string | null;
   messageID?: string;
   sessionTitleRequested?: boolean;
+  /** Host queue projection only; synchronous native callers keep their legacy card. */
+  contactReviewSurface?: "memory";
   conversationHistory?: readonly ConversationMessage[];
   promptSnapshot?: PromptSnapshot;
   runID?: string;
@@ -559,6 +561,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
   };
   const declinedProposals = () => sourceTexts().some(analysisOnlyOrNoSave);
   const declinedContact = () => declinedProposals() || sourceTexts().some(text => CONTACT_DECLINE.test(authoredNote(text)));
+  let stagedContactSource: { id: string; text: string } | null = null;
   let stagedMemorySourceID = sourceMessageID;
   let stagedMemoryHasContact = false;
   let mcpProposalsPending = false;
@@ -1504,6 +1507,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
       accountID: input.workspaceID,
       sourceMessageID: proposalSource[0],
     });
+    stagedContactSource = { id: proposalSource[0], text: proposalSource[1] };
     runState.proposal = {
       kind: "contact_change_proposal",
       proposal_kind:
@@ -1841,6 +1845,56 @@ export async function executeWorkspaceConversationAgentCore(input: {
         "The Agent proposal output did not match a same-Run Tool candidate.",
       );
     }
+    if (input.contactReviewSurface === "memory" && runState.proposal.proposal_kind === "create") {
+      // The queue persists only durable Memory references, never the legacy
+      // native event. Reuse its existing grounded staging/withdrawal gates.
+      const proposal = runState.proposal;
+      const contactSource = stagedContactSource as { id: string; text: string } | null;
+      const hadReview = Boolean(runState.memoryProposal);
+      const sourceCurrent = () => contactSource !== null
+        && messageSources.get(contactSource.id) === contactSource.text;
+      if (!hadReview && sourceCurrent()) {
+        const locator = { kind: "message" as const, session_id: input.sessionID ?? null, message_id: contactSource!.id };
+        await invokeTool("memory_review", { operation: "propose", contact_decision: "new",
+          person_display_label: proposal.display_name, new_contact_source_locator: locator,
+          items: [
+            ...(proposal.identity_clue ? [{ scope: "person", operation: "add", statement_kind: "source_statement",
+              dependence_kind: "contact", display_text: `消息提供的联系线索（未确认）：${proposal.identity_clue.value}`,
+              source_excerpt: proposal.identity_clue.value, source_locator: locator,
+              time_status: "unknown", sensitivity: "sensitive", reason: "Review the exact authored contact clue; identity remains tentative." }] : []),
+            ...(proposal.relationship_context ? [{ scope: "relationship", operation: "add", statement_kind: "source_statement",
+              dependence_kind: "relationship", display_text: `消息提供的关系背景（未确认）：${proposal.relationship_context}`,
+              source_excerpt: proposal.relationship_context, source_locator: locator,
+              time_status: "unknown", sensitivity: "normal", reason: "Review the exact authored relationship context without confirming it." }] : []),
+          ],
+        });
+        // Recheck source and live claim before returning a new reference.
+        // Cleanup uses existing authority; failure must never become success.
+        try {
+          await assertProposalCurrent();
+          if (!sourceCurrent()) throw new Error("CONTACT_REVIEW_SOURCE_CHANGED");
+        } catch (error) {
+          if (runState.memoryProposal) {
+            if (!input.memory?.withdraw) throw new Error("MEMORY_WITHDRAWAL_UNAVAILABLE");
+            await input.memory.withdraw({ proposalID: runState.memoryProposal.proposalID,
+              expectedRevision: runState.memoryProposal.proposalRevision, sourceMessageID: contactSource!.id });
+            runState.memoryProposal = null;
+          }
+          if (!(error instanceof Error && error.message === "CONTACT_REVIEW_SOURCE_CHANGED")) throw error;
+        }
+      }
+      const available = Boolean(runState.memoryProposal);
+      return {
+        block: block(available ? "answer" : "clarification", available ? "待确认内容" : "审阅暂不可用",
+          withResearchSection(available
+            ? hadReview ? "已有一张待确认卡片，请先核对其中的内容；未另建联系人提议。" : "请核对下方待确认内容。确认前不会更改联系人或记忆。"
+            : "The contact review is unavailable. No contact or Memory was saved."), false),
+        event: null,
+        memoryProposal: memoryRef(runState.memoryProposal),
+        firstContactResearch: firstContactReceipts,
+        ...(captureImageObservation ? { captureImageObservation } : {}), providerResult,
+      };
+    }
     return {
       block: block(
         "identity_review",
@@ -2105,6 +2159,7 @@ export async function executeWorkspaceConversationAgent(input: {
     objective: input.objective,
     ...(input.sourceText === undefined ? {} : { sourceText: input.sourceText }),
     provider: input.provider,
+    ...(input.hostAuthority ? { contactReviewSurface: "memory" as const } : {}),
     workspaceID: input.auth.accountId,
     // This queue carries no persisted, source-bound authorization for a
     // supplementary image processor. Global flags/credentials cannot grant it;
