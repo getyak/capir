@@ -471,7 +471,7 @@ export async function confirmScreenshotContactProfile(pool:Pool,auth:AuthContext
     if(row.revision!==review.expected_revision)deny("CONTACT_TASK_REVISION_CHANGED");
     if(row.status!=="waiting_for_user"||!row.state.response.contact_draft||!row.state.response.extraction||row.state.batch_conflict)deny("CONTACT_PROFILE_NOT_REVIEWABLE");
     const response=row.state.response;
-    if(row.state.selected && (review.selected_person_id!==row.state.selected.person_id||review.selected_relationship_context_id!==row.state.selected.relationship_context_id))deny("CONTACT_PROFILE_SELECTED_SCOPE_REQUIRED");
+    if(row.state.selected && !review.create_new && (review.selected_person_id!==row.state.selected.person_id||review.selected_relationship_context_id!==row.state.selected.relationship_context_id))deny("CONTACT_PROFILE_SELECTED_SCOPE_REQUIRED");
     const result=await saveReviewedContactProfile(client,auth,{taskID:id,draft:response.contact_draft!,extraction:response.extraction!,review,
       capturedAt:row.input_manifest.captured_at,expiresAt:row.expires_at.toISOString(),
       ...(row.input_manifest.browser_source?{browserSource:row.input_manifest.browser_source}:{}),
@@ -920,7 +920,6 @@ async function storeChat(client:PoolClient,auth:AuthContext,row:Row,displayName?
   const extraction=response.extraction!;const manifest=row.input_manifest;
   if(extraction.messages.length===0)deny("CONTACT_CHAT_HAS_NO_MESSAGES");
   if(manifest.text&&!displayName&&!row.state.selected)deny("CONTACT_TEXT_REUSE_REQUIRES_SELECTION");
-  if(extraction.conversation_kind!=="direct"&&!(Boolean(row.input_manifest.text)&&extraction.conversation_kind==="not_chat"&&extraction.contact_name&&extraction.identity_clues.some(clue=>["profile_url","handle","company","job_title"].includes(clue.kind)))&&!row.state.selected&&!row.state.user_contact_label)deny("CONTACT_CHAT_IDENTITY_AMBIGUOUS");
   const clientResourceID=`screenshot-contact:${row.id}`;
   const documentBlocks=manifest.text&&extraction.conversation_kind==="not_chat"?contactDocumentBlocks(manifest.text):null;
   const request:ResourceCaptureRequest={contract_version:CONTRACT_VERSION,idempotency_key:clientResourceID,
@@ -997,10 +996,7 @@ async function executeLocalTool(client:PoolClient,auth:AuthContext,row:Row,call:
       if(row.state.selected)deny("CONTACT_SELECTED_REUSE_REQUIRED");
       const filingName=row.state.user_contact_label??identity.contactName;
       if(!filingName||normalized(filingName)!==normalized(args.display_name))deny("CONTACT_CREATE_REQUIRES_VISIBLE_NAME");
-      if(!row.state.searches.some(s=>normalized(s.query)===normalized(args.display_name)&&s.candidates.length===0))deny("CONTACT_CREATE_REQUIRES_EMPTY_SEARCH");
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`${auth.accountId}:contact:${normalized(args.display_name)}`]);
-      const current=await searchPeople(client,auth,args.display_name);
-      if(current.people.length)deny("CONTACT_DIRECTORY_CHANGED_SEARCH_AGAIN");
       return storeChat(client,auth,row,args.display_name);
     }
     case "save_contact_chat":{

@@ -136,7 +136,7 @@ function personScope(input: ScopeFields): PersonScopeIntent {
 
   const contactName = input.contact_name?.normalize("NFKC").trim() ?? "";
   const contextLabel =
-    input.relationship_context_label?.normalize("NFKC").trim() ?? "";
+    input.relationship_context_label?.normalize("NFKC").trim() || (mode === "new_person" ? "联系人资料" : "");
   if (mode === "identity_candidates") {
     const candidatePersonIds = [
       ...new Set(input.candidate_person_ids ?? []),

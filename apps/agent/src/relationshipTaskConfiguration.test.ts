@@ -10,22 +10,22 @@ import {
   relationshipTaskConfiguration,
 } from "./relationshipTaskConfiguration.js";
 
-// Frozen values captured from the GET-18 worktree baseline (commit
-// 0ad5d212b41dbbb91a2851fa15ce16beccdd5a40) before any seam work. GLM
-// optimization must never shift these digests implicitly; a deliberate prompt
-// or policy change has to re-freeze them in review.
+// Frozen from GET-18 baseline 0ad5d212, then deliberately re-frozen for the
+// GET-40 clarification: review-only Memory proposals cannot save accepted state.
+// Runtime policy digests are unchanged. Future prompt or policy edits must
+// explicitly re-freeze these values in review.
 describe("frozen GLM relationship task configuration", () => {
   it("keeps the loaded glm-4.7 baseline configuration unchanged", () => {
     expect(loadedRelationshipTaskConfiguration("glm-4.7")).toEqual({
       configuration: {
         configurationId: "candidate-2763dc072ce561fa1de935be",
         model: "glm-4.7",
-        promptRevision: "dee0ad167e62a756",
-        promptContentDigest: "sha256:dee0ad167e62a756e30b6ba5dc1c5754d6d3783f407109af0e06b01927fd4b9d",
+        promptRevision: "ce41835e935403c3",
+        promptContentDigest: "sha256:ce41835e935403c399665d56c3357765385a8c425f94ae0fa0c61ea95cae8aab",
         runtimePolicyDigest: "sha256:ebc988f63edfaaac2e584880a46242ef7a31c4427d5fecec01ebda499fe3fd6a",
         parameters: { schemaVersion: "optimization-candidate.v1", taskFragmentId: "baseline", exampleIds: [] },
       },
-      taskConfigurationDigest: "sha256:a293172c64870681fb747294162c694cc0ba1779f833e5306630216b2af698b6",
+      taskConfigurationDigest: "sha256:b4a2195eb6fe78baae713f7a33bfd13cec6826388108855e5cefa06ce87a3e8f",
     });
   });
 
@@ -34,22 +34,22 @@ describe("frozen GLM relationship task configuration", () => {
       configuration: {
         configurationId: "candidate-2763dc072ce561fa1de935be",
         model: "glm-5.3",
-        promptRevision: "dee0ad167e62a756",
-        promptContentDigest: "sha256:dee0ad167e62a756e30b6ba5dc1c5754d6d3783f407109af0e06b01927fd4b9d",
+        promptRevision: "ce41835e935403c3",
+        promptContentDigest: "sha256:ce41835e935403c399665d56c3357765385a8c425f94ae0fa0c61ea95cae8aab",
         runtimePolicyDigest: "sha256:e072760ad36c2ab2b515731173745819a2875c95cf839403aab93ac855be81af",
         parameters: { schemaVersion: "optimization-candidate.v1", taskFragmentId: "baseline", exampleIds: [] },
       },
-      taskConfigurationDigest: "sha256:157e1993058d65923f39665d5838fe6b16fe470b5471234a716121457cf376a0",
+      taskConfigurationDigest: "sha256:9d5224558501bceda5881a6fa84d8fee9f2effb0ea96576a1f999a2556a3600c",
     });
     expect(loadedRelationshipTaskConfiguration("glm-4.7", 30000).taskConfigurationDigest)
-      .toBe("sha256:28d214146e56c6486e2594cdc2d5c8c90040663db5f13fdb89383c021f888eae");
+      .toBe("sha256:6b75a1c85eac2d6d11e85ad287d889334aba0a9de92b42ccab8169bbbdb709ce");
     expect(loadedRelationshipTaskConfiguration("glm-5.3", 30000).taskConfigurationDigest)
-      .toBe("sha256:4711de7f181aa85675d9f1a0b7fba0ec751b4a767da7bbd564de29ed829b7d59");
+      .toBe("sha256:37c9f227977a50527a906e9b2e4779decd887336296518ea44a863b27f4d109d");
   });
 
   it("keeps the loaded relationship prompt and the GLM reasoning gate unchanged", () => {
     expect(loadedRelationshipTaskPrompt().revision)
-      .toBe("dee0ad167e62a756e30b6ba5dc1c5754d6d3783f407109af0e06b01927fd4b9d");
+      .toBe("ce41835e935403c399665d56c3357765385a8c425f94ae0fa0c61ea95cae8aab");
     expect(chatModelReasoningEffort("glm-4.7")).toBeNull();
     expect(chatModelReasoningEffort("glm-5.3")).toBe("low");
     expect(chatModelReasoningEffort("deepseek-flash")).toBeNull();
@@ -84,12 +84,12 @@ describe("DeepSeek relationship text runtime policy", () => {
     expect(loaded.configuration).toEqual({
       configurationId: "candidate-2763dc072ce561fa1de935be",
       model: "deepseek-flash",
-      promptRevision: "dee0ad167e62a756",
-      promptContentDigest: "sha256:dee0ad167e62a756e30b6ba5dc1c5754d6d3783f407109af0e06b01927fd4b9d",
+      promptRevision: "ce41835e935403c3",
+      promptContentDigest: "sha256:ce41835e935403c399665d56c3357765385a8c425f94ae0fa0c61ea95cae8aab",
       runtimePolicyDigest: "sha256:96b432901223c8341d512dc3e8d8d89ebbb62251b610dca0b2a27fc4e467b53e",
       parameters: { schemaVersion: "optimization-candidate.v1", taskFragmentId: "baseline", exampleIds: [] },
     });
-    expect(loaded.taskConfigurationDigest).toBe("sha256:05b15a42bd9e5ea74162471f1c85ae0e2e8e91f65b72e0bdff238011a571e718");
+    expect(loaded.taskConfigurationDigest).toBe("sha256:95ecb7af9a9391413e495bf0d2be08fc450fed028b4109a0294dd9de14b500b0");
     expect(loaded.configuration.runtimePolicyDigest)
       .not.toBe(loadedRelationshipTaskConfiguration("glm-4.7").configuration.runtimePolicyDigest);
     expect(loaded.configuration.runtimePolicyDigest)

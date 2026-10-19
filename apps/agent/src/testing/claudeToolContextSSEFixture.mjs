@@ -21,6 +21,7 @@ const SOURCE = 'synthetic-evidence-0001';
 const CATALOG = ['contact_workspace_search', 'contact_workspace_read', 'contact_workspace_propose_create',
   'contact_workspace_propose_update', 'memory_review', 'mcp_connections'];
 const ESSENTIAL = ['read_response_preference', 'stage_calendar_draft'];
+const CORE = ['memory_review_recall', 'memory_review_propose'];
 const ANSWER_TOOLS = ['cite_evidence', 'read_relationship_memory'];
 
 export const TOOL_CONTEXT_MODES = ['natural', 'json', 'answer'];
@@ -42,7 +43,7 @@ function toolWire(tool) {
 }
 
 /** Capture the actual public wire request without retaining user secrets. */
-function measureRequest(index, body, headers) {
+function measureRequest(index, body, headers, catalog, essential) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const raw = JSON.stringify(body);
   return {
@@ -57,8 +58,8 @@ function measureRequest(index, body, headers) {
     toolNames: tools.map(tool => tool.name ?? null),
     // Deferred catalog visibility by actual original names anywhere in the
     // request (system reminders and loaded schemas both count as visible).
-    catalogVisibility: Object.fromEntries(CATALOG.map(name => [name, raw.includes(name)])),
-    essentialVisibility: Object.fromEntries(ESSENTIAL.map(name => [name, raw.includes(name)])),
+    catalogVisibility: Object.fromEntries(catalog.map(name => [name, raw.includes(name)])),
+    essentialVisibility: Object.fromEntries(essential.map(name => [name, raw.includes(name)])),
     toolSearchVisible: raw.includes('ToolSearch'),
   };
 }
@@ -92,6 +93,9 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
   assert(authorityFault === undefined || (mode === 'natural' && expect === 'discovery'
     && ['source', 'lease'].includes(authorityFault)));
   assert(runtime?.runClaudeHarness && query && z && ChatProvider, 'Pass the real production harness, SDK query, Zod and ClaudeChatProvider.');
+  const catalog = expect === 'discovery' ? [...CATALOG.filter(name => name !== 'memory_review'), ...CORE, 'stage_calendar_draft'] : CATALOG;
+  const essential = expect === 'discovery' ? ['read_response_preference'] : ESSENTIAL;
+  const deferred = catalog.filter(name => !CORE.includes(name));
   const started = performance.now();
   const events = [];
   const record = (event, metadata = {}) => events.push({ afterMs: Math.round(performance.now() - started), event, ...metadata });
@@ -159,7 +163,7 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
       return { block: { type: 'text', text: '' }, delta: { type: 'text_delta', text: mode === 'json' ? FINAL_JSON : FINAL } };
     }
     if (index === 1) return toolUse('ToolSearch', { query: 'contact memory review', max_results: 10 });
-    if (index === 2) return toolUse('ToolSearch', { query: `select:${PREFIX}mcp_connections,${PREFIX}contact_workspace_read,${PREFIX}contact_workspace_propose_create,${PREFIX}contact_workspace_propose_update,NotRegisteredTool` });
+    if (index === 2) return toolUse('ToolSearch', { query: `select:${PREFIX}mcp_connections,${PREFIX}contact_workspace_read,${PREFIX}contact_workspace_propose_create,${PREFIX}contact_workspace_propose_update,${PREFIX}stage_calendar_draft,NotRegisteredTool` });
     if (index === 3) return toolUse(PREFIX + 'contact_workspace_search', { query: HOSTILE_QUERY, exfiltrate: 'PRIVATE_HOSTILE_KEY' });
     if (index === 4) return toolUse(PREFIX + 'contact_workspace_search', { query: VALID_QUERY });
     return { block: { type: 'text', text: '' }, delta: { type: 'text_delta', text: mode === 'json' ? FINAL_JSON : FINAL } };
@@ -198,7 +202,7 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
       const body = JSON.parse(raw);
       requestCount += 1;
       const index = requestCount;
-      requests.push(measureRequest(index, body, request.headers));
+      requests.push(measureRequest(index, body, request.headers, catalog, essential));
       traces.push({ index, ...protocolTrace(body) });
       record('mock_request', { index, tools: requests[index - 1].toolNames });
       assert.equal(body.model, MODEL);
@@ -330,12 +334,12 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
     assert.equal(requests.length, expectedSteps, `expected ${expectedSteps} Messages requests, got ${requests.length}`);
     assert.equal(workspaceRemoved, true, 'The real harness must dispose its own SDK workspace.');
     const first = requests[0];
-    const catalogTools = first.tools.filter(tool => CATALOG.includes((tool.name ?? '').replace(PREFIX, '')));
+    const catalogTools = first.tools.filter(tool => catalog.includes((tool.name ?? '').replace(PREFIX, '')));
     const originalName = tool => (tool.name ?? '').replace(PREFIX, '');
-    const essentialTools = first.tools.filter(tool => ESSENTIAL.includes(originalName(tool)));
+    const essentialTools = first.tools.filter(tool => essential.includes(originalName(tool)));
     if (mode !== 'answer') {
-      assert.deepEqual(essentialTools.map(originalName).sort(), [...ESSENTIAL].sort(),
-        'both essential tools must be present, not an empty schema-check loop');
+      assert.deepEqual(essentialTools.map(originalName).sort(), [...essential].sort(),
+        'essential tools must be present, not an empty schema-check loop');
       for (const tool of essentialTools) assert(tool.schemaBytes > 0, `${tool.name} must stay visible upfront`);
     }
     if (authorityFault) {
@@ -366,7 +370,7 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
       assert.equal(first.toolSearchVisible, false);
       assert.equal(sdkOptions.enableToolSearch, null, 'legacy runs must not force SDK tool search');
       assert(sdkOptions.tools.every(name => name !== 'ToolSearch'));
-      assert.equal(catalogTools.length, CATALOG.length, 'legacy runs keep the full admitted catalog in the first request');
+      assert.equal(catalogTools.length, catalog.length, 'legacy runs keep the full admitted catalog in the first request');
       for (const tool of catalogTools) assert(tool.schemaBytes > 0, `${tool.name} must keep its full schema eagerly`);
       for (const tool of essentialTools) assert(tool.schemaBytes > 0);
       assert.equal(invokeCalls.length, 1);
@@ -380,10 +384,14 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
       assert(sdkOptions.tools.includes('ToolSearch'));
       assert(sdkOptions.allowedTools.includes('ToolSearch'));
       assert.equal(first.toolSearchVisible, true, 'ToolSearch must be visible in the first request');
-      assert.deepEqual(first.catalogVisibility, Object.fromEntries(CATALOG.map(name => [name, true])),
-        'every deferred capability remains discoverable by its original catalog name');
-      assert(catalogTools.every(tool => tool.schemaBytes === 0),
-        `deferred catalog schemas must stay out of the first request: ${JSON.stringify(catalogTools)}`);
+      assert.deepEqual(first.catalogVisibility, Object.fromEntries(catalog.map(name => [name, true])),
+        'every admitted capability remains visible by its original catalog name');
+      const deferredTools = catalogTools.filter(tool => deferred.includes(originalName(tool)));
+      assert(deferredTools.every(tool => tool.schemaBytes === 0),
+        `secondary catalog schemas must stay out of the first request: ${JSON.stringify(deferredTools)}`);
+      const coreTools = catalogTools.filter(tool => CORE.includes(originalName(tool)));
+      assert.deepEqual(coreTools.map(originalName).sort(), [...CORE].sort(), 'core Memory must be present without discovery');
+      for (const tool of coreTools) assert(tool.schemaBytes > 0, `${tool.name} must stay visible upfront`);
       for (const tool of essentialTools) assert(tool.schemaBytes > 0, `${tool.name} must stay visible upfront`);
       // Discoverability by actual original names and operation semantics,
       // resolved only over this Run's registered MCP catalog.
@@ -393,7 +401,7 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
       assert(references.every(name => name !== 'NotRegisteredTool'), 'unknown names must never resolve to a tool');
       assert((traces[1]?.toolResults ?? []).some(entry => /contact_workspace|memory_review/.test(`${entry.text}${entry.raw}`)),
         'semantic discovery must surface catalog capabilities');
-      for (const name of CATALOG) assert(references.includes(PREFIX + name), `discovery must reference ${name}`);
+      for (const name of deferred) assert(references.includes(PREFIX + name), `discovery must reference ${name}`);
       // Dynamic discovery loads the selected capability's real schema.
       const loaded = requests.slice(1).flatMap(entry => entry.tools)
         .filter(tool => (tool.name ?? '').endsWith('mcp_connections'));

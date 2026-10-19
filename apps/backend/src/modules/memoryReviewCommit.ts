@@ -439,13 +439,6 @@ export async function commitMemoryReview(
           "A contact already resolved for this proposal; save against it explicitly.",
         );
       }
-      if (binding.status === "ambiguous") {
-        throw new ApiError(
-          409,
-          "MEMORY_IDENTITY_AMBIGUOUS",
-          "Resolve the ambiguous contact before creating one.",
-        );
-      }
       const label =
         request.new_contact?.display_label?.trim() || proposal.person_display_label;
       if (!label) {

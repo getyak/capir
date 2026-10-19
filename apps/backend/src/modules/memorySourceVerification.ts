@@ -135,6 +135,18 @@ export async function verifyPendingSourceAuthority(
     proposalSourceAvailable = false;
   }
 
+  // Contact-only image proposals deliberately have no item rows. Their
+  // Session and immutable admitted artifacts still carry revocation authority.
+  // The resolver above takes source locks before this ledger read on commit.
+  if (proposalSourceAvailable && currentAuthority) {
+    proposalSourceAvailable = !(await tombstoneBlocks(client, auth.accountId, {
+      sessionIds: currentAuthority.sessionId ? [currentAuthority.sessionId] : [],
+      captureIds: currentAuthority.captureIds,
+      artifactIds: currentAuthority.artifacts.map(artifact => artifact.artifactId),
+      captureVersion: currentAuthority.captureVersion,
+    }));
+  }
+
   const captureItems = items.filter((item) => item.capture_id);
   const captureById = new Map<
     string,

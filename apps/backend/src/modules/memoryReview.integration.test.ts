@@ -301,6 +301,42 @@ async function insertSourceSession(
   }
 }
 
+describe.skipIf(!pool)("workspace screenshot contact source readback", () => {
+  it.each(["historical", "historical_scrubbed", "pending_current", "scrubbed_cancelled", "scrubbed_missing_turn", "scrubbed_changed_manifest"] as const)("opens and saves a name-only draft from its %s source message", async mode => {
+    const auth = await makeAuth(`image-contact-${mode}`);
+    const sessionID = randomUUID(), imageMessageID = randomUUID(), attachmentID = randomUUID();
+    const bytes = Buffer.from([1,2,3,4]);
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    await insertSourceSession(auth, sessionID, imageMessageID, "", [{attachmentId:attachmentID,contentHash:hash}]);
+    const original = (await pool!.query("SELECT payload FROM agent_sessions WHERE account_id=$1 AND id=$2", [auth.accountId,sessionID])).rows[0]!.payload;
+    // The real queue does not append the current turn until execution finishes.
+    if(mode==="pending_current")await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns}','[]'::jsonb) WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID]);
+    if(mode==="historical_scrubbed" || mode.startsWith("scrubbed_"))await pool!.query("UPDATE conversation_queue_entries SET content_state='scrubbed',objective=NULL,status=$3 WHERE account_id=$1 AND message_id=$2",[auth.accountId,imageMessageID,mode==="scrubbed_cancelled"?"cancelled":"completed"]);
+    if(mode==="scrubbed_missing_turn")await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns}','[]'::jsonb) WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID]);
+    if(mode==="scrubbed_changed_manifest")await pool!.query("UPDATE agent_sessions SET payload=jsonb_set(payload,'{turns,0,images,0,content_hash}',to_jsonb($3::text)) WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID,"a".repeat(64)]);
+    const artifactID = `conversation-image-${imageMessageID}-0-${attachmentID}`;
+    const execution = await executeWorkspaceConversationAgent({database:pool!,auth,sessionID,
+      messageID:mode==="pending_current"?imageMessageID:randomUUID(),
+      objective:"添加这个人的好友",sourceText:mode==="pending_current"?"":"添加这个人的好友",
+      inputParts:[{kind:"image",artifactID,mimeType:"image/png",byteSize:bytes.length,contentHash:hash,dataBase64:bytes.toString("base64")}],
+      provider:new ScriptedAgentProvider([{tool:"memory_review",input:{operation:"propose",contact_decision:"new",person_display_label:"Peter Yang",
+        new_contact_source_locator:{kind:"image_region",artifact_id:artifactID,image_index:0},items:[]}}],{outcome:"reply",title:"待添加",body:"可以在卡片中添加。"})});
+    if(mode.startsWith("scrubbed_")) { expect(execution.memoryProposal).toBeNull(); return; }
+    expect(execution.memoryProposal).toBeTruthy();
+    if(mode==="pending_current")await pool!.query("UPDATE agent_sessions SET payload=$3::jsonb WHERE account_id=$1 AND id=$2",[auth.accountId,sessionID,JSON.stringify(original)]);
+    const proposalID = execution.memoryProposal!.proposal_id;
+    const stored = (await pool!.query("SELECT source_message_id FROM memory_proposals WHERE account_id=$1 AND id=$2",[auth.accountId,proposalID])).rows[0]!;
+    expect(stored.source_message_id).toBe(imageMessageID);
+    const opened=await open(auth,proposalID,"chat");
+    const saved=await decideMemoryContactOnly(pool!,auth,opened.review.review_scope_id,opened.review_credential!,{
+      idempotency_key:randomUUID(),expected_proposal_revision:opened.review.proposal_revision,
+      display_label:"Peter Yang",relationship_context:"",reason:"Confirm the proposed separate contact."});
+    expect(saved.receipt.created_person_id).toBeTruthy();
+    const person=(await pool!.query("SELECT display_label FROM subjects WHERE account_id=$1 AND id=$2",[auth.accountId,saved.receipt.created_person_id])).rows[0];
+    expect(person).toEqual({display_label:"Peter Yang"});
+  });
+});
+
 async function stage(auth: AuthContext, options: StageOptions) {
   const idempotencyKey = randomUUID();
   const requestedSessionId =
@@ -650,7 +686,7 @@ describe.skipIf(!pool)("Memory review integration", () => {
     ).rejects.toThrow(/open|revision|frozen|rebase/i);
   });
 
-  it("refuses contact-dependent memory when the contact is skipped or ambiguous", async () => {
+  it("keeps skipped contacts unbound and permits a separately reviewed namesake", async () => {
     const auth = await makeAuth("skip");
     const { person } = draftProposalItems();
     const staged = await stage(auth, {
@@ -694,13 +730,13 @@ describe.skipIf(!pool)("Memory review integration", () => {
     });
     expect(ambiguous?.proposal.contact_status).toBe("ambiguous");
     const ambiguousOpen = await open(second, ambiguous!.proposal.proposal_id, "chat");
-    await expect(
-      commit(second, ambiguousOpen.review, ambiguousOpen.review_credential!, {
-        selected: ambiguousOpen.review.items.filter((item) => item.scope !== "self").map((item) => item.id),
-        contactDecision: "new",
-        newContact: { display_label: "Chen", relationship_context: "Design partner" },
-      }),
-    ).rejects.toThrow(/ambiguous/i);
+    const separate = await commit(second, ambiguousOpen.review, ambiguousOpen.review_credential!, {
+      selected: ambiguousOpen.review.items.filter((item) => item.scope !== "self").map((item) => item.id),
+      contactDecision: "new", newContact: { display_label: "Chen", relationship_context: "Design partner" },
+    });
+    expect(separate.body.receipt.created_person_id).toBeTruthy();
+    const namesakes = await pool!.query("SELECT id FROM subjects WHERE account_id = $1 AND display_label = 'Chen' AND status = 'active'", [second.accountId]);
+    expect(namesakes.rows).toHaveLength(3);
   });
 
   it("never strips a contact dependence from a sentence classified as self", async () => {
@@ -2811,7 +2847,7 @@ describe.skipIf(!pool)("Memory review integration", () => {
   });
 
 
-  it("answers an empty-objective image-only message without supplemental consent or saved claims", async () => {
+  it("allows a review-only image contact label without supplemental inspection or saved facts", async () => {
     const auth = await makeAuth("image-host-no-consent");
     const sessionId = randomUUID(), messageId = randomUUID();
     const images = [Buffer.from([1, 2, 3, 4]), Buffer.from([2, 2, 3, 4])].map((data, imageIndex) => ({
@@ -2835,10 +2871,10 @@ describe.skipIf(!pool)("Memory review integration", () => {
         expect(request.inputParts?.filter(part => part.kind === "image").map(part => part.dataBase64))
           .toEqual(images.map(image => image.data.toString("base64")));
         expect(request.supplementalTools?.some(tool => tool.name === "inspect_current_image")).not.toBe(true);
-        rejected.push(await invoke("memory_review", { operation: "propose", contact_decision: "new",
-          person_display_label: "陈宇", new_contact_source_locator: locator, items: [] }));
         rejected.push(await invoke("memory_review", { operation: "propose", contact_decision: "none",
           items: [candidate({ source_excerpt: "未经核验的图片文字", source_locator: locator })] }));
+        rejected.push(await invoke("memory_review", { operation: "propose", contact_decision: "new",
+          person_display_label: "陈宇", new_contact_source_locator: locator, items: [] }));
         return { structuredOutput: { outcome: "reply", title: "图片说明", body: "主模型正常回答图片内容。" },
           inputTokens: 1, outputTokens: 1, estimatedUsd: 0, turns: 1, permissionDenials: [] };
       }),
@@ -2849,17 +2885,19 @@ describe.skipIf(!pool)("Memory review integration", () => {
         provider: provider as never, database: pool!, auth, images,
       });
       expect(rejected).toMatchObject([
-        { ok: false, error: { code: "CONTACT_COUNTERPARTY_NOT_GROUNDED" } },
         { ok: false, error: { code: "MEMORY_SOURCE_UNGROUNDED" } },
+        { ok: true },
       ]);
       expect(inspection).not.toHaveBeenCalled();
-      expect(execution.body.memory_proposal).toBeUndefined();
-      expect(JSON.stringify(execution.body)).toContain("主模型正常回答图片内容。");
+      expect(execution.body.memory_proposal).toBeDefined();
+      expect(execution.body.blocks[0]).toMatchObject({ title: "核对陈宇联系人", body: "核对卡片后即可添加联系人。" });
+      expect(JSON.stringify(execution.body)).not.toContain("主模型正常回答图片内容。");
       const persisted = await pool!.query(
         `SELECT (SELECT count(*) FROM memory_proposals WHERE account_id=$1)::text AS proposals,
                 (SELECT count(*) FROM subjects WHERE account_id=$1)::text AS people,
-                (SELECT count(*) FROM memory_items WHERE account_id=$1)::text AS memories`, [auth.accountId]);
-      expect(persisted.rows[0]).toEqual({ proposals: "0", people: "0", memories: "0" });
+                (SELECT count(*) FROM memory_items WHERE account_id=$1)::text AS memories,
+                (SELECT count(*) FROM memory_proposal_items WHERE account_id=$1)::text AS proposed_items`, [auth.accountId]);
+      expect(persisted.rows[0]).toEqual({ proposals: "1", people: "0", memories: "0", proposed_items: "0" });
     } finally {
       inspection.mockRestore();
       if (previous.allow === undefined) delete process.env.TALENT_SIGNAL_ALLOW_SENSITIVE_AI_PROCESSING;
@@ -2868,6 +2906,50 @@ describe.skipIf(!pool)("Memory review integration", () => {
       else process.env.ARK_API_KEY = previous.key;
     }
   });
+
+  it.each(["available", "artifact", "session", "other-account"] as const)(
+    "rechecks %s revocation for a main-model image contact-only save", async revoked => {
+      const auth = await makeAuth(`empty-image-${revoked}`);
+      const sessionId = randomUUID(), messageId = randomUUID(), data = Buffer.from([1, 2, 3, 4]);
+      const image = { messageId, imageIndex: 0, attachmentId: randomUUID(), fileName: "synthetic-contact.png",
+        mediaType: "image/png" as const, byteSize: data.length,
+        contentHash: createHash("sha256").update(data).digest("hex"), data };
+      await insertSourceSession(auth, sessionId, messageId, "", [image]);
+      const artifactID = `conversation-image-${messageId}-0-${image.attachmentId}`;
+      const provider = {
+        providerId: "zhipu-chat-completions" as const, id: "synthetic-contact-revocation", model: "synthetic",
+        sdkVersion: "synthetic.v1", supportsImageInput: true,
+        inputCapabilities: { text: true, image: true, imageUnderstanding: true }, answer: vi.fn(),
+        run: vi.fn(async (_request: AgentProviderRequest, invoke: (name: string, input: unknown) => Promise<unknown>) => {
+          expect(await invoke("memory_review", { operation: "propose", contact_decision: "new", person_display_label: "Synthetic contact",
+            new_contact_source_locator: { kind: "image_region", artifact_id: artifactID, image_index: 0 }, items: [] }))
+            .toMatchObject({ ok: true });
+          return { structuredOutput: { outcome: "reply", title: "Review", body: "Review the contact." },
+            inputTokens: 1, outputTokens: 1, estimatedUsd: 0, turns: 1, permissionDenials: [] };
+        }),
+      };
+      const execution = await executeUnscopedChatTask({ request: { idempotency_key: randomUUID(), objective: "", session_id: sessionId, message_id: messageId },
+        provider: provider as never, database: pool!, auth, images: [image] });
+      const proposalID = execution.body.memory_proposal!.proposal_id;
+      const opened = await open(auth, proposalID, "chat");
+      expect(opened.review.items).toEqual([]);
+      if (revoked !== "available") {
+        const owner = revoked === "other-account" ? await makeAuth("unrelated-revocation") : auth;
+        await pool!.query("INSERT INTO memory_source_revocations(id,account_id,source_kind,source_id,reason) VALUES($1,$2,$3,$4,'source_revoked')",
+          [randomUUID(), owner.accountId, revoked === "session" ? "session" : "artifact", revoked === "session" ? sessionId : artifactID]);
+      }
+      const saved = commit(auth, opened.review, opened.review_credential!, { selected: [], contactDecision: "new",
+        newContact: { display_label: "Synthetic contact", relationship_context: "" } });
+      const blocked = revoked === "artifact" || revoked === "session";
+      if (blocked) await expect(saved).rejects.toMatchObject({ code: "MEMORY_SOURCE_UNAVAILABLE" });
+      else expect((await saved).body.receipt.item_count).toBe(0);
+      const persisted = await pool!.query(`SELECT
+        (SELECT count(*)::int FROM subjects WHERE account_id=$1) AS people,
+        (SELECT count(*)::int FROM memory_commits WHERE account_id=$1) AS commits,
+        (SELECT count(*)::int FROM memory_items WHERE account_id=$1) AS memories`, [auth.accountId]);
+      expect(persisted.rows[0]).toEqual({ people: blocked ? 0 : 1, commits: blocked ? 0 : 1, memories: 0 });
+    },
+  );
 
   it("dispatches a real Session proposal, then decides contact and Memory siblings separately", async () => {
     const auth = await makeAuth("session-card-dispatch");

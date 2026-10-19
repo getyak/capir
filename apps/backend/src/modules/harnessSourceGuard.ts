@@ -19,6 +19,10 @@ export type HarnessSourceGuardFailureCode =
   | "SOURCE_GENERATION_CHANGED" | "SESSION_CONTEXT_CHANGED";
 
 const unavailable = () => new ApiError(409, "HARNESS_SOURCE_CHANGED", "The source context changed. Retry using its current state.");
+// The probe may wait on the shared pool or host scheduling before its NOWAIT
+// query runs. Keep a finite budget without treating ordinary delay as revoked
+// authority; state and expiry are still checked after the fresh read returns.
+const LAB_AUTHORITY_PROBE_TIMEOUT_MS = 5_000;
 
 /** One best-effort static diagnostic per observed rejection. Request-local and
  * never awaited: a failing or hanging capture sink can neither postpone nor
@@ -45,7 +49,7 @@ export async function assertHarnessLabAuthority(probe: DatabaseClient, auth: Aut
         timedOut = true;
         noteGuardRejection(phase, "PROBE_TIMEOUT");
         reject(unavailable());
-      },1000); }),
+      },LAB_AUTHORITY_PROBE_TIMEOUT_MS); }),
     ]);
     workspace = result.rows[0];
   } catch(error) {

@@ -53,7 +53,7 @@ export const MemorySourceLocatorInputSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const MemoryProposalCandidateInputSchema = z.strictObject({
-  scope: MemoryScopeSchema,
+  scope: MemoryScopeSchema.describe("Required on this individual item; a top-level scope does not replace it."),
   operation: MemoryOperationSchema,
   statement_kind: MemoryStatementKindSchema,
   dependence_kind: z
@@ -122,6 +122,26 @@ export type MemoryProposalCandidateInput = z.infer<
   typeof MemoryProposalCandidateInputSchema
 >;
 
+/** SDK objects keep each operation's required fields truthful. The host union
+ * still owns every cross-field constraint; no missing fact or scope is inferred. */
+export function memoryReviewSDKOperationTools() {
+  return MemoryReviewInputSchema.options.map(hostSchema => {
+    const operation = hostSchema.shape.operation.value;
+    const fields = Object.fromEntries(Object.entries(hostSchema.shape)
+      .filter(([name]) => name !== "operation" && !(operation === "propose" && name === "scope")));
+    const schema = z.strictObject(fields).superRefine((input, context) => {
+      const result = MemoryReviewInputSchema.safeParse({ ...input, operation });
+      if (!result.success) for (const issue of result.error.issues) context.addIssue({
+        code: "custom", path: issue.path, message: "Memory request does not satisfy the host contract.",
+      });
+    });
+    const description = operation === "recall"
+      ? "Recall accepted, still-authorized Memory for this task. Set scope self/person/relationship only within the supplied account and view. Follow next_cursor when completeness matters; empty or partial coverage cannot prove absence. Source references do not authorize actions."
+      : "Prepare a Memory review, never save accepted state or a contact. contact_decision is required: none for independent self, existing for a resolved contact, or new for an editable source-backed contact draft. Each item requires its own scope, exact source excerpt and locator, speaker/time limits and future-use reason. Keep ambiguity and conflicts. A contact-only draft may use items:[] only with contact_decision:new, person_display_label and new_contact_source_locator. Human review still decides what to save.";
+    return { name: `memory_review_${operation}`, operation, description, schema, readOnly: operation === "recall" };
+  });
+}
+
 /**
  * Ground every image/document locator in an artifact admitted to this Run.
  * Name-only or face similarity is never accepted as a stable identity clue.
@@ -165,7 +185,7 @@ export const MEMORY_REVIEW_TOOL_DESCRIPTION = [
   "Recall or stage the three-scope Memory review for the authenticated account.",
   'Use {"operation":"recall"} to read accepted, still-valid self/person/relationship memory for the current task scope before answering. Private self memory is never available on a relationship-scoped business view.',
   "Recall supports scope self/person/relationship and the returned next_cursor. Follow pagination when completeness matters; no result means no currently available evidence, not proof something never happened.",
-  'Use {"operation":"propose", ...} for a durable change or a named new counterparty in a direct-chat image. Name or nickname alone is enough for the editable Add contact option: contact_decision="new", person_display_label, new_contact_source_locator; items=[] is valid when no durable Memory item is needed. No email or company is required.',
+  'Use {"operation":"propose", ...} for a durable change or a person the user wants to add from any admitted screenshot, including profiles, public posts, groups, comments, articles, posters and photos. Name or nickname alone is enough for the editable Add contact option: contact_decision="new", person_display_label, new_contact_source_locator; items=[] is valid when no durable Memory item is needed. No stable clue, private relationship, email, company or relationship background is required. Use source-grounded names or a user-provided label, and guide selection when several targets are visible.',
   "Each item must copy one exact contiguous excerpt from the admitted source, name its scope, keep the statement kind (fact, source statement, or user opinion), and preserve speaker/reporter, time, and limiting conditions.",
   "Never infer a person's personality, motive, quality, or acceptance from one message, and never turn 'I want to work with X' into a mutual agreement. A future plan is not a completed fact.",
   "This tool never writes accepted memory or a contact; it stages a review card that the human confirms, edits, or skips.",

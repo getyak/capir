@@ -580,7 +580,7 @@ export function validateMemorySelection<T extends SelectionCandidate>(
   }
   if (
     input.contactStatus === "ambiguous"
-    && input.contactDecision !== "none"
+    && input.contactDecision === "existing"
     && selected.some((item) => item.scope !== "self")
   ) {
     return {
