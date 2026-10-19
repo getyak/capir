@@ -5,6 +5,7 @@ import {
   MemoryReviewInputSchema,
   MemoryReviewToolInputSchema,
   memoryLocatorAdmissionError,
+  memoryReviewSDKOperationTools,
   type MemoryProposalCandidateInput,
 } from "./memorySchemas.js";
 import { AGENT_TOOL_CATALOG, agentToolJsonSchema } from "./toolCatalog.js";
@@ -159,5 +160,42 @@ describe("memory_review Agent tool", () => {
     );
     expect(invokeTool).not.toHaveBeenCalled();
     expect(result.structuredOutput).toMatchObject({ outcome: "reply" });
+  });
+});
+
+describe("bounded SDK Memory operations", () => {
+  const propose = () => memoryReviewSDKOperationTools().find(tool => tool.operation === "propose")!;
+  const self = () => candidate({ scope: "self", dependence_kind: "independent_self", speaker: "self",
+    display_text: "接下来两周练习陶艺，之后是否继续尚未决定", source_excerpt: "接下来两周练习陶艺，之后是否继续尚未决定", time_status: "future" });
+
+  it("binds only the host-selected operation and preserves explicit self or mixed item scopes", () => {
+    const tool = propose();
+    expect(tool.readOnly).toBe(false);
+    for (const items of [[self()], [self(), candidate({})]]) {
+      const request = { contact_decision: items.length > 1 ? "existing" : "none", items };
+      const parsed = tool.schema.parse(request);
+      const host = MemoryReviewInputSchema.parse({ ...parsed, operation: tool.operation });
+      expect(host).toEqual({ ...request, operation: "propose" });
+    }
+  });
+
+  it("does not infer missing scopes or hide original cross-field constraints", () => {
+    const request = { contact_decision: "none", items: [self()] };
+    const { scope: _scope, ...withoutScope } = self();
+    for (const invalid of [{ items: request.items }, { contact_decision: "none" },
+      { ...request, items: [withoutScope] }, { ...request, scope: "self" },
+      { ...request, operation: "commit" }, { ...request, items: [] },
+      { ...request, unrecognized: "synthetic" }]) expect(propose().schema.safeParse(invalid).success).toBe(false);
+    expect(propose().schema.safeParse({ contact_decision: "new", person_display_label: "Mira", items: [] }).success).toBe(false);
+    expect(propose().schema.safeParse({ contact_decision: "new", person_display_label: "Mira",
+      new_contact_source_locator: { kind: "image_region", artifact_id: "synthetic-admitted-image" }, items: [] }).success).toBe(true);
+  });
+
+  it("keeps recall read-only, scoped and paginated without proposal arguments", () => {
+    const recall = memoryReviewSDKOperationTools().find(tool => tool.operation === "recall")!;
+    expect(recall.readOnly).toBe(true);
+    expect(recall.schema.parse({ scope: "self", cursor: "page-2" })).toEqual({ scope: "self", cursor: "page-2" });
+    expect(recall.schema.safeParse({ items: [self()] }).success).toBe(false);
+    expect(recall.schema.safeParse({ operation: "commit" }).success).toBe(false);
   });
 });

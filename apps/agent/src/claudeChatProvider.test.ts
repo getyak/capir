@@ -587,10 +587,10 @@ describe("bounded tool context opt-in policy", () => {
   it("opts in with a deferred admitted catalog only for ordinary-text workspace conversation", async () => {
     const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
       expect(harnessRequest.toolDiscovery).toBe("bounded");
-      const essential = new Set(["read_response_preference", "stage_calendar_draft"]);
+      const essential = new Set(["read_response_preference", "memory_review_recall", "memory_review_propose"]);
       const deferred = harnessRequest.tools.filter(tool => !essential.has(tool.name));
       expect(deferred.map(tool => tool.name).sort()).toEqual(["contact_workspace_propose_create", "contact_workspace_propose_update",
-        "contact_workspace_read", "contact_workspace_search", "mcp_connections", "memory_review"]);
+        "contact_workspace_read", "contact_workspace_search", "mcp_connections", "stage_calendar_draft"]);
       // Large admitted catalog tools defer; small essential tools stay upfront.
       for (const tool of deferred) expect(tool.alwaysLoad ?? false).toBe(false);
       for (const name of essential) expect(harnessRequest.tools.find(tool => tool.name === name)?.alwaysLoad).toBe(true);
