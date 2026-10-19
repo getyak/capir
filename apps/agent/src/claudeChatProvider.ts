@@ -13,6 +13,7 @@ import {
   MEMORY_REVIEW_TOOL_DESCRIPTION,
   MemoryReviewInputSchema,
   MemoryReviewToolInputSchema,
+  memoryReviewSDKOperationTools,
   memoryLocatorAdmissionError,
 } from "./memorySchemas.js";
 import { AGENT_TOOL_CATALOG, contactWorkspaceOperationTools } from "./toolCatalog.js";
@@ -336,6 +337,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
           return { name: description.name, description: description.description,
             schema: (schema as z.ZodObject).omit({ operation: true }), readOnly: operation === "search" || operation === "read", operation };
         })
+        : name === "memory_review" && boundedDiscovery ? memoryReviewSDKOperationTools()
         : [{ name, description: definition.description, schema: definition.schema, readOnly: definition.readOnly, operation: undefined }];
       return variants.map(variant => ({ name: variant.name, description: variant.description,
         // Core Memory must be usable without a discovery hop or a contact.
@@ -349,7 +351,10 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
           // Validate even direct adapter dispatch; operation is host-selected.
           const parsed = variant.schema.safeParse(input);
           if (!parsed.success) return { content: [{ type: "text", text: JSON.stringify({ error: "TOOL_INPUT_INVALID" }) }], isError: true };
-          const result = await invokeTool(name, variant.operation ? { ...parsed.data, operation: variant.operation } : parsed.data, executionSignal);
+          const hostInput = variant.operation ? { ...parsed.data, operation: variant.operation } : parsed.data;
+          if (name === "memory_review" && boundedDiscovery && !MemoryReviewInputSchema.safeParse(hostInput).success)
+            return { content: [{ type: "text", text: JSON.stringify({ error: "TOOL_INPUT_INVALID" }) }], isError: true };
+          const result = await invokeTool(name, hostInput, executionSignal);
           if (result.ok) {
             const data = result.data as Record<string, any> | undefined;
             if (data?.operation === "search") searched = true;
@@ -363,7 +368,9 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
           return { content: [{ type: "text", text: JSON.stringify(result) }], isError: !result.ok };
         } }));
     });
-    tools.push(...responsePreferenceTool(request.responsePreference), ...calendar.tools, ...(request.supplementalTools ?? []));
+    const boundedMemory = boundedDiscovery && request.toolManifest.includes("memory_review");
+    tools.push(...responsePreferenceTool(request.responsePreference),
+      ...calendar.tools.map(tool => boundedMemory ? { ...tool, alwaysLoad: false } : tool), ...(request.supplementalTools ?? []));
     // Host-observed partial text is a forming response only. A host callback
     // exception or abort must never trigger a fallback model execution here.
     const onText = request.outputMode !== "json" && request.onVisibleText
@@ -384,7 +391,8 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
         : configuredClaudeChatPrompt(request.systemPrompt, preset, "workspace").text, calendar.instructions,
         request.responsePreference ? RESPONSE_PREFERENCE_INSTRUCTIONS : "",
         request.selfMemoryContext ? MEMORY_CONTEXT_INSTRUCTIONS : "",
-        request.toolManifest.includes("memory_review") ? WORKSPACE_MEMORY_REVIEW_GUIDANCE : ""].filter(Boolean).join("\n\n"), tools,
+        request.toolManifest.includes("memory_review") ? WORKSPACE_MEMORY_REVIEW_GUIDANCE : "",
+        boundedMemory ? "Memory SDK operations are memory_review_recall and memory_review_propose. Do not send a top-level operation or proposal-level scope; every proposed item requires its own scope and operation." : ""].filter(Boolean).join("\n\n"), tools,
       context: JSON.stringify({ calendar_clock: calendar.clock, scope: request.scopeSummary, conversation: boundedConversationHistory(request.conversationHistory),
         session_title_requested: sessionTitleRequested,
         input_images: userImages.map(part => ({ artifact_id: part.artifactID, mime_type: part.mimeType, byte_size: part.byteSize, content_hash: part.contentHash })),

@@ -53,7 +53,7 @@ export const MemorySourceLocatorInputSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const MemoryProposalCandidateInputSchema = z.strictObject({
-  scope: MemoryScopeSchema,
+  scope: MemoryScopeSchema.describe("Required on this individual item; a top-level scope does not replace it."),
   operation: MemoryOperationSchema,
   statement_kind: MemoryStatementKindSchema,
   dependence_kind: z
@@ -121,6 +121,26 @@ export type MemoryReviewInput = z.infer<typeof MemoryReviewInputSchema>;
 export type MemoryProposalCandidateInput = z.infer<
   typeof MemoryProposalCandidateInputSchema
 >;
+
+/** SDK objects keep each operation's required fields truthful. The host union
+ * still owns every cross-field constraint; no missing fact or scope is inferred. */
+export function memoryReviewSDKOperationTools() {
+  return MemoryReviewInputSchema.options.map(hostSchema => {
+    const operation = hostSchema.shape.operation.value;
+    const fields = Object.fromEntries(Object.entries(hostSchema.shape)
+      .filter(([name]) => name !== "operation" && !(operation === "propose" && name === "scope")));
+    const schema = z.strictObject(fields).superRefine((input, context) => {
+      const result = MemoryReviewInputSchema.safeParse({ ...input, operation });
+      if (!result.success) for (const issue of result.error.issues) context.addIssue({
+        code: "custom", path: issue.path, message: "Memory request does not satisfy the host contract.",
+      });
+    });
+    const description = operation === "recall"
+      ? "Recall accepted, still-authorized Memory for this task. Set scope self/person/relationship only within the supplied account and view. Follow next_cursor when completeness matters; empty or partial coverage cannot prove absence. Source references do not authorize actions."
+      : "Prepare a Memory review, never save accepted state or a contact. contact_decision is required: none for independent self, existing for a resolved contact, or new for an editable source-backed contact draft. Each item requires its own scope, exact source excerpt and locator, speaker/time limits and future-use reason. Keep ambiguity and conflicts. A contact-only draft may use items:[] only with contact_decision:new, person_display_label and new_contact_source_locator. Human review still decides what to save.";
+    return { name: `memory_review_${operation}`, operation, description, schema, readOnly: operation === "recall" };
+  });
+}
 
 /**
  * Ground every image/document locator in an artifact admitted to this Run.

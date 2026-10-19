@@ -117,7 +117,7 @@ SDK loopback controls. Paid acceptance is stopped under the owner's existing
 unknown-usage condition; detailed inputs, outputs, journals and operational
 account identities stay in task-owned private artifacts outside Git.
 
-Task4 is the active unpaid repair. Native SDK protocol tests first showed that
+Task4 established the first unpaid routing repair. Native SDK protocol tests first showed that
 ordinary-text requests exposed only discovery rather than the core Memory
 schema. The repaired request exposes Memory directly while retaining deferred
 secondary capabilities; direct self proposals work in the synthetic peer, and
@@ -134,3 +134,51 @@ resident contact-intent validation; coordinate compatible clean committed source
 rather than replacing its active candidate. Resident delivery, changed live
 behavior and renewed funded acceptance remain incomplete. Verify cleanup of the
 owned test account and synthetic database before final handoff.
+
+## Task 5: two-case renewal and subsequent stop
+
+The owner explicitly permitted two targeted retests after checks, retaining all
+old counts, unknown spend and original per-attempt limits. The private executor
+now binds that narrower scope and immutable ancestor history. Its complete
+repository and exact-product checks passed. The first retest hit new unknown
+usage and stopped the phase; the second was not dispatched. Detailed private
+inputs, observations and costs stay outside public Git. No further funded run
+is authorized by the unused slot.
+
+## Task 6: truthful operation schemas and a smaller Memory context
+
+Public source inspection shows the SDK Memory superset advertises optional
+fields that the strict propose branch requires. Give bounded ordinary workspace
+runs operation-specific SDK tools, using the established contact-tool adapter
+pattern. Keep the original host capability and strict Memory union, inject only
+the host-selected operation, require contact_decision/items/item scope, and omit
+redundant model-side top-level scope. Preserve every cross-field refinement.
+Do not infer missing scopes, identity, source facts or accepted state.
+
+Keep Memory upfront. Make calendar discoverable as a secondary tool only in
+that same bounded path; preserve its clock, live permissions, source checks,
+revision, cancellation and explicit finish_preparation behavior. JSON, image
+and relationship runs retain their existing interfaces and loading policy.
+Calendar now needs discovery in this path; this consumes the existing budget,
+which must not be raised to hide the added step.
+
+Verify actual native wire requirements, self/mixed proposals and rejection of
+missing fields, fake operations and invalid empty proposals before host dispatch.
+Exercise actual calendar discovery and a review-only draft, absent calendar
+context and source/lease revocation. Compare first-request tool bytes with the
+previous recorded wire; bytes are not actual token or invoice evidence. Review
+all source changes independently. Real model behavior and resident deployment
+remain incomplete under the paid stop, so keep the change draft.
+
+Task6 engineering verification: Agent579, AgentHost203 (Node22, serial with a
+20-second test timeout), both package typechecks/builds and docs/architecture
+checks pass. The first Node26 Host run had ten five-second subprocess-test
+timeouts under heavy local load; preserve that failed run separately. The final
+native suite13/13 verifies required operation fields, rejected invalid calls,
+calendar discovery/draft/no-context behavior and existing authorization fences.
+The recorded protocol fixture's first tool definitions shrink from14,232 to
+11,694 bytes (about18 percent). This is wire-size evidence, not actual token,
+billing or model-quality proof. Independent source review has no remaining
+P0/P1/P2 finding; clarify that only the top-level operation is host-selected.
+The updated exact-head CI remains required before integration. Paid acceptance
+and resident delivery are still incomplete; do not close GET-40.
