@@ -10,7 +10,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { createSdkMcpServer, query, startup, tool, type WarmQuery, type Options, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { claudeToolDiscoveryDecision, ToolSearchInputSchema, TOOL_SEARCH_NAME, type ClaudeToolDiscoveryMode } from "./claudeToolContextPolicy.js";
 import { z } from "zod";
-import { connectionHintsInError, connectionHintsInText, providerHttpStatus, sdkErrorCategory } from "./claudeHarnessDiagnostics.js";
+import { connectionHintsInDebugFile, connectionHintsInError, providerHttpStatus, sdkErrorCategory } from "./claudeHarnessDiagnostics.js";
 import type { AgentBudget, AgentProviderInputPart } from "./types.js";
 import type { ClaudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
 
@@ -456,7 +456,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   const connectionHints = new Set<string>();
   const rememberHints = (hints: readonly string[]) => { for (const code of hints) if (connectionHints.size < 8) connectionHints.add(code); };
   const diagnosticHints = () => connectionHints.size ? { connectionHints: [...connectionHints] } : {};
-  let stderrSuffix = "";
+  const collectDebugHints = async () => rememberHints(await connectionHintsInDebugFile(join(directory, "sdk-debug.log")));
   const controller = new AbortController();
   let authorityFailure: { error: unknown } | undefined;
   const abortAuthorityFailure = () => {
@@ -784,11 +784,6 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     const options: Options = {
       cwd: directory, env, abortController: controller,
       debugFile: join(directory, "sdk-debug.log"),
-      stderr: (chunk) => {
-        const sample = stderrSuffix + chunk.slice(-4096);
-        rememberHints(connectionHintsInText(sample));
-        stderrSuffix = sample.slice(-64);
-      },
       model: configuration.model, systemPrompt: request.systemPrompt,
       ...(request.effort ? { effort: request.effort } : {}),
       // Text deltas are provisional prose, never action or completion receipts.
@@ -954,6 +949,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         receiptCost = Math.max(receiptCost, message.total_cost_usd);
         receiptTurns += message.num_turns;
         if (message.subtype !== "success" || message.is_error) {
+          await collectDebugHints();
           const reason = message.subtype === "error_max_turns" ? "max_turns"
             : message.subtype === "error_max_budget_usd" ? "budget_exhausted"
             : message.subtype === "error_max_structured_output_retries" ? "structured_output_retry_exhausted" : "provider_error";
@@ -993,6 +989,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     await flushObservedAssistantSpans();
     return completedOutput;
   } catch (error) {
+    await collectDebugHints();
     rememberHints(connectionHintsInError(error));
     if (modelFrames.size === 0) {
       const failureCode = error instanceof ClaudeHarnessFailure ? error.message

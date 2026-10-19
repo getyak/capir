@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -52,6 +55,23 @@ describe("Claude harness offline SDK integration", { skip: !enabled, concurrent:
     if (originalTmpdir === undefined) delete process.env.TMPDIR;
     else process.env.TMPDIR = originalTmpdir;
   });
+
+  it("host DEBUG cannot add raw stderr retention without an opted-in callback", async () => {
+    const root = await mkdtemp(join(evidenceDirectory, "sdk-debug-probe-"));
+    let stdout: string;
+    try { ({ stdout } = await promisify(execFile)(process.execPath,
+      [fileURLToPath(new URL("./testing/claudeSDKDebugProbe.mjs", import.meta.url)), root], {
+        env: { PATH: process.env.PATH, HOME: join(root, "host"),
+          CLAUDE_CONFIG_DIR: join(root, "host-config"), DEBUG_CLAUDE_AGENT_SDK: "1" }, timeout: 40_000,
+      })); }
+    finally { await rm(root, { recursive: true, force: true }); }
+    const results = JSON.parse(stdout);
+    await writeFile(join(evidenceDirectory, "sdk-debug-privacy.json"), JSON.stringify(results, null, 2) + "\n");
+    expect(results).toEqual([
+      { withCallback: false, childEmitted: true, callbackObserved: false, hostPersistedBeforeCleanup: false, hostPersistedAfterCleanup: false },
+      { withCallback: true, childEmitted: true, callbackObserved: true, hostPersistedBeforeCleanup: true, hostPersistedAfterCleanup: true },
+    ]);
+  }, 45_000);
 
   it("native SDK obeys zero retries and reports a provider refusal", async () => {
     let requests = 0;

@@ -1,4 +1,6 @@
 /** Allowlisted SDK metadata only; vendor text and stderr are never retained. */
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 const SDK_ERROR_CATEGORIES = new Set([
   "authentication_failed", "oauth_org_not_allowed", "account_on_hold", "verification_required",
   "billing_error", "rate_limit", "overloaded", "invalid_request", "model_not_found",
@@ -31,4 +33,19 @@ export function connectionHintsInError(value: unknown): string[] {
     }
   } catch { /* Diagnostics must not replace the original failure. */ }
   return result;
+}
+
+/** Inspect only the bounded tail of the existing disposable CLI debug file.
+ * An SDK stderr callback enables an additional raw host debug sink; avoid it. */
+export async function connectionHintsInDebugFile(path: string): Promise<string[]> {
+  let file;
+  try {
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = await file.stat();
+    if (!stat.isFile()) return [];
+    const bytes = Buffer.alloc(Math.min(stat.size, 16_384));
+    const { bytesRead } = await file.read(bytes, 0, bytes.length, Math.max(0, stat.size - bytes.length));
+    return connectionHintsInText(bytes.subarray(0, bytesRead).toString("utf8"));
+  } catch { return []; }
+  finally { await file?.close().catch(() => {}); }
 }

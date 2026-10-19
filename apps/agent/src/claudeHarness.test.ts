@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access } from "node:fs/promises";
+import { access, writeFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ClaudeChatProvider } from "./claudeChatProvider.js";
@@ -157,20 +157,22 @@ describe("Claude harness deployment configuration", () => {
   });
   it("preserves safe connection hints and retry categories without private vendor text", async () => {
     const spans: ProductRunSpan[] = [];
-    const sdk = () => ({ close: vi.fn(), async *[Symbol.asyncIterator]() {
-      // The SDK is the external boundary; keep its native-shaped event and stderr callback.
+    let stderrCallback: unknown;
+    const sdk = (input: any) => ({ close: vi.fn(), async *[Symbol.asyncIterator]() {
+      await writeFile(input.options.debugFile, "EPIPE " + "x".repeat(20_000) + "\nconnect ECONNRESET PRIVATE_VENDOR_TEXT synthetic-secret\nnormal certificate setup, PRIVATE_VENDOR_TEXT");
+      // The SDK is the external boundary; retain its native-shaped retry event.
       yield { type: "system", subtype: "api_retry", attempt: 1, max_retries: 10,
         retry_delay_ms: 500, error_status: null, error: "unknown" };
       const cause = { code: "ERR_TLS_CERT_ALTNAME_INVALID", message: "PRIVATE_VENDOR_TEXT synthetic-secret" };
       throw new Error("PRIVATE_VENDOR_TEXT synthetic-secret", { cause });
     } });
     const query = (input: any) => {
-      input.options.stderr?.("connect ECONNRESET PRIVATE_VENDOR_TEXT synthetic-secret");
-      input.options.stderr?.("normal certificate setup, PRIVATE_VENDOR_TEXT");
-      return sdk();
+      stderrCallback = input.options.stderr;
+      return sdk(input);
     };
     const error = await withProductRunCapture({ async append(span) { spans.push(span); } }, () =>
       runClaudeHarness(config, request(), new AbortController().signal, query as any, null).catch(value => value));
+    expect(stderrCallback).toBeUndefined();
     expect(error.receipt.inputTokens).toBeNull();
     expect(error.receipt.outputTokens).toBeNull();
     expect(error.receipt.apiRetries[0]).toMatchObject({ httpStatus: null, errorCategory: "unknown" });
@@ -197,10 +199,13 @@ describe("Claude harness deployment configuration", () => {
     expect(environment.CLAUDE_CODE_MAX_RETRIES).toBeUndefined();
   });
   it("rejects a success-subtyped error as provider failure and preserves its receipt", async () => {
-    const sdk = queryMock(undefined, result({ is_error: true, api_error_status: 503 }));
+    const sdk = queryMock(async ({ options }) => {
+      await writeFile(options.debugFile, "ECONNRESET PRIVATE_VENDOR_TEXT synthetic-secret");
+    }, result({ is_error: true, api_error_status: 503 }));
     await expect(runClaudeHarness(config, request(), new AbortController().signal, sdk.run as any, null))
       .rejects.toMatchObject({ name: "ClaudeHarnessFailure", message: "CLAUDE_HARNESS_PROVIDER_ERROR",
-        receipt: { terminalReason: "provider_error", providerStatus: 503, inputTokens: 10, outputTokens: 20 } });
+        receipt: { terminalReason: "provider_error", providerStatus: 503, inputTokens: 10, outputTokens: 20,
+          connectionHints: ["ECONNRESET"] } });
   });
   it("admits only an explicit proxy and keeps its address out of diagnostics", async () => {
     const base = { ANTHROPIC_API_KEY: "synthetic-key", TALENT_SIGNAL_AGENT_MODEL: "synthetic-model" };
