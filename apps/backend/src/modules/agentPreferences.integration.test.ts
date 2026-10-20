@@ -21,6 +21,51 @@ beforeAll(async () => {
 afterAll(async () => { await pool?.end(); });
 
 describe.skipIf(!pool)("user-owned response preference", () => {
+  it("erases a resumable SDK checkpoint when only the output-language pin changes", async () => {
+    const owner = second;
+    const initial = await readAgentPreference(pool!, owner);
+    const pinned = await saveAgentPreference(pool!, owner, {
+      idempotency_key: randomUUID(), expected_revision: initial.preference.revision,
+      response_style: "default", prompt_output_language: "ja",
+    });
+    const id = randomUUID();
+    await mutateAgentSession(pool!, owner, id, { expected_revision: 0, idempotency_key: randomUUID(), payload: {
+      id, scopeKind: "unresolved_intent", personDisplayLabel: "New session", contextDisplayLabel: "Conversation", title: "Language pin check",
+      updatedAt: new Date().toISOString(), isUnread: false, turns: [],
+    } });
+    let sdkSessionID: string;
+    await inTransaction(pool!, async client => {
+      const lease = await createHarnessContinuationFactory(client, pool!, owner, id, { kind: "workspace_conversation" },
+        () => ({ expiresAt: new Date(Date.now() + 86_400_000), personIDs: [] }))("b".repeat(64));
+      sdkSessionID = lease.sessionID;
+      expect(lease.resume).toBe(false);
+      await lease.store.append({ projectKey: "synthetic", sessionId: lease.sessionID }, [{ type: "user", uuid: randomUUID(), message: "Synthetic previous turn" }]);
+      await lease.finish(true);
+    });
+    await inTransaction(pool!, async client => {
+      const lease = await createHarnessContinuationFactory(client, pool!, owner, id, { kind: "workspace_conversation" },
+        () => ({ expiresAt: new Date(Date.now() + 86_400_000), personIDs: [] }))("b".repeat(64));
+      expect(lease.resume).toBe(true);
+      expect(lease.sessionID).toBe(sdkSessionID!);
+      await lease.finish(true);
+    });
+    const guard = await createHarnessSourceGuard(pool!, owner, id, () => undefined);
+    await saveAgentPreference(pool!, owner, { idempotency_key: randomUUID(), expected_revision: pinned.preference.revision,
+      response_style: "default", prompt_output_language: "ko" });
+    await expect(guard()).rejects.toThrow("source context changed");
+    expect((await pool!.query("SELECT count(*)::int AS count FROM harness_session_entries WHERE account_id=$1", [owner.accountId])).rows[0].count).toBe(0);
+    // The language lives in host context rather than the configuration hash;
+    // source-generation invalidation must prevent reuse even with that same hash.
+    await inTransaction(pool!, async client => {
+      const lease = await createHarnessContinuationFactory(client, pool!, owner, id, { kind: "workspace_conversation" },
+        () => ({ expiresAt: new Date(Date.now() + 86_400_000), personIDs: [] }))("b".repeat(64));
+      expect(lease.resume).toBe(false);
+      expect(lease.sessionID).not.toBe(sdkSessionID!);
+      await lease.finish(false);
+    });
+    expect(await loadAgentResponsePreference(pool!, owner)).toMatchObject({ responseStyle: "default", promptOutputLanguage: "ko" });
+  });
+
   it("persists only the authenticated user's setting with revisions and exact retry semantics", async () => {
     expect((await readAgentPreference(pool!, auth)).preference).toMatchObject({ response_style: "default", revision: 0, provenance: null });
     const mutation = { idempotency_key: randomUUID(), expected_revision: 0, response_style: "conclusion_first" as const };

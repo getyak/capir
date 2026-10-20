@@ -1,20 +1,13 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
-import type { MarketingLocale } from "@/lib/marketing-locale";
-
-const LocaleContext = createContext<MarketingLocale>("zh-CN");
-export function MarketingLocaleProvider({
-  locale,
-  children,
-}: {
-  locale: MarketingLocale;
-  children: ReactNode;
-}) {
-  return (
-    <LocaleContext.Provider value={locale}>{children}</LocaleContext.Provider>
-  );
-}
-export function useMarketingLocale() {
-  return useContext(LocaleContext);
-}
+/**
+ * Compatibility shim: the locale context lives in `components/locale-provider`
+ * so workspace surfaces can share it without importing from `marketing/`.
+ */
+export {
+  LocaleProvider as MarketingLocaleProvider,
+  useLocale as useMarketingLocale,
+  useAccountLocale,
+  useT,
+  type TFunction,
+} from "../locale-provider";

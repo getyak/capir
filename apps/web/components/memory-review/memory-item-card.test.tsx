@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryProposalItem } from "@talent-signal/contracts";
 import { MemoryItemCard } from "./memory-item-card";
+import { LocaleProvider } from "../locale-provider";
 
 const item: MemoryProposalItem = {
   id: "77777777-7777-4777-8777-777777777777",
@@ -55,6 +56,21 @@ afterEach(async () => {
 });
 
 describe("Session Memory item card", () => {
+  it("localizes decisions and unknown receipts without rewriting the evidence", async () => {
+    await act(async () => root.render(<LocaleProvider locale="en"><MemoryItemCard
+      item={item} personLabel="林岚" busy={false} onDecide={decide}
+    /></LocaleProvider>));
+    expect(button("Update memory")).toBeTruthy();
+    expect(mount.textContent).toContain(item.source_excerpt);
+    expect(mount.textContent).toContain(item.display_text);
+    await act(async () => root.render(<LocaleProvider locale="en"><MemoryItemCard
+      item={item} personLabel="林岚" busy={false} onDecide={decide} onCheck={vi.fn()}
+      outcome={{ kind: "undo_unknown", receipt: null, operationKey: "unknown-undo" }}
+    /></LocaleProvider>));
+    expect(mount.querySelector('[role="status"]')?.textContent).toContain("Undo result awaiting check");
+    expect(button("Check the result")).toBeTruthy();
+  });
+
   it("shows the exact change and source with direct actions", async () => {
     await act(async () => root.render(createElement(MemoryItemCard, {
       item, personLabel: "林岚", busy: false, onDecide: decide,

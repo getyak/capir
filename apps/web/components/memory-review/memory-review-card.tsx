@@ -1,5 +1,6 @@
 "use client";
 
+import { useT, type TFunction } from "@/components/locale-provider";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CaretDown, CaretRight, MagnifyingGlass, X } from "@phosphor-icons/react";
 import Link from "next/link";
@@ -66,15 +67,16 @@ function primaryLabel(
   state: MemoryReviewDraftState,
   review: { person_display_label?: string | null; contact_status: string; person_id?: string | null },
   count: number,
+  t: TFunction,
 ): string {
-  const name = review.person_display_label ?? "此人";
+  const name = review.person_display_label ?? t("此人");
   if (state.contactDecision === "none") {
-    return count > 0 ? `仅记住关于我的 ${count} 条` : "本次不保存";
+    return count > 0 ? t("仅记住关于我的 {count} 条", { count }) : t("本次不保存");
   }
   if (state.contactDecision === "new" && review.contact_status === "pending") {
-    return count > 0 ? `添加${name}并记住 ${count} 条` : `仅添加${name}`;
+    return count > 0 ? t("添加{name}并记住 {count} 条", { name, count }) : t("仅添加{name}", { name });
   }
-  return count > 0 ? `记住 ${count} 条` : "本次不保存";
+  return count > 0 ? t("记住 {count} 条", { count }) : t("本次不保存");
 }
 
 function judgmentLabel(decision: MemoryDecision): string {
@@ -124,11 +126,12 @@ function ItemRow({
   onToggle: () => void;
   onOpenDetail: (trigger: HTMLButtonElement) => void;
 }) {
+  const t = useT();
   return (
     <li className={styles.itemRow}>
       <label className={styles.check}>
         <input
-          aria-label={`选择：${item.display_text}`}
+          aria-label={t("选择：{item}", { item: item.display_text })}
           checked={checked}
           disabled={disabled || frozen}
           onChange={onToggle}
@@ -153,10 +156,10 @@ function ItemRow({
   );
 }
 
-function groupLabel(scope: MemoryScope, personLabel: string | null): string {
-  if (scope === "self") return "关于我";
-  if (scope === "person") return personLabel ? `关于${personLabel}` : "关于对方";
-  return "我们之间";
+function groupLabel(scope: MemoryScope, personLabel: string | null, t: TFunction): string {
+  if (scope === "self") return t("关于我");
+  if (scope === "person") return personLabel ? t("关于{person}", { person: personLabel }) : t("关于对方");
+  return t("我们之间");
 }
 
 function GroupSection({
@@ -178,18 +181,19 @@ function GroupSection({
   onOpenItem: (item: MemoryProposalItem, trigger: HTMLButtonElement) => void;
   onOpenSheet: (scope: MemoryScope) => void;
 }) {
+  const t = useT();
   const selection = groupSelection(state, items);
   const expanded = state.expandedGroups[scope];
   const shown = expanded ? items.slice(0, PREVIEW_LIMIT) : [];
   const remaining = items.length - shown.length;
   const preview = items[0];
-  const label = groupLabel(scope, personLabel);
+  const label = groupLabel(scope, personLabel, t);
   return (
     <section className={styles.group} aria-label={label}>
       <div className={styles.groupHeader}>
         <label className={styles.check}>
           <input
-            aria-label={`${selection.state === "all" ? "取消全选" : "全选"}：${label}`}
+            aria-label={(selection.state === "all" ? t("取消全选") : t("全选")) + "：" + label}
             checked={selection.state === "all"}
             disabled={frozen}
             onChange={() => dispatch(toggleGroup(state, items))}
@@ -230,7 +234,7 @@ function GroupSection({
           </ul>
           {remaining > 0 ? (
             <button className={styles.more} disabled={frozen} onClick={() => onOpenSheet(scope)} type="button">
-              查看其余 {remaining} 条
+              {t("查看其余 {count} 条", { count: remaining })}
             </button>
           ) : null}
         </>
@@ -265,6 +269,7 @@ function Panel({
   personLabel: string | null;
   onOpenItem: (item: MemoryProposalItem, trigger: HTMLButtonElement) => void;
 }) {
+  const t = useT();
   const bodyRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef(0);
   const focusRowRef = useRef<string | null>(null);
@@ -320,20 +325,18 @@ function Panel({
                   }
                 }}
                 type="button"
-              >
-                返回
-              </button>
+              >{t("返回")}</button>
             ) : null}
             <div>
               <Dialog.Title className={styles.panelTitle}>
-                {groupLabel(scope, personLabel)}
+                {groupLabel(scope, personLabel, t)}
               </Dialog.Title>
               <p className={styles.panelCount}>
                 选中 {selection.selected}/{selection.total}
               </p>
             </div>
             <Dialog.Close asChild>
-              <button aria-label="关闭" className={styles.close} type="button">
+              <button aria-label={t("关闭")} className={styles.close} type="button">
                 <X size={16} />
               </button>
             </Dialog.Close>
@@ -343,21 +346,21 @@ function Panel({
               <div className={styles.detail}>
                 <p className={styles.detailSentence}>{detail.display_text}</p>
                 <dl>
-                  <dt>来源摘录</dt>
+                  <dt>{t("来源摘录")}</dt>
                   <dd>{detail.source_excerpt}</dd>
                   {detail.speaker ? (
                     <>
-                      <dt>说话者</dt>
+                      <dt>{t("说话者")}</dt>
                       <dd>{detail.speaker}</dd>
                     </>
                   ) : null}
                   {detail.reporter ? (
                     <>
-                      <dt>转述者</dt>
+                      <dt>{t("转述者")}</dt>
                       <dd>{detail.reporter}</dd>
                     </>
                   ) : null}
-                  <dt>时间</dt>
+                  <dt>{t("时间")}</dt>
                   <dd>
                     {detail.time_status === "unknown"
                       ? "时间未知"
@@ -369,7 +372,7 @@ function Panel({
                   </dd>
                   {detail.previous_text ? (
                     <>
-                      <dt>原句 → 新句</dt>
+                      <dt>{t("原句 → 新句")}</dt>
                       <dd>
                         <span>{detail.previous_text}</span>
                         <span aria-hidden="true"> → </span>
@@ -377,12 +380,10 @@ function Panel({
                       </dd>
                     </>
                   ) : null}
-                  <dt>为什么建议记住</dt>
+                  <dt>{t("为什么建议记住")}</dt>
                   <dd>{detail.reason}</dd>
                 </dl>
-                <label className={styles.editLabel}>
-                  编辑保存的句子
-                  <textarea
+                <label className={styles.editLabel}>{t("编辑保存的句子")}<textarea
                     maxLength={1000}
                     onChange={(event) =>
                       dispatch(setEditedText(state, detail.id, event.target.value))
@@ -393,9 +394,7 @@ function Panel({
                 </label>
                 {state.editedText[detail.id] !== undefined &&
                 state.editedText[detail.id] !== detail.original_display_text ? (
-                  <p className={styles.editNote}>
-                    编辑后的补充标记为“用户补充”，原摘录仍保留在依据中。
-                  </p>
+                  <p className={styles.editNote}>{t("编辑后的补充标记为“用户补充”，原摘录仍保留在依据中。")}</p>
                 ) : null}
               </div>
             ) : (
@@ -403,10 +402,10 @@ function Panel({
                 {needsSearch ? (
                   <>
                     <input
-                      aria-label="在此分组中搜索"
+                      aria-label={t("在此分组中搜索")}
                       className={styles.search}
                       onChange={(event) => dispatch({ ...state, search: event.target.value })}
-                      placeholder="搜索此分组…"
+                      placeholder={t("搜索此分组…")}
                       value={state.search}
                     />
                     {query ? (
@@ -455,15 +454,13 @@ function Panel({
             )}
           </div>
           <footer className={styles.panelFooter}>
-            <span>返回后统一保存</span>
+            <span>{t("返回后统一保存")}</span>
             <button
               className={styles.primary}
               disabled={frozen}
               onClick={() => dispatch(openSheet(state, null))}
               type="button"
-            >
-              完成
-            </button>
+            >{t("完成")}</button>
           </footer>
         </Dialog.Content>
       </Dialog.Portal>
@@ -471,9 +468,9 @@ function Panel({
   );
 }
 
-function identityHint(person: PersonDirectoryItem): string {
+function identityHint(person: PersonDirectoryItem, t: TFunction): string {
   const match = person.identity_matches[0];
-  if (!match || match.kind === "name") return person.profile?.headline ?? "姓名匹配 · 身份线索待补充";
+  if (!match || match.kind === "name") return person.profile?.headline ?? t("姓名匹配 · 身份线索待补充");
   const labels: Record<string, string> = {
     email: "邮箱",
     phone: "电话",
@@ -482,10 +479,10 @@ function identityHint(person: PersonDirectoryItem): string {
     public_profile_url: "公开主页",
     source_native_id: "来源标识",
   };
-  const label = labels[match.handle_type] ?? "联系方式";
+  const label = t(labels[match.handle_type] ?? "联系方式");
   return match.kind === "confirmed_handle"
-    ? `当前${label}：${match.display_hint}`
-    : `历史${label}：${match.display_hint}`;
+    ? t("当前{handle}：{hint}", { handle: label, hint: match.display_hint })
+    : t("历史{handle}：{hint}", { handle: label, hint: match.display_hint });
 }
 
 function ChangePersonPanel({
@@ -499,6 +496,7 @@ function ChangePersonPanel({
   pending: boolean;
   failure: string | null;
 }) {
+  const t = useT();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<PersonDirectoryItem[]>([]);
   const [searching, setSearching] = useState(false);
@@ -518,38 +516,34 @@ function ChangePersonPanel({
         body: JSON.stringify({ query: value }),
       });
       if (!response.ok) {
-        setSearchError("人物目录暂时不可用。");
+        setSearchError(t("人物目录暂时不可用。"));
         return;
       }
       const body = (await response.json()) as { people?: PersonDirectoryItem[] };
       setResults(body.people ?? []);
     } catch {
-      setSearchError("网络暂时不可用。");
+      setSearchError(t("网络暂时不可用。"));
     } finally {
       setSearching(false);
     }
   }
 
   return (
-    <section className={styles.changePerson} aria-label="换个人">
+    <section className={styles.changePerson} aria-label={t("换个人")}>
       <div className={styles.changeSearch}>
         <MagnifyingGlass aria-hidden="true" size={15} />
         <input
-          aria-label="按姓名或已确认联系方式查找人物"
+          aria-label={t("按姓名或已确认联系方式查找人物")}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") void search();
           }}
-          placeholder="按姓名、邮箱或电话查找…"
+          placeholder={t("按姓名、邮箱或电话查找…")}
           type="search"
           value={query}
         />
-        <button disabled={searching || pending || !query.trim()} onClick={() => void search()} type="button">
-          查找
-        </button>
-        <button className={styles.textButton} disabled={pending} onClick={onCancel} type="button">
-          返回原联系人
-        </button>
+        <button disabled={searching || pending || !query.trim()} onClick={() => void search()} type="button">{t("查找")}</button>
+        <button className={styles.textButton} disabled={pending} onClick={onCancel} type="button">{t("返回原联系人")}</button>
       </div>
       {searchError ? <p className={styles.warning} role="alert">{searchError}</p> : null}
       {results.length > 0 ? (
@@ -558,7 +552,7 @@ function ChangePersonPanel({
             <li key={person.id}>
               <div className={styles.changeCandidate}>
                 <strong>{person.display_label}</strong>
-                <small>{identityHint(person)}</small>
+                <small>{identityHint(person, t)}</small>
               </div>
               <div className={styles.changeContexts}>
                 {person.contexts.length === 0 ? (
@@ -566,9 +560,7 @@ function ChangePersonPanel({
                     disabled={pending}
                     onClick={() => onChoose({ contactDecision: "existing", personId: person.id, contextId: null })}
                     type="button"
-                  >
-                    仅关联此人
-                  </button>
+                  >{t("仅关联此人")}</button>
                 ) : (
                   person.contexts.map((context) => (
                     <button
@@ -589,17 +581,17 @@ function ChangePersonPanel({
         </ul>
       ) : null}
       <div className={styles.changeNew}>
-        <p>新建联系人</p>
+        <p>{t("新建联系人")}</p>
         <input
-          aria-label="新联系人姓名"
+          aria-label={t("新联系人姓名")}
           onChange={(event) => setNewName(event.target.value)}
-          placeholder="姓名"
+          placeholder={t("姓名")}
           value={newName}
         />
         <input
-          aria-label="新联系人关系"
+          aria-label={t("新联系人关系")}
           onChange={(event) => setNewRelationship(event.target.value)}
-          placeholder="关系（可留空）"
+          placeholder={t("关系（可留空）")}
           value={newRelationship}
         />
         <button
@@ -612,17 +604,13 @@ function ChangePersonPanel({
             })
           }
           type="button"
-        >
-          使用新联系人
-        </button>
+        >{t("使用新联系人")}</button>
       </div>
-      {pending ? <p className={styles.message} role="status">正在根据原始来源重新生成待确认内容…</p> : null}
+      {pending ? <p className={styles.message} role="status">{t("正在根据原始来源重新生成待确认内容…")}</p> : null}
       {failure ? (
         <p className={styles.warning} role="alert">
           {failure}
-          <button className={styles.textButton} onClick={onCancel} type="button">
-            保留原联系人
-          </button>
+          <button className={styles.textButton} onClick={onCancel} type="button">{t("保留原联系人")}</button>
         </p>
       ) : null}
     </section>
@@ -668,6 +656,7 @@ function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
 }
 
 function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
+  const t = useT();
   const controller = useMemoryReview({
     binding: props.binding,
     proposal: props.proposal,
@@ -737,34 +726,30 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
       ? "已撤销本次保存"
       : receipt?.created_person_id
         ? contactOnly
-          ? `已添加${receipt.person_display_label ?? "联系人"}`
-          : `已添加${receipt.person_display_label ?? "联系人"} · 记住 ${applied} 条`
+          ? t("已添加{name}", { name: receipt.person_display_label ?? t("联系人") })
+          : t("已添加{name} · 记住 {count} 条", { name: receipt.person_display_label ?? t("联系人"), count: applied })
         : applied > 0
-          ? updatedCount === applied ? `已更新 ${applied} 条` : updatedCount > 0 ? `已记住 ${applied - updatedCount} 条 · 更新 ${updatedCount} 条` : `已记住 ${applied} 条`
+          ? updatedCount === applied ? t("已更新 {count} 条", { count: applied }) : updatedCount > 0 ? t("已记住 {count} 条 · 更新 {updated} 条", { count: applied - updatedCount, updated: updatedCount }) : t("已记住 {count} 条", { count: applied })
           : keptOldCount > 0
-            ? "已按你的判断保留旧值，没有新增记忆"
-            : "本次未保存新内容";
+            ? t("已按你的判断保留旧值，没有新增记忆")
+            : t("本次未保存新内容");
     return (
       <section className={styles.card} role="status">
         <p className={styles.receipt}>{summary}</p>
         {(controller.phase !== "undone" || receipt?.undo_contact_outcome === "retained") && receipt?.created_person_id ? (
-          <Link className={styles.textButton} href={`/workspace/people/${receipt.created_person_id}`}>
-            查看人物
-          </Link>
+          <Link className={styles.textButton} href={`/workspace/people/${receipt.created_person_id}`}>{t("查看人物")}</Link>
         ) : null}
         {controller.phase === "undone" && receipt?.undo_contact_outcome === "retained" ? (
-          <p className={styles.message}>记忆已撤销；联系人已有后续记录，已为你保留。</p>
+          <p className={styles.message}>{t("记忆已撤销；联系人已有后续记录，已为你保留。")}</p>
         ) : null}
         {controller.phase === "receipt" && controller.canUndo ? (
-          <button className={styles.textButton} disabled={controller.frozen} onClick={() => void controller.undo()} type="button">
-            撤销
-          </button>
+          <button className={styles.textButton} disabled={controller.frozen} onClick={() => void controller.undo()} type="button">{t("撤销")}</button>
         ) : null}
         {controller.phase === "dismissed" ? (
-          <p className={styles.message}>当前来源版本不会再出现这张卡。</p>
+          <p className={styles.message}>{t("当前来源版本不会再出现这张卡。")}</p>
         ) : null}
         {controller.phase === "undoing" ? (
-          <p className={styles.message} role="status">正在撤销…</p>
+          <p className={styles.message} role="status">{t("正在撤销…")}</p>
         ) : null}
         {controller.error ? (
           <p className={styles.warning} role="alert">
@@ -789,9 +774,7 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
           disabled={!controller.canReconcile}
           onClick={() => void controller.reconcile()}
           type="button"
-        >
-          核对结果
-        </button>
+        >{t("核对结果")}</button>
       </section>
     );
   }
@@ -800,16 +783,14 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
     return (
       <section className={styles.card} role="alert">
         <p className={styles.message}>{controller.error ?? "记忆审阅暂时不可用。"}</p>
-        <button className={styles.primary} onClick={() => controller.open()} type="button">
-          重试
-        </button>
+        <button className={styles.primary} onClick={() => controller.open()} type="button">{t("重试")}</button>
       </section>
     );
   }
   if (controller.phase === "opening" && !review) {
     return (
       <section className={styles.card} aria-busy="true">
-        <p className={styles.message}>正在整理这次可以记住的内容…</p>
+        <p className={styles.message}>{t("正在整理这次可以记住的内容…")}</p>
       </section>
     );
   }
@@ -831,17 +812,17 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
   // The primary action names the real new/updated Memory count; a keep-only
   // decision is a confirmation, not a claim that something was remembered.
   const label = effect.applied > 0
-    ? primaryLabel(state, review, effect.applied)
+    ? primaryLabel(state, review, effect.applied, t)
     : effect.keptOld > 0
-      ? "确认保留旧值"
-      : primaryLabel(state, review, 0);
+      ? t("确认保留旧值")
+      : primaryLabel(state, review, 0, t);
   const totalVisible = visibleItems(review.items, state.contactDecision).length;
   // Zero real effect is a dismissal unless an explicit new-contact decision
   // still produces a real effect.
   const shouldDismiss = effect.applied === 0 && effect.keptOld === 0 && !newContactEnabled;
 
   return (
-    <section className={styles.card} data-memory-review aria-label="记忆审阅">
+    <section className={styles.card} data-memory-review aria-label={t("记忆审阅")}>
       {hasContact ? (
         <header className={styles.contactHeader}>
           <span aria-hidden="true" className={styles.avatar}>
@@ -858,7 +839,7 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
                   ? `${review.items.some(item => item.source_locator.kind === "image_region") ? "截图来源" : "本次对话"} · 待添加`
                   : review.relationship_display_label ?? "已关联联系人"}
             </small>
-            {isNewContact && review.relationship_display_label ? <small>关系记录：{review.relationship_display_label}</small> : null}
+            {isNewContact && review.relationship_display_label ? <small>{t("关系记录：{label}", { label: review.relationship_display_label })}</small> : null}
           </div>
           {props.purpose !== "chat" ? null : state.contactDecision !== "none" ? (
             <div className={styles.contactActions}>
@@ -891,9 +872,7 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
       ) : null}
 
       {sourceUnavailable ? (
-        <p className={styles.warning} role="alert">
-          来源已失效，这些内容不能保存。
-        </p>
+        <p className={styles.warning} role="alert">{t("来源已失效，这些内容不能保存。")}</p>
       ) : null}
 
       {groups.map((group) => (
@@ -911,8 +890,8 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
       ))}
 
       {judgments.length > 0 ? (
-        <section className={styles.judgment} aria-label="需要你判断">
-          <h3>需要你判断</h3>
+        <section className={styles.judgment} aria-label={t("需要你判断")}>
+          <h3>{t("需要你判断")}</h3>
           {judgments.map((item) => {
             // Only the actually legal decisions for this change kind are offered.
             const legal: MemoryDecision[] = item.operation === "add"
@@ -951,17 +930,15 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
 
       <footer className={styles.footer}>
         {totalVisible > 0 ? <p>
-          已选 {count} 条{effect.keptOld > 0 ? ` · 其中判断 ${effect.keptOld} 条` : ""}{totalVisible > 0 ? ` · 包含折叠内容` : ""}
+          {t("已选 {count} 条", { count })}{effect.keptOld > 0 ? ` ${t("· 其中判断 {count} 条", { count: effect.keptOld })}` : ""}{totalVisible > 0 ? ` ${t("· 包含折叠内容")}` : ""}
         </p> : null}
         {shouldDismiss ? (
           <button
             className={styles.primary}
             disabled={controller.frozen || rebasing || sourceUnavailable}
-            onClick={() => void controller.dismiss([], "本次不保存")}
+            onClick={() => void controller.dismiss([], t("本次不保存"))}
             type="button"
-          >
-            本次不保存
-          </button>
+          >{t("本次不保存")}</button>
         ) : (
           <button
             className={styles.primary}
@@ -987,23 +964,17 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
             <button
               className={styles.textButton}
               disabled={controller.frozen}
-              onClick={() => void controller.dismiss(visibleItems(review.items, state.contactDecision).map((item) => item.id), "本次不保存")}
+              onClick={() => void controller.dismiss(visibleItems(review.items, state.contactDecision).map((item) => item.id), t("本次不保存"))}
               type="button"
-            >
-              本次不保存
-            </button>
+            >{t("本次不保存")}</button>
           ) : null}
         </p>
         {controller.draftStatus === "saving" ? (
-          <p className={styles.message} role="status">正在保存草稿…</p>
+          <p className={styles.message} role="status">{t("正在保存草稿…")}</p>
         ) : controller.draftStatus === "saved" ? (
-          <p className={styles.message} role="status">草稿已保存，刷新后仍保留选择</p>
+          <p className={styles.message} role="status">{t("草稿已保存，刷新后仍保留选择")}</p>
         ) : controller.draftStatus === "error" ? (
-          <p className={styles.warning} role="alert">
-            草稿尚未同步，本页选择已保留。
-            <button className={styles.textButton} disabled={controller.frozen} onClick={() => controller.scheduleDraft()} type="button">
-              重试同步
-            </button>
+          <p className={styles.warning} role="alert">{t("草稿尚未同步，本页选择已保留。")}<button className={styles.textButton} disabled={controller.frozen} onClick={() => controller.scheduleDraft()} type="button">{t("重试同步")}</button>
           </p>
         ) : null}
         {controller.error ? (

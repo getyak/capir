@@ -1,4 +1,4 @@
-import { CONTRACT_VERSION, type AccountSettings, type AccountMutation } from '@talent-signal/contracts';
+import { CONTRACT_VERSION, type AccountSettings, type AccountMutation, type LanguagePreference } from '@talent-signal/contracts';
 import type { Pool, PoolClient } from 'pg';
 import { inTransaction } from '../database/pool.js';
 import { ApiError } from '../lib/apiError.js';
@@ -8,7 +8,8 @@ import type { AuthContext } from './auth.js';
 
 type AccountRow = { id: string; name: string; slug: string; owner_user_id: string | null; settings_revision: number; retired_at: Date | null };
 type UserRow = { id: string; display_name: string; email: string; username: string | null; email_verified_at: Date | null;
-  kind: string; account_role: 'admin' | 'member'; status: 'active' | 'revoked'; profile_revision: number };
+  kind: string; account_role: 'admin' | 'member'; status: 'active' | 'revoked'; profile_revision: number;
+  display_language: LanguagePreference };
 const iso = (value: Date) => value.toISOString();
 const realUser = (kind: string) => ['password_human', 'google_human', 'apple_human'].includes(kind);
 
@@ -66,6 +67,7 @@ async function read(client: PoolClient, auth: AuthContext, labEnabled: boolean):
     members:members.map(m=>({id:m.id,display_name:m.display_name,email:m.email,role:m.account_role,status:m.status,is_owner:m.id===account.owner_user_id})),
     activity:activity.map(e=>({...e,created_at:iso(e.created_at)})),
     lab_enabled:labEnabled&&user.kind!=='lab_human',
+    preferences:{display_language:user.display_language},
   };
 }
 
@@ -81,7 +83,7 @@ export function readAccountSettingsWith(client: PoolClient, auth: AuthContext, l
 export async function mutateAccountSettings(pool: Pool, auth: AuthContext, input: AccountMutation, labEnabled: boolean) {
   return inTransaction(pool, async client=>{
     const {account,user,isOwner,canManage}=await context(client,auth,true);
-    if (user.kind==='lab_human') throw new ApiError(403,'TEST_ACCOUNT_READ_ONLY','Return to your account to manage access.');
+    if (user.kind==='lab_human'&&input.kind!=='preferences') throw new ApiError(403,'TEST_ACCOUNT_READ_ONLY','Return to your account to manage access.');
     const hash=sha256(JSON.stringify(Object.fromEntries(Object.entries(input).sort(([a],[b])=>a.localeCompare(b)))));
     const previous=(await client.query<{request_hash:string}>('SELECT request_hash FROM account_access_events WHERE account_id=$1 AND actor_user_id=$2 AND id=$3',[auth.accountId,auth.userId,input.id])).rows[0];
     if(previous){
@@ -98,6 +100,14 @@ export async function mutateAccountSettings(pool: Pool, auth: AuthContext, input
       details.revision_before=user.profile_revision;
       details.revision_after=user.profile_revision+1;
       await client.query('UPDATE users SET display_name=$3,profile_revision=profile_revision+1 WHERE account_id=$1 AND id=$2',[auth.accountId,auth.userId,input.name.trim()]);
+    } else if(input.kind==='preferences'){
+      // User-scoped presentation preference. The language value itself stays
+      // out of the audit trail; only identity and lifecycle revisions enter it.
+      if(user.profile_revision!==input.expected_revision) throw new ApiError(409,'ACCOUNT_STALE','Refresh before saving this preference.');
+      details.target_user_id=user.id;
+      details.revision_before=user.profile_revision;
+      details.revision_after=user.profile_revision+1;
+      await client.query('UPDATE users SET display_language=$3,profile_revision=profile_revision+1 WHERE account_id=$1 AND id=$2',[auth.accountId,auth.userId,input.display_language]);
     } else if(input.kind==='revoke_session'){
       if(input.session_id===auth.sessionId) throw new ApiError(409,'CURRENT_SESSION','Use sign out to end this session.');
       // Lock the target session so the recorded before/after revocation state is

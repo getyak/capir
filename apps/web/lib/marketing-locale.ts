@@ -1,12 +1,38 @@
-export const marketingLocales = ["zh-CN", "en"] as const;
-export type MarketingLocale = (typeof marketingLocales)[number];
+import {
+  resolveDisplayLocale,
+  SUPPORTED_LOCALES,
+  type LocaleTag,
+} from "@talent-signal/contracts";
+
+/**
+ * The public-site locale negotiation, aligned to the canonical locale model
+ * (docs/internationalization.md). Names stay `marketing*` for compatibility
+ * with existing surfaces; the identity and fallback chain live in
+ * `@talent-signal/contracts`.
+ */
+export const marketingLocales = SUPPORTED_LOCALES;
+export type MarketingLocale = LocaleTag;
 export const localeCookie = "talent-signal-locale";
 
 export function isMarketingLocale(value: unknown): value is MarketingLocale {
-  return value === "zh-CN" || value === "en";
+  return typeof value === "string" && (SUPPORTED_LOCALES as readonly string[]).includes(value);
 }
 
-/** Explicit preference wins; otherwise honor the browser's weighted language list. */
+/**
+ * Transitional narrowing for copy that still ships as zh-CN/en inline
+ * dictionaries: zh-TW reads zh-CN copy, ja/ko read en. Removed by the web-i18n
+ * extraction when every dictionary moves into the five-locale catalogs.
+ */
+export function legacyCopyLocale(locale: MarketingLocale): "zh-CN" | "en" {
+  return locale.startsWith("zh") ? "zh-CN" : "en";
+}
+
+/**
+ * Explicit preference wins; otherwise honor the browser's weighted language
+ * list through the canonical fallback chain (zh-Hant|zh-HK|zh-MO -> zh-TW,
+ * zh-Hans|zh -> zh-CN, ja-* -> ja, ko-* -> ko, en-* -> en) and always end at
+ * `en`. An unknown preference is ignored, never a rendering blocker.
+ */
 export function resolveMarketingLocale(
   preference?: string,
   acceptLanguage = "",
@@ -25,9 +51,5 @@ export function resolveMarketingLocale(
       ({ weight }) => Number.isFinite(weight) && weight > 0 && weight <= 1,
     )
     .sort((a, b) => b.weight - a.weight || a.index - b.index);
-  for (const { tag } of languages) {
-    if (/^zh(?:-|$)/.test(tag)) return "zh-CN";
-    if (/^en(?:-|$)/.test(tag)) return "en";
-  }
-  return "en";
+  return resolveDisplayLocale("system", languages.map(({ tag }) => tag));
 }
