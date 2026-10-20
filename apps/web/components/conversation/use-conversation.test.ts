@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useConversation } from "./use-conversation";
 import { readConversationMessages, clearConversationLocal } from "../../lib/conversation-local";
+import type { SessionDetail } from "../session-workbench/session-detail-state";
 const fetcher=vi.hoisted(()=>vi.fn());
 vi.mock("../workspace-session-request",()=>({workspaceSessionFetch:fetcher}));
 const sid="72ce7ff4-a5a8-40d0-b1d7-d84a13adcd30";
@@ -23,6 +24,66 @@ it("shows an immutable outgoing message before admission, releases composer, and
 it("never auto-retries an unknown delivery and reuses its identity only on explicit retry",async()=>{
  fetcher.mockRejectedValue(new Error("offline"));await act(async()=>{chat.changeDraft("first");});await act(async()=>{await chat.submit();});const body=JSON.parse(fetcher.mock.calls[0][1].body);await flush();expect(fetcher).toHaveBeenCalledTimes(1);
  await act(async()=>{await chat.retryDelivery(chat.messages[0]);});await flush();const sends=fetcher.mock.calls.filter(call=>call[1]?.method==="POST");expect(sends).toHaveLength(2);expect(JSON.parse(sends[1][1].body).message_id).toBe(body.message_id);expect(JSON.parse(sends[1][1].body).idempotency_key).toBe(body.idempotency_key);
+});
+it("recovers a lost admission after remount without resending or duplicating canonical history", async () => {
+  // Controlled transport/lifecycle evidence only; no browser or backend claim.
+  fetcher.mockRejectedValue(new Error("response lost"));
+  await act(async () => { chat.changeDraft("Synthetic GET-207 message"); });
+  await act(async () => { await chat.submit(); });
+  const admitted = JSON.parse(fetcher.mock.calls[0][1].body);
+  const newerDraft = "  Synthetic unfinished draft\nkeep whitespace  ";
+  await act(async () => { chat.changeDraft(newerDraft); });
+  expect(chat.messages[0].delivery).toBe("unknown");
+
+  await act(async () => root.unmount());
+  root = createRoot(mount);
+  await act(async () => root.render(createElement(Probe, {})));
+  await flush();
+  expect(chat.draft).toBe(newerDraft);
+  expect(chat.messages).toHaveLength(1);
+  expect(chat.messages[0]).toMatchObject({ id: admitted.message_id, delivery: "unknown" });
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+
+  const snapshot = {
+    contract_version: "2026-08-24.10", session_id: sid, revision: 2,
+    paused: false, preview: null, queued: [],
+    active: {
+      queue_entry_id: admitted.message_id, message_id: admitted.message_id,
+      sequence: 1, revision: 1, status: "running", objective: admitted.objective,
+      run_id: "11111111-1111-4111-8111-111111111111", stage: "answer",
+      created_at: "2026-10-20T00:00:00.000Z", updated_at: "2026-10-20T00:00:01.000Z",
+      cancel_requested: false, failure_code: null,
+    },
+  };
+  fetcher.mockResolvedValueOnce(Response.json(snapshot));
+  await act(async () => { await chat.retryDelivery(chat.messages[0]); });
+  expect(chat.messages[0].delivery).toBe("accepted");
+  expect(chat.draft).toBe(newerDraft);
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+
+  const history: SessionDetail = {
+    session_id: sid, revision: 3, updated_at: "2026-10-20T00:00:02.000Z",
+    expires_at: "2099-01-01T00:00:00.000Z", state: "active",
+    title: "Synthetic GET-207 history", turn_count: 1, is_unread: false,
+    scope_kind: "unresolved_intent", person_id: null, relationship_context_id: null,
+    person_label: "", context_label: "", deleted_at: null,
+    display_authority: "stale_unconfirmed", composer_draft: null, composer_draft_updated_at: null,
+    turns: [{
+      id: admitted.message_id, objective: admitted.objective, createdAt: snapshot.active.created_at,
+      response: {
+        taskID: snapshot.active.run_id, contractVersion: "2026-08-24.10",
+        createdAt: "2026-10-20T00:00:02.000Z", contextManifestID: "",
+        knowledgeSnapshotID: "", disposition: "answer", savedBlocks: [],
+      },
+    }],
+  };
+  fetcher.mockImplementation(() => Promise.resolve(Response.json({ detail: history })));
+  await act(async () => { await chat.refreshDetail(); await chat.refreshDetail(); });
+  expect(chat.detail?.turns.map(turn => turn.id)).toEqual([admitted.message_id]);
+  expect(chat.messages).toEqual([]);
+  expect(readConversationMessages("owner", sid)).toEqual([]);
+  expect(chat.draft).toBe(newerDraft);
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
 });
 it("does not resurrect private outbox data when a late request rejects after logout",async()=>{
  let reject!:(reason:Error)=>void;fetcher.mockImplementation(()=>new Promise((_,no)=>{reject=no;}));await act(async()=>{chat.changeDraft("private");});await act(async()=>{await chat.submit();});await act(async()=>root.unmount());clearConversationLocal();reject(new Error("closed"));await flush();expect(readConversationMessages("owner",sid)).toEqual([]);
