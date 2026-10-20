@@ -2,7 +2,7 @@ import type { UnscopedChatTaskRequest } from "@talent-signal/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { createEnvironmentChatAnswerProvider, type RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
-import { executeUnscopedChatTask } from "./unscopedChat.js";
+import { executeUnscopedChatTask, IMAGE_ONLY_OBJECTIVE_INSTRUCTION } from "./unscopedChat.js";
 import { readAgentSessionConversation } from "./agentSessions.js";
 import type { DatabaseClient } from "../database/pool.js";
 import type { AuthContext } from "./auth.js";
@@ -16,6 +16,14 @@ const request: UnscopedChatTaskRequest = {
 
 describe("unscoped Agent conversation", () => {
   const auth = { accountId: "account", userId: "user" } as AuthContext;
+
+  it("defaults a clear image-only chat to an immediate editable review without a permission round", () => {
+    expect(IMAGE_ONLY_OBJECTIVE_INSTRUCTION).toContain("直接调用 memory_review");
+    expect(IMAGE_ONLY_OBJECTIVE_INSTRUCTION).toContain("最多补一句");
+    expect(IMAGE_ONLY_OBJECTIVE_INSTRUCTION).toContain("不要再问");
+    expect(IMAGE_ONLY_OBJECTIVE_INSTRUCTION).toContain("只分析、不保存或不行动");
+    expect(IMAGE_ONLY_OBJECTIVE_INSTRUCTION).not.toContain("可以提供一张");
+  });
 
   it("does not start a second remote SDK call after the admitted run fails", async () => {
     const answer = vi.fn(async () => { throw new Error("CLAUDE_HARNESS_SESSION_INVALIDATED"); });

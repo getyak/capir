@@ -6,11 +6,18 @@ import { useT } from "./marketing/locale-provider";
 import styles from "./agent-review-form.module.css";
 
 async function preferenceRequest(sessionVersion: string, input?: AgentPreferenceMutation): Promise<AgentPreferenceResponse> {
+  const fallback = input ? "暂时无法确认偏好，请重新读取或重试。" : "暂时无法读取回复偏好。";
   const result = await workspaceSessionFetch("/api/agent-preferences", { method: input ? "PUT" : "GET", cache: "no-store",
     headers: { "x-workspace-session": sessionVersion, ...(input ? { "content-type": "application/json" } : {}) },
-    ...(input ? { body: JSON.stringify(input) } : {}) });
-  const body = await result.json();
-  if (!result.ok) throw new Error(body.code === "AGENT_PREFERENCES_DISABLED" || /not enabled for this workspace/i.test(body.message ?? "") ? "此工作空间尚未启用回复偏好。" : body.message ?? "暂时无法读取回复偏好。");
+    ...(input ? { body: JSON.stringify(input) } : {}) }).catch(() => { throw new Error(fallback); });
+  const body = await result.json().catch(() => { throw new Error(fallback); });
+  if (!result.ok) {
+    if (body.code === "AGENT_PREFERENCES_DISABLED" || /not enabled for this workspace/i.test(body.message ?? "")) throw new Error("language.unavailable");
+    if (body.code === "AGENT_PREFERENCE_CHANGED") throw new Error("偏好已在另一端改变，请重新读取。");
+    if (result.status === 401) throw new Error("请重新登录。");
+    if (body.code === "session_stale") throw new Error("登录已改变，请重新打开偏好设置。");
+    throw new Error(fallback);
+  }
   return body;
 }
 export function AgentResponsePreference({ sessionVersion, embedded = false }: { sessionVersion: string; embedded?: boolean }) {
@@ -46,24 +53,24 @@ export function AgentResponsePreference({ sessionVersion, embedded = false }: { 
   }
   const currentPromptLanguage = current ? current.prompt_output_language ?? "system" : "system";
   const dirty = !current || style !== current.response_style || promptLanguage !== currentPromptLanguage;
-  return <section className={styles.preference} aria-label={embedded ? "回复偏好" : undefined} aria-labelledby={embedded ? undefined : "reply-preference-title"}>
-    {!embedded && <h1 id="reply-preference-title">回复偏好</h1>}
-    {!embedded && <p>这是你为自己保存的偏好，会同步到 Web 和 iOS。当前消息中的要求优先。</p>}
-    <label className={styles.field} htmlFor="reply-preference-style">回复顺序
+  return <section className={styles.preference} aria-label={embedded ? t("回复偏好") : undefined} aria-labelledby={embedded ? undefined : "reply-preference-title"}>
+    {!embedded && <h1 id="reply-preference-title">{t("回复偏好")}</h1>}
+    {!embedded && <p>{t("这是你为自己保存的偏好，会同步到 Web 和 iOS。当前消息中的要求优先。")}</p>}
+    <label className={styles.field} htmlFor="reply-preference-style">{t("回复顺序")}
     <select id="reply-preference-style" value={style} disabled={busy || !current} onChange={e => { setStyle(e.target.value as typeof style); attempt.current = null; setMessage(""); }}>
-      <option value="default">按当前问题安排</option><option value="conclusion_first">先给结论，再展开说明</option>
+      <option value="default">{t("按当前问题安排")}</option><option value="conclusion_first">{t("先给结论，再展开说明")}</option>
     </select></label>
     <label className={styles.field} htmlFor="reply-preference-language">{t("language.prompt.label")}
     <select id="reply-preference-language" value={promptLanguage} disabled={busy || !current} data-prompt-language onChange={e => { setPromptLanguage(e.target.value as LanguagePreference); attempt.current = null; setMessage(""); }}>
-      <option value="system">{t("language.option.system")}</option>
+      <option value="system">{t("language.prompt.option.system")}</option>
       {SUPPORTED_LOCALES.map(tag => <option key={tag} value={tag}>{LOCALE_ENDONYMS[tag]}</option>)}
     </select></label>
     <p>{t("language.prompt.hint")} {t("language.prompt.systemHint")}</p>
-    <p>只改变回复方式和写作语言，不改变来源判断或操作权限。选择“按当前问题安排”与“{t("language.option.system")}”可以重置。</p>
+    <p>{t("只改变回复方式和写作语言，不改变来源判断或操作权限。选择“{style}”与“{language}”可以重置。", { style: t("按当前问题安排"), language: t("language.prompt.option.system") })}</p>
     <div className={styles.actions}>
-      <button type="button" className={styles.primary} disabled={busy || !current || !dirty} onClick={save}>{busy ? "正在核对…" : "保存偏好"}</button>
-      <button type="button" className={styles.secondary} disabled={busy} onClick={reload}>重新读取</button>
+      <button type="button" className={styles.primary} disabled={busy || !current || !dirty} onClick={save}>{busy ? t("正在核对…") : t("保存偏好")}</button>
+      <button type="button" className={styles.secondary} disabled={busy} onClick={reload}>{t("重新读取")}</button>
     </div>
-    {message && <p role="status">{message}</p>}{error && <p role="alert">{error}</p>}
+    {message && <p role="status">{t(message)}</p>}{error && <p role="alert">{t(error)}</p>}
   </section>;
 }

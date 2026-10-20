@@ -291,10 +291,10 @@ export default async function ProjectHealthBriefPage() {
                   <div>
                     <span>
                       {option.stance === "recommended"
-                        ? "建议"
+                        ? t("建议")
                         : option.stance === "reject"
-                          ? "不建议"
-                          : "可选"}
+                          ? t("不建议")
+                          : t("可选")}
                     </span>
                     <h3>{option.name}</h3>
                   </div>
@@ -350,7 +350,7 @@ export default async function ProjectHealthBriefPage() {
                 <div className={styles.evidenceTitle}>
                   <div className={styles.labels}>
                     <span>{reference.type.replace("_", " ")}</span>
-                    <span>{reference.authority === "direct" ? "直接" : "推导"}</span>
+                    <span>{reference.authority === "direct" ? t("直接") : t("推导")}</span>
                     <span>{reference.freshness === "current" ? t("当前") : t("日期快照")}</span>
                   </div>
                   <h3>{reference.title}</h3>

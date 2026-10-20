@@ -55,7 +55,7 @@ Out of scope:
       `docs/decisions/2026-10-19-core-locale-i18n-and-language-preferences.md`.
 - [ ] M2 Language preference model, persistence, settings UI (two controls) —
       DONE: contracts `i18nSchemas` + additive preference fields, migration
-      `101_user_language_preferences` (incl. audit kind allowlist),
+      `102_user_language_preferences` (incl. audit kind allowlist),
       display-language group in Appearance pane, prompt-output language on
       `/workspace/preferences`, 5-locale language pickers (endonyms), web
       catalog runtime + first slice; integration-tested on PostgreSQL 17
@@ -91,3 +91,14 @@ two non-English locales, goal topic re-read item by item.
 ## Deviations
 
 (None yet.)
+
+## PR 388 review boundary, 2026-10-20
+
+The review repairs the incremental Web foundation and exposed language controls;
+it does not complete M3 through M5. Main was merged while preserving the new
+contact-creation behavior, and the unshipped language migration was appended as
+102 after main's 101 capture migration. Prompt pins now reach both production
+chat paths; system retains the existing current-request language behavior.
+Review, verification, and resident deployment progress is owned by
+`plans/2026-10-20-pr388-review.md`. Native and remaining extraction milestones
+stay open.

@@ -10,12 +10,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { createSdkMcpServer, query, startup, tool, type WarmQuery, type Options, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { claudeToolDiscoveryDecision, ToolSearchInputSchema, TOOL_SEARCH_NAME, type ClaudeToolDiscoveryMode } from "./claudeToolContextPolicy.js";
 import { z } from "zod";
+import { connectionHintsInDebugFile, connectionHintsInError, providerHttpStatus, sdkErrorCategory } from "./claudeHarnessDiagnostics.js";
 import type { AgentBudget, AgentProviderInputPart } from "./types.js";
 import type { ClaudeHarnessConfiguration } from "./claudeHarnessConfiguration.js";
 
 export const CLAUDE_HARNESS_VERSION = "get9-v1";
 export const HARNESS_MCP_PREFIX = "mcp__talent_signal__";
-type SDKRetryEvidence = { afterMs: number; attempt: number; maxRetries: number; delayMs: number; httpStatus: number | null };
+type SDKRetryEvidence = { afterMs: number; attempt: number; maxRetries: number; delayMs: number; httpStatus: number | null; errorCategory?: string };
 type ObservedSDKAssistant = {
   body: unknown;
   id: string;
@@ -181,6 +182,8 @@ export interface ClaudeHarnessRequest {
   effort?: "low" | "medium" | "high";
   /** Host-owned transport policy, shorter than the overall task deadline. */
   byteStreamIdleTimeoutMs?: number;
+  /** Host-owned bounded evaluation policy; absence preserves native SDK defaults. */
+  apiRetryLimit?: number;
   /** Recheck the account, source generation and lease before every capability. */
   assertCurrent(): Promise<void>;
   onText?: (text: string) => void;
@@ -216,6 +219,8 @@ export interface ClaudeHarnessResult {
   /** Time to first completed assistant content-block receipt; not TTFB or final answer latency. */
   sdkTiming?: { initializedAfterMs: number | null; firstModelResponseAfterMs: number | null };
   apiRetries?: SDKRetryEvidence[];
+  connectionHints?: string[];
+  providerStatus?: number;
   cleanupFailures?: CleanupFailureCode[];
 }
 
@@ -236,6 +241,7 @@ export class ClaudeHarnessInterruption extends Error {
     permissionDenials: string[]; usageComplete: false;
     sdkTiming?: { initializedAfterMs: number | null; firstModelResponseAfterMs: number | null };
     apiRetries?: SDKRetryEvidence[];
+    connectionHints?: string[];
     cleanupFailures?: CleanupFailureCode[];
   }, code: string) { super(code); this.name = "ClaudeHarnessInterruption"; }
 }
@@ -385,6 +391,9 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   signal: AbortSignal, sdkQuery: typeof query, observation: RuntimeObservationSession | null, continuation?: HarnessContinuation): Promise<ClaudeHarnessResult> {
   const assertCurrent = async () => { await request.assertCurrent(); await continuation?.assertCurrent(); };
   validBudget(request.budget);
+  if (request.apiRetryLimit !== undefined && (!Number.isInteger(request.apiRetryLimit) || request.apiRetryLimit < 0 || request.apiRetryLimit > 10)) {
+    throw new Error("CLAUDE_HARNESS_API_RETRY_LIMIT_INVALID");
+  }
   if (request.byteStreamIdleTimeoutMs !== undefined &&
       (!Number.isSafeInteger(request.byteStreamIdleTimeoutMs) || request.byteStreamIdleTimeoutMs < 10_000 ||
        request.byteStreamIdleTimeoutMs >= request.budget.maxDurationMs)) {
@@ -444,6 +453,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
   const executionStarted = Date.now();
   const sdkTiming = { initializedAfterMs: null as number | null, firstModelResponseAfterMs: null as number | null };
   const apiRetries: SDKRetryEvidence[] = [];
+  const connectionHints = new Set<string>();
+  const rememberHints = (hints: readonly string[]) => { for (const code of hints) if (connectionHints.size < 8) connectionHints.add(code); };
+  const diagnosticHints = () => connectionHints.size ? { connectionHints: [...connectionHints] } : {};
+  const collectDebugHints = async () => rememberHints(await connectionHintsInDebugFile(join(directory, "sdk-debug.log")));
   const controller = new AbortController();
   let authorityFailure: { error: unknown } | undefined;
   const abortAuthorityFailure = () => {
@@ -757,6 +770,10 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       ...(discovery === "admitted" ? { ENABLE_TOOL_SEARCH: "true" } : {}),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(Math.min(4_000, request.budget.maxTaskTokens)),
+      ...(request.apiRetryLimit !== undefined ? {
+        CLAUDE_CODE_MAX_RETRIES: String(request.apiRetryLimit),
+        CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES: String(request.apiRetryLimit),
+      } : {}),
       // Separate byte watchdog: the event watchdog clamps short values to 5min.
       // https://code.claude.com/docs/en/network-config#streaming-idle-watchdogs
       ...(request.byteStreamIdleTimeoutMs !== undefined ? {
@@ -874,10 +891,12 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
           tools:(message.tools??[]).filter(name=>allowed.has(name)),
           mcpConnected:(message.mcp_servers??[]).some(server=>server.name==="talent_signal" && server.status==="connected")});
       }
-      if (message.type === "system" && message.subtype === "api_retry" && apiRetries.length < 30) apiRetries.push({
-        afterMs: Date.now() - executionStarted, attempt: message.attempt, maxRetries: message.max_retries,
-        delayMs: message.retry_delay_ms, httpStatus: message.error_status,
-      });
+      if (message.type === "system" && message.subtype === "api_retry" && apiRetries.length < 30) {
+        const errorCategory = sdkErrorCategory(message.error);
+        apiRetries.push({ afterMs: Date.now() - executionStarted, attempt: message.attempt, maxRetries: message.max_retries,
+          delayMs: message.retry_delay_ms, httpStatus: providerHttpStatus(message.error_status) ?? null,
+          ...(errorCategory ? { errorCategory } : {}) });
+      }
       if ("session_id" in message && typeof message.session_id === "string") observedSessionID = message.session_id;
       if (message.type === "system" && message.subtype === "mirror_error") {
         controller.abort(new Error("CLAUDE_HARNESS_SESSION_MIRROR_FAILED"));
@@ -930,16 +949,19 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
         receiptCost = Math.max(receiptCost, message.total_cost_usd);
         receiptTurns += message.num_turns;
         if (message.subtype !== "success" || message.is_error) {
+          await collectDebugHints();
           const reason = message.subtype === "error_max_turns" ? "max_turns"
             : message.subtype === "error_max_budget_usd" ? "budget_exhausted"
             : message.subtype === "error_max_structured_output_retries" ? "structured_output_retry_exhausted" : "provider_error";
+          const providerStatus = providerHttpStatus((message as { api_error_status?: unknown }).api_error_status);
           throw new ClaudeHarnessFailure({ sessionID: message.session_id,
             inputTokens: receiptCounts.input, outputTokens: receiptCounts.output,
             estimatedUsd: receiptCost, turns: receiptTurns, toolCalls, toolCompletions: [...toolCompletions],
-            reportedModels: [...reportedModels], modelResponses: messageUsage.size, sdkTiming, apiRetries,
+            reportedModels: [...reportedModels], modelResponses: messageUsage.size, sdkTiming, apiRetries, ...diagnosticHints(),
+            ...(providerStatus !== undefined ? { providerStatus } : {}),
             terminalReason: message.terminal_reason ?? reason,
             permissionDenials: [...denials, ...message.permission_denials.map(() => "SDK_PERMISSION_DENIED")] },
-            `CLAUDE_HARNESS_${message.subtype.toUpperCase()}`);
+            message.subtype === "success" ? "CLAUDE_HARNESS_PROVIDER_ERROR" : `CLAUDE_HARNESS_${message.subtype.toUpperCase()}`);
         }
         if (receiptCounts.input + receiptCounts.output > request.budget.maxTaskTokens) throw new Error("CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED");
         if (receiptCost > request.budget.maxEstimatedUsd) throw new Error("CLAUDE_HARNESS_ERROR_MAX_BUDGET_USD");
@@ -962,16 +984,20 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
     completedOutput = { text: result.result, structuredOutput: result.structured_output ?? null,
       sessionID: result.session_id, inputTokens: counts.input, outputTokens: counts.output,
       estimatedUsd: receiptCost, turns: receiptTurns, toolCalls, toolCompletions: [...toolCompletions],
-      reportedModels: [...reportedModels], modelResponses: messageUsage.size, sdkTiming, apiRetries,
+      reportedModels: [...reportedModels], modelResponses: messageUsage.size, sdkTiming, apiRetries, ...diagnosticHints(),
       terminalReason: result.terminal_reason ?? "completed", permissionDenials: [...denials, ...result.permission_denials.map(() => "SDK_PERMISSION_DENIED")] };
     await flushObservedAssistantSpans();
     return completedOutput;
   } catch (error) {
+    await collectDebugHints();
+    rememberHints(connectionHintsInError(error));
     if (modelFrames.size === 0) {
       const failureCode = error instanceof ClaudeHarnessFailure ? error.message
         : claudeHarnessInterruptionCode(controller.signal.aborted ? controller.signal.reason : error);
       await recordProductEvent("harness.execution.failure", "context", { code: failureCode }, undefined,
-        { phase: "before_model_response", terminal_reason: failureCode }, { failed: true, secrets: captureSecrets });
+        { phase: "before_model_response", terminal_reason: failureCode,
+          ...(apiRetries.length ? { sdk_retry_evidence: apiRetries } : {}),
+          ...(connectionHints.size ? { sdk_connection_hints: [...connectionHints] } : {}) }, { failed: true, secrets: captureSecrets });
     }
     await flushObservedAssistantSpans();
     if (error instanceof ClaudeHarnessFailure) { primaryError = error; throw error; }
@@ -983,7 +1009,7 @@ async function executeClaudeHarness(configuration: ClaudeHarnessConfiguration, r
       outputTokens: result || messageUsage.size ? counts.output : null,
       estimatedUsd: result ? receiptCost : null, turns: result ? receiptTurns : null,
       toolCalls, toolCompletions: [...toolCompletions], reportedModels: [...reportedModels], modelResponses: messageUsage.size,
-      terminalReason: code, permissionDenials: denials, usageComplete: false, sdkTiming, apiRetries }, code);
+      terminalReason: code, permissionDenials: denials, usageComplete: false, sdkTiming, apiRetries, ...diagnosticHints() }, code);
     throw primaryError;
   } finally {
     clearTimeout(deadline);

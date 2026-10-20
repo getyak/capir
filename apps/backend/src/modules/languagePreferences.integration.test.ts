@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AuthContext } from "./auth.js";
 import { mutateAccountSettings, readAccountSettings } from "./accountManagement.js";
-import { readAgentPreference, saveAgentPreference } from "./agentPreferences.js";
+import { loadAgentResponsePreference, readAgentPreference, saveAgentPreference } from "./agentPreferences.js";
 
 /**
  * The two user-owned language preferences (docs/internationalization.md).
@@ -134,10 +134,52 @@ describe.skipIf(!pool)("user-owned prompt-output language", () => {
     const reloaded = await readAgentPreference(pool!, labUser);
     expect(reloaded.preference.prompt_output_language).toBe("ja");
 
-    const reset = await saveAgentPreference(pool!, labUser, {
+    expect(await loadAgentResponsePreference(pool!, labUser)).toMatchObject({
+      responseStyle: "default", promptOutputLanguage: "ja", sourceID: saved.preference.provenance!.source_id,
+    });
+
+    // Installed iOS clients only know response_style. Their saves must not
+    // silently reset a language explicitly selected on another surface.
+    const legacySave = await saveAgentPreference(pool!, labUser, {
       idempotency_key: randomUUID(), expected_revision: saved.preference.revision,
-      response_style: "default",
+      response_style: "conclusion_first",
+    });
+    expect(legacySave.preference.prompt_output_language).toBe("ja");
+
+    const reset = await saveAgentPreference(pool!, labUser, {
+      idempotency_key: randomUUID(), expected_revision: legacySave.preference.revision,
+      response_style: "default", prompt_output_language: "system",
     });
     expect(reset.preference.prompt_output_language ?? "system").toBe("system");
+    expect(await loadAgentResponsePreference(pool!, labUser)).toBeUndefined();
+  });
+
+  it("preserves a pinned language on a legacy style-only save", async () => {
+    const current = await readAgentPreference(pool!, human);
+    const pinned = await saveAgentPreference(pool!, human, {
+      idempotency_key: randomUUID(), expected_revision: current.preference.revision,
+      response_style: "default", prompt_output_language: "ko",
+    });
+    const mutation = { idempotency_key: randomUUID(), expected_revision: pinned.preference.revision,
+      response_style: "conclusion_first" as const };
+    const saved = await saveAgentPreference(pool!, human, mutation);
+    expect(saved.preference.prompt_output_language).toBe("ko");
+    expect(await saveAgentPreference(pool!, human, mutation)).toEqual(saved);
+    expect((await readAgentPreference(pool!, human)).preference.prompt_output_language).toBe("ko");
+  });
+
+  it("keeps the prompt language value out of audit metadata", async () => {
+    const current = await readAgentPreference(pool!, labUser);
+    await saveAgentPreference(pool!, labUser, {
+      idempotency_key: randomUUID(), expected_revision: current.preference.revision,
+      response_style: "default", prompt_output_language: "zh-TW",
+    });
+    const rows = await pool!.query<{ metadata: Record<string, unknown> }>(
+      "SELECT metadata FROM audit_events WHERE account_id=$1 AND event_type='agent_preference.saved'", [human.accountId]);
+    expect(rows.rowCount).toBeGreaterThan(0);
+    for (const row of rows.rows) {
+      expect(row.metadata).not.toHaveProperty("prompt_output_language");
+      expect(row.metadata).toMatchObject({ source: "explicit_user_setting", external_effect_count: 0 });
+    }
   });
 });

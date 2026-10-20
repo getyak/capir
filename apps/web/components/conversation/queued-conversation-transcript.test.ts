@@ -238,17 +238,27 @@ it.each(["response-lost", "wrong-binding", "wrong-origin"])("keeps %s calendar d
 });
 
 it("respects upward reader intent before the native scroll event and next resize", async () => {
-  const observers: Array<{ callback: ResizeObserverCallback; targets: Element[] }> = [];
-  vi.stubGlobal("ResizeObserver", class { record: { callback: ResizeObserverCallback; targets: Element[] }; constructor(callback: ResizeObserverCallback) { this.record = { callback, targets: [] }; observers.push(this.record); } observe(node: Element) { this.record.targets.push(node); } disconnect() {} });
+  const observers: Array<{ callback: ResizeObserverCallback; targets: Set<Element> }> = [];
+  vi.stubGlobal("ResizeObserver", class {
+    record: { callback: ResizeObserverCallback; targets: Set<Element> };
+    constructor(callback: ResizeObserverCallback) {
+      this.record = { callback, targets: new Set() };
+      observers.push(this.record);
+    }
+    observe(node: Element) { this.record.targets.add(node); }
+    unobserve(node: Element) { this.record.targets.delete(node); }
+    disconnect() { this.record.targets.clear(); }
+  });
   await act(async () => root?.render(createElement(QueuedConversation, { chatBinding: "chat-binding", detailBinding: "detail-binding", scope: SCOPE, initialDetail })));
   await flush();
   const viewport = document.querySelector<HTMLElement>('[role="region"][aria-label="对话记录"]')!;
   Object.defineProperties(viewport, { scrollHeight: { value: 1000, configurable: true }, clientHeight: { value: 300, configurable: true }, scrollTop: { value: 50, writable: true, configurable: true } });
-  const observer = observers.find(entry => entry.targets.includes(viewport) && entry.targets.includes(viewport.firstElementChild!));
-  expect(observer).toBeDefined();
+  const resized = new Set([viewport, viewport.firstElementChild!]);
+  const relevantObservers = () => observers.filter(entry => [...entry.targets].some(target => resized.has(target)));
+  expect(relevantObservers().length).toBeGreaterThan(0);
   await act(async () => {
     viewport.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
-    observer!.callback([], {} as ResizeObserver);
+    for (const observer of relevantObservers()) observer.callback([], {} as ResizeObserver);
   });
   expect(viewport.scrollTop).toBe(50);
   expect([...document.querySelectorAll("button")].some(button => button.textContent?.includes("回到最新"))).toBe(true);

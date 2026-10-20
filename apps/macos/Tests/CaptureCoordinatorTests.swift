@@ -109,7 +109,8 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(transport.submissions, 1)
         XCTAssertEqual(recovery.saved.count, 0, "A matching canonical image receipt releases raw local bytes")
         guard case .processing = coordinator.presentation else { return XCTFail("Expected admitted processing") }
-        XCTAssertNil(coordinator.nextLocalExpiry, "Only content-free receipt identity remains after admission")
+        XCTAssertEqual(coordinator.nextLocalExpiry, Date(timeIntervalSince1970: 1_800_000_300),
+                       "The original bytes are released; the bounded presentation thumbnail expires after five minutes")
     }
 
     @MainActor
@@ -301,6 +302,29 @@ final class CaptureCoordinatorTests: XCTestCase {
         XCTAssertNotNil(second.previewImage)
         window.dismiss()
         XCTAssertNil(second.previewImage, "Closing the rebound preview must discard only its image")
+    }
+
+    @MainActor
+    func testLateRecoveryRestoresItsIntentWithoutReplacingANewerPreview() async throws {
+        let (context, prefs, selector, transport, recovery) = fixture()
+        let old = try CaptureIntent(imagePNG: Data([1, 2, 3]), context: context,
+                                    capturedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        try recovery.save(old)
+        let coordinator = CaptureCoordinator(transport: transport, selector: selector, recovery: recovery,
+                                             preferences: prefs, now: { Date(timeIntervalSince1970: 1_800_000_000) })
+        transport.suspendNextContext = true
+        let restoring = Task { await coordinator.restoreRecovery() }
+        for _ in 0..<100 where transport.pendingContext == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pendingContext)
+        prefs.afterSelection = .preview
+        await coordinator.startCapture()
+        XCTAssertEqual(coordinator.presentation, .previewReady)
+        transport.pendingContext?.resume(returning: context); transport.pendingContext = nil
+        await restoring.value
+        XCTAssertTrue(coordinator.hasLocalImage(intentID: old.id), "Recovery still owns the old canonical local intent")
+        XCTAssertEqual(coordinator.presentation, .previewReady)
+        XCTAssertNotNil(coordinator.previewImage)
+        XCTAssertEqual(transport.submissions, 0)
     }
 
     @MainActor

@@ -289,6 +289,49 @@ describe.skipIf(!pool)("GET-9 SDK screenshot authority",()=>{
     expect((await pool!.query("SELECT id FROM subjects WHERE account_id=$1 AND display_label=$2",[auth.accountId,name])).rowCount).toBe(1);
   });
 
+  it("saves a separately reviewed name-only profile even when another record has that name", async () => {
+    const name=`Name-only profile ${randomUUID().slice(0,8)}`;
+    const profile:ContactChatExtraction={platform:"Synthetic public profile",conversation_kind:"not_chat",contact_name:name,
+      identity_clues:[],messages:[],uncertainties:[]};
+    const runner=new ScreenshotContactTaskRunner(pool!,{model:sdkModel(async(request,signal)=>{
+      await request.recordUnderstanding([profile],signal);return sdkReceipt();}),research:null});
+    const people:string[]=[];
+    for(let i=0;i<2;i++){
+      const request=input();const created=await createScreenshotContactTask(pool!,auth,request);
+      await runner.start(auth,created.body.task_id,request.image);
+      const draft=await loadScreenshotContactTask(pool!,auth,created.body.task_id);
+      expect(draft.contact_draft).toMatchObject({display_name:name,fields:[]});
+      const saved=await confirmScreenshotContactProfile(pool!,auth,draft.task_id,{decision:"save_reviewed_profile",
+        expected_revision:draft.revision,display_name:name,fields:[],create_new:true});
+      expect(saved.contact?.disposition).toBe("created");people.push(saved.contact!.person_id);
+    }
+    expect(new Set(people).size).toBe(2);
+  });
+
+  it("keeps an owned handle separate when a human creates a new contact", async () => {
+    const name=`Handle owner ${randomUUID().slice(0,8)}`, handle=`owned-${randomUUID()}`;
+    const profile:ContactChatExtraction={platform:"Synthetic social",conversation_kind:"not_chat",contact_name:name,
+      identity_clues:[{kind:"handle",value:handle,source_excerpt:handle}],messages:[],uncertainties:[]};
+    const runner=new ScreenshotContactTaskRunner(pool!,{model:sdkModel(async(request,signal)=>{
+      await request.recordUnderstanding([profile],signal);return sdkReceipt();}),research:null});
+    const draft=async()=>{const request=input(),created=await createScreenshotContactTask(pool!,auth,request);
+      await runner.start(auth,created.body.task_id,request.image);return loadScreenshotContactTask(pool!,auth,created.body.task_id);};
+    const first=await draft();
+    const owner=await confirmScreenshotContactProfile(pool!,auth,first.task_id,{decision:"save_reviewed_profile",
+      expected_revision:first.revision,display_name:name,fields:first.contact_draft!.fields.map(f=>({clue_index:f.clue_index,value:f.value})),create_new:true});
+    const second=await draft(), newName=`Separate ${name}`;
+    const blocked=await confirmScreenshotContactProfile(pool!,auth,second.task_id,{decision:"save_reviewed_profile",
+      expected_revision:second.revision,display_name:newName,fields:second.contact_draft!.fields.map(f=>({clue_index:f.clue_index,value:f.value})),create_new:true});
+    expect(blocked.status).toBe("waiting_for_user");expect(blocked.contact).toBeNull();expect(blocked.capture_id).toBeNull();
+    expect(blocked.candidates).toEqual(expect.arrayContaining([expect.objectContaining({person_id:owner.contact!.person_id})]));
+    expect((await pool!.query("SELECT id FROM subjects WHERE account_id=$1 AND display_label=$2",[auth.accountId,newName])).rowCount).toBe(0);
+    expect((await pool!.query("SELECT subject_id FROM identity_handles WHERE account_id=$1 AND status='confirmed' AND subject_id=$2",[auth.accountId,owner.contact!.person_id])).rows).toHaveLength(1);
+    const saved=await confirmScreenshotContactProfile(pool!,auth,blocked.task_id,{decision:"save_reviewed_profile",
+      expected_revision:blocked.revision,display_name:newName,fields:[],create_new:true});
+    expect(saved.contact?.disposition).toBe("created");expect(saved.contact?.person_id).not.toBe(owner.contact!.person_id);
+    expect((await pool!.query("SELECT id FROM identity_handles WHERE account_id=$1 AND subject_id=$2",[auth.accountId,saved.contact!.person_id])).rowCount).toBe(0);
+  });
+
   it("keeps actual chat about a website as attributed chat evidence and rejects public references in findings", async () => {
     const name = `Chat website ${randomUUID().slice(0, 8)}`;
     const message = "The website says the launch is Friday. I will send the revised plan tomorrow.";

@@ -16,6 +16,33 @@ const outcome = { text: "听起来今天很累。想说说发生了什么，还�
   turns: 1, toolCalls: 0, toolCompletions: [], terminalReason: "completed", permissionDenials: [], reportedModels: ["synthetic-model"] };
 
 describe("Claude natural chat product adapter", () => {
+  it.each(["workspace", "relationship"] as const)("passes an output-only language pin to %s prompt assembly", async mode => {
+    const preference = { responseStyle: "default" as const, promptOutputLanguage: "ja" as const,
+      sourceID: "user-preference:10000000-0000-4000-8000-000000000011:3", updatedAt: "2026-10-20T00:00:00Z" };
+    const execute = vi.fn(async (_configuration, request: ClaudeHarnessRequest) => {
+      expect(JSON.parse(request.context!).assistant_service_preference).toMatchObject({
+        response_style: "default", prompt_output_language: "ja", source_id: preference.sourceID,
+      });
+      expect(request.systemPrompt).toContain("prompt_output_language");
+      expect(request.systemPrompt).toContain("source_excerpt");
+      expect(request.systemPrompt).toContain("current user's explicit request takes precedence");
+      expect(request.tools.find(tool => tool.name === "read_response_preference")?.readOnly).toBe(true);
+      return outcome;
+    });
+    const provider = new ClaudeChatProvider(configuration, execute);
+    if (mode === "workspace") {
+      await provider.run({ runID: "synthetic-language", objective: "Explain this in my saved language.", systemPrompt: "Respond in Chinese.",
+        scopeSummary: { kind: "workspace_conversation", workspaceID: "workspace", sessionID: null, currentPersonID: null, currentRelationshipContextID: null },
+        toolManifest: [], budget: { maxTurns: 2, maxToolCalls: 2, maxTaskTokens: 12000, maxEstimatedUsd: 1, maxDurationMs: 60000 },
+        responsePreference: preference,
+      }, vi.fn(), new AbortController().signal);
+    } else {
+      await provider.answer({ mode: "relationship", objective: "Explain this in my saved language.",
+        context_blocks: [], allowed_citation_ids: [], responsePreference: preference });
+    }
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it("injects verified service settings and self context before any workspace tool call", async () => {
     const preference = { responseStyle: "conclusion_first" as const,
       sourceID: "user-preference:10000000-0000-4000-8000-000000000011:2", updatedAt: "2026-09-22T00:00:00Z" };
@@ -587,10 +614,10 @@ describe("bounded tool context opt-in policy", () => {
   it("opts in with a deferred admitted catalog only for ordinary-text workspace conversation", async () => {
     const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
       expect(harnessRequest.toolDiscovery).toBe("bounded");
-      const essential = new Set(["read_response_preference", "stage_calendar_draft"]);
+      const essential = new Set(["read_response_preference", "memory_review_recall", "memory_review_propose"]);
       const deferred = harnessRequest.tools.filter(tool => !essential.has(tool.name));
       expect(deferred.map(tool => tool.name).sort()).toEqual(["contact_workspace_propose_create", "contact_workspace_propose_update",
-        "contact_workspace_read", "contact_workspace_search", "mcp_connections", "memory_review"]);
+        "contact_workspace_read", "contact_workspace_search", "mcp_connections", "stage_calendar_draft"]);
       // Large admitted catalog tools defer; small essential tools stay upfront.
       for (const tool of deferred) expect(tool.alwaysLoad ?? false).toBe(false);
       for (const name of essential) expect(harnessRequest.tools.find(tool => tool.name === name)?.alwaysLoad).toBe(true);

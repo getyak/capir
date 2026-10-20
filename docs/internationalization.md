@@ -35,8 +35,11 @@ Both are stored user preferences; both default to `system`.
    (`AccountSettings.preferences`); every surface reads the same value.
 2. **Prompt-output language** (`prompt_output_language`): the language the
    agent writes in — replies, drafts, generated summaries. `system` resolves
-   to the same language display language resolves to. Stored in the
-   agent-preference store alongside `response_style`. Wired into prompt
+   to the current request language, preserving the existing automatic reply
+   behavior. An explicit locale pins generated output independently of the
+   display setting. Stored in the
+   agent-preference store alongside `response_style`. Omitting this field in
+   an older client preserves an existing pin. Wired into prompt
    assembly as an explicit output-language rule.
 
 ### What language settings never change
@@ -53,11 +56,21 @@ An explicit prompt-output pin overrides workspace language defaults embedded
 in prompts; with no pin, prompts keep their existing "use the user's
 language" behavior.
 
+## Delivery boundary
+
+PR 388 delivers the shared model, persisted Web settings, generated-output
+language pins, and an incremental Web catalog pipeline. Remaining Web
+extraction is tracked in `apps/web/i18n/pending-extraction.json`; its entries
+are untranslated work, not completed coverage. Native applications and
+extensions retain their existing language behavior until their own locale
+work and real-surface acceptance are complete. The table below includes those
+planned platform mechanisms, not a claim of five-language native delivery.
+
 ## Where strings live per surface
 
 | Surface | Mechanism | Catalog location |
 | --- | --- | --- |
-| Web (`apps/web`) | In-repo typed catalog runtime (`apps/web/lib/i18n`: `getT(locale)` for server components, `useT()` for client) | `apps/web/i18n/locales/{en,zh-CN,zh-TW,ja,ko}.json` plus locale-keyed copy modules (`lib/marketing-copy.ts`, `subpageCopy`, story dicts) |
+| Web (`apps/web`) | In-repo typed catalog runtime (`apps/web/lib/i18n`: `translate(locale, key, vars)` for server components, `useT()` for clients) | `apps/web/i18n/locales/{en,zh-CN,zh-TW,ja,ko}.json` plus locale-keyed copy modules (`lib/marketing-copy.ts`, `subpageCopy`, story dicts) |
 | iOS (`apps/ios`) | String Catalogs | `apps/ios/Resources/Localizable.xcstrings` (`zh-Hans` → also `zh-Hant`, `ja`, `ko`) |
 | macOS native (`apps/macos`) | String Catalog | `apps/macos/Resources/Localizable.xcstrings` |
 | macOS hybrid (`apps/macos-hybrid`) | Small JS dictionary keyed by canonical tag | alongside `index.html` / `quick-panel.html` |
@@ -78,9 +91,9 @@ Resolution order: active locale → original Chinese for zh-family locales →
 narrative copy with arrays and nested groups) count as catalogs; the guard
 suite treats values in those modules as extracted.
 
-Web interpolation uses `{name}` placeholders; plurals use `.one` / `.other`
-key suffixes with `Intl.PluralRules`. Dates, numbers, and lists format via
-`Intl.*` for the active locale.
+Web interpolation uses `{name}` placeholders. The current runtime does not
+select plural variants; callers must not assume `.one` / `.other` resolution.
+Localized date call sites use `Intl.*` with the active locale.
 
 ## Translation quality rules
 
@@ -90,13 +103,15 @@ key suffixes with `Intl.PluralRules`. Dates, numbers, and lists format via
   and idiom), not converted `zh-CN`.
 - `ja` and `ko` are native-quality, respecting each locale's politeness
   convention for UI copy.
-- `en` is the source language for web/macOS/extension keys; iOS source is
-  `en`.
+- Native and extension catalog keys use `en` as their source language.
+  Existing Web gettext keys retain their zh-CN source text.
 - Keep the evidence vocabulary consistent: a shared glossary translates
   evidence / confirmed / interpretation / proposal terms the same way
   everywhere so state distinctions stay crisp.
-- Machine-translation drafts must be reviewed before shipping; untranslated
-  keys fall back to `en`, never to raw keys.
+- Translation drafts need language review. Known catalog keys fall back to
+  `en` outside the Chinese source family; unknown keys currently render their
+  source key. Catalog guards and remaining extraction counts do not establish
+  native-speaker approval.
 
 ## Checks that enforce this
 
@@ -116,7 +131,7 @@ key suffixes with `Intl.PluralRules`. Dates, numbers, and lists format via
 
 ## Language pickers (settings)
 
-Workspace settings shows two labeled controls under one language section:
-display language ("Follow system" default) and prompt-output language
-("Follow system" default). Labels describe behavior; they never rank people,
-candidates, or languages.
+Appearance settings owns display language ("Follow system" default). The
+reply-preferences page owns output language ("Automatic (current request)"
+default) alongside reply order. Labels describe behavior; they never rank
+people, candidates, or languages.

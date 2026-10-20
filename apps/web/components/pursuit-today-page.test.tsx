@@ -65,6 +65,15 @@ function renderPage(
 }
 
 describe("today focus authority and details", () => {
+  it("presents independently loaded consumption and scopes empty copy to governed goals", () => {
+    const html = renderPage([], { binding: "current-binding", pursuitEnabled: true });
+    expect(html).toContain("今日概览");
+    expect(html).toContain("接下来的安排");
+    expect(html).toContain("继续一段对话");
+    expect(html).not.toContain("把注意力留给现在值得推进的一步。");
+    expect(html).not.toContain("今天不需要凭空制造任务。");
+    expect(html).toContain("目标暂无待处理事项");
+  });
   it("keeps owner and target date readable and folds revision and no-write copy into named details", () => {
     const html = renderPage([
       item({

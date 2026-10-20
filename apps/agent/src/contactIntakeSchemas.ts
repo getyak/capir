@@ -57,7 +57,7 @@ export const CONTACT_INTAKE_TOOLS = {
     schema: z.strictObject({ person_id: ID, relationship_context_id: ID }),
   },
   create_contact: {
-    description: "Create one internal contact from the visible screenshot name and save this task's IM messages. The intentional import authorizes reversible filing; this does not confirm extracted facts. Requires an empty exact name/identity search; duplicates or group-chat ambiguity stop for clarification.",
+    description: "Create one internal contact for the source-grounded person the user wants to add and preserve this task's source. Namesakes and source format do not block a separate contact. The intentional import authorizes reversible filing, never confirmed facts or identity merging. Honor a person the user explicitly selected instead of silently switching targets.",
     schema: z.strictObject({ display_name: Text.max(200) }),
   },
   save_contact_chat: {
@@ -180,6 +180,7 @@ export const ContactProfileConfirmationSchema = z.strictObject({
   display_name: Text.max(200),
   fields: z.array(z.strictObject({clue_index: z.number().int().min(0).max(11), value: Text.max(300)})).max(12),
   selected_person_id: ID.optional(), selected_relationship_context_id: ID.optional(),
+  create_new: z.boolean().optional(),
 });
 export type ContactProfileConfirmation = z.infer<typeof ContactProfileConfirmationSchema>;
 

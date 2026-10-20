@@ -33,7 +33,8 @@ export async function saveAccountSettings(_previous: AccountActionState, form: F
   }
   try {
     const data = await updateAccountSettings(input);
-    if (kind === 'profile' || kind === 'workspace' || kind === 'preferences') revalidatePath('/workspace', 'layout');
+    if (kind === 'preferences') revalidatePath('/', 'layout');
+    else if (kind === 'profile' || kind === 'workspace') revalidatePath('/workspace', 'layout');
     return { data, saved:true };
   }
   catch(error) {

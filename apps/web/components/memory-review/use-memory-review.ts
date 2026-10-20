@@ -270,7 +270,7 @@ export function useMemoryReview(options: {
         },
       });
     },
-    [binding],
+    [t, binding],
   );
 
   const ensureCapability = useCallback(async (): Promise<string | null> => capabilityRef.current, []);
@@ -312,7 +312,7 @@ export function useMemoryReview(options: {
     // internal English or schema jargon.
     if (message && /\p{Script=Han}/u.test(message) && message.length <= 200) return message;
     return fallback;
-  }, []);
+  }, [t, ]);
 
   const reconcileKey = useCallback(
     async (operationKey: string): Promise<void> => {
@@ -358,7 +358,7 @@ export function useMemoryReview(options: {
         setReconciling(false);
       }
     },
-    [binding, request, purpose, personId, contextId],
+    [t, binding, request, purpose, personId, contextId],
   );
 
   const reconcileItemKey = useCallback(async (itemId: string, operationKey: string): Promise<void> => {
@@ -447,7 +447,7 @@ export function useMemoryReview(options: {
     } finally {
       setReconciling(false);
     }
-  }, [request, purpose, personId, contextId, key]);
+  }, [t, request, purpose, personId, contextId, key]);
 
   const reconcileContactKey = useCallback(async (operationKey: string): Promise<void> => {
     setReconciling(true);
@@ -498,7 +498,7 @@ export function useMemoryReview(options: {
     } finally {
       setReconciling(false);
     }
-  }, [request, purpose, personId, contextId, key]);
+  }, [t, request, purpose, personId, contextId, key]);
 
   const open = useCallback(async () => {
     if (!binding || !proposalId || inflight.current) return;
@@ -655,7 +655,7 @@ export function useMemoryReview(options: {
     } finally {
       inflight.current = false;
     }
-  }, [binding, proposalId, proposalRevision, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, request, errorMessage, key, reconcileKey, reconcileItemKey, reconcileContactKey, ensureCapability, sessionId, options.entryCapability]);
+  }, [t, binding, proposalId, proposalRevision, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, request, errorMessage, key, reconcileKey, reconcileItemKey, reconcileContactKey, ensureCapability, sessionId, options.entryCapability]);
 
   const dispatchDraft = useCallback((next: MemoryReviewDraftState) => {
     const previous = draftRef.current;
@@ -895,7 +895,7 @@ export function useMemoryReview(options: {
         inflight.current = false;
       }
     },
-    [binding, proposalId, proposalRevision, purpose, personId, contextId, request, review, key, errorMessage, flushDraft],
+    [t, binding, proposalId, proposalRevision, purpose, personId, contextId, request, review, key, errorMessage, flushDraft],
   );
 
   const refreshReview = useCallback(async (decided?: { id: string; kind: "committed" | "skipped" }): Promise<boolean> => {
@@ -943,7 +943,7 @@ export function useMemoryReview(options: {
       setError(t("剩余内容暂时无法读取，请稍后核对。"));
       return false;
     }
-  }, [proposalId, binding, request, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, errorMessage]);
+  }, [t, proposalId, binding, request, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, errorMessage]);
 
   const decideItem = useCallback(async (input: {
     itemId: string;
@@ -1035,7 +1035,7 @@ export function useMemoryReview(options: {
     } finally {
       inflight.current = false;
     }
-  }, [binding, proposalId, purpose, personId, contextId, request, key, refreshReview, errorMessage]);
+  }, [t, binding, proposalId, purpose, personId, contextId, request, key, refreshReview, errorMessage]);
 
   const decideContactOnly = useCallback(async (input: {
     displayLabel: string;
@@ -1045,8 +1045,8 @@ export function useMemoryReview(options: {
     const credential = credentialRef.current;
     const scopeId = scopeRef.current;
     if (!binding || !proposalId || !current || !credential || !scopeId || inflight.current) return null;
-    if (current.contact_decision !== "new" || current.contact_status === "ambiguous") {
-      setError(t("请先核对同名联系人，再决定添加或关联。"));
+    if (current.contact_decision !== "new") {
+      setError(t("请从新建联系人草稿中添加。"));
       return null;
     }
     const label = input.displayLabel.trim();
@@ -1111,7 +1111,7 @@ export function useMemoryReview(options: {
     } finally {
       inflight.current = false;
     }
-  }, [binding, proposalId, purpose, personId, contextId, key, request, errorMessage, refreshReview]);
+  }, [t, binding, proposalId, purpose, personId, contextId, key, request, errorMessage, refreshReview]);
 
   const undoContact = useCallback(async (): Promise<boolean> => {
     const outcome = contactOutcome;
@@ -1155,7 +1155,7 @@ export function useMemoryReview(options: {
       setNotice(t("正在核对联系人撤销结果…"));
       return false;
     } finally { inflight.current = false; }
-  }, [contactOutcome, key, request, purpose, personId, contextId, errorMessage]);
+  }, [t, contactOutcome, key, request, purpose, personId, contextId, errorMessage]);
 
   const undoItem = useCallback(async (itemId: string): Promise<boolean> => {
     const outcome = itemOutcomes[itemId];
@@ -1223,7 +1223,7 @@ export function useMemoryReview(options: {
     } finally {
       inflight.current = false;
     }
-  }, [itemOutcomes, key, request, purpose, personId, contextId, errorMessage]);
+  }, [t, itemOutcomes, key, request, purpose, personId, contextId, errorMessage]);
 
   const checkItem = useCallback(async (itemId: string): Promise<void> => {
     const operationKey = itemOutcomes[itemId]?.operationKey;
@@ -1291,7 +1291,7 @@ export function useMemoryReview(options: {
         return false;
       }
     },
-    [binding, review, request, errorMessage, key],
+    [t, binding, review, request, errorMessage, key],
   );
 
   const reconcile = useCallback(async () => {
@@ -1379,7 +1379,7 @@ export function useMemoryReview(options: {
         inflight.current = false;
       }
     },
-    [binding, proposalId, proposalRevision, request, errorMessage, open, flushDraft],
+    [t, binding, proposalId, proposalRevision, request, errorMessage, open, flushDraft],
   );
 
   const undo = useCallback(async (): Promise<MemoryUndoOutcome> => {
@@ -1477,7 +1477,7 @@ export function useMemoryReview(options: {
       setError(t("撤销结果尚未确认，请稍后核对。"));
       return { kind: "failed", message: "撤销结果尚未确认，请稍后核对。" };
     }
-  }, [binding, locator, request, purpose, personId, contextId, key, errorMessage]);
+  }, [t, binding, locator, request, purpose, personId, contextId, key, errorMessage]);
 
   return {
     phase,

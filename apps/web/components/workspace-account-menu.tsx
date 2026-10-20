@@ -26,6 +26,7 @@ import {
   type WeeklyUsageView,
 } from "@/lib/weekly-usage";
 import { clearAllSessionOrganization } from "@/lib/workspace-session-organization";
+import { subscribeTheme } from "@/lib/theme-preference";
 import { SupportEmailEntry } from "./support-email-entry";
 import { DesktopAccountLink, DesktopAccountNotice, DesktopDeviceSettingsLink, DesktopUpdateBanner, useDesktopChrome } from "./desktop-chrome";
 import { WorkspaceFooterStrip } from "./workspace-footer";
@@ -219,6 +220,9 @@ export function WorkspaceAccountMenu({
     items[index]?.focus();
   }
 
+  // The workspace follows system and other-window changes even while the
+  // account popover (and its ThemeToggle subscriber) is unmounted.
+  useEffect(() => subscribeTheme(() => {}), []);
   useEffect(() => () => usageScope?.store.dispose(), [usageScope]);
 
   return (

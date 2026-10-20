@@ -1,26 +1,27 @@
 import { cache } from "react";
 import { cookies, headers } from "next/headers";
-import type { LocaleTag } from "@talent-signal/contracts";
+import type { LanguagePreference } from "@talent-signal/contracts";
 import { localeCookie, resolveMarketingLocale } from "@/lib/marketing-locale";
 import { loadAccountSettings } from "@/lib/server/accountBackend";
 
 /**
  * The authenticated display-language preference, or null when there is no
- * readable account session. `system` falls through to the public negotiation.
+ * readable account session. A readable account defaults to `system`, which
+ * follows the browser independently of the public-site locale cookie.
  */
-async function accountDisplayLanguage(): Promise<LocaleTag | null> {
+export const accountDisplayLanguage = cache(async (): Promise<LanguagePreference | null> => {
   try {
     const settings = await loadAccountSettings();
-    const preference = settings.preferences?.display_language;
-    return preference && preference !== "system" ? preference : null;
+    return settings.preferences?.display_language ?? "system";
   } catch {
     return null;
   }
-}
+});
 
 /**
  * Effective display locale for this request:
- * account preference -> locale cookie -> weighted Accept-Language.
+ * account preference (system follows Accept-Language), otherwise public
+ * locale cookie -> weighted Accept-Language.
  */
 export const getMarketingLocale = cache(async () => {
   const [cookieStore, requestHeaders, preference] = await Promise.all([
@@ -28,11 +29,9 @@ export const getMarketingLocale = cache(async () => {
     headers(),
     accountDisplayLanguage(),
   ]);
-  return (
-    preference ??
-    resolveMarketingLocale(
-      cookieStore.get(localeCookie)?.value,
-      requestHeaders.get("accept-language") ?? "",
-    )
+  return resolveMarketingLocale(
+    preference === null ? cookieStore.get(localeCookie)?.value
+      : preference === "system" ? undefined : preference,
+    requestHeaders.get("accept-language") ?? "",
   );
 });

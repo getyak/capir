@@ -33,6 +33,7 @@ it("saves the display language preference as a user-scoped presentation setting"
  update.mockResolvedValue({user:{id:"current-user"}});
  expect(await saveAccountSettings({},form)).toMatchObject({saved:true});
  expect(update).toHaveBeenCalledExactlyOnceWith({id:"lang-op",kind:"preferences",display_language:"ja",expected_revision:3});
+ expect(revalidate).toHaveBeenCalledWith("/", "layout");
 });
 it("defaults the display language to follow the system", async () => {
  const form = new FormData();

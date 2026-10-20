@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { startTransition, useActionState, useState } from "react";
 import {
   LOCALE_ENDONYMS,
   SUPPORTED_LOCALES,
@@ -28,21 +28,34 @@ export function DisplayLanguageSettings({
 }) {
   const t = useT();
   const [operationId, setOperationId] = useState("");
-  const [state, action, pending] = useActionState(saveAccountSettings, {} as AccountActionState);
-  const current: DisplayChoice =
-    state.data?.preferences?.display_language ?? account.preferences?.display_language ?? "system";
+  const [choice, setChoice] = useState<DisplayChoice>(account.preferences?.display_language ?? "system");
+  const [state, action, pending] = useActionState(async (previous: AccountActionState, form: FormData) => {
+    const result = await saveAccountSettings(previous, form);
+    if (result.saved) {
+      setOperationId("");
+      const confirmed = result.data?.preferences?.display_language ?? "system";
+      if (confirmed !== form.get("display_language")) {
+        setChoice(confirmed);
+        return { ...result, saved: false, error: "界面语言已在另一端改变，已显示最新设置。请核对后再保存。" };
+      }
+    }
+    return { ...result, data: result.data ?? previous.data };
+  }, {} as AccountActionState);
   const revision = state.data?.user.revision ?? account.user.revision;
   return (
     <form
-      action={action}
       onSubmit={(event) => {
+        event.preventDefault();
         if (pending) {
-          event.preventDefault();
           return;
         }
         const id = operationId || crypto.randomUUID();
         (event.currentTarget.elements.namedItem("operationId") as HTMLInputElement).value = id;
         setOperationId(id);
+        const form = new FormData(event.currentTarget);
+        // Dispatch explicitly so a resolved error does not trigger React's
+        // native form reset and replace the language needed for a safe retry.
+        startTransition(() => action(form));
       }}
     >
       <input type="hidden" name="operationId" defaultValue={operationId} />
@@ -54,8 +67,11 @@ export function DisplayLanguageSettings({
       <select
         id="display-language-select"
         name="display_language"
-        key={revision}
-        defaultValue={current}
+        value={choice}
+        onChange={(event) => {
+          setChoice(event.target.value as DisplayChoice);
+          setOperationId("");
+        }}
         disabled={pending}
         data-display-language
       >
@@ -66,7 +82,7 @@ export function DisplayLanguageSettings({
       </select>
       <p>{t("language.display.hint")}</p>
       <p aria-live="polite">
-        {pending ? "…" : state.error ?? (state.saved ? t("language.saved") : "")}
+        {pending ? "…" : state.error ? t(state.error) : state.saved ? t("language.saved") : ""}
       </p>
       <button type="submit" className={styles.primaryButton} disabled={pending}>
         {t("language.save")}

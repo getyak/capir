@@ -171,6 +171,43 @@ describe("private one-use handoff exchange", () => {
     ).rejects.toMatchObject({ status: 410 });
   });
 
+  for (const failure of ["transport", "body-read", "invalid-json", "invalid-schema"]) {
+    it(`normalizes ${failure} to a valid 502 boundary status and keeps real refusals`, async () => {
+      state.fetch.mockImplementation(async () => {
+        if (failure === "transport") throw new Error("synthetic-transport-error");
+        if (failure === "body-read") {
+          return new Response(
+            new ReadableStream({
+              start(controller) { controller.error(new Error("synthetic-sensitive-body-error")); },
+            }),
+            { status: 200 },
+          );
+        }
+        return failure === "invalid-json"
+          ? new Response("{", { status: 200 })
+          : jsonResponse(200, { session: null });
+      });
+      const error = await exchangeCapirTestHandoff({
+        handoffSecret: "h".repeat(43),
+        requestOrigin: WEB_ORIGIN,
+      }).then(() => null, (caught: Error) => caught);
+      // A transport status zero or an untrusted success status is never a
+      // response status at this boundary.
+      expect(error).toMatchObject({ status: 502 });
+      expect(error!.message).not.toContain("synthetic-sensitive-body-error");
+      expect(error!.message).not.toContain("synthetic-transport-error");
+    });
+  }
+
+  it("retains a real 400-599 refusal status at the boundary", async () => {
+    state.fetch.mockImplementation(async () =>
+      jsonResponse(429, { error: { code: "CAPIR_TEST_QUOTA", message: "quota" } }),
+    );
+    await expect(
+      exchangeCapirTestHandoff({ handoffSecret: "h".repeat(43), requestOrigin: WEB_ORIGIN }),
+    ).rejects.toMatchObject({ status: 429 });
+  });
+
   it("never prints untrusted response bodies in errors", async () => {
     state.fetch.mockImplementation(async () =>
       jsonResponse(500, {

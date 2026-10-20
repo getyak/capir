@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		006BD44208D70135F0F9204B /* CanonicalTodayPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9BF00B231FBA57F21648A46 /* CanonicalTodayPage.swift */; };
 		0280A09F855960F8B9B8B582 /* AgentAskActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3328EB6E9CD5E04046B93CBB /* AgentAskActivity.swift */; };
 		028A2559C5DD59ED1867A7D4 /* LivingConnectionMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 231394EAA3A3E7C83062638C /* LivingConnectionMark.swift */; };
 		02D37D4D53E73293C4D3D9A0 /* ResearchShowcaseView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC263880F93DD93183A4721 /* ResearchShowcaseView.swift */; };
@@ -41,6 +42,7 @@
 		15F64F09BF7F3AA01A386C9F /* AgentAskLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4F0E05C7B34524A0C830C9A /* AgentAskLiveActivity.swift */; };
 		16CB4CD0617CB6263D9EC665 /* LabCITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 208291EBFF8C8FF4721330B4 /* LabCITests.swift */; };
 		17554FC903A4478FE7F41E25 /* TalentSignalLab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CB1094A0E966F6F4FD0ECEA /* TalentSignalLab.swift */; };
+		17585A292A1437A9ED9F1F7A /* TodayScheduleClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64BF59F5649B3675ED9E5688 /* TodayScheduleClient.swift */; };
 		17AB391376909DD604853403 /* LabResetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F8ED6FCB699557253F515D8 /* LabResetView.swift */; };
 		18102050EFC99BD2741CACB9 /* LabMetricKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E175CA7DEEA8FEBB1ABE9DF /* LabMetricKit.swift */; };
 		182562E4D458AEE0F8DC958E /* AgentSessionContextPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D190C3B7758265FCB362A38B /* AgentSessionContextPolicy.swift */; };
@@ -72,6 +74,7 @@
 		373EC4428F3966B754C33E6F /* PursuitWorkspaceClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D91833FC9D20274A1A85C004 /* PursuitWorkspaceClient.swift */; };
 		38B5729E390D82BA3ECAE487 /* TalentSignalHTTPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF4FE85B6A6DF1E1EBDA3653 /* TalentSignalHTTPTransport.swift */; };
 		39C0CF02D7A7CEAD47876007 /* StandaloneOnboardingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC6A81331A906C3C93033158 /* StandaloneOnboardingStore.swift */; };
+		39E9790189474356C76765D0 /* TodayScheduleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C166FCA5817B5DB03D326F5 /* TodayScheduleTests.swift */; };
 		3A4D5DF33ECD01937895409A /* ResearchActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000FEDD459C574F08D2B0 /* ResearchActivityController.swift */; };
 		3A65DC2E0B32BF0EE18F3399 /* LabResetPermissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8067A8D4506AEAFC1517F03A /* LabResetPermissions.swift */; };
 		3AF235C23737D83E2D8D9988 /* RuntimeEnvironmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F53E8ACA4C974310ADDAD651 /* RuntimeEnvironmentTests.swift */; };
@@ -107,6 +110,7 @@
 		57FCED5019868487FC024668 /* TalentSignalLabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8341A8939A8399FB5E3DB75E /* TalentSignalLabView.swift */; };
 		5821215496252904C39FE2A0 /* ResearchShowcaseStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F3D4894152DC18CD4F9D288 /* ResearchShowcaseStoreTests.swift */; };
 		59BEBA6B0A3C418442E59C03 /* TextSignalCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF3826B0FFB3CF750AA89BC /* TextSignalCapture.swift */; };
+		59E28E697E4445909FE7C620 /* TodayScheduleClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E994477BBC188464A03A4878 /* TodayScheduleClientTests.swift */; };
 		5AB53512D99F0073F3911B6E /* CandidateSignalUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59ABD7E7EC7EB412FF62B6B2 /* CandidateSignalUITests.swift */; };
 		5AB6B6339FC04C894DCD1E6D /* StandaloneRecordingActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39D83870AC6BF272A562706B /* StandaloneRecordingActivityCoordinator.swift */; };
 		5BE94986368D550DCFBEF16D /* RuntimeWorkRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = E81E698FE234DABDA4A1DE8A /* RuntimeWorkRegistry.swift */; };
@@ -205,11 +209,13 @@
 		ACCF73276C146F5561CD23D7 /* SharedCaptureEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A50CADCC91C4605F27C6C1A /* SharedCaptureEnvelope.swift */; };
 		AD08E92344FA0B6C172C1F68 /* CandidateSignalComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = F65FD02A1A72391E9BBB4E70 /* CandidateSignalComponents.swift */; };
 		ADAEC0C77BF5018BE4D5F6D2 /* LabDiagnosticFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67F020BFF4B5D36459852B5 /* LabDiagnosticFiles.swift */; };
+		AEC00E84BA74B8283846171B /* TodayScheduleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A896028CDDC552313898D914 /* TodayScheduleView.swift */; };
 		AF846512F867A37E4852DFF6 /* LabFeatureOverrideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 229BFC9CA8CC2F6CB674E4B2 /* LabFeatureOverrideView.swift */; };
 		B14624CBE5BD9FA374989C83 /* TalentSignalHTTPTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 486D6CA55A006F4001B122A9 /* TalentSignalHTTPTransportTests.swift */; };
 		B395CC97F0E0B8496ED52532 /* LabWorkspaceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A339BF01C9C505A2105CFAE7 /* LabWorkspaceUITests.swift */; };
 		B3C923EEE0B61FD92DACA801 /* LabEnvironmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BBA84877E079058F2ED5E38 /* LabEnvironmentView.swift */; };
 		B3FCB11A82FE832BEF7B6B06 /* StandaloneOnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB438577F715989A67A3C389 /* StandaloneOnboardingView.swift */; };
+		B4899A4A6F533485E4A89DCA /* TodayScheduleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2927B20CA4D654F57BC3B16 /* TodayScheduleStore.swift */; };
 		B58AD7CCB4F0CBD2ECDB1E82 /* LabMetricKitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4DE25B40A661065D2904DC /* LabMetricKitView.swift */; };
 		BA7B7A4D4B5BAF7BC72510C2 /* RelationshipArchiveRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = F38A04F2F24A2E14520AA214 /* RelationshipArchiveRows.swift */; };
 		BAC906FBE44C3289C00AD239 /* RelationshipAgentStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0AB9B7264527674C941D66E /* RelationshipAgentStudioView.swift */; };
@@ -244,6 +250,7 @@
 		DB14818DB152AA692A267A31 /* GoogleSignInFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE5D2E6B4A895E655F0B421 /* GoogleSignInFlowTests.swift */; };
 		DB16C993EA71AB4C8AF6E003 /* LabResetExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6033B9D88E886443433BE75 /* LabResetExecutor.swift */; };
 		DBDEEC80AA6AC5C4E44CA1D1 /* LabReset.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF299542D7248062A20CFEE /* LabReset.swift */; };
+		DD88FEC37202D74484347797 /* TodayScheduleFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA92F34BA37AF9ACB5FE84BF /* TodayScheduleFormatting.swift */; };
 		DDB0F17C3A014370AA4C8CC1 /* CandidateMomentumLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8806D300F51296BE8C1CECE3 /* CandidateMomentumLoop.swift */; };
 		DDBC370C4A26325CF98576F3 /* LabStagesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95431510B8B76D1406B1619E /* LabStagesUITests.swift */; };
 		DED516B92DC9766A9E603815 /* LabWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D97B7AF0950AA0C0F99B97E /* LabWorkspaceView.swift */; };
@@ -260,6 +267,7 @@
 		EDB8F227EF0E06B6933CA94E /* LabJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C39793F9CFD3F4CDD94A4782 /* LabJobStore.swift */; };
 		EDE480A0FCEDE44DA2269451 /* AuthenticationPortraitScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A80C665A25854FF38B8EEB05 /* AuthenticationPortraitScene.swift */; };
 		EE08E4BFF39F3C4D6B523814 /* LabDiagnosticsEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97A09225E0E88A4272C063BE /* LabDiagnosticsEngine.swift */; };
+		EEE27CB35890DC95D9FA533F /* PursuitWorkspaceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D96AAA3AAB371AA4A3951AA /* PursuitWorkspaceSession.swift */; };
 		EF8B1007C9B5DB795BC042AC /* AuthenticationEmailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 074E415EAC1F24FEDE6B3C27 /* AuthenticationEmailView.swift */; };
 		F05235BB73AF218BB785AC65 /* LabFault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6586D136C160B7A7AEAEA40E /* LabFault.swift */; };
 		F12627D7E2EDF5E5506EDD92 /* AppSessionEndingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51741768CB8F7BFFB7DB1B2F /* AppSessionEndingController.swift */; };
@@ -344,6 +352,7 @@
 		09B21A71CBFE4A9353C01A02 /* AgentMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMarkdownTests.swift; sourceTree = "<group>"; };
 		0AA23253CF2421A9760D7C2D /* RunArtifactsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunArtifactsView.swift; sourceTree = "<group>"; };
 		0C9DFA3B0DF1506009FAD201 /* AccountSignInMethodsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSignInMethodsModelTests.swift; sourceTree = "<group>"; };
+		0D96AAA3AAB371AA4A3951AA /* PursuitWorkspaceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PursuitWorkspaceSession.swift; sourceTree = "<group>"; };
 		0DAD9E0FC70DBFA1DC0F0602 /* WorkspaceActiveRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceActiveRefresh.swift; sourceTree = "<group>"; };
 		0E8F03F28B7FF8E63906218F /* LabRegressionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabRegressionUITests.swift; sourceTree = "<group>"; };
 		0F92CDD8245AFCCF10A4CFD3 /* DeviceContactHandoffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceContactHandoffView.swift; sourceTree = "<group>"; };
@@ -363,6 +372,7 @@
 		231394EAA3A3E7C83062638C /* LivingConnectionMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivingConnectionMark.swift; sourceTree = "<group>"; };
 		2510365385378D04B3C2FF06 /* LabFeatureOverrideTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabFeatureOverrideTests.swift; sourceTree = "<group>"; };
 		2796745F45891838868FEA7B /* InfoPlist.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = InfoPlist.xcstrings; sourceTree = "<group>"; };
+		2C166FCA5817B5DB03D326F5 /* TodayScheduleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayScheduleTests.swift; sourceTree = "<group>"; };
 		2C8A42CBB4A5B1229D5BCC0D /* TalentSignalBrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalentSignalBrandMark.swift; sourceTree = "<group>"; };
 		2E1DC0CB9D729B8B77463673 /* CandidateSignal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateSignal.swift; sourceTree = "<group>"; };
 		2F3D4894152DC18CD4F9D288 /* ResearchShowcaseStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchShowcaseStoreTests.swift; sourceTree = "<group>"; };
@@ -422,6 +432,7 @@
 		62711EC3980F289124729FEE /* AgentSessionActiveRefreshTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionActiveRefreshTests.swift; sourceTree = "<group>"; };
 		63953A0F31800DC886749C51 /* ConversationTextRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTextRecognizer.swift; sourceTree = "<group>"; };
 		63EDB5D30193BD69657831B5 /* LabMetricKitStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabMetricKitStore.swift; sourceTree = "<group>"; };
+		64BF59F5649B3675ED9E5688 /* TodayScheduleClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayScheduleClient.swift; sourceTree = "<group>"; };
 		6586D136C160B7A7AEAEA40E /* LabFault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabFault.swift; sourceTree = "<group>"; };
 		663C6F2C1E5C6731D56BB6FD /* LabFeatureOverride.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabFeatureOverride.swift; sourceTree = "<group>"; };
 		67F4B8B346FEDD9002E272C9 /* AgentResponsePreferenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentResponsePreferenceView.swift; sourceTree = "<group>"; };
@@ -487,6 +498,7 @@
 		A011F41DFE4C6D032707B858 /* TalentSignalUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TalentSignalUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0CE7E28903465988A661C2F /* LabResetUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabResetUITests.swift; sourceTree = "<group>"; };
 		A11262DED3E38696377856A6 /* TextSignalSyncClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSignalSyncClient.swift; sourceTree = "<group>"; };
+		A2927B20CA4D654F57BC3B16 /* TodayScheduleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayScheduleStore.swift; sourceTree = "<group>"; };
 		A32DF7502592C73D42007EAB /* LabClientDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabClientDiagnostics.swift; sourceTree = "<group>"; };
 		A339BF01C9C505A2105CFAE7 /* LabWorkspaceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabWorkspaceUITests.swift; sourceTree = "<group>"; };
 		A497AEE31F6BA44AC7D6590B /* AccountLoginMethodsClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountLoginMethodsClientTests.swift; sourceTree = "<group>"; };
@@ -494,6 +506,7 @@
 		A551BFD6547CCDF5B612E66D /* AppSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSessionTests.swift; sourceTree = "<group>"; };
 		A6033B9D88E886443433BE75 /* LabResetExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabResetExecutor.swift; sourceTree = "<group>"; };
 		A80C665A25854FF38B8EEB05 /* AuthenticationPortraitScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticationPortraitScene.swift; sourceTree = "<group>"; };
+		A896028CDDC552313898D914 /* TodayScheduleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayScheduleView.swift; sourceTree = "<group>"; };
 		A9161D0F10C35A2F93579D36 /* AgentTaskProjectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTaskProjectionStoreTests.swift; sourceTree = "<group>"; };
 		AA2B7831196A17D268065375 /* RelationshipCaptureClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelationshipCaptureClient.swift; sourceTree = "<group>"; };
 		AA5787007A2101D53C994CC4 /* ResearchActivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchActivityTests.swift; sourceTree = "<group>"; };
@@ -514,6 +527,7 @@
 		B7293BAE0A61AD214E4218D5 /* SessionTimestampRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionTimestampRoundTripTests.swift; sourceTree = "<group>"; };
 		B7BA6ABF89066A837B02D357 /* LabDiagnosticsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabDiagnosticsUITests.swift; sourceTree = "<group>"; };
 		B834E9733590077A022403B3 /* RelationshipAskOperationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelationshipAskOperationState.swift; sourceTree = "<group>"; };
+		B9BF00B231FBA57F21648A46 /* CanonicalTodayPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanonicalTodayPage.swift; sourceTree = "<group>"; };
 		B9EE45D571DF974240C9F499 /* LabFaultView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabFaultView.swift; sourceTree = "<group>"; };
 		BAF7A150F49BBD2D49301417 /* ConversationContactIntakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationContactIntakeTests.swift; sourceTree = "<group>"; };
 		BB9EFCAC52B0FE8E9A27402D /* LabFaultUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabFaultUITests.swift; sourceTree = "<group>"; };
@@ -530,6 +544,7 @@
 		C6709D57D3A6344F855B478F /* AppAuthenticationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAuthenticationView.swift; sourceTree = "<group>"; };
 		C67F020BFF4B5D36459852B5 /* LabDiagnosticFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabDiagnosticFiles.swift; sourceTree = "<group>"; };
 		CA61B70184C18544D0719F83 /* StandaloneProposalEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneProposalEngine.swift; sourceTree = "<group>"; };
+		CA92F34BA37AF9ACB5FE84BF /* TodayScheduleFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayScheduleFormatting.swift; sourceTree = "<group>"; };
 		CAAB9035F34B0E674E37ED2C /* AgentSourceImportUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSourceImportUITests.swift; sourceTree = "<group>"; };
 		CABB789B7F76C375CF1ED355 /* AgentSessionSyncClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSessionSyncClient.swift; sourceTree = "<group>"; };
 		CB87A075089AF37BF5A926CC /* ProductLabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductLabView.swift; sourceTree = "<group>"; };
@@ -566,6 +581,7 @@
 		E68ADCA955185ACDD422B618 /* SignalCaptureHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalCaptureHubView.swift; sourceTree = "<group>"; };
 		E81E698FE234DABDA4A1DE8A /* RuntimeWorkRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeWorkRegistry.swift; sourceTree = "<group>"; };
 		E910BC6066372A0F92A05B8C /* AccountLoginMethodsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountLoginMethodsTests.swift; sourceTree = "<group>"; };
+		E994477BBC188464A03A4878 /* TodayScheduleClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayScheduleClientTests.swift; sourceTree = "<group>"; };
 		E994DB114437B41140D89F8F /* AgentAskActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAskActivityController.swift; sourceTree = "<group>"; };
 		E9C7FFDCFE8722F56DF1F6EA /* AudioSignalRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSignalRecorder.swift; sourceTree = "<group>"; };
 		EB1929D001893C3FA445C73B /* LabDemoResetUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabDemoResetUITests.swift; sourceTree = "<group>"; };
@@ -672,6 +688,8 @@
 				486D6CA55A006F4001B122A9 /* TalentSignalHTTPTransportTests.swift */,
 				99715DDDEFB0F06319D06588 /* TalentSignalLabTests.swift */,
 				5DBD7EB9582B085CB7D1063C /* TextSignalCaptureTests.swift */,
+				E994477BBC188464A03A4878 /* TodayScheduleClientTests.swift */,
+				2C166FCA5817B5DB03D326F5 /* TodayScheduleTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -812,6 +830,7 @@
 				F1701C7E0486A536D7D6E42E /* ProductRunFeedbackClient.swift */,
 				C0D05DF05D08ED499C60BA0E /* PursuitProposalReviewClient.swift */,
 				D91833FC9D20274A1A85C004 /* PursuitWorkspaceClient.swift */,
+				0D96AAA3AAB371AA4A3951AA /* PursuitWorkspaceSession.swift */,
 				AA2B7831196A17D268065375 /* RelationshipCaptureClient.swift */,
 				AB2000FEDD459C574F08D2B0 /* ResearchActivityController.swift */,
 				8811C7D2D18B4CD8F3BF47FC /* RuntimeEnvironment.swift */,
@@ -826,6 +845,8 @@
 				FE3ECC4EC4904ED2131A5BA2 /* TalentSignalLabClient.swift */,
 				4BBE84777F748BF910538D0E /* TextSignalOutbox.swift */,
 				A11262DED3E38696377856A6 /* TextSignalSyncClient.swift */,
+				64BF59F5649B3675ED9E5688 /* TodayScheduleClient.swift */,
+				CA92F34BA37AF9ACB5FE84BF /* TodayScheduleFormatting.swift */,
 				0DAD9E0FC70DBFA1DC0F0602 /* WorkspaceActiveRefresh.swift */,
 			);
 			path = Services;
@@ -868,6 +889,7 @@
 				F65FD02A1A72391E9BBB4E70 /* CandidateSignalComponents.swift */,
 				1126D2A5D6E0AB92128FDA22 /* CandidateSignalStore.swift */,
 				F2D9B7F6140163816B8B25C2 /* CandidateSignalView.swift */,
+				B9BF00B231FBA57F21648A46 /* CanonicalTodayPage.swift */,
 				382034DC80F815EB41351067 /* DeviceCalendarHandoffView.swift */,
 				0F92CDD8245AFCCF10A4CFD3 /* DeviceContactHandoffView.swift */,
 				ADEFBB89307ADD3F1B837BB7 /* DeviceLabStore.swift */,
@@ -927,6 +949,8 @@
 				8341A8939A8399FB5E3DB75E /* TalentSignalLabView.swift */,
 				54258A90B16E34F5EE3E5D6E /* TextSignalCaptureStore.swift */,
 				3CA3B1B8042B74DA1B5D1670 /* TextSignalCaptureView.swift */,
+				A2927B20CA4D654F57BC3B16 /* TodayScheduleStore.swift */,
+				A896028CDDC552313898D914 /* TodayScheduleView.swift */,
 				937E7835550FDCF7CC33BB3A /* WorkspacePersonRolePresentation.swift */,
 			);
 			path = Features;
@@ -1237,6 +1261,8 @@
 				B14624CBE5BD9FA374989C83 /* TalentSignalHTTPTransportTests.swift in Sources */,
 				EA38E93593D1C984DD0D9DE1 /* TalentSignalLabTests.swift in Sources */,
 				A8C31D8E27A8BB40971F0064 /* TextSignalCaptureTests.swift in Sources */,
+				59E28E697E4445909FE7C620 /* TodayScheduleClientTests.swift in Sources */,
+				39E9790189474356C76765D0 /* TodayScheduleTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1331,6 +1357,7 @@
 				AD08E92344FA0B6C172C1F68 /* CandidateSignalComponents.swift in Sources */,
 				E5D75A0095F3C32C3AAA9E0D /* CandidateSignalStore.swift in Sources */,
 				72B340A984815C3C9D0858BB /* CandidateSignalView.swift in Sources */,
+				006BD44208D70135F0F9204B /* CanonicalTodayPage.swift in Sources */,
 				0AC9981F2E565E9986EE1040 /* CaptureAppIntents.swift in Sources */,
 				A61DC528D2295A5B715FE3F9 /* ConversationContactIntake.swift in Sources */,
 				CD87311F58291D17500329BA /* ConversationContactIntentInterpreter.swift in Sources */,
@@ -1404,6 +1431,7 @@
 				9E9FCCE762A1387B509C2685 /* PursuitProposalReviewStore.swift in Sources */,
 				0F66097E97A12D5433BD6CBE /* PursuitWorkspace.swift in Sources */,
 				373EC4428F3966B754C33E6F /* PursuitWorkspaceClient.swift in Sources */,
+				EEE27CB35890DC95D9FA533F /* PursuitWorkspaceSession.swift in Sources */,
 				D08C2E84FC404988E0F82AE0 /* PursuitWorkspaceStore.swift in Sources */,
 				BAC906FBE44C3289C00AD239 /* RelationshipAgentStudioView.swift in Sources */,
 				A4B50D55CF2FD1DB578106DC /* RelationshipArchiveModels.swift in Sources */,
@@ -1454,6 +1482,10 @@
 				BB3580A3464A58431968556E /* TextSignalCaptureView.swift in Sources */,
 				61C6EB2AE6DFAA4CC58A1DEE /* TextSignalOutbox.swift in Sources */,
 				F29414196CFB77B16AEF2319 /* TextSignalSyncClient.swift in Sources */,
+				17585A292A1437A9ED9F1F7A /* TodayScheduleClient.swift in Sources */,
+				DD88FEC37202D74484347797 /* TodayScheduleFormatting.swift in Sources */,
+				B4899A4A6F533485E4A89DCA /* TodayScheduleStore.swift in Sources */,
+				AEC00E84BA74B8283846171B /* TodayScheduleView.swift in Sources */,
 				C1F6AE9A97C2AA0F940D8C1C /* WorkspaceActiveRefresh.swift in Sources */,
 				F798914EF7B0688DE146AF34 /* WorkspacePersonRolePresentation.swift in Sources */,
 			);

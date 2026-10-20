@@ -1,7 +1,7 @@
 -- User-owned language choices. Presentation only: never person data.
 -- display_language: interface chrome language; 'system' follows the platform.
--- prompt_output_language: language the agent writes in; 'system' follows the
--- resolved display language. Neither value ever translates stored evidence,
+-- prompt_output_language: language the agent writes in; 'system' preserves
+-- automatic current-request language selection. Neither value ever translates stored evidence,
 -- source excerpts, or quoted conversations.
 ALTER TABLE users ADD COLUMN display_language text NOT NULL DEFAULT 'system'
   CHECK(display_language IN ('system','en','zh-CN','zh-TW','ja','ko'));

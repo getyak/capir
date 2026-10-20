@@ -33,16 +33,16 @@ export function ContactDecisionCard({ displayLabel, relationshipContext, sourceE
   const [context, setContext] = useState(relationshipContext);
   const createdId = outcome?.receipt?.created_person_id;
   return <section className={styles.actionCard} aria-label={t("联系人操作")} data-contact-decision-card>
-    <div className={styles.actionHead}><span>{t("联系人")}</span><span>{sourceUnavailable || outcome?.kind === "unavailable" ? "不可用" : outcome?.kind === "committed" ? "已添加" : outcome?.kind === "skipped" ? "已跳过" : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? "待核对" : status === "ambiguous" ? t("需核对身份") : t("待添加")}</span></div>
+    <div className={styles.actionHead}><span>{t("联系人")}</span><span>{sourceUnavailable || outcome?.kind === "unavailable" ? t("不可用") : outcome?.kind === "committed" ? t("已添加") : outcome?.kind === "skipped" ? t("已跳过") : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? t("待核对") : status === "ambiguous" ? t("需核对身份") : t("待添加")}</span></div>
     {sourceUnavailable || outcome?.kind === "unavailable" ? null : <div className={styles.contactDecisionIdentity}><span className={styles.avatar} aria-hidden="true">{displayLabel.slice(0, 1)}</span><div><strong>{displayLabel}</strong>{relationshipContext ? <small>{relationshipContext}</small> : null}</div></div>}
     {sourceUnavailable || outcome?.kind === "unavailable" ? null : <div className={styles.actionSource}><blockquote data-expanded="true">{sourceExcerpt}</blockquote>{sourceImage ? <SourceImageButton source={sourceImage}/> : null}</div>}
     {sourceUnavailable ? <p className={styles.actionReceipt} role="alert">{t("来源已失效，不能继续添加。")}</p>
-      : outcome?.kind === "committed" ? <div className={styles.actionReceipt} role="status">已添加联系人
+      : outcome?.kind === "committed" ? <div className={styles.actionReceipt} role="status">{t("已添加联系人")}
       {createdId ? <Link href={`/workspace/people/${createdId}`}>{t("查看人物")}</Link> : null}
       {onUndo && outcome.receipt?.undo?.allowed ? <button type="button" onClick={onUndo}>{t("撤销")}</button> : null}
     </div> : outcome?.kind === "skipped" ? <p className={styles.actionReceipt} role="status">{t("本次未添加")}</p>
       : outcome?.kind === "undone" ? <p className={styles.actionReceipt} role="status">{outcome.receipt?.undo_contact_outcome === "retained" ? t("已撤销这次添加；联系人因后续记录保留") : t("已撤销这次添加")}</p>
-      : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? <div className={styles.actionReceipt} role="status">{outcome.kind === "undo_unknown" ? "撤销结果待核对" : "结果待核对"}<button type="button" onClick={onCheck}>{t("核对结果")}</button></div>
+      : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? <div className={styles.actionReceipt} role="status">{outcome.kind === "undo_unknown" ? t("撤销结果待核对") : t("结果待核对")}<button type="button" onClick={onCheck}>{t("核对结果")}</button></div>
       : outcome?.kind === "unavailable" ? <p className={styles.actionReceipt} role="alert">{t("来源已失效，不能继续添加。")}</p>
       : null}
     {!sourceUnavailable && !outcome && editing ? <form className={styles.contactDecisionEdit} onSubmit={(event) => {
@@ -57,11 +57,12 @@ export function ContactDecisionCard({ displayLabel, relationshipContext, sourceE
     }}>
       <label>{t("姓名")}<input value={name} maxLength={200} onChange={(event) => setName(event.target.value)}/></label>
       <label>{t("关系")}<input value={context} maxLength={200} onChange={(event) => setContext(event.target.value)}/></label>
-      <div className={styles.actionButtons}><button className={styles.actionPrimary} type="submit" disabled={busy || !name.trim()}>{name.trim() !== displayLabel.trim() ? t("核对新姓名") : "添加联系人"}</button><button type="button" onClick={() => { setName(displayLabel); setContext(relationshipContext); setEditing(false); }}>{t("取消")}</button></div>
+      <div className={styles.actionButtons}><button className={styles.actionPrimary} type="submit" disabled={busy || !name.trim()}>{name.trim() !== displayLabel.trim() ? t("核对新姓名") : t("添加联系人")}</button><button type="button" onClick={() => { setName(displayLabel); setContext(relationshipContext); setEditing(false); }}>{t("取消")}</button></div>
     </form> : null}
     {!sourceUnavailable && !outcome && !editing ? <div className={styles.actionButtons}>
-      {status === "pending" ? <button className={styles.actionPrimary} type="button" disabled={busy} onClick={() => onAdd(name.trim(), context.trim())}>{t("添加联系人")}</button> : <p className={styles.actionHint}>{t("发现同名人物，先核对是谁。")}</p>}
-      {status === "pending" ? <button type="button" disabled={busy} onClick={() => setEditing(true)}>{t("改资料")}</button> : null}
+      {status === "ambiguous" ? <p className={styles.actionHint}>{t("已有同名人物，可以查看已有记录，或添加为另一位联系人。")}</p> : null}
+      <button className={styles.actionPrimary} type="button" disabled={busy} onClick={() => onAdd(name.trim(), context.trim())}>{status === "ambiguous" ? t("添加为新联系人") : t("添加联系人")}</button>
+      <button type="button" disabled={busy} onClick={() => setEditing(true)}>{t("改资料")}</button>
       <button type="button" disabled={busy} onClick={onCompare}>{status === "ambiguous" ? t("核对人物") : t("查找已有")}</button>
       <button type="button" disabled={busy} onClick={onPass}>{t("暂不添加")}</button>
     </div> : null}

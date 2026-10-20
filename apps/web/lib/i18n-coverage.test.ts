@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import ts from "typescript";
 import { SUPPORTED_LOCALES, type LocaleTag } from "@talent-signal/contracts";
 import { catalogs } from "./i18n";
 import pendingExtraction from "../i18n/pending-extraction.json";
@@ -115,12 +116,40 @@ function uncoveredStrings(file: string): Set<string> {
   return found;
 }
 
+/** A catalog entry does not translate a literal rendered directly in JSX. */
+function untranslatedJsxStrings(source: string): Set<string> {
+  const syntax = ts.createSourceFile("surface.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const found = new Set<string>();
+  const visit = (node: ts.Node, insideJsx = false, translated = false) => {
+    const jsx = insideJsx || ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node) || ts.isJsxFragment(node);
+    if (jsx && !translated && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isJsxText(node))) {
+      const key = normalize(node.text);
+      if (CJK.test(key) && key in catalogs.en) found.add(key);
+    }
+    const translationCall = ts.isCallExpression(node) && ts.isIdentifier(node.expression)
+      && (node.expression.text === "t" || node.expression.text === "translate");
+    ts.forEachChild(node, (child) => visit(child, jsx, translated || translationCall));
+  };
+  visit(syntax);
+  return found;
+}
+
 describe("web i18n coverage", () => {
+  it("rejects bare JSX catalog keys while allowing actual translation calls", () => {
+    expect([...untranslatedJsxStrings(`const view = <button title={busy ? "保存" : t("取消")}>保存</button>;`)])
+      .toEqual(["保存"]);
+    expect([...untranslatedJsxStrings(`const view = <button title={t("保存")}>{t(labels[state])}</button>;`)])
+      .toEqual([]);
+  });
+
   it("files outside the ratchet have no uncovered Chinese strings", () => {
     const violations: string[] = [];
     for (const file of productionFiles()) {
       if (EXEMPT.has(file) || file in PENDING) continue;
       for (const key of uncoveredStrings(file)) violations.push(`${file}: ${key}`);
+      for (const key of untranslatedJsxStrings(readFileSync(resolve(webRoot, file), "utf8"))) {
+        violations.push(`${file}: untranslated JSX: ${key}`);
+      }
     }
     expect(
       violations,

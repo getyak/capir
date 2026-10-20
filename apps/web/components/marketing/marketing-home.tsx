@@ -14,7 +14,6 @@ import s from "./personal-agent.module.css";
 
 export function MarketingHome({ locale }: { locale: MarketingLocale }) {
   const [demo, dispatchDemo] = useReducer(personalAgentDemoReducer, initialPersonalAgentDemo);
-  const en = locale === "en";
   const faqs = personalAgentHomeFaqs(locale);
   const t = (zh: string, english: string) => translate(locale, zh, undefined, english);
   const localizeRow = (zhRow: readonly string[], enRow: readonly string[]) =>

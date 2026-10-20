@@ -7,6 +7,7 @@
 export {
   LocaleProvider as MarketingLocaleProvider,
   useLocale as useMarketingLocale,
+  useAccountLocale,
   useT,
   type TFunction,
 } from "../locale-provider";

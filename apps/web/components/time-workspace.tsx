@@ -126,7 +126,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
       }
     });
     return () => controller.abort();
-  }, [feedKey, binding, browserZone, scopeKey, authInvalid, reviewScopeKey, cancelReviewGeneration]);
+  }, [t, feedKey, binding, browserZone, scopeKey, authInvalid, reviewScopeKey, cancelReviewGeneration]);
   const value = feed?.key === feedKey ? feed.value : undefined;
   const activities = value?.activities ?? [];
   const selectedActivity = activities.find((a) => a.id === selected || location.draft === a.source_id && a.kind === "meeting_draft") ?? null;
@@ -243,7 +243,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
     if (!review) return;
     if (review.key !== reviewScopeKey) queueMicrotask(() => { setReview(null); setReviewNotice(""); });
     else if (reviewContinuity?.cleared) queueMicrotask(() => { setReview(null); setReviewNotice(t("依据来源已更新、删除、撤销或过期，旧回顾已清除。")); });
-  }, [review, reviewScopeKey, reviewContinuity]);
+  }, [t, review, reviewScopeKey, reviewContinuity]);
   const activeReview = review && review.key === reviewScopeKey && !reviewContinuity?.cleared ? review : null;
   // Retained through auto refresh/foreground or kept after a transport failure:
   // only with an explicit stale, unverified label, never as current authority.

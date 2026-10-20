@@ -31,8 +31,12 @@ import {
 import { WorkspaceDisconnectedState } from "./workspace-disconnected-state";
 import styles from "./pursuit-today-page.module.css";
 import { PursuitDeadline } from "./pursuit-deadline";
+import { TodayContext } from "./today-context";
 
 type Props = {
+  binding?: string;
+  expiresAt?: string | null;
+  pursuitEnabled?: boolean;
   error: string | null;
   expanded: boolean;
   projection: PursuitTodayProjection | null;
@@ -510,6 +514,9 @@ function Continuation({ item }: { item: PursuitTodayItem }) {
 }
 
 export function PursuitTodayPage({
+  binding = "",
+  expiresAt = null,
+  pursuitEnabled = true,
   error,
   expanded,
   projection,
@@ -528,12 +535,7 @@ export function PursuitTodayPage({
   return (
     <div className={styles.pageShell}>
       <main className={styles.main} id="main-content" tabIndex={-1}>
-        <header className={styles.hero}>
-          <div>
-            <h1>今日</h1>
-            <p>把注意力留给现在值得推进的一步。</p>
-          </div>
-        </header>
+        <TodayContext binding={binding} expiresAt={expiresAt} />
 
         {activeSessionRecoveryHref && !error ? (
           <section
@@ -551,7 +553,7 @@ export function PursuitTodayPage({
           </section>
         ) : null}
 
-        {error ? (
+        {!pursuitEnabled ? null : error ? (
           <div className={styles.errorStack}>
             {activeSessionRecoveryHref ? (
               <section className={styles.pageError} role="alert">
@@ -632,8 +634,8 @@ export function PursuitTodayPage({
         ) : (
           <section className={styles.empty}>
             <CheckCircle aria-hidden="true" size={30} weight="duotone" />
-            <p className={styles.eyebrow}>没有有依据的关注事项</p>
-            <h2>今天不需要凭空制造任务。</h2>
+            <p className={styles.eyebrow}>目标与待审阅内容</p>
+            <h2>目标暂无待处理事项</h2>
             <p>
               {projection?.totalPursuits
                 ? `${projection.noActionCount} 项活跃目标没有待审阅内容、已分配行动或有证据支撑的缺口。`

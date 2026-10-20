@@ -24,8 +24,10 @@ rewrite stored evidence.
 2. **Two stored user preferences, both defaulting to `system`.**
    `display_language` resolves per platform (browser/OS language) and drives
    UI chrome only. `prompt_output_language` drives generated assistant text
-   only; when `system`, it resolves to the same language the display resolves
-   to, so one knob is enough unless the user wants them different.
+   only. In the first Web slice, `system` preserves the existing automatic
+   current-request language behavior. An explicit locale pins generated output
+   independently of display language; browser-language propagation to every
+   Agent channel is not yet an implementation claim.
    Prompt-output language never translates or rewrites `source_excerpt`,
    quoted evidence, stored conversations, or provenance text.
 3. **Persist server-side in the two existing user-scoped stores.**

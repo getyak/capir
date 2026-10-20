@@ -1,10 +1,11 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useSyncExternalStore, useTransition } from "react";
 import { isMarketingLocale, localeCookie, marketingLocales } from "@/lib/marketing-locale";
 import { LOCALE_ENDONYMS } from "@talent-signal/contracts";
-import { useMarketingLocale, useT } from "./locale-provider";
+import { useAccountLocale, useMarketingLocale, useT } from "./locale-provider";
 
 const subscribeToHydration = () => () => {};
 const clientReady = () => true;
@@ -17,9 +18,16 @@ export function LanguageSwitcher() {
     serverReady,
   );
   const locale = useMarketingLocale();
+  const accountLocale = useAccountLocale();
   const t = useT();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  if (accountLocale) {
+    return <Link className="site-language" href="/workspace/settings?section=appearance"
+      aria-label={`${t("language.section.title")}: ${LOCALE_ENDONYMS[locale]}`}>
+      {LOCALE_ENDONYMS[locale]}
+    </Link>;
+  }
   return (
     <select
       className="site-language"

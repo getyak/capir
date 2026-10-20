@@ -105,6 +105,7 @@
     "098_mcp_account_retirement_fences",
     "099_person_source_sync",
     "100_screenshot_usage_diagnostics",
-    "101_user_language_preferences"
+    "101_capture_image_observation",
+    "102_user_language_preferences"
   ]
 }

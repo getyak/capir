@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { siteConfig } from "@/lib/site";
 import "./globals.css";
-import { getMarketingLocale } from "@/lib/server/marketing-locale";
+import { accountDisplayLanguage, getMarketingLocale } from "@/lib/server/marketing-locale";
 import { MarketingLocaleProvider } from "@/components/marketing/locale-provider";
 import { translate } from "@/lib/i18n";
 
@@ -78,19 +78,17 @@ const themeScript = `
 export default async function RootLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
-  const locale = await getMarketingLocale();
+  const [locale, accountLanguage] = await Promise.all([getMarketingLocale(), accountDisplayLanguage()]);
   return (
     <html lang={locale} data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body lang="zh-CN">
-        {/* Body stays zh-CN while legacy hardcoded Chinese content remains;
-            the web-i18n extraction flips this to the display locale. */}
+      <body lang={locale}>
         <a lang={locale} className="skip-link" href="#main-content">
           {translate(locale, "nav.skipToContent")}
         </a>
-        <MarketingLocaleProvider locale={locale}>
+        <MarketingLocaleProvider locale={locale} accountLocale={accountLanguage !== null}>
           {children}
         </MarketingLocaleProvider>
       </body>

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { persistTerminalCaptureObservation } from "./captureImageObservation.js";
 
 import {
   CONTRACT_VERSION,
@@ -744,9 +745,9 @@ export async function finalizeConversationQueueEntry(
     // One statement: lock the fenced row, clear the prioritize auto-continue
     // flag, and still return the pre-write flag so cancel finalize can leave
     // the queue running for the chosen supplement.
-    const updated = await client.query<{ id: string; prior_cancel_auto_continue: boolean }>(
+    const updated = await client.query<{ id: string; prior_cancel_auto_continue: boolean; message_id: string; prior_result: unknown }>(
       `WITH prior AS (
-         SELECT id, cancel_auto_continue
+         SELECT id, cancel_auto_continue, message_id, result
          FROM conversation_queue_entries
          WHERE ${predicate}
          FOR UPDATE
@@ -757,7 +758,7 @@ export async function finalizeConversationQueueEntry(
            cancel_auto_continue=false, failure_code=$8, completed_at=now(), updated_at=now(), revision=revision+1
        FROM prior
        WHERE e.id = prior.id
-       RETURNING e.id, prior.cancel_auto_continue AS prior_cancel_auto_continue`,
+       RETURNING e.id, prior.message_id, prior.result AS prior_result, prior.cancel_auto_continue AS prior_cancel_auto_continue`,
       [...fenceValues(fence), input.status, scrub ? "scrubbed" : "retained", input.failureCode ?? null],
     );
     if (updated.rowCount !== 1) {
@@ -774,6 +775,10 @@ export async function finalizeConversationQueueEntry(
     }
     const autoContinue =
       input.status === "cancelled" && (updated.rows[0]?.prior_cancel_auto_continue ?? false);
+    if (input.status === "completed" || input.status === "cancelled") {
+      const finalized = updated.rows[0]!;
+      await persistTerminalCaptureObservation(client, fence, finalized.message_id, finalized.prior_result, input.status === "completed");
+    }
     // GET-128 steering group shared fate. Delivered messages were processed
     // inside this run and fold into its single canonical turn, so they take
     // the run's terminal state and the same scrub. Messages that never

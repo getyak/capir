@@ -7,8 +7,9 @@ export const AgentPreferenceMutationSchema = Type.Object({
   idempotency_key: Type.String({ format: "uuid" }),
   expected_revision: Type.Integer({ minimum: 0 }),
   response_style: AgentResponseStyleSchema,
-  // Optional for older clients; absent means "system" (follow the language
-  // the interface resolves to). Presentation only: never person data.
+  // Optional for older clients: absent preserves an existing language pin,
+  // or defaults to "system" for a new preference. Explicit "system" removes
+  // the pin and keeps the prompt's existing user-language behavior.
   prompt_output_language: Type.Optional(LanguagePreferenceSchema),
 }, { additionalProperties: false });
 export const AgentPreferenceResponseSchema = Type.Object({
