@@ -249,13 +249,26 @@ function SettingsNavigation({ section, labEnabled }: {
   useEffect(() => {
     let frame = 0;
     const media = window.matchMedia("(max-width: 900px)");
+    let lastFocused: HTMLElement | null = null;
+    function onFocusIn(event: FocusEvent) {
+      lastFocused = event.target instanceof HTMLElement && rootRef.current?.contains(event.target)
+        ? event.target : null;
+    }
     function onResize() {
-      if (!rootRef.current?.contains(document.activeElement)) return;
+      // CSS can hide the focused rail before this media event, leaving body
+      // active. Retain its last focus only until the user chooses another area.
+      const focused = rootRef.current?.contains(document.activeElement)
+        ? document.activeElement : document.activeElement === document.body ? lastFocused : null;
+      if (!(focused instanceof HTMLElement) || !rootRef.current?.contains(focused)) return;
       if (media.matches) {
         // Opening the disclosure preserves focus on search/a category when the
         // desktop rail collapses around a keyboard user.
         setOpen(true);
-      } else if (document.activeElement === triggerRef.current) {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          if (document.activeElement === document.body && lastFocused === focused) focused.focus();
+        });
+      } else if (focused === triggerRef.current) {
         rootRef.current?.querySelector<HTMLAnchorElement>('[aria-current="page"]')?.focus();
       }
     }
@@ -272,16 +285,21 @@ function SettingsNavigation({ section, labEnabled }: {
       }
     }
     function onPointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) {
+        lastFocused = null;
+        setOpen(false);
+      }
     }
     window.addEventListener("keydown", onShortcut);
     media.addEventListener("change", onResize);
     document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("focusin", onFocusIn);
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onShortcut);
       media.removeEventListener("change", onResize);
       document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("focusin", onFocusIn);
     };
   }, []);
   function close() {

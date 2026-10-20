@@ -39,8 +39,18 @@ Symphony remains paused; delivery uses the host Git, GitHub and Linear tools.
   git diff whitespace validation passed.
 - Documentation, Wiki and architecture boundary/diagram checks passed.
 - Independent reviewer found no confirmed P0/P1/P2 in the implementation.
-- Pending: rendered 320/390px and desktop checks, real URL/back/forward/refresh,
-  resize, light/dark/forced colors, error feedback and editor continuity.
+- PR391 merged2bb1ee62 and the clean resident release was built and activated.
+  Actual1280/390/320px light/dark/forced-color comparisons have no overflow or
+  JavaScript errors. Narrow content headings move from503.89px to269.5–292px.
+  Actual Next navigation and browser Back retain unsaved appearance drafts;
+  previews revert away and restore on return. Forward, refresh, full category
+  discovery, search keyboard navigation and content focus passed before resize.
+- Real resizing exposed a missing case: CSS hides a focused desktop rail before
+  the media event, leaving body active. Retain the last navigation focus until
+  the user chooses another region, reopen the narrow chooser and restore it.
+  The regression failed before the fix;47 focused tests pass afterwards and
+  independent review found no confirmed P0/P1/P2. Actual postdeploy resize
+  acceptance remains pending for the followup patch.
 - Pending: PR at refreshed main, current-head CI and review disposition, normal
   protected merge, then clean resident Web deployment and live revision readback.
 - Keep GET-205 open until required actual-surface acceptance is complete.
