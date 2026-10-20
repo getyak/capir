@@ -8,6 +8,7 @@ import type { MarketingLocale } from "@/lib/marketing-locale";
 import { marketingAccessHref } from "@/lib/marketing-copy";
 import { siteConfig } from "@/lib/site";
 import { personalAgentHomeFaqs } from "@/lib/personal-agent-copy";
+import { translate } from "@/lib/i18n";
 import { PersonalAgentDemo, PersonalAgentDemoCover } from "./personal-agent-demo";
 import s from "./personal-agent.module.css";
 
@@ -15,35 +16,41 @@ export function MarketingHome({ locale }: { locale: MarketingLocale }) {
   const [demo, dispatchDemo] = useReducer(personalAgentDemoReducer, initialPersonalAgentDemo);
   const en = locale === "en";
   const faqs = personalAgentHomeFaqs(locale);
-  const t = (zh: string, english: string) => en ? english : zh;
-  const stories = en ? [
+  const t = (zh: string, english: string) => translate(locale, zh, undefined, english);
+  const localizeRow = (zhRow: readonly string[], enRow: readonly string[]) =>
+    zhRow.map((cell, index) => translate(locale, cell, undefined, enRow[index]));
+  const storiesEn = [
     ["Remember an introduction", "You meet someone working on overseas payments. Keep how you met and what they said, without manufacturing a follow-up. A possible visit next month remains a plan at that time, never a permanent label."],
     ["Keep a small promise", "You agree to send a portfolio. Review one unfinished thing with no invented deadline. A later reply can propose changing the same item to waiting for their review."],
     ["Prepare for the next conversation", "Find shared context, changes, and what remains unfinished. No record of sending a promised example is different from proof that it was never sent."],
     ["Let context become current", "A later message says they decided to stay with their team. Review the change, retain the earlier history, and stop using an old job-search intention as current context."],
     ["Leave room for waiting", "“Not now” can pause a reminder while preserving context. Waiting is not evidence of disinterest. The absence of a next step is a complete result."],
-  ] : [
+  ] as const;
+  const storiesZh = [
     ["刚认识，先留作下次背景", "活动后认识一个做海外支付的人。留下怎么认识的、当时提到什么，不必制造跟进任务。“下个月可能来上海”保留为当时的计划，不成为永久标签。"],
     ["答应了一件小事，别让它沉下去", "你答应整理设计师作品集。审阅后记成一件未完的事，没有日期就不安排明天到期。新的回复能提出更新同一事项，变为等对方看完。"],
     ["下次见面，接得上上次", "回顾共同背景、最近变化和未完事项。没有记录表明案例已经提供，不等于案例没有提供；来源不足时，留出确认空间。"],
     ["新的消息，让旧理解变新", "对方从“考虑换工作”变为“决定留在团队”。审阅更新当前背景，同时保留来往历史，不再把旧意向当成今天的事实。"],
     ["先别提醒，也是一种理解", "一句“等项目结束再聊”，可以保留背景并暂停提醒。不会把等待推断成不感兴趣，没有下一步也可以安心结束。"],
   ];
-  const timeline = en ? [
+  const stories = storiesZh.map((row, i) => localizeRow(row, storiesEn[i]));
+  const timelineEn = [
     ["First time", "“I'll put it together.”", "See the understanding first, then keep the overview promise.", "Item 01 · waiting on you · no agreed deadline"],
     ["Later", "“Got it. I'll review it this weekend.”", "A new capture proposes a state change for the same item; you still confirm it.", "Item 01: waiting on you → waiting on them · no duplicate"],
     ["Next time", "Pick up without rereading everything.", "Shared context, reviewed changes, and what is still open stay beside the original words.", "Inspectable sources · time unconfirmed · waiting is valid"],
-  ] : [
+  ] as const;
+  const timelineZh = [
     ["第一次", "“好，我整理一下。”", "先看到理解，确认后留下产品介绍这件事。", "事项 01 · 等你整理 · 无约定截止日期"],
     ["后来", "“收到，我周末看看。”", "新的截图提出同一事项的状态更新，仍然由你确认。", "事项 01：等你整理 → 等对方 · 不重复新建"],
     ["下次", "接着聊，不必翻完所有记录。", "共同背景、已经变化的事和仍待确认的问题，都在原话旁边。", "原话可查 · 时间未确定 · 可以等待"],
   ];
+  const timeline = timelineZh.map((row, i) => localizeRow(row, timelineEn[i]));
 
   return <main id="main-content" tabIndex={-1} className={s.page} lang={locale}>
     <section className={s.hero} aria-labelledby="personal-agent-title">
       <div className={s.heroCopy}>
         <p className={s.eyebrow}>{t("你的个人 Agent · 从一段对话开始", "Your personal Agent · it starts with a conversation")}</p>
-        <h1 id="personal-agent-title">{en ? <>People that matter.<br/><em>Pick up where you left off.</em></> : <>重要的人，<br/><em>不用从头聊起。</em></>}</h1>
+        <h1 id="personal-agent-title"><>{t("重要的人，", "People that matter.")}<br/><em>{t("不用从头聊起。", "Pick up where you left off.")}</em></></h1>
         <p className={s.heroBody}>{t("留下认识的背景、答应的事和后来的变化。下次交流，接着上次聊。", "Keep how you met, what you promised, and what changed afterward. Your next conversation picks up where the last one ended.")}</p>
         <div className={s.heroActions}>
           <a className={s.primaryLink} href="#personal-agent-demo">{t("体验这段对话", "Try this conversation")}<ArrowRight size={16}/></a>
@@ -67,7 +74,7 @@ export function MarketingHome({ locale }: { locale: MarketingLocale }) {
         </li>)}</ol> : <div className={s.timeThread}><div className={s.timeStep}><span className={s.timeLabel}>{t("来源已移除", "Source removed")}</span><div><h3>{t("这段接续，暂时不能回顾。", "This continuity example is unavailable.")}</h3><p>{t("依赖原话的示例已撤回。明确开始新的合成演示，才会重新载入样例。", "The source-dependent example has been withdrawn. Only starting a new synthetic demo reloads the sample.")}</p></div></div></div>}
     </div></section>
     <section className={s.personSection} id="product" aria-labelledby="person-context-title"><div className={s.sectionCopy}><p className={s.kicker}>{t("先接住一句话，再慢慢认识一个人", "Keep a conversation. Get to know a person over time.")}</p><h2 id="person-context-title">{t("每个人身边，", "Beside each person,")}<br/>{t("都有可以继续的背景。", "context you can continue.")}</h2><p>{t("人物页不必像一份完整履历。先回答三个日常问题，让下次见面不用从头翻记录。", "A person page need not begin with a complete biography. Start with three everyday questions so your next meeting needs less reconstruction.")}</p><Link className={s.secondaryLink} href="/product">{t("了解个人 Agent 的工作方式", "Explore the personal Agent")}<ArrowUpRight size={15}/></Link></div>
-      <div className={s.personSheet}><div className={s.personIdentity}><span className={s.avatar} aria-hidden="true">{demo.sourceAvailable ? "夏" : "·"}</span><div><h3>{demo.sourceAvailable ? t("陈夏", "Chen Xia") : t("来源已移除", "Source removed")}</h3><p>{t("与上方演示使用同一份背景 · 仅本页", "Same context as the demo above · page only")}</p></div></div>
+      <div className={s.personSheet}><div className={s.personIdentity}><span className={s.avatar} aria-hidden="true">{demo.sourceAvailable ? t("夏", "CX") : "·"}</span><div><h3>{demo.sourceAvailable ? t("陈夏", "Chen Xia") : t("来源已移除", "Source removed")}</h3><p>{t("与上方演示使用同一份背景 · 仅本页", "Same context as the demo above · page only")}</p></div></div>
         {!demo.sourceAvailable ? <div className={s.personQuestion}><span>{t("当前背景不可用", "Current context unavailable")}</span><p>{t("重要内容已失去来源支持，无法继续用于回顾。", "Important context has lost its source support and cannot be used in a recap.")}</p><small>{t("重播不会恢复来源；可明确开始新合成演示。", "Replay cannot restore sources. Start a clearly named new synthetic demo.")}</small></div> : !demo.identityResolved ? <div className={s.personQuestion}><span>{t("人物尚未绑定", "Person not yet linked")}</span><p>{t("先确认当前截图属于哪一位人物，再读取私有背景。", "Resolve which person this capture concerns before reading private context.")}</p></div> : <>
           <div className={s.personQuestion}><span>{t("我们怎么认识的？", "How do we know each other?")}</span><p>{t("这份截图没有提供认识背景。", "This capture does not provide how you met.")}</p><small>{t("保持缺口，不根据聊天推断关系类型。", "Keep the gap; do not infer relationship type from wording.")}</small></div>
           <div className={s.personQuestion}><span>{t("最近发生了什么？", "What changed recently?")}</span><p>{demo.updateConfirmed ? t("你表示已发介绍；陈夏说周末看看。", "You said the overview was sent; Chen Xia said they would review it over the weekend.") : t("陈夏说下周可以看看产品，你答应先发介绍。", "Chen Xia said they could look at the product next week; you agreed to send an overview.")}</p><small>{demo.saved ? t("演示中已审阅的陈述 · 来源时间可查", "Statements reviewed in the demo · inspectable source time") : t("尚待你确认 · 不等于已经保存", "For your review · not a completed save")}</small></div>

@@ -1,7 +1,6 @@
 {
   "components/talent-signal-lab/lab-batch-workspace.tsx": 94,
   "components/memory-review/memory-review-card.tsx": 89,
-  "components/marketing/marketing-home.tsx": 84,
   "components/relationship-workspace/person-source-sync-control.tsx": 79,
   "components/relationship-workspace-app.tsx": 77,
   "components/memory-review/use-memory-review.ts": 70,
@@ -286,6 +285,7 @@
   "components/avatar-preferences-provider.tsx": 1,
   "components/blog-post-preview.tsx": 1,
   "components/contact-agent/capture-intake.ts": 1,
+  "components/marketing/marketing-home.tsx": 1,
   "components/oauth-submit.tsx": 1,
   "components/people-directory-app.tsx": 1,
   "components/session-workbench/session-detail-state.ts": 1,

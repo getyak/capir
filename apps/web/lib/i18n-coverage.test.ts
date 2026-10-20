@@ -70,9 +70,12 @@ function productionFiles(): string[] {
 function uncoveredStrings(file: string): Set<string> {
   const source = readFileSync(resolve(webRoot, file), "utf8");
   const found = new Set<string>();
+  // Catalog keys may carry leading/trailing spaces at call sites; compare
+  // against a normalized key index so trimming cannot fake a gap.
+  const enKeys = new Set(Object.keys(catalogs.en).map(normalize));
   const add = (value: string) => {
     const key = normalize(value);
-    if (key && CJK.test(key) && !(key in catalogs.en)) found.add(key);
+    if (key && CJK.test(key) && !enKeys.has(key)) found.add(key);
   };
   for (const match of source.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)) add(match[1]);
   for (const match of source.matchAll(/'((?:[^'\\\n]|\\.)*)'/g)) add(match[1]);
