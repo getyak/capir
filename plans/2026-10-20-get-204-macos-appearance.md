@@ -48,6 +48,30 @@ claimed as passes. Production origin/world gates remain unchanged.
 Symphony remains paused. Native private captures and full test/probe receipts
 stay in host evidence; they must not be uploaded with workspace content.
 
+## SwiftUI presentation follow-up
+
+The signed0.2.16(169) readback confirmed the value-input fix repaired Light,
+but Dark → System still retained dark content. Same-process traces narrowed it
+to SwiftUI's intermediate platform host: app, window and root host resolved
+Aqua while that host explicitly retained DarkAqua. This is an observed
+integration failure, not a script/menu persistence failure.
+
+ConnectedQuietWorkspace now gives SwiftUI the same closed preference through
+preferredColorScheme and releases it on native sign-in or load failure. A
+focused candidate run and actual Debug scene showed that nil alone still left
+the platform host dark. The presentation modifier therefore also supplies the
+colorScheme environment, following NSApplication.effectiveAppearance through
+its public KVO publisher for System. It never changes the application's own
+appearance and continues observing later changes instead of pinning Aqua. The
+outer preview modifier emits a dark preference only when explicitly enabled;
+ordinary launches emit no outer preference, since a higher-level nil would
+cancel the workspace value. AppKit material retains its existing ownership;
+no private host traversal or global appearance override is introduced. The
+host regression uses the actual disabled preview modifier and also exercises
+later application appearance changes plus surface detach/reattach with the
+same retained WebView and draft. Earlier failed candidates remain private
+evidence and are not counted as passing acceptance.
+
 ## Remaining delivery gates
 
 Run documentation and whitespace checks; commit the candidate, independently

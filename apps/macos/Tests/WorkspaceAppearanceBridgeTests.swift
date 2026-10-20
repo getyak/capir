@@ -12,6 +12,9 @@ final class WorkspaceAppearanceBridgeTests: XCTestCase {
         XCTAssertNil(WorkspaceAppearance.system.nativeAppearance)
         XCTAssertEqual(WorkspaceAppearance.light.nativeAppearance?.name, .aqua)
         XCTAssertEqual(WorkspaceAppearance.dark.nativeAppearance?.name, .darkAqua)
+        XCTAssertNil(WorkspaceAppearance.system.colorScheme)
+        XCTAssertEqual(WorkspaceAppearance.light.colorScheme, .light)
+        XCTAssertEqual(WorkspaceAppearance.dark.colorScheme, .dark)
     }
 
     @MainActor
@@ -101,7 +104,7 @@ final class WorkspaceAppearanceBridgeTests: XCTestCase {
         let state = AppearanceHostState()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 720),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        let host = NSHostingView(rootView: AppearanceHost(browser: browser, state: state).preferredColorScheme(nil))
+        let host = NSHostingView(rootView: AppearanceHost(browser: browser, state: state))
         window.contentView = host
         window.orderFront(nil)
         defer { window.orderOut(nil); window.contentView = nil }
@@ -138,6 +141,58 @@ final class WorkspaceAppearanceBridgeTests: XCTestCase {
             XCTAssertTrue(material.webView === webView, "Theme changes must retain the live WebView")
             let draft = try await webView.evaluateJavaScript("document.getElementById('draft').value") as? String
             XCTAssertEqual(draft, "unsent fixture")
+        }
+        for (appearance, expectedDark): (NSAppearance.Name, Bool) in [(.darkAqua, true), (.aqua, false)] {
+            NSApp.appearance = NSAppearance(named: appearance)
+            var dark: Bool?
+            for _ in 0..<100 {
+                dark = try await webView.evaluateJavaScript("matchMedia('(prefers-color-scheme: dark)').matches") as? Bool
+                if dark == expectedDark { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertNil(window.appearance, "System must keep following later application appearance changes")
+            XCTAssertNil(material.appearance)
+            XCTAssertEqual(dark, expectedDark)
+        }
+        // Releasing the live surface for native sign-in/recovery must also
+        // release the SwiftUI presentation preference, then restore on return.
+        state.preference = .dark
+        for _ in 0..<100 {
+            if host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertEqual(host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
+        state.showSurface = false
+        for _ in 0..<100 {
+            if surface(in: host) == nil && window.appearance == nil &&
+                host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .aqua { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNil(surface(in: host))
+        XCTAssertNil(window.appearance)
+        XCTAssertEqual(host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
+        state.showSurface = true
+        for _ in 0..<100 {
+            if surface(in: host)?.preference == .dark &&
+                host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(surface(in: host)?.webView === webView)
+        XCTAssertEqual(host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua)
+        let restoredDraft = try await webView.evaluateJavaScript("document.getElementById('draft').value") as? String
+        XCTAssertEqual(restoredDraft, "unsent fixture")
+        state.preview = true
+        for preference: WorkspaceAppearance in [.system, .light] {
+            state.preference = preference
+            var dark: Bool?
+            for _ in 0..<100 {
+                dark = try await webView.evaluateJavaScript("matchMedia('(prefers-color-scheme: dark)').matches") as? Bool
+                if surface(in: host)?.preference == .dark && dark == true { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertEqual(surface(in: host)?.preference, .dark)
+            XCTAssertEqual(window.appearance?.name, .darkAqua)
+            XCTAssertEqual(dark, true, "Explicit preview must govern both the presentation and Web surface")
         }
     }
 
@@ -178,13 +233,24 @@ final class WorkspaceAppearanceBridgeTests: XCTestCase {
 
 private final class AppearanceHostState: ObservableObject {
     @Published var preference: WorkspaceAppearance = .system
+    @Published var showSurface = true
+    @Published var preview = false
 }
 
 private struct AppearanceHost: View {
     let browser: WorkspaceBrowser
     @ObservedObject var state: AppearanceHostState
     var body: some View {
-        WorkspaceWebSurface(browser: browser, zoom: 1, appearance: state.preference)
+        Group {
+            if state.showSurface {
+                WorkspaceWebSurface(browser: browser, zoom: 1, appearance: state.preview ? .dark : state.preference)
+            } else {
+                Text("Native sign-in or recovery")
+            }
+        }
+        .modifier(WorkspaceAppearancePresentation(preference:
+            state.preview ? .dark : state.showSurface ? state.preference : nil))
+        .modifier(NativeAppearancePreview(enabled: state.preview))
     }
 }
 
