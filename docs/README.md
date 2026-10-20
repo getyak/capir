@@ -87,6 +87,10 @@ updated.
 
 ## Operations and evaluation
 
+- [Local Symphony delivery](operations/symphony-local-automation.md) explains
+  single-issue ownership, visible Project sessions, bounded dispatch, delivery
+  gates and recovery while the legacy fleet remains paused.
+
 - [macOS download and distribution](operations/macos-distribution.md): Universal
   packages, workspace setup, release automation, signing, and updates.
 
