@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   MemoryCommitResponse,
@@ -179,6 +180,7 @@ export function useMemoryReview(options: {
   entryCapability?: string | null;
   sessionId?: string | null;
 }): MemoryReviewController {
+  const t = useT();
   const { binding, proposal, purpose } = options;
   // Stable entry keys: a parent rerender with a new proposal object identity
   // must not reopen the review or discard pending draft/terminal state.
@@ -252,7 +254,7 @@ export function useMemoryReview(options: {
 
   const request = useCallback(
     async (path: string, init: RequestInit = {}) => {
-      if (!binding) throw new Error("登录状态已改变。");
+      if (!binding) throw new Error(t("登录状态已改变。"));
       // Reuse the production workspace binding guard: the proxy requires the
       // rendered account header and the route revalidates the login binding.
       return workspaceSessionFetch(path, {
@@ -288,14 +290,14 @@ export function useMemoryReview(options: {
       // fall through to the caller's fallback
     }
     const correctable: Record<string, string> = {
-      MEMORY_RELATIONSHIP_CONTEXT_REQUIRED: "这类关系记忆需要先确定关系名称，请重试。",
-      MEMORY_SOURCE_UNAVAILABLE: "来源已失效，这些内容不能保存。",
-      MEMORY_SOURCE_REVOKED: "来源已撤销，这些内容不能保存。",
-      MEMORY_PURSUIT_ASSOCIATION_STALE: "这段寻访证据已变化，请从寻访重新打开。",
-      MEMORY_REVIEW_REBASE_REQUIRED: "提案已有更新，请刷新后重新确认。",
-      MEMORY_ITEM_REVISION_CONFLICT: "有内容已被修改，请刷新后重新确认。",
-      MEMORY_REVIEW_DRAFT_STALE: "审阅已在别处更新，已按最新版本重排。",
-      MEMORY_PROPOSAL_CLOSED: "这次提案已结束，无需重复保存。",
+      MEMORY_RELATIONSHIP_CONTEXT_REQUIRED: t("这类关系记忆需要先确定关系名称，请重试。"),
+      MEMORY_SOURCE_UNAVAILABLE: t("来源已失效，这些内容不能保存。"),
+      MEMORY_SOURCE_REVOKED: t("来源已撤销，这些内容不能保存。"),
+      MEMORY_PURSUIT_ASSOCIATION_STALE: t("这段寻访证据已变化，请从寻访重新打开。"),
+      MEMORY_REVIEW_REBASE_REQUIRED: t("提案已有更新，请刷新后重新确认。"),
+      MEMORY_ITEM_REVISION_CONFLICT: t("有内容已被修改，请刷新后重新确认。"),
+      MEMORY_REVIEW_DRAFT_STALE: t("审阅已在别处更新，已按最新版本重排。"),
+      MEMORY_PROPOSAL_CLOSED: t("这次提案已结束，无需重复保存。"),
       MEMORY_CONTACT_ALREADY_EXISTS: "这个联系人已存在，请选择已有联系人。",
       MEMORY_IDENTITY_AMBIGUOUS: "有同名联系人，请重新选择并核对联系人后再保存。",
       MEMORY_IDENTITY_NOT_AUTHORIZED: "请先选择并确认这位联系人，再保存相关内容。",
@@ -330,12 +332,12 @@ export function useMemoryReview(options: {
           // exact key and report a truthful status; only the commit endpoint's
           // own definitive rejection clears it.
           if (response.status === 401 || response.status === 403) {
-            setError("审阅入口已过期，请重新打开这段对话后核对。");
+            setError(t("审阅入口已过期，请重新打开这段对话后核对。"));
             setPhase("unknown");
-            setNotice("正在确认保存结果…");
+            setNotice(t("正在确认保存结果…"));
             return;
           }
-          setNotice("正在确认保存结果…");
+          setNotice(t("正在确认保存结果…"));
           return;
         }
         const view = (await response.json()) as MemoryScopedOperationView;
@@ -344,14 +346,14 @@ export function useMemoryReview(options: {
           setPhase(view.state === "undone" ? "undone" : "receipt");
           setNotice(null);
         } else if (view.state === "source_revoked") {
-          setError("来源已失效，这些内容不能保存。");
+          setError(t("来源已失效，这些内容不能保存。"));
           setPhase("error");
           setNotice(null);
         } else {
-          setNotice("正在确认保存结果…");
+          setNotice(t("正在确认保存结果…"));
         }
       } catch {
-        setNotice("正在确认保存结果…");
+        setNotice(t("正在确认保存结果…"));
       } finally {
         setReconciling(false);
       }
@@ -368,7 +370,7 @@ export function useMemoryReview(options: {
       );
       if (!response.ok) {
         setPhase("unknown");
-        setNotice("正在核对这一条的结果…");
+        setNotice(t("正在核对这一条的结果…"));
         return;
       }
       const view = (await response.json()) as MemoryScopedOperationView;
@@ -381,7 +383,7 @@ export function useMemoryReview(options: {
             kind: "undo_unknown", receipt: view.visible_receipt, operationKey,
           } }));
           setPhase("unknown");
-          setNotice("正在核对撤销结果…");
+          setNotice(t("正在核对撤销结果…"));
           return;
         }
         setItemOutcomes((previous) => ({ ...previous, [itemId]: {
@@ -434,14 +436,14 @@ export function useMemoryReview(options: {
           kind: "unavailable", receipt: null, operationKey,
         } }));
         setPhase("error");
-        setError("来源已失效，这一条不能继续操作。");
+        setError(t("来源已失效，这一条不能继续操作。"));
       } else {
         setPhase("unknown");
-        setNotice("正在核对这一条的结果…");
+        setNotice(t("正在核对这一条的结果…"));
       }
     } catch {
       setPhase("unknown");
-      setNotice("正在核对这一条的结果…");
+      setNotice(t("正在核对这一条的结果…"));
     } finally {
       setReconciling(false);
     }
@@ -462,7 +464,7 @@ export function useMemoryReview(options: {
         if (view.state === "applied" && undoPending) {
           setContactOutcome({ kind: "undo_unknown", receipt: view.visible_receipt, operationKey });
           setPhase("unknown");
-          setNotice("正在核对联系人撤销结果…");
+          setNotice(t("正在核对联系人撤销结果…"));
           return;
         }
         setContactOutcome({ kind: view.state === "undone" ? "undone" : "committed", receipt: view.visible_receipt, operationKey });
@@ -484,11 +486,11 @@ export function useMemoryReview(options: {
       } else if (view.state === "source_revoked") {
         setContactOutcome({ kind: "unavailable", receipt: null, operationKey });
         setPhase("error");
-        setError("来源已失效，联系人结果不能从这里继续操作。");
+        setError(t("来源已失效，联系人结果不能从这里继续操作。"));
       } else {
         setContactOutcome({ kind: "unknown", receipt: null, operationKey });
         setPhase("unknown");
-        setNotice("正在核对联系人结果…");
+        setNotice(t("正在核对联系人结果…"));
       }
     } catch {
       setContactOutcome({ kind: "unknown", receipt: null, operationKey });
@@ -521,7 +523,7 @@ export function useMemoryReview(options: {
       inflight.current = false;
       setLocator(existing);
       setPhase("dismissed");
-      setNotice("本次不保存已记录。");
+      setNotice(t("本次不保存已记录。"));
       return;
     }
     if (existing) {
@@ -558,7 +560,7 @@ export function useMemoryReview(options: {
     try {
       const capability = await ensureCapability();
       if (!capability && !options.entryCapability && sessionId) {
-        setError("审阅入口已失效，请重新打开这段对话。");
+        setError(t("审阅入口已失效，请重新打开这段对话。"));
         setPhase("error");
         return;
       }
@@ -585,7 +587,7 @@ export function useMemoryReview(options: {
         const code = terminal?.error?.code ?? terminal?.code;
         const details = terminal?.error?.details ?? terminal?.details;
         if (code === "MEMORY_REVIEW_DISMISSED") {
-          setPhase("dismissed"); setNotice("本次不保存已记录。"); setError(null);
+          setPhase("dismissed"); setNotice(t("本次不保存已记录。")); setError(null);
           return;
         }
         if (code === "MEMORY_REVIEW_PROCESSED" && typeof details?.operation_key === "string") {
@@ -608,7 +610,7 @@ export function useMemoryReview(options: {
           await reconcileKey(existing.operation_key);
           return;
         }
-        setError(await errorMessage(response, "无法打开这次记忆审阅。"));
+        setError(await errorMessage(response, t("无法打开这次记忆审阅。")));
         setPhase("error");
         return;
       }
@@ -648,7 +650,7 @@ export function useMemoryReview(options: {
       setPhase("review");
       return true;
     } catch {
-      setError("网络暂时不可用，请稍后重试。");
+      setError(t("网络暂时不可用，请稍后重试。"));
       setPhase("error");
     } finally {
       inflight.current = false;
@@ -792,7 +794,7 @@ export function useMemoryReview(options: {
       const credential = credentialRef.current;
       const reviewScopeId = scopeRef.current;
       if (!binding || !proposalId || !credential || !reviewScopeId) {
-        setError("审阅凭证无效，请重新打开审阅。");
+        setError(t("审阅凭证无效，请重新打开审阅。"));
         setPhase("error");
         return null;
       }
@@ -810,7 +812,7 @@ export function useMemoryReview(options: {
         if (!flushed) inflight.current = false;
       }
       if (!flushed) {
-        setError("草稿尚未同步，请修正后重试；本次未提交。");
+        setError(t("草稿尚未同步，请修正后重试；本次未提交。"));
         setPhase("review");
         return null;
       }
@@ -857,7 +859,7 @@ export function useMemoryReview(options: {
           },
         );
         if (!response.ok) {
-          const message = await errorMessage(response, "尚未保存。");
+          const message = await errorMessage(response, t("尚未保存。"));
           if (response.status >= 400 && response.status < 500) {
             // The commit endpoint's own definitive rejection is the only place
             // the frozen operation key is cleared; the draft is preserved.
@@ -875,7 +877,7 @@ export function useMemoryReview(options: {
             return null;
           }
           setError(null);
-          setNotice("正在确认保存结果…");
+          setNotice(t("正在确认保存结果…"));
           setPhase("unknown");
           return null;
         }
@@ -886,7 +888,7 @@ export function useMemoryReview(options: {
         return result;
       } catch {
         // Frozen operation ID: never create a fresh ID on an unknown response.
-        setNotice("正在确认保存结果…");
+        setNotice(t("正在确认保存结果…"));
         setPhase("unknown");
         return null;
       } finally {
@@ -919,7 +921,7 @@ export function useMemoryReview(options: {
           setPhase(code === "MEMORY_REVIEW_PROCESSED" ? "processed" : "dismissed");
           return true;
         }
-        setError(await errorMessage(response, "剩余内容暂时无法读取，请稍后核对。"));
+        setError(await errorMessage(response, t("剩余内容暂时无法读取，请稍后核对。")));
         return false;
       }
       const body = (await response.json()) as { review_credential?: string; review: MemoryReviewView };
@@ -938,7 +940,7 @@ export function useMemoryReview(options: {
       setError(null);
       return true;
     } catch {
-      setError("剩余内容暂时无法读取，请稍后核对。");
+      setError(t("剩余内容暂时无法读取，请稍后核对。"));
       return false;
     }
   }, [proposalId, binding, request, purpose, personId, contextId, pursuitId, pursuitRoleId, pursuitEvidenceFragmentId, errorMessage]);
@@ -955,7 +957,7 @@ export function useMemoryReview(options: {
     if (!binding || !proposalId || !current || !credential || !scopeId || !item || item.status !== "pending" || inflight.current) return null;
     const contactDecision = item.scope === "self" ? "none" : current.contact_decision;
     if (contactDecision === "new" || (item.scope !== "self" && current.contact_status !== "resolved")) {
-      setError("请先确认联系人，再处理关于对方的记忆。");
+      setError(t("请先确认联系人，再处理关于对方的记忆。"));
       return null;
     }
     inflight.current = true;
@@ -974,7 +976,7 @@ export function useMemoryReview(options: {
     if (!key || !writeRequiredLocator(key, nextLocator)) {
       inflight.current = false;
       setPhase("review");
-      setError("浏览器无法保存这次操作，已停止提交；请稍后重试。");
+      setError(t("浏览器无法保存这次操作，已停止提交；请稍后重试。"));
       return null;
     }
     operationRef.current = operationKey;
@@ -1004,12 +1006,12 @@ export function useMemoryReview(options: {
             delete itemKeys[item.id];
             writeLocator(key, { ...nextLocator, operation_key: null, item_pending_id: null, item_operation_keys: itemKeys });
           }
-          setError(await errorMessage(response, "这一条尚未保存。"));
+          setError(await errorMessage(response, t("这一条尚未保存。")));
           setPhase("review");
           return null;
         }
         setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: "unknown", receipt: null, operationKey } }));
-        setNotice("正在核对这一条的结果…");
+        setNotice(t("正在核对这一条的结果…"));
         setPhase("unknown");
         return null;
       }
@@ -1027,7 +1029,7 @@ export function useMemoryReview(options: {
       return result;
     } catch {
       setItemOutcomes((previous) => ({ ...previous, [item.id]: { kind: "unknown", receipt: null, operationKey } }));
-      setNotice("正在核对这一条的结果…");
+      setNotice(t("正在核对这一条的结果…"));
       setPhase("unknown");
       return null;
     } finally {
@@ -1044,7 +1046,7 @@ export function useMemoryReview(options: {
     const scopeId = scopeRef.current;
     if (!binding || !proposalId || !current || !credential || !scopeId || inflight.current) return null;
     if (current.contact_decision !== "new" || current.contact_status === "ambiguous") {
-      setError("请先核对同名联系人，再决定添加或关联。");
+      setError(t("请先核对同名联系人，再决定添加或关联。"));
       return null;
     }
     const label = input.displayLabel.trim();
@@ -1060,7 +1062,7 @@ export function useMemoryReview(options: {
       undo_key: prior?.undo_key ?? null,
     };
     if (!key || !writeRequiredLocator(key, next)) {
-      setError("浏览器无法保存这次操作，已停止提交；请稍后重试。");
+      setError(t("浏览器无法保存这次操作，已停止提交；请稍后重试。"));
       return null;
     }
     inflight.current = true;
@@ -1084,13 +1086,13 @@ export function useMemoryReview(options: {
         if (response.status >= 400 && response.status < 500) {
           operationRef.current = null;
           writeLocator(key, { ...next, operation_key: null, contact_operation_key: null, contact_pending: false });
-          setError(await errorMessage(response, "联系人尚未添加。"));
+          setError(await errorMessage(response, t("联系人尚未添加。")));
           setPhase("review");
           return null;
         }
         setContactOutcome({ kind: "unknown", receipt: null, operationKey });
         setPhase("unknown");
-        setNotice("正在核对联系人结果…");
+        setNotice(t("正在核对联系人结果…"));
         return null;
       }
       const result = (await response.json()) as MemoryContactOnlyDecisionResponse;
@@ -1104,7 +1106,7 @@ export function useMemoryReview(options: {
     } catch {
       setContactOutcome({ kind: "unknown", receipt: null, operationKey });
       setPhase("unknown");
-      setNotice("正在核对联系人结果…");
+      setNotice(t("正在核对联系人结果…"));
       return null;
     } finally {
       inflight.current = false;
@@ -1118,21 +1120,21 @@ export function useMemoryReview(options: {
     if (!prior) return false;
     const undoKey = prior.contact_undo_key ?? crypto.randomUUID();
     if (!writeRequiredLocator(key, { ...prior, contact_undo_key: undoKey })) {
-      setError("浏览器无法保存这次撤销操作，已停止提交。");
+      setError(t("浏览器无法保存这次撤销操作，已停止提交。"));
       return false;
     }
     inflight.current = true;
     const operationKey = outcome.operationKey;
     try {
       const viewResponse = await request(`/api/memory/operation-views/${operationKey}?purpose=${purpose}${personId ? `&person_id=${personId}` : ""}${contextId ? `&relationship_context_id=${contextId}` : ""}`, { method: "GET" });
-      if (!viewResponse.ok) { setError("无法核对联系人保存结果，本次尚未撤销。"); return false; }
+      if (!viewResponse.ok) { setError(t("无法核对联系人保存结果，本次尚未撤销。")); return false; }
       const view = (await viewResponse.json()) as MemoryScopedOperationView;
       if (view.state === "undone") {
         setContactOutcome({ kind: "undone", receipt: view.visible_receipt, operationKey });
         writeLocator(key, { ...prior, contact_undo_key: null });
         return true;
       }
-      if (!view.undo.allowed || !view.commit_revision) { setError("联系人已有后续记录，不能从这里撤销。"); return false; }
+      if (!view.undo.allowed || !view.commit_revision) { setError(t("联系人已有后续记录，不能从这里撤销。")); return false; }
       const response = await request(`/api/memory/operation-views/${operationKey}/undo`, {
         method: "POST",
         body: JSON.stringify({
@@ -1141,7 +1143,7 @@ export function useMemoryReview(options: {
           reason: "用户撤销本次联系人添加。",
         }),
       });
-      if (!response.ok) { setError(await errorMessage(response, "联系人尚未撤销。")); return false; }
+      if (!response.ok) { setError(await errorMessage(response, t("联系人尚未撤销。"))); return false; }
       const body = (await response.json()) as { receipt: MemoryReceipt };
       setContactOutcome({ kind: "undone", receipt: body.receipt, operationKey });
       const current = readLocator(key);
@@ -1150,7 +1152,7 @@ export function useMemoryReview(options: {
       return true;
     } catch {
       setContactOutcome({ kind: "undo_unknown", receipt: outcome.receipt, operationKey });
-      setNotice("正在核对联系人撤销结果…");
+      setNotice(t("正在核对联系人撤销结果…"));
       return false;
     } finally { inflight.current = false; }
   }, [contactOutcome, key, request, purpose, personId, contextId, errorMessage]);
@@ -1164,14 +1166,14 @@ export function useMemoryReview(options: {
     const undoKey = prior.item_undo_keys?.[itemId] ?? crypto.randomUUID();
     const pending: Locator = { ...prior, item_undo_keys: { ...(prior.item_undo_keys ?? {}), [itemId]: undoKey } };
     if (!writeRequiredLocator(key, pending)) {
-      setError("浏览器无法保存这次撤销操作，已停止提交。");
+      setError(t("浏览器无法保存这次撤销操作，已停止提交。"));
       return false;
     }
     inflight.current = true;
     try {
       const viewResponse = await request(`/api/memory/operation-views/${operationKey}?purpose=${purpose}${personId ? `&person_id=${personId}` : ""}${contextId ? `&relationship_context_id=${contextId}` : ""}`, { method: "GET" });
       if (!viewResponse.ok) {
-        setError("无法核对这次保存，撤销尚未进行。");
+        setError(t("无法核对这次保存，撤销尚未进行。"));
         return false;
       }
       const view = (await viewResponse.json()) as MemoryScopedOperationView;
@@ -1182,7 +1184,7 @@ export function useMemoryReview(options: {
         return true;
       }
       if (!view.undo.allowed || !view.commit_revision) {
-        setError("这条记忆已变化，不能从这里撤销。");
+        setError(t("这条记忆已变化，不能从这里撤销。"));
         return false;
       }
       const response = await request(`/api/memory/operation-views/${operationKey}/undo`, {
@@ -1197,7 +1199,7 @@ export function useMemoryReview(options: {
         }),
       });
       if (!response.ok) {
-        setError(await errorMessage(response, "这条记忆尚未撤销。"));
+        setError(await errorMessage(response, t("这条记忆尚未撤销。")));
         return false;
       }
       const body = (await response.json()) as { receipt: MemoryReceipt };
@@ -1216,7 +1218,7 @@ export function useMemoryReview(options: {
       setItemOutcomes((previous) => ({ ...previous, [itemId]: {
         ...previous[itemId], kind: "undo_unknown", receipt: outcome.receipt, operationKey,
       } }));
-      setNotice("正在核对撤销结果…");
+      setNotice(t("正在核对撤销结果…"));
       return false;
     } finally {
       inflight.current = false;
@@ -1248,7 +1250,7 @@ export function useMemoryReview(options: {
           },
         );
         if (!response.ok) {
-          setError(await errorMessage(response, "本次未保存。"));
+          setError(await errorMessage(response, t("本次未保存。")));
           return false;
         }
         const result = (await response.json()) as {
@@ -1257,7 +1259,7 @@ export function useMemoryReview(options: {
         };
         if (result.proposal_status === "dismissed") {
           setPhase("dismissed");
-          setNotice("本次不保存已记录。");
+          setNotice(t("本次不保存已记录。"));
           if (key) {
             const current = readLocator(key);
             if (current) {
@@ -1282,10 +1284,10 @@ export function useMemoryReview(options: {
           draftRef.current = rebased;
           setDraft(rebased);
         }
-        setNotice(`已跳过 ${result.dismissed_item_ids?.length ?? itemIds.length} 条。`);
+        setNotice(t("已跳过 {count} 条。", { count: result.dismissed_item_ids?.length ?? itemIds.length }));
         return true;
       } catch {
-        setError("网络暂时不可用，本次未保存。");
+        setError(t("网络暂时不可用，本次未保存。"));
         return false;
       }
     },
@@ -1313,7 +1315,7 @@ export function useMemoryReview(options: {
       try {
         if (!(await flushDraft())) {
           setRebaseState("error");
-          setRebaseError("草稿尚未同步，请重试；联系人尚未切换。");
+          setRebaseError(t("草稿尚未同步，请重试；联系人尚未切换。"));
           return false;
         }
         const response = await request(
@@ -1342,7 +1344,7 @@ export function useMemoryReview(options: {
         );
         if (!response.ok) {
           setRebaseState("error");
-          setRebaseError(await errorMessage(response, "无法切换联系人。"));
+          setRebaseError(await errorMessage(response, t("无法切换联系人。")));
           return false;
         }
         setRebaseState("idle");
@@ -1367,11 +1369,11 @@ export function useMemoryReview(options: {
           setError(message);
           return false;
         }
-        setNotice("已按所选联系人重新整理，请重新勾选关于对方和关系的内容。");
+        setNotice(t("已按所选联系人重新整理，请重新勾选关于对方和关系的内容。"));
         return true;
       } catch {
         setRebaseState("error");
-        setRebaseError("网络暂时不可用，未能切换联系人。");
+        setRebaseError(t("网络暂时不可用，未能切换联系人。"));
         return false;
       } finally {
         inflight.current = false;
@@ -1408,7 +1410,7 @@ export function useMemoryReview(options: {
       );
       if (!viewResponse.ok) {
         setPhase("receipt");
-        setError("无法确认撤销范围，请稍后核对。");
+        setError(t("无法确认撤销范围，请稍后核对。"));
         return { kind: "failed", message: "无法确认撤销范围。" };
       }
       const view = (await viewResponse.json()) as MemoryScopedOperationView;
@@ -1416,7 +1418,7 @@ export function useMemoryReview(options: {
         undoKeyRef.current = null;
         setReceipt(view.visible_receipt);
         setPhase("undone");
-        setNotice("已撤销本次保存。");
+        setNotice(t("已撤销本次保存。"));
         if (key) {
           const current = readLocator(key);
           if (current) {
@@ -1450,7 +1452,7 @@ export function useMemoryReview(options: {
       });
       if (!response.ok) {
         setPhase("receipt");
-        const message = await errorMessage(response, "本次尚未撤销。");
+        const message = await errorMessage(response, t("本次尚未撤销。"));
         setError(message);
         return { kind: "conflict", message };
       }
@@ -1458,7 +1460,7 @@ export function useMemoryReview(options: {
       const undoneReceipt = (await response.json()) as { receipt: MemoryReceipt };
       setReceipt(undoneReceipt.receipt);
       setPhase("undone");
-      setNotice("已撤销本次保存。");
+      setNotice(t("已撤销本次保存。"));
       // Keep the non-sensitive operation locator so a refresh can reconcile and
       // display the actual undone receipt without reopening a closed proposal.
       if (key) {
@@ -1472,7 +1474,7 @@ export function useMemoryReview(options: {
       return { kind: "undone" };
     } catch {
       setPhase("receipt");
-      setError("撤销结果尚未确认，请稍后核对。");
+      setError(t("撤销结果尚未确认，请稍后核对。"));
       return { kind: "failed", message: "撤销结果尚未确认，请稍后核对。" };
     }
   }, [binding, locator, request, purpose, personId, contextId, key, errorMessage]);

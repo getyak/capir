@@ -49,7 +49,14 @@ const EXEMPT = new Set([...CATALOG_EQUIVALENTS, ...CONTENT]);
 const PENDING: Record<string, number> = pendingExtraction;
 
 const CJK = /[\u3400-\u9fff]/;
+const CODEISH = /[;=?\\/*]|=>|===|\bconst\b|\breturn\b/;
 const normalize = (value: string) => value.trim().replace(/\s+/g, " ");
+/**
+ * Coverage key: interpolation slots collapse to one marker on both sides, so
+ * `已更新 {count} 条` covers the template `已更新 ${applied} 条`.
+ */
+const coverageKey = (value: string) =>
+  normalize(value.replace(/\{[^}]*\}/g, "\u0000")).replace(/ ?\u0000 ?/g, " \u0000 ");
 
 function productionFiles(): string[] {
   const out: string[] = [];
@@ -72,17 +79,33 @@ function uncoveredStrings(file: string): Set<string> {
   const found = new Set<string>();
   // Catalog keys may carry leading/trailing spaces at call sites; compare
   // against a normalized key index so trimming cannot fake a gap.
-  const enKeys = new Set(Object.keys(catalogs.en).map(normalize));
+  const enKeys = new Set(Object.keys(catalogs.en).map(coverageKey));
   const add = (value: string) => {
-    const key = normalize(value);
+    const key = coverageKey(value);
     if (key && CJK.test(key) && !enKeys.has(key)) found.add(key);
   };
   for (const match of source.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)) add(match[1]);
   for (const match of source.matchAll(/'((?:[^'\\\n]|\\.)*)'/g)) add(match[1]);
   for (const match of source.matchAll(/`((?:[^`\\]|\\.)*)`/g)) {
-    if (!match[1].includes("${")) add(match[1]);
+    // Interpolated templates participate through coverage keys.
+    add(match[1].replace(/\$\{[^}]*\}/g, "{}"));
   }
-  for (const match of source.matchAll(/>([^<>{}]*[\u3400-\u9fff][^<>{}]*)</g)) add(match[1]);
+  // JSX text nodes, including fragments adjacent to {expressions}. Code
+  // spans that merely contain a `>` operator are excluded.
+  const jsxSpans = [
+    />([^<>{}]*[\u3400-\u9fff][^<>{}]*)</g,
+    />([^<>{}]*[\u3400-\u9fff][^<>{}]*)\{/g,
+    /\}([^<>{}]*[\u3400-\u9fff][^<>{}]*)</g,
+    /\}([^<>{}]*[\u3400-\u9fff][^<>{}]*)\{/g,
+  ];
+  for (const pattern of jsxSpans) {
+    for (const match of source.matchAll(pattern)) {
+      // Quote/punctuation marks indicate a code span crossing string
+      // boundaries, not a real JSX text fragment.
+      if (CODEISH.test(match[1]) || /["',;]/.test(match[1])) continue;
+      add(match[1]);
+    }
+  }
   return found;
 }
 

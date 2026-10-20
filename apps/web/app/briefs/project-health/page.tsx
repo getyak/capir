@@ -179,7 +179,7 @@ export default async function ProjectHealthBriefPage() {
           <a href="#evidence">
             <span>03</span>{t("原始依据")}</a>
         </nav>
-        <p className={styles.railMeta}>内部评审 · {projectHealthBrief.snapshot.date}</p>
+        <p className={styles.railMeta}>{t("内部评审 · {date}", { date: projectHealthBrief.snapshot.date })}</p>
       </aside>
 
       <main className={styles.main} id="main-content" tabIndex={-1}>
@@ -231,7 +231,7 @@ export default async function ProjectHealthBriefPage() {
           </section>
 
           <footer className={styles.snapshotBar}>
-            <span>快照 {projectHealthBrief.snapshot.date}</span>
+            <span>{t("快照 {date}", { date: projectHealthBrief.snapshot.date })}</span>
             <span>main@{commitLabel}</span>
             <span>{projectHealthBrief.audience}</span>
           </footer>
@@ -351,7 +351,7 @@ export default async function ProjectHealthBriefPage() {
                   <div className={styles.labels}>
                     <span>{reference.type.replace("_", " ")}</span>
                     <span>{reference.authority === "direct" ? "直接" : "推导"}</span>
-                    <span>{reference.freshness === "current" ? "当前" : "日期快照"}</span>
+                    <span>{reference.freshness === "current" ? t("当前") : t("日期快照")}</span>
                   </div>
                   <h3>{reference.title}</h3>
                   <p>
@@ -374,7 +374,7 @@ export default async function ProjectHealthBriefPage() {
             <p className={styles.sectionLabel}>{t("方法")}</p>
             <p>{t("使用仓库 Skill")}<code>engineering-decision-brief</code>{t("：限制最高层判断数量；分离观察、解释、建议与决策；要求每个议题同时包含依据、未知、建议和验证方式。")}</p>
             <p>
-              范围：{projectHealthBrief.snapshot.scope}。编号 {projectHealthBrief.id}。
+              {t("范围：{scope}。编号 {id}。", { scope: projectHealthBrief.snapshot.scope, id: projectHealthBrief.id })}
             </p>
           </footer>
         </section>
