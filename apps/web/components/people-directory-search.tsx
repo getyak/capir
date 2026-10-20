@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import { ArrowRight, MagnifyingGlass, X } from "@phosphor-icons/react";
 import Form from "next/form";
 import Link from "next/link";
@@ -12,6 +13,7 @@ import styles from "./people-directory-app.module.css";
 export function PeopleDirectorySearch({ query, returnSessionId }: {
   query: string; returnSessionId: string | null;
 }) {
+  const t = useT();
   const input = useRef<HTMLInputElement>(null);
   const clearing = useRef(false);
   useEffect(() => {
@@ -28,19 +30,19 @@ export function PeopleDirectorySearch({ query, returnSessionId }: {
       <MagnifyingGlass aria-hidden="true" size={20} />
       <input
         ref={input}
-        aria-label="按姓名或已确认联系方式搜索人物"
+        aria-label={t(t("按姓名或已确认联系方式搜索人物"))}
         defaultValue={query}
         key={query}
         maxLength={160}
         name="query"
-        placeholder="按姓名、邮箱或电话查找…"
+        placeholder={t(t("按姓名、邮箱或电话查找…"))}
         type="search"
       />
       {returnSessionId ? <input name="session" type="hidden" value={returnSessionId} /> : null}
       {query ? (
         <Button asChild variant="ghost" size="icon" className={styles.clearSearch}>
           <Link
-            aria-label="清除人物搜索"
+            aria-label={t(t("清除人物搜索"))}
             href={withReturnSession("/workspace/people", returnSessionId)}
             onNavigate={() => { clearing.current = true; }}
             scroll={false}
@@ -49,7 +51,7 @@ export function PeopleDirectorySearch({ query, returnSessionId }: {
           </Link>
         </Button>
       ) : null}
-      <Button aria-label="搜索人物" variant="ghost" size="icon" type="submit">
+      <Button aria-label={t(t("搜索人物"))} variant="ghost" size="icon" type="submit">
         <ArrowRight aria-hidden="true" size={15} />
       </Button>
     </Form>
