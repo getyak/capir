@@ -13,6 +13,7 @@ vi.mock("@/auth", () => ({ auth }));
 vi.mock("next/navigation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/navigation")>()),
   redirect,
+  useRouter: () => ({ refresh: vi.fn() }),
 }));
 vi.mock("@/lib/server/accountBackend", () => ({ loadAccountSettings }));
 vi.mock("@/lib/server/backendAuth", () => ({

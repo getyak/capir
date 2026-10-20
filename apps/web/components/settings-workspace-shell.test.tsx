@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 
 const linkState = vi.hoisted(() => ({ intercepted: 0 }));
+const routerState = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => routerState }));
 // Stand-in for next/link: a client-side link intercepts the click and prevents
 // the document navigation, which is exactly what the macOS WKWebView delegate
 // must not see for outbound destinations.
@@ -24,6 +26,7 @@ vi.mock("next/link", async () => {
         {
           ...(rest as AnchorHTMLAttributes<HTMLAnchorElement>),
           onClick: (event: ReactMouseEvent<HTMLAnchorElement>) => {
+            (rest.onClick as ((event: ReactMouseEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
             linkState.intercepted += 1;
             event.preventDefault();
           },
@@ -38,6 +41,9 @@ vi.mock("./avatar-editor", () => ({ AvatarDefaultSettings: () => null }));
 vi.mock("@/app/workspace/settings/actions", () => ({ saveAccountSettings: vi.fn() }));
 
 import { SettingsWorkspace } from "./settings-workspace";
+import { LocaleProvider } from "./locale-provider";
+import { translate } from "@/lib/i18n";
+import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { revertTheme, themePreferenceSnapshot } from "@/lib/theme-preference";
 
 let root: Root;
@@ -103,6 +109,105 @@ afterEach(async () => {
 });
 
 describe("settings shell", () => {
+  it("opens the category chooser, closes on Escape and restores its trigger", async () => {
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-controls="settings-category-panel"]')!;
+    expect(trigger.textContent).toContain("连接与权限");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(() => trigger.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    const input = await type("截图");
+    await press(input, "Escape");
+    // First Escape clears the query; second closes the chooser.
+    expect(input.value).toBe("");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    await press(input, "Escape");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("closes on same-category activation and focuses the new title on section changes", async () => {
+    vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as MediaQueryList);
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-controls="settings-category-panel"]')!;
+    await act(() => trigger.click());
+    await act(() => host.querySelector<HTMLAnchorElement>('[aria-current="page"]')!.click());
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+    await act(() => trigger.click());
+    await render({ section: "account" });
+    expect(host.querySelector('[aria-controls="settings-category-panel"]')?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(host.querySelector("[data-settings-title]"));
+    expect(document.activeElement?.textContent).toBe("账号与安全");
+  });
+
+  it("opens hidden search with the existing keyboard shortcut", async () => {
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true }));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    });
+    expect(host.querySelector('[aria-controls="settings-category-panel"]')?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("搜索设置");
+  });
+
+  it("leaves IME cancellation to the input instead of closing the chooser", async () => {
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-controls="settings-category-panel"]')!;
+    await act(() => trigger.click());
+    const input = await type("截图");
+    for (const properties of [{ isComposing: true }, { keyCode: 229 }]) {
+      await act(() => {
+        input.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Escape", bubbles: true, ...properties,
+        }));
+      });
+      expect(input.value).toBe("截图");
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    }
+  });
+
+  it("keeps focused navigation available when the rail changes width", async () => {
+    const media = Object.assign(new EventTarget(), { matches: false });
+    vi.spyOn(window, "matchMedia").mockReturnValue(media as unknown as MediaQueryList);
+    await render({ section: "account" });
+    const selected = host.querySelector<HTMLAnchorElement>('[aria-current="page"]')!;
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-controls="settings-category-panel"]')!;
+    await act(() => {
+      selected.focus();
+      media.matches = true;
+      media.dispatchEvent(new Event("change"));
+    });
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(selected);
+    await act(() => {
+      trigger.focus();
+      media.matches = false;
+      media.dispatchEvent(new Event("change"));
+    });
+    expect(document.activeElement).toBe(selected);
+  });
+
+  it("dismisses without changing the category on outside pointer or focus", async () => {
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-controls="settings-category-panel"]')!;
+    await act(() => trigger.click());
+    await act(() => document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    await act(() => { trigger.click(); trigger.focus(); });
+    await act(() => host.querySelector<HTMLElement>("[data-settings-title]")!.focus());
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector('[aria-current="page"]')?.textContent).toBe("连接与权限");
+  });
+
+  it.each(["en", "zh-CN", "zh-TW", "ja", "ko"] as const)("translates the full navigation and current category in %s", async (locale) => {
+    await act(() => root.render(
+      <LocaleProvider locale={locale}>
+        <SettingsWorkspace initial={null} labEnabled section="connections" sessionVersion="session-version" />
+      </LocaleProvider>,
+    ));
+    const links = host.querySelectorAll("[data-settings-navigation] a");
+    expect([...links].map(link => link.textContent)).toEqual(SETTINGS_SECTIONS.map(item => translate(locale, item.label)));
+    expect([...links].map(link => link.getAttribute("href"))).toEqual(SETTINGS_SECTIONS.map(item => item.href));
+    expect(host.querySelector('[aria-controls="settings-category-panel"]')?.textContent).toContain(translate(locale, "连接与权限"));
+  });
+
   it("renders one settings navigation whose selected section matches the content title", async () => {
     expect(host.querySelector('[data-desktop-settings-surface="1"]')).toBeTruthy();
     const navs = host.querySelectorAll("[data-settings-navigation]");
@@ -247,6 +352,10 @@ describe("appearance", () => {
     expect(host.textContent).toContain("偏好未能保存到本机浏览器");
     expect(host.textContent).toContain("预览未保存");
     expect(document.documentElement.dataset.theme).toBe("dark");
+    await render({ section: "connections" });
+    await render({ section: "appearance" });
+    expect(host.querySelector('[data-settings-pane="appearance"] [role="alert"]')?.textContent).toContain("偏好未能保存");
+    expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
   it("reapplies the saved preference when leaving Appearance with an unsaved draft", async () => {
@@ -255,11 +364,20 @@ describe("appearance", () => {
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(localStorage.getItem("talent-signal-theme")).toBeNull();
 
-    // Section change unmounts AppearancePane; the unsaved preview must not leak.
+    // A hidden Activity suspends the preview effect without dropping the draft.
     await render({ section: "connections" });
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(localStorage.getItem("talent-signal-theme")).toBeNull();
     expect(host.textContent).toContain("查看数据与操作边界");
+    expect(host.querySelector('[data-settings-pane="appearance"]')?.hasAttribute("hidden")).toBe(true);
+    expect(host.querySelector('[data-settings-pane="appearance"]')?.hasAttribute("inert")).toBe(true);
+    await render({ section: "appearance" });
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(host.querySelector('[data-theme-option="dark"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(host.textContent).toContain("预览未保存");
+    await clickButton("取消");
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(localStorage.getItem("talent-signal-theme")).toBeNull();
   });
 
   it("pairs browser and Mac persistence copy without granting capability", async () => {

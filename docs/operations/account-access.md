@@ -274,6 +274,17 @@ while device controls remain local. Settings never use the legacy fixture
 fallback. Profile names and workspace names are editable; email and provider
 identity remain unchanged.
 
+Web Settings uses the same category links at every width. At narrow widths,
+the current-category button reveals search and the complete category list;
+Escape dismisses it and returns focus. Category URLs remain directly loadable,
+and browser history selects the matching category. Visited editors keep
+unsaved choices and save errors in memory while switching categories. Hidden
+editors suspend their effects: an unsaved theme preview applies only while
+Appearance is visible. Leaving Settings, reloading, or changing the authenticated
+account/workspace/session clears these temporary drafts; they are never copied
+to browser storage. Saving still requires each editor's explicit action and
+normal authorization, revision and retry checks.
+
 ## Ownership and management
 
 A new personal workspace explicitly belongs to its creator. Migration assigns an

@@ -28,20 +28,24 @@ export function DisplayLanguageSettings({
 }) {
   const t = useT();
   const [operationId, setOperationId] = useState("");
-  const [choice, setChoice] = useState<DisplayChoice>(account.preferences?.display_language ?? "system");
+  const [receipt, setReceipt] = useState<{ source: AccountSettings; value: AccountSettings } | null>(null);
+  const confirmed = receipt?.source === account ? receipt.value : account;
+  const [draft, setDraft] = useState<{ choice: DisplayChoice; revision: number } | null>(null);
+  const choice = draft?.choice ?? confirmed.preferences?.display_language ?? "system";
+  const revision = draft?.revision ?? confirmed.user.revision;
   const [state, action, pending] = useActionState(async (previous: AccountActionState, form: FormData) => {
     const result = await saveAccountSettings(previous, form);
+    if (result.data) setReceipt({ source: account, value: result.data });
     if (result.saved) {
       setOperationId("");
-      const confirmed = result.data?.preferences?.display_language ?? "system";
-      if (confirmed !== form.get("display_language")) {
-        setChoice(confirmed);
+      setDraft(null);
+      const savedChoice = result.data?.preferences?.display_language ?? "system";
+      if (savedChoice !== form.get("display_language")) {
         return { ...result, saved: false, error: "界面语言已在另一端改变，已显示最新设置。请核对后再保存。" };
       }
     }
     return { ...result, data: result.data ?? previous.data };
   }, {} as AccountActionState);
-  const revision = state.data?.user.revision ?? account.user.revision;
   return (
     <form
       onSubmit={(event) => {
@@ -53,6 +57,7 @@ export function DisplayLanguageSettings({
         (event.currentTarget.elements.namedItem("operationId") as HTMLInputElement).value = id;
         setOperationId(id);
         const form = new FormData(event.currentTarget);
+        setDraft(current => current ?? { choice, revision });
         // Dispatch explicitly so a resolved error does not trigger React's
         // native form reset and replace the language needed for a safe retry.
         startTransition(() => action(form));
@@ -69,7 +74,10 @@ export function DisplayLanguageSettings({
         name="display_language"
         value={choice}
         onChange={(event) => {
-          setChoice(event.target.value as DisplayChoice);
+          setDraft(current => ({
+            choice: event.target.value as DisplayChoice,
+            revision: current?.revision ?? confirmed.user.revision,
+          }));
           setOperationId("");
         }}
         disabled={pending}

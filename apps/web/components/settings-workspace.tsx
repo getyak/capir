@@ -4,6 +4,7 @@ import { useT, useLocale } from "@/components/locale-provider";
 import { LOCALE_ENDONYMS, type AccountSettings } from "@talent-signal/contracts";
 import {
   ArrowUpRight,
+  CaretDown,
   Check,
   Desktop,
   MagnifyingGlass,
@@ -11,7 +12,9 @@ import {
   Sun,
 } from "@phosphor-icons/react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
+  Activity,
   useEffect,
   useMemo,
   useRef,
@@ -103,7 +106,7 @@ function Destination({
  * Arrow keys move focus through the results; Escape clears and returns focus to
  * the field; a failed query explains the available owners.
  */
-function SettingsSearch({ labEnabled }: { labEnabled: boolean }) {
+function SettingsSearch({ labEnabled, onChoose }: { labEnabled: boolean; onChoose: () => void }) {
   const t = useT();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -119,24 +122,13 @@ function SettingsSearch({ labEnabled }: { labEnabled: boolean }) {
   const showing = open && hasQuery;
 
   useEffect(() => {
-    function onShortcut(event: KeyboardEvent) {
-      if (event.isComposing || event.altKey) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "f") {
-        event.preventDefault();
-        inputRef.current?.focus();
-        inputRef.current?.select();
-        setOpen(true);
-      }
-    }
     function onPointerDown(event: MouseEvent) {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     }
-    window.addEventListener("keydown", onShortcut);
     document.addEventListener("mousedown", onPointerDown);
     return () => {
-      window.removeEventListener("keydown", onShortcut);
       document.removeEventListener("mousedown", onPointerDown);
     };
   }, []);
@@ -152,6 +144,7 @@ function SettingsSearch({ labEnabled }: { labEnabled: boolean }) {
     setOpen(false);
     setQuery("");
     setActive(-1);
+    onChoose();
   }
 
   return (
@@ -161,8 +154,8 @@ function SettingsSearch({ labEnabled }: { labEnabled: boolean }) {
       onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
         if (event.key === "Escape") {
-          event.preventDefault();
           if (query) {
+            event.preventDefault();
             setQuery("");
             setActive(-1);
             inputRef.current?.focus();
@@ -240,6 +233,130 @@ function SettingsSearch({ labEnabled }: { labEnabled: boolean }) {
   );
 }
 
+/**
+ * One inventory at every width. On narrow screens the labelled disclosure
+ * reveals search and full category names; desktop keeps the same links visible.
+ * The parent keys this ephemeral chooser by section, so history also closes it.
+ */
+function SettingsNavigation({ section, labEnabled }: {
+  section: SettingsSection;
+  labEnabled: boolean;
+}) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    let frame = 0;
+    const media = window.matchMedia("(max-width: 900px)");
+    function onResize() {
+      if (!rootRef.current?.contains(document.activeElement)) return;
+      if (media.matches) {
+        // Opening the disclosure preserves focus on search/a category when the
+        // desktop rail collapses around a keyboard user.
+        setOpen(true);
+      } else if (document.activeElement === triggerRef.current) {
+        rootRef.current?.querySelector<HTMLAnchorElement>('[aria-current="page"]')?.focus();
+      }
+    }
+    function onShortcut(event: KeyboardEvent) {
+      if (event.isComposing || event.keyCode === 229 || event.altKey || event.defaultPrevented) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        setOpen(true);
+        frame = requestAnimationFrame(() => {
+          const input = rootRef.current?.querySelector<HTMLInputElement>('input[type="search"]');
+          input?.focus();
+          input?.select();
+        });
+      }
+    }
+    function onPointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    window.addEventListener("keydown", onShortcut);
+    media.addEventListener("change", onResize);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", onShortcut);
+      media.removeEventListener("change", onResize);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, []);
+  function close() {
+    setOpen(false);
+    if (window.matchMedia("(max-width: 900px)").matches) triggerRef.current?.focus();
+  }
+  return (
+    <div
+      className={styles.sidebar}
+      ref={rootRef}
+      data-settings-chooser
+      data-open={open}
+      onBlur={(event) => {
+        if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && !event.defaultPrevented &&
+            !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+          event.preventDefault();
+          close();
+        }
+      }}
+    >
+      <h1 className={styles.sidebarHeading}>{t("设置")}</h1>
+      <button
+        className={styles.categoryTrigger}
+        type="button"
+        ref={triggerRef}
+        aria-expanded={open}
+        aria-controls="settings-category-panel"
+        onClick={() => setOpen(!open)}
+      >
+        <span className={styles.categoryContext}>{t("设置")}</span>
+        <span className={styles.categoryLabel}>{t(sectionLabel(section))}</span>
+        <CaretDown size={18} aria-hidden="true" />
+      </button>
+      <div className={styles.categoryPanel} id="settings-category-panel">
+        <SettingsSearch labEnabled={labEnabled} onChoose={close} />
+        <nav className={styles.navigation} aria-label={t("设置分区")} data-settings-navigation>
+          {SETTINGS_SECTIONS.filter(item => item.id !== "testing" || labEnabled).map(item => (
+            <Link
+              key={item.id}
+              href={item.href}
+              aria-current={section === item.id ? "page" : undefined}
+              onClick={(event) => {
+                // Modified clicks keep ordinary open-in-new-tab behavior.
+                if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                close();
+              }}
+            >
+              <span>{t(item.label)}</span>
+              {section === item.id ? <Check size={16} aria-hidden="true" /> : null}
+            </Link>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+/** Visit lazily; retain drafts while inactive without running hidden effects. */
+function RetainedSettingsPane({ active, children, section }: {
+  active: boolean;
+  children: ReactNode;
+  section: SettingsSection;
+}) {
+  const [visited, setVisited] = useState(active);
+  if (active && !visited) setVisited(true);
+  return visited ? (
+    <Activity mode={active ? "visible" : "hidden"}>
+      <div data-settings-pane={section} hidden={!active} inert={!active}>{children}</div>
+    </Activity>
+  ) : null;
+}
+
 function SearchResult({
   active,
   entry,
@@ -289,7 +406,11 @@ const THEME_OPTIONS = [
   Icon: typeof Sun;
 }[];
 
-function AppearancePane({ sessionVersion, account }: { sessionVersion: string | null; account: AccountSettings | null }) {
+function AppearancePane({ sessionVersion, account, accountAvailable = true }: {
+  sessionVersion: string | null;
+  account: AccountSettings | null;
+  accountAvailable?: boolean;
+}) {
   const t = useT();
   const locale = useLocale();
   const timeZone = useSyncExternalStore(
@@ -308,10 +429,12 @@ function AppearancePane({ sessionVersion, account }: { sessionVersion: string | 
   const selected = draft ?? persisted;
   const dirty = selected !== persisted;
 
-  // An unsaved preview must never leak past Appearance. Leaving the pane
-  // (section change, navigation, or reload) reapplies the saved preference,
-  // including system-following resolution.
-  useEffect(() => () => { revertTheme(); }, []);
+  // Activity suspends this effect while away, without discarding the draft.
+  // Return to Appearance restores its preview; other panes use the saved theme.
+  useEffect(() => {
+    if (dirty) previewTheme(selected);
+    return () => { revertTheme(); };
+  }, [dirty, selected]);
 
   function choose(value: ThemePreference) {
     if (value === selected) return;
@@ -343,10 +466,15 @@ function AppearancePane({ sessionVersion, account }: { sessionVersion: string | 
     <div className={styles.pane}>
       <Group title={t("语言")}>
         {account ? (
-          <DisplayLanguageSettings account={account} />
-        ) : (
+          <Activity mode={accountAvailable ? "visible" : "hidden"}>
+            <div hidden={!accountAvailable} inert={!accountAvailable}>
+              <DisplayLanguageSettings account={account} />
+            </div>
+          </Activity>
+        ) : null}
+        {!accountAvailable || !account ? (
           <p className={styles.notice}>{t("当前无法读取账号设置，重新登录后才能更改界面语言。")}</p>
-        )}
+        ) : null}
       </Group>
 
       <Group title={t("界面主题")}>
@@ -534,18 +662,7 @@ const PANE_HINTS: Record<SettingsSection, string> = {
   testing: "使用隔离的合成资料验证功能。",
 };
 
-export function SettingsWorkspace({
-  initial,
-  sessionVersion,
-  section,
-  labEnabled,
-  recovery,
-  avatarUrl,
-  connect,
-  connectReturnTo,
-  webRelease,
-  webReleaseObservedAt,
-}: {
+type SettingsWorkspaceProps = {
   avatarUrl?: string | null;
   initial: AccountSettings | null;
   sessionVersion: string | null;
@@ -562,8 +679,68 @@ export function SettingsWorkspace({
       duplicate: { provider: string; expiresAt: string } | null;
     };
   };
-}) {
+};
+
+export function SettingsWorkspace(props: SettingsWorkspaceProps) {
+  // Drafts never cross an account, workspace, or authenticated session boundary.
+  // sessionVersion binds the credential and both identities independently of a
+  // settings read. Only that known session may retain drafts through read errors.
+  const identity = props.initial
+    ? JSON.stringify([props.initial.workspace.id, props.initial.user.id])
+    : null;
+  const [lastIdentity, setLastIdentity] = useState(identity);
+  if (identity && identity !== lastIdentity) setLastIdentity(identity);
+  const scope = JSON.stringify([
+    identity ?? (props.sessionVersion ? lastIdentity : null), props.sessionVersion,
+  ]);
+  return <SettingsWorkspaceSession key={scope} {...props} />;
+}
+
+function SettingsUnavailable({ section }: { section: SettingsSection }) {
   const t = useT();
+  const router = useRouter();
+  const href = SETTINGS_SECTIONS.find(item => item.id === section)!.href;
+  return (
+    <section className={styles.unavailable}>
+      <h3>{t("账号设置暂时无法连接")}</h3>
+      <p>{t("暂时无法读取最新资料。请重试，或重新登录。")}</p>
+      <div>
+        <button type="button" onClick={() => router.refresh()}>{t("重新载入")}</button>
+        <Link href={`/login?callbackUrl=${encodeURIComponent(href)}`}>
+          {t("重新登录")}<ArrowUpRight aria-hidden="true" size={14} />
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+function SettingsWorkspaceSession({
+  initial,
+  sessionVersion,
+  section,
+  labEnabled,
+  recovery,
+  avatarUrl,
+  connect,
+  connectReturnTo,
+  webRelease,
+  webReleaseObservedAt,
+}: SettingsWorkspaceProps) {
+  const t = useT();
+  const [lastAccount, setLastAccount] = useState(initial);
+  if (initial && initial !== lastAccount) setLastAccount(initial);
+  // Retained data only keeps hidden editors mounted. An unavailable read never
+  // presents cached permissions, sessions or profile data as current.
+  const retainedAccount = initial ?? (sessionVersion ? lastAccount : null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const previousSection = useRef(section);
+  useEffect(() => {
+    if (previousSection.current === section) return;
+    previousSection.current = section;
+    // A hash search result owns its destination scroll. Otherwise bring the
+    // newly selected editor into view, including after keyboard/history moves.
+    headingRef.current?.focus({ preventScroll: Boolean(window.location.hash) });
+  }, [section]);
   const workspaceName = initial?.workspace.name ?? null;
   // Display-only scope labels. Browser/app wording is paired with CSS so the
   // macOS Settings scene can say "this Mac" without granting any capability.
@@ -585,29 +762,13 @@ export function SettingsWorkspace({
   return (
     <main className={styles.page} id="main-content" tabIndex={-1} data-settings-workspace data-desktop-settings-surface="1">
       <div className={styles.layout}>
-        <div className={styles.sidebar}>
-          <h1 className={styles.sidebarHeading}>{t("设置")}</h1>
-          <SettingsSearch labEnabled={labEnabled} />
-          <nav className={styles.navigation} aria-label={t("设置分区")} data-settings-navigation>
-            {SETTINGS_SECTIONS.filter(
-              (item) => item.id !== "testing" || labEnabled,
-            ).map((item) => (
-              <Link
-                key={item.id}
-                href={item.href}
-                aria-current={section === item.id ? "page" : undefined}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        </div>
+        <SettingsNavigation key={section} section={section} labEnabled={labEnabled} />
 
         <div className={styles.content}>
           <header className={styles.heading}>
             <div>
               <p className={styles.breadcrumb}>{t("设置")} / {t(sectionLabel(section))}</p>
-              <h2>{t(sectionLabel(section))}</h2>
+              <h2 ref={headingRef} tabIndex={-1} data-settings-title>{t(sectionLabel(section))}</h2>
               <p className={styles.hint}>{t(PANE_HINTS[section])}</p>
             </div>
             <span className={styles.scopePill} data-settings-scope>
@@ -620,32 +781,28 @@ export function SettingsWorkspace({
             </span>
           </header>
 
-          {["overview", "account", "workspace"].includes(section) ? (
-            initial ? (
+          {(["overview", "account", "workspace"] as const).map(pane => (
+            <RetainedSettingsPane key={pane} section={pane} active={section === pane && Boolean(initial)}>
+            {retainedAccount ? (
               <AccountSettingsPanel
-                key={`${initial.workspace.id}-${initial.user.id}-${section}`}
-                initial={initial}
+                initial={retainedAccount}
                 avatarUrl={avatarUrl}
-                section={section === "overview" ? "profile" : (section as "account" | "workspace")}
+                section={pane === "overview" ? "profile" : pane}
                 embedded
                 recovery={recovery}
                 connect={connect}
                 connectReturnTo={connectReturnTo}
               />
-            ) : (
-              <section className={styles.unavailable}>
-                <h3>{t("账号设置暂时无法连接")}</h3>
-                <p>{t("暂时无法读取最新资料。请重试，或重新登录。")}</p>
-                <div>
-                  <a href="/workspace/settings">{t("重新载入")}</a>
-                  <Link href="/login?callbackUrl=%2Fworkspace%2Fsettings">{t("重新登录")}<ArrowUpRight aria-hidden="true" size={14} />
-                  </Link>
-                </div>
-              </section>
-            )
-          ) : null}
+            ) : null}
+            </RetainedSettingsPane>
+          ))}
+          {!initial && ["overview", "account", "workspace", "appearance"].includes(section)
+            ? <SettingsUnavailable section={section} />
+            : null}
           {section === "account" ? <p><Link href="/workspace/settings/cli">{t("CLI 授权 · 查看与撤销")}</Link></p> : null}
-          {section === "appearance" ? <AppearancePane sessionVersion={sessionVersion} account={initial} /> : null}
+          <RetainedSettingsPane section="appearance" active={section === "appearance"}>
+            <AppearancePane sessionVersion={sessionVersion} account={retainedAccount} accountAvailable={Boolean(initial)} />
+          </RetainedSettingsPane>
           {section === "connections" ? <ConnectionsPane workspaceName={workspaceName} /> : null}
           {section === "versions" ? (
             <SettingsVersionsPane
