@@ -6,5 +6,13 @@
   "pi_task": "20261020-071413-c2fc441d",
   "pi_status": "cancelled; partial scoped source independently inspected",
   "credits_estimate": 67473152,
-  "mutation": false
+  "mutation": false,
+  "resident_revision": "2b4cd303b08d868daad9abd45cf984c0085315a3",
+  "actual_web": "1440x1000 normal/light;390x844 light (initial export is auto-scrolled focus state);320x568 dark/focus;390 actual zero-scroll geometry input302px (before290),16px/min44/focus2/no shadow; body15,title24,frames0,document390/scale1. Separate top screenshot retains service warning.",
+  "pending": [
+    "forced-color states",
+    "desktop typography measurement",
+    "cancel path",
+    "native actual-after blocked by normal login connectivity/recovery"
+  ]
 }

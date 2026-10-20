@@ -5,5 +5,13 @@
   "worker_adjacent_tests": 212,
   "pi_task": "20261020-064550-4aee5ad5",
   "credits_estimate": 36351824,
-  "mutation": false
+  "mutation": false,
+  "resident_revision": "2b4cd303b08d868daad9abd45cf984c0085315a3",
+  "build_id": "CUmCARtl8cbaMXZZgPw1m",
+  "actual_web": "1440x1000 and390x844 normal,390x568 expanded top and scrolled end. Width390/scale1, body15 input16 send44.",
+  "pending": [
+    "320px",
+    "dark/forced/reduced",
+    "macOS actual-after: normal browser login unresolved; one new independent attempt in progress"
+  ]
 }

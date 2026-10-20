@@ -150,11 +150,13 @@
 
 @media (forced-colors: active) {
   /* Enabled filled primary, GrayText disabled, and system-color selection and
-     focus; nothing opts out of the system palette wholesale. */
+     focus. Only the two filled system-color actions suppress automatic text
+     backplates; their palette still comes from Highlight/HighlightText. */
   .card:global(.context-agent-create) :global(.context-primary-button):not(:disabled) {
     background: Highlight;
     border-color: Highlight;
     color: HighlightText;
+    forced-color-adjust: none;
   }
 
   .card:global(.context-agent-create) button:disabled,
@@ -170,10 +172,11 @@
     outline-offset: -2px;
   }
 
-  .card:global(.context-agent-create) :global(.context-agent-person-matches) > article button[data-active="true"] {
+  .card:global(.context-agent-create) :global(.context-agent-person-matches) > article button[data-active="true"]:not(:disabled) {
     background: Highlight;
     border-color: Highlight;
     color: HighlightText;
+    forced-color-adjust: none;
   }
 
   .card:global(.context-agent-create) :is(input, textarea):focus {

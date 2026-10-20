@@ -1,0 +1,19 @@
+{
+  "status": "passed",
+  "finished_utc": "2026-10-20T02:02:37.472064+00:00",
+  "elapsed_seconds": 40.41,
+  "expected_prior_guard_after_installer_lock": "0dd218319a9f4b661a9efbcb4d9cdecc368ae9a4",
+  "before": {
+    "revision": "0dd218319a9f4b661a9efbcb4d9cdecc368ae9a4",
+    "buildID": "SniPHYkFXvRdf_rI_dZEb",
+    "release": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/0dd21831",
+    "port": 3000
+  },
+  "after": {
+    "revision": "2b4cd303b08d868daad9abd45cf984c0085315a3",
+    "buildID": "CUmCARtl8cbaMXZZgPw1m",
+    "release": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/2b4cd303",
+    "port": 3000
+  },
+  "error": null
+}
