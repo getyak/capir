@@ -35,6 +35,19 @@ struct WorkspaceDesktopCommands: Commands {
                 .keyboardShortcut("]").disabled(browser?.webView.canGoForward != true)
             Button("重新载入") { browser?.retry() }
                 .keyboardShortcut("r").disabled(browser == nil)
+            Menu("工作区外观") {
+                Picker("工作区外观", selection: Binding(
+                    get: { browser?.appearancePreference ?? .system },
+                    set: { browser?.selectAppearance($0) }
+                )) {
+                    ForEach(WorkspaceAppearance.allCases, id: \.self) { preference in
+                        Text(preference.title).tag(preference)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            .disabled(browser == nil || browser?.signedOut == true ||
+                      browser?.loading == true || browser?.savingAppearance == true)
         }
         CommandMenu("前往") {
             Button("人物") { browser?.navigate(.people) }
@@ -712,14 +725,23 @@ struct WorkspaceWindowBehavior: NSViewRepresentable {
         var floating = false
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            configureWindow()
+        }
+
+        func configureWindow() {
             window?.level = floating ? .floating : .normal
+            // AppKit keeps its ordinary title-bar drag region and traffic lights.
+            // The Web sidebar owns branding; retain the window title for menus/AX.
+            window?.titleVisibility = .hidden
+            window?.titlebarAppearsTransparent = true
+            window?.isMovableByWindowBackground = false
         }
     }
 
     func makeNSView(context: Context) -> View { View() }
     func updateNSView(_ view: View, context: Context) {
         view.floating = floating
-        view.window?.level = floating ? .floating : .normal
+        view.configureWindow()
     }
 }
 

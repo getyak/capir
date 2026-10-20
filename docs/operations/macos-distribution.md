@@ -81,7 +81,7 @@ active until a clean replacement build and authenticated readback pass.
 
 The optional menu-bar capture entry uses the same configured Web workspace login. On first use it discloses the current workspace and available image processors before an intentional selection can upload. The device-owned capture permission is separate from that login. The ordinary path is configurable shortcut, region selection and release; the Agent then processes an image-only Session message. Settings → This device controls the menu-bar icon, shortcut, default preview choice and optional top status hint. Hiding the icon leaves the main window and Settings reachable. An unadmitted screenshot is encrypted for bounded device recovery, while an admitted image follows the workspace Session/source lifecycle.
 
-**Settings (⌘ ,) → Connection**, the native toolbar and the Web account menu open
+**Settings (⌘ ,) → Connection**, the Go menu and the Web account menu open
 the same native controls. Enter an HTTPS origin or a `/workspace/...` link without
 credentials, query parameters or fragments. Test the draft before saving; a stale
 probe never applies to a changed address. A successful HEAD request to `/login`
@@ -95,6 +95,45 @@ Cookie stores are partitioned by canonical scheme/host/port, including local por
 The first upgrade from legacy default WebKit storage therefore requires a fresh
 login. Switching services asks the user to finish input/uploads before reloading.
 Copyable diagnostics omit origins, accounts, cookies and conversation content.
+
+## Workspace appearance verification
+
+The native **View → 工作区外观** menu offers **跟随系统**, **浅色** and **深色**.
+It updates only the embedded origin's existing `talent-signal-theme` local
+preference. The Web avatar theme action uses the same store. A separate browser
+has its own preference and session. System removes the stored override and
+clears `NSWindow.appearance`; subsequent OS appearance changes must repaint the
+Web content as well as the material. Appearance save failures stay visible.
+The display bridge accepts only a fixed enum from the configured main frame and
+current origin. It grants no account, navigation or external-action authority.
+
+For acceptance, obtain a storage-guard artifact directory before native builds.
+Run the affected `WorkspaceAppearanceBridgeTests`, `WorkspaceMaterialSurfaceTests`
+and `WorkspaceSettingsTests` with the same derived-data directory. The script
+contract suite is `node --test scripts/macos/workspace-appearance.test.mjs`;
+it also runs in `scripts/macos/check.sh`. Script checks and compilation do not
+establish actual window behavior.
+
+Preserve uncropped before/after captures using identical authorized synthetic
+workspace content at 1280×820 and 900×720. Record actual window/image dimensions,
+app build, source revision, Web revision and each setting. On the real window:
+
+1. Select light, dark, then System, including reset when System currently
+   resolves to the same color. Change macOS appearance again with the app open.
+   Repeat after reload and reopening the workspace; retain an unsent draft.
+2. Compare active and inactive windows at 90%, 100% and 150% content zoom.
+   Verify readable sidebar controls and an opaque reading canvas. Repeat with
+   Reduce Transparency and Increase Contrast, separately and together.
+3. Drag only the native title bar; select text and operate Web controls beneath
+   it. Exercise close/reopen, minimize/restore and zoom/full screen using the
+   standard window buttons. Confirm no content is behind those buttons.
+4. Exercise `⌘N`, `⌘[`, `⌘]`, `⌘R`, `⌘,`, native menu selection, Web keyboard
+   traversal and back/forward gestures. Confirm one settings window and one
+   navigation owner. Check preference persistence and a truthful save failure.
+
+Record unavailable cases as blocked. Do not use fabricated theme metadata,
+cropped images or an older installed build as proof of the changed client.
+Restore any OS accessibility/appearance settings changed by the test.
 
 ## Automated publication
 
