@@ -1,3 +1,5 @@
+"use client";
+
 import { useT } from "@/components/locale-provider";
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
 import { AddressBook } from "@phosphor-icons/react/dist/ssr";
