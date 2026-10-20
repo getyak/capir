@@ -51,7 +51,7 @@
   "components/conversation/private-conversation.tsx": 25,
   "components/account-access-form.tsx": 24,
   "components/relationship-workspace/agent-identity-review-card.tsx": 24,
-  "app/desktop-auth/authorize/page.tsx": 23,
+  "app/desktop-auth/authorize/page.tsx": 20,
   "app/dev/desktop-chrome/preview.tsx": 23,
   "components/test-workspaces.tsx": 23,
   "components/workspace-extensions-helpers.ts": 23,

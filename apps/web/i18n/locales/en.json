@@ -1567,5 +1567,11 @@
   "资料或权限已发生变化。请刷新页面，核对最新内容后再提交。": "The profile or permissions changed. Refresh the page, review the latest values, then submit again.",
   "请检查填写内容，名称应为 1–100 个字符。": "Check your input. Names must contain 1–100 characters.",
   "暂时无法核验保存结果。保留当前内容，可用同一次操作重试或刷新核对。": "The save result could not be verified. Keep your current input and retry the same operation, or refresh to check.",
-  "暂时连不上服务，请重试。": "Unable to connect. Please try again."
+  "暂时连不上服务，请重试。": "Unable to connect. Please try again.",
+  "需要使用自己的账号": "Use your own account",
+  "登录请求无法核对": "Unable to verify this sign-in request",
+  "登录服务暂时不可用": "Sign-in service temporarily unavailable",
+  "测试身份不能授权 Mac 登录。请返回工作区退出测试身份，再使用自己的账号重新开始。": "Test identities cannot authorize Mac sign-in. Return to the workspace, leave the test identity, then start again with your own account.",
+  "这个 Mac 登录请求无效、已过期或与当前浏览器不匹配。请回到 Mac，重新发起登录。": "This Mac sign-in request is invalid, expired, or does not match this browser. Return to your Mac and start sign-in again.",
+  "暂时无法连接登录服务。请稍后回到 Mac 重试；这不代表你已经退出登录。": "The sign-in service cannot be reached right now. Return to your Mac and try again later. This does not mean you have been signed out."
 }
