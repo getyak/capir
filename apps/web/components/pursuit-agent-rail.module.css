@@ -33,17 +33,19 @@
 .header p,
 .label {
   color: color-mix(in srgb, var(--ink, #27231f) 58%, transparent);
-  font-size: 0.7rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   font-weight: 720;
   letter-spacing: 0.12em;
   margin: 0 0 4px;
   text-transform: uppercase;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .header h2 {
-  font-size: 1.12rem;
+  font-size: var(--ts-type-section, 1.125rem);
   letter-spacing: -0.02em;
   margin: 0;
+  font-weight: 600;
 }
 
 .mark {
@@ -72,7 +74,8 @@
 
 .start > span {
   color: color-mix(in srgb, var(--ink, #27231f) 58%, transparent);
-  font-size: 0.78rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .start > button,
@@ -85,11 +88,11 @@
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-size: 0.84rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 700;
   gap: 8px;
   justify-content: center;
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 17px;
   text-decoration: none;
 }
@@ -119,7 +122,9 @@
 
 .boundary span {
   color: color-mix(in srgb, var(--ink, #27231f) 64%, transparent);
-  font-size: 0.78rem;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .status {
@@ -139,12 +144,15 @@
 }
 
 .status strong {
-  font-size: 0.84rem;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .status span {
   color: color-mix(in srgb, var(--ink, #27231f) 58%, transparent);
-  font-size: 0.72rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .status button {
@@ -155,9 +163,10 @@
   cursor: pointer;
   display: flex;
   font: inherit;
-  font-size: 0.74rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   gap: 5px;
   padding: 6px;
+  min-height: 44px;
 }
 
 .progress {
@@ -222,13 +231,14 @@
 }
 
 .progress strong {
-  font-size: 0.78rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .progress small {
   color: color-mix(in srgb, var(--ink, #27231f) 58%, transparent);
-  font-size: 0.7rem;
-  line-height: 1.42;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .streamBriefing {
@@ -259,31 +269,35 @@
 }
 
 .handoff h3 {
-  font-size: 0.96rem;
+  font-size: var(--ts-type-section, 1.125rem);
   line-height: 1.42;
+  font-weight: 600;
 }
 
 .handoff > p:not(.label),
 .handoff > span {
   color: color-mix(in srgb, var(--ink, #27231f) 66%, transparent);
-  font-size: 0.78rem;
-  line-height: 1.5;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .handoff > span {
-  font-size: 0.7rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .handoff a {
   align-items: center;
   color: #9e3725;
   display: inline-flex;
-  font-size: 0.78rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 720;
   gap: 6px;
   justify-self: start;
   margin-top: 3px;
   text-underline-offset: 3px;
+  min-height: 44px;
 }
 
 .streamBriefing section {
@@ -315,27 +329,29 @@
 }
 
 .streamBriefing section > p:not(.label) {
-  font-size: 0.84rem;
-  line-height: 1.55;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin: 7px 0 0;
   white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .streamBriefing section > span,
 .streamBriefing section > a {
   color: #9e3725;
   display: inline-block;
-  font-size: 0.7rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   font-weight: 700;
   margin-top: 8px;
   text-underline-offset: 3px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .transportNote {
   border-top: 1px solid color-mix(in srgb, var(--ink, #27231f) 8%, transparent);
   color: color-mix(in srgb, var(--ink, #27231f) 62%, transparent);
-  font-size: 0.72rem;
-  line-height: 1.45;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
   margin: 0;
   padding: 11px 22px 14px;
 }
@@ -364,23 +380,26 @@
 }
 
 .claims p {
-  font-size: 0.84rem;
-  line-height: 1.5;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .claims span {
   color: color-mix(in srgb, var(--ink, #27231f) 54%, transparent);
   display: block;
-  font-size: 0.7rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   margin-top: 4px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .claims a {
   color: #9e3725;
-  font-size: 0.72rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 700;
   text-underline-offset: 3px;
+  min-height: 44px;
 }
 
 .dependency {
@@ -388,18 +407,20 @@
 }
 
 .dependency h3 {
-  font-size: 1.07rem;
+  font-size: var(--ts-type-section, 1.125rem);
   line-height: 1.35;
   margin: 8px 0;
+  font-weight: 600;
 }
 
 .dependency > p:last-child,
 .nextMove span,
 .quiet {
   color: color-mix(in srgb, var(--ink, #27231f) 68%, transparent);
-  font-size: 0.82rem;
-  line-height: 1.5;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .nextMove {
@@ -416,8 +437,9 @@
 .details {
   border-top: 1px solid color-mix(in srgb, var(--ink, #27231f) 8%, transparent);
   color: color-mix(in srgb, var(--ink, #27231f) 62%, transparent);
-  font-size: 0.75rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   padding: 16px 22px 19px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .details summary {
@@ -437,10 +459,11 @@
 .stale {
   background: color-mix(in srgb, #b9432d 8%, transparent);
   border-radius: 10px;
-  font-size: 0.76rem;
-  line-height: 1.45;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin-top: 11px;
   padding: 10px;
+  overflow-wrap: anywhere;
 }
 
 .working {
@@ -465,12 +488,15 @@
 }
 
 .working strong {
-  font-size: 0.82rem;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .working p span {
   color: color-mix(in srgb, var(--ink, #27231f) 58%, transparent);
-  font-size: 0.75rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .error {
@@ -565,5 +591,5 @@
 
   .claims a {
     grid-column: 2;
-  }
+   font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; }
 }

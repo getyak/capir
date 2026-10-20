@@ -27,8 +27,9 @@
 .agendaHeading p,
 .contextPane > header p {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   margin: 0 0 7px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .header h1 {
@@ -42,10 +43,11 @@
 
 .header > div > p:last-child {
   color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.65;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin: 9px 0 0;
   max-width: 58ch;
+  overflow-wrap: anywhere;
 }
 
 .newConversation {
@@ -55,9 +57,9 @@
   color: var(--muted-strong);
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 0.75rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   gap: 7px;
-  min-height: 34px;
+  min-height: 44px;
   padding: 0 14px;
   text-decoration: none;
 }
@@ -77,10 +79,11 @@
 .deepLinkNotice {
   border-left: 2px solid var(--accent);
   color: var(--muted-strong);
-  font-size: 0.75rem;
-  line-height: 1.65;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin: -8px 0 0;
   padding: 9px 12px;
+  overflow-wrap: anywhere;
 }
 
 .calendarPane {
@@ -115,8 +118,8 @@
 
 .monthHeader h2 {
   color: var(--ink);
-  font-size: 0.9375rem;
-  font-weight: 560;
+  font-size: var(--ts-type-section, 1.125rem);
+  font-weight: 600;
   margin: 0;
   text-align: center;
 }
@@ -149,9 +152,10 @@
 
 .weekdays {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   margin-bottom: 10px;
   text-align: center;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .weekdays span {
@@ -189,10 +193,11 @@
   align-items: center;
   border-radius: 50%;
   display: inline-flex;
-  font-size: 0.75rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   height: 30px;
   justify-content: center;
   width: 30px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .day:hover > span {
@@ -226,15 +231,16 @@
 .agendaHeading h2,
 .contextPane > header h2 {
   color: var(--ink);
-  font-size: 0.875rem;
-  font-weight: 560;
+  font-size: var(--ts-type-section, 1.125rem);
+  font-weight: 600;
   margin: 0;
   overflow-wrap: anywhere;
 }
 
 .agendaHeading > span {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .agendaList {
@@ -262,14 +268,16 @@
 .agendaList time,
 .agendaList small {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .agendaList strong {
   color: var(--ink);
-  font-size: 0.875rem;
+  font-size: var(--ts-type-body, 0.9375rem);
   font-weight: 520;
   overflow-wrap: anywhere;
+  line-height: var(--ts-leading-body, 1.667);
 }
 
 .contextPane > header {
@@ -287,9 +295,11 @@
 
 .contextMeta > div {
   display: flex;
-  font-size: 0.75rem;
+  font-size: var(--ts-type-body, 0.9375rem);
   gap: 12px;
   justify-content: space-between;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .contextMeta dt {
@@ -315,7 +325,7 @@
   align-items: center;
   color: var(--ink-soft);
   display: inline-flex;
-  font-size: 0.75rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   min-height: 44px;
   padding-block: 8px;
   width: fit-content;
@@ -335,10 +345,10 @@
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-size: 0.75rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   gap: 6px;
   justify-content: center;
-  min-height: 34px;
+  min-height: 44px;
   padding: 6px 13px;
   width: fit-content;
 }
@@ -355,16 +365,17 @@
 
 .dismissArea small {
   color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.55;
+  font-size: var(--ts-type-meta, 0.8125rem);
+  line-height: var(--ts-leading-meta, 1.5);
   max-width: 34rem;
 }
 
 .dismissArea p {
   color: var(--error);
-  font-size: 0.75rem;
-  line-height: 1.6;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .spin {
@@ -382,15 +393,18 @@
 
 .empty strong {
   color: var(--ink-soft);
-  font-size: 0.875rem;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .empty p,
 .contextEmpty {
   color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.7;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin: 5px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .error {
@@ -424,8 +438,10 @@
 .unavailable {
   border-top: 1px solid var(--line-soft);
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--ts-type-body, 0.9375rem);
   padding-top: 16px;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .unavailable summary {
@@ -497,7 +513,7 @@
   .newConversation {
     align-self: flex-start;
     min-height: 44px;
-  }
+   font-size: var(--ts-type-nav, 0.875rem); }
 
   .day {
     min-height: 42px;

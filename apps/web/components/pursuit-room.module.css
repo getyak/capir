@@ -302,9 +302,10 @@
 .quiet {
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.6;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   padding: 20px 0;
+  overflow-wrap: anywhere;
 }
 
 .proposal {
@@ -330,8 +331,8 @@
 }
 
 .proposal > header h2 {
-  font-size: 1rem;
-  font-weight: 640;
+  font-size: var(--ts-type-section, 1.125rem);
+  font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.35;
   margin-top: 9px;
@@ -341,8 +342,9 @@
 .proposal > header span {
   color: var(--muted-strong);
   display: block;
-  font-size: 0.76rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   margin-top: 14px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .proposal > header > div:last-child {
@@ -352,11 +354,12 @@
   color: var(--success);
   display: flex;
   flex: 0 0 auto;
-  font-size: 0.69rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   font-weight: 690;
   gap: 7px;
   min-height: 36px;
   padding: 0 13px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .proposalEvidence {
@@ -378,10 +381,11 @@
   color: var(--muted);
   display: block;
   font-family: var(--font-mono), monospace;
-  font-size: 0.61rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   font-style: normal;
   letter-spacing: 0.05em;
   margin-top: 10px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .proposalItems {
@@ -399,16 +403,17 @@
 }
 
 .proposalItems legend {
-  font-size: 0.8rem;
-  font-weight: 720;
+  font-size: var(--ts-type-body, 0.9375rem);
+  font-weight: 600;
   padding: 0 8px;
 }
 
 .proposalItems legend span {
   color: var(--accent-strong);
   font-family: var(--font-mono), monospace;
-  font-size: 0.61rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   margin-right: 9px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .beforeAfter {
@@ -428,8 +433,9 @@
 }
 
 .beforeAfter strong {
-  font-size: 0.8rem;
-  line-height: 1.45;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .beforeAfter > svg {
@@ -438,9 +444,10 @@
 
 .proposalReason {
   color: var(--muted-strong);
-  font-size: 0.76rem;
-  line-height: 1.55;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   margin-top: 14px;
+  overflow-wrap: anywhere;
 }
 
 .decisionOptions {
@@ -467,10 +474,11 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   display: inline-flex;
-  font-size: 0.69rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   font-weight: 680;
   min-height: 44px;
   padding: 0 14px;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .decisionOptions input:checked + span {
@@ -497,13 +505,14 @@
   border: 1px solid var(--line);
   border-radius: 10px;
   font-family: var(--font-sans), sans-serif;
-  font-size: 0.78rem;
+  font-size: var(--ts-type-body, 0.9375rem);
   letter-spacing: normal;
-  line-height: 1.5;
+  line-height: var(--ts-leading-body, 1.667);
   padding: 11px 12px;
   resize: vertical;
   text-transform: none;
   width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .reviewCommit {
@@ -536,9 +545,10 @@
 
 .reviewCommit p {
   color: color-mix(in srgb, var(--background) 60%, transparent);
-  font-size: 0.67rem;
-  line-height: 1.5;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   max-width: 520px;
+  overflow-wrap: anywhere;
 }
 
 .reviewCommit button {
@@ -547,7 +557,7 @@
   border-radius: 999px;
   color: var(--accent-ink);
   flex: 0 0 auto;
-  font-size: 0.74rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 760;
   min-height: 44px;
   padding: 0 16px;
@@ -579,13 +589,16 @@
 }
 
 .reviewError strong {
-  font-size: 0.75rem;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .reviewError span {
   color: var(--muted-strong);
-  font-size: 0.7rem;
-  line-height: 1.5;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .reviewError a {
@@ -594,7 +607,7 @@
   border-radius: 999px;
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 0.7rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 760;
   min-height: 44px;
   padding: 9px 13px;
@@ -615,12 +628,15 @@
 
 .receipt h3 {
   color: var(--ink);
-  font-size: 1rem;
+  font-size: var(--ts-type-section, 1.125rem);
+  font-weight: 600;
 }
 
 .receipt span {
   color: var(--muted-strong);
-  font-size: 0.7rem;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .receipt > button {
@@ -630,7 +646,7 @@
   border-radius: 999px;
   color: inherit;
   flex: 0 0 auto;
-  font-size: 0.7rem;
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 760;
   margin-left: auto;
   min-height: 44px;
@@ -652,14 +668,16 @@
 .history article span {
   color: var(--muted);
   font-family: var(--font-mono), monospace;
-  font-size: 0.59rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   letter-spacing: 0.07em;
   text-transform: uppercase;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .history article strong {
-  font-size: 0.78rem;
-  line-height: 1.45;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 1080px) {
@@ -693,11 +711,11 @@
 
   .proposal > header > div:last-child {
     justify-self: start;
-  }
+   font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }
 
   .reviewCommit button {
     width: 100%;
-  }
+   font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; }
 }
 
 @media (max-width: 560px) {
@@ -740,7 +758,7 @@
 
   .receipt > button {
     margin-left: 36px;
-  }
+   font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; }
 
   .beforeAfter {
     grid-template-columns: 1fr;
@@ -758,5 +776,7 @@
   .decisionOptions span {
     justify-content: center;
     width: 100%;
-  }
+   font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }
 }
+
+@media (max-width: 640px) { .editValue input, .editValue textarea, .reviewCommit textarea { font-size: 1rem; } }

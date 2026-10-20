@@ -25,12 +25,16 @@
   --ts-space-lg: 16px;
   --ts-space-xl: 24px;
   --ts-space-xxl: 32px;
-  --ts-type-title: 24px;
-  --ts-type-object: 22px;
-  --ts-type-section: 18px;
-  --ts-type-body: 15px;
-  --ts-type-nav: 14px;
-  --ts-type-meta: 13px;
+  /* Preserve the host's preferred root text size across every reading role. */
+  --ts-type-title: 1.5rem;
+  --ts-type-object: 1.375rem;
+  --ts-type-section: 1.125rem;
+  --ts-type-body: 0.9375rem;
+  --ts-type-nav: 0.875rem;
+  --ts-type-meta: 0.8125rem;
+  --ts-leading-body: 1.667;
+  --ts-leading-meta: 1.5;
+  --ts-leading-heading: 1.4;
 
   color: var(--ts-ink);
   font-family:

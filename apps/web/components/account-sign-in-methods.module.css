@@ -3,19 +3,21 @@
   flex-direction: column;
   gap: 12px;
   padding: 20px 0;
-  border-bottom: 1px solid var(--hairline, rgba(28, 26, 24, 0.1));
+  border-bottom: 1px solid var(--line);
 }
 
 .section h2 {
-  font-size: 15px;
+  font-size: var(--ts-type-body, 0.9375rem);
   font-weight: 600;
   margin: 0;
 }
 
 .secondary {
-  color: var(--ink-secondary, rgba(28, 26, 24, 0.62));
-  font-size: 13px;
+  color: var(--muted);
+  font-size: var(--ts-type-body, 0.9375rem);
   margin: 0;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .rows {
@@ -31,7 +33,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 14px 0;
-  border-top: 1px solid var(--hairline, rgba(28, 26, 24, 0.08));
+  border-top: 1px solid var(--line);
 }
 
 .rowHead {
@@ -39,21 +41,22 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .badge,
 .badgePending {
-  font-size: 12px;
+  font-size: var(--ts-type-meta, 0.8125rem);
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid var(--hairline, rgba(28, 26, 24, 0.14));
-  color: var(--ink-secondary, rgba(28, 26, 24, 0.62));
+  border: 1px solid var(--line);
+  color: var(--muted);
   white-space: nowrap;
 }
 
 .badge[data-state='connected'] {
-  color: var(--ink, rgba(28, 26, 24, 0.9));
-  border-color: rgba(28, 26, 24, 0.35);
+  color: var(--ink);
+  border-color: var(--line-strong);
 }
 
 .actions {
@@ -68,20 +71,20 @@
   min-height: 44px;
   padding: 0 16px;
   border-radius: 10px;
-  font-size: 14px;
+  font-size: var(--ts-type-nav, 0.875rem);
   cursor: pointer;
 }
 
 .primary {
-  border: 1px solid rgba(28, 26, 24, 0.85);
-  background: rgba(28, 26, 24, 0.9);
-  color: #fff;
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--surface);
 }
 
 .quiet {
-  border: 1px solid var(--hairline, rgba(28, 26, 24, 0.18));
+  border: 1px solid var(--line);
   background: transparent;
-  color: var(--ink, rgba(28, 26, 24, 0.9));
+  color: var(--ink);
 }
 
 .primary:disabled,
@@ -96,49 +99,54 @@
   gap: 10px;
   padding: 14px 16px;
   border-radius: 12px;
-  background: rgba(28, 26, 24, 0.04);
+  background: var(--surface-muted);
 }
 
 .stepUpTitle {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--ts-type-body, 0.9375rem);
   font-weight: 600;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .field {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--ts-type-meta, 0.8125rem);
 }
 
 .field input {
   min-height: 44px;
   padding: 0 12px;
   border-radius: 10px;
-  border: 1px solid var(--hairline, rgba(28, 26, 24, 0.2));
-  background: #fff;
-  font-size: 15px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-size: var(--ts-type-body, 0.9375rem);
+  color: var(--ink);
 }
 
 .notice,
 .error {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--ts-type-body, 0.9375rem);
   min-height: 18px;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .notice {
-  color: var(--ink-secondary, rgba(28, 26, 24, 0.62));
+  color: var(--muted);
 }
 
 .error {
-  color: #8a2f23;
+  color: var(--error);
 }
 
 /* Optional unconnected providers live behind one named, native disclosure. */
 .addMethods {
-  border-top: 1px solid var(--hairline, rgba(28, 26, 24, 0.08));
+  border-top: 1px solid var(--line);
 }
 
 .addMethods > summary,
@@ -146,7 +154,7 @@
   align-items: center;
   cursor: pointer;
   display: flex;
-  font-size: 13px;
+  font-size: var(--ts-type-meta, 0.8125rem);
   min-height: 44px;
   padding: 11px 0;
   list-style: none;
@@ -159,7 +167,7 @@
 
 .addMethods > summary::after,
 .disclosure > summary::after {
-  color: var(--ink-secondary, rgba(28, 26, 24, 0.62));
+  color: var(--muted);
   content: "⌄";
   font-size: 18px;
   font-weight: 400;
@@ -174,18 +182,18 @@
 }
 
 .addMethods > summary {
-  color: var(--ink, rgba(28, 26, 24, 0.9));
+  color: var(--ink);
   font-weight: 550;
 }
 
 .addMethods > summary:focus-visible,
 .disclosure > summary:focus-visible {
-  outline: 2px solid var(--ink, rgba(28, 26, 24, 0.9));
+  outline: 2px solid var(--ink);
   outline-offset: 3px;
 }
 
 .addMethods[open] > summary {
-  border-bottom: 1px solid var(--hairline, rgba(28, 26, 24, 0.08));
+  border-bottom: 1px solid var(--line);
 }
 
 .addMethods .rows > .row:first-child {
@@ -193,17 +201,19 @@
 }
 
 .disclosure {
-  border-bottom: 1px solid var(--hairline, rgba(28, 26, 24, 0.1));
-  color: var(--ink-secondary, rgba(28, 26, 24, 0.62));
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
   display: flex;
   flex-direction: column;
-  font-size: 13px;
+  font-size: var(--ts-type-body, 0.9375rem);
   gap: 8px;
   padding: 8px 0;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .disclosure > summary {
-  color: var(--ink, rgba(28, 26, 24, 0.9));
+  color: var(--ink);
   font-weight: 550;
 }
 
@@ -215,3 +225,6 @@
   .addMethods > summary::after,
   .disclosure > summary::after { transition: none; }
 }
+
+@media (max-width: 640px) { .field input { font-size: 1rem; } }
+@media (forced-colors: active) { .primary { background: ButtonFace; border-color: ButtonText; color: ButtonText; } }
