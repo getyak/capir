@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import { clearTimeWorkspaceStorage } from "@/lib/time-workspace-storage";
 import {
   ArrowCounterClockwise,
@@ -210,6 +211,7 @@ function WorkspaceCorpusUnavailable({
   source: WorkspaceDataSource;
   user: { email?: string | null; name?: string | null };
 }) {
+  const t = useT();
   return (
     <div className="review-workspace">
       <aside className="review-sidebar">
@@ -219,23 +221,19 @@ function WorkspaceCorpusUnavailable({
         </div>
 
         <div className="review-sidebar__scope">
-          <p>依据审阅</p>
-          <span>语料不可用</span>
+          <p>{t("依据审阅")}</p>
+          <span>{t("语料不可用")}</span>
         </div>
 
-        <nav aria-label="候选人进展测试案例">
-          <p className="review-sidebar__empty">当前没有可展示的案例。</p>
+        <nav aria-label={t("候选人进展测试案例")}>
+          <p className="review-sidebar__empty">{t("当前没有可展示的案例。")}</p>
         </nav>
 
         <div className="review-sidebar__foot">
           <Link href="/workspace">
-            <ArrowLeft aria-hidden="true" size={16} />
-            规范流程
-          </Link>
+            <ArrowLeft aria-hidden="true" size={16} />{t("规范流程")}</Link>
           <Link href="/">
-            <ArrowSquareOut aria-hidden="true" size={16} />
-            产品网站
-          </Link>
+            <ArrowSquareOut aria-hidden="true" size={16} />{t("产品网站")}</Link>
           <form
             action={signOutOfWorkspace}
             onSubmit={() => {
@@ -245,9 +243,7 @@ function WorkspaceCorpusUnavailable({
             }}
           >
             <button type="submit">
-              <SignOut aria-hidden="true" size={16} />
-              退出登录
-            </button>
+              <SignOut aria-hidden="true" size={16} />{t("退出登录")}</button>
           </form>
         </div>
       </aside>
@@ -274,14 +270,12 @@ function WorkspaceCorpusUnavailable({
         <ReviewMain>
           <section
             className="review-source-note"
-            aria-label="工作区数据来源"
+            aria-label={t("工作区数据来源")}
           >
             <strong>{source.label}</strong>
-            <p>此页面暂时没有可审阅的评测案例。</p>
+            <p>{t("此页面暂时没有可审阅的评测案例。")}</p>
             <button type="button" onClick={() => window.location.reload()}>
-              <ArrowCounterClockwise aria-hidden="true" size={15} />
-              刷新来源
-            </button>
+              <ArrowCounterClockwise aria-hidden="true" size={15} />{t("刷新来源")}</button>
           </section>
 
           <section
@@ -289,11 +283,9 @@ function WorkspaceCorpusUnavailable({
             aria-labelledby="corpus-unavailable-title"
             data-corpus-unavailable="true"
           >
-            <p>评测语料不可用</p>
-            <h2 id="corpus-unavailable-title">这里不会展示任何示例案例。</h2>
-            <span>
-              当前未提供评测案例。请返回主工作区继续使用正常业务流程。
-            </span>
+            <p>{t("评测语料不可用")}</p>
+            <h2 id="corpus-unavailable-title">{t("这里不会展示任何示例案例。")}</h2>
+            <span>{t("当前未提供评测案例。请返回主工作区继续使用正常业务流程。")}</span>
           </section>
         </ReviewMain>
       </div>
@@ -346,6 +338,7 @@ export function WorkspaceApp({
   source: WorkspaceDataSource;
   user: { email?: string | null; name?: string | null };
 }) {
+  const t = useT();
   const [selectedId, setSelectedId] = useState<CandidateMomentumCase["id"]>(
     dataset?.cases[0]?.id ?? "TS-CORE-01",
   );
@@ -440,7 +433,7 @@ export function WorkspaceApp({
 
   function resolveTime() {
     if (!timeDraft.date || !timeDraft.time || !timeDraft.timezone) {
-      setTimeError("请选择准确日期、当地时间和来源时区。")
+      setTimeError(t("请选择准确日期、当地时间和来源时区。"))
       return;
     }
     updateReview((current) => ({
@@ -483,11 +476,11 @@ export function WorkspaceApp({
         </div>
 
         <div className="review-sidebar__scope">
-          <p>依据审阅</p>
+          <p>{t("依据审阅")}</p>
           <span>{dataset.cases.length} 个合成案例</span>
         </div>
 
-        <nav aria-label="候选人进展测试案例">
+        <nav aria-label={t("候选人进展测试案例")}>
           <ol className="review-case-rail">
             {dataset.cases.map((item) => (
               <CaseRailItem
@@ -503,18 +496,12 @@ export function WorkspaceApp({
 
         <div className="review-sidebar__foot">
           <Link href="/workspace">
-            <ArrowLeft aria-hidden="true" size={16} />
-            规范流程
-          </Link>
+            <ArrowLeft aria-hidden="true" size={16} />{t("规范流程")}</Link>
           <Link href="/">
-            <ArrowSquareOut aria-hidden="true" size={16} />
-            产品网站
-          </Link>
+            <ArrowSquareOut aria-hidden="true" size={16} />{t("产品网站")}</Link>
           <form action={signOutOfWorkspace} onSubmit={clearPendingLocalIntents}>
             <button type="submit">
-              <SignOut aria-hidden="true" size={16} />
-              退出登录
-            </button>
+              <SignOut aria-hidden="true" size={16} />{t("退出登录")}</button>
           </form>
         </div>
       </aside>
@@ -541,18 +528,16 @@ export function WorkspaceApp({
         <ReviewMain>
           <section
             className="review-source-note"
-            aria-label="工作区数据来源"
+            aria-label={t("工作区数据来源")}
           >
             <strong>{source.label}</strong>
             <p>{source.detail}</p>
             <button type="button" onClick={() => window.location.reload()}>
-              <ArrowCounterClockwise aria-hidden="true" size={15} />
-              刷新来源
-            </button>
+              <ArrowCounterClockwise aria-hidden="true" size={15} />{t("刷新来源")}</button>
           </section>
 
           <div className="review-mobile-picker">
-            <label htmlFor="fixture-case">审阅案例</label>
+            <label htmlFor="fixture-case">{t("审阅案例")}</label>
             <select
               id="fixture-case"
               value={fixtureCase.id}
@@ -593,9 +578,7 @@ export function WorkspaceApp({
                   : "无需事实决定"}
               </small>
               <button type="button" onClick={resetSelectedCase}>
-                <ArrowCounterClockwise aria-hidden="true" size={15} />
-                重置案例
-              </button>
+                <ArrowCounterClockwise aria-hidden="true" size={15} />{t("重置案例")}</button>
             </div>
           </header>
 
@@ -616,8 +599,8 @@ export function WorkspaceApp({
               >
                 <header>
                   <div>
-                    <p>观察到的依据</p>
-                    <h2 id="source-evidence-title">准确来源</h2>
+                    <p>{t("观察到的依据")}</p>
+                    <h2 id="source-evidence-title">{t("准确来源")}</h2>
                   </div>
                   <span>
                     {new Intl.DateTimeFormat("zh-CN", {
@@ -646,13 +629,13 @@ export function WorkspaceApp({
 
                 <dl className="review-source-metadata">
                   <div>
-                    <dt>来源时区</dt>
+                    <dt>{t("来源时区")}</dt>
                     <dd>
                       {fixtureCase.context.source_timezone ?? "未提供"}
                     </dd>
                   </div>
                   <div>
-                    <dt>项目</dt>
+                    <dt>{t("项目")}</dt>
                     <dd>
                       {fixtureCase.context.assignment ?? "尚未绑定"}
                     </dd>
@@ -667,18 +650,14 @@ export function WorkspaceApp({
                 >
                   <header>
                     <div>
-                      <p>身份歧义</p>
-                      <h2 id="identity-resolution-title">
-                        此来源属于哪位候选人？
-                      </h2>
+                      <p>{t("身份歧义")}</p>
+                      <h2 id="identity-resolution-title">{t("此来源属于哪位候选人？")}</h2>
                     </div>
                     <LockKey aria-hidden="true" size={20} />
                   </header>
-                  <p>
-                    选择背景前，不能创建候选人事实或截止日期行动。此选择仅保留在测试会话中。
-                  </p>
+                  <p>{t("选择背景前，不能创建候选人事实或截止日期行动。此选择仅保留在测试会话中。")}</p>
                   <fieldset>
-                    <legend>候选人与项目</legend>
+                    <legend>{t("候选人与项目")}</legend>
                     {fixtureCase.context.candidate_options?.map((option) => (
                       <label key={option}>
                         <input
@@ -705,7 +684,7 @@ export function WorkspaceApp({
                   <section className="resolution-note" aria-live="polite">
                     <CheckCircle aria-hidden="true" size={18} />
                     <div>
-                      <strong>背景已选择</strong>
+                      <strong>{t("背景已选择")}</strong>
                       <p>
                         {readableCandidateOption(
                           review.identityResolution ?? "",
@@ -720,9 +699,7 @@ export function WorkspaceApp({
                           identityResolution: null,
                         }))
                       }
-                    >
-                      更改
-                    </button>
+                    >{t("更改")}</button>
                   </section>
                 )}
 
@@ -733,17 +710,15 @@ export function WorkspaceApp({
                 >
                   <header>
                     <div>
-                      <p>时间歧义</p>
-                      <h2 id="time-resolution-title">
-                        解决来源日期与时区。
-                      </h2>
+                      <p>{t("时间歧义")}</p>
+                      <h2 id="time-resolution-title">{t("解决来源日期与时区。")}</h2>
                     </div>
                     <Clock aria-hidden="true" size={20} />
                   </header>
                   <p>{fixtureCase.context.notes}</p>
                   <div className="time-resolution-fields">
                     <label>
-                      <span>准确日期</span>
+                      <span>{t("准确日期")}</span>
                       <input
                         type="date"
                         value={timeDraft.date}
@@ -756,7 +731,7 @@ export function WorkspaceApp({
                       />
                     </label>
                     <label>
-                      <span>当地时间</span>
+                      <span>{t("当地时间")}</span>
                       <input
                         type="time"
                         value={timeDraft.time}
@@ -769,7 +744,7 @@ export function WorkspaceApp({
                       />
                     </label>
                     <label>
-                      <span>来源时区</span>
+                      <span>{t("来源时区")}</span>
                       <select
                         value={timeDraft.timezone}
                         onChange={(event) =>
@@ -779,7 +754,7 @@ export function WorkspaceApp({
                           }))
                         }
                       >
-                        <option value="">选择时区</option>
+                        <option value="">{t("选择时区")}</option>
                         <option value="Asia/Singapore">
                           Asia/Singapore
                         </option>
@@ -797,9 +772,7 @@ export function WorkspaceApp({
                     type="button"
                     onClick={resolveTime}
                   >
-                    <Check aria-hidden="true" size={16} />
-                    使用此来源时间
-                  </button>
+                    <Check aria-hidden="true" size={16} />{t("使用此来源时间")}</button>
                 </section>
               )}
 
@@ -807,7 +780,7 @@ export function WorkspaceApp({
                 <section className="resolution-note" aria-live="polite">
                   <CheckCircle aria-hidden="true" size={18} />
                   <div>
-                    <strong>来源时间已解决</strong>
+                    <strong>{t("来源时间已解决")}</strong>
                     <p>
                       {review.timeResolution.date}，{" "}
                       {review.timeResolution.time} (
@@ -831,9 +804,7 @@ export function WorkspaceApp({
                         },
                       }))
                     }
-                  >
-                    更改
-                  </button>
+                  >{t("更改")}</button>
                 </section>
               )}
             </div>
@@ -845,8 +816,8 @@ export function WorkspaceApp({
               >
                 <header>
                   <div>
-                    <p>拟议理解</p>
-                    <h2 id="proposed-state-title">逐项审阅事实</h2>
+                    <p>{t("拟议理解")}</p>
+                    <h2 id="proposed-state-title">{t("逐项审阅事实")}</h2>
                   </div>
                   <span>
                     {fixtureCase.expected.assertions.length}{" "}
@@ -905,7 +876,7 @@ export function WorkspaceApp({
                             </div>
                             {priorValue && (
                               <p>
-                                <span>之前</span>
+                                <span>{t("之前")}</span>
                                 <del>{priorValue}</del>
                               </p>
                             )}
@@ -913,9 +884,7 @@ export function WorkspaceApp({
 
                           {editing ? (
                             <div className="fact-review__edit">
-                              <label htmlFor={`edit-${assertion.field}`}>
-                                编辑后的值
-                              </label>
+                              <label htmlFor={`edit-${assertion.field}`}>{t("编辑后的值")}</label>
                               <textarea
                                 id={`edit-${assertion.field}`}
                                 rows={3}
@@ -928,9 +897,7 @@ export function WorkspaceApp({
                                 <button
                                   type="button"
                                   onClick={() => setEditingField(null)}
-                                >
-                                  取消
-                                </button>
+                                >{t("取消")}</button>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -940,9 +907,7 @@ export function WorkspaceApp({
                                   <FloppyDisk
                                     aria-hidden="true"
                                     size={15}
-                                  />
-                                  保存编辑
-                                </button>
+                                  />{t("保存编辑")}</button>
                               </div>
                             </div>
                           ) : (
@@ -950,7 +915,7 @@ export function WorkspaceApp({
                               <div className="fact-review__value">
                                 {factReview.status === "edited" && (
                                   <p>
-                                    <span>拟议</span>
+                                    <span>{t("拟议")}</span>
                                     <del>{factReview.originalValue}</del>
                                   </p>
                                 )}
@@ -992,9 +957,7 @@ export function WorkspaceApp({
                                     assertion.status,
                                   )
                                 }
-                              >
-                                重新打开审阅
-                              </button>
+                              >{t("重新打开审阅")}</button>
                             ) : (
                               <div className="fact-review__actions">
                                 <button
@@ -1008,9 +971,7 @@ export function WorkspaceApp({
                                   <PencilSimple
                                     aria-hidden="true"
                                     size={15}
-                                  />
-                                  编辑
-                                </button>
+                                  />{t("编辑")}</button>
                                 <button
                                   type="button"
                                   onClick={() =>
@@ -1020,9 +981,7 @@ export function WorkspaceApp({
                                     )
                                   }
                                 >
-                                  <X aria-hidden="true" size={15} />
-                                  驳回
-                                </button>
+                                  <X aria-hidden="true" size={15} />{t("驳回")}</button>
                                 <button
                                   type="button"
                                   disabled={ambiguousFactLocked}
@@ -1033,15 +992,11 @@ export function WorkspaceApp({
                                     )
                                   }
                                 >
-                                  <Check aria-hidden="true" size={15} />
-                                  确认
-                                </button>
+                                  <Check aria-hidden="true" size={15} />{t("确认")}</button>
                               </div>
                             ))}
                           {ambiguousFactLocked && (
-                            <p className="fact-review__locked">
-                              确认或编辑此值前，请先解决来源时间。
-                            </p>
+                            <p className="fact-review__locked">{t("确认或编辑此值前，请先解决来源时间。")}</p>
                           )}
                         </article>
                       );
@@ -1056,11 +1011,11 @@ export function WorkspaceApp({
               >
                 <header>
                   <div>
-                    <p>独立决定</p>
-                    <h2 id="action-review-title">一个下一步行动</h2>
+                    <p>{t("独立决定")}</p>
+                    <h2 id="action-review-title">{t("一个下一步行动")}</h2>
                   </div>
                   {fixtureCase.expected.action && (
-                    <span>单独批准</span>
+                    <span>{t("单独批准")}</span>
                   )}
                 </header>
 
@@ -1105,7 +1060,7 @@ export function WorkspaceApp({
                     </div>
                     <dl>
                       <div>
-                        <dt>为何现在</dt>
+                        <dt>{t("为何现在")}</dt>
                         <dd>
                           {localizeGeneratedCopy(
                             fixtureCase.expected.action.reason,
@@ -1113,7 +1068,7 @@ export function WorkspaceApp({
                         </dd>
                       </div>
                       <div>
-                        <dt>负责人</dt>
+                        <dt>{t("负责人")}</dt>
                         <dd>
                           {getActionOwnerLabel(
                             fixtureCase.expected.action.owner,
@@ -1121,7 +1076,7 @@ export function WorkspaceApp({
                         </dd>
                       </div>
                       <div>
-                        <dt>截止时间</dt>
+                        <dt>{t("截止时间")}</dt>
                         <dd>
                           {localizeGeneratedCopy(
                             fixtureCase.expected.action.due,
@@ -1129,15 +1084,13 @@ export function WorkspaceApp({
                         </dd>
                       </div>
                       <div>
-                        <dt>准确本地效果</dt>
-                        <dd>
-                          向此测试会话添加一个已批准问题；不会发送消息或安排日程。
-                        </dd>
+                        <dt>{t("准确本地效果")}</dt>
+                        <dd>{t("向此测试会话添加一个已批准问题；不会发送消息或安排日程。")}</dd>
                       </div>
                     </dl>
 
                     <div className="action-proposal__evidence">
-                      <span>支持来源</span>
+                      <span>{t("支持来源")}</span>
                       {fixtureCase.expected.action.evidence_message_ids.map(
                         (messageId) => (
                           <blockquote key={messageId}>
@@ -1155,9 +1108,7 @@ export function WorkspaceApp({
                       <>
                         {!canApproveAction(fixtureCase, review) && (
                           <p className="action-proposal__locked">
-                            <LockKey aria-hidden="true" size={15} />
-                            先审阅所有拟议事实，才能进行这项独立决定。
-                          </p>
+                            <LockKey aria-hidden="true" size={15} />{t("先审阅所有拟议事实，才能进行这项独立决定。")}</p>
                         )}
                         <div className="action-proposal__actions">
                           <button
@@ -1171,9 +1122,7 @@ export function WorkspaceApp({
                                 actionDecision: "declined",
                               }))
                             }
-                          >
-                            拒绝行动
-                          </button>
+                          >{t("拒绝行动")}</button>
                           <button
                             className="review-primary-button"
                             type="button"
@@ -1188,9 +1137,7 @@ export function WorkspaceApp({
                               }))
                             }
                           >
-                            <Check aria-hidden="true" size={16} />
-                            批准本地交接
-                          </button>
+                            <Check aria-hidden="true" size={16} />{t("批准本地交接")}</button>
                         </div>
                       </>
                     )}
@@ -1199,10 +1146,8 @@ export function WorkspaceApp({
                       <div className="action-decision-note">
                         <Prohibit aria-hidden="true" size={18} />
                         <div>
-                          <strong>行动已拒绝</strong>
-                          <p>
-                            依据与已审阅事实保持完整，未创建本地交接。
-                          </p>
+                          <strong>{t("行动已拒绝")}</strong>
+                          <p>{t("依据与已审阅事实保持完整，未创建本地交接。")}</p>
                         </div>
                         <button
                           type="button"
@@ -1212,9 +1157,7 @@ export function WorkspaceApp({
                               actionDecision: "pending",
                             }))
                           }
-                        >
-                          恢复提议
-                        </button>
+                        >{t("恢复提议")}</button>
                       </div>
                     )}
 
@@ -1232,9 +1175,7 @@ export function WorkspaceApp({
                           </div>
                         </div>
                         <div className="fixture-outcome__control">
-                          <label htmlFor={`outcome-${fixtureCase.id}`}>
-                            待检查的测试观察结果
-                          </label>
+                          <label htmlFor={`outcome-${fixtureCase.id}`}>{t("待检查的测试观察结果")}</label>
                           <div>
                             <select
                               id={`outcome-${fixtureCase.id}`}
@@ -1245,12 +1186,10 @@ export function WorkspaceApp({
                                 )
                               }
                             >
-                              <option value="pending">待处理</option>
-                              <option value="verified">
-                                已在测试中验证
-                              </option>
-                              <option value="failed">失败</option>
-                              <option value="unknown">未知</option>
+                              <option value="pending">{t("待处理")}</option>
+                              <option value="verified">{t("已在测试中验证")}</option>
+                              <option value="failed">{t("失败")}</option>
+                              <option value="unknown">{t("未知")}</option>
                             </select>
                             <button
                               type="button"
@@ -1260,13 +1199,9 @@ export function WorkspaceApp({
                                   outcome: outcomeDraft,
                                 }))
                               }
-                            >
-                              应用测试结果
-                            </button>
+                            >{t("应用测试结果")}</button>
                           </div>
-                          <p>
-                            此控件用于演示结果语义，不会联系或观察外部系统。
-                          </p>
+                          <p>{t("此控件用于演示结果语义，不会联系或观察外部系统。")}</p>
                         </div>
                       </div>
                     )}
@@ -1275,7 +1210,7 @@ export function WorkspaceApp({
               </section>
 
               <details className="review-boundaries">
-                <summary>案例边界已保留</summary>
+                <summary>{t("案例边界已保留")}</summary>
                 <ul>
                   {fixtureCase.expected.must_not.map((boundary) => (
                     <li key={boundary}>{localizeGeneratedCopy(boundary)}</li>

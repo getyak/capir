@@ -18,6 +18,7 @@ stable, and free of implementation-level detail.
 | What should the product feel like? | [Design system](design-system.md) |
 | What should be built next? | [Delivery](delivery.md) |
 | Which integrations are allowed? | [Integrations](integrations.md) |
+| How is the product localized? | [Internationalization](internationalization.md) |
 
 Read only the documents needed for the task. For example, a visual change
 usually needs Product and Design System, while a retention change needs

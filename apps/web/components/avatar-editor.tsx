@@ -1,4 +1,5 @@
 "use client";
+import { useT } from "@/components/locale-provider";
 
 import { Camera } from "@phosphor-icons/react/dist/csr/Camera";
 import { Check } from "@phosphor-icons/react/dist/csr/Check";
@@ -31,6 +32,7 @@ export function AvatarEditor({ id, label, url, self = false, size = 72, shape, c
 }
 
 export function AvatarDefaultSettings() {
+  const t = useT();
   const { store, defaultStyle } = useAvatarPreferences();
   const [error, setError] = useState("");
   const [clearing, setClearing] = useState<AvatarSnapshot | null>(null);
@@ -52,24 +54,24 @@ export function AvatarDefaultSettings() {
       setClearing(null);
     } finally { setBusy(false); }
   }
-  return <section className={styles.settings} aria-label="默认头像风格">
-    <div><h2>联系人默认头像</h2><p>没有照片时使用。单独设置过的联系人保持自己的风格。</p></div>
+  return <section className={styles.settings} aria-label={t("默认头像风格")}>
+    <div><h2>{t("联系人默认头像")}</h2><p>{t("没有照片时使用。单独设置过的联系人保持自己的风格。")}</p></div>
     <div className={styles.defaults}>
       {choices.map(choice => <button className={styles.defaultOption} disabled={!store || busy} aria-pressed={defaultStyle === choice.value} key={choice.value} type="button" onClick={() => void select(choice.value)}>
         <span className={styles.examples}>
-          <IdentityAvatar id="example-1" label="张伟" size={40} preference={{ style: choice.value }} />
+          <IdentityAvatar id="example-1" label={t("张伟")} size={40} preference={{ style: choice.value }} />
           <IdentityAvatar id="example-2" label="John Smith" size={40} preference={{ style: choice.value }} />
-          <IdentityAvatar id="example-3" label="陈曦" size={40} preference={{ style: choice.value }} />
+          <IdentityAvatar id="example-3" label={t("陈曦")} size={40} preference={{ style: choice.value }} />
         </span>
         <span>{choice.label}{defaultStyle === choice.value ? <Check size={14} aria-hidden="true" /> : null}</span>
       </button>)}
     </div>
-    <p className={styles.hint}>没有姓名时，使用稳定的抽象图案。</p>
+    <p className={styles.hint}>{t("没有姓名时，使用稳定的抽象图案。")}</p>
     <details className={styles.localData}>
-      <summary>管理本机头像数据</summary>
-      <p>清除当前账号在此浏览器中上传的头像和风格设置，恢复已有来源照片与姓名头像。</p>
-      {clearing ? <div><button className={styles.textButton} type="button" disabled={busy} onClick={() => setClearing(null)}>保留设置</button><button className={styles.textButton} type="button" disabled={busy} onClick={() => void clear()}>确认清除</button></div>
-        : <button className={styles.textButton} type="button" disabled={!store || busy} onClick={() => { store?.refresh(); setClearing(store?.getSnapshot() ?? null); }}>清除本机头像设置</button>}
+      <summary>{t("管理本机头像数据")}</summary>
+      <p>{t("清除当前账号在此浏览器中上传的头像和风格设置，恢复已有来源照片与姓名头像。")}</p>
+      {clearing ? <div><button className={styles.textButton} type="button" disabled={busy} onClick={() => setClearing(null)}>{t("保留设置")}</button><button className={styles.textButton} type="button" disabled={busy} onClick={() => void clear()}>{t("确认清除")}</button></div>
+        : <button className={styles.textButton} type="button" disabled={!store || busy} onClick={() => { store?.refresh(); setClearing(store?.getSnapshot() ?? null); }}>{t("清除本机头像设置")}</button>}
     </details>
     {error ? <p className={styles.error} role="alert">{error}</p> : null}
     <span className={styles.srOnly} role="status">{status}</span>

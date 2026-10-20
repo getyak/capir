@@ -72,7 +72,7 @@ export function RelationshipBrief() {
             {c.quoteLabel}
           </span>
           <blockquote lang="zh-CN">{c.quote}</blockquote>
-          {locale === "en" && (
+          {!locale.startsWith("zh") && (
             <p className={styles.translation}>
               <span>{c.translation}: </span>I need to decide before Wednesday.
               The arrangement for working remotely from Singapore has not been

@@ -1,3 +1,4 @@
+import { useT } from "@/components/locale-provider";
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
 import { AddressBook } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
@@ -23,13 +24,14 @@ export function PeopleDirectoryApp({
   returnSessionId,
   sessionRecoveryHref,
 }: Props) {
+  const t = useT();
   return (
     <div className={styles.shell}>
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <div className={styles.page}>
           <header className={styles.pageHeading}>
             <div>
-              <h1>人物</h1>
+              <h1>{t("人物")}</h1>
               <p>
                 {error
                   ? "目录暂时不可用；已保存的联系人资料不会改变。"
@@ -45,9 +47,7 @@ export function PeopleDirectoryApp({
                 "/workspace?surface=desk&intent=create-contact",
                 returnSessionId,
               )}
-            >
-              添加联系人
-            </Link>
+            >{t("添加联系人")}</Link>
           </header>
 
           <div className={styles.listTools}>
@@ -72,7 +72,7 @@ export function PeopleDirectoryApp({
                 primaryLabel={sessionRecoveryHref ? "重新登录" : "重新载入"}
                 secondaryHref="/workspace"
                 secondaryLabel="返回对话"
-                title="人物目录暂时不可用。"
+                title={t("人物目录暂时不可用。")}
               />
             </div>
           ) : people.length === 0 ? (
@@ -89,23 +89,19 @@ export function PeopleDirectoryApp({
               {query ? (
                 <Link
                   href={withReturnSession("/workspace/people", returnSessionId)}
-                >
-                  清除搜索
-                </Link>
+                >{t("清除搜索")}</Link>
               ) : (
                 <Link
                   href={withReturnSession("/workspace?surface=desk&intent=create-contact", returnSessionId)}
-                >
-                  添加第一位联系人
-                </Link>
+                >{t("添加第一位联系人")}</Link>
               )}
             </div>
           ) : (
             <>
               <div aria-hidden="true" className={styles.tableHeader}>
-                <span>人物</span>
-                <span>关系情境与资料</span>
-                <span>更新</span>
+                <span>{t("人物")}</span>
+                <span>{t("关系情境与资料")}</span>
+                <span>{t("更新")}</span>
               </div>
               <PeopleDirectoryList people={people} query={query} returnSessionId={returnSessionId} />
             </>

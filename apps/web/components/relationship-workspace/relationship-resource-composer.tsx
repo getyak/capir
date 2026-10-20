@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import type {
   PersonDirectoryItem,
   PublicResearchResponse,
@@ -125,6 +126,7 @@ function ScopedRelationshipResourceComposer({
   /** Owner session binding for the time workspace boundary. */
   sessionBinding?: string | null;
 }) {
+  const t = useT();
   const reviewTitleRef = useRef<HTMLHeadingElement | null>(null);
   const sourceAuthorizationTriggerRef = useRef<HTMLButtonElement | null>(null);
   const deleteResourceTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -339,7 +341,7 @@ function ScopedRelationshipResourceComposer({
       return;
     }
 
-    setBusyOperation("正在更正身份…");
+    setBusyOperation(t("正在更正身份…"));
     setError("");
     identityCorrectionRequestRef.current ??= crypto.randomUUID();
     try {
@@ -391,7 +393,7 @@ function ScopedRelationshipResourceComposer({
       });
       if (readback === "unavailable") {
         setError(
-          "身份更正已记录，但无法读回更正后的关系。请重新加载后再做其他决定。",
+          t("身份更正已记录，但无法读回更正后的关系。请重新加载后再做其他决定。"),
         );
       }
     } catch (caught) {
@@ -547,7 +549,7 @@ function ScopedRelationshipResourceComposer({
       return payload;
     }
     throw new Error(
-      "无法恢复此前的公开研究状态。",
+      t("无法恢复此前的公开研究状态。"),
     );
   }
 
@@ -559,7 +561,7 @@ function ScopedRelationshipResourceComposer({
     if (!resourceId) {
       return;
     }
-    setBusyOperation("正在读取研究状态…");
+    setBusyOperation(t("正在读取研究状态…"));
     setError("");
     try {
       const result = await loadLatestResearch(resourceId);
@@ -590,10 +592,10 @@ function ScopedRelationshipResourceComposer({
         selectedResource.resource.source_locator,
       ).hostname.toLowerCase();
     } catch {
-      setError("已保存的公开网址无效。")
+      setError(t("已保存的公开网址无效。"))
       return;
     }
-    setBusyOperation("正在查阅公开资料…");
+    setBusyOperation(t("正在查阅公开资料…"));
     setError("");
     setResearchResult(null);
     try {
@@ -646,7 +648,7 @@ function ScopedRelationshipResourceComposer({
     currentStatus: "proposed" | "reviewed" | "rejected",
     decision: "reviewed" | "rejected",
   ) {
-    setBusyOperation("正在保存提取审阅…");
+    setBusyOperation(t("正在保存提取审阅…"));
     setError("");
     try {
       const response = await relationshipIntegrationFetch(
@@ -698,11 +700,11 @@ function ScopedRelationshipResourceComposer({
     }
     const correctedValue = claimEdits[claim.id]?.trim() ?? "";
     if (decision === "confirm" && !correctedValue) {
-      setError("请添加你打算确认的值。")
+      setError(t("请添加你打算确认的值。"))
       return;
     }
     const resourceId = selectedResource.resource.id;
-    setBusyOperation("正在保存事实决定…");
+    setBusyOperation(t("正在保存事实决定…"));
     setError("");
     try {
       const response = await relationshipIntegrationFetch(
@@ -746,7 +748,7 @@ function ScopedRelationshipResourceComposer({
     if (!selectedResource) {
       return;
     }
-    setBusyOperation("正在删除来源…");
+    setBusyOperation(t("正在删除来源…"));
     setError("");
     try {
       const response = await relationshipIntegrationFetch(
@@ -809,14 +811,14 @@ function ScopedRelationshipResourceComposer({
         parsedExpiry <= new Date()
       ) {
         setError(
-          "请选择未来的来源授权截止时间。",
+          t("请选择未来的来源授权截止时间。"),
         );
         return;
       }
       authorizationExpiresAt = parsedExpiry.toISOString();
     }
     const resourceId = selectedResource.resource.id;
-    setBusyOperation("正在更新来源授权…");
+    setBusyOperation(t("正在更新来源授权…"));
     setError("");
     sourceAuthorizationRequestRef.current ??= crypto.randomUUID();
     try {
@@ -918,10 +920,10 @@ function ScopedRelationshipResourceComposer({
     }
     const capturedAt = requestCapturedAtRef.current;
     if (!capturedAt) {
-      setError("无法保留来源观察时间。")
+      setError(t("无法保留来源观察时间。"))
       return;
     }
-    setBusyOperation("正在保存资料…");
+    setBusyOperation(t("正在保存资料…"));
     setError("");
     try {
       let response: Response;
@@ -1015,13 +1017,13 @@ function ScopedRelationshipResourceComposer({
     >
       <div className="context-resource-composer__heading">
         <div>
-          <p className="eyebrow">添加背景</p>
-          <h2 id="add-context-title">补充这位联系人的背景</h2>
+          <p className="eyebrow">{t("添加背景")}</p>
+          <h2 id="add-context-title">{t("补充这位联系人的背景")}</h2>
           <p>
             附加到 {scopeLabel}。每个来源都保留各自的权限、依据位置与删除路径。
           </p>
         </div>
-        <div aria-label="背景来源类型" role="tablist">
+        <div aria-label={t("背景来源类型")} role="tablist">
           <button
             aria-selected={mode === "note"}
             onClick={() => {
@@ -1031,9 +1033,7 @@ function ScopedRelationshipResourceComposer({
             role="tab"
             type="button"
           >
-            <PencilSimple aria-hidden="true" size={16} />
-            备注
-          </button>
+            <PencilSimple aria-hidden="true" size={16} />{t("备注")}</button>
           <button
             aria-selected={mode === "conversation"}
             onClick={() => {
@@ -1043,9 +1043,7 @@ function ScopedRelationshipResourceComposer({
             role="tab"
             type="button"
           >
-            <ChatCircleDots aria-hidden="true" size={16} />
-            对话转写
-          </button>
+            <ChatCircleDots aria-hidden="true" size={16} />{t("对话转写")}</button>
           <button
             aria-selected={mode === "document"}
             onClick={() => {
@@ -1055,9 +1053,7 @@ function ScopedRelationshipResourceComposer({
             role="tab"
             type="button"
           >
-            <UploadSimple aria-hidden="true" size={16} />
-            文件
-          </button>
+            <UploadSimple aria-hidden="true" size={16} />{t("文件")}</button>
           <button
             aria-selected={mode === "url"}
             onClick={() => {
@@ -1067,13 +1063,9 @@ function ScopedRelationshipResourceComposer({
             role="tab"
             type="button"
           >
-            <LinkSimple aria-hidden="true" size={16} />
-            链接
-          </button>
+            <LinkSimple aria-hidden="true" size={16} />{t("链接")}</button>
           <button onClick={onScreenshot} type="button">
-            <FileImage aria-hidden="true" size={16} />
-            截图
-          </button>
+            <FileImage aria-hidden="true" size={16} />{t("截图")}</button>
         </div>
       </div>
 
@@ -1128,7 +1120,7 @@ function ScopedRelationshipResourceComposer({
             </span>
           </button>
           <label>
-            <span>文档用途</span>
+            <span>{t("文档用途")}</span>
             <select
               onChange={(event) => {
                 setDocumentKind(
@@ -1138,8 +1130,8 @@ function ScopedRelationshipResourceComposer({
               }}
               value={documentKind}
             >
-              <option value="resume">简历</option>
-              <option value="document">补充文档</option>
+              <option value="resume">{t("简历")}</option>
+              <option value="document">{t("补充文档")}</option>
             </select>
           </label>
           <label className="context-resource-checkbox">
@@ -1151,11 +1143,7 @@ function ScopedRelationshipResourceComposer({
               }}
               type="checkbox"
             />
-            <span>
-              将可见网址保存为研究种子
-              <small>
-                这不会抓取页面，也不会授权深度研究。
-              </small>
+            <span>{t("将可见网址保存为研究种子")}<small>{t("这不会抓取页面，也不会授权深度研究。")}</small>
             </span>
           </label>
         </div>
@@ -1186,7 +1174,7 @@ function ScopedRelationshipResourceComposer({
                   setValue(event.target.value);
                   resetRequest();
                 }}
-                placeholder="你希望未来的自己记住什么？这始终是你撰写的备注，不是对方陈述。"
+                placeholder={t("你希望未来的自己记住什么？这始终是你撰写的备注，不是对方陈述。")}
                 rows={3}
                 value={value}
               />
@@ -1225,9 +1213,7 @@ function ScopedRelationshipResourceComposer({
         </p>
       ) : null}
       <footer>
-        <p>
-          每个来源都可单独审阅；保存网址并不代表获准抓取。
-        </p>
+        <p>{t("每个来源都可单独审阅；保存网址并不代表获准抓取。")}</p>
         <button
           className="context-primary-button context-primary-button--compact"
           disabled={
@@ -1253,7 +1239,7 @@ function ScopedRelationshipResourceComposer({
 
       <div className="context-resource-ledger">
         <div>
-          <h3>此关系的来源</h3>
+          <h3>{t("此关系的来源")}</h3>
           <span>
             {resourceLoading
               ? "加载中……"
@@ -1317,9 +1303,7 @@ function ScopedRelationshipResourceComposer({
             ))}
           </div>
         ) : resourceLoading ? null : (
-          <p className="context-resource-ledger__empty">
-            尚未附加其他备注、对话转写、文件或链接。
-          </p>
+          <p className="context-resource-ledger__empty">{t("尚未附加其他备注、对话转写、文件或链接。")}</p>
         )}
       </div>
 
@@ -1327,7 +1311,7 @@ function ScopedRelationshipResourceComposer({
         <div className={`context-resource-review ${styles.review}`}>
           <header className={styles.reviewHeader}>
             <div className={styles.reviewTitle}>
-              <p className="eyebrow">依据审阅</p>
+              <p className="eyebrow">{t("依据审阅")}</p>
               <h3 className={styles.readingTarget} ref={reviewTitleRef} tabIndex={-1}>
                 {selectedResource.resource.display_name}
               </h3>
@@ -1363,9 +1347,7 @@ function ScopedRelationshipResourceComposer({
                 }}
                 type="button"
               >
-                <PencilSimple aria-hidden="true" size={15} />
-                人物不对？
-              </button>
+                <PencilSimple aria-hidden="true" size={15} />{t("人物不对？")}</button>
               <button
                 aria-expanded={sourceAuthorizationOpen}
                 ref={sourceAuthorizationTriggerRef}
@@ -1407,11 +1389,9 @@ function ScopedRelationshipResourceComposer({
                 }}
                 type="button"
               >
-                <Trash aria-hidden="true" size={15} />
-                删除来源
-              </button>
+                <Trash aria-hidden="true" size={15} />{t("删除来源")}</button>
               <button
-                aria-label="关闭依据审阅"
+                aria-label={t("关闭依据审阅")}
                 className="context-icon-button"
                 onClick={() => {
                   sourceReadVersion.current += 1;
@@ -1447,7 +1427,7 @@ function ScopedRelationshipResourceComposer({
             >
               <header>
                 <div>
-                  <p className="eyebrow">来源授权</p>
+                  <p className="eyebrow">{t("来源授权")}</p>
                   <h4>
                     {selectedResource.resource
                       .source_authorization_state === "authorized"
@@ -1475,7 +1455,7 @@ function ScopedRelationshipResourceComposer({
                     : "恢复访问会重新显示受治理依据，但所有来源衍生声明都需重新由你审阅。此前事实、批准和行动保持撤回。"}
               </p>
               <label className="context-identity-correction__reason">
-                <span>为何更改此授权？</span>
+                <span>{t("为何更改此授权？")}</span>
                 <textarea
                   maxLength={500}
                   onChange={(event) => {
@@ -1514,9 +1494,7 @@ function ScopedRelationshipResourceComposer({
                     type="datetime-local"
                     value={sourceAuthorizationExpiresAt}
                   />
-                  <small>
-                    这决定来源能否继续作为依据，不会改变原始文件的保留时长。
-                  </small>
+                  <small>{t("这决定来源能否继续作为依据，不会改变原始文件的保留时长。")}</small>
                 </label>
               ) : null}
               <footer>
@@ -1532,9 +1510,7 @@ function ScopedRelationshipResourceComposer({
                     resetSourceAuthorizationDecision();
                   }}
                   type="button"
-                >
-                  取消
-                </button>
+                >{t("取消")}</button>
                 <button
                   className={
                     selectedResource.resource
@@ -1573,9 +1549,7 @@ function ScopedRelationshipResourceComposer({
               className={`context-resource-review__delete ${styles.decision}`}
               onFocusCapture={revealDecisionControl}
             >
-              <p>
-                这会删除此来源及由它发现的资料，并撤回依赖它的关系记录与对话快照。此操作不能恢复。
-              </p>
+              <p>{t("这会删除此来源及由它发现的资料，并撤回依赖它的关系记录与对话快照。此操作不能恢复。")}</p>
               <button
                 className="context-secondary-button"
                 onClick={() => {
@@ -1587,9 +1561,7 @@ function ScopedRelationshipResourceComposer({
                   setDeleteResourceConfirm(false);
                 }}
                 type="button"
-              >
-                保留来源
-              </button>
+              >{t("保留来源")}</button>
               <button
                 className="context-danger-button"
                 disabled={busy}
@@ -1604,8 +1576,8 @@ function ScopedRelationshipResourceComposer({
             <section className="context-identity-correction">
               <header>
                 <div>
-                  <p className="eyebrow">身份更正</p>
-                  <h4>将此受治理来源移到正确的人物。</h4>
+                  <p className="eyebrow">{t("身份更正")}</p>
+                  <h4>{t("将此受治理来源移到正确的人物。")}</h4>
                 </div>
                 <Warning aria-hidden="true" size={19} />
               </header>
@@ -1613,7 +1585,7 @@ function ScopedRelationshipResourceComposer({
                 此来源及由其发现的内容会一并移动。{scopeLabel} 下已确认事实将被撤回；新关系只会收到可审阅提议，绝不会自动成为事实。
               </p>
               <div
-                aria-label="身份更正目标类型"
+                aria-label={t("身份更正目标类型")}
                 className="context-identity-correction__mode"
                 role="group"
               >
@@ -1625,9 +1597,7 @@ function ScopedRelationshipResourceComposer({
                     resetIdentityCorrectionRequest();
                   }}
                   type="button"
-                >
-                  现有人物
-                </button>
+                >{t("现有人物")}</button>
                 <button
                   aria-pressed={identityTargetMode === "new"}
                   onClick={() => {
@@ -1635,9 +1605,7 @@ function ScopedRelationshipResourceComposer({
                     resetIdentityCorrectionRequest();
                   }}
                   type="button"
-                >
-                  新人物
-                </button>
+                >{t("新人物")}</button>
               </div>
               {identityPeopleLoading ? (
                 <p className="context-identity-correction__loading">
@@ -1645,13 +1613,11 @@ function ScopedRelationshipResourceComposer({
                     aria-hidden="true"
                     className="spin"
                     size={16}
-                  />
-                  正在加载受治理人才……
-                </p>
+                  />{t("正在加载受治理人才……")}</p>
               ) : identityTargetMode === "existing" ? (
                 <div className="context-identity-correction__fields">
                   <label>
-                    <span>正确人物</span>
+                    <span>{t("正确人物")}</span>
                     <select
                       disabled={busy}
                       onChange={(event) => {
@@ -1662,9 +1628,7 @@ function ScopedRelationshipResourceComposer({
                       }}
                       value={identityTargetPersonId}
                     >
-                      <option disabled value="">
-                        选择正确人物……
-                      </option>
+                      <option disabled value="">{t("选择正确人物……")}</option>
                       {identityPeople.map((person) => (
                         <option key={person.id} value={person.id}>
                           {person.display_label} · {person.capture_count}{" "}
@@ -1674,7 +1638,7 @@ function ScopedRelationshipResourceComposer({
                     </select>
                   </label>
                   <label>
-                    <span>关系背景</span>
+                    <span>{t("关系背景")}</span>
                     <select
                       disabled={busy}
                       onChange={(event) => {
@@ -1683,22 +1647,18 @@ function ScopedRelationshipResourceComposer({
                       }}
                       value={identityTargetContextId}
                     >
-                      <option disabled value="">
-                        选择关系背景……
-                      </option>
+                      <option disabled value="">{t("选择关系背景……")}</option>
                       {identityTargetPerson?.contexts.map((context) => (
                         <option key={context.id} value={context.id}>
                           {context.display_label}
                         </option>
                       ))}
-                      <option value="__new__">
-                        创建独立背景……
-                      </option>
+                      <option value="__new__">{t("创建独立背景……")}</option>
                     </select>
                   </label>
                   {identityTargetContextId === "__new__" ? (
                     <label>
-                      <span>新背景名称</span>
+                      <span>{t("新背景名称")}</span>
                       <input
                         disabled={busy}
                         maxLength={200}
@@ -1706,7 +1666,7 @@ function ScopedRelationshipResourceComposer({
                           setIdentityNewContextLabel(event.target.value);
                           resetIdentityCorrectionRequest();
                         }}
-                        placeholder="例如：产品副总裁 · Northstar 寻访"
+                        placeholder={t("例如：产品副总裁 · Northstar 寻访")}
                         value={identityNewContextLabel}
                       />
                     </label>
@@ -1715,7 +1675,7 @@ function ScopedRelationshipResourceComposer({
               ) : (
                 <div className="context-identity-correction__fields">
                   <label>
-                    <span>新人物姓名</span>
+                    <span>{t("新人物姓名")}</span>
                     <input
                       disabled={busy}
                       maxLength={200}
@@ -1723,12 +1683,12 @@ function ScopedRelationshipResourceComposer({
                         setIdentityNewPersonLabel(event.target.value);
                         resetIdentityCorrectionRequest();
                       }}
-                      placeholder="例如：Maya Chen"
+                      placeholder={t("例如：Maya Chen")}
                       value={identityNewPersonLabel}
                     />
                   </label>
                   <label>
-                    <span>关系背景</span>
+                    <span>{t("关系背景")}</span>
                     <input
                       disabled={busy}
                       maxLength={200}
@@ -1736,14 +1696,14 @@ function ScopedRelationshipResourceComposer({
                         setIdentityNewContextLabel(event.target.value);
                         resetIdentityCorrectionRequest();
                       }}
-                      placeholder="例如：产品副总裁 · Northstar 寻访"
+                      placeholder={t("例如：产品副总裁 · Northstar 寻访")}
                       value={identityNewContextLabel}
                     />
                   </label>
                 </div>
               )}
               <label className="context-identity-correction__reason">
-                <span>为什么这是正确身份？</span>
+                <span>{t("为什么这是正确身份？")}</span>
                 <textarea
                   disabled={busy}
                   maxLength={500}
@@ -1751,24 +1711,20 @@ function ScopedRelationshipResourceComposer({
                     setIdentityCorrectionReason(event.target.value);
                     resetIdentityCorrectionRequest();
                   }}
-                  placeholder="例如：邮箱地址与任职经历和现有联系人匹配。"
+                  placeholder={t("例如：邮箱地址与任职经历和现有联系人匹配。")}
                   rows={2}
                   value={identityCorrectionReason}
                 />
               </label>
               <footer>
-                <p>
-                  待处理行动会被撤销；正在进行的效果必须先完成对账，才能继续移动。
-                </p>
+                <p>{t("待处理行动会被撤销；正在进行的效果必须先完成对账，才能继续移动。")}</p>
                 <div>
                   <button
                     className="context-text-button"
                     disabled={busy}
                     onClick={() => setIdentityCorrectionOpen(false)}
                     type="button"
-                  >
-                    保留当前身份
-                  </button>
+                  >{t("保留当前身份")}</button>
                   <button
                     className="context-primary-button context-primary-button--compact"
                     disabled={
@@ -1824,8 +1780,8 @@ function ScopedRelationshipResourceComposer({
           selectedResource.resource.source_locator ? (
               <section className="context-research-approval">
               <div>
-                <p className="eyebrow">公开研究</p>
-                <h4>AI 读取种子之外内容前，请先选择边界。</h4>
+                <p className="eyebrow">{t("公开研究")}</p>
+                <h4>{t("AI 读取种子之外内容前，请先选择边界。")}</h4>
                 <p>
                   已批准域名：{" "}
                   <strong>
@@ -1834,13 +1790,11 @@ function ScopedRelationshipResourceComposer({
                         selectedResource.resource.source_locator,
                       ).hostname
                     }
-                  </strong>
-                  。每个检索页面都会以拟议依据返回，并保留网址、检索时间与相关资料的删除范围。
-                </p>
+                  </strong>{t("。每个检索页面都会以拟议依据返回，并保留网址、检索时间与相关资料的删除范围。")}</p>
               </div>
               <div className="context-research-approval__scope">
                 <label>
-                  <span>最大页数</span>
+                  <span>{t("最大页数")}</span>
                   <select
                     disabled={busy}
                     onChange={(event) =>
@@ -1848,13 +1802,13 @@ function ScopedRelationshipResourceComposer({
                     }
                     value={researchPageCount}
                   >
-                    <option value={1}>1 页</option>
-                    <option value={3}>最多 3 页</option>
-                    <option value={5}>最多 5 页</option>
+                    <option value={1}>{t("1 页")}</option>
+                    <option value={3}>{t("最多 3 页")}</option>
+                    <option value={5}>{t("最多 5 页")}</option>
                   </select>
                 </label>
                 <label>
-                  <span>跟随链接</span>
+                  <span>{t("跟随链接")}</span>
                   <select
                     disabled={busy}
                     onChange={(event) =>
@@ -1862,8 +1816,8 @@ function ScopedRelationshipResourceComposer({
                     }
                     value={researchLinkDepth}
                   >
-                    <option value={0}>仅种子页面</option>
-                    <option value={1}>同域一层</option>
+                    <option value={0}>{t("仅种子页面")}</option>
+                    <option value={1}>{t("同域一层")}</option>
                   </select>
                 </label>
               </div>
@@ -1876,11 +1830,7 @@ function ScopedRelationshipResourceComposer({
                   }
                   type="checkbox"
                 />
-                <span>
-                  我批准这次有边界的公开研究
-                  <small>
-                    仅限 HTTPS；私有网络与跨域重定向会被阻止。
-                  </small>
+                <span>{t("我批准这次有边界的公开研究")}<small>{t("仅限 HTTPS；私有网络与跨域重定向会被阻止。")}</small>
                 </span>
               </label>
               {researchResult ? (
@@ -1930,17 +1880,13 @@ function ScopedRelationshipResourceComposer({
                             </li>
                           ))}
                       </ul>
-                      <small>
-                        检索警告属于操作依据，不是关于此人的声明。
-                      </small>
+                      <small>{t("检索警告属于操作依据，不是关于此人的声明。")}</small>
                     </div>
                   ) : null}
                 </div>
               ) : null}
               <footer>
-                <p>
-                  研究绝不会确认人物事实，也不会联系任何人。
-                </p>
+                <p>{t("研究绝不会确认人物事实，也不会联系任何人。")}</p>
                 <button
                   className="context-primary-button context-primary-button--compact"
                   disabled={
@@ -1984,10 +1930,8 @@ function ScopedRelationshipResourceComposer({
                   <FileImage aria-hidden="true" size={18} weight="duotone" />
                 </span>
                 <p>
-                  <strong>截图事实仍需你判断</strong>
-                  <small>
-                    转写审阅与事实决定保持分离。打开原始采集审阅，逐项确认、驳回或保留为未解决。
-                  </small>
+                  <strong>{t("截图事实仍需你判断")}</strong>
+                  <small>{t("转写审阅与事实决定保持分离。打开原始采集审阅，逐项确认、驳回或保留为未解决。")}</small>
                 </p>
               </div>
               <button
@@ -1998,9 +1942,7 @@ function ScopedRelationshipResourceComposer({
                   )
                 }
                 type="button"
-              >
-                继续事实审阅
-                <ArrowRight aria-hidden="true" size={15} />
+              >{t("继续事实审阅")}<ArrowRight aria-hidden="true" size={15} />
               </button>
             </section>
           ) : null}
@@ -2008,8 +1950,8 @@ function ScopedRelationshipResourceComposer({
             <section className="context-claim-review">
               <header>
                 <div>
-                  <p className="eyebrow">拟议人物更新</p>
-                  <h4>决定哪些内容成为这段关系的一部分。</h4>
+                  <p className="eyebrow">{t("拟议人物更新")}</p>
+                  <h4>{t("决定哪些内容成为这段关系的一部分。")}</h4>
                 </div>
                 <span>
                   {
@@ -2022,9 +1964,7 @@ function ScopedRelationshipResourceComposer({
                   项待处理
                 </span>
               </header>
-              <p>
-                每项更新都保留准确来源片段；在你选择当前值前，冲突声明保持分离。
-              </p>
+              <p>{t("每项更新都保留准确来源片段；在你选择当前值前，冲突声明保持分离。")}</p>
               <div className="context-claim-review__list">
                 {selectedResource.claim_proposals.map((claim) => {
                   const open = ["pending", "unresolved"].includes(
@@ -2064,22 +2004,22 @@ function ScopedRelationshipResourceComposer({
                       </header>
                       {claim.prior_confirmed_value ? (
                         <div
-                          aria-label="拟议事实变化"
+                          aria-label={t("拟议事实变化")}
                           className="context-claim-review__diff"
                         >
                           <span>
-                            <small>之前</small>
+                            <small>{t("之前")}</small>
                             <del>{claim.prior_confirmed_value}</del>
                           </span>
                           <ArrowRight aria-hidden="true" size={15} />
                           <span>
-                            <small>拟议</small>
+                            <small>{t("拟议")}</small>
                             <ins>{claimEdits[claim.id] ?? ""}</ins>
                           </span>
                         </div>
                       ) : null}
                       <label>
-                        <span>待确认值</span>
+                        <span>{t("待确认值")}</span>
                         <input
                           disabled={!open || busy}
                           maxLength={2_000}
@@ -2099,8 +2039,8 @@ function ScopedRelationshipResourceComposer({
                             "没有可用的准确来源引文。"}
                         </span>
                       </blockquote>
-                      {dateRequired ? <p>需要完整日期 YYYY-MM-DD。导入时间不能替代消息时间。</p> : null}
-                      {evidenceBlocked ? <p role="status">来源或身份已变化，请重新审阅当前证据。</p> : null}
+                      {dateRequired ? <p>{t("需要完整日期 YYYY-MM-DD。导入时间不能替代消息时间。")}</p> : null}
+                      {evidenceBlocked ? <p role="status">{t("来源或身份已变化，请重新审阅当前证据。")}</p> : null}
                       <p>
                         {claim.producer.name} {claim.producer.version} ·
                         来源片段 {claim.evidence_fragment_id.slice(0, 8)}
@@ -2114,9 +2054,7 @@ function ScopedRelationshipResourceComposer({
                               void decideClaim(claim, "dismiss")
                             }
                             type="button"
-                          >
-                            驳回
-                          </button>
+                          >{t("驳回")}</button>
                           <button
                             className="context-secondary-button"
                             disabled={busy}
@@ -2127,9 +2065,7 @@ function ScopedRelationshipResourceComposer({
                               )
                             }
                             type="button"
-                          >
-                            保持未解决
-                          </button>
+                          >{t("保持未解决")}</button>
                           <button
                             className="context-primary-button"
                             disabled={
@@ -2142,9 +2078,7 @@ function ScopedRelationshipResourceComposer({
                             }
                             type="button"
                           >
-                            <Check aria-hidden="true" size={16} />
-                            为此关系确认
-                          </button>
+                            <Check aria-hidden="true" size={16} />{t("为此关系确认")}</button>
                         </footer>
                       ) : null}
                     </article>
@@ -2171,7 +2105,7 @@ function ScopedRelationshipResourceComposer({
                   {fragmentAttributionLabel(fragment.attribution.actor_kind, fragment.attribution.status)}
                 </p>
                 <details>
-                  <summary>查看提取信息</summary>
+                  <summary>{t("查看提取信息")}</summary>
                   <p>提取方式：{fragment.parser.name} · {fragment.parser.version}</p>
                 </details>
                 {fragment.review_status === "proposed" ? (
@@ -2187,9 +2121,7 @@ function ScopedRelationshipResourceComposer({
                         )
                       }
                       type="button"
-                    >
-                      驳回提取结果
-                    </button>
+                    >{t("驳回提取结果")}</button>
                     <button
                       className="context-primary-button"
                       disabled={busy}
@@ -2202,17 +2134,13 @@ function ScopedRelationshipResourceComposer({
                       }
                       type="button"
                     >
-                      <Check aria-hidden="true" size={16} />
-                      提取结果与来源一致
-                    </button>
+                      <Check aria-hidden="true" size={16} />{t("提取结果与来源一致")}</button>
                   </footer>
                 ) : null}
               </article>
             ))}
           </div>
-          <p>
-            审阅只确认转写准确性，不会把文档中的声明变成关于此人的当前事实。
-          </p>
+          <p>{t("审阅只确认转写准确性，不会把文档中的声明变成关于此人的当前事实。")}</p>
         </div>
       ) : null}
     </section>
