@@ -7,7 +7,7 @@ import {
   LinkSimple,
 } from "@phosphor-icons/react";
 import Link from "next/link";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import {
   installUpdateHref,
@@ -144,6 +144,16 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
  */
 export function WorkspaceDownloadEntry() {
   const wrap = useRef<HTMLSpanElement>(null);
+  const control = useRef<HTMLElement | null>(null);
+  const restoreFocus = useRef(false);
+  const controlRef = useCallback((node: HTMLElement | null) => {
+    if (!node) restoreFocus.current = document.activeElement === control.current;
+    control.current = node;
+    if (node && restoreFocus.current) {
+      restoreFocus.current = false;
+      node.focus();
+    }
+  }, []);
   const [dismissed, setDismissed] = useState(false);
   useEffect(() => {
     const dismiss = (event: KeyboardEvent) => {
@@ -174,6 +184,7 @@ export function WorkspaceDownloadEntry() {
           data-phase={state?.phase}
           role="status"
           tabIndex={0}
+          ref={controlRef}
         >
           {inner}
         </span>
@@ -184,6 +195,7 @@ export function WorkspaceDownloadEntry() {
           className={styles.footerEntry}
           data-phase={state?.phase}
           href={entry.href ?? "/download"}
+          ref={controlRef}
         >
           {inner}
         </a>

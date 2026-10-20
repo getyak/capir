@@ -279,6 +279,16 @@ describe("workspace footer strip", () => {
     expect(retry?.getAttribute("href")).toBe("talentsignal-desktop://updates");
     expect(retry?.getAttribute("aria-label")).toContain("重新检查");
     expect(retry?.textContent).toBe("重试");
+    expect(document.activeElement).toBe(retry);
+
+    await showDesktop({ protocolVersion: 1, availableVersion: null, phase: "downloading" });
+    expect(document.activeElement).toBe(host.querySelector("[role='status']"));
+
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    await showDesktop({ protocolVersion: 1, availableVersion: null, phase: "failed" });
+    expect(document.activeElement).toBe(outside);
   });
 
   it("puts an explicit install/restart banner at the top of the avatar popover", async () => {
