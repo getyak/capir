@@ -30,19 +30,19 @@ export function PeopleDirectorySearch({ query, returnSessionId }: {
       <MagnifyingGlass aria-hidden="true" size={20} />
       <input
         ref={input}
-        aria-label={t(t("按姓名或已确认联系方式搜索人物"))}
+        aria-label={t("按姓名或已确认联系方式搜索人物")}
         defaultValue={query}
         key={query}
         maxLength={160}
         name="query"
-        placeholder={t(t("按姓名、邮箱或电话查找…"))}
+        placeholder={t("按姓名、邮箱或电话查找…")}
         type="search"
       />
       {returnSessionId ? <input name="session" type="hidden" value={returnSessionId} /> : null}
       {query ? (
         <Button asChild variant="ghost" size="icon" className={styles.clearSearch}>
           <Link
-            aria-label={t(t("清除人物搜索"))}
+            aria-label={t("清除人物搜索")}
             href={withReturnSession("/workspace/people", returnSessionId)}
             onNavigate={() => { clearing.current = true; }}
             scroll={false}
@@ -51,7 +51,7 @@ export function PeopleDirectorySearch({ query, returnSessionId }: {
           </Link>
         </Button>
       ) : null}
-      <Button aria-label={t(t("搜索人物"))} variant="ghost" size="icon" type="submit">
+      <Button aria-label={t("搜索人物")} variant="ghost" size="icon" type="submit">
         <ArrowRight aria-hidden="true" size={15} />
       </Button>
     </Form>

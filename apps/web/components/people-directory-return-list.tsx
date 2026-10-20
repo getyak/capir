@@ -43,5 +43,5 @@ export function PeopleDirectoryReturnList({ children, className }: {
     try { window.history.replaceState(window.history.state, "", current.href); } catch { /* Explicit return remains available. */ }
   }
 
-  return <ol ref={list} className={className} aria-label={t(t("联系人列表"))} onClickCapture={rememberEntry}>{children}</ol>;
+  return <ol ref={list} className={className} aria-label={t("联系人列表")} onClickCapture={rememberEntry}>{children}</ol>;
 }
