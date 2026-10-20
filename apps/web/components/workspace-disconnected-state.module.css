@@ -41,15 +41,17 @@
 }
 
 .copy h2 {
-  font-size: clamp(1.12rem, 1.5vw, 1.4rem);
-  letter-spacing: -0.03em;
+  font-size: var(--ts-type-section, 1.125rem);
+  letter-spacing: 0;
   margin: 0;
 }
 
 .copy p {
   color: var(--muted-strong);
-  line-height: 1.6;
+  line-height: var(--ts-leading-body, 1.667);
   margin: 0;
+  font-size: var(--ts-type-body, 0.9375rem);
+  overflow-wrap: anywhere;
 }
 
 .actions {
@@ -61,12 +63,12 @@
 .primary,
 .secondary {
   align-items: center;
-  border-radius: 999px;
+  border-radius: var(--ts-radius-control, 8px);
   display: inline-flex;
-  font-size: 0.78rem;
-  font-weight: 760;
+  font-size: var(--ts-type-nav, 0.875rem);
+  font-weight: 500;
   gap: 8px;
-  min-height: 42px;
+  min-height: 44px;
   padding: 0 16px;
 }
 

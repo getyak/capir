@@ -188,11 +188,10 @@ Mobile reading preferences keep `Text size` and `Card density` independent. Text
 Density changes card spacing, shape, and avatars without shrinking controls below 44 points; Settings previews the result and compact is the retrieval default.
 People and Sessions share quiet search and filter controls, with the active filter named and directly clearable. Rows prioritize title, identity, context, and recency; identity keeps the same scan position across attention states. People use a quiet directory rhythm. Unread Sessions alone receive restrained elevation, stronger type, and quiet visible and accessible read-state labels; operational attention remains a separate label. At accessibility sizes, identity and context use the full row width. Utility chrome must leave room for that content, with complete navigation names, practical symbols, and large-content alternatives for bounded controls where they do not replace an existing hold gesture. Session titles use at most 32 user-perceived characters, stay on one line, and name the concrete topic or task in the user's language. Prefer a recognizable verb-object phrase. Never use placeholders such as `Reply`, `Answer`, `Hello`, `回复`, `回答`, `你好`, or `工作台对话`; a person returning weeks later should know which conversation to open without reading its latest message.
 
-On working surfaces, headings name the current object, date, state, or
-decision within a bounded operational scale. Page and object titles never
-behave like marketing heroes, and metadata remains legible rather than tiny.
-Reserve narrative promises and oversized type for public proof or onboarding;
-there too, evidence and interaction must carry the depth instead of empty space.
+On working surfaces, headings name the current object, date, state, or decision within a bounded operational scale. Page and object titles never behave like marketing heroes, and metadata remains legible rather than tiny. Reserve narrative promises and oversized type for public proof or onboarding; there too, evidence and interaction must carry the depth instead of empty space.
+
+The [shared reading roles](../packages/workspace-ui/src/theme/tokens.css) keep user messages, Agent replies, evidence, editable drafts, and failure explanations at body size even in compact rails and review cards. Timestamps, counts, and source labels use metadata; controls use navigation type. Reduce framing and repetition before reading size.
+Component styles own their typography once; host adapters alias the shared scale instead of accumulating selector overrides. Multilingual prose wraps naturally; code and tables keep bounded scrolling.
 
 Avoid:
 
