@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 
@@ -57,6 +58,53 @@ def listeners_belong_to(target):
             seen.add(listener)
             listener = run("ps", "-o", "ppid=", "-p", listener, check=False).stdout.strip()
     return True
+
+
+def probe_auth_readiness(opener, target):
+    """Return bounded categories only; never retain URLs, bodies or exception text."""
+    try:
+        with opener.open("http://127.0.0.1:3000/api/auth/providers", timeout=2) as response:
+            status = response.status
+            if status != 200:
+                return {"state": "http_error", "http_status": status}
+            body = response.read(65_537)
+            if len(body) > 65_536:
+                return {"state": "invalid_provider_payload", "http_status": status}
+            providers = json.loads(body)
+            if not isinstance(providers, dict):
+                return {"state": "invalid_provider_payload", "http_status": status}
+            if "password-account" not in providers:
+                return {"state": "password_provider_missing", "http_status": status}
+            if not listeners_belong_to(target):
+                return {"state": "listener_not_owned", "http_status": status}
+            return {"state": "ready", "http_status": status}
+    except urllib.error.HTTPError as error:
+        status = error.code
+        error.close()
+        return {"state": "http_error", "http_status": status}
+    except (TimeoutError, socket.timeout):
+        return {"state": "timeout"}
+    except urllib.error.URLError as error:
+        return {"state": "timeout" if isinstance(error.reason, TimeoutError) else "transport_error"}
+    except (ValueError, UnicodeError):
+        return {"state": "invalid_provider_payload"}
+    except OSError:
+        return {"state": "transport_error"}
+
+
+def wait_auth_readiness(opener, target, attempts=45):
+    started = time.monotonic()
+    counts = {}
+    last = {"state": "not_probed"}
+    for attempt in range(1, attempts + 1):
+        last = probe_auth_readiness(opener, target)
+        counts[last["state"]] = counts.get(last["state"], 0) + 1
+        if last["state"] == "ready":
+            break
+        time.sleep(1)
+    return {"ready": last["state"] == "ready", "attempts": attempt,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+            "counts": counts, "last": last}
 
 
 def main():
@@ -119,21 +167,22 @@ def main():
         plist.chmod(0o600)
         bootstrap(domain, plist, target)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        for _ in range(45):
-            try:
-                with opener.open("http://127.0.0.1:3000/api/auth/providers", timeout=2) as response:
-                    providers = json.load(response)
-                    if response.status == 200 and "password-account" in providers and listeners_belong_to(target):
-                        (state / "active-release.json").write_text(json.dumps({
-                            "revision": revision, "buildID": build_id,
-                            "release": str(release), "port": 3000,
-                        }, indent=2) + "\n")
-                        print(f"Resident Web ready on port 3000 at revision {revision}")
-                        return
-            except (OSError, ValueError):
-                pass
-            time.sleep(1)
-        raise RuntimeError("Web authentication readiness failed; inspect the launchd logs")
+        readiness = wait_auth_readiness(opener, target)
+        diagnostic = state / "readiness-last.json"
+        diagnostic.write_text(json.dumps({"revision": revision, "buildID": build_id,
+                                          **readiness}, indent=2) + "\n")
+        diagnostic.chmod(0o600)
+        if readiness["ready"]:
+            (state / "active-release.json").write_text(json.dumps({
+                "revision": revision, "buildID": build_id,
+                "release": str(release), "port": 3000,
+            }, indent=2) + "\n")
+            print(f"Resident Web ready on port 3000 at revision {revision}")
+            return
+        last = readiness["last"]
+        raise RuntimeError(f"Web authentication readiness failed: {last['state']} "
+                           f"after {readiness['attempts']} probes; "
+                           "inspect readiness-last.json and launchd logs")
     except BaseException:
         unload_error = None
         try:

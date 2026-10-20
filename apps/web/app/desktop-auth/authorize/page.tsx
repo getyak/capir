@@ -78,16 +78,25 @@ export default async function DesktopAuthAuthorizePage({
       // cookie mutation, then return to this exact unapproved Mac operation.
       redirect(`/login?reason=backend_session_expired&callbackUrl=${encodeURIComponent(safeReturnTarget(attempt, state))}`);
     }
-    const unknown =
-      error instanceof DesktopAuthRequestError ||
-      (error instanceof Error && "code" in error);
+    const refusedIdentity = error instanceof TalentSignalHttpError &&
+      error.status === 403 && error.code === "DESKTOP_BROWSER_LOGIN_IDENTITY_REFUSED";
+    const mismatchedRequest = error instanceof TalentSignalHttpError && (
+      (error.status === 403 && error.code === "DESKTOP_BROWSER_LOGIN_PROOF_MISMATCH") ||
+      (error.status === 409 && error.code === "DESKTOP_BROWSER_LOGIN_ORIGIN_NOT_ALLOWED")
+    );
+    const invalidRequest = mismatchedRequest || (
+      (error instanceof TalentSignalHttpError || error instanceof DesktopAuthRequestError) &&
+      [400, 404, 410].includes(error.status)
+    );
     return (
       <main id="main-content" className={styles.page}><div className={styles.topbar}><Link href="/" className="brand">capri</Link><span>Mac 登录</span></div><div className={styles.content}>
-        <h1>登录请求无法核对</h1>
+        <h1>{refusedIdentity ? "需要使用自己的账号" : invalidRequest ? "登录请求无法核对" : "登录服务暂时不可用"}</h1>
         <p>
-          {unknown
-            ? "这个 Mac 登录请求已经失效或不存在。请回到 Mac，重新发起登录。"
-            : "暂时无法连接登录服务。请稍后回到 Mac 重试。"}
+          {refusedIdentity
+            ? "测试身份不能授权 Mac 登录。请返回工作区退出测试身份，再使用自己的账号重新开始。"
+            : invalidRequest
+              ? "这个 Mac 登录请求无效、已过期或与当前浏览器不匹配。请回到 Mac，重新发起登录。"
+              : "暂时无法连接登录服务。请稍后回到 Mac 重试；这不代表你已经退出登录。"}
         </p>
         <Link href="/workspace">回到工作区</Link>
       </div></main>

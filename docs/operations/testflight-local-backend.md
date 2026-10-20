@@ -283,7 +283,15 @@ Logs are under `~/Library/Logs/Talent Signal/web`; the active revision is in
 `web/active-release.json`. Retain the previous release for rollback. Do not
 rebuild, modify, or remove the live release worktree. After switching, verify
 Tailscale HTTPS login, an authenticated workspace request, and launchd restart
-recovery. The Mac must be awake and the owning user logged in; clients must
+recovery. Each activation retains private `web/readiness-last.json`: candidate revision/build ID,
+probe count, elapsed time, bounded category counts and last HTTP status. It separates
+transport/timeout, HTTP errors, invalid/missing password providers and listener
+ownership failures without storing response bodies, URLs, exception text or secrets.
+A provider probe is only the activation gate; protected login/workspace and native
+recovery still require their own acceptance. The existing45-probe, ownership,
+clean-receipt and rollback gates remain mandatory.
+
+The Mac must be awake and the owning user logged in; clients must
 join the authorized tailnet. Physical Wi-Fi/LAN address changes do not change
 `AUTH_URL`. Never automatically replace it with a `192.168.x.x` address.
 
