@@ -1,4 +1,6 @@
 import AppKit
+import Combine
+import SwiftUI
 import WebKit
 
 enum WorkspaceAppearance: String, CaseIterable {
@@ -18,6 +20,35 @@ enum WorkspaceAppearance: String, CaseIterable {
         case .light: NSAppearance(named: .aqua)
         case .dark: NSAppearance(named: .darkAqua)
         }
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
+/// Keep SwiftUI's platform host in sync as well as the window. A nil
+/// presentation preference can leave its previous color scheme cached, so
+/// System's environment follows the application's effective appearance.
+struct WorkspaceAppearancePresentation: ViewModifier {
+    let preference: WorkspaceAppearance?
+    @State private var systemScheme: ColorScheme =
+        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .dark : .light
+
+    func body(content: Content) -> some View {
+        content
+            .preferredColorScheme(preference?.colorScheme)
+            .environment(\.colorScheme, preference?.colorScheme ?? systemScheme)
+            .onReceive(NSApp.publisher(for: \.effectiveAppearance, options: [.initial, .new])
+                .map { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? ColorScheme.dark : .light }
+                .removeDuplicates()
+                .receive(on: RunLoop.main)) { scheme in
+                if systemScheme != scheme { systemScheme = scheme }
+            }
     }
 }
 

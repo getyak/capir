@@ -117,6 +117,14 @@ does not prove that a changed preference reaches its representable. Read back
 both the surface and window overrides, WebKit media query and retained draft
 after dark → light → System, without replacing the live WebView. Script checks,
 menu checkmarks and compilation do not establish actual window behavior.
+The same preference must reach the SwiftUI presentation as well as AppKit:
+an intermediate platform host can retain DarkAqua even after the window and
+material release their overrides. System also drives the SwiftUI environment
+from the application's effective appearance, observing later changes rather
+than pinning the resolved color. Exercise the actual outer preview modifier
+with preview disabled; an unconditional higher-level
+`preferredColorScheme(nil)` cancels the workspace preference. Native sign-in
+and recovery surfaces must release the workspace presentation preference.
 
 Preserve uncropped before/after captures using identical authorized synthetic
 workspace content at 1280×820 and 900×720. Record actual window/image dimensions,

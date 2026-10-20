@@ -599,6 +599,7 @@ struct WorkspaceWebSurface: NSViewRepresentable {
 }
 
 private struct ConnectedQuietWorkspace: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject private var navigation = WorkspaceNavigation.shared
     @ObservedObject var login: DesktopBrowserLoginCoordinator
     @StateObject private var browser: WorkspaceBrowser
@@ -611,6 +612,11 @@ private struct ConnectedQuietWorkspace: View {
     init(origin: WorkspaceOrigin, login: DesktopBrowserLoginCoordinator) {
         self.login = login
         _browser = StateObject(wrappedValue: WorkspaceBrowser(origin: origin))
+    }
+
+    private var presentationAppearance: WorkspaceAppearance? {
+        if model.isDarkAppearancePreview { return .dark }
+        return browser.signedOut || browser.failure != nil ? nil : browser.appearancePreference
     }
 
     private func consumeDestination() {
@@ -635,7 +641,7 @@ private struct ConnectedQuietWorkspace: View {
             // same WebView and navigation/session ownership for recovery.
             if !browser.signedOut && browser.failure == nil {
                 WorkspaceWebSurface(browser: browser, zoom: zoom,
-                                    appearance: browser.appearancePreference)
+                                    appearance: presentationAppearance ?? .system)
             }
             if browser.signedOut {
                 // Native signed-out surface only: the Web login page never
@@ -691,6 +697,7 @@ private struct ConnectedQuietWorkspace: View {
                 .background(TSBrand.canvas)
             }
         }
+        .modifier(WorkspaceAppearancePresentation(preference: presentationAppearance))
         .focusedSceneObject(browser)
         .background(WorkspaceWindowBehavior(floating: floating))
         .onAppear {
