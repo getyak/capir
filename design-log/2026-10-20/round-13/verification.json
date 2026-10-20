@@ -1,0 +1,9 @@
+{
+  "status": "Reviewed/tested source; real-surface and resident acceptance pending",
+  "review_sha256": "18277b46e57b3065679190dddf6e3905bc0ef63bb02860fce74b2500eff6a59c",
+  "parent_tests": 19,
+  "worker_adjacent_tests": 212,
+  "pi_task": "20261020-064550-4aee5ad5",
+  "credits_estimate": 36351824,
+  "mutation": false
+}

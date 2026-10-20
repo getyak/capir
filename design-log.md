@@ -299,3 +299,12 @@ A second real interaction issue appears when scrolling moves another option unde
 All47 relevant parent tests across4files pass, plus63 additional worker regressions. Independent final five-file review finds no confirmedP0–P2 at `dc1cdf8034b67ef5adcb918dd0c6c9cf1675ec22a04db544523db71ae54b147e`. [Checks](design-log/2026-10-20/round-12/checks.txt), [receipt](design-log/2026-10-20/round-12/verification.json). Native resident0dd21831 before-images cover [1123×865](design-log/2026-10-20/round-12/macos-default-before.jpg), [900×720](design-log/2026-10-20/round-12/macos-narrow-before.jpg) and slash menus at [default](design-log/2026-10-20/round-12/macos-menu-default-before.jpg) and [narrow](design-log/2026-10-20/round-12/macos-menu-narrow-before.jpg). The primary authorized workspace stays on a blank unsent conversation with a collapsed sidebar; the slash is cleared and default window restored. No model call or server record is created. Native output bytes are JPEG.
 
 Final local bounds also pass at [320px](design-log/2026-10-20/round-12/web-menu-320.png) and1440px: scale1, no document/body overflow, selected-center hit true, input16/15px respectively. The [1440px capture](design-log/2026-10-20/round-12/web-menu-1440-abnormal.png) retains a real unavailable sidebar and is explicitly abnormal-state proof. The [dark390px capture](design-log/2026-10-20/round-12/web-dark-390.png) uses DPR1; light exports use DPR2.
+
+
+### Loop13 — Private conversation keeps attention on the words
+
+**Decision:** independently reviewed and tested; production and actual-after proof pending.
+
+The redundant welcome ornament is removed from both the actual empty room and its loading view. The existing heading becomes24px/600 sans, body/help/error text15px, metadata13px and narrow input16px. A solid hairline and2px keyboard focus replace the dashed elevated composer. Existing privacy disclosure, routes, requests, lifetime and all actions remain intact. Safe centering keeps expanded text reachable in short windows.
+
+Before: [1440px](design-log/2026-10-20/round-13/web-1440-before.png), [390px](design-log/2026-10-20/round-13/web-390-before.png), [expanded short window](design-log/2026-10-20/round-13/web-390x568-expanded-before.png). Final three-file independent review finds noP0–P2 at `18277b46e57b3065679190dddf6e3905bc0ef63bb02860fce74b2500eff6a59c`. Parent19 specific tests and Web lint pass; worker also reports212 adjacent conversation regressions. No private message or model request was sent. Actual after-images remain required before acceptance.

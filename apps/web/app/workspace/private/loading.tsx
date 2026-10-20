@@ -9,7 +9,6 @@ export default function PrivateConversationLoading() {
       <Link className={styles.exit} href="/workspace"><X size={16} aria-hidden="true"/>返回工作区</Link>
     </header>
     <div className={styles.body}><div className={styles.welcome}>
-      <span className={styles.orbit}><Ghost size={23} weight="fill" aria-hidden="true"/></span>
       <h1>只属于此刻的对话</h1>
       <p role="status">正在打开隐私对话…</p>
     </div></div>
