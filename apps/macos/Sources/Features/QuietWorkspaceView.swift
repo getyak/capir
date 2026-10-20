@@ -177,7 +177,6 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         _ = WorkspaceAppearanceBridge(controller: configuration.userContentController, origin: origin) { [weak self] value in
             guard let self, !self.retired else { return }
             self.appearancePreference = value
-            self.webView.window?.appearance = value.nativeAppearance
         }
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -354,7 +353,6 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                 }
                 self.appearanceSaveNotice = nil
                 self.appearancePreference = preference
-                self.webView.window?.appearance = preference.nativeAppearance
             }
     }
 
@@ -589,13 +587,14 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 struct WorkspaceWebSurface: NSViewRepresentable {
     let browser: WorkspaceBrowser
     let zoom: Double
+    let appearance: WorkspaceAppearance
     func makeNSView(context: Context) -> WorkspaceMaterialSurface {
         browser.webView.pageZoom = min(1.5, max(0.9, zoom))
-        return WorkspaceMaterialSurface(webView: browser.webView, preference: browser.appearancePreference)
+        return WorkspaceMaterialSurface(webView: browser.webView, preference: appearance)
     }
     func updateNSView(_ nsView: WorkspaceMaterialSurface, context: Context) {
         nsView.webView.pageZoom = min(1.5, max(0.9, zoom))
-        nsView.preference = browser.appearancePreference
+        nsView.preference = appearance
     }
 }
 
@@ -635,7 +634,8 @@ private struct ConnectedQuietWorkspace: View {
             // and keyboard. Detach only its presentation; browser retains the
             // same WebView and navigation/session ownership for recovery.
             if !browser.signedOut && browser.failure == nil {
-                WorkspaceWebSurface(browser: browser, zoom: zoom)
+                WorkspaceWebSurface(browser: browser, zoom: zoom,
+                                    appearance: browser.appearancePreference)
             }
             if browser.signedOut {
                 // Native signed-out surface only: the Web login page never

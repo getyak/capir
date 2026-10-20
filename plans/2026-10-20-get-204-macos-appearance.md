@@ -23,25 +23,30 @@ Account settings remain browser-owned. No backend or Web source is changed.
 
 ## Host takeover and verification
 
-The user authorized manual host delivery on2026-10-20. Symphony remains paused;
-old worker Git/sandbox/service-gateway limitations are historical, not current
-host blockers. A verified stash preserves the original candidate before main
-refresh. The candidate is now based on main409c555a, including206 reading tokens.
+PR395 merged and official signed0.2.15(166) was installed with signature,
+notarization, appcast and rollback verification. Nine original AppKit/WebKit
+and seven script tests passed. Actual window testing preserved private captures,
+zoom/drag/minimize/keyboard evidence and default-account authorization.
 
--7 shipped-script tests pass, including System reset, later media changes,
-  persistence failure/retry and foreign-origin refusal.
-- Real build-for-testing passed. It caught an invalid WKUserScript.contentWorld
-  getter in a new test; the host replaced that with an actual WebKit page-world
-  versus isolated-world handler availability check using the installed SDK API.
--9 actual AppKit/WebKit XCTest cases pass on macOS26.4. They cover closed values,
-  frame/origin rejection, preserved scripts, isolated native handler ownership,
-  window detach/reattach/System, reduced-transparency fallback and standard
-  titlebar buttons/drag-region policy. This is runtime evidence, not syntax only.
-- Independent original review found no confirmedP0/P1/P2. The test repair and
-  refreshed-main integration still require independent recheck before the PR.
-- Private actual installed-native before frames at1123×865 and900×680 are
-  preserved in host evidence. They contain only the authorized default test
-  workspace, are private, and must never be uploaded to GitHub.
+Final cross-check reopened acceptance: Light could leave the native titlebar
+dark, and System could retain dark WebKit media despite global Aqua. Checking
+the menu and an isolated NSView was insufficient. A minimal actual SwiftUI-host
+probe reproduced the retained surface override while window.appearance changed.
+The fixed probe clears both overrides and resolves Aqua again.
+
+The follow-up passes the closed appearance enum as a value input to the
+representable. Bridge/menu completion only publish the confirmed preference;
+the material surface owns applying it to itself and its window. This avoids
+SwiftUI skipping an update whose only inputs were an unchanged browser reference
+and zoom. The live WebView, history and local draft stay in place. A new runtime
+regression exercises the confirmed preference changes through an NSHostingView, reads back surface/window/WebKit media state and retains a synthetic
+draft. The focused8-test runtime suite and7 existing JS contracts pass.
+Earlier opaque-document and loopback full-bridge fixture attempts did not
+establish the full chain; failures remain in private evidence and are not
+claimed as passes. Production origin/world gates remain unchanged.
+
+Symphony remains paused. Native private captures and full test/probe receipts
+stay in host evidence; they must not be uploaded with workspace content.
 
 ## Remaining delivery gates
 

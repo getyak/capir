@@ -111,8 +111,12 @@ For acceptance, obtain a storage-guard artifact directory before native builds.
 Run the affected `WorkspaceAppearanceBridgeTests`, `WorkspaceMaterialSurfaceTests`
 and `WorkspaceSettingsTests` with the same derived-data directory. The script
 contract suite is `node --test scripts/macos/workspace-appearance.test.mjs`;
-it also runs in `scripts/macos/check.sh`. Script checks and compilation do not
-establish actual window behavior.
+it also runs in `scripts/macos/check.sh`. The regression must include the real
+SwiftUI host for confirmed preference changes: a material view tested alone
+does not prove that a changed preference reaches its representable. Read back
+both the surface and window overrides, WebKit media query and retained draft
+after dark → light → System, without replacing the live WebView. Script checks,
+menu checkmarks and compilation do not establish actual window behavior.
 
 Preserve uncropped before/after captures using identical authorized synthetic
 workspace content at 1280×820 and 900×720. Record actual window/image dimensions,
