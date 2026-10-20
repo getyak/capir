@@ -1,0 +1,48 @@
+{
+  "viewport": {
+    "width": 390,
+    "height": 568,
+    "dpr": 2,
+    "scale": 1
+  },
+  "documentWidth": 390,
+  "bodyWidth": 390,
+  "heading": "24px",
+  "input": {
+    "font": "16px",
+    "rect": {
+      "x": 30,
+      "y": 85.59375,
+      "width": 330,
+      "height": 88
+    }
+  },
+  "composer": {
+    "border": "solid",
+    "shadow": "none",
+    "outline": "3px"
+  },
+  "send": {
+    "x": 316,
+    "y": 181.59375,
+    "width": 44,
+    "height": 44
+  },
+  "details": {
+    "open": true,
+    "font": "15px",
+    "rect": {
+      "x": 16,
+      "y": 244.59375,
+      "width": 358,
+      "height": 269
+    }
+  },
+  "scroll": {
+    "client": 507,
+    "height": 651,
+    "top": 144
+  },
+  "theme": "light",
+  "forced": false
+}

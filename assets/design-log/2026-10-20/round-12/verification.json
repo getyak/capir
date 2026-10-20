@@ -1,0 +1,31 @@
+{
+  "status": "Final independent review,47 parent tests, real keyboard,320/390/1440 clipping and forced-color correction verified; resident/native delivery pending",
+  "pi_task": "20261020-060834-9b259cfd",
+  "pi_credits_estimate": 78497792,
+  "credit_unit": "MiMo Token Plan Credits estimate, not USD",
+  "final_review_diff_sha256": "dc1cdf8034b67ef5adcb918dd0c6c9cf1675ec22a04db544523db71ae54b147e",
+  "parent_tests": {
+    "files": 4,
+    "tests": 47,
+    "passed": true,
+    "local_start": "2026-10-20T07:19:13+08:00"
+  },
+  "worker_extra_regression": {
+    "tests": 63,
+    "passed": true
+  },
+  "actual": {
+    "web_390": "Visual viewport390x844/scale1, document and body width390, input16px; first selected listbox row center hit true (baseline false). Export uses task-only EmulateFocusedPage; PNG780x1688 DPR2.",
+    "short_390x568": "Existing inline fallback; outer canvas scroll reaches last option and input. Not all content fits at once. Forced-dark selected text and draft tag become readable after the narrow system-color correction actually loads.",
+    "stationary_pointer": "Actual final UI: five ArrowDown from the first row selects the last Capture item without pointer-driven replacement; input and last option remain visible after canvas scroll. keyboard-last-final.jpg.",
+    "native_before": "Resident0dd21831, installed0.2.8(125), primary authorized empty new conversation, collapsed sidebar;1123x865/900x720 plus slash menus. All unsent characters cleared and default window restored. No send/model/file picker/write performed. Native exports are JPEG.",
+    "privacy": "Raw unrelated native sidebar identities remain excluded from published screenshots.",
+    "web_320": "320x844 scale1 DPR2, document/body320, input16, selected center hit true; panel286x251.",
+    "web_1440": "1440x1000 scale1 DPR2, document/body1440, input15, selected center hit true; panel340x360. Screenshot explicitly retains an abnormal sidebar unavailable state."
+  },
+  "pending": [
+    "resident build/deployment/restart",
+    "native after screenshots"
+  ],
+  "source": "Five scoped files; presentation geometry, typography, pointer hover and tests only. No domain/request/receipt/IME/send/navigation changes."
+}

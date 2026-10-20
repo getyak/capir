@@ -1,0 +1,13 @@
+{
+  "variant": "direct window appearance from model action",
+  "decision": "rejected in this probe",
+  "observed_facts": {
+    "choice": "dark",
+    "native": "NSAppearanceNameAqua",
+    "web": "dark"
+  },
+  "automated_verdict": "none",
+  "human_choice": "unreviewed",
+  "AI_hypothesis": "SwiftUI rendering may overwrite the action-time window assignment; not proven",
+  "next_variant": "NSViewRepresentable lifecycle owner, matching existing WorkspaceWindowBehavior pattern"
+}

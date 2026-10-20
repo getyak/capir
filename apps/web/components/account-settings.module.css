@@ -1,66 +1,88 @@
-.page { max-width: 960px; margin: 0 auto; padding: var(--workspace-page-padding) var(--workspace-page-padding) 64px; color: var(--ink); }
+.page { max-width: 960px; margin: 0 auto; padding: var(--workspace-page-padding) var(--workspace-page-padding) 64px; color: var(--ink); font-size: 15px; }
 .heading { margin-bottom: 32px; }
-.heading h1 { font-size: var(--workspace-title-size); font-weight: 650; letter-spacing: 0; margin: 10px 0; }
+.heading h1 { font-size: var(--workspace-title-size); font-weight: 600; letter-spacing: 0; margin: 10px 0; }
 .heading p { color: var(--muted); line-height: 1.7; }
-.eyebrow { font-size: 12px; letter-spacing: .08em; }
+.eyebrow { font-size: 13px; letter-spacing: .08em; }
 .tabs { display: flex; flex-wrap: wrap; gap: 28px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
 .tabs a { padding: 12px 0; color: var(--muted); text-decoration: none; }
 .tabs a[aria-current=page] { color: var(--ink); box-shadow: 0 2px var(--ink); }
 .section { padding: 20px 0; border-bottom: 1px solid var(--line-soft); }
-.section h2 { font-size: .9375rem; font-weight: 640; margin: 0 0 12px; }
+.section h1 { font-size: var(--workspace-title-size); font-weight: 600; letter-spacing: 0; margin: 0 0 12px; }
+.section h2 { font-size: .9375rem; font-weight: 600; margin: 0 0 12px; }
 .section p { line-height: 1.7; }
-.secondary { color: var(--muted); font-size: 12.5px; margin: 5px 0 12px; overflow-wrap: anywhere; }
+.section > a { align-items: center; display: inline-flex; min-height: 44px; }
+.secondary { color: var(--muted); font-size: 15px; margin: 5px 0 12px; overflow-wrap: anywhere; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 20px; min-height: 48px; padding: 10px 0; }
 .row + .row { border-top: 1px solid var(--line-soft); }
 .row > div { min-width: 0; }
 .row time { color: var(--muted); font-size: 13px; }
-.badge { background: var(--surface-muted); border: 1px solid var(--line-soft); padding: 4px 9px; border-radius: 999px; font-size: 13px; white-space: nowrap; }
+/* Session date and expiry lines stay metadata-sized. */
+.row > div > .secondary { font-size: 13px; }
+.row strong, .member strong { font-weight: 500; overflow-wrap: anywhere; }
+.badge { background: var(--surface-muted); border: 1px solid var(--line-soft); padding: 4px 9px; border-radius: 999px; font-size: 13px; overflow-wrap: anywhere; }
 .form { margin: 6px 0; }
 .form fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
-.form label { display: grid; gap: 7px; font-size: 12.5px; }
-.form input:not([type=hidden]), .form select { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 9px; min-height: 38px; padding: 8px 11px; font: inherit; font-size: 13px; min-width: 0; }
-.form button { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 8px 14px; min-height: 40px; cursor: pointer; font: inherit; font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
-.button { background: transparent; border: 0; color: var(--ink); border-radius: 8px; padding: 8px 10px; margin: 0 -10px; min-height: 40px; cursor: pointer; font: inherit; font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
-.form button:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); }
-.button:hover { background: var(--surface-muted); text-decoration: underline; text-underline-offset: 3px; }
+.form label { display: grid; gap: 7px; font-size: 15px; }
+.form input:not([type=hidden]), .form select { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 9px; min-height: 38px; padding: 8px 11px; font: inherit; font-size: 15px; min-width: 0; }
+.form button { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 8px 14px; min-height: 40px; cursor: pointer; font: inherit; font-size: 15px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), border-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), opacity var(--workspace-transition-duration, 180ms) var(--ease-out, ease); }
+.button { background: transparent; border: 0; color: var(--ink); border-radius: 8px; padding: 8px 10px; margin: 0 -10px; min-height: 40px; cursor: pointer; font: inherit; font-size: 15px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), opacity var(--workspace-transition-duration, 180ms) var(--ease-out, ease); }
+.form button:hover:not(:disabled):not(.saveButton) { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); }
+.form button:active:not(:disabled):not(.saveButton) { background: var(--surface-muted); }
+.form .saveButton:hover:not(:disabled), .form .saveButton:active:not(:disabled) { background: var(--ink); opacity: .85; }
+.button:hover:not(:disabled) { background: var(--surface-muted); text-decoration: underline; text-underline-offset: 3px; }
+.button:active:not(:disabled) { background: var(--surface-strong); }
 .form :disabled, .button:disabled { opacity: .5; cursor: wait; }
 .form :focus-visible, .tabs a:focus-visible, .button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .editRow { display: flex; gap: 10px; width: 100%; }
 .editRow input { flex: 1; max-width: 420px; }
-.notice, .error { margin: 6px 0 0; font-size: 12px; }
-.notice { color: var(--muted); }
-.error { color: #b34430; }
+.notice, .error { margin: 6px 0 0; }
+.notice { color: var(--muted); font-size: 13px; }
+.error { color: #b34430; font-size: 15px; overflow-wrap: anywhere; }
 .member { border-top: 1px solid var(--line-soft); padding: 18px 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
 .member > div { flex: 1; min-width: 180px; }
 .member span { font-size: 13px; color: var(--muted); }
 .banner { display:flex; align-items:center; justify-content:flex-start; flex-wrap:wrap; gap:20px; padding:12px 24px; background:var(--surface); border-bottom:1px solid var(--line); font-size:13px; }
 .banner button { background:transparent; border:1px solid var(--line); color:var(--ink); padding:8px 12px; border-radius:8px; cursor:pointer; }
-@media(max-width:640px) { .page { padding:28px 20px 100px; } .tabs { gap:20px; font-size:14px; } .row { align-items:flex-start; flex-wrap:wrap; gap:8px; min-height: 0; } .member { align-items:flex-start; } .form button, .button, .form input:not([type=hidden]), .form select { min-height: 44px; } }
 
 .profileIdentity { display: flex; gap: 14px; align-items: center; margin-bottom: 20px; }
+.profileIdentity > div { min-width: 0; }
 .profileAvatar { width: 44px; height: 44px; flex: 0 0 44px; border: 1px solid var(--line); border-radius: 50%; display: grid; place-items: center; font-size: 16px; background: var(--surface); color: var(--ink); }
-.profileIdentity h2 { font-size: 15px; margin-bottom: 4px; }
+.profileIdentity h2 { font-size: 15px; margin-bottom: 4px; overflow-wrap: anywhere; }
 
 /* One readable edit surface, shared by the web page and native settings window. */
 .section:first-child { padding-top: 0; }
 .section { padding: 24px 0; }
-.secondary { font-size: 13px; }
-.form label, .form input:not([type=hidden]), .form select, .form button { font-size: 14px; }
+.secondary { font-size: 15px; }
+.form label, .form input:not([type=hidden]), .form select, .form button { font-size: 15px; }
 .form button, .button, .form input:not([type=hidden]), .form select { min-height: 44px; }
 .profileIdentity { gap: 20px; margin-bottom: 28px; align-items: center; }
 .profileIdentity h2 { font-size: 15px; line-height: 24px; font-weight: 600; }
 .profileIdentity .secondary { margin-bottom: 0; }
 .nameField { display: grid; gap: 10px; }
 .fieldLabel { font-size: 15px; line-height: 24px; font-weight: 600; }
-.editValue { width: calc(100% + 24px); min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 0; border-radius: 8px; padding: 10px 12px; margin: 0 -12px; color: var(--ink); background: transparent; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
-.editValue > span:first-child { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
-.editValue > span:last-child { flex-shrink: 0; color: var(--ink); font-size: 13px; }
-.editValue:hover { border-color: transparent; background: var(--surface-muted); }
-.editValue:hover > span:last-child { text-decoration: underline; text-underline-offset: 3px; }
+.editValue { width: calc(100% + 24px); min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 0; border-radius: 8px; padding: 10px 12px; margin: 0 -12px; color: var(--ink); background: transparent; font: inherit; font-size: 15px; text-align: left; cursor: pointer; transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease); }
+.editValue > span:first-child { color: var(--muted); font-size: 15px; overflow-wrap: anywhere; min-width: 0; }
+.editValue > span:last-child { flex-shrink: 0; color: var(--ink); font-size: 15px; }
+.editValue:hover:not(:disabled) { border-color: transparent; background: var(--surface-muted); }
+.editValue:hover:not(:disabled) > span:last-child { text-decoration: underline; text-underline-offset: 3px; }
 .editValue:focus-visible, .disclosure summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .form .saveButton { color: var(--surface); background: var(--ink); border-color: var(--ink); }
 .editRow { flex-wrap: wrap; }
 .editRow input { flex: 1 1 180px; max-width: none; }
-.disclosure { padding: 18px 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
-.disclosure summary { cursor: pointer; min-height: 44px; padding: 11px 0; color: var(--muted); font-size: 13px; }
+.disclosure { padding: 18px 0; color: var(--muted); font-size: 15px; line-height: 1.7; }
+.disclosure summary { cursor: pointer; min-height: 44px; padding: 11px 0; color: var(--muted); font-size: 15px; }
 .disclosure a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: underline; }
+
+@media(max-width:640px) { .page { padding:28px 20px 100px; } .tabs { gap:20px; } .row { align-items:flex-start; flex-wrap:wrap; gap:8px; min-height: 0; } .member { align-items:flex-start; } .form button, .button { min-height: 44px; } .form input:not([type=hidden]), .form select { min-height: 44px; font-size: 16px; } }
+
+@media (forced-colors: active) {
+  /* The filled save action uses the system palette without a Canvas
+   * backplate; the selected tab keeps an underline cue in place of shadow. */
+  .form .saveButton, .form .saveButton:hover:not(:disabled), .form .saveButton:active:not(:disabled) { background: ButtonText; border-color: ButtonText; color: ButtonFace; forced-color-adjust: none; opacity: 1; }
+  .tabs a[aria-current=page] { box-shadow: none; text-decoration: underline; text-underline-offset: 3px; }
+  .form :focus-visible, .tabs a:focus-visible, .button:focus-visible, .editValue:focus-visible, .disclosure summary:focus-visible { outline-color: Highlight; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page *, .page *::before, .page *::after { animation: none !important; transition: none !important; }
+}

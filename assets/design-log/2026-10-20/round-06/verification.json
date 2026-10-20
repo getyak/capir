@@ -1,0 +1,87 @@
+{
+  "status": "accepted and deployed; actual resident and native after-proof verified",
+  "review_diff_sha256": "6fa45e851b5e0745b93feadbcbb5a8ab41de8a5b6a415ca601a8df161df45768",
+  "first_service_top_before_px": 564.71875,
+  "first_service_top_after_px": 494.078125,
+  "recovered_px": 70.640625,
+  "tested_widths": [
+    320,
+    390,
+    1440
+  ],
+  "horizontal_overflow": false,
+  "catalog_button_size_px": [
+    90,
+    44
+  ],
+  "tab_height_px": 44,
+  "tab_keyboard": "ArrowRight/ArrowLeft changes panel and focus; 2px outline",
+  "custom_fields_320": {
+    "height_px": 44,
+    "width_px": 250,
+    "font_px": 16
+  },
+  "normal_transition_seconds": 0.18,
+  "reduced_transition_seconds": 1e-05,
+  "loading_disabled_catalog_buttons": 4,
+  "failed_read_disabled_catalog_buttons": 4,
+  "recovered_enabled_catalog_buttons": 4,
+  "recovery": "precise read-only Fetch failure cleared, keyboard Reload restored canonical reads; zero alert panels",
+  "error_text_font_px": 15,
+  "focused_tests": {
+    "passed": 28,
+    "files": 4
+  },
+  "web_lint": "passed",
+  "native_after": {
+    "app_version": "0.2.8 (125)",
+    "default_window_px": [
+      1123,
+      865
+    ],
+    "narrow_window_px": [
+      900,
+      720
+    ],
+    "restored_default_window": true,
+    "record_scope": "authorized primary workspace; empty Time or no MCP connections",
+    "proof": "saved actual resident pixels"
+  },
+  "screenshots": "mismatched scrolled or stale-painted captures rejected; matched light captures include separate raw viewport metadata",
+  "images": {
+    "06-extensions-light-390-before.png": "web-390-before.png",
+    "06-extensions-light-390-candidate.png": "web-390-after.png",
+    "06-extensions-light-1440-before.png": "web-1440-before.png",
+    "06-extensions-light-1440-candidate.png": "web-1440-after.png",
+    "06-extensions-dark-390-candidate.png": "web-dark-390-after.png",
+    "06-extensions-dark-1440-candidate.png": "web-dark-1440-after.png",
+    "06-extensions-outbound-light-390-before.png": "outbound-390-before.png",
+    "06-extensions-outbound-light-390-candidate.png": "outbound-390-after.png",
+    "06-extensions-forced-colors-390.png": "web-forced-colors-390.png",
+    "06-extensions-error-390.png": "web-error-390.png",
+    "06-extensions-resident-light-390-after.png": "web-390-after.png",
+    "06-extensions-resident-light-1440-after.png": "web-1440-after.png",
+    "06-extensions-macos-default-after.png": "macos-default-after.png",
+    "06-extensions-macos-narrow-after.png": "macos-narrow-after.png"
+  },
+  "docs_check": "passed",
+  "resident": {
+    "revision": "916c104c2526cbd0be088ce62ea6ebc66c934a68",
+    "buildID": "5PrRkQAfnP-lkomTIMDmF",
+    "clean_detached_production_build": "passed",
+    "activation": "passed",
+    "restart": {
+      "revision": "916c104c2526cbd0be088ce62ea6ebc66c934a68",
+      "buildID": "5PrRkQAfnP-lkomTIMDmF",
+      "ready": true,
+      "elapsed_seconds": 18.41,
+      "attempts": 7,
+      "process_changed": true,
+      "active_receipt_unchanged": true
+    },
+    "https_login": "200; certificate verification result0",
+    "protected_read": "isolated QA workspace returned all four canonical MCP directory entries after restart",
+    "api_health": "ready; database ready; unchanged API service"
+  },
+  "native_before": "not captured; no paired native comparison claimed"
+}

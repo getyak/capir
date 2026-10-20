@@ -13,6 +13,7 @@ vi.mock("@/lib/time-workspace-client", async (original) => ({ ...await original<
 import { pendingTimeOperation, rememberTimeOperation, rememberTimeEditorDraft } from "@/lib/time-workspace-storage";
 import { calendarLocalTime } from "@/lib/calendar-draft";
 import { TimeWorkspace } from "./time-workspace";
+import { LocaleProvider } from "./locale-provider";
 import { WORKSPACE_SESSION_EXPIRED_EVENT } from "./workspace-session-request";
 let root: Root, host: HTMLDivElement;
 const pendingMutation = { ...timeFixtureMutation, expected_revision: 1, idempotency_key: "b2000000-0000-4000-8000-000000000099" };
@@ -22,6 +23,25 @@ function payload(title = "Synthetic private activity", more = false) {
 }
 async function render() { nativeReplace(null, "", `/workspace/meetings?${mock.query}`); await act(async () => { root.render(createElement(TimeWorkspace, { people: [], peopleError: null, binding: "a", legacyDraft: null })); }); }
 async function click(label: string) { const button = [...host.querySelectorAll("button")].find((b) => b.textContent === label); expect(button).toBeTruthy(); await act(async () => button!.click()); }
+function addButton() { const button = [...host.querySelectorAll("button")].find((b) => b.textContent === "添加日程"); expect(button).toBeTruthy(); return button as HTMLButtonElement; }
+async function typeEditorTitle(text: string) {
+  await act(async () => {
+    const input = host.querySelector<HTMLInputElement>('input[maxlength="200"]')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+function escapeKey(init: { composing?: boolean; ime229?: boolean } = {}) {
+  const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  if (init.composing !== undefined) Object.defineProperty(event, "isComposing", { value: init.composing });
+  if (init.ime229) Object.defineProperty(event, "keyCode", { value: 229 });
+  return event;
+}
+async function pressEscape(target: Element, init: { composing?: boolean; ime229?: boolean } = {}) {
+  await act(async () => { target.dispatchEvent(escapeKey(init)); });
+}
+// The focus return is deferred past the close commit; one timer tick is enough.
+async function flushFocus() { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); }); }
 beforeEach(() => {
   vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.resetAllMocks(); sessionStorage.clear(); mock.query = "day=2026-09-21&tz=UTC";
   vi.spyOn(window.history, "pushState").mockImplementation((data, unused, url) => { nativePush(data, unused, url); mock.push(String(url)); });
@@ -31,6 +51,18 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); sessionStorage.clear(); });
 describe("rendered time workspace", () => {
+  it.each(["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."])("localizes the network recovery hint for %s", async (message) => {
+    mock.request.mockRejectedValue(new Error(message));
+    await act(async () => {
+      root.render(<LocaleProvider locale="en"><TimeWorkspace people={[]} peopleError={null} binding="a" legacyDraft={null} /></LocaleProvider>);
+    });
+    const alert = host.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Unable to connect. Please try again.");
+    expect(alert?.textContent).not.toContain("暂时连不上服务");
+    mock.request.mockResolvedValue({ ...payload(), activities: [] });
+    await act(async () => alert!.querySelector("button")!.click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
   it("composes rapid filter changes before the next router render", async () => {
     await render(); await click("筛选");
     const selects = host.querySelectorAll("select");
@@ -343,5 +375,182 @@ describe("review continuity", () => {
     expect(host.textContent).toContain("Private review body");
     expect(Object.keys(sessionStorage)).toHaveLength(0);
     expect(Object.keys(localStorage)).toHaveLength(0);
+  });
+});
+
+describe("keyboard focus return", () => {
+  it("returns focus to Add after Escape closes a blank new editor", async () => {
+    await render();
+    const add = addButton();
+    await act(async () => add.click());
+    expect(host.querySelector('input[maxlength="200"]')).not.toBeNull();
+    await pressEscape(host.querySelector('input[maxlength="200"]')!);
+    expect(host.querySelector('input[maxlength="200"]')).toBeNull();
+    await flushFocus();
+    expect(document.activeElement).toBe(add);
+  });
+
+  it("returns focus to the schedule row that opened the editor", async () => {
+    mock.request.mockResolvedValue({ ...payload(), activities: [timeFixtureActivity] });
+    await render();
+    const row = [...host.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find((b) => b.textContent?.includes("Synthetic meeting"));
+    expect(row).toBeTruthy();
+    await act(async () => { row!.focus(); row!.click(); });
+    mock.query = window.location.search.slice(1); await render();
+    expect(host.querySelector('input[maxlength="200"]')).not.toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="关闭编辑"]')!.click());
+    expect(host.querySelector('input[maxlength="200"]')).toBeNull();
+    await flushFocus();
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("falls back to Add when a deep-linked editor closes", async () => {
+    mock.query += `&item=schedule:${timeFixtureSchedule.id}`; await render();
+    expect(host.querySelector('input[maxlength="200"]')).not.toBeNull();
+    const add = addButton();
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="关闭编辑"]')!.click());
+    await flushFocus();
+    expect(document.activeElement).toBe(add);
+  });
+
+  it("returns focus to the clicked row when focus stayed on another row", async () => {
+    const a = timeFixtureSchedule, b = { ...a, id: "b1000000-0000-4000-8000-000000000099", title: "Schedule B" };
+    mock.request.mockResolvedValue({ ...payload(), activities: [a, b].map((r) => ({ ...timeFixtureActivity, id: `schedule:${r.id}`, source_id: r.id, title: r.title })) });
+    mock.read.mockImplementation(async (id: string) => id === a.id ? a : b);
+    await render();
+    const rows = [...host.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')];
+    const rowA = rows.find((r) => r.textContent?.includes(a.title!))!;
+    const rowB = rows.find((r) => r.textContent?.includes(b.title))!;
+    // A WebKit mouse click never moves focus: it stays on the previous row while
+    // a nested title target of row B initiates the editor.
+    rowA.focus();
+    // Real input can run a microtask checkpoint between React's separate
+    // native capture and bubble listeners. happy-dom's JS .click() otherwise
+    // keeps an outer stack and misses that browser ordering.
+    const microtasks: VoidFunction[] = [];
+    const queue = vi.spyOn(globalThis, "queueMicrotask").mockImplementation((task) => { microtasks.push(task); });
+    const checkpoint = () => { while (microtasks.length) microtasks.shift()!(); };
+    host.addEventListener("click", checkpoint, { capture: true, once: true });
+    await act(async () => {
+      try { rowB.querySelector("strong")!.click(); }
+      finally { queue.mockRestore(); checkpoint(); }
+    });
+    mock.query = window.location.search.slice(1); await render();
+    expect(host.querySelector<HTMLInputElement>('input[maxlength="200"]')!.value).toBe(b.title);
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="关闭编辑"]')!.click());
+    await flushFocus();
+    expect(document.activeElement).toBe(rowB);
+    expect(document.activeElement).not.toBe(rowA);
+  });
+
+  it("restores focus to a usable control after closing an unverified new schedule", async () => {
+    await render();
+    const add = addButton();
+    await act(async () => add.click());
+    await typeEditorTitle("Unsent new meeting");
+    mock.request.mockImplementation(async (url: string) => url.includes("/api/time/schedules/") ? Promise.reject(new TypeError("network lost")) : payload());
+    await act(async () => { [...host.querySelectorAll('button[type="submit"]')].find((b) => b.textContent === "保存安排")!.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(host.textContent).toContain("操作可能已完成");
+    const receipt = pendingTimeOperation("a")!;
+    expect(receipt).not.toBeNull();
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="关闭编辑"]')!.click());
+    expect(host.querySelector('input[maxlength="200"]')).toBeNull();
+    await flushFocus();
+    // Add is disabled while the operation is unresolved; focus must land on a
+    // control that can actually take it, never back on BODY.
+    expect(add.disabled).toBe(true);
+    const recovery = [...host.querySelectorAll("button")].find((b) => b.textContent === "核实上次操作")!;
+    expect(recovery).toBeTruthy();
+    expect(document.activeElement).toBe(recovery);
+    expect((document.activeElement as HTMLButtonElement).disabled).toBe(false);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(pendingTimeOperation("a")).toEqual(receipt);
+  });
+
+  it("cancels a pending focus return when the account binding changes", async () => {
+    await render();
+    const add = addButton();
+    await act(async () => add.click());
+    const input = host.querySelector<HTMLInputElement>('input[maxlength="200"]')!;
+    // The binding change lands in the same task as the close, before the
+    // deferred focus runs: no focus may cross to the next account.
+    await act(async () => {
+      input.dispatchEvent(escapeKey());
+      root.render(createElement(TimeWorkspace, { people: [], peopleError: null, binding: "b", legacyDraft: null }));
+    });
+    expect(host.querySelector('input[maxlength="200"]')).toBeNull();
+    await flushFocus();
+    expect(add.isConnected).toBe(true);
+    expect(document.activeElement).not.toBe(add);
+  });
+
+  it("cancels a pending focus return when the session expires", async () => {
+    await render();
+    const add = addButton();
+    await act(async () => add.click());
+    const input = host.querySelector<HTMLInputElement>('input[maxlength="200"]')!;
+    await act(async () => {
+      input.dispatchEvent(escapeKey());
+      window.dispatchEvent(new Event(WORKSPACE_SESSION_EXPIRED_EVENT));
+    });
+    await flushFocus();
+    expect(document.activeElement).not.toBe(add);
+  });
+
+  it("cancels a pending focus return when a new editor opens", async () => {
+    await render();
+    const add = addButton();
+    await act(async () => add.click());
+    const input = host.querySelector<HTMLInputElement>('input[maxlength="200"]')!;
+    await act(async () => {
+      input.dispatchEvent(escapeKey());
+      add.click();
+    });
+    expect(host.querySelector('input[maxlength="200"]')).not.toBeNull();
+    await flushFocus();
+    expect(document.activeElement).not.toBe(add);
+  });
+
+  it("cancels a pending focus return when the workspace unmounts", async () => {
+    await render();
+    const add = addButton();
+    await act(async () => add.click());
+    const input = host.querySelector<HTMLInputElement>('input[maxlength="200"]')!;
+    await act(async () => {
+      input.dispatchEvent(escapeKey());
+      root.unmount(); root = createRoot(host);
+    });
+    await flushFocus();
+    expect(add.isConnected).toBe(false);
+    expect(document.activeElement).not.toBe(add);
+  });
+
+  it("does not move focus after history navigation closes the editor", async () => {
+    await render();
+    const add = addButton();
+    await act(async () => add.click());
+    await click("周");
+    expect(host.querySelector('input[maxlength="200"]')).toBeNull();
+    await flushFocus();
+    expect(add.isConnected).toBe(true);
+    expect(document.activeElement).not.toBe(add);
+  });
+
+  it("does not move focus after a save completes", async () => {
+    await render();
+    const add = addButton();
+    await act(async () => add.click());
+    await typeEditorTitle("Booked");
+    mock.request.mockImplementation(async (url: string, _binding: string, request: RequestInit) =>
+      url.includes("/api/time/schedules/") ? { contract_version: CONTRACT_VERSION, schedule: { ...timeFixtureSchedule, revision: 1, last_operation_id: JSON.parse(request.body as string).idempotency_key } } : payload());
+    const save = [...host.querySelectorAll<HTMLButtonElement>('button[type="submit"]')].find((b) => b.textContent === "保存安排")!;
+    expect(save).toBeTruthy();
+    save.focus();
+    await act(async () => { save.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(host.textContent).toContain("已保存到时间工作台");
+    await flushFocus();
+    expect(document.activeElement).toBe(save);
+    expect(document.activeElement).not.toBe(add);
   });
 });

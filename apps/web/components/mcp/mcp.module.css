@@ -257,7 +257,7 @@
   }
 }
 
-.directory { min-width: 0; width: 100%; border-top: 1px solid var(--line-soft); padding-top: 24px; color: var(--ink); }
+.directory { min-width: 0; width: 100%; color: var(--ink); }
 .directory h2 { font-size: 18px; font-weight: 600; margin: 0; }
 .sectionHeading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .sectionHeading > div { display: grid; gap: 8px; }
@@ -275,3 +275,34 @@
 @media (max-width: 640px) { .sectionHeading { flex-wrap: wrap; } .choices li { flex-wrap: wrap; } .entry { padding: 14px; } .card { min-width: 0; } .authState { flex-wrap: wrap; } }
 
 .receipt .receiptPreview { font-family: inherit; font-size: 13px; line-height: 1.65; max-height: 240px; }
+
+/* Catalog choices are peers, not four competing primary actions. Request and
+   confirmation controls elsewhere keep their existing primary treatment. */
+.directory .summary,
+.directory .notice,
+.directory .hint { font-size: var(--workspace-body-size); line-height: 1.65; }
+.directory .domain,
+.directory .authState { font-size: var(--workspace-meta-size); }
+.directory .custom summary,
+.directory > .sectionHeading > .secondary { font-size: var(--workspace-body-size); }
+.directory .entry h3 { font-size: var(--workspace-body-size); font-weight: 600; }
+.directoryGrid .entry > .primary {
+  align-self: flex-start;
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink);
+  font-size: var(--workspace-body-size);
+  margin-top: auto;
+  transition: background var(--workspace-transition-duration, 180ms) var(--ease-out), border-color var(--workspace-transition-duration, 180ms) var(--ease-out);
+}
+.directoryGrid .entry > .primary:hover:not(:disabled) { background: var(--surface-muted); border-color: var(--muted); }
+.directoryGrid .entry > .primary:active:not(:disabled) { background: var(--surface-selected); }
+
+@media (prefers-reduced-motion: reduce) {
+  .directoryGrid .entry > .primary { transition: none; }
+}
+
+@media (forced-colors: active) {
+  .directoryGrid .entry > .primary { background: ButtonFace; border-color: ButtonText; color: ButtonText; }
+  .directoryGrid .entry > .primary:disabled { border-color: GrayText; color: GrayText; opacity: 1; }
+}

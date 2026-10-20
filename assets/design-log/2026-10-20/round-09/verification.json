@@ -1,0 +1,80 @@
+{
+  "status": "accepted and deployed; resident, native and restart proof verified",
+  "review_diff_sha256": "f047f9b53e2b1f3a7539100d05edfb9f6559eabf8508b5d7bd0b9830792fa152",
+  "body_state_text_before_px": 13,
+  "body_state_text_after_px": 15,
+  "provenance_date_count_px": 13,
+  "mobile_textarea_px": 16,
+  "normal_transition_seconds": 0.18,
+  "reduced_transition_seconds": 1e-05,
+  "tested_widths": [
+    320,
+    390,
+    1440
+  ],
+  "horizontal_overflow": false,
+  "keyboard": "Enter changes reading mode;2px focus preserved",
+  "reading_authority": "same confirmed-only and retained-source wording; no record writes",
+  "body_contrast": {
+    "light": 5.647927430674284,
+    "dark": 8.117879363713325,
+    "method": "sRGB relative luminance from actual rendered foreground and first opaque ancestor background"
+  },
+  "forced_colors": {
+    "before": "unselected transparent borders become black; all three modes look underlined",
+    "after": "Canvas unselected borders; one Highlight selected border",
+    "keyboard_raw": "marker moves uniquely to Raw; other two borders white"
+  },
+  "focused_tests": {
+    "passed": 41,
+    "files": 2,
+    "final_run_local_time": "2026-10-20 04:37:39"
+  },
+  "web_lint": "passed",
+  "source_css_fixture": "synthetic only; exact module CSS for error/conflict wrapping and readonly input16/focus2; not a live product error or mutation",
+  "native_before": "installed0.2.8/125, authorized primary fictional test person,2accepted source-attributed memories;sidebar collapsed to exclude unrelated identities,1123x865 and900x720",
+  "native_after": "installed0.2.8/125; same fictional person and two memories, sidebar collapsed,1123x865 and900x720; window restored1123x865; no native binary update",
+  "images": {
+    "09-person-resident-light-1440-before.png": "web-1440-before.png",
+    "09-person-resident-light-390-before.png": "web-390-before.png",
+    "09-person-local-dark-390-candidate.png": "web-dark-390-after.png",
+    "09-person-local-dark-1440-candidate.png": "web-dark-1440-after.png",
+    "09-person-local-reading-keyboard-390.png": "reading-keyboard-390.png",
+    "09-person-local-raw-keyboard-320.png": "raw-keyboard-320.png",
+    "09-person-local-forced-colors-before.png": "forced-colors-before.png",
+    "09-person-local-forced-colors-after.png": "forced-colors-after.png",
+    "09-person-source-css-recovery-fixture-390.png": "source-css-recovery-390.png",
+    "09-person-source-css-recovery-fixture-320.png": "source-css-recovery-320.png",
+    "09-person-macos-default-collapsed-before.png": "macos-default-collapsed-before.png",
+    "09-person-macos-narrow-collapsed-before.png": "macos-narrow-collapsed-before.png",
+    "09-person-resident-light-390-after.png": "web-390-after.png",
+    "09-person-resident-light-1440-after.png": "web-1440-after.png",
+    "09-person-macos-default-collapsed-after.png": "macos-default-collapsed-after.png",
+    "09-person-macos-narrow-collapsed-after.png": "macos-narrow-collapsed-after.png"
+  },
+  "deployment": {
+    "revision": "7c526fb058933d0ffdb057efcbfa00379c1ef42a",
+    "buildID": "SWJjqSYI4_Q3wxzgBvQs0",
+    "source": "clean committed detached release",
+    "initial_activation": "authentication readiness timeout; installer rollback restored916c104c and protected Person read was verified",
+    "controlled_retry_seconds": 42.52,
+    "retry_source_or_installer_changed": false,
+    "startup_delay_cause": "unconfirmed",
+    "restart": {
+      "revision": "7c526fb058933d0ffdb057efcbfa00379c1ef42a",
+      "buildID": "SWJjqSYI4_Q3wxzgBvQs0",
+      "ready": true,
+      "elapsed_seconds": 9.96,
+      "attempts": 5,
+      "process_changed": true,
+      "active_receipt_unchanged": true,
+      "https_login_http_and_certificate_verify": "200 0",
+      "api_readiness": {
+        "status": "ready",
+        "database": "ready",
+        "migration": "079_memory_source_authority"
+      }
+    },
+    "protected_read_after_restart": "same isolated synthetic Person;15px actual context help; no data writes"
+  }
+}

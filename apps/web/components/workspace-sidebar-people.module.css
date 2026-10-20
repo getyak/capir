@@ -15,7 +15,7 @@
 
 .heading {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--workspace-meta-size, 0.8125rem);
   font-weight: 500;
   line-height: 1.5;
   margin: 0;
@@ -31,6 +31,7 @@
   min-height: 44px;
   min-width: 0;
   padding: 0 3px 0 9px;
+  transition: border-color var(--workspace-transition-duration, 180ms) var(--ease-out);
 }
 
 .search > svg {
@@ -44,7 +45,7 @@
   color: var(--ink);
   flex: 1 1 auto;
   font: inherit;
-  font-size: 0.8125rem;
+  font-size: var(--workspace-body-size, 0.9375rem);
   min-width: 0;
   outline: none;
   padding: 10px 0;
@@ -60,7 +61,14 @@
 }
 
 .search:focus-within {
-  border-color: var(--muted-strong);
+  border-color: var(--ink);
+}
+
+/* Keyboard entry gets one evident ring around the quiet search field. */
+.search:has(input:focus-visible) {
+  border-color: var(--ink);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .searchControl {
@@ -75,10 +83,11 @@
   justify-content: center;
   min-height: 44px;
   padding: 0;
+  transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out);
   width: 30px;
 }
 
-.searchControl:hover,
+.searchControl:hover:not(:disabled),
 .person:hover {
   background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent));
 }
@@ -106,6 +115,7 @@
   min-width: 0;
   padding: 7px 8px;
   text-decoration: none;
+  transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out);
 }
 
 .person[aria-current="page"] {
@@ -125,22 +135,24 @@
   white-space: nowrap;
 }
 
+/* Person names step up to workspace body while context stays metadata;
+   tighter line boxes keep the directory row pitch unchanged. */
 .identity strong {
-  font-size: 0.8125rem;
+  font-size: var(--workspace-body-size, 0.9375rem);
   font-weight: 500;
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
 .identity small {
   color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.4;
+  font-size: var(--workspace-meta-size, 0.8125rem);
+  line-height: 1.3;
 }
 
 .state,
 .scope {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: var(--workspace-meta-size, 0.8125rem);
   line-height: 1.6;
   margin: 0;
   overflow-wrap: anywhere;
@@ -167,7 +179,7 @@
 }
 
 .allPeople {
-  font-size: 0.75rem;
+  font-size: var(--workspace-meta-size, 0.8125rem);
 }
 
 .searchControl:focus-visible,
@@ -178,8 +190,20 @@
   outline-offset: 2px;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .search,
+  .searchControl,
+  .person {
+    transition: none;
+  }
+}
+
 @media (forced-colors: active) {
   .person[aria-current="page"] {
     outline: 1px solid Highlight;
+  }
+
+  .search:has(input:focus-visible) {
+    outline-color: Highlight;
   }
 }

@@ -523,6 +523,13 @@ request cannot undo telemetry already retained under the wrong account.
 Test data may contain synthetic or explicitly authorized testing material only;
 isolation is not consent for external processing or retention.
 
+Visual acceptance evidence follows the same purpose boundary. A collapsed native
+sidebar can still expose unrelated conversation titles in its accessibility tree.
+Filter inspection output to the exact approved controls or synthetic fixture
+before emitting or retaining it; collapsing chrome is not redaction. Use matched
+fictional content for shared screenshots, and keep unrelated primary-workspace
+lists out of published comparison artifacts.
+
 Ending a test workspace revokes access before data cleanup. The UI distinguishes
 cleanup pending/failed from verified deletion. New database tables must be
 explicitly classified in the Lab cleanup manifest and account-scoped tables need

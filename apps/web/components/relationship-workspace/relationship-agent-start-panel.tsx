@@ -80,7 +80,10 @@ export function RelationshipAgentStartPanel({
   return (
     <aside
       aria-labelledby="relationship-chat-title"
-      className="context-chat context-chat--standalone"
+      className={cn(
+        "context-chat context-chat--standalone",
+        createOpen && styles.entryPanel,
+      )}
       id="relationship-chat"
       data-has-conversation={turns.length > 0 || createOpen || Boolean(identityResolutionCase)}
       data-creating={createOpen || undefined}

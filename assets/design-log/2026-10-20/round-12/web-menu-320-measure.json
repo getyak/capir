@@ -1,0 +1,44 @@
+{
+  "viewport": {
+    "innerWidth": 320,
+    "innerHeight": 844,
+    "dpr": 2,
+    "vv": {
+      "width": 320,
+      "height": 844,
+      "scale": 1,
+      "top": 0
+    }
+  },
+  "documentWidth": 320,
+  "bodyWidth": 320,
+  "composer": {
+    "x": 16,
+    "y": 452,
+    "width": 288,
+    "height": 62
+  },
+  "input": {
+    "x": 79,
+    "y": 471,
+    "width": 162,
+    "height": 24
+  },
+  "font": "16px",
+  "menu": {
+    "x": 17,
+    "y": 194,
+    "width": 286,
+    "height": 251
+  },
+  "side": "above",
+  "maxHeight": "251px",
+  "selected": {
+    "x": 24,
+    "y": 201,
+    "width": 272,
+    "height": 44
+  },
+  "focus": "MAIN",
+  "hit": true
+}

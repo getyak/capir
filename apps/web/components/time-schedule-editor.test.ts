@@ -11,7 +11,7 @@ import { pendingTimeOperation, TimeRequestError } from "@/lib/time-workspace-cli
 import { timeFixtureSchedule } from "@/lib/test/time-fixtures";
 let host: HTMLDivElement, root: Root;
 beforeEach(() => {
-  vi.restoreAllMocks(); vi.resetAllMocks(); mock.read.mockResolvedValue(timeFixtureSchedule); sessionStorage.clear(); Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.resetAllMocks(); mock.read.mockResolvedValue(timeFixtureSchedule); sessionStorage.clear(); Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); sessionStorage.clear(); });
@@ -20,6 +20,24 @@ async function render(record: TimeScheduleRecord | null = timeFixtureSchedule, r
 }
 async function submit() { await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
 async function click(text: string) { const button = [...host.querySelectorAll("button")].find((b) => b.textContent === text); expect(button).toBeTruthy(); await act(async () => button!.click()); }
+async function typeTitle(text: string) {
+  await act(async () => {
+    const input = host.querySelector<HTMLInputElement>("input")!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+// Native key events: IME state and the native 229 code must be observable to
+// the editor exactly as browsers report them.
+async function pressEscape(target: Element, init: { composing?: boolean; ime229?: boolean; handled?: boolean; swallowed?: boolean } = {}) {
+  const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  if (init.composing !== undefined) Object.defineProperty(event, "isComposing", { value: init.composing });
+  if (init.ime229) Object.defineProperty(event, "keyCode", { value: 229 });
+  if (init.handled) target.addEventListener("keydown", (e) => e.preventDefault(), { once: true });
+  if (init.swallowed) target.addEventListener("keydown", (e) => e.stopPropagation(), { once: true });
+  await act(async () => { target.dispatchEvent(event); });
+}
+function stubConfirm(accept: boolean) { const spy = vi.fn<(message: string) => boolean>(() => accept); vi.stubGlobal("confirm", spy); return spy; }
 describe("rendered schedule recovery", () => {
   it("recovers a lost successful response without issuing a second write", async () => {
     mock.request.mockRejectedValue(new TypeError("network lost"));
@@ -134,6 +152,134 @@ describe("rendered schedule recovery", () => {
     expect(readTimeEditorDraft("a")?.fields.title).toBe("Unsent title");
     expect(host.textContent).not.toContain("未能在此标签页保留输入");
   });
+});
+
+describe("keyboard close contract", () => {
+  it("closes a pristine editor on Escape from the Save control without confirmation or writes", async () => {
+    await render(null);
+    const confirm = stubConfirm(true);
+    await pressEscape(host.querySelector('button[type="submit"]')!);
+    expect(mock.close).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(mock.request).not.toHaveBeenCalled();
+    expect(pendingTimeOperation("a")).toBeNull();
+    expect(readTimeEditorDraft("a")).toBeNull();
+  });
+
+  it("keeps a dirty editor and its input when the Escape close confirmation is cancelled", async () => {
+    await render(null); await typeTitle("Unsent title");
+    const confirm = stubConfirm(false);
+    await pressEscape(host.querySelector("input")!);
+    expect(confirm).toHaveBeenCalledWith("离开会放弃尚未保存的修改。");
+    expect(mock.close).not.toHaveBeenCalled();
+    expect(host.querySelector("form")).not.toBeNull();
+    expect(host.querySelector<HTMLInputElement>("input")!.value).toBe("Unsent title");
+    expect(mock.request).not.toHaveBeenCalled();
+    expect(pendingTimeOperation("a")).toBeNull();
+  });
+
+  it("closes a dirty editor on Escape only through the same confirmation decision", async () => {
+    await render(null); await typeTitle("Unsent title");
+    const confirm = stubConfirm(true);
+    await pressEscape(host.querySelector("input")!);
+    expect(confirm).toHaveBeenCalledWith("离开会放弃尚未保存的修改。");
+    expect(mock.close).toHaveBeenCalledTimes(1);
+    expect(mock.request).not.toHaveBeenCalled();
+  });
+
+  it("shares one close decision and message between Escape and the close control", async () => {
+    await render(null); await typeTitle("Unsent title");
+    const confirm = stubConfirm(false);
+    await click("×");
+    await pressEscape(host.querySelector("input")!);
+    expect(mock.close).not.toHaveBeenCalled();
+    expect(confirm).toHaveBeenCalledTimes(2);
+    const messages = confirm.mock.calls.map(([message]) => message);
+    expect(messages[0]).toBe("离开会放弃尚未保存的修改。");
+    expect(messages[1]).toBe(messages[0]);
+  });
+
+  it("keeps the pending operation credentials when Escape closes an unverified editor", async () => {
+    mock.request.mockRejectedValue(new TypeError("network lost"));
+    await render(); await submit();
+    const receipt = pendingTimeOperation("a")!;
+    expect(receipt).not.toBeNull();
+    const confirm = stubConfirm(true);
+    await pressEscape(host.querySelector("section")!);
+    expect(confirm).toHaveBeenCalledWith("操作结果尚未核实，关闭后可继续核实。");
+    expect(mock.close).toHaveBeenCalledTimes(1);
+    expect(pendingTimeOperation("a")).toEqual(receipt);
+    expect(mock.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores Escape during an IME composition until the composition ends", async () => {
+    await render(null);
+    const input = host.querySelector("input")!;
+    await act(async () => { input.dispatchEvent(new Event("compositionstart", { bubbles: true })); });
+    await pressEscape(input, { composing: true });
+    await pressEscape(input);
+    expect(mock.close).not.toHaveBeenCalled();
+    expect(host.querySelector("form")).not.toBeNull();
+    await act(async () => { input.dispatchEvent(new Event("compositionend", { bubbles: true })); });
+    await pressEscape(input);
+    expect(mock.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores Escape reported as native IME keyCode 229", async () => {
+    await render(null);
+    await pressEscape(host.querySelector("input")!, { ime229: true });
+    expect(mock.close).not.toHaveBeenCalled();
+    await pressEscape(host.querySelector("input")!);
+    expect(mock.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close on an Escape already handled by a child", async () => {
+    await render(null);
+    const input = host.querySelector("input")!;
+    await pressEscape(input, { handled: true });
+    expect(mock.close).not.toHaveBeenCalled();
+    await pressEscape(input);
+    expect(mock.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not close on an Escape swallowed inside a child", async () => {
+    await render(null);
+    const input = host.querySelector("input")!;
+    await pressEscape(input, { swallowed: true });
+    expect(mock.close).not.toHaveBeenCalled();
+    await pressEscape(input);
+    expect(mock.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores Escape outside the editor surface", async () => {
+    await render(null);
+    await pressEscape(document.body);
+    expect(mock.close).not.toHaveBeenCalled();
+    await pressEscape(host.querySelector("input")!);
+    expect(mock.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the terminal view on Escape without confirmation", async () => {
+    mock.read.mockRejectedValue(new TimeRequestError("gone", 404));
+    await render();
+    const confirm = stubConfirm(true);
+    const close = [...host.querySelectorAll("button")].find((b) => b.textContent === "关闭")!;
+    await pressEscape(close);
+    expect(mock.close).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("closes a pristine editor from the close control without confirmation", async () => {
+    await render(null);
+    const confirm = stubConfirm(true);
+    await click("×");
+    expect(mock.close).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+});
+
+describe("draft retention", () => {
   it("does not let an unmounted save completion erase a later draft", async () => {
     let resolve!: (value: unknown) => void;
     mock.request.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));

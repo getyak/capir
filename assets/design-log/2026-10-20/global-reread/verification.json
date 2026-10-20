@@ -1,0 +1,88 @@
+{
+  "status": "read-only global inspection; not a new implementation",
+  "resident": "7c526fb058933d0ffdb057efcbfa00379c1ef42a",
+  "history": "actual isolated workspace0sessions;24px title,15px empty description;1440/390 andforced-dark primary/focus readable;structure retained",
+  "preferences": "actual isolated workspace,24px title;body/select14px recorded forlater typography pass;no preference changed/saved",
+  "conversation": "actual isolated workspace;inline composer14px;static hero andstarter actionstructure retained",
+  "composer_clipping": {
+    "centerHitOwn": false,
+    "clips": [
+      {
+        "class": "_825xVG_list",
+        "overflow": "auto",
+        "rect": {
+          "bottom": 434,
+          "height": 358,
+          "left": 18,
+          "right": 372,
+          "top": 76,
+          "width": 354,
+          "x": 18,
+          "y": 76
+        },
+        "scrollTop": 0
+      },
+      {
+        "class": "_825xVG_menu",
+        "overflow": "hidden",
+        "rect": {
+          "bottom": 435,
+          "height": 360,
+          "left": 17,
+          "right": 373,
+          "top": 75,
+          "width": 356,
+          "x": 17,
+          "y": 75
+        },
+        "scrollTop": 0
+      },
+      {
+        "class": "GI3Jna_canvas",
+        "overflow": "auto",
+        "rect": {
+          "bottom": 766,
+          "height": 581,
+          "left": 0,
+          "right": 390,
+          "top": 185,
+          "width": 390,
+          "x": 0,
+          "y": 185
+        },
+        "scrollTop": 0
+      }
+    ],
+    "option": {
+      "bottom": 138.828125,
+      "height": 56.828125,
+      "left": 24,
+      "right": 366,
+      "top": 82,
+      "width": 342,
+      "x": 24,
+      "y": 82
+    },
+    "selected": "true",
+    "viewport": {
+      "height": 844,
+      "width": 390
+    }
+  },
+  "composer_test_actions": "opened plus menu;typedslashwithoutsend,ArrowDownchangesactualselection;Escapeclosedandfieldcleared;blank localdraft_session URL allocated byexistingfocusflow;no serverrecord orAIcall",
+  "composer_selection": "actual inheritedsurface-selected#e8e6df works; no missing-selection-token claim",
+  "native_context_menu": "installed0.2.8 default1123x865, collapsedsidebarfictionalperson;nativeLookup/Translate/Copy/Share/Services menu observed thenCancel;noactionexecuted;selectioncleared",
+  "native_history": "actual900settledlistlookedreadable,private raw only because titlesincludeunmarkedsources;no recordopened/created",
+  "pending_batch": "composer-layout-contract.json preparedprivate,NOTdispatchedwhileTime10writeractive",
+  "images": {
+    "12-history-resident-light-1440-before.png": "history-1440.png",
+    "12-history-resident-light-390-before.png": "history-390.png",
+    "12-history-forced-dark-1440-before.png": "history-forced-dark.png",
+    "12-preferences-resident-light-390-before.png": "preferences-390.png",
+    "12-preferences-resident-light-1440-before.png": "preferences-1440.png",
+    "12-conversation-resident-light-1440-before.png": "conversation-1440.png",
+    "12-conversation-resident-light-390-before.png": "conversation-390.png",
+    "12-composer-clipped-first-390-before.png": "composer-clipped-first-390.png",
+    "native-person-context-menu-verified.png": "macos-native-context-menu.png"
+  }
+}

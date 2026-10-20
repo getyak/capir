@@ -1,0 +1,5 @@
+Final parent: 47 tests across4 files passed at07:19:13 +08:00,18.82s.
+Worker extra regression:63 tests passed;lint and typecheck passed.
+Stationary-pointer RED: old mouseenter handler changes keyboard-selected option unexpectedly;1failed/4passed at07:18:45 +08:00.
+Final GREEN: boundary enter and touch movement preserve selection; actual mouse movement selects;focus and no-submit assertions pass.
+Final independent five-file review: no confirmedP0–P2, dc1cdf8034b67ef5adcb918dd0c6c9cf1675ec22a04db544523db71ae54b147e.

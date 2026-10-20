@@ -1566,5 +1566,6 @@
   "当前账号没有这项管理权限。": "Your account does not have permission to manage this setting.",
   "资料或权限已发生变化。请刷新页面，核对最新内容后再提交。": "The profile or permissions changed. Refresh the page, review the latest values, then submit again.",
   "请检查填写内容，名称应为 1–100 个字符。": "Check your input. Names must contain 1–100 characters.",
-  "暂时无法核验保存结果。保留当前内容，可用同一次操作重试或刷新核对。": "The save result could not be verified. Keep your current input and retry the same operation, or refresh to check."
+  "暂时无法核验保存结果。保留当前内容，可用同一次操作重试或刷新核对。": "The save result could not be verified. Keep your current input and retry the same operation, or refresh to check.",
+  "暂时连不上服务，请重试。": "Unable to connect. Please try again."
 }

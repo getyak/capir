@@ -1,0 +1,21 @@
+{
+  "status": "Main entry craft active2b; final forced-color correction1c actual-verified in clean production-output preview but NOT DEPLOYED after two readiness failures/automatic rollback. Native latest after-proof blocked.",
+  "review_sha256": "4f2eb9c10c99c03ae71b3a736733abaaabda923feff1cb6bafd5c61fafbca369",
+  "parent_tests": 75,
+  "test_files": 3,
+  "pi_task": "20261020-071413-c2fc441d",
+  "pi_status": "cancelled; partial scoped source independently inspected",
+  "credits_estimate": 67473152,
+  "mutation": false,
+  "resident_revision": "2b4cd303b08d868daad9abd45cf984c0085315a3",
+  "actual_web": "1440x1000 normal/light;390x844 light (initial export is auto-scrolled focus state);320x568 dark/focus;390 actual zero-scroll geometry input302px (before290),16px/min44/focus2/no shadow; body15,title24,frames0,document390/scale1. Separate top screenshot retains service warning.",
+  "pending": [
+    "deploy1c with unchanged gates after readiness cause is resolved",
+    "macOS actual-after blocked by normal login connectivity/recovery",
+    "actual pending/error/readonly/selected-match layout not induced; unit behavior covers these states"
+  ],
+  "candidate_revision": "1c7e1a4a6ebb797ac039b005534df96186287298",
+  "candidate_build_id": "K1LOQCHQFtwESnV-W2-Ah",
+  "forced_colors": "Actual1440x1000 DPR2, same unsent fictional draft. Before2b resident label fully hidden by white backplate; clean1c production-output preview label readable after correction. Disabled baseline recorded; active+disabled combination source-reviewed, not forced in actual data.",
+  "cancel": "Actual Cancel removes create card and its fictional text without creating a record; inherited intent query remains unchanged."
+}
