@@ -50,6 +50,10 @@ the button; failure keeps the current app usable and offers another check.
 Checking alone never authorizes installation. The application menu and native
 settings also offer checks and installation when the Web server is unavailable
 or still runs an older Web version. Background download/installation is disabled.
+The expanded workspace footer keeps the update label and Connect apps control
+visible at fixed positions. Download and installation are non-actionable,
+keyboard-focusable status controls; the collapsed rail retains their short
+progress label, with details available on hover or focus.
 Settings show the installed version, check status and last verified feed check.
 A failed network or signature check is never reported as up to date. **Settings → Updates** controls
 scheduled checks and opt-in preview releases. Production feeds contain only signed,

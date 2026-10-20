@@ -10,8 +10,8 @@
  *
  * Shared utility type: workspace metadata (13px) carries labels, counters and
  * help; workspace body (15px) carries names and inputs; weights stay 400/500/
- * 600. Interaction states share the 180ms transition; the footer entry morph
- * keeps its pinned in-place 220ms pacing.
+ * 600. Interaction states share the 180ms transition; footer targets stay
+ * fixed while their surface and text respond.
  */
 
 .shell {
@@ -1276,98 +1276,82 @@
 
 /* ── Workspace footer strip ────────────────────────────────────────── */
 
-/* Web keeps the ordinary account row; the hosted workspace shows the compact
-   avatar / Connect apps / download strip with a 44px account target and two
-   8px gaps. */
- .accountStrip { display:flex; align-items:center; gap:8px; min-width:0; width:100%; }
+/* One quiet utility row. Every control has a 44px target; labels stay visible
+   in the expanded sidebar, so discovering an update never moves its neighbor. */
+.accountStrip { display:flex; align-items:center; gap:6px; min-width:0; width:100%; }
 .accountStrip > .accountMenu { flex:0 0 44px; min-width:0; }
 .accountStrip .accountTrigger { border-radius:50%; height:44px; justify-content:center; min-height:44px; padding:0; width:44px; }
 .accountStrip .accountTrigger .avatar[data-size="account"] { font-size:11px; height:28px; width:28px; }
 .accountStrip .accountName,.accountStrip .accountChevron { display:none; }
-.accountStrip:has(.footerEntryWrap) .connectPill { width:128px; }
 .connectPill {
   align-items: center;
-  background: color-mix(in srgb, var(--ink) 5%, transparent);
-  border-radius: 999px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
   color: var(--muted-strong);
   display: inline-flex;
-  flex: 1 1 auto;
-  font-size: var(--workspace-meta-size, 0.8125rem);
+  flex: 1 1 0;
+  font-size: 13px;
   font-weight: 500;
-  gap: 8px;
-  height: 40px;
+  gap: 5px;
+  height: 44px;
   justify-content: center;
   overflow: hidden;
-  padding: 0 12px;
+  padding: 0 5px;
   text-decoration: none;
   transition:
-    width 220ms var(--ease-out, ease),
-    padding 220ms var(--ease-out, ease),
     background 180ms ease,
     color 180ms ease;
-  min-width: 40px;
-  width: 180px;
+  min-width: 44px;
 }
 .connectPill:hover {
-  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
   color: var(--ink);
 }
 .connectPill:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
-.connectPillLabel { overflow: hidden; white-space: nowrap; max-width: 80px; transition: max-width 220ms var(--ease-out), opacity 160ms ease; }
+.connectPillLabel { white-space: nowrap; }
 .connectPill svg, .footerEntry svg { flex-shrink: 0; }
 
 .footerEntryWrap { display: inline-flex; flex: 0 0 auto; position: relative; }
 .footerEntry {
   align-items: center;
-  background: color-mix(in srgb, var(--ink) 5%, transparent);
-  border: 0;
-  border-radius: 999px;
-  color: var(--muted-strong);
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
   cursor: pointer;
   display: inline-flex;
   flex: 0 0 auto;
   font: inherit;
-  font-size: var(--workspace-meta-size, 0.8125rem);
+  font-size: 13px;
   font-weight: 500;
-  gap: 0;
-  height: 40px;
+  font-variant-numeric: tabular-nums;
+  gap: 5px;
+  height: 44px;
   justify-content: center;
   overflow: hidden;
   padding: 0;
   text-decoration: none;
   transition:
-    width 220ms var(--ease-out, ease),
-    gap 220ms var(--ease-out, ease),
     background 180ms ease,
+    border-color 180ms ease,
     color 180ms ease;
-  width: 40px;
+  width: 76px;
 }
 .footerEntry:hover {
-  background: color-mix(in srgb, var(--ink) 10%, transparent);
-  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--line-strong);
 }
 .footerEntry:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
-.footerEntry[data-phase="available"], .footerEntry[data-phase="available"]:hover { background: var(--ink); color: var(--surface); }
-.footerEntryLabel { overflow: hidden; white-space: nowrap; max-width: 0; opacity: 0; transition: max-width 220ms var(--ease-out), opacity 160ms ease; }
-
-/* Hover or keyboard focus over the download entry contracts the Connect apps
-   pill to its icon while the entry widens in place: constant strip geometry,
-   no layout shift. Collapsed rails stay icon-only. */
-.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:hover) .connectPill,
-.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-visible) .connectPill,
-.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-within) .connectPill {
-  padding: 0;
-  gap: 0;
-  width: 40px;
+.footerEntry[data-phase="available"] {
+  background: var(--ink);
+  border-color: transparent;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent);
+  color: var(--surface);
 }
-.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:hover) .footerEntry,
-.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-visible) .footerEntry,
-.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:focus-within) .footerEntry {
-  width: 128px;
-  gap: 8px;
-}
-.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .connectPillLabel { max-width: 0; opacity: 0; }
-.shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .footerEntryLabel { max-width: 80px; opacity: 1; }
+.footerEntry[data-phase="available"]:hover { background: var(--ink-soft); }
+.footerEntry[data-interactive="false"] { cursor: default; }
+.footerEntryLabel { white-space: nowrap; }
 
 /* Custom tooltip above the entry; no native title tooltip duplicates it. */
 .footerTooltip {
@@ -1546,11 +1530,18 @@
 }
 .shell:has(.sidebarState[data-collapsed="true"]) .connectPill,
 .shell:has(.sidebarState[data-collapsed="true"]) .footerEntry {
+  flex: 0 0 auto;
+  gap: 0;
   padding: 0;
-  width: 40px;
+  width: 44px;
 }
 .shell:has(.sidebarState[data-collapsed="true"]) .connectPillLabel,
 .shell:has(.sidebarState[data-collapsed="true"]) .footerEntryLabel { display: none; }
+/* A compact rail still shows progress without requiring hover. Its tooltip
+   opens into the canvas instead of clipping against the window's left edge. */
+.shell:has(.sidebarState[data-collapsed="true"]) .footerEntry[data-interactive="false"] svg { display: none; }
+.shell:has(.sidebarState[data-collapsed="true"]) .footerEntry[data-interactive="false"] .footerEntryLabel { display: inline; font-size: 12px; }
+.shell:has(.sidebarState[data-collapsed="true"]) .sidebar .footerTooltip { left: 0; right: auto; }
 @media (prefers-reduced-motion: reduce) {
   .connectPill,
   .connectPillLabel,
@@ -1816,7 +1807,8 @@
   .railControl[data-selected="true"],
   .railSessionAvatar[aria-current="page"],
   .railIconLink[aria-current="page"] { outline: 1px solid Highlight; }
-  .footerEntry[data-phase="available"], .footerEntry[data-phase="available"]:hover { background: ButtonText; color: ButtonFace; forced-color-adjust: none; }
+  .footerEntry { border-color: ButtonText; }
+  .footerEntry[data-phase="available"], .footerEntry[data-phase="available"]:hover { background: ButtonText; border-color: ButtonText; color: ButtonFace; forced-color-adjust: none; }
   .sessionRowMenuPopover,
   .accountPopover,
   .searchDialog { border: 1px solid ButtonText; }

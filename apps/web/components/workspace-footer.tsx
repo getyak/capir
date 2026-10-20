@@ -18,12 +18,11 @@ import styles from "./workspace-shell.module.css";
 
 /**
  * The compact bottom-left workspace footer: account avatar, a flexible
- * Connect apps pill and a circular download/update entry.
+ * Connect apps link and a compact download/update control.
  *
- * Geometry is CSS-only. Hovering or focusing the download entry contracts the
- * Connect apps pill to its icon while the entry widens in place (constant 224px
- * strip, 220ms easing, immediate under reduced motion). Hover never executes an
- * effect; only an explicit activation opens the entry's link.
+ * Labels remain visible in the expanded sidebar, with stable targets on hover
+ * and focus. Hover never executes an effect; only an explicit activation opens
+ * the entry's link.
  */
 
 export function ConnectAppsPill() {
@@ -33,8 +32,8 @@ export function ConnectAppsPill() {
       className={styles.connectPill}
       href="/workspace/extensions"
     >
+      <LinkSimple aria-hidden="true" size={16} />
       <span className={styles.connectPillLabel}>连接应用</span>
-      <LinkSimple aria-hidden="true" size={18} />
     </Link>
   );
 }
@@ -47,7 +46,7 @@ function downloadTooltip(state: DesktopChromeSnapshot | null): {
   if (state.phase === "downloading") {
     return {
       title: `正在下载更新${state.progress === null ? "" : ` ${state.progress}%`}`,
-      detail: "下载与校验完成后会提示安装。",
+      detail: "正在完成已授权的更新，校验后将安装并重启。",
     };
   }
   if (state.phase === "installing") {
@@ -80,10 +79,10 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   href: string | null;
   status: boolean;
 } {
-  const icon = <ArrowDown aria-hidden="true" size={15} weight="bold" />;
+  const icon = <DownloadSimple aria-hidden="true" size={16} />;
   if (!state) {
     return {
-      icon: <DownloadSimple aria-hidden="true" size={15} weight="bold" />,
+      icon,
       text: "下载",
       ariaLabel: "下载 capri",
       href: "/download",
@@ -92,7 +91,7 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   }
   if (state.phase === "downloading") {
     return {
-      icon,
+      icon: <ArrowDown aria-hidden="true" size={16} />,
       text: state.progress === null ? "下载中" : `${state.progress}%`,
       ariaLabel: `正在下载更新${state.progress === null ? "" : ` ${state.progress}%`}`,
       href: null,
@@ -101,7 +100,7 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   }
   if (state.phase === "installing") {
     return {
-      icon,
+      icon: <ArrowClockwise aria-hidden="true" size={16} />,
       text: "更新中",
       ariaLabel: "正在更新并重启",
       href: null,
@@ -110,8 +109,8 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   }
   if (state.phase === "failed") {
     return {
-      icon: <ArrowClockwise aria-hidden="true" size={15} />,
-      text: "重试更新",
+      icon: <ArrowClockwise aria-hidden="true" size={16} />,
+      text: "重试",
       ariaLabel: "更新未完成，重新检查更新",
       href: "talentsignal-desktop://updates",
       status: false,
@@ -130,7 +129,7 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   }
   // Idle: download and help stay reachable without inventing an available release.
   return {
-    icon: <DownloadSimple aria-hidden="true" size={15} weight="bold" />,
+    icon,
     text: "下载",
     ariaLabel: "下载 capri",
     href: "/download",
@@ -139,7 +138,7 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
 }
 
 /**
- * The circular download/update entry with its custom tooltip. A real host
+ * The download/update control with its custom tooltip. A real host
  * available version appears in the tooltip above; no native title tooltip
  * duplicates it, and an idle host never shows an invented release.
  */
@@ -174,6 +173,7 @@ export function WorkspaceDownloadEntry() {
           data-interactive="false"
           data-phase={state?.phase}
           role="status"
+          tabIndex={0}
         >
           {inner}
         </span>
