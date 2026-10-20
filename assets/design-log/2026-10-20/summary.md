@@ -12,7 +12,7 @@ The workspace now gives more space to actual work, uses a more consistent readin
 
 **macOS:** installed0.2.8(125) is unchanged. Earlier shared-style changes have real1123×865/900×720 proof, including Time, Extensions and Person. Latest Time inspector/composer/private/contact after-proof is incomplete: an expired session enters normal browser sign-in, but exchange readback remains unresolved; one new prepare attempt fails connectivity. No cookie injection, client replacement or auth-source change is used. Native appearance/System reset remains an explicitly rejected unproven direction.
 
-[Full design log](../../design-log.md) · [active plan](../../plans/2026-10-20-design-noon.md) · [visual comparison board](comparison.html) · [activation/restart receipts](resident-proof/final-restart.json) · [last deployment failure](resident-proof/backplate-retry-activation.json)
+[Full design log](../../../design-log.md) · [active plan](../../../plans/2026-10-20-design-noon.md) · [visual comparison board](comparison.html) · [activation/restart receipts](resident-proof/final-restart.json) · [last deployment failure](resident-proof/backplate-retry-activation.json)
 
 ## What improved
 
