@@ -6,3 +6,58 @@
     scroll-margin-block-end: calc(84px + env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* Presentation-only create-entry surface: the root aside keeps its width,
+   position, navigation and scroll ownership, and inherits the shared
+   workspace tokens as a plain transparent surface without the ornamental
+   wash, outer border or shadow. The compound :global selectors keep this
+   local layer deterministically ahead of the desk card rules. */
+aside.entryPanel:global(.context-chat--standalone)[data-creating] {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* One quiet heading block on a 16/24px rhythm: 24px/600 title, 13px/500
+   eyebrow with normal tracking, no separator, no nested inset stack. All
+   heading and copy text is retained. */
+aside.entryPanel:global(.context-chat):global(.context-chat--standalone)[data-creating] :global(.context-agent-heading) {
+  border-bottom: 0;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 24px 24px 16px;
+}
+
+/* The outer chat glyph is aria-hidden and repeats the create card's own
+   identity mark; only this entry class hides it. */
+aside.entryPanel:global(.context-chat):global(.context-chat--standalone)[data-creating] :global(.context-agent-heading) > span {
+  display: none;
+}
+
+aside.entryPanel:global(.context-chat):global(.context-chat--standalone)[data-creating] :global(.context-agent-heading) p {
+  font-size: var(--workspace-meta-size, 0.8125rem);
+  font-weight: 500;
+  letter-spacing: normal;
+}
+
+aside.entryPanel:global(.context-chat):global(.context-chat--standalone)[data-creating] :global(.context-agent-heading) h1 {
+  font-size: var(--workspace-title-size, 1.5rem);
+  font-weight: 600;
+}
+
+/* The thread owns the single horizontal inset so the flattened form below
+   keeps the full available width at every size. */
+.entryThread:global(.context-agent-thread) {
+  padding: 0 24px 24px;
+}
+
+/* Within entryThread only, the direct create card loses its frame and nested
+   padding. Its margin, scroll, overflow and max-height semantics stay as the
+   shared rules define them; embedded create cards and the identity-review
+   surface keep their existing material. */
+.entryThread > :global(.context-agent-create) {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}

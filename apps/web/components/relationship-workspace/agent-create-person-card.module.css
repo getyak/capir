@@ -22,3 +22,167 @@
     scroll-margin-block-end: calc(84px + env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* Shared create-card type scale: body, help, error, pending and confirmed
+   messages and labels sit at 15px, metadata at 13px, and weights stay in the
+   400/500/600 range (labels 500, section titles 600). The compound
+   :global(.context-agent-create) keeps this module layer deterministically
+   ahead of the shared global create-card rules without restyling them. */
+.card:global(.context-agent-create) {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  font-weight: 400;
+}
+
+.card:global(.context-agent-create) strong,
+.card:global(.context-agent-create) summary {
+  font-weight: 600;
+}
+
+.card:global(.context-agent-create) > header strong {
+  font-size: var(--workspace-body-size, 0.9375rem);
+}
+
+.card:global(.context-agent-create) :global(.context-agent-identity-check) > header span {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  font-weight: 600;
+}
+
+.card:global(.context-agent-create) :global(.context-agent-create__pending) strong,
+.card:global(.context-agent-create) :global(.context-agent-create__committed) strong,
+.card:global(.context-agent-create) :global(.context-agent-handle-owner) strong,
+.card:global(.context-agent-create) :global(.context-agent-person-matches) > article > header strong {
+  font-size: var(--workspace-body-size, 0.9375rem);
+}
+
+.card:global(.context-agent-create) :global(.context-agent-person-matches) > article > header > span {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  font-weight: 600;
+}
+
+/* Body copy: labels, help text, safety/state paragraphs and status messages. */
+.card:global(.context-agent-create) label > span,
+.card:global(.context-agent-create) :global(.context-agent-distinct-person) > span {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  font-weight: 500;
+}
+
+.card:global(.context-agent-create) label small,
+.card:global(.context-agent-create) button small,
+.card:global(.context-agent-create) :global(.context-agent-handle-owner) small {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  font-weight: 400;
+}
+
+.card:global(.context-agent-create) > header p,
+.card:global(.context-agent-create) > footer p,
+.card:global(.context-agent-create) :global(.context-agent-create__error),
+.card:global(.context-agent-create) :global(.context-agent-create__pending) p,
+.card:global(.context-agent-create) :global(.context-agent-create__committed) p,
+.card:global(.context-agent-create) :global(.context-agent-identity-check) > p,
+.card:global(.context-agent-create) :global(.context-agent-identity-error) > p,
+.card:global(.context-agent-create) :global(.context-agent-person-matches) > p,
+.card:global(.context-agent-create) :global(.context-agent-temporal-note) {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  font-weight: 400;
+}
+
+.card:global(.context-agent-create) :global(.context-agent-create__draft-summary) i {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  font-weight: 500;
+}
+
+/* Metadata stays legible at 13px: counts, status flags, role and reason
+   chips, and the draft source excerpt. */
+.card:global(.context-agent-create) :global(.context-agent-identity-check) > header i,
+.card:global(.context-agent-create) :global(.context-agent-temporal-status),
+.card:global(.context-agent-create) :global(.context-agent-person-matches) > article > header small,
+.card:global(.context-agent-create) :global(.context-agent-match-reasons) li,
+.card:global(.context-agent-create) :global(.context-agent-create__draft-summary) small {
+  font-size: var(--workspace-meta-size, 0.8125rem);
+  font-weight: 400;
+}
+
+.card:global(.context-agent-create) :global(.context-agent-identity-check) > header i,
+.card:global(.context-agent-create) :global(.context-agent-temporal-status) {
+  font-weight: 500;
+}
+
+/* Editable fields: 15px on desktop, 16px on narrow screens where platforms
+   zoom below that. The 44px minimum height and the declared rows stay; the
+   checkbox keeps its compact shape. */
+.card:global(.context-agent-create) :is(input, textarea):not([type="checkbox"]) {
+  font-size: var(--workspace-body-size, 0.9375rem);
+  min-height: 44px;
+}
+
+@media (max-width: 760px) {
+  .card:global(.context-agent-create) :is(input, textarea):not([type="checkbox"]) {
+    font-size: 16px;
+  }
+}
+
+/* One clear 2px focus cue on the field, using the shared focus token: no
+   colored glow and no drop shadow. Scroll-margin rules above keep the
+   focused field visible automatically. */
+.card:global(.context-agent-create) :is(input, textarea):focus {
+  border-color: var(--line);
+  box-shadow: none;
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Supported actions only: 44px targets (above), 15px type, one consequential
+   primary with a quiet secondary, and explicit disabled states. */
+.card:global(.context-agent-create) button {
+  min-height: 44px;
+  font-size: var(--workspace-body-size, 0.9375rem);
+  font-weight: 500;
+  transition:
+    background-color var(--workspace-transition-duration, 180ms) var(--ease-out),
+    border-color var(--workspace-transition-duration, 180ms) var(--ease-out),
+    color var(--workspace-transition-duration, 180ms) var(--ease-out),
+    transform var(--workspace-transition-duration, 180ms) var(--ease-out);
+}
+
+.card:global(.context-agent-create) :global(.context-primary-button) {
+  font-weight: 600;
+}
+
+@media (forced-colors: active) {
+  /* Enabled filled primary, GrayText disabled, and system-color selection and
+     focus; nothing opts out of the system palette wholesale. */
+  .card:global(.context-agent-create) :global(.context-primary-button):not(:disabled) {
+    background: Highlight;
+    border-color: Highlight;
+    color: HighlightText;
+  }
+
+  .card:global(.context-agent-create) button:disabled,
+  .card:global(.context-agent-create) :is(input, textarea):disabled {
+    border-color: GrayText;
+    color: GrayText;
+  }
+
+  .card:global(.context-agent-create) :global(.context-agent-person-matches) > article[data-selected="true"] {
+    border-color: Highlight;
+    box-shadow: none;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .card:global(.context-agent-create) :global(.context-agent-person-matches) > article button[data-active="true"] {
+    background: Highlight;
+    border-color: Highlight;
+    color: HighlightText;
+  }
+
+  .card:global(.context-agent-create) :is(input, textarea):focus {
+    outline-color: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card:global(.context-agent-create) button {
+    transition: none;
+  }
+}

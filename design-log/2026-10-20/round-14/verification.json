@@ -1,0 +1,10 @@
+{
+  "status": "Reviewed/tested source; real-surface and resident acceptance pending",
+  "review_sha256": "4f2eb9c10c99c03ae71b3a736733abaaabda923feff1cb6bafd5c61fafbca369",
+  "parent_tests": 75,
+  "test_files": 3,
+  "pi_task": "20261020-071413-c2fc441d",
+  "pi_status": "cancelled; partial scoped source independently inspected",
+  "credits_estimate": 67473152,
+  "mutation": false
+}

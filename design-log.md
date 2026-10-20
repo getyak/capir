@@ -308,3 +308,14 @@ Final local bounds also pass at [320px](design-log/2026-10-20/round-12/web-menu-
 The redundant welcome ornament is removed from both the actual empty room and its loading view. The existing heading becomes24px/600 sans, body/help/error text15px, metadata13px and narrow input16px. A solid hairline and2px keyboard focus replace the dashed elevated composer. Existing privacy disclosure, routes, requests, lifetime and all actions remain intact. Safe centering keeps expanded text reachable in short windows.
 
 Before: [1440px](design-log/2026-10-20/round-13/web-1440-before.png), [390px](design-log/2026-10-20/round-13/web-390-before.png), [expanded short window](design-log/2026-10-20/round-13/web-390x568-expanded-before.png). Final three-file independent review finds noP0–P2 at `18277b46e57b3065679190dddf6e3905bc0ef63bb02860fce74b2500eff6a59c`. Parent19 specific tests and Web lint pass; worker also reports212 adjacent conversation regressions. No private message or model request was sent. Actual after-images remain required before acceptance.
+
+
+### Loop14 — Contact entry uses one readable form surface
+
+**Decision:** reviewed/tested candidate; real-surface and resident acceptance pending.
+
+Only the existing create-open standalone entry loses its duplicate outer frame, inset card frame and decorative heading glyph. Heading24px/600, body/help/error15px and metadata13px align with the shared workspace. Embedded conversation cards retain their frame. Editable narrow fields use16px, fields/buttons keep44px targets, keyboard focus2px and motion180ms with reduced/forced-color rules. All labels, identity decisions, submissions, receipts and persistence remain unchanged.
+
+Before: [1440px](design-log/2026-10-20/round-14/web-1440-before.png), [390px](design-log/2026-10-20/round-14/web-390-before.png). The independent review found a desktop matching-button specificity conflict; adding44px to the existing compound button rule closes it. Final three-file review `4f2eb9c10c99c03ae71b3a736733abaaabda923feff1cb6bafd5c61fafbca369` has noP0–P2. Parent75 tests across3files and Web lint pass.
+
+The Pi task was canceled during additional build verification when host resource pressure increased; its scoped source was retained, inspected and independently verified by the parent. Cancellation is not a successful handoff. No contact was created or modified. Actual after-images and clean resident compilation remain required before acceptance.
