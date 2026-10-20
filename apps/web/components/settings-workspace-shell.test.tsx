@@ -185,6 +185,42 @@ describe("settings shell", () => {
     expect(document.activeElement).toBe(selected);
   });
 
+  it("restores navigation focus after responsive CSS blurs a newly hidden category", async () => {
+    const media = Object.assign(new EventTarget(), { matches: false });
+    vi.spyOn(window, "matchMedia").mockReturnValue(media as unknown as MediaQueryList);
+    await render({ section: "account" });
+    const selected = host.querySelector<HTMLAnchorElement>('[aria-current="page"]')!;
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-controls="settings-category-panel"]')!;
+    await act(() => {
+      selected.focus();
+      // Real browsers blur display:none content before the media change event.
+      selected.blur();
+      media.matches = true;
+      media.dispatchEvent(new Event("change"));
+    });
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(selected);
+  });
+
+  it("does not restore old category focus after the user clicks outside navigation", async () => {
+    const media = Object.assign(new EventTarget(), { matches: false });
+    vi.spyOn(window, "matchMedia").mockReturnValue(media as unknown as MediaQueryList);
+    await render({ section: "account" });
+    const selected = host.querySelector<HTMLAnchorElement>('[aria-current="page"]')!;
+    const trigger = host.querySelector<HTMLButtonElement>('[aria-controls="settings-category-panel"]')!;
+    await act(() => {
+      selected.focus();
+      selected.blur();
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      media.matches = true;
+      media.dispatchEvent(new Event("change"));
+    });
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("dismisses without changing the category on outside pointer or focus", async () => {
     const trigger = host.querySelector<HTMLButtonElement>('[aria-controls="settings-category-panel"]')!;
     await act(() => trigger.click());
