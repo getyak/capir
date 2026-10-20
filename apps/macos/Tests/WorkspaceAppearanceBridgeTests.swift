@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import WebKit
 import XCTest
 @testable import TalentSignalMac
@@ -90,6 +91,57 @@ final class WorkspaceAppearanceBridgeTests: XCTestCase {
     }
 
     @MainActor
+    func testSwiftUIHostReconcilesAppearanceWithoutReplacingWebView() async throws {
+        let originalAppearance = NSApp.appearance
+        NSApp.appearance = NSAppearance(named: .aqua)
+        defer { NSApp.appearance = originalAppearance }
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://appearance-host.invalid"))
+        let browser = WorkspaceBrowser(origin: origin)
+        browser.retire()
+        let state = AppearanceHostState()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 720),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let host = NSHostingView(rootView: AppearanceHost(browser: browser, state: state).preferredColorScheme(nil))
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        let probe = AppearanceNavigationProbe()
+        let loaded = expectation(description: "synthetic host document")
+        probe.onFinish = { loaded.fulfill() }
+        browser.webView.navigationDelegate = probe
+        browser.webView.configuration.userContentController.removeAllUserScripts()
+        browser.webView.loadHTMLString("<!doctype html><textarea id='draft'>unsent fixture</textarea>", baseURL: origin.url)
+        await fulfillment(of: [loaded], timeout: 15)
+        func surface(in view: NSView) -> WorkspaceMaterialSurface? {
+            if let value = view as? WorkspaceMaterialSurface { return value }
+            return view.subviews.lazy.compactMap { surface(in: $0) }.first
+        }
+        let material = try XCTUnwrap(surface(in: host))
+        let webView = browser.webView
+        for preference: WorkspaceAppearance in [.dark, .light, .dark, .system] {
+            // Change the value input through SwiftUI; never set surface.preference.
+            // Origin/bridge contracts are tested separately and on the signed app.
+            state.preference = preference
+            var dark: Bool?
+            for _ in 0..<100 {
+                dark = try await webView.evaluateJavaScript("matchMedia('(prefers-color-scheme: dark)').matches") as? Bool
+                if material.preference == preference && dark == (preference == .dark) { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertEqual(material.preference, preference)
+            XCTAssertEqual(material.appearance?.name, preference.nativeAppearance?.name)
+            XCTAssertEqual(window.appearance?.name, preference.nativeAppearance?.name)
+            let expected = preference == .dark ? NSAppearance.Name.darkAqua : .aqua
+            XCTAssertEqual(material.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), expected)
+            XCTAssertEqual(host.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), expected)
+            XCTAssertEqual(dark, preference == .dark)
+            XCTAssertTrue(material.webView === webView, "Theme changes must retain the live WebView")
+            let draft = try await webView.evaluateJavaScript("document.getElementById('draft').value") as? String
+            XCTAssertEqual(draft, "unsent fixture")
+        }
+    }
+
+    @MainActor
     func testReducedTransparencyUsesOpaqueBackingAndRestoresActiveStateMaterial() {
         let surface = WorkspaceMaterialSurface(webView: WKWebView())
         surface.setReducedTransparency(true)
@@ -121,6 +173,18 @@ final class WorkspaceAppearanceBridgeTests: XCTestCase {
         XCTAssertFalse(window.styleMask.contains(.fullSizeContentView),
                        "Web controls must stay below the native drag region")
         window.contentView = nil
+    }
+}
+
+private final class AppearanceHostState: ObservableObject {
+    @Published var preference: WorkspaceAppearance = .system
+}
+
+private struct AppearanceHost: View {
+    let browser: WorkspaceBrowser
+    @ObservedObject var state: AppearanceHostState
+    var body: some View {
+        WorkspaceWebSurface(browser: browser, zoom: 1, appearance: state.preference)
     }
 }
 
