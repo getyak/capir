@@ -133,6 +133,23 @@ describe("web i18n coverage", () => {
     expect(violations, "simplified characters leaked into zh-TW").toEqual([]);
   });
 
+  it("no cross-script lookalike leaks (Hangul in ja, kana in ko, CJK in en)", () => {
+    // Hangul syllables like 스트 and katakana スト are visual lookalikes;
+    // batch authoring has produced these slips before, so they are guarded.
+    const checks: ReadonlyArray<[LocaleTag, RegExp, string]> = [
+      ["ja", /[\uac00-\uac00\ud7af-\ud7af\uac00-\ud7af]|[\uac00-\ud7af]/, "Hangul in ja"],
+      ["ko", /[\u3040-\u30ff]/, "kana in ko"],
+      ["en", /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/, "CJK in en"],
+      ["zh-TW", /[\u3040-\u30ff\uac00-\ud7af]/, "kana/Hangul in zh-TW"],
+    ];
+    for (const [locale, pattern, label] of checks) {
+      const violations = Object.entries(catalogs[locale] as Record<string, string>)
+        .filter(([, value]) => pattern.test(value))
+        .map(([key, value]) => `${key} -> ${value}`);
+      expect(violations, label).toEqual([]);
+    }
+  });
+
   it("catalog values are non-empty strings in every locale", () => {
     for (const locale of SUPPORTED_LOCALES) {
       for (const [key, value] of Object.entries(catalogs[locale as LocaleTag])) {
