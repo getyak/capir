@@ -10,5 +10,6 @@
   "language.save": "保存",
   "language.saved": "已保存。",
   "language.unavailable": "此工作空间尚未启用回复偏好。",
-  "language.prompt.option.system": "自动（当前请求）"
+  "language.prompt.option.system": "自动（当前请求）",
+  "暂时连不上服务，请重试。": "暂时连不上服务，请重试。"
 }

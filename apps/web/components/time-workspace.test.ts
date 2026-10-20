@@ -13,6 +13,7 @@ vi.mock("@/lib/time-workspace-client", async (original) => ({ ...await original<
 import { pendingTimeOperation, rememberTimeOperation, rememberTimeEditorDraft } from "@/lib/time-workspace-storage";
 import { calendarLocalTime } from "@/lib/calendar-draft";
 import { TimeWorkspace } from "./time-workspace";
+import { LocaleProvider } from "./locale-provider";
 import { WORKSPACE_SESSION_EXPIRED_EVENT } from "./workspace-session-request";
 let root: Root, host: HTMLDivElement;
 const pendingMutation = { ...timeFixtureMutation, expected_revision: 1, idempotency_key: "b2000000-0000-4000-8000-000000000099" };
@@ -50,6 +51,18 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); sessionStorage.clear(); });
 describe("rendered time workspace", () => {
+  it.each(["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."])("localizes the network recovery hint for %s", async (message) => {
+    mock.request.mockRejectedValue(new Error(message));
+    await act(async () => {
+      root.render(createElement(LocaleProvider, { locale: "en", children: createElement(TimeWorkspace, { people: [], peopleError: null, binding: "a", legacyDraft: null }) }));
+    });
+    const alert = host.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Unable to connect. Please try again.");
+    expect(alert?.textContent).not.toContain("暂时连不上服务");
+    mock.request.mockResolvedValue({ ...payload(), activities: [] });
+    await act(async () => alert!.querySelector("button")!.click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
   it("composes rapid filter changes before the next router render", async () => {
     await render(); await click("筛选");
     const selects = host.querySelectorAll("select");

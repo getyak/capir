@@ -54,7 +54,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
   const reviewScopeKey = `${binding}:${scopeKey}`;
   const [feed, setFeed] = useState<Feed | null>(null), [moreBusy, setMoreBusy] = useState(false), [moreError, setMoreError] = useState("");
   const feedErrorText = ["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."].includes(feed?.error ?? "")
-    ? "暂时连不上服务，请重试。" : feed?.error;
+    ? t("暂时连不上服务，请重试。") : feed?.error;
   const [authInvalid, setAuthInvalid] = useState(false), [filters, setFilters] = useState(false);
   const [review, setReview] = useState<ReviewMemory | null>(null), [reviewBusy, setReviewBusy] = useState(false), [reviewError, setReviewError] = useState(""), [reviewNotice, setReviewNotice] = useState("");
   const [objective, setObjective] = useState("");
