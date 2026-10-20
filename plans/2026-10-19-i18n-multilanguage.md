@@ -60,7 +60,12 @@ Out of scope:
       `/workspace/preferences`, 5-locale language pickers (endonyms), web
       catalog runtime + first slice; integration-tested on PostgreSQL 17
       (17 tests incl. revision/idempotency/audit/lab-account cases).
-- [ ] M3 Web localization (core 5).
+- [ ] M3 Web localization (core 5) — IN PROGRESS: home/settings/people/briefs
+      + workspace chrome done (612 catalog keys x 4 locales); i18n coverage
+      guard + shrinking ratchet manifest (`apps/web/i18n/pending-extraction.json`)
+      enforces the remainder: 314 files / 4,658 strings. Permanent exceptions:
+      locale-keyed copy modules + source-language content (blog, brief seed,
+      demo narratives).
 - [ ] M4 iOS + macOS localization (core 5).
 - [ ] M5 Extensions localization (core 5).
 - [ ] M6 Agent prompt-output language wiring + tests.
