@@ -61,11 +61,15 @@ Out of scope:
       catalog runtime + first slice; integration-tested on PostgreSQL 17
       (17 tests incl. revision/idempotency/audit/lab-account cases).
 - [ ] M3 Web localization (core 5) — IN PROGRESS: home/settings/people/briefs
-      + workspace chrome done (612 catalog keys x 4 locales); i18n coverage
-      guard + shrinking ratchet manifest (`apps/web/i18n/pending-extraction.json`)
-      enforces the remainder: 314 files / 4,658 strings. Permanent exceptions:
-      locale-keyed copy modules + source-language content (blog, brief seed,
-      demo narratives).
+      + workspace/contact-agent/composer/time/run-monitor/memory-review core done
+      (1,511 catalog keys x 4 locales). Coverage guard hardened (interpolated
+      templates + expression-adjacent JSX text + cross-script lookalike leaks).
+      Ratchet (`apps/web/i18n/pending-extraction.json`): 314 files / 4,183
+      strings under the hardened extractor. Pipeline per surface: extract
+      (host-side python — sandbox transport corrupts big scripts) -> author
+      4 locales -> wrap (codemod + manual ternary/template/helper-threading
+      passes) -> guard -> regenerate manifest -> suite -> commit. Permanent
+      exceptions: locale-keyed copy modules + source-language content.
 - [ ] M4 iOS + macOS localization (core 5).
 - [ ] M5 Extensions localization (core 5).
 - [ ] M6 Agent prompt-output language wiring + tests.

@@ -90,6 +90,12 @@ function uncoveredStrings(file: string): Set<string> {
     // Interpolated templates participate through coverage keys.
     add(match[1].replace(/\$\{[^}]*\}/g, "{}"));
   }
+  // JSX text scans run over source with literals blanked so fragment rules
+  // cannot re-enter t("…") arguments and report inner fragments as gaps.
+  const codeOnly = source
+    .replace(/"((?:[^"\\\n]|\\.)*)"/g, '""')
+    .replace(/'((?:[^'\\\n]|\\.)*)'/g, "''")
+    .replace(/`((?:[^`\\]|\\.)*)`/g, "``");
   // JSX text nodes, including fragments adjacent to {expressions}. Code
   // spans that merely contain a `>` operator are excluded.
   const jsxSpans = [
@@ -99,7 +105,7 @@ function uncoveredStrings(file: string): Set<string> {
     /\}([^<>{}]*[\u3400-\u9fff][^<>{}]*)\{/g,
   ];
   for (const pattern of jsxSpans) {
-    for (const match of source.matchAll(pattern)) {
+    for (const match of codeOnly.matchAll(pattern)) {
       // Quote/punctuation marks indicate a code span crossing string
       // boundaries, not a real JSX text fragment.
       if (CODEISH.test(match[1]) || /["',;]/.test(match[1])) continue;

@@ -234,7 +234,7 @@ function GroupSection({
           </ul>
           {remaining > 0 ? (
             <button className={styles.more} disabled={frozen} onClick={() => onOpenSheet(scope)} type="button">
-              查看其余 {remaining} 条
+              {t("查看其余 {count} 条", { count: remaining })}
             </button>
           ) : null}
         </>
@@ -839,7 +839,7 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
                   ? `${review.items.some(item => item.source_locator.kind === "image_region") ? "截图来源" : "本次对话"} · 待添加`
                   : review.relationship_display_label ?? "已关联联系人"}
             </small>
-            {isNewContact && review.relationship_display_label ? <small>关系记录：{review.relationship_display_label}</small> : null}
+            {isNewContact && review.relationship_display_label ? <small>{t("关系记录：{label}", { label: review.relationship_display_label })}</small> : null}
           </div>
           {props.purpose !== "chat" ? null : state.contactDecision !== "none" ? (
             <div className={styles.contactActions}>

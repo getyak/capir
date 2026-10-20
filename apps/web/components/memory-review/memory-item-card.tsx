@@ -48,7 +48,7 @@ export function MemoryItemCard({ item, personLabel, busy, locked = false, outcom
   const resolved = outcome?.kind === "committed" || outcome?.kind === "skipped" || outcome?.kind === "undone";
   const redacted = sourceUnavailable || outcome?.kind === "unavailable";
   return <section className={styles.actionCard} aria-label={t("记忆 · {scope}", { scope: scopeLabel(item, redacted ? null : personLabel, t) })} data-memory-item-card={item.id}>
-    <div className={styles.actionHead}><span>记忆 · {scopeLabel(item, redacted ? null : personLabel, t)}</span><span>{sourceUnavailable ? "不可用" : outcome?.kind === "committed" ? "已保存" : outcome?.kind === "skipped" ? "已跳过" : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? "待核对" : outcome?.kind === "unavailable" ? "不可用" : "待处理"}</span></div>
+    <div className={styles.actionHead}><span>{t("记忆 · {scope}", { scope: scopeLabel(item, redacted ? null : personLabel, t) })}</span><span>{sourceUnavailable ? t("不可用") : outcome?.kind === "committed" ? t("已保存") : outcome?.kind === "skipped" ? t("已跳过") : outcome?.kind === "unknown" || outcome?.kind === "undo_unknown" ? t("待核对") : outcome?.kind === "unavailable" ? t("不可用") : t("待处理")}</span></div>
     {redacted ? null : <p className={styles.actionChange}>{item.previous_text ? <><span>{item.previous_text}</span><span aria-hidden="true"> → </span><strong>{shownText}</strong></> : <strong>{shownText}</strong>}</p>}
     {redacted ? null : <div className={styles.actionSource}>
       <blockquote data-expanded={sourceOpen}>{item.source_excerpt}</blockquote>
@@ -185,7 +185,7 @@ export function SessionMemoryCards({ controller, onComment, onCompare, compariso
       onCheck={(itemId) => void controller.checkItem(itemId)}
       onUndo={(itemId) => void controller.undoItem(itemId)}
       onComment={onComment ? () => onComment(item) : undefined}/>) }
-    {!showAll && items.length > 3 ? <button className={styles.actionMore} type="button" onClick={() => setShowAll(true)}>更多建议 · {items.length - 3}</button> : null}
+    {!showAll && items.length > 3 ? <button className={styles.actionMore} type="button" onClick={() => setShowAll(true)}>{t("更多建议 · {count}", { count: items.length - 3 })}</button> : null}
     {controller.error ? <p className={styles.warning} role="alert">{controller.error}</p> : null}
     {controller.notice ? <p className={styles.message} role="status">{controller.notice}</p> : null}
   </div>;
