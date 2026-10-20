@@ -2,7 +2,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { TalentSignalHttpError } from "@talent-signal/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 
-const fixture = vi.hoisted(() => ({ auth: vi.fn(), claims: vi.fn(), current: vi.fn(), grant: vi.fn(), redirect: vi.fn() }));
+const fixture = vi.hoisted(() => ({ auth: vi.fn(), claims: vi.fn(), current: vi.fn(), grant: vi.fn(), redirect: vi.fn(), locale: vi.fn() }));
+vi.mock("@/lib/server/marketing-locale", () => ({ getMarketingLocale: fixture.locale }));
 vi.mock("@/auth", () => ({ auth: fixture.auth }));
 vi.mock("@/lib/server/backendAuth", () => ({ readPrimaryBackendSessionClaims: fixture.claims }));
 vi.mock("next/navigation", () => ({ redirect: fixture.redirect }));
@@ -17,6 +18,7 @@ const attempt = "11111111-2222-4333-8444-555555555555", state = "s".repeat(43);
 const returnTarget = `/desktop-auth/authorize?attempt=${attempt}&state=${state}`;
 beforeEach(() => {
   vi.clearAllMocks();
+  fixture.locale.mockResolvedValue("zh-CN");
   fixture.auth.mockResolvedValue({ user: { id: "synthetic" } });
   fixture.claims.mockResolvedValue({ backendAccessToken: "synthetic", backendAccountId: "account", backendUserId: "user" });
   fixture.redirect.mockImplementation(() => { throw new Error("expected-redirect"); });
@@ -78,5 +80,14 @@ it.each([
   expect(html).toContain("登录请求无法核对");
   expect(html).toContain("与当前浏览器不匹配");
   expect(html).not.toContain("登录服务暂时不可用");
+  expect(fixture.redirect).not.toHaveBeenCalled();
+});
+
+it("localizes a temporary failure without claiming the browser is signed out", async () => {
+  fixture.locale.mockResolvedValue("en");
+  fixture.current.mockRejectedValue(new TalentSignalHttpError(503, "BACKEND_UNAVAILABLE", "Unavailable", null));
+  const html = renderToStaticMarkup(await AuthorizePage({ searchParams: Promise.resolve({ attempt, state }) }));
+  expect(html).toContain("Sign-in service temporarily unavailable");
+  expect(html).toContain("This does not mean you have been signed out.");
   expect(fixture.redirect).not.toHaveBeenCalled();
 });

@@ -23,7 +23,7 @@ query strings, raw exceptions, environment values or credentials.
 
 ## Host verification
 
--11 authorization classification/reauthentication tests pass; changed-fileESLint
+-12 authorization classification/reauthentication/localization tests pass; changed-fileESLint
   passes. Independent review closed the permanent-mismatch P2 and found noP0/P1.
 -6 standard-library readiness tests pass, covering network/HTTP/payload/provider/
   ownership refusals, byte bounds, privacy, transient recovery and45-probe failure.
@@ -50,7 +50,12 @@ do not invent a historical root cause or claim an unobserved fix.
 
 Preferred Pi diagnosis was stopped after44minutes without code; no automatic
 model retry/provider fallback. The parent implemented the bounded fixes.
-Refresh main, review diagnostics independently, complete docs/current-head CI,
+The first PR head passed2694Web tests but failed the i18n extraction ratchet.
+The six new error strings now use the existing cached server locale and ship
+four non-source locale catalogs; the residual manifest shrinks23to20. The
+19auth/coverage tests and independent localization review pass.
+
+Complete current-head CI,
 merge normally, deploy the clean merged Web and read the new readiness receipt.
 Recheck actual Web/default-owner Mac login, healthy restart and protected content,
 record exact service/native revisions, then assess issue acceptance honestly.
