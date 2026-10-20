@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import {
   Browser,
   FileImage,
@@ -193,28 +194,29 @@ function SourceTypeIcon({ kind }: { kind?: string }) {
 }
 
 function IntakeGuide() {
+  const t = useT();
   return (
-    <section className={styles.intakeGuide} aria-label="来源会如何整理">
-      <h2>来源会如何整理</h2>
+    <section className={styles.intakeGuide} aria-label={t("来源会如何整理")}>
+      <h2>{t("来源会如何整理")}</h2>
       <div className={styles.guideStep}>
         <FileText aria-hidden />
         <div>
-          <strong>保留原文</strong>
-          <p>保留期内，随时回看截图与原文。</p>
+          <strong>{t("保留原文")}</strong>
+          <p>{t("保留期内，随时回看截图与原文。")}</p>
         </div>
       </div>
       <div className={styles.guideStep}>
         <UsersThree aria-hidden />
         <div>
-          <strong>串起人物</strong>
-          <p>身份明确时归入对应人物。</p>
+          <strong>{t("串起人物")}</strong>
+          <p>{t("身份明确时归入对应人物。")}</p>
         </div>
       </div>
       <div className={styles.guideStep}>
         <HandPointing aria-hidden />
         <div>
-          <strong>把判断留给你</strong>
-          <p>不确定的身份与资料会请你确认。</p>
+          <strong>{t("把判断留给你")}</strong>
+          <p>{t("不确定的身份与资料会请你确认。")}</p>
         </div>
       </div>
     </section>
@@ -222,9 +224,10 @@ function IntakeGuide() {
 }
 
 function HistorySkeleton() {
+  const t = useT();
   return (
     <div className={styles.historyLoading} role="status">
-      <p>正在读取来源记录</p>
+      <p>{t("正在读取来源记录")}</p>
       <span aria-hidden />
       <span aria-hidden />
       <span aria-hidden />
@@ -241,13 +244,12 @@ function HistoryError({
   disabled: boolean;
   onRetry: () => void;
 }) {
+  const t = useT();
   return (
     <div className={styles.historyError} role="alert">
       <WarningCircle aria-hidden />
       <p>{message}</p>
-      <button type="button" onClick={onRetry} disabled={disabled}>
-        重试
-      </button>
+      <button type="button" onClick={onRetry} disabled={disabled}>{t("重试")}</button>
     </div>
   );
 }
@@ -333,6 +335,7 @@ function TaskEvidenceCard({
   onCancelDelete,
   onDelete,
 }: TaskCardProps) {
+  const t = useT();
   const heading =
     item.contact?.display_name ??
     item.contact_draft?.display_name ??
@@ -345,7 +348,7 @@ function TaskEvidenceCard({
     <section
       className={styles.card}
       id={`contact-task-${item.task_id}`}
-      aria-label="联系人分析卡片"
+      aria-label={t("联系人分析卡片")}
     >
       <div className={styles.cardHeading}>
         <div>
@@ -358,9 +361,7 @@ function TaskEvidenceCard({
           <Link
             className={styles.profileLink}
             href={`/workspace/captures/people/${item.contact.person_id}?context=${item.contact.relationship_context_id}`}
-          >
-            查看人物来源 ↗
-          </Link>
+          >{t("查看人物来源 ↗")}</Link>
         ) : null}
       </div>
 
@@ -388,9 +389,7 @@ function TaskEvidenceCard({
           </span>
           <span>{item.source.title}</span>
           {/^https?:\/\//.test(item.source.url) ? (
-            <a href={item.source.url} target="_blank" rel="noreferrer">
-              打开来源 ↗
-            </a>
+            <a href={item.source.url} target="_blank" rel="noreferrer">{t("打开来源 ↗")}</a>
           ) : null}
           <span>
             {item.source.time_basis === "imported_at" ? "导入时间" : "截取时间"} ·{" "}
@@ -403,14 +402,14 @@ function TaskEvidenceCard({
 
       {item.source_text ? (
         <details className={styles.sourceText}>
-          <summary>查看提交的原文</summary>
+          <summary>{t("查看提交的原文")}</summary>
           <pre>{item.source_text}</pre>
         </details>
       ) : null}
 
       {item.summary || failure ? (
         <p className={styles.summary}>
-          {showFailure ? (failure ?? item.summary) : item.summary}
+          {showFailure ? (failure ? t(failure) : item.summary) : item.summary}
         </p>
       ) : null}
 
@@ -418,9 +417,7 @@ function TaskEvidenceCard({
         <div className={styles.progress}>
           <span className={styles.pulse} />
           <span>{tools[item.events.at(-1)?.tool ?? ""] ?? "正在提取来源并查找人物"}</span>
-          <button type="button" disabled={busy} onClick={() => void onCancelTask(item)}>
-            停止
-          </button>
+          <button type="button" disabled={busy} onClick={() => void onCancelTask(item)}>{t("停止")}</button>
         </div>
       ) : null}
 
@@ -444,7 +441,7 @@ function TaskEvidenceCard({
       {item.question && !item.contact_draft ? (
         <div className={styles.question}>
           <h3>{item.question}</h3>
-          {item.candidates.length > 0 ? <p>选择后会归入该人物的关系记录并继续整理。</p> : null}
+          {item.candidates.length > 0 ? <p>{t("选择后会归入该人物的关系记录并继续整理。")}</p> : null}
           {item.candidates.map((candidate) => (
             <button
               key={`${candidate.person_id}:${candidate.relationship_context_id}`}
@@ -457,9 +454,7 @@ function TaskEvidenceCard({
           ))}
           {item.extraction ? (
             <>
-              <label className={styles.label}>
-                或指定本次归档的联系人姓名
-                <input
+              <label className={styles.label}>{t("或指定本次归档的联系人姓名")}<input
                   value={name}
                   onChange={(event) => onNameChange(event.target.value)}
                   maxLength={200}
@@ -470,9 +465,7 @@ function TaskEvidenceCard({
                 type="button"
                 onClick={() => void onResume(item)}
                 disabled={busy || (!name.trim() && !hasDraftImage)}
-              >
-                按此姓名继续整理
-              </button>
+              >{t("按此姓名继续整理")}</button>
             </>
           ) : null}
         </div>
@@ -480,24 +473,16 @@ function TaskEvidenceCard({
 
       {["failed", "partial", "cancelled"].includes(item.status) &&
       !item.limitations.includes("CONTACT_SOURCE_DELETION_PENDING") ? (
-        <button type="button" onClick={() => void onResume(item)} disabled={busy}>
-          继续这个任务
-        </button>
+        <button type="button" onClick={() => void onResume(item)} disabled={busy}>{t("继续这个任务")}</button>
       ) : null}
 
       {item.status !== "deleted" ? (
         <div className={styles.deleteSource}>
           {deleteID === item.task_id ? (
             <>
-              <p>
-                删除本次来源、原图及衍生分析。若人物已无其他来源，也会移除该人物及关系记录。
-              </p>
-              <button type="button" onClick={() => void onDelete(item)} disabled={busy}>
-                确认删除来源
-              </button>
-              <button type="button" onClick={onCancelDelete} disabled={busy}>
-                保留
-              </button>
+              <p>{t("删除本次来源、原图及衍生分析。若人物已无其他来源，也会移除该人物及关系记录。")}</p>
+              <button type="button" onClick={() => void onDelete(item)} disabled={busy}>{t("确认删除来源")}</button>
+              <button type="button" onClick={onCancelDelete} disabled={busy}>{t("保留")}</button>
             </>
           ) : (
             <button
@@ -505,16 +490,14 @@ function TaskEvidenceCard({
               type="button"
               disabled={busy}
               onClick={() => onRequestDelete(item.task_id)}
-            >
-              删除这次采集
-            </button>
+            >{t("删除这次采集")}</button>
           )}
         </div>
       ) : null}
 
       {item.findings.length > 0 ? (
         <div className={styles.section}>
-          <h3>这次来源留下了什么</h3>
+          <h3>{t("这次来源留下了什么")}</h3>
           {item.findings.map((finding, index) => (
             <article className={styles.finding} key={index}>
               <p>{finding.text}</p>
@@ -530,7 +513,7 @@ function TaskEvidenceCard({
 
       {item.profile_fields.length > 0 ? (
         <div className={styles.section}>
-          <h3>有来源的职业资料</h3>
+          <h3>{t("有来源的职业资料")}</h3>
           <dl className={styles.profile}>
             {item.profile_fields.map((field, index) => (
               <div key={index}>
@@ -641,7 +624,7 @@ function TaskEvidenceCard({
 
       {item.limitations.length > 0 ? (
         <details className={styles.section}>
-          <summary>仍需注意与核对</summary>
+          <summary>{t("仍需注意与核对")}</summary>
           <ul>
             {item.limitations.map((line, index) => (
               <li key={index}>{line}</li>
@@ -651,7 +634,7 @@ function TaskEvidenceCard({
       ) : null}
 
       {item.events.length > 0 ? <details className={styles.section}>
-        <summary>查看实际处理记录</summary>
+        <summary>{t("查看实际处理记录")}</summary>
         <ol>
           {item.events.map((event) => (
             <li key={event.sequence}>
@@ -738,6 +721,7 @@ function CaptureWorkspace({
   onDraftChange,
   onAdmissionChange,
 }: WorkspaceProps) {
+  const t = useT();
   const [text, setText] = useState(initialText ?? "");
   const [inputMode, setInputMode] = useState<ComposerMode>(
     initialInputMode ?? "image",
@@ -996,7 +980,7 @@ function CaptureWorkspace({
         file.size > MAX_ATTACHMENT_BYTES,
     );
     if (invalid) {
-      setComposerError("请选择 10 MB 以内的 PNG、JPEG 或 WebP 截图。");
+      setComposerError(t("请选择 10 MB 以内的 PNG、JPEG 或 WebP 截图。"));
       return;
     }
     // Do not clear the preserved attempt or the host's seed error here: on
@@ -1084,7 +1068,7 @@ function CaptureWorkspace({
     const files = Array.from(event.dataTransfer?.files ?? []);
     if (files.length === 0) {
       if (dataTransferHasFileEntries(Array.from(event.dataTransfer?.items ?? []))) {
-        setComposerError("暂不支持文件夹，请拖入 PNG、JPEG 或 WebP 截图文件。");
+        setComposerError(t("暂不支持文件夹，请拖入 PNG、JPEG 或 WebP 截图文件。"));
       }
       return;
     }
@@ -1243,12 +1227,12 @@ function CaptureWorkspace({
       setTask(latest);
       setDeleteID(null);
       setConflictTaskID(null);
-      setActionError("这条来源已更新。已载入最新状态，请核对后重新选择；刚才的操作没有执行。");
+      setActionError(t("这条来源已更新。已载入最新状态，请核对后重新选择；刚才的操作没有执行。"));
       await loadRecords();
     } catch {
       if (!alive.current || !selection.isCurrent(token)) return;
       setConflictTaskID(id);
-      setActionError("这条来源已更新，但暂时无法读取最新状态。输入仍在，请先刷新状态，再决定是否继续。");
+      setActionError(t("这条来源已更新，但暂时无法读取最新状态。输入仍在，请先刷新状态，再决定是否继续。"));
     }
   }
 
@@ -1407,25 +1391,23 @@ function CaptureWorkspace({
       <summary hidden={!composerCollapsible}>
         {task ? "追加来源" : "添加来源"}
       </summary>
-      <section className={styles.composer} aria-label="添加来源" onPaste={handlePaste}>
+      <section className={styles.composer} aria-label={t("添加来源")} onPaste={handlePaste}>
         <div className={styles.composerHeader}>
-          <div className={styles.inputModes} role="group" aria-label="来源类型">
+          <div className={styles.inputModes} role="group" aria-label={t("来源类型")}>
             <button
               type="button"
               aria-pressed={inputMode === "image"}
               onClick={() => selectMode("image")}
               disabled={editingLocked}
             >
-              <Images aria-hidden /> 截图
-            </button>
+              <Images aria-hidden />{t("截图")}</button>
             <button
               type="button"
               aria-pressed={inputMode === "text"}
               onClick={() => selectMode("text")}
               disabled={editingLocked}
             >
-              <TextT aria-hidden /> 文字
-            </button>
+              <TextT aria-hidden />{t("文字")}</button>
           </div>
         </div>
 
@@ -1446,7 +1428,7 @@ function CaptureWorkspace({
               type="file"
               multiple
               accept={ACCEPTED_IMAGE_TYPES.join(",")}
-              aria-label="选择聊天截图"
+              aria-label={t("选择聊天截图")}
               onChange={handleFileInput}
               disabled={attachmentsLocked}
             />
@@ -1454,11 +1436,11 @@ function CaptureWorkspace({
               {attachments.length === 0 ? (
                 <>
                   <div className={styles.uploadArt}><Images aria-hidden weight="light" /></div>
-                  <strong>拖入截图，或直接粘贴</strong>
-                  <p className={styles.uploadHint}>PNG、JPEG、WebP · 最多 10 张，每张 10 MB</p>
+                  <strong>{t("拖入截图，或直接粘贴")}</strong>
+                  <p className={styles.uploadHint}>{t("PNG、JPEG、WebP · 最多 10 张，每张 10 MB")}</p>
                 </>
               ) : (
-                <ol className={styles.attachments} aria-label="待发送截图">
+                <ol className={styles.attachments} aria-label={t("待发送截图")}>
                   {attachments.map((attachment, index) => (
                     <li key={attachment.id}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1492,9 +1474,7 @@ function CaptureWorkspace({
             </div>
           </div>
         ) : (
-          <label className={styles.sourceLabel}>
-            来源文字
-            <textarea
+          <label className={styles.sourceLabel}>{t("来源文字")}<textarea
               className={styles.sourceTextarea}
               rows={8}
               maxLength={50000}
@@ -1505,7 +1485,7 @@ function CaptureWorkspace({
                 textAttempt.current = null;
                 setComposerError("");
               }}
-              placeholder="粘贴对话原文、人物介绍或网页片段…"
+              placeholder={t("粘贴对话原文、人物介绍或网页片段…")}
               disabled={editingLocked}
             />
             <span className={styles.characterCount}>{text.length} / 50000</span>
@@ -1513,10 +1493,8 @@ function CaptureWorkspace({
         )}
 
         <details className={styles.intentDetails}>
-          <summary>添加整理要求</summary>
-          <label className={styles.label}>
-            这次想了解什么？
-            <textarea
+          <summary>{t("添加整理要求")}</summary>
+          <label className={styles.label}>{t("这次想了解什么？")}<textarea
               value={objective}
               onChange={(event) => {
                 setObjective(event.target.value);
@@ -1524,7 +1502,7 @@ function CaptureWorkspace({
                 imageAttempt.current = null;
                 setComposerError("");
               }}
-              placeholder="例如：记下这次沟通，查找公开职业资料，帮我想清楚下一步。"
+              placeholder={t("例如：记下这次沟通，查找公开职业资料，帮我想清楚下一步。")}
               rows={3}
               maxLength={4000}
               disabled={editingLocked}
@@ -1549,19 +1527,13 @@ function CaptureWorkspace({
               }}
               disabled={editingLocked}
             />
-            <span>
-              允许搜索公开职业资料
-            </span>
+            <span>{t("允许搜索公开职业资料")}</span>
           </label>
         <div className={styles.composerFooter}>
           <details className={styles.retentionDisclosure}>
             <summary>
-              <ShieldCheck aria-hidden /> 原文与分析最多保留 30 天
-            </summary>
-            <p>
-              保存后会自动进行内部整理：来源原文与分析最多保留 30
-              天。身份或资料有歧义时会请你确认，不会自动对外发送消息或修改公开资料。你可以随时删除这次采集及其衍生分析。
-            </p>
+              <ShieldCheck aria-hidden />{t("原文与分析最多保留 30 天")}</summary>
+            <p>{t("保存后会自动进行内部整理：来源原文与分析最多保留 30 天。身份或资料有歧义时会请你确认，不会自动对外发送消息或修改公开资料。你可以随时删除这次采集及其衍生分析。")}</p>
           </details>
           <button
             type="button"
@@ -1578,16 +1550,12 @@ function CaptureWorkspace({
         </div>
         {unresolved ? (
           <div className={styles.pendingAttempt} role="status">
-            <p>
-              上一次提交的结果未确认。为避免重复保存，请先重试同一次提交，或放弃它后再修改。
-            </p>
+            <p>{t("上一次提交的结果未确认。为避免重复保存，请先重试同一次提交，或放弃它后再修改。")}</p>
             <button
               type="button"
               onClick={discardUnresolvedAttempt}
               disabled={busy}
-            >
-              放弃这次未确认的提交
-            </button>
+            >{t("放弃这次未确认的提交")}</button>
           </div>
         ) : null}
       </section>
@@ -1607,7 +1575,7 @@ function CaptureWorkspace({
     }
     const errorBanner = historyError ? (
       <HistoryError
-        message={historyError}
+        message={historyError ? t(historyError) : historyError}
         disabled={busy}
         onRetry={() => void loadRecords()}
       />
@@ -1615,12 +1583,12 @@ function CaptureWorkspace({
     if (scopedRecent.length === 0) {
       if (errorBanner) return errorBanner;
       if (filter === "attention")
-        return <p className={styles.muted}>暂时没有待处理的来源。</p>;
+        return <p className={styles.muted}>{t("暂时没有待处理的来源。")}</p>;
       return (
         <div className={styles.emptyHistory}>
           <Tray aria-hidden />
-          <strong>还没有来源</strong>
-          <p>添加后，处理进度与结果会留在这里。</p>
+          <strong>{t("还没有来源")}</strong>
+          <p>{t("添加后，处理进度与结果会留在这里。")}</p>
         </div>
       );
     }
@@ -1649,9 +1617,9 @@ function CaptureWorkspace({
       {!embedded && !dialogMode ? (
         <header className={styles.header}>
           <Link href="/contact-agent" className={styles.brand}>
-            capri <span>关系工作台</span>
+            capri <span>{t("关系工作台")}</span>
           </Link>
-          <Link href="/workspace">返回工作台</Link>
+          <Link href="/workspace">{t("返回工作台")}</Link>
         </header>
       ) : null}
 
@@ -1662,9 +1630,9 @@ function CaptureWorkspace({
         {!dialogMode ? (
           <header className={styles.intro}>
             <div className={styles.titleBlock}>
-              {personID ? <p className={styles.eyebrow}>联系人档案</p> : null}
+              {personID ? <p className={styles.eyebrow}>{t("联系人档案")}</p> : null}
               <h1>{personID ? (personName ?? "联系人") : "来源"}</h1>
-              <p>截图与文字，整理成可追溯的人物线索。</p>
+              <p>{t("截图与文字，整理成可追溯的人物线索。")}</p>
             </div>
             {task ? (
               <button
@@ -1673,23 +1641,20 @@ function CaptureWorkspace({
                 onClick={startNewSource}
                 disabled={busy}
               >
-                <Plus aria-hidden /> 添加来源
-              </button>
+                <Plus aria-hidden />{t("添加来源")}</button>
             ) : null}
             {personID && revision && !archiveID ? (
               <button
                 type="button"
                 className={styles.textButton}
                 onClick={() => setArchiveOpen(true)}
-              >
-                归档联系人
-              </button>
+              >{t("归档联系人")}</button>
             ) : null}
           </header>
         ) : null}
 
         {!dialogMode ? (
-          <aside className={styles.guideRail} aria-label="来源会如何整理">
+          <aside className={styles.guideRail} aria-label={t("来源会如何整理")}>
             <IntakeGuide />
           </aside>
         ) : null}
@@ -1699,10 +1664,8 @@ function CaptureWorkspace({
             composer
           ) : archiveID ? (
             <div className={styles.card}>
-              <p>联系人已归档，资料已从当前工作区隐藏。</p>
-              <button type="button" onClick={() => void restore()} disabled={busy}>
-                撤销归档
-              </button>
+              <p>{t("联系人已归档，资料已从当前工作区隐藏。")}</p>
+              <button type="button" onClick={() => void restore()} disabled={busy}>{t("撤销归档")}</button>
             </div>
           ) : (
             composer
@@ -1710,10 +1673,10 @@ function CaptureWorkspace({
 
           {actionError ? (
             <p className={styles.error} role="alert" ref={actionErrorRef} tabIndex={-1}>
-              {actionError}
+              {actionError ? t(actionError) : actionError}
             </p>
           ) : null}
-          {conflictTaskID ? <button type="button" disabled={busy} onClick={() => void retryConflictRead()}>刷新来源状态</button> : null}
+          {conflictTaskID ? <button type="button" disabled={busy} onClick={() => void retryConflictRead()}>{t("刷新来源状态")}</button> : null}
 
           {shown.map((item) => (
             <TaskEvidenceCard
@@ -1736,7 +1699,7 @@ function CaptureWorkspace({
           ))}
 
           {!dialogMode ? (
-            <section className={styles.recent} aria-label="来源记录">
+            <section className={styles.recent} aria-label={t("来源记录")}>
               <div className={styles.recentHeading}>
                 <h2>{personID ? "这位联系人的整理记录" : "最近来源"}</h2>
                 {hasRecords && !task ? (
@@ -1746,25 +1709,22 @@ function CaptureWorkspace({
                     onClick={startNewSource}
                     disabled={busy}
                   >
-                    <Plus aria-hidden /> 添加来源
-                  </button>
+                    <Plus aria-hidden />{t("添加来源")}</button>
                 ) : null}
               </div>
               {hasRecords ? (
-                <div className={styles.filters} role="group" aria-label="筛选来源记录">
+                <div className={styles.filters} role="group" aria-label={t("筛选来源记录")}>
                   <button
                     type="button"
                     aria-pressed={filter === "all"}
                     onClick={() => setFilter("all")}
-                  >
-                    全部 <span>{allScopedRecent.length}</span>
+                  >{t("全部")}<span>{allScopedRecent.length}</span>
                   </button>
                   <button
                     type="button"
                     aria-pressed={filter === "attention"}
                     onClick={() => setFilter("attention")}
-                  >
-                    待处理 <span>{attentionCount}</span>
+                  >{t("待处理")}<span>{attentionCount}</span>
                   </button>
                 </div>
               ) : null}
@@ -1783,20 +1743,14 @@ function CaptureWorkspace({
             className={styles.card}
           >
             <h2 id="archive-title">归档 {personName}？</h2>
-            <p>
-              联系人将从当前工作区隐藏，正在进行的整理会停止。资料仍按原保留期限保存，你可以撤销归档。
-            </p>
-            <button type="button" onClick={() => setArchiveOpen(false)}>
-              取消
-            </button>
+            <p>{t("联系人将从当前工作区隐藏，正在进行的整理会停止。资料仍按原保留期限保存，你可以撤销归档。")}</p>
+            <button type="button" onClick={() => setArchiveOpen(false)}>{t("取消")}</button>
             <button
               type="button"
               className={styles.primary}
               disabled={busy}
               onClick={() => void archive()}
-            >
-              归档这个联系人
-            </button>
+            >{t("归档这个联系人")}</button>
           </section>
         </div>
       ) : null}
