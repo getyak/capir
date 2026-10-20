@@ -181,14 +181,19 @@ export function normalizeSettingsQuery(value: string): string {
 export function searchSettings(
   query: string,
   labEnabled: boolean,
+  // Matches against display text: entries are gettext keys, so a Japanese
+  // query finds the language section. Identity keeps server callers simple.
+  translateText: (value: string) => string = (value) => value,
 ): SettingsSearchEntry[] {
   const normalized = normalizeSettingsQuery(query);
   if (!normalized) return [];
   return SETTINGS_SEARCH_ENTRIES.filter(
     (entry) =>
       (entry.id !== "testing" || labEnabled) &&
-      [entry.title, entry.description, ...entry.keywords].some((value) =>
-        normalizeSettingsQuery(value).includes(normalized),
-      ),
+      [entry.title, entry.description, ...entry.keywords]
+        .map(translateText)
+        .some((value) =>
+          normalizeSettingsQuery(value).includes(normalized),
+        ),
   );
 }

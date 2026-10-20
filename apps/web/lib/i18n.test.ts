@@ -45,9 +45,12 @@ describe("web catalogs", () => {
     expect(translate("ko", "missing.key")).toBe("missing.key");
     expect(interpolate("Hello {name}, {missing} stays", { name: "Ada" })).toBe("Hello Ada, {missing} stays");
   });
-  it("resolves gettext-style Chinese-source keys to identity for zh locales", () => {
-    expect(translate("zh-CN", "保存偏好")).toBe("保存偏好");
-    expect(translate("zh-TW", "保存偏好")).toBe("保存偏好");
+  it("resolves gettext-style Chinese-source keys: catalog wins, identity fallback", () => {
+    // Translated entries always win — zh-TW reads authored Traditional text.
+    expect(translate("zh-TW", "保存偏好")).toBe("儲存偏好");
+    // A CJK key with no entry falls back to identity for zh-family locales.
+    expect(translate("zh-CN", "尚无译文的中文键")).toBe("尚无译文的中文键");
+    expect(translate("zh-TW", "尚无译文的中文键")).toBe("尚无译文的中文键");
     expect(translate("en", "保存偏好", undefined, "Save preference")).toBe("Save preference");
   });
   it("keeps evidence-boundary wording in every locale", () => {

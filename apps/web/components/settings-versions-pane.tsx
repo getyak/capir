@@ -1,4 +1,5 @@
 "use client";
+import { useT } from "@/components/locale-provider";
 
 import { ArrowClockwise } from "@phosphor-icons/react";
 import Link from "next/link";
@@ -109,6 +110,7 @@ export function SettingsVersionsPane({
   webRelease: WebReleaseView | null;
   webReleaseObservedAt: string;
 }) {
+  const t = useT();
   const health = useOptionalSystemHealth();
   const desktop = useDesktopRelease();
   const deviceObservedAt = useDeviceReadAt();
@@ -136,11 +138,9 @@ export function SettingsVersionsPane({
 
   return (
     <div className={styles.pane}>
-      <p className={styles.scopeNote}>
-        各端独立发布。这里显示已核验的版本与检查时间；只有取得可靠更新结果时，才会提示“可更新”。
-      </p>
+      <p className={styles.scopeNote}>{t("各端独立发布。这里显示已核验的版本与检查时间；只有取得可靠更新结果时，才会提示“可更新”。")}</p>
 
-      <Group title="此浏览器页面">
+      <Group title={t("此浏览器页面")}>
         <section
           className={styles.versionRow}
           data-version-component="web"
@@ -171,14 +171,12 @@ export function SettingsVersionsPane({
           </p>
           <div className={styles.versionActions}>
             <button className={styles.versionRefresh} onClick={() => window.location.reload()} type="button">
-              <ArrowClockwise aria-hidden="true" size={15} />
-              重新载入本页版本
-            </button>
+              <ArrowClockwise aria-hidden="true" size={15} />{t("重新载入本页版本")}</button>
           </div>
         </section>
       </Group>
 
-      <Group title="服务">
+      <Group title={t("服务")}>
         <section
           className={styles.versionRow}
           data-version-component="backend"
@@ -186,11 +184,11 @@ export function SettingsVersionsPane({
           data-phase={health?.phase ?? "unavailable"}
         >
           <div className={styles.versionHead}>
-            <strong>后端服务</strong>
+            <strong>{t("后端服务")}</strong>
             <RevisionText value={backendRevision} missing="未提供版本" />
           </div>
           <p className={styles.versionMeta}>
-            <span>来源：后端服务的本次运行回报</span>
+            <span>{t("来源：后端服务的本次运行回报")}</span>
             <span>
               观测于 {observation ? formatTime(observation.observed_at) : "时间未知"}
             </span>
@@ -210,22 +208,20 @@ export function SettingsVersionsPane({
                 {health.refreshing ? "读取中" : "重新读取"}
               </button>
             ) : (
-              <Link className={styles.versionRefresh} href="/workspace/settings/diagnostics">
-                查看系统检测
-              </Link>
+              <Link className={styles.versionRefresh} href="/workspace/settings/diagnostics">{t("查看系统检测")}</Link>
             )}
           </div>
         </section>
       </Group>
 
-      <Group title="此设备">
+      <Group title={t("此设备")}>
         <section
           className={styles.versionRow}
           data-version-component="macos"
           data-unknown={desktop.appVersion ? "false" : "true"}
         >
           <div className={styles.versionHead}>
-            <strong>macOS 应用</strong>
+            <strong>{t("macOS 应用")}</strong>
             <span className={styles.versionIdentity}>
               {desktop.appVersion ?? "无法确认版本"}
             </span>
@@ -247,19 +243,17 @@ export function SettingsVersionsPane({
         </section>
       </Group>
 
-      <Group title="其他设备">
+      <Group title={t("其他设备")}>
         <section
           className={styles.versionRow}
           data-version-component="ios"
           data-unknown="true"
         >
           <div className={styles.versionHead}>
-            <strong>iPhone / iPad 应用</strong>
-            <span className={styles.versionIdentity}>此设备无法读取</span>
+            <strong>{t("iPhone / iPad 应用")}</strong>
+            <span className={styles.versionIdentity}>{t("此设备无法读取")}</span>
           </div>
-          <p className={styles.versionStatus}>
-            已安装版本只在对应的 iPhone 或 iPad 上可见：打开 capri → 设置 → 版本与状态。这里不会从发布清单推断。
-          </p>
+          <p className={styles.versionStatus}>{t("已安装版本只在对应的 iPhone 或 iPad 上可见：打开 capri → 设置 → 版本与状态。这里不会从发布清单推断。")}</p>
         </section>
         <section
           className={styles.versionRow}
@@ -267,12 +261,10 @@ export function SettingsVersionsPane({
           data-unknown="true"
         >
           <div className={styles.versionHead}>
-            <strong>浏览器扩展</strong>
-            <span className={styles.versionIdentity}>此设备无法读取</span>
+            <strong>{t("浏览器扩展")}</strong>
+            <span className={styles.versionIdentity}>{t("此设备无法读取")}</span>
           </div>
-          <p className={styles.versionStatus}>
-            已安装版本在该浏览器的 capri Capture 扩展面板顶部显示；Chrome 报告可用更新时会提示。这里不能跨浏览器读取。
-          </p>
+          <p className={styles.versionStatus}>{t("已安装版本在该浏览器的 capri Capture 扩展面板顶部显示；Chrome 报告可用更新时会提示。这里不能跨浏览器读取。")}</p>
         </section>
       </Group>
     </div>
