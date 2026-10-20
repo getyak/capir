@@ -2,8 +2,8 @@
  * Shared workspace composer shell.
  *
  * Quiet neutral surface, one restrained accent, keyboard-first. The suggestion
- * menu is a real listbox positioned above the field; a long list scrolls
- * instead of overflowing the viewport.
+ * menu is a real listbox anchored to this outer shell and fitted into the
+ * visible clipping region; a long list scrolls instead of overflowing.
  */
 
 .composer {
@@ -18,8 +18,8 @@
   padding: 16px 16px 12px;
   position: relative;
   transition:
-    border-color 200ms var(--ease-out),
-    box-shadow 200ms var(--ease-out);
+    border-color 180ms var(--ease-out),
+    box-shadow 180ms var(--ease-out);
 }
 
 .composer:focus-within {
@@ -27,6 +27,13 @@
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--focus) 12%, transparent),
     0 7px 24px color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+/* One clear 2px container cue for keyboard input. The editor itself keeps no
+   outline, so the focus ring never doubles on the textarea. */
+.composer:has(textarea:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 .composer textarea {
@@ -53,7 +60,7 @@
 .mirror { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: transparent; font: inherit; font-size: 1rem; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; padding: 4px 5px 0; box-sizing: border-box; }
 .mentionMark { color: transparent; background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 4px; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 55%, transparent); }
 .selectedReferences { display: flex; flex-wrap: wrap; gap: 6px; grid-column: 1 / -1; min-width: 0; }
-.reference { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 44px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--ink); padding: 4px 10px 4px 6px; font: inherit; font-size: .8125rem; cursor: pointer; animation: reference-arrive 160ms var(--ease-out); }
+.reference { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 44px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--ink); padding: 4px 10px 4px 6px; font: inherit; font-size: .8125rem; cursor: pointer; animation: reference-arrive 180ms var(--ease-out); }
 .reference > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .reference > svg { flex: 0 0 auto; color: var(--accent-strong); }
 .reference:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
@@ -82,13 +89,13 @@
   box-shadow: none;
 }
 .composer[data-layout="inline"] textarea {
-  min-height: 22px;
-  font-size: 14px;
-  line-height: 22px;
+  min-height: 24px;
+  font-size: 15px;
+  line-height: 24px;
   padding: 0;
 }
-.composer[data-layout="inline"] .mirror { font-size: 14px; line-height: 22px; padding: 0; }
-.inlineLeading, .inlineTrailing { display:flex; align-items:center; min-width:0; }
+.composer[data-layout="inline"] .mirror { font-size: 15px; line-height: 24px; padding: 0; }
+.inlineLeading, .inlineTrailing { display:flex; align-items:center; min-width:0; min-height:44px; }
 .inlineLeading { min-width:44px; justify-content:center; align-self:end; }
 .inlineTrailing { align-self:end; }
 .footer[data-inline="true"] { grid-column:1 / -1; margin:0; }
@@ -142,7 +149,7 @@
   font-size: 0.75rem;
   letter-spacing: 0.01em;
   opacity: 0;
-  transition: opacity 140ms var(--ease-out);
+  transition: opacity 180ms var(--ease-out);
   white-space: nowrap;
 }
 
@@ -152,7 +159,7 @@
 
 .meter {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -167,7 +174,7 @@
 }
 
 .menu {
-  animation: composer-menu-enter 150ms var(--ease-out);
+  animation: composer-menu-enter 180ms var(--ease-out);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -204,7 +211,7 @@
   min-height: 44px;
   padding: 8px 10px;
   text-align: left;
-  transition: transform 100ms ease-out;
+  transition: transform 180ms ease-out;
 }
 
 .item:active {
@@ -230,8 +237,8 @@
 .itemText strong {
   color: var(--ink);
   display: block;
-  font-size: 0.875rem;
-  font-weight: 540;
+  font-size: 15px;
+  font-weight: 500;
   line-height: 22px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -241,7 +248,7 @@
 .itemText small {
   color: var(--muted);
   display: block;
-  font-size: 0.75rem;
+  font-size: 13px;
   line-height: 20px;
   margin-top: 2px;
   overflow: hidden;
@@ -254,14 +261,14 @@
   border-radius: 999px;
   color: var(--muted);
   flex: 0 0 auto;
-  font-size: 0.75rem;
+  font-size: 13px;
   padding: 1px 7px;
 }
 
 .state {
   color: var(--muted);
   display: grid;
-  font-size: 0.75rem;
+  font-size: 15px;
   gap: 8px;
   line-height: 1.6;
   padding: 8px 10px;
@@ -278,7 +285,7 @@
   color: var(--ink);
   cursor: pointer;
   font: inherit;
-  font-size: 0.75rem;
+  font-size: 15px;
   justify-self: start;
   min-height: 44px;
   padding: 3px 16px;
@@ -292,7 +299,7 @@
 .overflow {
   border-top: 1px solid var(--line-soft);
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 15px;
   line-height: 1.55;
   margin: 0;
   padding: 7px 10px;
@@ -318,6 +325,11 @@
   .composer {
     border-radius: 15px;
     padding: 12px 12px 8px;
+  }
+
+  .composer[data-layout="inline"] textarea,
+  .composer[data-layout="inline"] .mirror {
+    font-size: 16px;
   }
 
   .menu {
@@ -363,7 +375,8 @@
 @media (forced-colors: active) {
   .mentionMark { background: transparent; box-shadow: none; text-decoration: underline; text-decoration-color: Highlight; }
   .reference { background: Canvas; border-color: Highlight; color: CanvasText; }
-  .composer:focus-within {
+  .composer:focus-within,
+  .composer:has(textarea:focus-visible) {
     outline: 2px solid Highlight;
   }
 
@@ -378,6 +391,27 @@
   .item:hover {
     background: Highlight;
     color: HighlightText;
+  }
+
+  /* Selected labels and inner icons stay on the highlighted pair. */
+  .item .itemText strong,
+  .item .itemText small,
+  .item .tag,
+  .item > svg {
+    color: inherit;
+  }
+
+  /* The system text backplate can cover a selected label. Keep only these
+     labels on the same system HighlightText/Highlight pair as their row. */
+  .item[aria-selected="true"] .itemText,
+  .item[aria-selected="true"] .tag {
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+
+  .item[aria-selected="true"] .tag {
+    background: transparent;
+    border-color: HighlightText;
   }
 }
 
@@ -406,6 +440,6 @@
   border-radius: inherit;
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   color: var(--muted-strong);
-  font-size: 0.8125rem;
+  font-size: 15px;
   pointer-events: none;
 }
