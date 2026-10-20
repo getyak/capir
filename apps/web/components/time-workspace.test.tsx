@@ -54,7 +54,7 @@ describe("rendered time workspace", () => {
   it.each(["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."])("localizes the network recovery hint for %s", async (message) => {
     mock.request.mockRejectedValue(new Error(message));
     await act(async () => {
-      root.render(createElement(LocaleProvider, { locale: "en", children: createElement(TimeWorkspace, { people: [], peopleError: null, binding: "a", legacyDraft: null }) }));
+      root.render(<LocaleProvider locale="en"><TimeWorkspace people={[]} peopleError={null} binding="a" legacyDraft={null} /></LocaleProvider>);
     });
     const alert = host.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Unable to connect. Please try again.");
