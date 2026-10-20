@@ -1,0 +1,19 @@
+{
+  "status": "failed",
+  "finished_utc": "2026-10-20T03:17:18.972945+00:00",
+  "elapsed_seconds": 50.33,
+  "expected_prior_guard_after_installer_lock": "2b4cd303b08d868daad9abd45cf984c0085315a3",
+  "before": {
+    "revision": "2b4cd303b08d868daad9abd45cf984c0085315a3",
+    "buildID": "CUmCARtl8cbaMXZZgPw1m",
+    "release": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/2b4cd303",
+    "port": 3000
+  },
+  "after": {
+    "revision": "2b4cd303b08d868daad9abd45cf984c0085315a3",
+    "buildID": "CUmCARtl8cbaMXZZgPw1m",
+    "release": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/2b4cd303",
+    "port": 3000
+  },
+  "error": "Web authentication readiness failed; inspect the launchd logs"
+}

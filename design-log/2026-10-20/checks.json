@@ -1,0 +1,55 @@
+{
+  "round-12-final-tests.log": {
+    "sha256": "ae2ea1c2e8e27ff22e81cf406928ccb74f155351971fc313c33d5a8e00ca44fe",
+    "evidence_lines": [
+      " Test Files  4 passed (4)",
+      "      Tests  47 passed (47)",
+      "   Start at  07:19:13",
+      "   Duration  18.82s (import 83%, environment 13%, tests 2%, transform 1%)"
+    ]
+  },
+  "round-13-parent-tests.log": {
+    "sha256": "6bbd7c1758c3cfb2abd96732a9fa4a6189958c6404f4270dec1d2f5201954455",
+    "evidence_lines": [
+      " Test Files  2 passed (2)",
+      "      Tests  19 passed (19)",
+      "   Start at  07:14:36",
+      "   Duration  10.34s (import 82%, environment 15%, transform 2%, tests 1%)"
+    ]
+  },
+  "round-14-backplate-tests.log": {
+    "sha256": "c86cff67c3c85a5b732cb894f6805bffecc2ec7cce5755f702624c9545bb9b16",
+    "evidence_lines": [
+      " Test Files  3 passed (3)",
+      "      Tests  75 passed (75)",
+      "   Start at  10:52:40",
+      "   Duration  24.40s (tests 65%, import 29%, environment 5%, transform 1%)"
+    ]
+  },
+  "round-14-backplate-lint.log": {
+    "sha256": "4b12813442c851c9653b3ead95ad81f89f9902196a9f3e02102f023add1a0e0c",
+    "evidence_lines": []
+  },
+  "backplate-release-build.log": {
+    "sha256": "0cf4b56eca68abcf402fd34da519256123c372bb53850423d34cc42d3a70ef1a",
+    "evidence_lines": [
+      "\u2713 Compiled successfully in 96s",
+      "  Finished TypeScript in 39.0s ...",
+      "  Generating static pages using 9 workers (0/47) ...",
+      "  Generating static pages using 9 workers (11/47) ",
+      "  Generating static pages using 9 workers (23/47) ",
+      "  Generating static pages using 9 workers (35/47) ",
+      "\u2713 Generating static pages using 9 workers (47/47) in 7.0s"
+    ]
+  },
+  "noon-final-docs-check.log": {
+    "sha256": "39c50f6dbe93f28c560333419ab34da911dfe52e8cd3310a74e43bf7455e557c",
+    "evidence_lines": [
+      "product architecture: PASS \u00b7 79 elements \u00b7 47 texts \u00b7 76 solid \u00b7 3 dashed \u00b7 2562x1439",
+      "system architecture: PASS \u00b7 123 elements \u00b7 64 texts \u00b7 118 solid \u00b7 5 dashed \u00b7 2574x1732",
+      "Agent module blueprint: PASS \u00b7 117 elements \u00b7 62 texts \u00b7 108 solid \u00b7 9 dashed \u00b7 2830x1548",
+      "Agent control plane: PASS \u00b7 112 elements \u00b7 62 texts \u00b7 92 solid \u00b7 20 dashed \u00b7 2582x1470",
+      "Agent runtime flow: PASS \u00b7 88 elements \u00b7 46 texts \u00b7 81 solid \u00b7 7 dashed \u00b7 2588x1374"
+    ]
+  }
+}

@@ -294,7 +294,7 @@ review into a chat reply.
 
 - Avatars aid recognition without verifying identity: authorized photo, readable name initials, then a stable abstract fallback. Account-scoped local choices support preview, cancel, save and reset. Explain the local-only persistence scope on demand and preserve source provenance, readable contrast and reduced motion.
 - Preserve meaning without relying on color alone. Explicit composer directory choices receive a text highlight and an avatar/check reference with a hover, keyboard or touch preview. Preview only the current account's directory labels and relationship labels; arbitrary typed names do not establish identity or authorize Memory access. Editing a reference or losing its authorized directory removes its presentation state. Active processing may use a restrained text light sweep; queued, stopping and terminal labels remain static, with reduced-motion and forced-colors fallbacks.
-- Keep text and controls legible at platform accessibility sizes.
+- Keep text and controls legible at platform accessibility sizes and in actual forced-color palettes. Preserve readable labels and focus/selected/disabled distinctions with system colors; computed color pairs alone do not prove rendered legibility.
 - Make focus, keyboard, screen-reader, and reduced-motion behavior first-class.
 - Avoid private conversation content in generic notifications or previews.
 - Let the user understand retention, source access, and deletion consequences.

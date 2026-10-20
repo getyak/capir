@@ -1,0 +1,34 @@
+[
+  {
+    "release": "0dd21831",
+    "compiler_cache": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/0dd21831/apps/web/.next/cache/turbopack",
+    "clean_source": true,
+    "open_files": false,
+    "runtime_and_fetch_cache_retained": true,
+    "moved_to": "/private/tmp/ai-test-design-noon-compiler-cache.KxNzlG/0dd21831"
+  },
+  {
+    "release": "576a1b8b",
+    "compiler_cache": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/576a1b8b/apps/web/.next/cache/turbopack",
+    "clean_source": true,
+    "open_files": false,
+    "runtime_and_fetch_cache_retained": true,
+    "moved_to": "/private/tmp/ai-test-design-noon-compiler-cache.KxNzlG/576a1b8b"
+  },
+  {
+    "release": "7c526fb0",
+    "compiler_cache": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/7c526fb0/apps/web/.next/cache/turbopack",
+    "clean_source": true,
+    "open_files": false,
+    "runtime_and_fetch_cache_retained": true,
+    "moved_to": "/private/tmp/ai-test-design-noon-compiler-cache.KxNzlG/7c526fb0"
+  },
+  {
+    "release": "916c104c",
+    "compiler_cache": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/916c104c/apps/web/.next/cache/turbopack",
+    "clean_source": true,
+    "open_files": false,
+    "runtime_and_fetch_cache_retained": true,
+    "moved_to": "/private/tmp/ai-test-design-noon-compiler-cache.KxNzlG/916c104c"
+  }
+]
