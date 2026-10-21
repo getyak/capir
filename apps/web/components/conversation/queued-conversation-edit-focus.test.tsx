@@ -50,6 +50,44 @@ it("returns Cancel to the same entry's newly mounted edit control, not another c
   } finally { foreign.remove(); }
 });
 
+it("reveals the returned edit control inside only its queue after a taller image row replaces the editor", async () => {
+  await open();
+  const queue = host.querySelector<HTMLElement>('[aria-label="可控补充"]')!;
+  Object.defineProperties(queue, { clientHeight: { value: 108, configurable: true }, clientTop: { value: 1, configurable: true } });
+  const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this === queue) return new DOMRect(0, 100, 300, 110);
+    if (this.matches("[data-queue-edit]")) return new DOMRect(30, 260 - queue.scrollTop, 44, 44);
+    return new DOMRect(30, 120, 44, 44);
+  });
+  try {
+    button("取消").focus();
+    await act(async () => button("取消").click());
+    expect(document.activeElement).toBe(edit());
+    expect(queue.scrollTop).toBe(101);
+    expect(document.documentElement.scrollTop).toBe(0);
+    expect(document.body.scrollTop).toBe(0);
+  } finally { measure.mockRestore(); }
+});
+
+it("reveals a clipped queue target above while leaving visible, oversized and root focus alone", () => {
+  const queue = host.querySelector<HTMLElement>('[aria-label="可控补充"]')!;
+  Object.defineProperties(queue, { clientHeight: { value: 108, configurable: true }, clientTop: { value: 1, configurable: true } });
+  queue.scrollTop = 50;
+  let target = new DOMRect(30, 95, 44, 44);
+  const measure = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    return this === queue ? new DOMRect(0, 100, 300, 110) : target;
+  });
+  const composer = host.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+  try {
+    edit().focus(); expect(queue.scrollTop).toBe(38);
+    composer.focus(); target = new DOMRect(30, 130, 44, 44);
+    edit().focus(); expect(queue.scrollTop).toBe(38);
+    composer.focus(); target = new DOMRect(30, 95, 44, 200);
+    edit().focus(); expect(queue.scrollTop).toBe(38);
+    queue.tabIndex = -1; queue.focus(); expect(queue.scrollTop).toBe(38);
+  } finally { measure.mockRestore(); }
+});
+
 it("keeps Save focus during the request and returns success to the same entry", async () => {
   await open(); await save();
   expect(button("保存").disabled).toBe(false); expect(button("保存").getAttribute("aria-disabled")).toBe("true");
