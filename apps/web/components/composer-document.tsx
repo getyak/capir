@@ -208,6 +208,19 @@ export function ComposerDocumentPreview({
         <Dialog.Content
           className={`${styles.dialog} ts-workspace-theme quiet-workspace`}
           data-composer-document
+          onFocusCapture={(event) => {
+            const dialog = event.currentTarget;
+            const target = event.target;
+            if (!(target instanceof HTMLElement) || target === dialog || !dialog.contains(target)) return;
+            const bounds = target.getBoundingClientRect();
+            // FocusScope wraps with preventScroll. Reveal only a clipped
+            // control in this dialog, leaving large editors' caret scroll alone.
+            if (bounds.height > dialog.clientHeight - 8) return;
+            const top = dialog.getBoundingClientRect().top + dialog.clientTop;
+            const bottom = top + dialog.clientHeight;
+            if (bounds.top < top + 4) dialog.scrollTop += bounds.top - top - 4;
+            else if (bounds.bottom > bottom - 4) dialog.scrollTop += bounds.bottom - bottom + 4;
+          }}
           onEscapeKeyDown={(event) => {
             // Escape closes this dialog only; it never reaches run controls.
             event.stopPropagation();
