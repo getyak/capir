@@ -1,5 +1,5 @@
 .runtimeRoot { display:contents; }
-.canvas { display:flex; flex-direction:column; height:100%; flex:1 1 auto; min-height:0; min-width:0; color:var(--ink); background:var(--background); position:relative; }
+.canvas { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; min-width:0; color:var(--ink); background:var(--background); position:relative; overflow:hidden; overscroll-behavior:none; }
 /* 68px floating Session title: centered, lightweight, no divider. */
 .header { display:flex; align-items:center; justify-content:center; gap:12px; min-height:68px; padding:12px 24px; min-width:0; border-bottom:0; position:relative; flex:none; }
 .headingText { min-width:0; max-width:min(640px, 60vw); text-align:center; }
@@ -12,7 +12,7 @@
 .detailPanel { position:absolute; right:0; top:48px; width:min(330px,calc(100vw - 32px)); max-height:min(62dvh,460px,calc(100dvh - 144px)); overflow-y:auto; overscroll-behavior:contain; padding:18px; background:var(--surface); border:1px solid var(--line-soft); border-radius:18px; z-index:20; box-shadow:0 8px 24px color-mix(in srgb, var(--ink) 10%, transparent); line-height: var(--ts-leading-body, 1.667); font-size: var(--ts-type-body, 0.9375rem); }
 .detailPanel p { margin:0 0 12px; overflow-wrap: anywhere; }.detailPanel a { display:block; }.textButton,.confirm button { border:0; background:none; color:inherit; cursor:pointer; padding:8px 0; display:flex; gap:8px; align-items:center; font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; }.confirm { display:flex; flex-wrap:wrap; gap:12px; }.confirm p { width:100%; }
 .detailScope { color:var(--ink); font-weight:500; }
-.transcript { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:0 24px 24px; scrollbar-gutter:stable both-edges; }
+.transcript { flex:1; min-height:0; overflow:auto; overscroll-behavior:none; padding:0 24px 24px; scrollbar-gutter:stable both-edges; }
 /* 880px readable axis shared by transcript and composer. */
 .content { max-width:880px; margin:0 auto; min-width:0; }
 .turn { margin-bottom:36px; }.localTurn { margin:0 0 26px; }

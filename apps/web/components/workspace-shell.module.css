@@ -20,8 +20,11 @@
   color: var(--ink);
   display: grid;
   grid-template-columns: var(--workspace-sidebar-width) minmax(0, 1fr);
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   min-width: 320px;
+  overflow: clip;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .shell:has(.sidebarState[data-collapsed="true"]) {
@@ -36,13 +39,13 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  height: 100dvh;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
   /* Account menus must escape both the expanded sidebar and collapsed rail. */
   overflow: visible;
   padding: 12px 12px 10px;
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 40;
 }
 
@@ -216,7 +219,7 @@
   margin-top: 18px;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
   padding-right: 1px;
   scrollbar-color: var(--line) transparent;
   scrollbar-width: thin;
@@ -805,7 +808,8 @@
 .workspace {
   display: flex;
   flex-direction: column;
-  min-height: 100dvh;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -877,11 +881,16 @@
 
 .stage {
   flex: 1 1 auto;
+  min-height: 0;
   min-width: 0;
+  overflow: auto;
+  overscroll-behavior: none;
+  /* Keep absolute page helpers inside this scroll owner's clipping boundary. */
+  position: relative;
 }
 
 /* Conversation pages own their scroll area so input stays in one place.
-   Other pages retain normal document scrolling. Test-space banners take space. */
+   Other pages scroll inside the stage. Test-space banners take real space. */
 .workspace:has([data-conversation-canvas]) {
   height: 100dvh;
   min-height: 0;
@@ -890,6 +899,10 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
+}
+.stage:has([data-conversation-canvas]) > :not([data-conversation-canvas]) {
+  flex-shrink: 0;
 }
 
 /* The frozen boundary evaluator and the scoped relationship desk own their
@@ -1062,7 +1075,8 @@
   /* Bottom navigation already reserves space in the shell. Short pages
      should fit the remaining viewport instead of adding a blank scroll. */
   .workspace {
-    min-height: calc(100dvh - 78px - env(safe-area-inset-bottom, 0px));
+    height: 100%;
+    min-height: 0;
   }
 
   .sidebar {
@@ -1135,6 +1149,7 @@
     border-bottom: 1px solid var(--line-soft);
     display: flex;
     height: 56px;
+    flex-shrink: 0;
     justify-content: space-between;
     padding: 0 16px;
     position: sticky;
@@ -1246,6 +1261,7 @@
     flex: 0 1 auto;
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: none;
     scrollbar-width: thin;
   }
   .sidebarScroll {
@@ -1574,7 +1590,7 @@
 :global(html[data-desktop-surface="settings"]) .shell > .sidebar,
 :global(html[data-desktop-surface="settings"]) .routeHeader,
 :global(html[data-desktop-surface="settings"]) .mobileHeader { display: none; }
-:global(html[data-desktop-surface="settings"]) .stage { min-height: 100dvh; padding: 0; }
+:global(html[data-desktop-surface="settings"]) .stage { min-height: 0; padding: 0; }
 
 /* ── Local session organization rows ─────────────────────────────────── */
 
@@ -1871,7 +1887,7 @@
 .personChip:hover,.personChip[aria-pressed="true"] { background:var(--surface-selected); }
 .shell:has(.sidebarState[data-collapsed="true"]) .sidebarState { flex:1; min-height:0; }
 .shell:has(.sidebarState[data-collapsed="true"]) :is(.brandRow,.railRow) { display:none; }
-.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { align-items:center; display:flex; flex:1; flex-direction:column; min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { align-items:center; display:flex; flex:1; flex-direction:column; min-height:0; overflow-y:auto; overscroll-behavior:none; scrollbar-width:thin; }
 .railCollapsedTop { flex:none; }
 .railSessions { display:flex; flex:none; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; overflow:auto; scrollbar-width:none; }
 .railSessionAvatar,.railIconLink { align-items:center; border-radius:12px; color:var(--muted-strong); display:flex; flex:none; height:44px; justify-content:center; text-decoration:none; transition:background-color var(--workspace-transition-duration,180ms) var(--ease-out),color var(--workspace-transition-duration,180ms) var(--ease-out); width:44px; }

@@ -82,6 +82,18 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
   const recoveryActionRef = useRef<HTMLButtonElement | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
   const canvasRef = useRef<HTMLElement | null>(null);
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+  // Browser keyboard reveal must clear the actual sticky controls, including
+  // translated labels and an expanded filter panel, without guessing a height.
+  useLayoutEffect(() => {
+    const main = mainRef.current, controls = controlsRef.current;
+    if (!main || !controls) return;
+    const measure = () => main.style.setProperty("--time-controls-height", `${Math.ceil(controls.getBoundingClientRect().height)}px`);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(controls);
+    return () => { observer?.disconnect(); main.style.removeProperty("--time-controls-height"); };
+  }, [authInvalid, filters]);
   const editorOrigin = useRef<{ key: string; element: HTMLElement } | null>(null);
   // WebKit mouse clicks need not focus their button. Capture the real trigger,
   // then consume it in select() during that same native event. A task-level
@@ -323,7 +335,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
     {pending ? <div className={styles.notice} role="status">有一次{pending.method === "DELETE" ? "删除" : "保存"}尚未核实。{"title" in pending.body ? ` ${pending.body.title}` : ""}<button ref={recoveryActionRef} type="button" disabled={recoveryBusy} onClick={() => void recover()}>{t("核实上次操作")}</button><button type="button" disabled={recoveryBusy} onClick={() => void retryPending()}>{t("重试原操作")}</button><button type="button" disabled={recoveryBusy} onClick={() => { if (window.confirm(t("放弃此恢复凭据只会清除本标签页的原输入，不能撤销可能已保存的安排。确认后请检查时间记录。"))) { clearTimeOperation(binding, { id: pending.id, key: pending.key }); clearTimeEditorDraft(binding, pending.id); setRecovery(t("已按你的选择清除恢复凭据。请核对当前时间记录。")); refreshData(); } }}>{t("放弃恢复凭据")}</button><small>{t("恢复内容仅保留在此浏览器标签页，最长一天；确认成功后即清除。")}</small></div> : null}{recovery ? <p className={styles.muted} role="status">{recovery}</p> : null}
     {savedDraft && !editor && !pending ? <div className={styles.notice}>有一份尚未保存的编辑：{savedDraft.fields.title || "未命名安排"}<button type="button" disabled={recoveryBusy} onClick={() => void restoreEditorDraft()}>{t("恢复未保存编辑")}</button><button type="button" disabled={recoveryBusy} onClick={() => { if (window.confirm(t("确认丢弃这份尚未保存的编辑？"))) { clearTimeEditorDraft(binding, savedDraft.id); setRecovery(t("已丢弃未保存编辑。")); refreshData(); } }}>{t("丢弃未保存编辑")}</button></div> : null}
     {legacyDraft?.unavailable && location.draft ? <p className={styles.notice} role="status">{t("这份会议草稿已处理或来源不可用。")}</p> : null}
-    <div className={styles.toolbar}>
+    <div ref={controlsRef} className={styles.controls} role="group" aria-label={t("时间")} data-time-controls><div className={styles.toolbar}>
       <div className={styles.dateNavigation}>
         <button aria-label={t("上一段时间")} onClick={() => shift(-1)} type="button"><ArrowLeft size={17} /></button>
         <div className={styles.dateTitle}>
@@ -339,8 +351,9 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
         <button ref={addButtonRef} type="button" className={styles.primary} disabled={Boolean(pending) || recoveryBusy || Boolean(savedDraft && !editor)} onClick={(event) => { if (!canLeaveEditor()) return; selectAbort.current?.abort(); const key = crypto.randomUUID(); editorOrigin.current = { key, element: event.currentTarget }; setEditor({ key, record: null }); setEditorError(""); updateTimeLocation({ item: null, draft: null }); }}><Plus size={16} aria-hidden="true" />{t("添加日程")}</button>
       </div>
     </div>
-    <div className={styles.scopeBar}><div className={styles.quickRanges}>{[["day", t("当天")], ["past7", t("过去 7 天")], ["next30", t("未来 30 天")]].map(([r, label]) => <button key={r} type="button" aria-pressed={range === r && view === "timeline"} onClick={() => navigate({ view: "timeline", range: r! })}>{label}</button>)}<span>{selectedPerson ? `人物：${selectedPerson.label}` : personId ? "已筛选人物" : "全部人物"}{kind ? ` · ${TIME_KINDS[kind]}` : ""}</span>{personId || kind ? <button type="button" onClick={() => navigate({ person: null, kind: null })}>{t("清除筛选")}</button> : null}</div><span>{value ? `${activities.length} 条${value.complete ? "" : " · 尚有更多"}` : "正在读取"}</span></div>
     {filters ? <section className={styles.filters} aria-label={t("时间筛选")}><label>{t("人物")}<select value={personId} onChange={(e) => navigate({ person: e.target.value })}><option value="">{t("全部人物")}</option>{people.map((p) => <option value={p.id} key={p.id}>{p.label} · {p.context || p.id.slice(0, 6)}</option>)}</select></label><label>{t("记录类型")}<select value={kind} onChange={(e) => navigate({ kind: e.target.value })}><option value="">{t("全部记录")}</option>{Object.entries(TIME_KINDS).map(([k, label]) => <option value={k} key={k}>{label}</option>)}</select></label><label>{t("显示时区")}<input defaultValue={timeZone} key={timeZone} list="time-zones" maxLength={100} onBlur={(e) => { if (e.target.value.trim()) navigate({ tz: e.target.value.trim() }); }} /></label><form className={styles.customRange} onSubmit={(e) => { e.preventDefault(); const to = addDays(customTo, 1); if (customFrom <= customTo && Date.parse(to) - Date.parse(customFrom) <= 93 * 86400000) navigate({ view: "timeline", range: "custom", from: customFrom, to, day: customFrom }); else setMoreError(t("请选择连续的 1–93 天。")); }}><label>{t("从")}<input required type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></label><label>{t("到（含当天）")}<input required type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></label><button type="submit">{t("查看范围")}</button></form>{peopleError ? <p role="status">{peopleError}</p> : null}</section> : null}
+    </div>
+    <div className={styles.scopeBar}><div className={styles.quickRanges}>{[["day", t("当天")], ["past7", t("过去 7 天")], ["next30", t("未来 30 天")]].map(([r, label]) => <button key={r} type="button" aria-pressed={range === r && view === "timeline"} onClick={() => navigate({ view: "timeline", range: r! })}>{label}</button>)}<span>{selectedPerson ? `人物：${selectedPerson.label}` : personId ? "已筛选人物" : "全部人物"}{kind ? ` · ${TIME_KINDS[kind]}` : ""}</span>{personId || kind ? <button type="button" onClick={() => navigate({ person: null, kind: null })}>{t("清除筛选")}</button> : null}</div><span>{value ? `${activities.length} 条${value.complete ? "" : " · 尚有更多"}` : "正在读取"}</span></div>
     <datalist id="time-zones">{["Asia/Shanghai", "Asia/Hong_Kong", "Asia/Tokyo", "America/New_York", "America/Los_Angeles", "Europe/London", "Europe/Berlin", "UTC"].map((tz) => <option key={tz} value={tz} />)}</datalist>
     <div className={styles.workspace}><div className={styles.reviewDock}><details><summary><Sparkle aria-hidden="true" size={17} /><span>{t("范围回顾")}</span><span className={styles.reviewDockStatus}>{reviewBusy ? "正在回顾…" : activeReview ? reviewStale ? "旧整理 · 未核实" : "有待核对的整理" : "与 Agent 回顾当前范围"}</span></summary>{reviewPanel}</details></div><section ref={canvasRef} className={styles.canvas} aria-label={t("时间记录")} aria-busy={!value && !feed?.error} onClickCapture={captureClick}>
       {feed?.key === feedKey && feed.error ? <div className={styles.empty} role="alert"><CalendarBlank size={28} /><h2>{t("时间记录暂时无法读取")}</h2><p>{feedErrorText}</p><button type="button" onClick={refreshData}>{t("重新读取")}</button></div> : !value ? <div className={styles.empty} role="status"><span className={styles.loadingDot} /><p>{t("正在整理这段时间…")}</p></div> : <>

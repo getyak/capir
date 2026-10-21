@@ -1,5 +1,4 @@
 "use client";
-import { useLayoutEffect, useRef } from "react";
 import type { TimeActivity } from "@talent-signal/contracts";
 import { CalendarBlank, ChatCircleDots, Globe, UserPlus, Clock, ArrowUpRight } from "@phosphor-icons/react";
 import { addDays, dateInZone, formatDay, formatTime, monthDays, scheduleSegments, TIME_KINDS, TIME_STATUSES, weekStart } from "@/lib/time-workspace";
@@ -44,10 +43,8 @@ export function weekHasClockChange(day: string, zone: string) {
 }
 export function TimeWeek({ activities, day, zone, selected, onSelect, onDay }: { activities: TimeActivity[]; day: string; zone: string; selected: string; onSelect: (a: TimeActivity) => void; onDay: (d: string) => void }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart(day), i));
-  const hoursViewport = useRef<HTMLDivElement>(null);
   const segments = days.map((d) => scheduleSegments(activities, d, zone));
   const startHour = Math.min(8, ...segments.flat().map((s) => Math.floor(s.start / 60)));
-  useLayoutEffect(() => { if (hoursViewport.current) hoursViewport.current.scrollTop = (8 - startHour) * 56; }, [day, zone, startHour]);
   if (weekHasClockChange(day, zone)) return <><p className={styles.notice}>本周有时钟调整，使用实际时间列表显示，避免重复时段产生歧义。</p><TimeTimeline activities={activities} selected={selected} zone={zone} onSelect={onSelect} /></>;
   const endHour = Math.max(19, ...segments.flat().map((s) => Math.ceil(s.end / 60)));
   const hours = Array.from({ length: endHour - startHour + 1 }, (_, i) => i + startHour);
@@ -55,7 +52,7 @@ export function TimeWeek({ activities, day, zone, selected, onSelect, onDay }: {
   return <div className={styles.weekScroller}><div className={styles.week} aria-label="周日程">
     <div className={styles.weekHeader}><span>时间</span>{days.map((d) => <button key={d} type="button" onClick={() => onDay(d)} data-selected={d === day}>{formatDay(d, { weekday: "short" })}<strong>{Number(d.slice(8))}</strong></button>)}</div>
     <div className={styles.weekPoints}><span>记录 / 全天</span>{days.map((d, i) => <div key={d} data-selected={d === day}>{dayRecords[i]!.length === 0 && segments[i]!.length === 0 ? <p className={styles.weekEmpty}>没有安排</p> : dayRecords[i]!.map((a) => <button type="button" key={a.id} onClick={() => onSelect(a)} title={a.title}><TimeActivityIcon kind={a.kind} /><span>{a.title}</span></button>)}</div>)}</div>
-    <div ref={hoursViewport} className={styles.weekHoursViewport} role="region" aria-label="时段网格，可滚动查看全天" tabIndex={0}><div className={styles.weekGrid} style={{ height: (endHour - startHour) * 56 }}><div className={styles.hourLabels}>{hours.map((h) => <span key={h} style={{ top: (h - startHour) * 56 }}>{String(h).padStart(2, "0")}:00</span>)}</div>
+    <div className={styles.weekHoursViewport} role="region" aria-label="时段网格"><div className={styles.weekGrid} style={{ height: (endHour - startHour) * 56 }}><div className={styles.hourLabels}>{hours.map((h) => <span key={h} style={{ top: (h - startHour) * 56 }}>{String(h).padStart(2, "0")}:00</span>)}</div>
       {days.map((d, i) => <div className={styles.weekColumn} key={d} data-selected={d === day}>{segments[i]!.map((s) => <button type="button" className={styles.weekEvent} data-kind={s.activity.kind} aria-pressed={selected === s.activity.id} key={s.activity.id} onClick={() => onSelect(s.activity)} style={{ top: (s.start / 60 - startHour) * 56, height: Math.max(22, (s.end - s.start) / 60 * 56), left: `calc(${s.lane / s.lanes * 100}% + 2px)`, width: `calc(${100 / s.lanes}% - 4px)` }} title={`${s.activity.title} · ${formatTime(s.activity.occurred_at, zone)}–${formatTime(s.activity.ends_at!, zone)}`}><span>{formatTime(s.activity.occurred_at, zone)}–{formatTime(s.activity.ends_at!, zone)}</span><strong>{s.activity.title}</strong></button>)}</div>)}
     </div></div>
   </div></div>;
