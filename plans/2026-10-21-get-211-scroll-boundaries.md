@@ -7,7 +7,8 @@ Sidebar, route chrome, and account footer stay stable; overflowing content has
 an explicit scroll owner. Time date/view/filter controls stay operable while
 reading. Preserve narrow screens, keyboard access, menus, test banners, and
 conversation reading continuity. No domain, authorization, backend, or native
-binary behavior is changed.
+binary behavior is changed by the UI fix. The required CI audit also needs a
+minimal compatible shared MCP SDK security upgrade, described below.
 
 ## Implementation
 
@@ -23,6 +24,15 @@ binary behavior is changed.
   independently.
 - Reduce unnecessary Today/Settings trailing padding and short-window spacing.
 
+## Required CI repair
+
+The complete production dependency audit rejected the existing MCP SDK 1.31.0
+for four upstream advisories. Upgrade the existing `^1.29.0` override to the
+minimal patched version 1.32.0, verified against the npm release/integrity
+metadata. Keep security gates unchanged and update the existing graph
+regression. This requires deploying the affected shared backend/Agent Host as
+well as Web from clean committed source. No new integrations are introduced.
+
 ## Evidence
 
 - Baseline: `98b9608dbe7774badba39afda91f265967e8552d`. Existing document heights
@@ -32,7 +42,9 @@ binary behavior is changed.
   product failure.
 - 93 focused host tests passed. Lint, typecheck, docs and architecture passed.
   Full Web run passed 2697 tests with one new-label i18n coverage failure;
-  corrected the label and passed the 52-test i18n/Time recheck. CI owns the
+  corrected the label and passed the 52-test i18n/Time recheck. The SDK repair
+  passed a fresh zero-advisory production audit, dependency security regressions,
+  and complete Agent/Agent Host checks. CI owns the
   complete current-commit rerun.
 - Real synthetic browser checks cover 1274x720, 1274x600, 900x600, 390x844,
   and 320x640: shell bounds, empty conversation edges, sticky Time controls,
@@ -50,7 +62,8 @@ binary behavior is changed.
 
 1. Commit and linked PR; all applicable checks on the latest PR commit.
 2. Normal merge and readback.
-3. Clean committed resident Web build/activation, exact live revision, protected
+3. Clean committed resident Web and backend/Agent Host build/activation, exact
+   live revisions, protected
    workspace and changed-behavior verification, and launchd restart recovery.
 4. Linear completion only after acceptance; stop and verify owned test cleanup.
 
