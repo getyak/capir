@@ -350,3 +350,73 @@ it("keeps reading the earlier messages when the send cannot be durably admitted 
     expect(host.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")?.value).toBe("Synthetic draft retained on failure");
   } finally { denied.mockRestore(); }
 });
+
+it.each(["fresh", "saved"])("respects a focused transcript control before native scroll/resize in the %s reader", async mode => {
+  let viewport = await open();
+  if (mode === "saved") {
+    await readAt(viewport, 340);
+    await leave();
+    viewport = await open();
+  }
+  // Controlled component metrics model the browser's chosen historical view;
+  // no scroll event has yet told the parent that native focus moved there.
+  viewport.scrollTop = 120;
+  const control = viewport.querySelector<HTMLElement>("summary,button,a[href]");
+  expect(control).not.toBeNull();
+  await act(async () => control!.focus());
+  height = 3000;
+  await resize();
+  expect(viewport.scrollTop).toBe(120);
+  expect(host.textContent).toContain("回到最新");
+  await leave();
+  expect((await open()).scrollTop).toBe(120);
+});
+
+it("keeps latest-follow when Tab only enters the transcript region itself", async () => {
+  const viewport = await open();
+  await act(async () => viewport.focus());
+  height = 3000;
+  await resize();
+  expect(viewport.scrollTop).toBe(2400);
+  expect(host.textContent).not.toContain("回到最新");
+});
+
+it("resumes latest-follow after the reader explicitly chooses Back to latest", async () => {
+  const viewport = await open();
+  viewport.scrollTop = 120;
+  await act(async () => viewport.querySelector<HTMLElement>("summary,button,a[href]")!.focus());
+  await resize();
+  const latest = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("回到最新"));
+  expect(latest).toBeDefined();
+  await act(async () => latest!.click());
+  height = 3000;
+  await resize();
+  expect(viewport.scrollTop).toBe(2400);
+  expect(host.textContent).not.toContain("回到最新");
+});
+
+it("keeps a focused control's near-bottom scroll from re-enabling follow before a dock resize", async () => {
+  const viewport = await open();
+  viewport.scrollTop = 1760; //40px from latest, inside the ordinary72px threshold.
+  await act(async () => {
+    viewport.querySelector<HTMLElement>("summary,button,a[href]")!.focus();
+    viewport.dispatchEvent(new Event("scroll", {bubbles:true}));
+  });
+  viewportHeight = 300;
+  await resize();
+  expect(viewport.scrollTop).toBe(1760);
+});
+
+it.each(["wheel", "touch", "scrollbar", "End"])("allows explicit %s scrolling to resume latest-follow after focused reading", async mode => {
+  const viewport = await open(); viewport.scrollTop = 120;
+  await act(async () => viewport.querySelector<HTMLElement>("summary,button,a[href]")!.focus());
+  await act(async () => {
+    if (mode === "wheel") viewport.dispatchEvent(new WheelEvent("wheel", {deltaY:100,bubbles:true}));
+    else if (mode === "touch") { viewport.dispatchEvent(new Event("touchstart", {bubbles:true})); viewport.dispatchEvent(new Event("touchmove", {bubbles:true})); }
+    else if (mode === "scrollbar") viewport.dispatchEvent(new Event("pointerdown", {bubbles:true}));
+    else viewport.dispatchEvent(new KeyboardEvent("keydown", {key:"End",bubbles:true}));
+    viewport.scrollTop = 1800;
+    viewport.dispatchEvent(new Event("scroll", {bubbles:true}));
+  });
+  height = 3000; await resize(); expect(viewport.scrollTop).toBe(2400);
+});

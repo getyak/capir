@@ -130,6 +130,7 @@ export function QueuedConversation(props: Props) {
   const [editValue, setEditValue] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [away, setAway] = useState(false);
+  const focusedReading = useRef(false);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
   useConversationAxis(viewport);
   const reading = useConversationReadingPosition({ viewportRef: viewport, contentRef: content, followsLatestRef: follows, onAwayChange: setAway,
@@ -255,7 +256,7 @@ export function QueuedConversation(props: Props) {
   };
   useEffect(() => {
     const node = content.current; const scroll = viewport.current; if (!node || !scroll) return;
-    const observer = new ResizeObserver(() => { if (reading.restoring.current) reading.restore(); else if (follows.current) scroll.scrollTop = scroll.scrollHeight; else setAway(true); });
+    const observer = new ResizeObserver(() => { if (reading.restoring.current) reading.restore(); else if (follows.current) scroll.scrollTop = scroll.scrollHeight; else setAway(!conversationNearBottom(scroll)); });
     observer.observe(node); observer.observe(scroll); return () => observer.disconnect();
   }, [reading]);
   useEffect(() => { if (chat.ready && chat.draft && props.initialDetail) document.getElementById("queued-conversation-composer")?.focus({ preventScroll: true }); /* Restore focus only at initial hydration. */
@@ -268,8 +269,8 @@ export function QueuedConversation(props: Props) {
     focusRequested.current = false;
     composer.focus({ preventScroll: true });
   }, [chat.ready, chat.unavailable, props.initialDetail]);
-  function latest() { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
-  async function send() { if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
+  function latest() { reading.cancelRestore(); focusedReading.current = false; userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
+  async function send() { if (await chat.submit()) { reading.cancelRestore(); focusedReading.current = false; userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
   function removeImage(attachmentId: string, trigger: HTMLButtonElement) {
     const composer = trigger.closest("[data-conversation-canvas]")?.querySelector<HTMLTextAreaElement>("#queued-conversation-composer");
     chat.removeAttachment(attachmentId);
@@ -315,7 +316,7 @@ export function QueuedConversation(props: Props) {
     </div></details></header>}
     <SessionRuntime key={`${props.chatBinding}:${id ?? "draft"}`} messages={projectedMessages} running={Boolean(activeVisible)}>
     <ThreadPrimitive.Root className={styles.runtimeRoot} data-session-runtime>
-    <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} scrollToBottomOnRunStart={false} className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onWheel={event => { reading.cancelRestore(); userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { reading.cancelRestore(); userScroll.current = true; }} onPointerDown={() => { reading.cancelRestore(); userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) { reading.cancelRestore(); userScroll.current = true; } if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (!reading.restoring.current && viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); reading.remember(); } }}>
+    <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} scrollToBottomOnRunStart={false} className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onFocusCapture={event => { if (event.target === event.currentTarget || !event.currentTarget.contains(event.target)) return; reading.cancelRestore(); focusedReading.current = true; userScroll.current = true; follows.current = false; reading.remember(); }} onWheel={event => { reading.cancelRestore(); focusedReading.current = false; userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { reading.cancelRestore(); userScroll.current = true; }} onTouchMove={() => { focusedReading.current = false; }} onPointerDown={event => { reading.cancelRestore(); if (event.target === event.currentTarget) focusedReading.current = false; userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) { reading.cancelRestore(); focusedReading.current = false; userScroll.current = true; } if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (!reading.restoring.current && viewport.current && userScroll.current) { const nearLatest = conversationNearBottom(viewport.current); const readingControl = focusedReading.current && document.activeElement !== viewport.current && viewport.current.contains(document.activeElement); follows.current = !readingControl && nearLatest; setAway(!nearLatest); reading.remember(); } }}>
       <div className={styles.content} ref={content}>
         {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><div><h2>把没聊完的，接着聊。</h2><p>带来一段聊天、一个人的近况，或一件还没结束的事。先理清，再决定留下什么。</p></div></div>}
         <ThreadPrimitive.Messages>{({ message }) => message.role === "user"
