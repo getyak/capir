@@ -30,6 +30,15 @@ navigation do not overwrite each other. Browser history changes dismiss clean st
 editors. Unsaved editors remain open until the user saves or explicitly closes them,
 even when tab-local storage is unavailable.
 
+On narrow Web screens, read-only person, Session and public-source records use
+a named modal detail with keyboard focus inside. Escape or explicit dismissal
+closes only the selected record and returns to its usable origin. Range filters
+and mutation recovery remain intact. Background reads keep the detail shell
+open while replacing private content with current loading, failure or coverage
+states; unread pages never prove that a record was removed. Desktop details
+remain beside the timeline. Schedule and meeting-draft editors retain their
+separate unsaved-input and uncertain-write protections.
+
 ## Today consumption
 
 Web and its shared Mac product window, and native iOS, consume the same

@@ -397,6 +397,157 @@ describe("review continuity", () => {
 });
 
 describe("keyboard focus return", () => {
+  function readOnlySession() {
+    return { ...timeFixtureActivity, kind: "session_activity" as const, id: `session_activity:${timeFixtureActivity.source_id}:2026-09-21`, title: "Synthetic session", summary: "One synthetic activity" };
+  }
+  function narrowViewport() {
+    let matches = true;
+    const listeners = new Set<() => void>();
+    vi.stubGlobal("matchMedia", () => ({ get matches() { return matches; }, addEventListener: (_: string, listener: () => void) => listeners.add(listener), removeEventListener: (_: string, listener: () => void) => listeners.delete(listener) }));
+    return (next: boolean) => { matches = next; listeners.forEach((listener) => listener()); };
+  }
+  it("opens a named narrow session dialog, preserves scope and returns to its clicked row", async () => {
+    narrowViewport(); const activity = readOnlySession();
+    mock.request.mockResolvedValue({ ...payload(), activities: [activity] });
+    mock.query += "&kind=session_activity&view=timeline"; await render();
+    const row = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.includes(activity.title))!;
+    await act(async () => row.querySelector("strong")!.click());
+    mock.query = window.location.search.slice(1); await render();
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.contains(document.activeElement)).toBe(true);
+    expect(document.getElementById(dialog!.getAttribute("aria-labelledby")!)?.textContent).toBe("记录详情");
+    const returnToRow = vi.spyOn(row, "focus");
+    await pressEscape(dialog!);
+    await flushFocus();
+    expect(returnToRow).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    mock.query = window.location.search.slice(1); await render(); await flushFocus();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(row);
+    expect(new URLSearchParams(mock.query).get("kind")).toBe("session_activity");
+    expect(new URLSearchParams(mock.query).get("day")).toBe("2026-09-21");
+    expect(new URLSearchParams(mock.query).has("item")).toBe(false);
+  });
+  it.each(["session_activity", "person_created", "public_source_update"] as const)("preserves the person timeline and authority for read-only %s", async (kind) => {
+    narrowViewport(); const activity = { ...readOnlySession(), kind, id: `${kind}:${timeFixtureActivity.source_id}`, person_id: timeFixtureActivity.source_id, authority: "unconfirmed" as const };
+    mock.query += `&item=${activity.id}`;
+    mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const dialog = document.querySelector('[role="dialog"]')!; expect(dialog).not.toBeNull();
+    expect(dialog.textContent).toContain("尚待核对");
+    const timeline = [...dialog.querySelectorAll("button")].find((b) => b.textContent === "查看这个人的时间线")!;
+    expect(timeline).toBeTruthy(); await act(async () => timeline.click());
+    const actual = new URLSearchParams(window.location.search);
+    expect(actual.get("person")).toBe(activity.person_id); expect(actual.get("range")).toBe("past7");
+    expect(actual.has("item")).toBe(false);
+  });
+  it("explains blocked person navigation inside deep-linked details and keeps the unsent draft", async () => {
+    narrowViewport(); const activity = { ...readOnlySession(), person_id: timeFixtureActivity.source_id };
+    rememberTimeEditorDraft("a", { id: timeFixtureSchedule.id, existing: true, base_revision: 1, expires: Date.now() + 60000, fields: { title: "Unsent edit", note: "Unsent note", person: "", start: "2026-09-21T01:00", end: "2026-09-21T01:30", zone: "UTC", allDay: false, kind: "meeting", reminder: "none", status: "planned" } });
+    mock.query += `&item=${activity.id}`; mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const dialog = document.querySelector('[role="dialog"]')!;
+    await act(async () => [...dialog.querySelectorAll("button")].find((b) => b.textContent === "查看这个人的时间线")!.click());
+    expect(dialog.textContent).toContain("请先恢复或放弃上次未保存的编辑。");
+    expect(new URLSearchParams(window.location.search).get("item")).toBe(activity.id);
+    expect(host.textContent).toContain("Unsent edit");
+  });
+  it("keeps the narrow dialog mounted during a background read without showing obsolete content", async () => {
+    narrowViewport(); const activity = readOnlySession();
+    mock.query += `&item=${activity.id}`;
+    mock.request.mockResolvedValueOnce({ ...payload(), activities: [activity] }); await render();
+    const dialog = document.querySelector('[role="dialog"]'); expect(dialog).not.toBeNull();
+    let resolve!: (value: unknown) => void;
+    mock.request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(dialog?.textContent).not.toContain(activity.summary);
+    expect(dialog?.textContent).toContain("正在整理这段时间…");
+    await act(async () => resolve({ ...payload(), activities: [] }));
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(dialog?.textContent).not.toContain(activity.summary);
+    await act(async () => dialog!.querySelector<HTMLButtonElement>('button[aria-label="关闭详情"]')!.click());
+    mock.query = window.location.search.slice(1); await render(); await flushFocus();
+    expect(document.activeElement).toBe(addButton());
+  });
+  it("keeps IME Escape in the session dialog and clears it on session expiry without returning focus", async () => {
+    narrowViewport(); const activity = readOnlySession(); mock.query += `&item=${activity.id}`;
+    mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const dialog = document.querySelector('[role="dialog"]')!; expect(dialog).not.toBeNull();
+    await pressEscape(dialog, { composing: true });
+    expect(new URLSearchParams(window.location.search).get("item")).toBe(activity.id);
+    await pressEscape(dialog, { ime229: true });
+    expect(new URLSearchParams(window.location.search).get("item")).toBe(activity.id);
+    const focus = vi.spyOn(HTMLElement.prototype, "focus"); focus.mockClear();
+    await act(async () => window.dispatchEvent(new Event(WORKSPACE_SESSION_EXPIRED_EVENT)));
+    await flushFocus();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.textContent).toContain("请重新登录");
+    expect(focus).not.toHaveBeenCalled();
+  });
+  it("recovers a failed refresh inside the same dialog and distinguishes incomplete coverage", async () => {
+    narrowViewport(); const activity = readOnlySession(); mock.query += `&item=${activity.id}`;
+    mock.request.mockResolvedValueOnce({ ...payload(), activities: [activity] }); await render();
+    const dialog = document.querySelector('[role="dialog"]')!;
+    mock.request.mockRejectedValueOnce(new Error("Backend unavailable"));
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(dialog.querySelector('[role="alert"]')?.textContent).toBe("Backend unavailable");
+    expect(dialog.textContent).not.toContain(activity.summary);
+    mock.request.mockResolvedValueOnce({ ...payload(), activities: [], complete: false, next_cursor: "next" });
+    await act(async () => [...dialog.querySelectorAll("button")].find((b) => b.textContent === "重新读取")!.click());
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(dialog.textContent).toContain("当前只显示已读取的记录，不能据此判断其余时段为空。");
+    expect(dialog.textContent).not.toContain("这份记录已不在当前范围。");
+  });
+  it("returns to the same activity after refresh replaces its original DOM row", async () => {
+    narrowViewport(); const activity = readOnlySession();
+    mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const oldRow = host.querySelector<HTMLButtonElement>("[data-time-activity-id]")!;
+    await act(async () => oldRow.click()); mock.query = window.location.search.slice(1); await render();
+    let resolve!: (value: unknown) => void;
+    mock.request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(oldRow.isConnected).toBe(false);
+    await act(async () => resolve({ ...payload(), activities: [activity] }));
+    const newRow = host.querySelector<HTMLButtonElement>("[data-time-activity-id]")!;
+    expect(newRow).not.toBe(oldRow);
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="关闭详情"]')!.click());
+    mock.query = window.location.search.slice(1); await render(); await flushFocus();
+    expect(document.activeElement).toBe(newRow);
+  });
+  it("keeps composition Escape and moves focus into desktop details across the breakpoint", async () => {
+    const resize = narrowViewport(); const activity = readOnlySession(); mock.query += `&item=${activity.id}`;
+    mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const dialog = document.querySelector('[role="dialog"]')!;
+    await act(async () => dialog.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+    await pressEscape(dialog);
+    expect(new URLSearchParams(window.location.search).get("item")).toBe(activity.id);
+    await act(async () => dialog.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
+    await act(async () => resize(false)); await flushFocus();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement?.textContent).toBe("记录详情");
+    expect(new URLSearchParams(window.location.search).get("item")).toBe(activity.id);
+    await act(async () => resize(true));
+    expect(document.querySelector('[role="dialog"]')?.contains(document.activeElement)).toBe(true);
+  });
+  it("does not return focus to the old account or after history dismisses read-only details", async () => {
+    narrowViewport(); const activity = readOnlySession(); mock.query += `&item=${activity.id}`;
+    mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const dialog = document.querySelector('[role="dialog"]')!;
+    const focus = vi.spyOn(HTMLElement.prototype, "focus"); focus.mockClear();
+    mock.query = "day=2026-09-21&tz=UTC";
+    await act(async () => { nativeReplace(null, "", `/workspace/meetings?${mock.query}`); window.dispatchEvent(new PopStateEvent("popstate")); });
+    await render(); await flushFocus();
+    expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(focus).not.toHaveBeenCalled();
+    mock.query += `&item=${activity.id}`; await render();
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[role="dialog"] button[aria-label="关闭详情"]')!.click();
+      root.render(createElement(TimeWorkspace, { people: [], peopleError: null, binding: "b", legacyDraft: null }));
+    });
+    focus.mockClear(); await flushFocus(); expect(focus).not.toHaveBeenCalled();
+    expect(dialog.isConnected).toBe(false);
+  });
   it("returns focus to Add after Escape closes a blank new editor", async () => {
     await render();
     const add = addButton();
