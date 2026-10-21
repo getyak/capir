@@ -2,7 +2,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowSquareOut, CaretLeft, CaretRight, DownloadSimple, X } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { ConversationImageManifest } from "@talent-signal/contracts";
 
@@ -44,9 +44,8 @@ function imageKey(images: readonly ConversationImageManifest[]): string {
  * indefinite loading placeholder.
  */
 export function ConversationImageStrip(props: Props) {
-  const [attempt, setAttempt] = useState(0);
-  const identity = JSON.stringify([props.scope, props.sessionId, props.messageId, props.binding, props.local, imageKey(props.images), attempt]);
-  return <LoadedConversationImageStrip {...props} key={identity} onRetry={() => setAttempt((value) => value + 1)} />;
+  const identity = JSON.stringify([props.scope, props.sessionId, props.messageId, props.binding, props.local, imageKey(props.images)]);
+  return <LoadedConversationImageStrip {...props} key={identity} />;
 }
 
 function LoadedConversationImageStrip({
@@ -57,8 +56,13 @@ function LoadedConversationImageStrip({
   binding,
   local,
   compact = false,
-  onRetry,
-}: Props & { onRetry: () => void }) {
+}: Props) {
+  const [attempt, setAttempt] = useState(0);
+  const [reading, setReading] = useState(true);
+  const [recoveryId, setRecoveryId] = useState<string | null>(null);
+  const readBusy = useRef(true);
+  const fetched = useRef(false);
+  const decodedOrFailed = useRef(images.map(() => false));
   const [urls, setUrls] = useState<Array<string | null>>(() => images.map(() => null));
   const [failed, setFailed] = useState<boolean[]>(() => images.map(() => false));
   const [expanded, setExpanded] = useState(false);
@@ -75,7 +79,13 @@ function LoadedConversationImageStrip({
   const stripRef = useRef<HTMLDivElement | null>(null);
   const keys = imageKey(images);
 
-  const markFailed = (position: number) => {
+  const finishRead = () => {
+    if (!fetched.current || !decodedOrFailed.current.every(Boolean)) return;
+    readBusy.current = false;
+    setReading(false);
+  };
+  const markFailed = (position: number, expectedUrl?: string) => {
+    if (expectedUrl && current.current[position] !== expectedUrl) return;
     const url = current.current[position];
     if (url) {
       URL.revokeObjectURL(url);
@@ -84,6 +94,13 @@ function LoadedConversationImageStrip({
       setUrls((previous) => previous.map((value, i) => (i === position ? null : value)));
     }
     setFailed((previous) => previous.map((value, i) => (i === position ? true : value)));
+    decodedOrFailed.current[position] = true;
+    finishRead();
+  };
+  const markDecoded = (position: number, url: string) => {
+    if (current.current[position] !== url) return;
+    decodedOrFailed.current[position] = true;
+    finishRead();
   };
 
   /** Replace one object URL, revoking the bytes it supersedes immediately. */
@@ -94,6 +111,7 @@ function LoadedConversationImageStrip({
       created.current = created.current.filter((entry) => entry !== previous);
     }
     current.current[position] = url;
+    decodedOrFailed.current[position] = false;
     created.current.push(url);
     setUrls((previous) => previous.map((value, i) => (i === position ? url : value)));
   };
@@ -134,17 +152,29 @@ function LoadedConversationImageStrip({
     }
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     generation.current += 1;
     const run = generation.current;
     const alive = () => generation.current === run;
     for (const url of created.current) URL.revokeObjectURL(url);
     created.current = [];
     current.current = images.map(() => null);
+    readBusy.current = true;
+    fetched.current = false;
+    decodedOrFailed.current = images.map(() => false);
+    // Activity reconnects effects while retaining state. Revoked pixels and a
+    // prior recovery must become a new busy read before the strip is painted.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setReading(true);
+    setUrls(images.map(() => null));
+    setFailed(images.map(() => false));
     void (async () => {
-      if (local) { await loadLocal(alive); return; }
-      // Sequential readback keeps one quiet transcript-side fetch at a time.
-      for (let position = 0; position < images.length && alive(); position += 1) await loadServer(position, alive);
+      if (local) await loadLocal(alive);
+      else {
+        // Sequential readback keeps one quiet transcript-side fetch at a time.
+        for (let position = 0; position < images.length && alive(); position += 1) await loadServer(position, alive);
+      }
+      if (alive()) { fetched.current = true; finishRead(); }
     })();
     return () => {
       generation.current += 1;
@@ -153,7 +183,7 @@ function LoadedConversationImageStrip({
       current.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, messageId, scope, binding, local, keys]);
+  }, [sessionId, messageId, scope, binding, local, keys, attempt]);
 
   const measure = useCallback(() => {
     const image = imageRef.current;
@@ -174,6 +204,8 @@ function LoadedConversationImageStrip({
 
   if (images.length === 0) return null;
   const anyFailed = failed.some(Boolean);
+  const recoveryPosition = images.findIndex(image => image.attachment_id === recoveryId);
+  const recovered = !reading && !anyFailed && recoveryPosition >= 0 && Boolean(urls[recoveryPosition]);
   const layout = images.length === 1 ? "single" : expanded ? "expanded" : "folded";
 
   const openAt = (position: number, trigger: HTMLButtonElement) => {
@@ -195,6 +227,8 @@ function LoadedConversationImageStrip({
     else if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
   };
   const retryOne = (position: number) => {
+    readBusy.current = true; setReading(true);
+    decodedOrFailed.current[position] = false;
     setFailed((previous) => previous.map((value, i) => (i === position ? false : value)));
     const run = generation.current;
     const alive = () => generation.current === run;
@@ -202,6 +236,19 @@ function LoadedConversationImageStrip({
       if (local) await loadLocal(alive, position);
       else await loadServer(position, alive);
     })();
+  };
+  const retryAll = () => {
+    if (readBusy.current) return;
+    readBusy.current = true; fetched.current = false;
+    setReading(true);
+    setRecoveryId(images.find((_, position) => failed[position])?.attachment_id ?? recoveryId);
+    // Invalidate old responses and decoded-image events before the next render.
+    generation.current += 1;
+    for (const url of created.current) URL.revokeObjectURL(url);
+    created.current = []; current.current = images.map(() => null);
+    decodedOrFailed.current = images.map(() => false);
+    setUrls(images.map(() => null)); setFailed(images.map(() => false));
+    setAttempt(value => value + 1);
   };
   /** Open and download use only the mounted object URL on an explicit click. */
   const openOriginal = () => {
@@ -240,7 +287,7 @@ function LoadedConversationImageStrip({
                 type="button"
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt={image.file_name} onError={() => markFailed(position)} src={urls[position]!} />
+                <img alt={image.file_name} onError={() => markFailed(position, urls[position]!)} onLoad={() => markDecoded(position, urls[position]!)} src={urls[position]!} />
               </button>
             ) : (
               <span
@@ -267,11 +314,12 @@ function LoadedConversationImageStrip({
           </button>
         </div>
       ) : null}
-      {anyFailed ? (
-        <button className={styles.imageRetry} onClick={onRetry} type="button">
-          重新读取图片
+      {anyFailed || recoveryId ? (
+        <button aria-busy={reading || undefined} aria-disabled={reading || undefined} aria-label={recovered ? `已重新读取，查看原图 ${recoveryPosition + 1}` : undefined} className={styles.imageRetry} onClick={event => { if (readBusy.current) return; if (recovered) openAt(recoveryPosition, event.currentTarget); else retryAll(); }} type="button">
+          {recovered ? `查看原图 ${recoveryPosition + 1}` : recoveryId && reading ? "正在重新读取" : "重新读取图片"}
         </button>
       ) : null}
+      {recoveryId ? <span className="sr-only" role="status">{reading ? "正在重新读取图片。" : anyFailed ? "仍有图片暂时无法读取，可重试。" : "图片已重新读取，可查看原图。"}</span> : null}
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className={styles.imageBackdrop} />
@@ -314,7 +362,7 @@ function LoadedConversationImageStrip({
                 <img
                   alt={shown?.file_name ?? `原图 ${index + 1}`}
                   data-zoom={zoom}
-                  onError={() => markFailed(index)}
+                  onError={() => markFailed(index, urls[index]!)}
                   onLoad={measure}
                   ref={imageRef}
                   src={urls[index]!}

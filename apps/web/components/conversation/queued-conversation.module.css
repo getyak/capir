@@ -169,6 +169,7 @@
 .composerImageHint { margin:0 8px 6px; color:var(--muted); font-size:var(--ts-type-meta, 0.8125rem); }
 @media(max-width:640px) { .imageExpand,.imageRetry { min-height:44px; } .imageButton,.imagePlaceholder { width:84px; height:84px; } .images[data-layout="single"] { width:240px; } .images[data-layout="folded"] .imageItem { margin-left:-52px; } .imageNav[data-side="previous"] { left:8px; } .imageNav[data-side="next"] { right:8px; } .imageZoom { min-width:60px; } .imageZoom,.imageControl,.imageClose { min-height:44px; } .imageControl { width:44px; } .imageClose { width:44px; } .imageMeta { bottom:max(12px,env(safe-area-inset-bottom)); } }
 .imageRetry { margin-top:6px; border:0; background:none; color:var(--ink); text-decoration:underline; font-size: var(--ts-type-nav, 0.875rem); padding:4px 0; cursor:pointer; min-height: 44px; }
+.imageRetry[aria-disabled="true"] { color:var(--muted); cursor:wait; }
 
 /* Brief one-shot seam for an observed run that just completed or needs review.
    Vermilion is reserved for this consequence seam; it plays exactly once. */

@@ -7,7 +7,7 @@
 // open/download with the original file name on explicit clicks, blank-space
 // close without image/control close, honest retryable failures with no
 // renumbering, and object URL revocation on unmount.
-import { act, createElement } from "react";
+import { Activity, act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -127,6 +127,177 @@ function dialogImage(): HTMLImageElement {
 function positionText(): string {
   return dialog().querySelector(`.${styles.imagePosition}`)?.textContent ?? "";
 }
+
+// Host protocol fixture only: happy-dom does not decode these synthetic bytes.
+// The protected browser checks use the actual valid PNG and natural dimensions.
+async function decodeThumbnails(): Promise<void> {
+  await act(async () => {
+    for (const image of document.querySelectorAll<HTMLImageElement>("ul img")) {
+      Object.defineProperties(image, { naturalWidth: { value:480, configurable:true }, naturalHeight: { value:240, configurable:true } });
+      image.dispatchEvent(new window.Event("load"));
+    }
+  });
+}
+
+it("keeps one focused retry control through pending read and decoded recovery, then opens the exact image", async () => {
+  fetcher.mockResolvedValueOnce(new Response("unavailable", {status:500}));
+  await renderStrip({images:[imageManifest(0)]});
+  const retry = button("重新读取图片"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+  await act(async () => { retry.click(); retry.click(); }); await flush();
+  expect(retry.isConnected).toBe(true); expect(document.activeElement).toBe(retry);
+  expect(retry.disabled).toBe(false); expect(retry.getAttribute("aria-busy")).toBe("true");
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  finish(new Response(pngBytes())); await flush();
+  expect(retry.getAttribute("aria-busy")).toBe("true"); // Blob arrival is not pixel recovery.
+  await decodeThumbnails();
+  expect(document.activeElement).toBe(retry);
+  expect(retry.getAttribute("aria-label")).toBe("已重新读取，查看原图 1");
+  await act(async () => retry.click()); await flush();
+  expect(dialogImage().alt).toBe("photo-1.png");
+  await act(async () => document.activeElement?.dispatchEvent(new window.KeyboardEvent("keydown", {key:"Escape",bubbles:true,cancelable:true}))); await flush();
+  expect(document.activeElement).toBe(retry);
+});
+
+it("keeps the same control retryable after a repeated read failure without claiming recovery", async () => {
+  fetcher.mockResolvedValue(new Response("unavailable", {status:500}));
+  await renderStrip({images:[imageManifest(0)]});
+  const retry = button("重新读取图片"); retry.focus();
+  await act(async () => retry.click()); await flush();
+  expect(retry.isConnected).toBe(true); expect(document.activeElement).toBe(retry);
+  expect(retry.getAttribute("aria-busy")).not.toBe("true");
+  expect(retry.textContent).toBe("重新读取图片");
+  expect(document.body.textContent).not.toContain("图片已重新读取");
+});
+
+it("does not steal a user's moved focus when the retry finishes decoding", async () => {
+  fetcher.mockResolvedValueOnce(new Response("unavailable", {status:500}));
+  await renderStrip({images:[imageManifest(0)]});
+  const retry = button("重新读取图片"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+  await act(async () => retry.click()); await flush();
+  const other = document.createElement("button"); document.body.append(other); other.focus();
+  try {
+    finish(new Response(pngBytes())); await flush(); await decodeThumbnails();
+    expect(document.activeElement).toBe(other);
+    expect(retry.getAttribute("aria-label")).toBe("已重新读取，查看原图 1");
+  } finally { other.remove(); }
+});
+
+it("keeps a decoding failure retryable and revokes its failed bytes", async () => {
+  fetcher.mockResolvedValueOnce(new Response("unavailable", {status:500}));
+  await renderStrip({images:[imageManifest(0)]});
+  const retry = button("重新读取图片"); retry.focus();
+  await act(async () => retry.click()); await flush();
+  const image = document.querySelector<HTMLImageElement>("ul img")!, url = image.src;
+  await act(async () => image.dispatchEvent(new window.Event("error")));
+  expect(document.activeElement).toBe(retry);
+  expect(retry.textContent).toBe("重新读取图片");
+  expect(retry.getAttribute("aria-busy")).not.toBe("true");
+  expect(revokedUrls).toContain(url);
+  expect(document.body.textContent).not.toContain("图片已重新读取");
+});
+
+it("retries local bytes in the same scope without using the server proxy", async () => {
+  setConversationImageStoreForTest(storeWith([], {getThrows:true}));
+  await renderStrip({images:[imageManifest(0)],local:true});
+  const retry = button("重新读取图片"); retry.focus();
+  setConversationImageStoreForTest(storeWith(records(pngBytes())));
+  await act(async () => retry.click()); await flush(); await decodeThumbnails();
+  expect(document.activeElement).toBe(retry);
+  expect(retry.getAttribute("aria-label")).toBe("已重新读取，查看原图 1");
+  expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("preserves expansion and manifest order, recovering the first failed attachment rather than the first image", async () => {
+  let fail = true;
+  fetcher.mockImplementation((url: string) => {
+    if (url.endsWith("/1") && fail) { fail = false; return Promise.resolve(new Response("unavailable", {status:500})); }
+    return Promise.resolve(new Response(pngBytes()));
+  });
+  await renderStrip({images:[imageManifest(0),imageManifest(1),imageManifest(2)]}); await decodeThumbnails();
+  await act(async () => button("展开图片").click());
+  const retry = button("重新读取图片"); retry.focus(); const previousUrls = [...createdUrls];
+  await act(async () => retry.click()); await flush();
+  expect(document.querySelector("[data-layout='expanded']")).not.toBeNull();
+  await decodeThumbnails();
+  expect(document.activeElement).toBe(retry);
+  expect(retry.getAttribute("aria-label")).toBe("已重新读取，查看原图 2");
+  expect([...document.querySelectorAll("ul img")].map(e => e.getAttribute("alt"))).toEqual(["photo-1.png","photo-2.png","photo-3.png"]);
+  expect(previousUrls.every(url => revokedUrls.includes(url))).toBe(true);
+  await act(async () => retry.click()); await flush();
+  expect(dialogImage().alt).toBe("photo-2.png"); expect(positionText()).toBe("2 / 3");
+});
+
+it.each(["binding", "scope", "sessionId", "messageId", "images", "local", "unmount"] as const)("discards a pending retry across %s ownership changes", async (kind) => {
+  const base = {binding:"chat-binding",scope:"a".repeat(64),sessionId:SESSION,messageId:MESSAGE,images:[imageManifest(0)],local:false};
+  fetcher.mockResolvedValueOnce(new Response("unavailable", {status:500}));
+  await renderStrip({images:base.images});
+  const retry = button("重新读取图片"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+  await act(async () => retry.click()); await flush();
+  if (kind === "unmount") { await act(async () => root?.unmount()); root = null; }
+  else {
+    const next = {...base};
+    if (kind === "images") next.images = [imageManifest(1, "new-owner.png")];
+    else if (kind === "local") { next.local = true; setConversationImageStoreForTest(storeWith(records(pngBytes()))); }
+    else next[kind] = kind === "scope" ? "b".repeat(64) : "new-owner";
+    await act(async () => root?.render(createElement(ConversationImageStrip,next))); await flush(); await decodeThumbnails();
+  }
+  expect(retry.isConnected).toBe(false);
+  const count = createdUrls.length;
+  const other = document.createElement("button"); document.body.append(other); other.focus();
+  try {
+    finish(new Response(pngBytes())); await flush();
+    expect(createdUrls).toHaveLength(count);
+    expect(document.activeElement).toBe(other);
+    expect(document.body.textContent).not.toContain("图片已重新读取，可查看原图");
+  } finally { other.remove(); }
+});
+
+it("discards late local retry bytes after the message switches to server history", async () => {
+  setConversationImageStoreForTest(storeWith([], {getThrows:true}));
+  await renderStrip({images:[imageManifest(0)],local:true});
+  let finish!: (records: DurableConversationImage[]) => void;
+  setConversationImageStoreForTest({...storeWith([]), get: () => new Promise(resolve => { finish = resolve; })});
+  await act(async () => button("重新读取图片").click()); await flush();
+  await act(async () => root?.render(createElement(ConversationImageStrip, {binding:"chat-binding",scope:"a".repeat(64),sessionId:SESSION,messageId:MESSAGE,images:[imageManifest(0)],local:false})));
+  await flush(); await decodeThumbnails();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  const serverUrl = document.querySelector<HTMLImageElement>("ul img")!.src;
+  finish(records(pngBytes())); await flush();
+  expect(document.querySelector<HTMLImageElement>("ul img")!.src).toBe(serverUrl);
+  expect(createdUrls).toEqual([serverUrl]);
+});
+
+it("restarts a retained Activity read honestly before it can reuse a recovered control", async () => {
+  const props = {binding:"chat-binding",scope:"a".repeat(64),sessionId:SESSION,messageId:MESSAGE,images:[imageManifest(0)],local:false};
+  mount = document.createElement("div"); document.body.append(mount); root = createRoot(mount);
+  const render = async (mode: "visible" | "hidden") => {
+    await act(async () => root?.render(<Activity mode={mode}><ConversationImageStrip {...props} /></Activity>));
+    await flush();
+  };
+  fetcher.mockResolvedValueOnce(new Response("unavailable", {status:500}));
+  await render("visible");
+  const retry = button("重新读取图片");
+  await act(async () => retry.click()); await flush(); await decodeThumbnails();
+  expect(retry.getAttribute("aria-label")).toBe("已重新读取，查看原图 1");
+  const previous = [...createdUrls];
+  await render("hidden");
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+  await render("visible");
+  expect(retry.isConnected).toBe(true);
+  expect(retry.getAttribute("aria-busy")).toBe("true");
+  expect(retry.getAttribute("aria-label") ?? "").not.toContain("已重新读取");
+  expect(document.querySelector("ul img")).toBeNull();
+  expect(previous.every(url => revokedUrls.includes(url))).toBe(true);
+  finish(new Response(pngBytes())); await flush(); await decodeThumbnails();
+  expect(retry.getAttribute("aria-label")).toBe("已重新读取，查看原图 1");
+});
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
