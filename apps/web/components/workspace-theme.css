@@ -1,4 +1,11 @@
 /* Authenticated host adapter: shared palette, no changes to public surfaces. */
+/* The viewport owns chrome; individual workspace content regions own scrolling.
+   Scope this to the mounted product so public pages retain document scrolling. */
+html:has(.quiet-workspace),
+html:has(.quiet-workspace) body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 .quiet-workspace {
   --background: var(--ts-panel-surface);
   --surface: var(--ts-panel-surface);

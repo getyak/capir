@@ -15,8 +15,12 @@
   font-size: 15px;
   margin: 0 auto;
   max-width: 1240px;
-  padding: 40px 30px 80px;
+  padding: 40px 30px;
   width: 100%;
+}
+
+@media (min-width: 761px) and (max-height: 720px) {
+  .page { padding-block: 24px; }
 }
 
 .layout {
@@ -954,7 +958,7 @@
 
 @media (max-width: 1000px) {
   .page {
-    padding: 28px 24px 64px;
+    padding: 28px 24px;
   }
   .layout {
     column-gap: 24px;

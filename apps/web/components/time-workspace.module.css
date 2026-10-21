@@ -15,6 +15,7 @@
 .header h1 { font-size: var(--workspace-title-size); font-weight: 600; line-height: 1.42; }
 .header p { color: var(--muted); font-size: var(--workspace-body-size); line-height: 1.6; margin-top: 6px; max-width: 62ch; }
 .eyebrow { color: var(--muted); font-size: var(--workspace-meta-size); }
+.controls { background: var(--background); position: sticky; top: 0; z-index: 10; padding-top: 12px; margin-top: -12px; }
 .toolbar { align-items: center; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 16px; padding: 0 0 18px; }
 .dateNavigation { align-items: center; display: flex; flex: 1 1 auto; gap: 4px; }
 .dateNavigation>button { background: transparent; border-color: transparent; color: var(--muted-strong); }
@@ -46,7 +47,7 @@
 .filters label { flex: 1 1 140px; }
 .customRange { align-items: end; display: flex; flex: 2 1 370px; gap: 8px; }
 .customRange label { flex: 1; }
-.workspace { border-top: 1px solid var(--line-soft); display: grid; grid-template-columns: minmax(0,1fr) 300px; min-height: 550px; }
+.workspace { border-top: 1px solid var(--line-soft); display: grid; grid-template-columns: minmax(0,1fr) 300px; min-height: 0; }
 .canvas { min-width: 0; padding: 5px 24px 0 0; }
 .inspector { border-left: 1px solid var(--line-soft); min-width: 0; padding: 28px 0 0 24px; }
 .dayGroup { margin-bottom: 26px; }
@@ -128,7 +129,7 @@
 .page .monthEvent span { color: var(--muted); font-size: var(--workspace-meta-size); font-variant-numeric: tabular-nums; }
 .page .monthEvent strong { font-size: var(--workspace-meta-size); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .page .moreInDay { background: transparent; border: 0; color: var(--muted); font-size: var(--workspace-meta-size); min-height: 30px; padding: 3px; }
-.weekScroller { border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; padding-top: 0; }.week { min-width: 580px; }
+.weekScroller { border: 1px solid var(--line); border-radius: 12px; overflow-x: auto; overscroll-behavior-x: none; padding-top: 0; }.week { min-width: 580px; }
 .weekHeader,.weekPoints,.weekGrid { display: grid; grid-template-columns: 48px repeat(7,minmax(0,1fr)); }
 .weekHeader { border-bottom: 1px solid var(--line); }.weekHeader>span { align-self: center; color: var(--muted); font-size: var(--workspace-meta-size); padding-left: 7px; }
 .page .weekHeader button { background: transparent; border: 0; border-radius: 0; color: var(--muted); flex-direction: column; font-size: var(--workspace-meta-size); gap: 4px; justify-content: center; min-height: 72px; padding: 12px 6px; }
@@ -140,7 +141,7 @@
 .page .weekPoints button:hover { background: var(--surface-muted); }
 .weekPoints svg { flex: 0 0 13px; width: 13px; }.weekPoints button>span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .weekEmpty { color: var(--muted); font-size: var(--workspace-meta-size); padding: 6px 3px; }
-.weekHoursViewport { max-height: min(52vh, 560px); overflow-y: auto; overscroll-behavior-y: contain; padding-top: 12px; }.weekGrid { margin-top: 0; }.hourLabels { position: relative; }.hourLabels span { color: var(--muted); font-size: var(--workspace-meta-size); position: absolute; transform: translateY(-50%); }
+.weekHoursViewport { padding-block: 12px; }.weekGrid { margin-top: 0; }.hourLabels { position: relative; }.hourLabels span { color: var(--muted); font-size: var(--workspace-meta-size); position: absolute; transform: translateY(-50%); }
 .weekColumn { background: repeating-linear-gradient(to bottom,var(--line-soft) 0,var(--line-soft) 1px,transparent 1px,transparent 56px); border-left: 1px solid var(--line-soft); position: relative; }
 .weekColumn[data-selected=true] { background-color: var(--surface-muted); }
 .page .weekEvent { align-items: start; background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; display: flex; flex-direction: column; gap: 2px; justify-content: start; min-height: 0; overflow: hidden; padding: 5px 8px; position: absolute; text-align: left; }
@@ -166,3 +167,13 @@
   .page .segmented button[aria-pressed=true],.page .quickRanges button[aria-pressed=true],.page .toolbarActions>button[aria-expanded=true] { background: Highlight; border-color: Highlight; color: HighlightText; forced-color-adjust: none; }
 }
 @media (prefers-reduced-motion: reduce) { .page *, .page *::before, .page *::after { animation: none !important; transition: none !important; } }
+
+/* Keep one vertical reading owner. Narrow calendars retain a readable width;
+ * horizontal gestures belong only to the calendar, with no horizontal bounce. */
+.workspace :is(button,a,input,select,textarea,summary,[tabindex]),
+.scopeBar button { scroll-margin-top: calc(var(--time-controls-height, 0px) + 12px); scroll-margin-bottom: 12px; }
+/* Filters may be taller than a short window; keep their controls reachable
+ * without allowing the sticky group to consume the entire reading viewport. */
+@media (max-height: 700px), (max-width: 640px) {
+  .controls .filters { max-height: max(100px, calc(100dvh - 500px)); overflow-y: auto; overscroll-behavior: none; }
+}

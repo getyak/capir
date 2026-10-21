@@ -7,7 +7,11 @@ overrides:
   # pins the minimal compatible patched release published on npm; registry
   # release metadata is authoritative for target availability.
   # https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-6qxp-vccf-f47h
-  "@modelcontextprotocol/sdk@^1.29.0": "1.31.0"
+  # https://github.com/advisories/GHSA-22jm-h49p-29qw
+  # https://github.com/advisories/GHSA-6prh-2h8m-c8cw
+  # https://github.com/advisories/GHSA-46jr-4wx8-v453
+  # https://github.com/advisories/GHSA-rvq5-wwqv-78pq
+  "@modelcontextprotocol/sdk@^1.29.0": "1.32.0"
   # https://github.com/honojs/hono/security/advisories/GHSA-hxh3-vqpv-xpqv
   # https://github.com/advisories/GHSA-5r4p-p66f-jhc7
   "hono@^4": "4.13.11"

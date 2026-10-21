@@ -17,7 +17,12 @@
 .main {
   margin: 0 auto;
   max-width: 1040px;
-  padding: 40px 40px 80px;
+  padding: 40px;
+}
+
+/* Preserve reading room in short desktop windows without a trailing blank scroll. */
+@media (min-width: 761px) and (max-height: 720px) {
+  .main { padding-block: 24px; }
 }
 
 .errorStack {
@@ -673,7 +678,7 @@
   }
 
   .main {
-    padding: 24px 24px 64px;
+    padding: 24px;
   }
 
   .todayGrid {
@@ -689,7 +694,7 @@
 
 @media (max-width: 760px) {
   .main {
-    padding: 20px 20px 56px;
+    padding: 20px;
   }
 
   .errorStack {
