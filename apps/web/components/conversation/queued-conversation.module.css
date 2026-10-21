@@ -240,3 +240,6 @@
 
 /* Editable text keeps the platform-safe size in a narrow viewport. */
 @media(max-width:640px) { .edit textarea, .composer > div[data-variant]:not([data-layout="inline"]) textarea { font-size:1rem; } }
+
+/* Saving remains focusable so its completion can return to the queue row. */
+.edit button[aria-disabled="true"] { color:var(--muted); cursor:wait; }

@@ -2,7 +2,7 @@
 
 import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Stop, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { conversationHome } from "@/lib/conversation-local";
 import {
@@ -128,6 +128,21 @@ export function QueuedConversation(props: Props) {
   } });
   const [editing, setEditing] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const queueRef = useRef<HTMLElement>(null);
+  const editFormRef = useRef<HTMLFormElement>(null);
+  const editReturn = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const entry = editReturn.current;
+    if (editing || !entry) return;
+    editReturn.current = null;
+    if (document.activeElement !== document.body) return;
+    const row = [...(queueRef.current?.querySelectorAll<HTMLElement>("[data-queue-entry]") ?? [])].find(element => element.dataset.queueEntry === entry);
+    const trigger = row?.querySelector<HTMLButtonElement>("[data-queue-edit]");
+    // A cancelled in-flight Save may still own the mutation lock. Its edit
+    // trigger is disabled; keep focus in this canvas's usable composer instead.
+    const target = trigger && !trigger.disabled ? trigger : queueRef.current?.closest("[data-conversation-canvas]")?.querySelector<HTMLTextAreaElement>("#queued-conversation-composer");
+    if (target && !target.disabled) target.focus({ preventScroll: true });
+  }, [editing]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [away, setAway] = useState(false);
   const focusedReading = useRef(false);
@@ -284,7 +299,17 @@ export function QueuedConversation(props: Props) {
       if (unhandled) router.replace("/workspace");
     }
   }
-  async function applyEdit(entry: string) { if (await chat.mutate({ kind: "edit", queue_entry_id: entry, objective: editValue.trim() })) setEditing(null); }
+  function closeEdit(entry: string, form: HTMLFormElement) {
+    if (form.contains(document.activeElement)) editReturn.current = entry;
+    setEditing(null);
+  }
+  async function applyEdit(entry: string, form: HTMLFormElement) {
+    if (chat.mutating) return;
+    const saved = await chat.mutate({ kind: "edit", queue_entry_id: entry, objective: editValue.trim() });
+    // A cancelled/replaced editor, navigation or account teardown no longer
+    // owns this completion. A moved focus also stays with the user's choice.
+    if (saved && form.isConnected && editFormRef.current === form) closeEdit(entry, form);
+  }
   // Escape pauses the queue while a run is live. IME composition owns Enter
   // and Escape: a composing key event is never an action.
   function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
@@ -330,8 +355,8 @@ export function QueuedConversation(props: Props) {
     <div className={styles.dock}>
       {away && <button className={styles.latest} onClick={latest}><ArrowDown size={15}/>回到最新</button>}
       {props.legacyRecovery && <LegacyRecoveryNotice key={props.legacyRecovery.sessionId} recovery={props.legacyRecovery}/>}
-      {queued.length > 0 && <section className={styles.queue} aria-label="可控补充"><div className={styles.queueHeading}><span>{paused ? "已暂停" : queued.some(entry => entry.steers_run_id && entry.steer_state !== "unsupported") ? "本次补充" : "接下来"}<small>{queued.length}</small></span>{paused && <button disabled={chat.mutating || Boolean(active) || queued.some(entry => entry.status !== "queued")} onClick={() => void chat.mutate({kind:"continue"})}>继续处理<ArrowUp size={13}/></button>}</div>
-        <ol>{queued.map((entry, index) => <li key={entry.queue_entry_id} data-status={entry.status}>{editing === entry.queue_entry_id ? <form className={styles.edit} onSubmit={event => { event.preventDefault(); void applyEdit(entry.queue_entry_id); }}><label htmlFor={`edit-${entry.queue_entry_id}`}>编辑待处理消息</label><textarea autoFocus id={`edit-${entry.queue_entry_id}`} value={editValue} maxLength={1000} onChange={event => setEditValue(event.target.value)}/><div><button type="button" onClick={() => setEditing(null)}>取消</button><button type="submit" disabled={!editValue.trim() || chat.mutating}>保存</button></div></form> : <><span className={styles.number}>{index + 1}</span><span className={styles.queueText}>{entry.host_result ? "MCP 结果已记录，继续原任务" : displayText(entry.objective, entry.images)}{entry.images?.length ? <ConversationImageStrip binding={props.chatBinding} compact images={entry.images} local={false} messageId={entry.message_id} scope={props.scope} sessionId={id ?? ""}/> : null}{entry.status === "queued" && (active || paused) && <small>{entry.steer_state === "unsupported" ? "这条消息将完整保留到下一任务" : entry.steers_run_id ? entry.steer_delivered ? "已并入当前任务" : entry.steer_state === "dispatching" ? "补充已冻结，正在并入当前任务" : "当前工具完成后并入本次任务" : active ? "完成或停止当前回复后处理" : "已暂停，继续后按此顺序处理"}</small>}{["failed", "interrupted"].includes(entry.status) && <small>{queueFailureText(entry.failure_code, Boolean(entry.images?.length))}</small>}</span><div className={styles.queueActions}>{entry.status === "queued" && entry.objective.trim() && !entry.host_result ? <button aria-label={`编辑第 ${index + 1} 条待处理消息`} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => { setEditing(entry.queue_entry_id); setEditValue(entry.objective); }}><PencilSimple size={16}/></button> : entry.status === "queued" ? null : <button disabled={chat.mutating} onClick={async () => { if (await chat.mutate({kind:"retry",queue_entry_id:entry.queue_entry_id})) await chat.mutate({kind:"continue"}); }}>重试</button>}{entry.status === "queued" && !entry.steers_run_id && (active || paused || index > 0) && <button className={styles.prioritize} disabled={chat.mutating} title={active ? "停止当前回复并优先处理这条" : "优先处理这条"} aria-label={`优先处理第 ${index + 1} 条待处理消息`} onClick={() => void prioritize(entry.queue_entry_id, index + 1)}><ArrowUp size={14}/>优先</button>}<button aria-label={`移除第 ${index + 1} 条待处理消息`} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => void chat.mutate({kind:"withdraw",queue_entry_id:entry.queue_entry_id})}><X size={16}/></button></div></>}</li>)}</ol>
+      {queued.length > 0 && <section ref={queueRef} className={styles.queue} aria-label="可控补充"><div className={styles.queueHeading}><span>{paused ? "已暂停" : queued.some(entry => entry.steers_run_id && entry.steer_state !== "unsupported") ? "本次补充" : "接下来"}<small>{queued.length}</small></span>{paused && <button disabled={chat.mutating || Boolean(active) || queued.some(entry => entry.status !== "queued")} onClick={() => void chat.mutate({kind:"continue"})}>继续处理<ArrowUp size={13}/></button>}</div>
+        <ol>{queued.map((entry, index) => <li key={entry.queue_entry_id} data-queue-entry={entry.queue_entry_id} data-status={entry.status}>{editing === entry.queue_entry_id ? <form ref={editFormRef} className={styles.edit} onSubmit={event => { event.preventDefault(); void applyEdit(entry.queue_entry_id, event.currentTarget); }}><label htmlFor={`edit-${entry.queue_entry_id}`}>编辑待处理消息</label><textarea autoFocus id={`edit-${entry.queue_entry_id}`} value={editValue} maxLength={1000} onChange={event => setEditValue(event.target.value)}/><div><button type="button" onClick={event => closeEdit(entry.queue_entry_id, event.currentTarget.form!)}>取消</button><button type="submit" aria-disabled={chat.mutating || undefined} aria-busy={chat.mutating || undefined} disabled={!editValue.trim()}>保存</button></div></form> : <><span className={styles.number}>{index + 1}</span><span className={styles.queueText}>{entry.host_result ? "MCP 结果已记录，继续原任务" : displayText(entry.objective, entry.images)}{entry.images?.length ? <ConversationImageStrip binding={props.chatBinding} compact images={entry.images} local={false} messageId={entry.message_id} scope={props.scope} sessionId={id ?? ""}/> : null}{entry.status === "queued" && (active || paused) && <small>{entry.steer_state === "unsupported" ? "这条消息将完整保留到下一任务" : entry.steers_run_id ? entry.steer_delivered ? "已并入当前任务" : entry.steer_state === "dispatching" ? "补充已冻结，正在并入当前任务" : "当前工具完成后并入本次任务" : active ? "完成或停止当前回复后处理" : "已暂停，继续后按此顺序处理"}</small>}{["failed", "interrupted"].includes(entry.status) && <small>{queueFailureText(entry.failure_code, Boolean(entry.images?.length))}</small>}</span><div className={styles.queueActions}>{entry.status === "queued" && entry.objective.trim() && !entry.host_result ? <button data-queue-edit aria-label={`编辑第 ${index + 1} 条待处理消息`} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => { setEditing(entry.queue_entry_id); setEditValue(entry.objective); }}><PencilSimple size={16}/></button> : entry.status === "queued" ? null : <button disabled={chat.mutating} onClick={async () => { if (await chat.mutate({kind:"retry",queue_entry_id:entry.queue_entry_id})) await chat.mutate({kind:"continue"}); }}>重试</button>}{entry.status === "queued" && !entry.steers_run_id && (active || paused || index > 0) && <button className={styles.prioritize} disabled={chat.mutating} title={active ? "停止当前回复并优先处理这条" : "优先处理这条"} aria-label={`优先处理第 ${index + 1} 条待处理消息`} onClick={() => void prioritize(entry.queue_entry_id, index + 1)}><ArrowUp size={14}/>优先</button>}<button aria-label={`移除第 ${index + 1} 条待处理消息`} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => void chat.mutate({kind:"withdraw",queue_entry_id:entry.queue_entry_id})}><X size={16}/></button></div></>}</li>)}</ol>
       </section>}
       {(chat.error || chat.draftConflict || chat.unavailable) && <div className={styles.notice} role="status">{chat.unavailable ? "这段对话已结束或登录状态发生变化，请重新打开工作台。" : chat.draftConflict ? <>另一处也修改了草稿，当前输入已保留。<button onClick={() => void chat.keepDraft()}>保留当前草稿</button></> : chat.error}</div>}
       {imageCount > 0 && <div className={styles.composerImages} aria-label="要发送的图片">
