@@ -25,16 +25,37 @@ export function writeConversationMessage(scope: string, session: string, message
   try { if (!target) return false; target.setItem(key(scope, session, `message:${message.id}`), JSON.stringify(message)); return true; } catch { return false; }
 }
 export function removeConversationMessage(scope: string, session: string, id: string, target = storage()) {
-  try { target?.removeItem(key(scope, session, `message:${id}`)); } catch { /* Best effort; replay still uses the same identity. */ }
+  try { if (!target) return false; target.removeItem(key(scope, session, `message:${id}`)); return target.getItem(key(scope, session, `message:${id}`)) === null; } catch { return false; }
+}
+/** One immutable, expiring receipt per explicit withdrawal; never inferred from absence. */
+export function writeConversationWithdrawal(scope: string, session: string, operation: string, messageIds: readonly string[], expiresAt: number, target = storage()): boolean {
+  if (!uuid.test(operation) || !messageIds.length || messageIds.length > 51 || new Set(messageIds).size !== messageIds.length || messageIds.some(id => !uuid.test(id)) || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + DAY) return false;
+  try { if (!target) return false; target.setItem(key(scope, session, `withdrawal:${operation}`), JSON.stringify({ messageIds, expiresAt })); return true; } catch { return false; }
+}
+export function readConversationWithdrawnIds(scope: string, session: string, target = storage()): Set<string> {
+  const ids = new Set<string>();
+  try {
+    if (!target) return ids;
+    const prefix = key(scope, session, "withdrawal:");
+    for (let i = 0; i < target.length; i++) {
+      const entryKey = target.key(i); if (!entryKey?.startsWith(prefix)) continue;
+      const item = parse<{ messageIds: string[]; expiresAt: number }>(target.getItem(entryKey));
+      if (!item || !Array.isArray(item.messageIds) || !item.messageIds.length || item.messageIds.length > 51 || item.messageIds.some(id => typeof id !== "string" || !uuid.test(id)) || !Number.isFinite(item.expiresAt) || item.expiresAt <= Date.now() || item.expiresAt > Date.now() + DAY) continue;
+      for (const id of item.messageIds) ids.add(id);
+    }
+  } catch { /* Keep only validated receipt IDs already read. */ }
+  return ids;
 }
 export function readConversationMessages(scope: string, session: string, target = storage()): LocalMessage[] {
   const entries: LocalMessage[] = [];
+  const withdrawn = readConversationWithdrawnIds(scope, session, target);
   try {
     if (!target) return entries;
     const prefix = key(scope, session, "message:");
     for (let i = target.length - 1; i >= 0; i--) {
       const entryKey = target.key(i); if (!entryKey?.startsWith(prefix)) continue;
       const entry = parse<LocalMessage>(target.getItem(entryKey));
+      if (entry && withdrawn.has(entry.id)) continue;
       const imagesValid = entry?.images === undefined || (Array.isArray(entry.images) && entry.images.length > 0 && entry.images.length <= 10 && entry.images.every(image =>
         uuid.test(image.attachment_id) && typeof image.file_name === "string" && image.file_name.length > 0 && image.file_name.length <= 200 &&
         ["image/png", "image/jpeg", "image/webp"].includes(image.media_type) &&
@@ -68,6 +89,7 @@ export function clearConversationLocal(scope?: string, session?: string, target 
  */
 export function listConversationImageKeys(scope?: string, target = storage()): string[] {
   const keys: string[] = [];
+  const withdrawals = new Map<string, Set<string>>();
   try {
     if (!target) return keys;
     const prefix = scope ? `${PREFIX}${scope}:` : PREFIX;
@@ -80,7 +102,9 @@ export function listConversationImageKeys(scope?: string, target = storage()): s
       if (markerIndex < 0) continue;
       const owner = rest.slice(0, markerIndex);
       const entry = parse<LocalMessage>(target.getItem(entryKey));
-      if (entry && entry.images?.length && entry.expiresAt > Date.now()) {
+      const boundary = owner.lastIndexOf(":");
+      if (!withdrawals.has(owner)) withdrawals.set(owner, readConversationWithdrawnIds(owner.slice(0, boundary), owner.slice(boundary + 1), target));
+      if (entry && !withdrawals.get(owner)!.has(entry.id) && entry.images?.length && entry.expiresAt > Date.now()) {
         keys.push(`${owner}:${entry.id}`);
       }
     }

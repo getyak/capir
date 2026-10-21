@@ -23,6 +23,8 @@ export interface ConversationImageStore {
   put(key: string, images: readonly DurableConversationImage[]): Promise<boolean>;
   get(key: string): Promise<DurableConversationImage[]>;
   delete(key: string): Promise<void>;
+  /** Confirms the readwrite transaction completed, rather than best-effort disposal. */
+  deleteConfirmed?(key: string): Promise<boolean>;
   deletePrefix(prefix: string): Promise<void>;
   inventory(): Promise<Array<{ key: string; expiresAt: number }>>;
 }
@@ -109,6 +111,15 @@ export function createIndexedDbConversationImageStore(
       } catch {
         /* Best effort; an accepted message is already durable on the server. */
       }
+    },
+    async deleteConfirmed(key) {
+      try {
+        const db = await open();
+        const transaction = db.transaction(STORE_NAME, "readwrite");
+        transaction.objectStore(STORE_NAME).delete(key);
+        await transactionDone(transaction);
+        return true;
+      } catch { return false; }
     },
     async deletePrefix(prefix) {
       try {
@@ -244,6 +255,13 @@ export async function removeConversationImages(
   messageId: string,
 ): Promise<void> {
   await conversationImageStore()?.delete(conversationImageKey(scope, session, messageId));
+}
+
+export async function removeConversationImagesConfirmed(scope: string, session: string, messageId: string): Promise<boolean> {
+  const store = conversationImageStore();
+  if (!store?.deleteConfirmed) return false;
+  try { return await store.deleteConfirmed(conversationImageKey(scope, session, messageId)); }
+  catch { return false; }
 }
 
 export async function clearConversationImages(

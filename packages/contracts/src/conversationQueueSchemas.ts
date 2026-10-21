@@ -271,6 +271,9 @@ export const ConversationQueueAppliedSchema = Type.Object(
     queue_entry_id: Type.Union([id, Type.Null()]),
     run_id: Type.Union([id, Type.Null()]),
     status: Type.Union([ConversationQueueEntryStatusSchema, Type.Null()]),
+    // Explicit deletion authority from the withdrawal transaction, including
+    // unprocessed steering members. Older idempotent receipts may omit it.
+    withdrawn_message_ids: Type.Optional(Type.Array(id, { minItems: 1, maxItems: 51, uniqueItems: true })),
   },
   obj,
 );

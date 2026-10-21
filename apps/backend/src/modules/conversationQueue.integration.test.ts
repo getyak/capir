@@ -582,16 +582,47 @@ suite("durable conversation queue", () => {
         }),
       ).rejects.toMatchObject({ statusCode: 409 });
       const current = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
-      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+      const withdrawn = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
         kind: "withdraw",
         queue_entry_id: admitted.response.queue_entry_id,
         expected_revision: current.revision,
         idempotency_key: randomUUID(),
       });
+      expect(withdrawn.applied.withdrawn_message_ids).toEqual([admitted.response.message_id]);
       expect(await entryRow(seeded.sessionId, seeded.accountId)).toHaveLength(0);
     } finally {
       await removeProofAccount(seeded.accountId);
     }
+  });
+
+  it("returns exact withdrawn message identities and replays group removal", async () => {
+    const seeded = await seedSession();
+    try {
+      const admissions = [];
+      const requests = [];
+      for (const objective of ["Synthetic leader", "Synthetic unprocessed supplement", "Synthetic neighbour"]) {
+        const request = {
+          session_id: seeded.sessionId, message_id: randomUUID(), objective, idempotency_key: randomUUID(),
+        };
+        requests.push(request); admissions.push(await admitConversationQueueEntry(pool!, seeded.auth, request));
+      }
+      const [leader, supplement, neighbour] = admissions;
+      // Fixture only: no model run is needed to prove the transaction's group deletion receipt.
+      await pool!.query("UPDATE conversation_queue_entries SET steer_group_entry_id=$1 WHERE account_id=$2 AND id=$3", [leader!.response.queue_entry_id, seeded.accountId, supplement!.response.queue_entry_id]);
+      const request = { kind: "withdraw" as const, queue_entry_id: leader!.response.queue_entry_id,
+        expected_revision: (await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId)).revision, idempotency_key: randomUUID() };
+      const first = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, request);
+      expect(first.applied.withdrawn_message_ids).toEqual([leader!.response.message_id, supplement!.response.message_id].sort());
+      expect(first.snapshot.queued.map(row => row.message_id)).toEqual([neighbour!.response.message_id]);
+      const replay = await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, request);
+      expect(replay.replayed).toBe(true);
+      expect(replay.applied).toEqual(first.applied);
+      expect(replay.snapshot.queued.map(row => row.message_id)).toEqual([neighbour!.response.message_id]);
+      // An already in-flight duplicate can replay its old ACK, but cannot recreate a row.
+      expect((await admitConversationQueueEntry(pool!, seeded.auth, requests[0]!)).replayed).toBe(true);
+      for (const original of requests.slice(0, 2)) await expect(admitConversationQueueEntry(pool!, seeded.auth, { ...original, idempotency_key: randomUUID() })).rejects.toMatchObject({ code: "CONVERSATION_QUEUE_MESSAGE_WITHDRAWN" });
+      expect((await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId)).queued.map(row => row.message_id)).toEqual([neighbour!.response.message_id]);
+    } finally { await removeProofAccount(seeded.accountId); }
   });
 
   it("replays a successful queued edit idempotently and rejects a claimed edit", async () => {

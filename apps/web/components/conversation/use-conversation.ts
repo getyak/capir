@@ -15,12 +15,13 @@ import { sessionHumanMessages } from "@/lib/session-human-messages";
 import { workspaceSessionFetch } from "../workspace-session-request";
 import { validateAttachmentBatch } from "../contact-agent/capture-intake";
 import { acceptConversationPreview, acceptConversationSnapshot, ConversationFrames } from "@/lib/conversation-stream";
-import { clearConversationLocal, conversationExpiry, readConversationDraft, readConversationMessages, removeConversationMessage, writeConversationDraft, writeConversationMessage, type LocalMessage } from "@/lib/conversation-local";
+import { clearConversationLocal, conversationExpiry, readConversationDraft, readConversationMessages, readConversationWithdrawnIds, removeConversationMessage, writeConversationDraft, writeConversationMessage, writeConversationWithdrawal, type LocalMessage } from "@/lib/conversation-local";
 import {
   base64FromBlob,
   loadConversationImages,
   persistConversationImages,
   removeConversationImages,
+  removeConversationImagesConfirmed,
   sha256Hex,
   type DurableConversationImage,
 } from "@/lib/conversation-image-store";
@@ -107,7 +108,8 @@ export function useConversation(options: Options) {
     controller !== null && lifecycle.current === controller && !controller.signal.aborted, []);
 
   const storeMessages = useCallback((next: LocalMessage[]) => { local.current = next; setMessages(next); }, []);
-  // Canonical history is the only handoff that retires a local outbox row.
+  // Canonical history retires a local outbox row; an explicit withdrawal
+  // receipt separately authorizes deletion of exactly its message IDs.
   // Until its turn exists — carrying the same ordered image manifests — the
   // exact message identity and its local attachment bytes are the durable
   // evidence of what was sent. A server active/queued row only represents the
@@ -121,6 +123,23 @@ export function useConversation(options: Options) {
     const remaining = local.current.filter(message => { if (!settled.has(message.id)) return true; removeConversationMessage(scope, id, message.id); void removeConversationImages(scope, id, message.id); return false; });
     if (remaining.length !== local.current.length) storeMessages(remaining);
   }, [id, scope, storeMessages]);
+
+  async function retireWithdrawn(messageIds: readonly string[]) {
+    if (!id || !messageIds.length) return true;
+    const owner = lifecycle.current;
+    const removed = new Set(messageIds);
+    const metadataRemoved = messageIds.map(messageId => removeConversationMessage(scope, id, messageId)).every(Boolean);
+    storeMessages(local.current.filter(message => !removed.has(message.id)));
+    setHandoffEntries(current => Object.fromEntries(Object.entries(current).filter(([messageId]) => !removed.has(messageId))));
+    setHandoffPreviews(current => Object.fromEntries(Object.entries(current).filter(([messageId]) => !removed.has(messageId))));
+    setRunOutcome(current => Object.fromEntries(Object.entries(current).filter(([messageId]) => !removed.has(messageId))));
+    setReadbackStalled(current => current.filter(messageId => !removed.has(messageId)));
+    const images = await Promise.allSettled(messageIds.map(messageId => removeConversationImagesConfirmed(scope, id, messageId)));
+    if (!stillCurrent(owner)) return false;
+    const clean = metadataRemoved && images.every(result => result.status === "fulfilled" && result.value);
+    if (!clean) setError("队列已移除，但本机副本清理未完成，请恢复本机存储后核对。");
+    return clean;
+  }
 
   async function request(url: string, init: RequestInit = {}, binding = chatBinding) {
     const controller = lifecycle.current;
@@ -264,6 +283,8 @@ export function useConversation(options: Options) {
     if (sender.current || !id || !ready || unavailable) return;
     sender.current = true;
     const controller = lifecycle.current;
+    const stillOwned = (messageId: string) => local.current.some(message => message.id === messageId)
+      && !readConversationWithdrawnIds(scope, id).has(messageId);
     let didAdmit = false;
     try {
       for (;;) {
@@ -272,6 +293,7 @@ export function useConversation(options: Options) {
         if (!message || message.delivery !== "pending") break;
         const uploads = await uploadsFor(message);
         if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
+        if (!stillOwned(message.id)) { await retireWithdrawn([message.id]); continue; }
         if (message.images?.length && !uploads) {
           const uncertain = message.receiptUncertain !== false;
           updateMessage(message.id, { delivery: uncertain ? "unknown" : "rejected", error: uncertain ? "本机图片暂时无法读取，送达结果仍未确认。恢复连接后请核对。" : "本机图片数据已丢失，无法重发。请移除这条消息后重新选择图片。" });
@@ -279,9 +301,11 @@ export function useConversation(options: Options) {
         }
         updateMessage(message.id, { delivery: "sending", receiptUncertain: true, error: undefined });
         try {
+          if (!stillOwned(message.id)) { await retireWithdrawn([message.id]); continue; }
           const response = await request(queueUrl, { method: "POST", body: JSON.stringify({ session_id: id, message_id: message.id, idempotency_key: `web-queue:${message.id}`, objective: message.objective, time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(uploads && uploads.length ? { images: uploads } : {}) }) });
           const admission = await response.json();
           if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
+          if (!stillOwned(message.id)) { await retireWithdrawn([message.id]); continue; }
           if (typeof admission.memory_entry_capability === "string") {
             entryCapabilityRef.current = admission.memory_entry_capability;
             setEntryCapability(admission.memory_entry_capability);
@@ -293,6 +317,7 @@ export function useConversation(options: Options) {
         } catch (caught) {
           // No response is not a rejected message. Its immutable identity stays in the outbox.
           if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
+          if (!stillOwned(message.id)) { await retireWithdrawn([message.id]); continue; }
           const definitive = message.receiptUncertain === false && caught instanceof RequestError && caught.status >= 400 && caught.status < 500 && caught.status !== 408;
           updateMessage(message.id, { delivery: definitive ? "rejected" : "unknown", receiptUncertain: !definitive, error: definitive ? caught.message : "送达结果尚未确认，可核对并重试。" });
           if (!controller || controller.signal.aborted) break;
@@ -339,6 +364,7 @@ export function useConversation(options: Options) {
     const value = recoveredDraft?.value ?? initial?.composer_draft ?? "";
     draftRef.current = value; setDraft(value);
     storeMessages(readConversationMessages(scope, id).map(message => message.delivery === "sending" ? { ...message, delivery: "unknown" } : message));
+    void retireWithdrawn([...readConversationWithdrawnIds(scope, id)]);
     loaded.current = true; setReady(true);
     });
     function changed(event: StorageEvent) {
@@ -346,6 +372,7 @@ export function useConversation(options: Options) {
       const other = readConversationDraft(scope, id!);
       if (other && other.writer !== writer.current && other.updatedAt > draftStamp.current && other.value !== draftRef.current) setDraftConflict(true);
       const found = readConversationMessages(scope, id!);
+      void retireWithdrawn([...readConversationWithdrawnIds(scope, id!)]);
       const own = new Map(local.current.map(item => [item.id, item]));
       for (const message of found) if (!own.has(message.id)) own.set(message.id, { ...message, delivery: message.delivery === "pending" || message.delivery === "sending" ? "unknown" : message.delivery });
       storeMessages([...own.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
@@ -564,6 +591,9 @@ export function useConversation(options: Options) {
   }
   async function mutate(input: Omit<ConversationQueueMutationRequest, "expected_revision" | "idempotency_key"> & { objective?: string; queue_entry_id?: string; run_id?: string }) {
     if (mutationBusy.current || !snapshotRef.current) return false;
+    const owner = lifecycle.current;
+    const withdrawnEntry = input.kind === "withdraw" ? snapshotRef.current.queued.find(entry => entry.queue_entry_id === input.queue_entry_id) : null;
+    if (input.kind === "withdraw" && !withdrawnEntry) { setError("队列刚刚有变化，请核对后再操作。"); return false; }
     mutationBusy.current = true; setMutating(true); setError("");
     try {
       const operation = crypto.randomUUID();
@@ -578,8 +608,22 @@ export function useConversation(options: Options) {
         if (latest.active?.run_id !== input.run_id) return true;
         response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: latest.revision, idempotency_key: operation }) });
       }
-      const body = await response.json(); commitSnapshot(body.snapshot); return true;
+      const body = await response.json();
+      if (!stillCurrent(owner)) return false;
+      commitSnapshot(body.snapshot);
+      if (input.kind === "withdraw") {
+        const ids = body.applied?.withdrawn_message_ids;
+        if (body.applied?.kind !== "withdraw" || body.applied.queue_entry_id !== input.queue_entry_id || body.applied.status !== null || body.applied.run_id !== null || body.snapshot?.session_id !== id || !Array.isArray(ids) || !ids.includes(withdrawnEntry!.message_id) || [body.snapshot.active, ...(body.snapshot.queued ?? [])].some(entry => entry?.queue_entry_id === input.queue_entry_id)) {
+          setError("撤销回执尚不完整，本机内容已保留，请核对后再操作。"); return false;
+        }
+        if (!writeConversationWithdrawal(scope, id!, operation, ids, expiry())) {
+          setError("队列已移除，但本机撤销记录未能保存，请恢复本机存储后核对。"); return false;
+        }
+        return await retireWithdrawn(ids);
+      }
+      return true;
     } catch (caught) {
+      if (!stillCurrent(owner)) return false;
       refuse(caught); setError(caught instanceof RequestError && caught.status === 409 ? "队列刚刚有变化，已更新。请核对后再操作。" : "操作结果尚未确认，已保留内容。请核对队列后重试。");
       try { const response = await request(queueUrl); const next = await response.json(); commitSnapshot(next); } catch { /* Keep the last known state. */ }
       return false;

@@ -115,6 +115,11 @@ export async function admitConversationQueueEntry(
       return { response: replay, replayed: true };
     }
     await lockConversationQueueSession(client, request.session_id);
+    const withdrawn = await client.query(
+      "SELECT 1 FROM conversation_queue_operations WHERE account_id=$1 AND applied->>'kind'='withdraw' AND applied->'withdrawn_message_ids' ? $2 LIMIT 1",
+      [auth.accountId, request.message_id],
+    );
+    if (withdrawn.rowCount) throw new ApiError(409, "CONVERSATION_QUEUE_MESSAGE_WITHDRAWN", "This message was explicitly withdrawn. Send a new message for a new intention.");
     const existing = (
       await client.query<ConversationQueueEntryRow>(
         "SELECT * FROM conversation_queue_entries WHERE account_id=$1 AND session_id=$2 AND message_id=$3",
@@ -472,12 +477,13 @@ async function applyMutation(
     // Withdrawing a task message removes its remaining steering messages
     // together (they are one unprocessed intention). Terminal folded work is
     // never reachable here: completed and cancelled rows are not withdrawable.
-    await client.query(
-      "DELETE FROM conversation_queue_entries WHERE account_id=$1 AND (id=$2 OR steer_group_entry_id=$2)",
+    const withdrawn = await client.query<{ message_id: string }>(
+      "DELETE FROM conversation_queue_entries WHERE account_id=$1 AND (id=$2 OR steer_group_entry_id=$2) RETURNING message_id",
       [auth.accountId, row.id],
     );
     await bumpConversationQueueState(client, auth.accountId, sessionId);
-    return { kind: "withdraw", queue_entry_id: row.id, run_id: null, status: null };
+    return { kind: "withdraw", queue_entry_id: row.id, run_id: null, status: null,
+      withdrawn_message_ids: withdrawn.rows.map(entry => entry.message_id).sort() };
   }
   // retry: an explicit action that re-queues one entry. Only an explicit
   // Continue clears the pause, so a failed old message can never move silently
