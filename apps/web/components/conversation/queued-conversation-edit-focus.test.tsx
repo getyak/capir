@@ -41,6 +41,28 @@ const button = (text: string) => [...form().querySelectorAll("button")].find(el 
 async function open(position = 1) { edit(position).focus(); await act(async () => edit(position).click()); }
 async function save() { button("保存").focus(); await act(async () => button("保存").click()); }
 
+it("keeps Continue typing focus in its own composer through a failed request", async () => {
+  const foreign = document.createElement("textarea"); foreign.id = "queued-conversation-composer"; document.body.prepend(foreign);
+  try {
+    const trigger = [...host.querySelectorAll("button")].find(button => button.textContent === "继续处理")!;
+    trigger.focus(); await act(async () => trigger.click());
+    const own = host.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+    expect(document.activeElement).toBe(own);
+    expect(trigger.disabled).toBe(true);
+    expect(mutation.calls).toEqual([{ kind: "continue" }]);
+    await act(async () => mutation.finish!(false));
+    expect(document.activeElement).toBe(own); expect(trigger.disabled).toBe(false);
+  } finally { foreign.remove(); }
+});
+
+it("never steals focus after Continue settles if the reader moved elsewhere", async () => {
+  const trigger = [...host.querySelectorAll("button")].find(button => button.textContent === "继续处理")!;
+  trigger.focus(); await act(async () => trigger.click());
+  const other = document.createElement("button"); document.body.append(other); other.focus();
+  try { await act(async () => mutation.finish!(true)); expect(document.activeElement).toBe(other); }
+  finally { other.remove(); }
+});
+
 it("returns Cancel to the same entry's newly mounted edit control, not another canvas", async () => {
   const foreign = document.createElement("button"); foreign.setAttribute("aria-label", "编辑第 1 条待处理消息"); document.body.prepend(foreign);
   try {
