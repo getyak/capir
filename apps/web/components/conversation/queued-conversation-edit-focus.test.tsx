@@ -1,11 +1,11 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const mutation = vi.hoisted(() => ({ finish: null as ((success: boolean) => void) | null, calls: [] as unknown[] }));
+const mutation = vi.hoisted(() => ({ finish: null as ((success: boolean) => void) | null, calls: [] as unknown[], failed: false, active: false }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }) }));
-vi.mock("../workspace-composer", () => ({ WorkspaceComposer: ({ id }: { id: string }) => <textarea id={id}/> }));
+vi.mock("../workspace-composer", () => ({ WorkspaceComposer: ({ id, footerEnd }: { id: string; footerEnd: ReactNode }) => <div><textarea id={id}/>{footerEnd}</div> }));
 vi.mock("./use-conversation", async () => {
   const { useState } = await import("react");
   return { useConversation: () => {
@@ -15,7 +15,7 @@ vi.mock("./use-conversation", async () => {
       preview: null, connection: "connected", error: null, entryCapability: null,
       unavailable: false, preparing: false, submitting: false, mutating,
       handoffEntries: {}, handoffPreviews: {}, runOutcome: {}, readbackStalled: [],
-      snapshot: { paused: true, active: null, queued: [1, 2].map(n => ({ queue_entry_id: `entry-${n}`, message_id: `message-${n}`, status: "queued", objective: `Synthetic ${n}` })) },
+      snapshot: { paused: true, active: mutation.active ? { queue_entry_id: "run-entry", message_id: "run-message", status: "running", run_id: "run-1", objective: "Synthetic run", cancel_requested: false } : null, queued: [1, 2].map(n => ({ queue_entry_id: `entry-${n}`, message_id: `message-${n}`, status: mutation.failed ? "failed" : "queued", objective: `Synthetic ${n}` })) },
       submit: vi.fn(), addFiles: vi.fn(), changeDraft: vi.fn(), removeAttachment: vi.fn(),
       mutate: async (input: unknown) => {
         mutation.calls.push(input); setMutating(true);
@@ -30,7 +30,7 @@ import { QueuedConversation } from "./queued-conversation";
 let host: HTMLDivElement, root: ReturnType<typeof createRoot>;
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  mutation.finish = null; mutation.calls = [];
+  mutation.finish = null; mutation.calls = []; mutation.failed = false; mutation.active = false;
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => root.render(<QueuedConversation scope={"a".repeat(64)} chatBinding="chat" detailBinding="detail" bootstrap={{sessionId:"11111111-1111-4111-8111-111111111111",capability:"synthetic"}}/>));
 });
@@ -40,6 +40,55 @@ const form = () => host.querySelector<HTMLFormElement>("form")!;
 const button = (text: string) => [...form().querySelectorAll("button")].find(el => el.textContent === text)!;
 async function open(position = 1) { edit(position).focus(); await act(async () => edit(position).click()); }
 async function save() { button("保存").focus(); await act(async () => button("保存").click()); }
+async function refreshFixture() {
+  await act(async () => root.render(<QueuedConversation scope={"a".repeat(64)} chatBinding="chat" detailBinding="detail" bootstrap={{sessionId:"11111111-1111-4111-8111-111111111111",capability:"synthetic"}}/>));
+}
+
+it("keeps Withdraw typing focus through a failed request without submitting again", async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="移除第 1 条待处理消息"]')!;
+  trigger.focus(); await act(async () => trigger.click());
+  const composer = host.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+  expect(document.activeElement).toBe(composer);
+  await act(async () => trigger.click());
+  expect(mutation.calls).toEqual([{ kind: "withdraw", queue_entry_id: "entry-1" }]);
+  await act(async () => mutation.finish!(false));
+  expect(document.activeElement).toBe(composer);
+});
+
+it("keeps a failed Retry in the composer and does not Continue an unconfirmed retry", async () => {
+  mutation.failed = true; await refreshFixture();
+  const trigger = [...host.querySelectorAll("button")].find(button => button.textContent === "重试")!;
+  trigger.focus(); await act(async () => trigger.click());
+  const composer = host.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+  expect(document.activeElement).toBe(composer);
+  await act(async () => mutation.finish!(false));
+  expect(mutation.calls).toEqual([{ kind: "retry", queue_entry_id: "entry-1" }]);
+  expect(document.activeElement).toBe(composer);
+});
+
+it("continues a confirmed Retry once without stealing later user focus", async () => {
+  mutation.failed = true; await refreshFixture();
+  const trigger = [...host.querySelectorAll("button")].find(button => button.textContent === "重试")!;
+  trigger.focus(); await act(async () => trigger.click());
+  const other = document.createElement("button"); document.body.append(other); other.focus();
+  try {
+    await act(async () => mutation.finish!(true));
+    expect(mutation.calls).toEqual([{ kind: "retry", queue_entry_id: "entry-1" }, { kind: "continue" }]);
+    await act(async () => mutation.finish!(true));
+    expect(document.activeElement).toBe(other);
+  } finally { other.remove(); }
+});
+
+it("moves explicit Stop to the usable composer before waiting for its result", async () => {
+  mutation.active = true; await refreshFixture();
+  const trigger = host.querySelector<HTMLButtonElement>('[aria-label="停止当前回复"]')!;
+  trigger.focus(); await act(async () => trigger.click());
+  const composer = host.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+  expect(document.activeElement).toBe(composer);
+  expect(mutation.calls).toEqual([{ kind: "stop", run_id: "run-1" }]);
+  await act(async () => mutation.finish!(false));
+  expect(document.activeElement).toBe(composer);
+});
 
 it("keeps Continue typing focus in its own composer through a failed request", async () => {
   const foreign = document.createElement("textarea"); foreign.id = "queued-conversation-composer"; document.body.prepend(foreign);
