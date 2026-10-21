@@ -51,6 +51,32 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); sessionStorage.clear(); });
 describe("rendered time workspace", () => {
+  it("keeps invalid range feedback in its own form with unchanged dates and focus", async () => {
+    await render(); await click("筛选");
+    const fields = [...host.querySelectorAll<HTMLInputElement>('input[type="date"]')];
+    await act(async () => {
+      for (const [index, value] of ["2026-10-23", "2026-10-21"].entries()) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(fields[index], value);
+        fields[index]!.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    const form = fields[0]!.form!;
+    form.querySelector<HTMLButtonElement>('button[type="submit"]')!.focus();
+    const before = window.location.href;
+    await act(async () => form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    const feedback = form.querySelector('[role="alert"]');
+    expect(feedback?.textContent).toBe("请选择连续的 1–93 天。");
+    expect(document.activeElement).toBe(feedback);
+    expect(fields.map(field => field.value)).toEqual(["2026-10-23", "2026-10-21"]);
+    expect(window.location.href).toBe(before);
+    expect(host.querySelector('[aria-label="时间记录"] [role="alert"]')).toBeNull();
+    const next = host.querySelector<HTMLButtonElement>('[aria-label="下一段时间"]')!;
+    next.focus(); mock.query = "day=2026-09-22&tz=UTC"; await render();
+    expect(form.querySelector('[role="alert"]')).toBe(feedback);
+    expect(document.activeElement).toBe(next);
+    await click("筛选"); await click("筛选");
+    expect([...host.querySelectorAll<HTMLInputElement>('input[type="date"]')].map(field => field.value)).toEqual(["2026-10-23", "2026-10-21"]);
+  });
   it.each(["Failed to fetch", "Load failed", "NetworkError when attempting to fetch resource."])("localizes the network recovery hint for %s", async (message) => {
     mock.request.mockRejectedValue(new Error(message));
     await act(async () => {

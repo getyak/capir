@@ -193,3 +193,7 @@
 @media(max-width:640px) {
   .customRange > label { flex:1 1 100%; }
 }
+
+.customRange[data-invalid="true"] { flex-wrap:wrap; }
+.rangeError { color:var(--error); flex:1 0 100%; font-size:var(--workspace-body-size); line-height:1.6; min-width:0; overflow-wrap:anywhere; }
+.rangeError:focus-visible { border-radius:4px; outline:2px solid var(--focus); outline-offset:3px; }
