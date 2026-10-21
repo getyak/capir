@@ -33,7 +33,9 @@ even when tab-local storage is unavailable.
 On narrow Web screens, read-only person, Session and public-source records use
 a named modal detail with keyboard focus inside. Escape or explicit dismissal
 closes only the selected record and returns to its usable origin. Range filters
-and mutation recovery remain intact. Background reads keep the detail shell
+and mutation recovery remain intact. The person-timeline action moves keyboard
+focus into the destination workspace after its exact account and URL scope
+commit; later reads do not repeat that focus move. Background reads keep the detail shell
 open while replacing private content with current loading, failure or coverage
 states; unread pages never prove that a record was removed. Desktop details
 remain beside the timeline. Schedule and meeting-draft editors retain their

@@ -31,6 +31,10 @@ function updateTimeLocation(patch: Record<string, string | null>, method: "push"
   else window.history.replaceState(null, "", href);
 }
 
+function timeQueryKey(query: string) {
+  const params = new URLSearchParams(query); params.sort(); return params.toString();
+}
+
 // Focus restore must land on a control that can actually take focus: a
 // detached or disabled control silently drops focus back to BODY.
 function usableControl(control: HTMLElement | null): HTMLElement | null {
@@ -98,6 +102,12 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
   }, [authInvalid, filters]);
   const editorOrigin = useRef<{ key: string; element: HTMLElement; activityId?: string } | null>(null);
   const readOnlyCloseIntent = useRef<{ key: string; binding: string; scopeKey: string } | null>(null);
+  const personNavigationIntent = useRef<{ binding: string; from: string; to: string } | null>(null);
+  const personNavigationFocus = useRef<number | null>(null);
+  const cancelPersonNavigationFocus = useCallback(() => {
+    personNavigationIntent.current = null;
+    if (personNavigationFocus.current !== null) { window.clearTimeout(personNavigationFocus.current); personNavigationFocus.current = null; }
+  }, []);
   // WebKit mouse clicks need not focus their button. Capture the real trigger,
   // then consume it in select() during that same native event. A task-level
   // cleanup must not run between React's capture and bubble listeners.
@@ -143,6 +153,30 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
   useLayoutEffect(() => { if (selected) cancelFocusReturn(); }, [selected, cancelFocusReturn]);
   useLayoutEffect(() => { if (editorOrigin.current?.activityId) editorOrigin.current = null; readOnlyCloseIntent.current = null; cancelFocusReturn(); }, [scopeKey, cancelFocusReturn]);
   useLayoutEffect(() => () => cancelFocusReturn(), [cancelFocusReturn]);
+  useLayoutEffect(() => { cancelPersonNavigationFocus(); }, [binding, cancelPersonNavigationFocus]);
+  useLayoutEffect(() => { if (editor || authInvalid) cancelPersonNavigationFocus(); }, [editor, authInvalid, cancelPersonNavigationFocus]);
+  useLayoutEffect(() => () => cancelPersonNavigationFocus(), [cancelPersonNavigationFocus]);
+  // Only the read-only person action requests this focus move. Match the whole
+  // committed URL (including date/zone/filters), not just a person or a feed
+  // response. A same-scope action can complete by clearing item alone.
+  useLayoutEffect(() => {
+    const intent = personNavigationIntent.current;
+    if (!intent) return;
+    const committed = timeQueryKey(queryText);
+    if (committed !== intent.to) {
+      if (committed !== intent.from) cancelPersonNavigationFocus();
+      return;
+    }
+    personNavigationIntent.current = null;
+    if (selected || editor || authInvalid || binding !== intent.binding) return;
+    personNavigationFocus.current = window.setTimeout(() => {
+      personNavigationFocus.current = null;
+      if (liveBinding.current !== intent.binding || timeQueryKey(window.location.search) !== intent.to) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement && active !== mainRef.current) return;
+      usableControl(mainRef.current)?.focus();
+    }, 0);
+  }, [queryText, selected, editor, authInvalid, binding, cancelPersonNavigationFocus]);
   const restoreReadOnlyFocus = useEffectEvent((key: string) => returnFocusAfterClose(key));
   useLayoutEffect(() => {
     const intent = readOnlyCloseIntent.current;
@@ -159,8 +193,14 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
     if (savedDraft && !editor && !pending) { setRecovery(t("请先恢复或放弃上次未保存的编辑。")); return false; }
     return true;
   }
-  function navigate(patch: Record<string, string | null>) {
+  function navigate(patch: Record<string, string | null>, focusPersonScope = false) {
     if (!canLeaveEditor()) return;
+    cancelPersonNavigationFocus();
+    if (focusPersonScope) {
+      const from = timeQueryKey(window.location.search);
+      const target = timeHref(new URLSearchParams(window.location.search), { ...patch, item: null, draft: null });
+      personNavigationIntent.current = { binding, from, to: timeQueryKey(target.split("?")[1] ?? "") };
+    }
     editorOrigin.current = null; readOnlyCloseIntent.current = null; cancelFocusReturn();
     selectAbort.current?.abort(); setEditor(null); setEditorError(""); setReviewError("");
     updateTimeLocation({ ...patch, item: null, draft: null }, "push");
@@ -172,6 +212,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
   const historyChanged = useEffectEvent(() => {
     selectAbort.current?.abort(); recoveryAbort.current?.abort(); cancelReviewGeneration();
     editorOrigin.current = null; readOnlyCloseIntent.current = null; cancelFocusReturn();
+    cancelPersonNavigationFocus();
     recoveryLock.current = false; setRecoveryBusy(false);
     // Keep the live editor when input may exist only in memory (for example a
     // full/disabled sessionStorage). A history change cannot discard that input.
@@ -179,7 +220,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
     setEditor(null); setEditorError(""); setHistoryRevision((v) => v + 1);
   });
   useEffect(() => {
-    const expired = () => { clearTimeWorkspaceStorage(); recoveryAbort.current?.abort(); setAuthInvalid(true); setFeed(null); setReview(null); setReviewNotice(""); setEditor(null); cancelReviewGeneration(); selectAbort.current?.abort(); editorOrigin.current = null; readOnlyCloseIntent.current = null; cancelFocusReturn(); };
+    const expired = () => { clearTimeWorkspaceStorage(); recoveryAbort.current?.abort(); setAuthInvalid(true); setFeed(null); setReview(null); setReviewNotice(""); setEditor(null); cancelReviewGeneration(); selectAbort.current?.abort(); editorOrigin.current = null; readOnlyCloseIntent.current = null; cancelFocusReturn(); cancelPersonNavigationFocus(); };
     // A completed review survives backgrounding and the foreground refresh; a
     // pending generation is canceled and its lock released.
     const resume = () => { if (document.visibilityState === "visible") { refreshData(); router.refresh(); } else cancelReviewGeneration(); };
@@ -187,7 +228,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
     window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, expired); document.addEventListener("visibilitychange", resume);
     const timer = setInterval(() => { purgeExpiredTimeWorkspaceStorage(); if (document.visibilityState === "visible" && !reviewRun.current) refreshData(); }, 60000);
     return () => { window.removeEventListener("popstate", historyChanged); window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, expired); document.removeEventListener("visibilitychange", resume); clearInterval(timer); recoveryAbort.current?.abort(); cancelReviewGeneration(); selectAbort.current?.abort(); };
-  }, [refreshData, router, binding, cancelReviewGeneration, cancelFocusReturn]);
+  }, [refreshData, router, binding, cancelReviewGeneration, cancelFocusReturn, cancelPersonNavigationFocus]);
   useEffect(() => {
     if (!browserZone || authInvalid) return;
     const controller = new AbortController();
@@ -251,6 +292,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
     if (new URLSearchParams(window.location.search).get("item") === activity.id && editor?.record?.id === activity.source_id) return;
     if (!canLeaveEditor()) return;
     readOnlyCloseIntent.current = null;
+    cancelPersonNavigationFocus();
     cancelFocusReturn();
     // Only an actual feed row opening the schedule editor provides a focus
     // return target; any other selection drops a stale origin.
@@ -391,7 +433,7 @@ export function TimeWorkspace({ people, peopleError, binding, legacyDraft }: { p
         <p className={styles.coverage}>{value.coverage_note}</p>
       </>}{moreError ? <div role="alert" className={styles.notice}>{moreError}<button type="button" onClick={refreshData}>{t("重新读取范围")}</button></div> : null}
     </section><aside className={styles.inspector} aria-label={t("时间详情")} data-open={Boolean(editor || selectedActivity && !readOnlyInspectorOpen)}>
-      {editor ? <TimeScheduleEditor key={`${binding}:${editor.key}`} record={editor.record} draftId={editor.key} day={day} zone={timeZone} personId={personId} people={people} binding={binding} refreshKey={refresh} mutationBlocked={recoveryBusy || Boolean(pending && pending.id !== (editor.record?.id ?? editor.key))} onDirtyChange={setEditorDirty} onSaved={() => refreshData()} onClose={() => { if (recoveryLock.current) return; clearTimeEditorDraft(binding); setEditor(null);  updateTimeLocation({ item: null, draft: null }); returnFocusAfterClose(editor.key); }} /> : readOnlyInspectorOpen ? <TimeReadOnlyInspector key={`${binding}:${scopeKey}:${selected}`} activity={selectedActivity && ["session_activity", "person_created", "public_source_update"].includes(selectedActivity.kind) ? selectedActivity : null} loading={!value && !feedFailed} error={feedFailed ? feedErrorText || t("时间记录暂时无法读取") : null} complete={Boolean(value?.complete)} navigationNotice={savedDraft && !pending ? recovery : ""} zone={timeZone} onClose={closeReadOnlyInspector} onRetry={refreshData} onPersonTimeline={(person) => navigate({ person, view: "timeline", range: "past7" })} /> : selectedActivity ? <section className={styles.detail}><div className={styles.inspectorHeading}><span className={styles.eyebrow}>{t("记录详情")}</span><button type="button" aria-label={t("关闭详情")} onClick={() => navigate({})}>×</button></div><div className={styles.detailIcon}><TimeActivityIcon kind={selectedActivity.kind} /></div><h2>{selectedActivity.title}</h2><span className={styles.badge}>{TIME_STATUSES[selectedActivity.status]}</span><p>{selectedActivity.summary}</p><dl><div><dt>{t("时间")}</dt><dd>{formatDay(dateInZone(selectedActivity.occurred_at, timeZone))} {selectedActivity.all_day ? "全天" : formatTime(selectedActivity.occurred_at, timeZone)}</dd></div>{selectedActivity.person_label ? <div><dt>{t("人物")}</dt><dd>{selectedActivity.person_label}{selectedActivity.context_label ? ` · ${selectedActivity.context_label}` : ""}</dd></div> : null}<div><dt>{t("来源")}</dt><dd>{TIME_KINDS[selectedActivity.kind]} · {selectedActivity.authority === "unconfirmed" ? "尚待核对" : selectedActivity.authority === "user_authored" ? "由你记录" : "系统活动记录"}</dd></div></dl>
+      {editor ? <TimeScheduleEditor key={`${binding}:${editor.key}`} record={editor.record} draftId={editor.key} day={day} zone={timeZone} personId={personId} people={people} binding={binding} refreshKey={refresh} mutationBlocked={recoveryBusy || Boolean(pending && pending.id !== (editor.record?.id ?? editor.key))} onDirtyChange={setEditorDirty} onSaved={() => refreshData()} onClose={() => { if (recoveryLock.current) return; clearTimeEditorDraft(binding); setEditor(null);  updateTimeLocation({ item: null, draft: null }); returnFocusAfterClose(editor.key); }} /> : readOnlyInspectorOpen ? <TimeReadOnlyInspector key={`${binding}:${scopeKey}:${selected}`} activity={selectedActivity && ["session_activity", "person_created", "public_source_update"].includes(selectedActivity.kind) ? selectedActivity : null} loading={!value && !feedFailed} error={feedFailed ? feedErrorText || t("时间记录暂时无法读取") : null} complete={Boolean(value?.complete)} navigationNotice={savedDraft && !pending ? recovery : ""} zone={timeZone} onClose={closeReadOnlyInspector} onRetry={refreshData} onPersonTimeline={(person) => navigate({ person, view: "timeline", range: "past7" }, true)} /> : selectedActivity ? <section className={styles.detail}><div className={styles.inspectorHeading}><span className={styles.eyebrow}>{t("记录详情")}</span><button type="button" aria-label={t("关闭详情")} onClick={() => navigate({})}>×</button></div><div className={styles.detailIcon}><TimeActivityIcon kind={selectedActivity.kind} /></div><h2>{selectedActivity.title}</h2><span className={styles.badge}>{TIME_STATUSES[selectedActivity.status]}</span><p>{selectedActivity.summary}</p><dl><div><dt>{t("时间")}</dt><dd>{formatDay(dateInZone(selectedActivity.occurred_at, timeZone))} {selectedActivity.all_day ? "全天" : formatTime(selectedActivity.occurred_at, timeZone)}</dd></div>{selectedActivity.person_label ? <div><dt>{t("人物")}</dt><dd>{selectedActivity.person_label}{selectedActivity.context_label ? ` · ${selectedActivity.context_label}` : ""}</dd></div> : null}<div><dt>{t("来源")}</dt><dd>{TIME_KINDS[selectedActivity.kind]} · {selectedActivity.authority === "unconfirmed" ? "尚待核对" : selectedActivity.authority === "user_authored" ? "由你记录" : "系统活动记录"}</dd></div></dl>
         {selectedActivity.kind === "meeting_draft" ? <TimeMeetingInspector id={selectedActivity.source_id} revision={selectedActivity.source_revision} binding={binding} refreshKey={refresh} returnHref={timeHref(new URLSearchParams(queryText), { item: null, draft: null })} /> : selectedActivity.kind === "schedule" ? <p role="status">{editorError || "正在读取安排…"}</p> : activityHref(selectedActivity) ? <Link className={styles.sourceLink} href={activityHref(selectedActivity)!}>{t("打开来源")}<ArrowUpRight size={16} /></Link> : null}
         {selectedActivity.person_id ? <button type="button" onClick={() => navigate({ person: selectedActivity.person_id, view: "timeline", range: "past7" })}>{t("查看这个人的时间线")}</button> : null}
       </section> : <section className={styles.contextIntro}><span className={styles.eyebrow}>{t("此刻的上下文")}</span><h2>{t("把时间串起来")}</h2><p>{t("选择一条记录，回到原来的对话，或核对下一次安排。")}</p><div className={styles.contextRule} /><span>{formatDay(scope.from, { month: "short", day: "numeric" })} — {formatDay(addDays(scope.to, -1), { month: "short", day: "numeric" })}</span><p>{selectedPerson ? `${selectedPerson.label}的相关记录` : "所选时间内的活动记录"}</p></section>}

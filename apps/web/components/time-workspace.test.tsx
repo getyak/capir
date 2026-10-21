@@ -446,10 +446,64 @@ describe("keyboard focus return", () => {
     rememberTimeEditorDraft("a", { id: timeFixtureSchedule.id, existing: true, base_revision: 1, expires: Date.now() + 60000, fields: { title: "Unsent edit", note: "Unsent note", person: "", start: "2026-09-21T01:00", end: "2026-09-21T01:30", zone: "UTC", allDay: false, kind: "meeting", reminder: "none", status: "planned" } });
     mock.query += `&item=${activity.id}`; mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
     const dialog = document.querySelector('[role="dialog"]')!;
+    const focus = vi.spyOn(host.querySelector<HTMLElement>("main")!, "focus");
     await act(async () => [...dialog.querySelectorAll("button")].find((b) => b.textContent === "查看这个人的时间线")!.click());
     expect(dialog.textContent).toContain("请先恢复或放弃上次未保存的编辑。");
     expect(new URLSearchParams(window.location.search).get("item")).toBe(activity.id);
     expect(host.textContent).toContain("Unsent edit");
+    const unrelated = new URLSearchParams(mock.query); unrelated.delete("item"); unrelated.set("person", activity.person_id); unrelated.set("view", "timeline"); unrelated.set("range", "past7");
+    mock.query = unrelated.toString(); await render(); await flushFocus();
+    expect(focus).not.toHaveBeenCalled();
+  });
+  it.each([false, true])("focuses the committed person scope once while its read is pending (same scope=%s)", async (sameScope) => {
+    narrowViewport(); const activity = { ...readOnlySession(), person_id: timeFixtureActivity.source_id };
+    mock.query += `${sameScope ? `&person=${activity.person_id}&view=timeline&range=past7` : ""}&item=${activity.id}`;
+    mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const main = host.querySelector<HTMLElement>("main")!, focus = vi.spyOn(main, "focus");
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "查看这个人的时间线")!.click());
+    const targetQuery = window.location.search.slice(1);
+    await flushFocus(); expect(focus).not.toHaveBeenCalled();
+    let resolve!: (value: unknown) => void;
+    if (!sameScope) mock.request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    mock.query = targetQuery; await render(); await flushFocus();
+    expect(document.activeElement).toBe(main); expect(focus).toHaveBeenCalledTimes(1);
+    if (!sameScope) {
+      expect(host.querySelector('[aria-label="时间记录"]')?.getAttribute("aria-busy")).toBe("true");
+      await act(async () => resolve({ ...payload(), activities: [activity] })); await flushFocus();
+      expect(focus).toHaveBeenCalledTimes(1);
+    }
+  });
+  it("drops a person navigation intent after a different date commits", async () => {
+    narrowViewport(); const activity = { ...readOnlySession(), person_id: timeFixtureActivity.source_id };
+    mock.query += `&item=${activity.id}`; mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const main = host.querySelector<HTMLElement>("main")!, focus = vi.spyOn(main, "focus");
+    await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "查看这个人的时间线")!.click());
+    const targetQuery = window.location.search.slice(1), other = new URLSearchParams(targetQuery); other.set("day", "2026-09-22");
+    mock.query = other.toString(); await render(); await flushFocus(); expect(focus).not.toHaveBeenCalled();
+    mock.query = targetQuery; await render(); await flushFocus(); expect(focus).not.toHaveBeenCalled();
+  });
+  it.each(["account", "history", "editor", "selection", "user focus", "expiry", "unmount"])("cancels queued person-scope focus on %s", async (reason) => {
+    narrowViewport(); const activity = { ...readOnlySession(), person_id: timeFixtureActivity.source_id };
+    mock.query += `&item=${activity.id}`; mock.request.mockResolvedValue({ ...payload(), activities: [activity] }); await render();
+    const main = host.querySelector<HTMLElement>("main")!, focus = vi.spyOn(main, "focus");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find((b) => b.textContent === "查看这个人的时间线")!.click());
+      mock.query = window.location.search.slice(1); await render();
+      expect(focus).not.toHaveBeenCalled();
+      await act(async () => {
+        if (reason === "account") root.render(createElement(TimeWorkspace, { people: [], peopleError: null, binding: "b", legacyDraft: null }));
+        else if (reason === "history") window.dispatchEvent(new PopStateEvent("popstate"));
+        else if (reason === "expiry") window.dispatchEvent(new Event(WORKSPACE_SESSION_EXPIRED_EVENT));
+        else if (reason === "editor") addButton().click();
+        else if (reason === "selection") host.querySelector<HTMLButtonElement>("[data-time-activity-id]")!.click();
+        else if (reason === "user focus") addButton().focus();
+        else root.unmount();
+      });
+      await act(async () => vi.runOnlyPendingTimersAsync());
+      expect(focus).not.toHaveBeenCalled();
+      if (reason === "unmount") root = createRoot(host);
+    } finally { vi.useRealTimers(); }
   });
   it("keeps the narrow dialog mounted during a background read without showing obsolete content", async () => {
     narrowViewport(); const activity = readOnlySession();
