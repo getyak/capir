@@ -287,6 +287,8 @@ recovery. Each activation retains private `web/readiness-last.json`: candidate r
 probe count, elapsed time, bounded category counts and last HTTP status. It separates
 transport/timeout, HTTP errors, invalid/missing password providers and listener
 ownership failures without storing response bodies, URLs, exception text or secrets.
+For supplementary restart checks, reuse `probe_auth_readiness` from the installer
+instead of duplicating provider identifiers or listener-ownership checks.
 A provider probe is only the activation gate; protected login/workspace and native
 recovery still require their own acceptance. The existing45-probe, ownership,
 clean-receipt and rollback gates remain mandatory.

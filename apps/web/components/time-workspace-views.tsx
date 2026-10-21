@@ -3,25 +3,35 @@ import type { TimeActivity } from "@talent-signal/contracts";
 import { CalendarBlank, ChatCircleDots, Globe, UserPlus, Clock, ArrowUpRight } from "@phosphor-icons/react";
 import { addDays, dateInZone, formatDay, formatTime, monthDays, scheduleSegments, TIME_KINDS, TIME_STATUSES, weekStart } from "@/lib/time-workspace";
 import { calendarUTCFromLocal } from "@/lib/calendar-draft";
+import { useLocale, useT } from "./locale-provider";
 import styles from "./time-workspace.module.css";
+
+/** Timeline day headings speak the active display locale; stored days and zones stay untouched. */
+function formatTimelineDay(day: string, locale: string) {
+  return new Intl.DateTimeFormat(locale, { month: "long", day: "numeric", weekday: "long", timeZone: "UTC" }).format(new Date(`${day}T12:00:00Z`));
+}
 
 export function TimeActivityIcon({ kind }: { kind: TimeActivity["kind"] }) {
   const Icon = kind === "session_activity" ? ChatCircleDots : kind === "person_created" ? UserPlus : kind === "meeting_draft" ? CalendarBlank : kind === "public_source_update" ? Globe : Clock;
   return <Icon aria-hidden="true" size={18} />;
 }
 export function TimeActivityRow({ activity, zone, selected, onSelect }: { activity: TimeActivity; zone: string; selected?: boolean; onSelect: (activity: TimeActivity) => void }) {
+  const t = useT();
+  const personLabel = activity.person_label && activity.person_label.trim() !== activity.title.trim() ? `${activity.person_label} · ` : "";
   return <button type="button" className={styles.activity} aria-pressed={selected} onClick={() => onSelect(activity)}>
-    <time className={styles.activityTime} dateTime={activity.occurred_at}>{dateInZone(activity.occurred_at, zone) !== activity.local_day ? <small>{dateInZone(activity.occurred_at, zone).slice(5).replace("-", "/")}<br /></small> : null}{activity.all_day ? "全天" : formatTime(activity.occurred_at, zone)}</time>
+    <time className={styles.activityTime} dateTime={activity.occurred_at}>{dateInZone(activity.occurred_at, zone) !== activity.local_day ? <small>{dateInZone(activity.occurred_at, zone).slice(5).replace("-", "/")}<br /></small> : null}{activity.all_day ? t("全天") : formatTime(activity.occurred_at, zone)}</time>
     <span className={styles.activityIcon} data-kind={activity.kind}><TimeActivityIcon kind={activity.kind} /></span>
-    <span className={styles.activityBody}><strong>{activity.title}</strong><span>{activity.person_label ? `${activity.person_label} · ` : ""}{activity.summary || TIME_KINDS[activity.kind]}</span></span>
-    <span className={styles.activityStatus} data-status={activity.status}>{TIME_STATUSES[activity.status]}</span><ArrowUpRight className={styles.rowArrow} aria-hidden="true" size={15} />
+    <span className={styles.activityBody}><strong>{activity.title}</strong><span>{personLabel}{activity.summary || t(TIME_KINDS[activity.kind])}</span></span>
+    <span className={styles.activityStatus} data-status={activity.status}>{t(TIME_STATUSES[activity.status])}</span><ArrowUpRight className={styles.rowArrow} aria-hidden="true" size={15} />
   </button>;
 }
 export function TimeTimeline({ activities, zone, selected, onSelect }: { activities: TimeActivity[]; zone: string; selected: string; onSelect: (activity: TimeActivity) => void }) {
+  const t = useT();
+  const locale = useLocale();
   const groups = new Map<string, TimeActivity[]>();
   for (const activity of activities) { const group = groups.get(activity.local_day) ?? []; group.push(activity); groups.set(activity.local_day, group); }
-  return <div className={styles.timeline}>{[...groups].map(([day, records]) => <section key={day} aria-label={formatDay(day)} className={styles.dayGroup}>
-    <div className={styles.dayHeading}><h2>{formatDay(day)}</h2><span>{records.length} 条记录</span></div>
+  return <div className={styles.timeline}>{[...groups].map(([day, records]) => <section key={day} aria-label={formatTimelineDay(day, locale)} className={styles.dayGroup}>
+    <div className={styles.dayHeading}><h2>{formatTimelineDay(day, locale)}</h2><span>{records.length === 1 ? t("1 条记录") : t("{count} 条记录", { count: records.length })}</span></div>
     {records.map((activity) => <TimeActivityRow key={activity.id} activity={activity} zone={zone} selected={selected === activity.id} onSelect={onSelect} />)}
   </section>)}</div>;
 }
