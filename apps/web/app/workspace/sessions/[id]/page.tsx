@@ -7,6 +7,7 @@ import { loadMeetingDrafts } from "@/lib/server/meetingDrafts";
 import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-session";
 import { mintMemoryEntryCapability } from "@/lib/server/memoryEntryCapability";
 import { SessionWorkbench } from "@/components/session-workbench/session-workbench";
+import { SessionSourceHeading } from "@/components/session-source-heading";
 import {
   backendSessionRecoveryHref,
   isBackendSessionExpiredError,
@@ -68,7 +69,7 @@ export default async function SessionDetailPage({
   if (!detail) {
     return (
       <section aria-labelledby="session-unavailable" className="workspace-section">
-        <h1 id="session-unavailable">对话不可用</h1>
+        <SessionSourceHeading binding={workspaceSessionsBinding(claims)} sessionId={id} id="session-unavailable">对话不可用</SessionSourceHeading>
         <p role="alert">{error}</p>
         {sessionRecoveryHref ? (
           <a href={sessionRecoveryHref}>重新登录</a>

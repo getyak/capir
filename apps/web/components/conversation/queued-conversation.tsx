@@ -14,6 +14,7 @@ import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
 import type { ConversationImageManifest, ConversationQueueEntry, MemoryProposalItem } from "@talent-signal/contracts";
 import type { LocalMessage } from "@/lib/conversation-local";
 import { WorkspaceComposer } from "../workspace-composer";
+import { SessionSourceHeading } from "../session-source-heading";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { conversationNearBottom } from "../session-workbench/session-presentation";
 import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
@@ -297,7 +298,7 @@ export function QueuedConversation(props: Props) {
 
   return <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label="对话" data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
     {admitted && <header className={styles.header}>
-      <div className={styles.headingText}><h1 title={chat.detail?.title || "新对话"}>{chat.detail?.title || "新对话"}</h1></div>
+      <div className={styles.headingText}><SessionSourceHeading binding={props.detailBinding} sessionId={id ?? ""} ready={chat.ready} title={chat.detail?.title || "新对话"}>{chat.detail?.title || "新对话"}</SessionSourceHeading></div>
       {personId && !chat.unavailable && <button className={styles.personContext} aria-label={`查看 ${personLabel || "联系人"} 的人物背景`} onClick={event => personContextPanel.open(personId,event.currentTarget)}>人物背景</button>}
       <details className={styles.details}><summary aria-label="对话详情"><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>对话详情</span></summary><div className={styles.detailPanel}>
       <p className={styles.detailScope}>{scopeLabel}</p>

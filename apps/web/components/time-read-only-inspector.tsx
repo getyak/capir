@@ -9,6 +9,7 @@ import { useT } from "./locale-provider";
 import { TimeActivityIcon } from "./time-workspace-views";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
+import { useRequestSessionSourceFocus } from "./workspace-navigation-continuity";
 import styles from "./time-workspace.module.css";
 
 const narrowQuery = "(max-width: 1000px)";
@@ -23,10 +24,11 @@ const serverSnapshot = () => false;
 // This shell belongs to the selected URL, not a request generation. A refresh
 // replaces its contents with honest loading/error states without reopening it.
 // Editable schedules and meeting drafts deliberately keep their own lifecycle.
-export function TimeReadOnlyInspector({ activity, loading, error, complete, navigationNotice, zone, onClose, onRetry, onPersonTimeline }: {
-  activity: TimeActivity | null; loading: boolean; error: string | null; complete: boolean; navigationNotice: string; zone: string; onClose: () => void; onRetry: () => void; onPersonTimeline: (personId: string) => void;
+export function TimeReadOnlyInspector({ binding, activity, loading, error, complete, navigationNotice, zone, onClose, onRetry, onPersonTimeline }: {
+  binding: string; activity: TimeActivity | null; loading: boolean; error: string | null; complete: boolean; navigationNotice: string; zone: string; onClose: () => void; onRetry: () => void; onPersonTimeline: (personId: string) => void;
 }) {
   const t = useT();
+  const requestSourceFocus = useRequestSessionSourceFocus();
   const narrow = useSyncExternalStore(subscribeViewport, narrowSnapshot, serverSnapshot);
   const composing = useRef(false);
   const desktopTitle = useRef<HTMLHeadingElement>(null);
@@ -45,7 +47,7 @@ export function TimeReadOnlyInspector({ activity, loading, error, complete, navi
         <div><dt>{t("来源")}</dt><dd>{t(TIME_KINDS[activity.kind])} · {t(activity.authority === "unconfirmed" ? "尚待核对" : activity.authority === "user_authored" ? "由你记录" : "系统活动记录")}</dd></div></dl>
       {activity.person_id ? <Button variant="outline" onClick={() => onPersonTimeline(activity.person_id!)}>{t("查看这个人的时间线")}</Button> : null}
       {navigationNotice ? <p className={styles.staleNote} role="status">{navigationNotice}</p> : null}
-      {source ? <Link className={styles.sourceLink} href={source}>{t("打开来源")}<ArrowUpRight size={16} /></Link> : null}
+      {source ? <Link className={styles.sourceLink} href={source} onNavigate={() => { if (activity.kind === "session_activity") requestSourceFocus(binding, activity.source_id); }}>{t("打开来源")}<ArrowUpRight size={16} /></Link> : null}
     </> : <><p role={error ? "alert" : "status"}>{loading ? t("正在整理这段时间…") : error || (complete ? t("这份记录已不在当前范围。") : t("当前只显示已读取的记录，不能据此判断其余时段为空。"))}</p>{error ? <Button variant="outline" onClick={onRetry}>{t("重新读取")}</Button> : null}</>}
   </section>;
   if (!narrow) return <section><div className={styles.inspectorHeading}><h2 ref={desktopTitle} tabIndex={-1} className={styles.readOnlyDesktopTitle}>{t("记录详情")}</h2><Button variant="ghost" size="icon" aria-label={t("关闭详情")} onClick={onClose}>×</Button></div>{details}</section>;

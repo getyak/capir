@@ -3,6 +3,36 @@ import { validMeetingDay } from "./meeting-calendar";
 import { validTimeZone } from "./time-workspace";
 
 export type WorkspaceNavigationDestination = "conversation" | "people" | "meetings";
+
+/** One account-bound UI handoff, never persisted or promoted to authority. */
+export function createWorkspaceSourceFocusMemory(scope: string | null, binding: string | null) {
+  let expired = !scope || !binding, serial = 0;
+  let pending: { id: number; from: string; to: string; until: number } | null = null;
+  function current() {
+    if (pending && pending.until < Date.now()) pending = null;
+    return expired ? null : pending;
+  }
+  function peek(callerBinding: string | null, href: string) {
+    const request = current();
+    return callerBinding === binding && request?.to === href ? request.id : null;
+  }
+  return {
+    request(callerBinding: string | null, sessionId: string, from: string) {
+      if (expired || callerBinding !== binding || !isSessionId(sessionId)) return;
+      const source = vetWorkspaceNavigationHref(from);
+      if (source?.destination !== "meetings") return;
+      pending = { id: ++serial, from: source.href, to: `/workspace/sessions/${encodeURIComponent(sessionId)}`, until: Date.now() + 30_000 };
+    },
+    observe(href: string) { const request = current(); if (request && href !== request.from && href !== request.to) pending = null; },
+    peek,
+    consume(id: number, callerBinding: string | null, href: string) {
+      if (peek(callerBinding, href) !== id) return false;
+      pending = null; return true;
+    },
+    clear() { pending = null; },
+    expire() { expired = true; pending = null; },
+  };
+}
 export type WorkspaceNavigationLocator = { destination: WorkspaceNavigationDestination; href: string };
 const BASE = "https://workspace.invalid";
 const CONTROL = /[\u0000-\u001f\u007f]/u;

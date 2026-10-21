@@ -177,7 +177,7 @@ export default async function WorkspaceLayout({
   return (
     <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
-      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope}>
+      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope} binding={pendingBinding}>
       <PersonContextPanelProvider binding={pendingBinding}>
       <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
         {pendingBinding ? (

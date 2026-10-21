@@ -22,6 +22,7 @@ import { usePersonContextPanel } from "../person-context-panel";
 import { useWorkspaceChat } from "../relationship-workspace/use-workspace-chat";
 import { ConversationProvenance, ConversationResponse } from "../conversation-response";
 import { WorkspaceComposer } from "../workspace-composer";
+import { SessionSourceHeading } from "../session-source-heading";
 import { workspaceSessionFetch } from "@/components/workspace-session-request";
 import {
   subscribeWorkspaceRefresh,
@@ -817,9 +818,9 @@ function LegacySessionWorkbench({
     >
       <header className={chatStyles.header}>
         <div className={chatStyles.headingText}>
-          <h1 className={chatStyles.title} id="session-title" title={sessionDisplayTitle(detail.title)}>
+          <SessionSourceHeading binding={binding} sessionId={detail.session_id} className={chatStyles.title} id="session-title" title={sessionDisplayTitle(detail.title)}>
             {sessionDisplayTitle(detail.title)}
-          </h1>
+          </SessionSourceHeading>
         </div>
         <div className={chatStyles.headerActions}>
         {detail.person_id && detail.state === "active" && <button
