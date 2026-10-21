@@ -270,6 +270,11 @@ export function QueuedConversation(props: Props) {
   }, [chat.ready, chat.unavailable, props.initialDetail]);
   function latest() { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
   async function send() { if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
+  function removeImage(attachmentId: string, trigger: HTMLButtonElement) {
+    const composer = trigger.closest("[data-conversation-canvas]")?.querySelector<HTMLTextAreaElement>("#queued-conversation-composer");
+    chat.removeAttachment(attachmentId);
+    if (composer && !composer.disabled) composer.focus({ preventScroll: true });
+  }
   function navigate(href: string) { navigating.current = true; router.push(href); }
   async function remove() {
     if (await chat.remove()) {
@@ -332,7 +337,7 @@ export function QueuedConversation(props: Props) {
         {chat.attachments.map((attachment, index) => <span className={styles.composerImage} key={attachment.id}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={attachment.manifest.file_name} src={attachment.url} />
-          <button aria-label={`移除第 ${index + 1} 张图片`} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable} onClick={() => chat.removeAttachment(attachment.id)} type="button"><X size={12} weight="bold"/></button>
+          <button aria-label={`移除第 ${index + 1} 张图片`} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable} onClick={event => removeImage(attachment.id, event.currentTarget)} type="button"><X size={12} weight="bold"/></button>
         </span>)}
       </div>}
       {imageCount >= 10 && <p className={styles.composerImageHint} role="status">已达到每条消息 10 张图片的上限。</p>}
