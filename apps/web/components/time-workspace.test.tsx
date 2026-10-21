@@ -58,6 +58,7 @@ describe("rendered time workspace", () => {
     });
     const alert = host.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Unable to connect. Please try again.");
+    expect(host.textContent).toContain("Temporarily unavailable");
     expect(alert?.textContent).not.toContain("暂时连不上服务");
     mock.request.mockResolvedValue({ ...payload(), activities: [] });
     await act(async () => alert!.querySelector("button")!.click());
@@ -101,9 +102,13 @@ describe("rendered time workspace", () => {
   });
   it("keeps read failures distinct from a successful empty range", async () => {
     mock.request.mockRejectedValue(new Error("Backend unavailable")); await render();
+    expect(host.textContent).not.toContain("正在读取");
+    expect(host.textContent).toContain("暂不可用");
     expect(host.textContent).toContain("时间记录暂时无法读取"); expect(host.textContent).not.toContain("这段时间还没有记录");
     mock.request.mockResolvedValue({ ...payload(), activities: [] }); await click("重新读取");
     expect(host.textContent).toContain("这段时间还没有记录");
+    expect(host.textContent).not.toContain("暂不可用");
+    expect(host.textContent).not.toContain("正在读取");
   });
   it("discards an old range's late response", async () => {
     let oldResolve!: (value: unknown) => void;
@@ -111,6 +116,19 @@ describe("rendered time workspace", () => {
     await render(); mock.query = "day=2026-09-22&tz=UTC"; mock.request.mockResolvedValue({ ...payload("New range"), scope: { ...scope, from: "2026-09-22", to: "2026-09-23" } });
     await render(); await act(async () => oldResolve(payload("Obsolete private record")));
     expect(host.textContent).toContain("New range"); expect(host.textContent).not.toContain("Obsolete private record");
+  });
+  it("announces a new range as loading after the previous range failed", async () => {
+    mock.request.mockRejectedValueOnce(new Error("Backend unavailable"));
+    await render();
+    let resolve!: (value: unknown) => void;
+    mock.request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    mock.query = "day=2026-09-22&tz=UTC";
+    await render();
+    expect(host.querySelector('[aria-label="时间记录"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(host.textContent).toContain("正在读取");
+    expect(host.textContent).not.toContain("暂不可用");
+    await act(async () => resolve({ ...payload(), scope: { ...scope, from: "2026-09-22", to: "2026-09-23" } }));
+    expect(host.querySelector('[aria-label="时间记录"]')?.getAttribute("aria-busy")).toBe("false");
   });
   it("clears private records when the workspace session expires", async () => {
     await render(); expect(host.textContent).toContain("Synthetic private activity");

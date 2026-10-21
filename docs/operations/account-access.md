@@ -497,6 +497,14 @@ exact replay until stop or expiry; supplied passwords are never echoed.
 Passwords, tokens and handoff secrets never enter journals, errors, receipts
 or URLs. Retain sanitized evidence only, then stop the run.
 
+When capturing CLI JSON for acceptance evidence, allowlist the nonsecret run,
+verification, and browser receipt fields before writing or printing them.
+Generated credentials use the top-level `generated_credential` projection;
+a denylist for fields named `password` or `credentials` does not remove it.
+For scripted browser acceptance, prefer a generated password passed privately
+through `--password-stdin`, and keep it only in process memory, the keyring,
+or a private registered temporary artifact until the owned run is stopped.
+
 The capir backend, registered origins and the server-only Web consumer key
 must be deployed for that exact environment. Legacy `capir.v1` records retain
 `refresh_supported=false`; `capir sandbox` remains discoverable as unsupported
