@@ -48,8 +48,11 @@ struct ConversationMemoryReviewHost: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(language.text("Contact review could not be loaded."))
                         .font(.body).fixedSize(horizontal: false, vertical: true)
-                    Button(language.text("Reload review")) { attempt += 1 }
-                        .font(.subheadline.weight(.medium)).frame(minHeight: 44)
+                    Button { attempt += 1 } label: {
+                        Text(language.text("Reload review"))
+                            .frame(minHeight: 44).contentShape(Rectangle())
+                    }
+                        .font(.subheadline.weight(.medium))
                         .accessibilityIdentifier("conversation-memory-reload")
                 }
                 .accessibilityIdentifier("conversation-memory-unavailable")
@@ -115,7 +118,10 @@ private struct ConversationMemorySourceImage: View {
                 } else if failed {
                     VStack(spacing: 12) {
                         Text(language.text("The original image could not be loaded."))
-                        Button(language.text("Try again")) { attempt += 1 }.frame(minHeight: 44)
+                        Button { attempt += 1 } label: {
+                            Text(language.text("Try again"))
+                                .frame(minHeight: 44).contentShape(Rectangle())
+                        }
                     }.foregroundStyle(.white).padding(24)
                 } else { ProgressView().tint(.white) }
             }

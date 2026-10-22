@@ -17,7 +17,8 @@ with one meaningful next decision, not a collection of progress cards.
   untracked evidence and is preserved. All writes use this isolated worktree.
 - User screenshots show a tiny long-image preview, an empty-looking bubble,
   a promised contact review without a visible card, saved-response copy and an
-  unexplained composer spinner.
+  ambiguous ring-like composer control. Source identifies the idle ring as a
+  static voice action, not evidence of a running network request.
 - The backend persists `response.memoryProposal`; Web renders its authoritative
   proposal ID/revision through MemoryReviewCard. The native response model has
   no corresponding field. Existing native intake is a different legacy path.
@@ -92,8 +93,9 @@ recheck resources and the single iOS session before heavyweight operations.
 1. Complete: freeze native contracts, UX states and worker ownership.
 2. Complete: implement the non-overlapping slices and integrate one complete conversation.
 3. Source review complete: independent reviewer rechecked all confirmed P0/P1 fixes.
-4. Active: build, focused tests and actual primary-device interaction; compact
-   only for long-image, keyboard and Dynamic Type layout.
+4. Primary proof at 27c95988: build, 110 focused tests and seven deterministic
+   primary-device UI cases passed. Compact layout proof remains incomplete;
+   its Simulator runner failed before entering a test body.
 5. Current-head CI, applicable resident deployment if runtime changes, native
    release/acceptance evidence and precise resource closeout.
 
@@ -143,7 +145,14 @@ including both reading directions, original-image access, pending status,
 AX5/dark mode and unavailable recovery. The remaining two assertions queried
 receipt child text after successful actions. The receipt now has an explicit
 accessibility container; existing assertions remain unchanged. Build 9 passed,
-with its focused unit/UI verification active. CI also exposed
+with 110 focused unit tests and all seven primary-device UI cases passing on
+native source 27c95988. The same interaction assertions were retained. Compact
+verification reused this build for the justified long-image/keyboard/AX5 layout
+cases; CoreSimulator stalled at installation/runner launch and never entered a
+test body. Main canceled only its verified driver PID 60557 with SIGINT under
+renewed resource pressure. The guarded session ended and shut down its owned
+device; no simulator data was erased. This is not a compact passing result.
+CI also exposed
 two obsolete policy-test assumptions (maximum ten cases and two old test classes);
 the bounded quick 14/smoke 15 policy correction passed 18 policy tests and its
 focused selector regression. Neither failure is waived.
@@ -167,9 +176,11 @@ remain in the private artifact/keyring only. During a backend transport failure,
 CLI refresh became uncertain; do not replay that credential. Approval to revoke
 and re-login the exact staging CLI grant is pending because its derived entries
 may serve other work. Native verification continues independently.
-Live Memory behavior, actual native UI, device latency and installed TestFlight
-fidelity still require proof. Draft PR #405 is open:
-https://github.com/getyak/capir/pull/405. Latest-head required CI and native UI
+Live Memory behavior, direct VoiceOver/Chinese input checks, compact layout,
+device latency and installed TestFlight fidelity still require proof. The
+primary native UI result uses synthetic data and does not prove these paths.
+Draft PR #405 is open:
+https://github.com/getyak/capir/pull/405. Latest-head required CI and real-provider
 acceptance remain pending; no merge, deployment or release is claimed.
 
 ## Source review checkpoint
@@ -185,9 +196,9 @@ precede a collapsed suggestion preview; pending Memory editors follow actual
 contact confirmation. Editorial and compact directions share the same behavior.
 Seven deterministic UI cases and one opt-in real-provider image/contact journey
 are present. Build 6 and focused unit evidence are recorded above; the main agent
-owns build 9 and the actual UI rerun. Documentation/architecture and
-localization gates passed. Pending actual UI, provider and installed-build
-evidence cannot be replaced by source review or synthetic results.
+owns build 9 and its passing primary UI rerun. Documentation/architecture and
+localization gates passed. Pending compact, provider and installed-build
+evidence cannot be replaced by source review or synthetic primary results.
 
 The complete source-based symptom, cross-platform and prioritized improvement
 register is [the dated UX audit](../docs/research/ios-conversation-ux-audit-2026-10-22.md).
@@ -195,13 +206,20 @@ Its proposed local-feedback timing target is not a measured result. The main
 agent inspected the same native content and selected editorial presentation:
 it keeps the identity fields and primary decision prominent while fitting the
 secondary actions on one row; compact insets added a vertical action stack.
-Six inspected synthetic screenshots and the selection rationale are retained in
+Eight selected synthetic screenshots and the inspected selection rationale are retained in
 the private task artifact. No installed-build quality score or real-provider
 success is inferred from synthetic tests.
 
-Latest required CI at c1b10dab passed repository policy, security, Web, backend,
-CLI and control-plane checks. Native smoke reproduced the same receipt-text
-assertion failure and remains a release blocker until the fixed head passes.
+Historical CI at c1b10dab passed repository policy, security, Web, backend,
+CLI and control-plane checks; native smoke reproduced the receipt-text query
+failure. At fixed source 27c95988, all applicable checks except the still-running
+native smoke have passed. Final consistency review also found two Host failure
+actions with the old outer-frame touch-target pattern. Their labels now own the
+44pt frame and content shape, matching the card treatment already exercised.
+This narrow native delta requires new-head CI; the earlier local results remain
+bound to 27c95988. Renewed host pressure and the prior installation failure mean
+no additional local Simulator run is claimed. Only the latest applicable job
+result can close the CI gate.
 The audit is classified under docs/research; repository hygiene remains intact.
 The existing backend recovered without intervention: scoped health/readiness
 and HTTP revision were verified on 2026-10-23. Prior transport-failure cause is
