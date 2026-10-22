@@ -6,8 +6,8 @@ import {
   X,
 } from "@phosphor-icons/react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   searchWorkspaceResults,
@@ -15,6 +15,10 @@ import {
   type WorkspaceSearchPerson,
   type WorkspaceSearchSession,
 } from "@/lib/workspace-search";
+import {
+  beginWorkspaceSearchFocusHandoff,
+  type WorkspaceSearchFocusHandoff,
+} from "@/lib/workspace-search-focus";
 import {
   isWorkspaceDirectoryAbort,
   loadWorkspaceDirectory,
@@ -218,16 +222,84 @@ export function WorkspaceGlobalSearchDialog({
   const dialog = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const [dialogCycle, setDialogCycle] = useState(0);
+  const cycle = useRef(0);
+  const mounted = useRef(false);
+  const openRef = useRef(false);
+  // One in-memory focus intent per accepted same-tab result activation, scoped
+  // to the binding captured at selection. Intents are never persisted and never
+  // survive the credential lifecycle; Escape, the close control and modified
+  // or new-tab activations keep restoring the exact trigger.
+  const pendingFocus = useRef<{ href: string; fromHref: string; binding: string | null; cycle: number } | null>(null);
+  const acceptedCycle = useRef<number | null>(null);
+  const handoff = useRef<WorkspaceSearchFocusHandoff | null>(null);
+  const currentBinding = useRef(binding);
+  const scopeExpired = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      cycle.current += 1;
+      pendingFocus.current = null;
+      acceptedCycle.current = null;
+      handoff.current?.cancel(); handoff.current = null;
+    };
+  }, []);
+  useLayoutEffect(() => {
+    currentBinding.current = binding;
+    cycle.current += 1;
+    handoff.current?.cancel();
+    handoff.current = null;
+    pendingFocus.current = null;
+    scopeExpired.current = false;
+  }, [binding]);
+  useLayoutEffect(() => {
+    const location = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const pending = pendingFocus.current;
+    if (pending && location !== pending.fromHref && location !== pending.href) pendingFocus.current = null;
+    handoff.current?.observeLocation(location);
+    // Installed Next replaces the SearchParams context on canonical URL
+    // changes (including hash-only commits); layout precedes DOM observers.
+  }, [pathname, searchParams]);
+  useLayoutEffect(() => {
+    // Scope expiry kills every intent no matter whether the close-time handoff
+    // has armed yet; nothing may focus across the credential boundary.
+    const expire = () => {
+      scopeExpired.current = true;
+      handoff.current?.cancel();
+      handoff.current = null;
+      pendingFocus.current = null;
+    };
+    window.addEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, expire);
+    return () => window.removeEventListener(WORKSPACE_SESSION_EXPIRED_EVENT, expire);
+  }, []);
   const changeOpen = useCallback((next: boolean) => {
-    if (next) setQuery("");
+    openRef.current = next;
+    if (next) {
+      cycle.current += 1;
+      setDialogCycle(cycle.current);
+      handoff.current?.cancel(); handoff.current = null;
+      pendingFocus.current = null;
+      acceptedCycle.current = null;
+      setQuery("");
+    }
     setOpen(next);
   }, []);
   const show = useCallback(() => {
-    if (!open) changeOpen(true);
-  }, [open, changeOpen]);
+    if (!openRef.current) changeOpen(true);
+  }, [changeOpen]);
   const close = useCallback(() => changeOpen(false), [changeOpen]);
+  const select = useCallback((href: string) => {
+    if (!scopeExpired.current) {
+      acceptedCycle.current = cycle.current;
+      pendingFocus.current = { href, fromHref: `${window.location.pathname}${window.location.search}${window.location.hash}`, binding, cycle: cycle.current };
+    }
+    close();
+  }, [binding, close]);
 
   useEffect(() => {
     // Radix listens for Escape at document capture. Register before opening
@@ -286,11 +358,40 @@ export function WorkspaceGlobalSearchDialog({
         </button>
       </DialogTrigger>
       <DialogContent
+        key={dialogCycle}
         layout="search"
         showCloseButton={false}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           input.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          // Radix schedules this callback after unmount. A previous dialog's
+          // callback cannot restore or arm anything in a newer lifecycle.
+          if (!mounted.current || openRef.current || dialogCycle !== cycle.current || scopeExpired.current) {
+            event.preventDefault();
+            return;
+          }
+          const pending = pendingFocus.current;
+          pendingFocus.current = null;
+          if (!pending) {
+            if (acceptedCycle.current === cycle.current) event.preventDefault();
+            return;
+          }
+          // Accepted same-tab result activation: the selected final destination
+          // heading is the target, so the global trigger must not be restored.
+          // The handoff starts only here, after the dialog close released its
+          // focus trap; the navigation itself is never cancelled.
+          event.preventDefault();
+          if (pending.cycle !== cycle.current || pending.binding !== currentBinding.current) return;
+          handoff.current?.cancel();
+          handoff.current = beginWorkspaceSearchFocusHandoff({
+            href: pending.href,
+            fromHref: pending.fromHref,
+            isCurrent: () => mounted.current && !openRef.current && !scopeExpired.current
+              && cycle.current === pending.cycle && currentBinding.current === pending.binding,
+            cancelOn: [WORKSPACE_SESSION_EXPIRED_EVENT],
+          });
         }}
         ref={dialog}
         onKeyDown={(event) => {
@@ -326,7 +427,7 @@ export function WorkspaceGlobalSearchDialog({
             </Button>
           </DialogClose>
         </div>
-        <WorkspaceSearchResults binding={binding} query={query} close={close} />
+        <WorkspaceSearchResults binding={binding} query={query} close={close} select={select} />
         <p className={styles.searchHint}>↑ ↓ 选择 · Enter 打开 · Esc 关闭</p>
       </DialogContent>
     </Dialog>
@@ -336,10 +437,11 @@ export function WorkspaceGlobalSearchDialog({
 // Keep the authorized projection mounted for the surface's short exit fade,
 // rather than flashing an empty state as soon as controlled open becomes false.
 // Radix Presence unmounts it after the animation; scope/expiry still fail closed.
-function WorkspaceSearchResults({ binding, query, close }: {
+function WorkspaceSearchResults({ binding, query, close, select }: {
   binding: string | null;
   query: string;
   close: () => void;
+  select: (href: string) => void;
 }) {
   const { people, sessions, loading, failed, retry } = useWorkspaceSearchSources(binding, true);
   const results = searchWorkspaceResults({ people, sessions, query });
@@ -366,41 +468,49 @@ function WorkspaceSearchResults({ binding, query, close }: {
               {results.people.length ? (
                 <>
                   <p className={styles.searchSection}>人物</p>
-                  {results.people.map((person) => (
-                    <Link
-                      className={styles.searchResult}
-                      data-search-result=""
-                      href={`/workspace/people/${encodeURIComponent(person.id)}`}
-                      key={person.id}
-                      onClick={close}
-                    >
-                      <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} className={styles.avatar} dataSize="row" />
-                      <span>
-                        <strong>{person.label}</strong>
-                        <small>{person.detail}</small>
-                      </span>
-                    </Link>
-                  ))}
+                  {results.people.map((person) => {
+                    const href = `/workspace/people/${encodeURIComponent(person.id)}`;
+                    return (
+                      <Link
+                        className={styles.searchResult}
+                        data-search-result=""
+                        href={href}
+                        key={person.id}
+                        onClick={close}
+                        onNavigate={() => select(href)}
+                      >
+                        <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} className={styles.avatar} dataSize="row" />
+                        <span>
+                          <strong>{person.label}</strong>
+                          <small>{person.detail}</small>
+                        </span>
+                      </Link>
+                    );
+                  })}
                 </>
               ) : null}
               {results.sessions.length ? (
                 <>
                   <p className={styles.searchSection}>对话</p>
-                  {results.sessions.map((session) => (
-                    <Link
-                      className={styles.searchResult}
-                      data-search-result=""
-                      href={`/workspace/sessions/${encodeURIComponent(session.id)}`}
-                      key={session.id}
-                      onClick={close}
-                    >
-                      <ChatCircle aria-hidden="true" size={17} />
-                      <span>
-                        <strong>{session.title}</strong>
-                        <small>{session.detail}</small>
-                      </span>
-                    </Link>
-                  ))}
+                  {results.sessions.map((session) => {
+                    const href = `/workspace/sessions/${encodeURIComponent(session.id)}`;
+                    return (
+                      <Link
+                        className={styles.searchResult}
+                        data-search-result=""
+                        href={href}
+                        key={session.id}
+                        onClick={close}
+                        onNavigate={() => select(href)}
+                      >
+                        <ChatCircle aria-hidden="true" size={17} />
+                        <span>
+                          <strong>{session.title}</strong>
+                          <small>{session.detail}</small>
+                        </span>
+                      </Link>
+                    );
+                  })}
                 </>
               ) : null}
             </>

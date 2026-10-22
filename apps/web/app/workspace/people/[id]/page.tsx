@@ -7,8 +7,10 @@ import { auth } from "@/auth";
 import { MemoryReviewCard } from "@/components/memory-review/memory-review-card";
 import { safeResearchLink } from "@/components/research-notebook";
 import { PersonMemoryContent } from "@/components/person-memory-content";
+import { PersonMemoryReviewHeading } from "@/components/person-memory-review-heading";
 import { AvatarEditor } from "@/components/avatar-editor";
 import { memoryDate } from "@/lib/person-memory-projection";
+import { workspaceSearchFocusTargetProps } from "@/lib/workspace-search-focus";
 import { peopleDirectoryHref, personDirectoryEntryId, personMemoryHref, readPeopleDirectoryQuery } from "@/components/people-directory-navigation";
 import {
   validReturnSessionId,
@@ -56,6 +58,9 @@ export default async function PersonMemoryPage({
   const directoryQuery = readPeopleDirectoryQuery(parameters.directory_query);
   const href = personMemoryHref(id, directoryQuery, returnSessionId);
   const directoryHref = peopleDirectoryHref(directoryQuery, returnSessionId);
+  // Final Person headings (including unavailable/error surfaces) carry the
+  // global search handoff marker; loading main-content never does.
+  const searchFocusTarget = workspaceSearchFocusTargetProps(`/workspace/people/${encodeURIComponent(id)}`);
   const session = await auth();
   if (!session?.user) {
     redirect(`/login?callbackUrl=${encodeURIComponent(href)}`);
@@ -67,7 +72,7 @@ export default async function PersonMemoryPage({
     return (
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.state} aria-labelledby="person-invalid">
-          <h1 className={styles.stateTitle} id="person-invalid">
+          <h1 className={styles.stateTitle} id="person-invalid" {...searchFocusTarget}>
             人物不可用
           </h1>
           <p className={styles.stateText}>这个人物标识无效。</p>
@@ -107,7 +112,7 @@ export default async function PersonMemoryPage({
     return (
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.state} aria-labelledby="person-unavailable">
-          <h1 className={styles.stateTitle} id="person-unavailable">
+          <h1 className={styles.stateTitle} id="person-unavailable" {...searchFocusTarget}>
             人物记忆不可用
           </h1>
           <p className={styles.stateText} role="alert">
@@ -160,7 +165,7 @@ export default async function PersonMemoryPage({
           url={person?.avatar?.url ?? null}
         />
         <div className={styles.identityText}>
-          <h1>{person?.display_label ?? "人物"}</h1>
+          <h1 {...searchFocusTarget}>{person?.display_label ?? "人物"}</h1>
           {person?.profile?.headline ? (
             <p className={styles.identityNote}>{person.profile.headline}</p>
           ) : confirmedIdentity ? (
@@ -208,15 +213,13 @@ export default async function PersonMemoryPage({
               className={styles.section}
               aria-labelledby="person-memory-pending"
             >
-              <h2 className={styles.sectionTitle} id="person-memory-pending">
-                待确认变化
-              </h2>
+              <PersonMemoryReviewHeading className={styles.sectionTitle} personId={person?.id ?? id} />
               <ul className={styles.pendingList}>
                 {proposals.map((proposal) => (
                   <li key={proposal.proposal_id}>
                     <MemoryReviewCard
                       binding={binding}
-                      contextId={proposal.relationship_context_id ?? null}
+                      contextId={null}
                       entryCapability={entryCapability}
                       personId={person?.id ?? id}
                       proposal={{

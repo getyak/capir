@@ -252,6 +252,8 @@ export function usePersonMemory(options: Options) {
         attempt.current = null; setEdit(null); setNotice("记忆已删除，并已核对当前列表。原始对话未删除。");
         return operation.id;
       }
+      const replacement = operation.replacement;
+      if (!replacement) throw new Error("Mutation receipt not verified");
       let cursor: string | null = null;
       const seen = new Set<string>();
       let persisted: MemoryRecallItem | undefined;
@@ -262,13 +264,13 @@ export function usePersonMemory(options: Options) {
         const page = await readPage(cursor, epoch);
         if (epoch !== generation.current) return null;
         readItems.push(...page.items); readHasMore = Boolean(page.has_more); readCursor = page.next_cursor ?? null;
-        persisted = page.items.find(item => item.id === operation.replacement!.id);
+        persisted = page.items.find(item => item.id === replacement.id);
         if (persisted) break;
         cursor = page.has_more ? page.next_cursor ?? null : null;
         if (cursor && seen.has(cursor)) throw new Error("Repeated memory cursor");
         if (cursor) seen.add(cursor);
       } while (cursor);
-      if (!persisted || persisted.display_text !== operation.text || persisted.version !== operation.replacement.version
+      if (!persisted || persisted.display_text !== operation.text || persisted.version !== replacement.version
         || persisted.scope !== original.scope || persisted.subject_id !== original.subject_id
         || persisted.relationship_context_id !== original.relationship_context_id || !canEditMemory(persisted)) {
         // A complete, authorized read resolves availability, even when another

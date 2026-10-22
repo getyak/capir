@@ -27,6 +27,22 @@ function imageKey(images: readonly ConversationImageManifest[]): string {
   return images.map((image) => image.attachment_id).join("|");
 }
 
+type InlineRetryState = {
+  /** Dialog open epoch that armed this attempt. */
+  epoch: number;
+  /** Monotonic attempt number so a stale attempt can never hand off focus. */
+  attempt: number;
+  position: number;
+  attachmentId: string;
+  /** Object URL this attempt produced, once its bytes arrived. */
+  expectedUrl: string | null;
+  /** True while the read is in flight; false while its bytes are decoding. */
+  pending: boolean;
+  /** Eligibility is lost on the first blur, even if the user later returns. */
+  focusEligible: boolean;
+  recovered: boolean;
+};
+
 /**
  * Inline conversation image strip with an exact-image viewer.
  *
@@ -73,6 +89,12 @@ function LoadedConversationImageStrip({
   const created = useRef<string[]>([]);
   const current = useRef<Array<string | null>>(images.map(() => null));
   const generation = useRef(0);
+  const [inlineRetry, setInlineRetryState] = useState<InlineRetryState | null>(null);
+  const inlineRetryRef = useRef<InlineRetryState | null>(null);
+  const openEpoch = useRef(0);
+  const retryAttempt = useRef(0);
+  const inlineRetryButtonRef = useRef<HTMLButtonElement | null>(null);
+  const zoomRef = useRef<HTMLButtonElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -84,8 +106,19 @@ function LoadedConversationImageStrip({
     readBusy.current = false;
     setReading(false);
   };
+  const updateInlineRetry = (next: InlineRetryState | null) => {
+    inlineRetryRef.current = next;
+    setInlineRetryState(next);
+  };
   const markFailed = (position: number, expectedUrl?: string) => {
     if (expectedUrl && current.current[position] !== expectedUrl) return;
+    const live = inlineRetryRef.current;
+    if (live && live.position === position && (expectedUrl === undefined || live.expectedUrl === expectedUrl)) {
+      // A failed read or a failed decode ends this attempt's handoff. The same
+      // Retry control stays mounted through `failed[position]` and never
+      // claims recovery.
+      updateInlineRetry(null);
+    }
     const url = current.current[position];
     if (url) {
       URL.revokeObjectURL(url);
@@ -114,6 +147,12 @@ function LoadedConversationImageStrip({
     decodedOrFailed.current[position] = false;
     created.current.push(url);
     setUrls((previous) => previous.map((value, i) => (i === position ? url : value)));
+    const live = inlineRetryRef.current;
+    if (live && live.position === position && live.pending) {
+      // The attempt's bytes arrived: the SAME Retry stays mounted while the
+      // current viewer image decodes; only a real onLoad may finish it.
+      updateInlineRetry({ ...live, expectedUrl: url, pending: false });
+    }
   };
 
   const loadServer = async (position: number, alive: () => boolean) => {
@@ -162,9 +201,13 @@ function LoadedConversationImageStrip({
     readBusy.current = true;
     fetched.current = false;
     decodedOrFailed.current = images.map(() => false);
+    // A whole-strip reread (retryAll, Activity reconnect, owner or binding
+    // identity change) cancels any prior one-image retry focus handoff.
+    openEpoch.current += 1;
     // Activity reconnects effects while retaining state. Revoked pixels and a
     // prior recovery must become a new busy read before the strip is painted.
     // eslint-disable-next-line react-hooks/set-state-in-effect
+    updateInlineRetry(null);
     setReading(true);
     setUrls(images.map(() => null));
     setFailed(images.map(() => false));
@@ -210,15 +253,30 @@ function LoadedConversationImageStrip({
 
   const openAt = (position: number, trigger: HTMLButtonElement) => {
     triggerRef.current = trigger;
+    // A new open epoch cancels any prior retry focus handoff.
+    openEpoch.current += 1;
+    updateInlineRetry(null);
     setIndex(position);
     setZoom("fit");
     setFitPercent(null);
     setOpen(true);
   };
-  const step = (delta: number) => setIndex((current) => (current + delta + images.length) % images.length);
+  const step = (delta: number) => {
+    // Stepping to another image (including away and back) cancels the handoff.
+    updateInlineRetry(null);
+    setIndex((current) => (current + delta + images.length) % images.length);
+  };
+  const onOpenChange = (next: boolean) => {
+    if (!next) {
+      // Closing cancels the handoff; a late result must never steal focus.
+      openEpoch.current += 1;
+      updateInlineRetry(null);
+    }
+    setOpen(next);
+  };
   /** Only blank dialog space closes; the image and every control keep it open. */
   const onBlankClose = (event: React.MouseEvent) => {
-    if (event.target === event.currentTarget) setOpen(false);
+    if (event.target === event.currentTarget) onOpenChange(false);
   };
   const onKeyDown = (event: React.KeyboardEvent) => {
     // The actual-size scroll region keeps native keyboard panning.
@@ -226,7 +284,28 @@ function LoadedConversationImageStrip({
     if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
     else if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
   };
-  const retryOne = (position: number) => {
+  const retryOne = (position: number, trigger: HTMLButtonElement) => {
+    if (inlineRetryRef.current?.recovered) {
+      // Returning to Retry was the user's choice. Keep it until an explicit
+      // activation hands off; this is no longer a network retry.
+      zoomRef.current?.focus({ preventScroll: true });
+      updateInlineRetry(null);
+      return;
+    }
+    // Synchronous duplicate-activation guard: the focused control is
+    // single-shot while its own read or decode is pending.
+    if (inlineRetryRef.current) return;
+    retryAttempt.current += 1;
+    updateInlineRetry({
+      epoch: openEpoch.current,
+      attempt: retryAttempt.current,
+      position,
+      attachmentId: images[position]?.attachment_id ?? "",
+      expectedUrl: null,
+      pending: true,
+      focusEligible: document.activeElement === trigger,
+      recovered: false,
+    });
     readBusy.current = true; setReading(true);
     decodedOrFailed.current[position] = false;
     setFailed((previous) => previous.map((value, i) => (i === position ? false : value)));
@@ -236,6 +315,28 @@ function LoadedConversationImageStrip({
       if (local) await loadLocal(alive, position);
       else await loadServer(position, alive);
     })();
+  };
+  /** The viewer image decoded real pixels: finish the inline retry handoff. */
+  const onViewerDecoded = (url: string) => {
+    measure();
+    const live = inlineRetryRef.current;
+    if (!live || live.pending || live.recovered || live.expectedUrl !== url) return;
+    if (live.position !== index || live.epoch !== openEpoch.current || live.attempt !== retryAttempt.current) return;
+    if (images[live.position]?.attachment_id !== live.attachmentId) return;
+    if (current.current[live.position] !== url) return;
+    // Only when that exact Retry still owns focus does it synchronously hand
+    // focus to the existing zoom control, before the Retry is removed.
+    const retry = inlineRetryButtonRef.current;
+    if (live.focusEligible && retry?.isConnected && document.activeElement === retry && zoomRef.current?.isConnected) {
+      zoomRef.current?.focus({ preventScroll: true });
+      updateInlineRetry(null);
+    } else if (retry?.isConnected && document.activeElement === retry) {
+      // Never remove a control the user deliberately returned to, and never
+      // reinterpret that return as permission for an automatic handoff.
+      updateInlineRetry({ ...live, recovered: true, focusEligible: false });
+    } else {
+      updateInlineRetry(null);
+    }
   };
   const retryAll = () => {
     if (readBusy.current) return;
@@ -273,6 +374,11 @@ function LoadedConversationImageStrip({
     ? "缩放 100%（原始大小），点击切换为适应窗口"
     : "缩放 适应窗口，点击切换为原始 100%";
   const shown = images[index];
+  const activeRetry = inlineRetry?.position === index ? inlineRetry : null;
+  const showInlineRetry = failed[index] || activeRetry !== null;
+  const viewerMessage = activeRetry
+    ? (activeRetry.recovered ? "图片已恢复。" : activeRetry.pending ? "正在重新读取图片…" : "正在读取图片…")
+    : failed[index] ? "这张图片暂时无法读取。" : "正在读取图片…";
 
   return (
     <div className={styles.images} data-compact={compact ? "true" : undefined} data-layout={layout} ref={stripRef}>
@@ -320,7 +426,7 @@ function LoadedConversationImageStrip({
         </button>
       ) : null}
       {recoveryId ? <span className="sr-only" role="status">{reading ? "正在重新读取图片。" : anyFailed ? "仍有图片暂时无法读取，可重试。" : "图片已重新读取，可查看原图。"}</span> : null}
-      <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Root open={open} onOpenChange={onOpenChange}>
         <Dialog.Portal>
           <Dialog.Overlay className={styles.imageBackdrop} />
           <Dialog.Content
@@ -336,7 +442,7 @@ function LoadedConversationImageStrip({
             }}
           >
             <div className={styles.imageToolbar}>
-              <button aria-label={zoomDescription} className={styles.imageZoom} onClick={() => setZoom((value) => (value === "actual" ? "fit" : "actual"))} type="button">
+              <button aria-label={zoomDescription} className={styles.imageZoom} onClick={() => setZoom((value) => (value === "actual" ? "fit" : "actual"))} ref={zoomRef} type="button">
                 {zoomLabel}
               </button>
               <button aria-label="在新标签页打开原图" className={styles.imageControl} disabled={!urls[index]} onClick={openOriginal} type="button">
@@ -363,20 +469,33 @@ function LoadedConversationImageStrip({
                   alt={shown?.file_name ?? `原图 ${index + 1}`}
                   data-zoom={zoom}
                   onError={() => markFailed(index, urls[index]!)}
-                  onLoad={measure}
+                  onLoad={() => onViewerDecoded(urls[index]!)}
                   ref={imageRef}
                   src={urls[index]!}
                 />
-              ) : (
-                <div className={styles.imageDialogMessage} role="status">
-                  <p>{failed[index] ? "这张图片暂时无法读取。" : "正在读取图片…"}</p>
-                  {failed[index] ? (
-                    <button className={styles.imageRetryInline} onClick={() => retryOne(index)} type="button">
-                      重新读取
+              ) : null}
+              {!urls[index] || showInlineRetry ? (
+                <div className={styles.imageDialogMessage} data-overlay={urls[index] ? "true" : undefined} role="status">
+                  <p>{viewerMessage}</p>
+                  {showInlineRetry ? (
+                    <button
+                      aria-busy={activeRetry && !activeRetry.recovered ? true : undefined}
+                      aria-disabled={activeRetry && !activeRetry.recovered ? true : undefined}
+                      className={styles.imageRetryInline}
+                      onBlur={() => {
+                        const live = inlineRetryRef.current;
+                        if (live?.recovered) updateInlineRetry(null);
+                        else if (live?.focusEligible) updateInlineRetry({ ...live, focusEligible: false });
+                      }}
+                      onClick={event => retryOne(index, event.currentTarget)}
+                      ref={inlineRetryButtonRef}
+                      type="button"
+                    >
+                      {activeRetry?.recovered ? "查看已恢复图片" : "重新读取"}
                     </button>
                   ) : null}
                 </div>
-              )}
+              ) : null}
               {images.length > 1 ? (
                 <button aria-label="下一张图片" className={styles.imageNav} data-side="next" onClick={() => step(1)} type="button">
                   <CaretRight aria-hidden size={18} />

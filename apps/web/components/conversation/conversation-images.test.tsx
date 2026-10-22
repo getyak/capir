@@ -139,6 +139,26 @@ async function decodeThumbnails(): Promise<void> {
   });
 }
 
+// Two images where the second fails its first read; the viewer is opened on
+// the healthy image and stepped onto the unavailable one, which is the only
+// way a keyboard user reaches the inline Retry inside the viewer.
+async function openFailedImage(): Promise<void> {
+  fetcher.mockImplementation((url: string) => String(url).endsWith("/1")
+    ? Promise.resolve(new Response("unavailable", { status: 500 }))
+    : Promise.resolve(new Response(pngBytes())));
+  await renderStrip({ images: [imageManifest(0), imageManifest(1)] });
+  await act(async () => { document.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!.click(); });
+  await flush();
+  await act(async () => {
+    dialog().dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+  });
+  expect(dialog().textContent).toContain("这张图片暂时无法读取。");
+}
+
+function viewerImageCount(): number {
+  return dialog().querySelectorAll("img").length;
+}
+
 it("keeps one focused retry control through pending read and decoded recovery, then opens the exact image", async () => {
   fetcher.mockResolvedValueOnce(new Response("unavailable", {status:500}));
   await renderStrip({images:[imageManifest(0)]});
@@ -198,6 +218,164 @@ it("keeps a decoding failure retryable and revokes its failed bytes", async () =
   expect(retry.getAttribute("aria-busy")).not.toBe("true");
   expect(revokedUrls).toContain(url);
   expect(document.body.textContent).not.toContain("图片已重新读取");
+});
+
+it("keeps the same focused inline Retry mounted through a pending read with a synchronous duplicate guard", async () => {
+  await openFailedImage();
+  const retry = button("重新读取"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  await act(async () => { retry.click(); retry.click(); }); await flush();
+  // The second activation is dropped synchronously: one retry read only.
+  expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/1"))).toHaveLength(2);
+  expect(retry.isConnected).toBe(true);
+  expect(document.activeElement).toBe(retry);
+  expect(retry.getAttribute("aria-busy")).toBe("true");
+  expect(retry.getAttribute("aria-disabled")).toBe("true");
+  expect(retry.textContent).toBe("重新读取");
+  // A late failure returns to the SAME control without claiming recovery.
+  await act(async () => { finish(new Response("unavailable", { status: 500 })); }); await flush();
+  expect(button("重新读取")).toBe(retry);
+  expect(document.activeElement).toBe(retry);
+  expect(retry.getAttribute("aria-busy")).not.toBe("true");
+  expect(document.body.textContent).not.toContain("图片已重新读取");
+});
+
+it("keeps the inline Retry through blob arrival until the viewer image really decodes, then hands focus to zoom", async () => {
+  await openFailedImage();
+  const retry = button("重新读取"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  await act(async () => retry.click()); await flush();
+  finish(new Response(pngBytes())); await flush();
+  // Bytes available is not pixel recovery: the SAME control stays mounted.
+  expect(button("重新读取")).toBe(retry);
+  expect(retry.isConnected).toBe(true);
+  expect(document.activeElement).toBe(retry);
+  expect(retry.getAttribute("aria-busy")).toBe("true");
+  expect(viewerImageCount()).toBe(1);
+  expect(dialogImage().alt).toBe("photo-2.png");
+  expect(document.body.textContent).not.toContain("图片已重新读取");
+  // Only the CURRENT viewer image's real successful onLoad finishes the retry.
+  await act(async () => dialogImage().dispatchEvent(new window.Event("load")));
+  expect(retry.isConnected).toBe(false);
+  expect(document.activeElement).toBe(button("缩放 适应窗口，点击切换为原始 100%"));
+});
+
+it("keeps the same focused inline Retry after a repeated failure without a false recovery", async () => {
+  await openFailedImage();
+  const retry = button("重新读取"); retry.focus();
+  fetcher.mockImplementation(() => Promise.resolve(new Response("unavailable", { status: 500 })));
+  await act(async () => retry.click()); await flush();
+  await act(async () => retry.click()); await flush();
+  expect(button("重新读取")).toBe(retry);
+  expect(retry.isConnected).toBe(true);
+  expect(document.activeElement).toBe(retry);
+  expect(retry.textContent).toBe("重新读取");
+  expect(retry.getAttribute("aria-busy")).not.toBe("true");
+  expect(document.body.textContent).not.toContain("图片已重新读取");
+  expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/1"))).toHaveLength(3);
+});
+
+it("keeps the same focused inline Retry on a decode failure and revokes its failed bytes", async () => {
+  await openFailedImage();
+  const retry = button("重新读取"); retry.focus();
+  fetcher.mockImplementation(() => Promise.resolve(new Response(pngBytes())));
+  await act(async () => retry.click()); await flush();
+  const brokenUrl = dialogImage().src;
+  await act(async () => dialogImage().dispatchEvent(new window.Event("error")));
+  expect(button("重新读取")).toBe(retry);
+  expect(document.activeElement).toBe(retry);
+  expect(retry.getAttribute("aria-busy")).not.toBe("true");
+  expect(revokedUrls).toContain(brokenUrl);
+  expect(document.body.textContent).not.toContain("图片已重新读取");
+});
+
+it("never steals a moved focus when the retried image finishes decoding", async () => {
+  await openFailedImage();
+  const retry = button("重新读取"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  await act(async () => retry.click()); await flush();
+  finish(new Response(pngBytes())); await flush();
+  // The user picks another control inside the modal while the bytes decode.
+  const other = button("下载原图");
+  other.focus();
+  await act(async () => dialogImage().dispatchEvent(new window.Event("load")));
+  expect(document.activeElement).toBe(other);
+  expect(retry.isConnected).toBe(false);
+});
+
+it.each(["left-and-returned", "activated-without-focus"] as const)("keeps an explicit recovered action after %s, with no automatic focus or second GET", async kind => {
+  await openFailedImage();
+  const retry = button("重新读取");
+  const other = button("上一张图片");
+  if (kind === "left-and-returned") retry.focus(); else other.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+  await act(async () => retry.click()); await flush();
+  await act(async () => { other.focus(); retry.focus(); });
+  expect(button("重新读取")).toBe(retry);
+  finish(new Response(pngBytes())); await flush();
+  await act(async () => dialogImage().dispatchEvent(new window.Event("load")));
+  expect(document.activeElement).toBe(retry);
+  expect(button("查看已恢复图片")).toBe(retry);
+  expect(retry.getAttribute("aria-busy")).not.toBe("true");
+  const calls = fetcher.mock.calls.length;
+  await act(async () => retry.click());
+  expect(fetcher.mock.calls).toHaveLength(calls);
+  expect(document.activeElement).toBe(button("缩放 适应窗口，点击切换为原始 100%"));
+});
+
+it("retires a retained recovered action only after the user leaves it", async () => {
+  await openFailedImage(); const retry = button("重新读取"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+  await act(async () => retry.click()); await flush();
+  const other = button("上一张图片");
+  await act(async () => { other.focus(); retry.focus(); });
+  finish(new Response(pngBytes())); await flush();
+  await act(async () => dialogImage().dispatchEvent(new window.Event("load")));
+  expect(document.activeElement).toBe(retry);
+  await act(async () => other.focus());
+  expect(document.activeElement).toBe(other); expect(retry.isConnected).toBe(false);
+});
+
+it("cancels the handoff on stepping away and keeps the late one-image read alive", async () => {
+  await openFailedImage();
+  const retry = button("重新读取"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  await act(async () => retry.click()); await flush();
+  const previous = button("上一张图片");
+  await act(async () => { previous.focus(); previous.click(); }); await flush();
+  expect(document.activeElement).toBe(previous);
+  const before = createdUrls.length;
+  finish(new Response(pngBytes())); await flush();
+  // Cancelling UI focus work never cancels the shared read pipeline.
+  expect(createdUrls).toHaveLength(before + 1);
+  const next = button("下一张图片");
+  await act(async () => { next.focus(); next.click(); }); await flush();
+  await act(async () => dialogImage().dispatchEvent(new window.Event("load")));
+  expect(document.activeElement).toBe(next);
+});
+
+it("cancels the handoff on close so a late result never steals focus", async () => {
+  await openFailedImage();
+  const retry = button("重新读取"); retry.focus();
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));
+  await act(async () => retry.click()); await flush();
+  const trigger = document.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!;
+  await act(async () => {
+    document.activeElement?.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+  await flush();
+  expect(document.querySelector("[role='dialog']")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+  finish(new Response(pngBytes())); await flush(); await decodeThumbnails();
+  expect(document.activeElement).toBe(trigger);
+  expect(document.body.textContent).not.toContain("图片已重新读取，可查看原图");
 });
 
 it("retries local bytes in the same scope without using the server proxy", async () => {
