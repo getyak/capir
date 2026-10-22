@@ -180,7 +180,7 @@ localization gates passed. Pending actual UI, provider and installed-build
 evidence cannot be replaced by source review or synthetic results.
 
 The complete source-based symptom, cross-platform and prioritized improvement
-register is [the dated UX audit](../docs/evaluations/2026-10-22-ios-conversation-ux-audit.md).
+register is [the dated UX audit](../docs/research/ios-conversation-ux-audit-2026-10-22.md).
 Its proposed local-feedback timing target is not a measured result. The main
 agent will compare the same native content before choosing a visual direction;
 no rendered or installed-build quality score is inferred from passing source checks.
