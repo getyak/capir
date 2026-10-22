@@ -4,39 +4,9 @@ struct AskPendingMediaStrip: View {
     let drafts: [AskMediaDraft]
     let language: AppLanguage
 
-    private var visibleDrafts: [AskMediaDraft] { Array(drafts.prefix(3)) }
-
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(visibleDrafts.enumerated()), id: \.element.id) { index, draft in
-                Image(uiImage: draft.preview)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 58, height: 58)
-                    .clipShape(RoundedRectangle(cornerRadius: 13))
-                    .overlay {
-                        if index == 2, drafts.count > 3 {
-                            RoundedRectangle(cornerRadius: 13)
-                                .fill(Color.black.opacity(0.48))
-                            Text(verbatim: "+\(drafts.count - 3)")
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                        }
-                    }
-            }
-        }
-        .padding(3)
-        .background(Color.tsCanvas, in: RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.tsLine, lineWidth: 1)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            String(drafts.count) + " · "
-                + language.text("Task images, not evidence")
-        )
-        .accessibilityIdentifier("ask-pending-media")
+        ConversationPendingImageSources(drafts: drafts, language: language)
+            .accessibilityIdentifier("ask-pending-media")
     }
 }
 
@@ -46,14 +16,16 @@ struct AskUserMessageBubble: View {
     var accessibilityIdentifier = "ask-user-message"
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            bubble(fixesWidth: true)
-            bubble(fixesWidth: false)
-                .frame(maxWidth: 330, alignment: .trailing)
+        if ConversationImagePresentation.hasMessage(message) {
+            ViewThatFits(in: .horizontal) {
+                bubble(fixesWidth: true)
+                bubble(fixesWidth: false)
+                    .frame(maxWidth: 330, alignment: .trailing)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(message)
+            .accessibilityIdentifier(accessibilityIdentifier)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(message)
-        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private func bubble(fixesWidth: Bool) -> some View {

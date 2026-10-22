@@ -1700,6 +1700,7 @@ struct RelationshipAskResponse: Decodable, Equatable, Identifiable {
     let createdAt: String
     let citations: [Citation]
     var labFeatureReceipt: LabFeatureAdoptionReceipt? = nil
+    var memoryProposal: ConversationMemoryProposalReference? = nil
 
     var id: String { taskID }
 
@@ -1878,7 +1879,8 @@ struct RelationshipAskResponse: Decodable, Equatable, Identifiable {
         createdAt: String,
         sessionTitle: String? = nil,
         citations: [Citation] = [],
-        labFeatureReceipt: LabFeatureAdoptionReceipt? = nil
+        labFeatureReceipt: LabFeatureAdoptionReceipt? = nil,
+        memoryProposal: ConversationMemoryProposalReference? = nil
     ) {
         self.contractVersion = contractVersion
         self.taskID = taskID
@@ -1891,6 +1893,7 @@ struct RelationshipAskResponse: Decodable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.citations = citations
         self.labFeatureReceipt = labFeatureReceipt
+        self.memoryProposal = memoryProposal
     }
 
     init(from decoder: Decoder) throws {
@@ -1906,6 +1909,9 @@ struct RelationshipAskResponse: Decodable, Equatable, Identifiable {
         createdAt = try container.decode(String.self, forKey: .createdAt)
         citations = []
         labFeatureReceipt = nil
+        memoryProposal = try container.decodeIfPresent(ConversationMemoryProposalReference.self, forKey: .memoryProposal)
+            ?? container.decodeIfPresent(ConversationMemoryProposalReference.self, forKey: .legacyMemoryProposal)
+        if let memoryProposal, !memoryProposal.isValid { throw PursuitWorkspaceClientError.invalidResponse }
     }
 
     func attaching(citations: [Citation], labFeatureReceipt: LabFeatureAdoptionReceipt?) -> RelationshipAskResponse {
@@ -1920,7 +1926,8 @@ struct RelationshipAskResponse: Decodable, Equatable, Identifiable {
             createdAt: createdAt,
             sessionTitle: sessionTitle,
             citations: citations,
-            labFeatureReceipt: labFeatureReceipt
+            labFeatureReceipt: labFeatureReceipt,
+            memoryProposal: memoryProposal
         )
     }
 
@@ -1932,6 +1939,8 @@ struct RelationshipAskResponse: Decodable, Equatable, Identifiable {
         case disposition, blocks, media
         case sessionTitle = "session_title"
         case createdAt = "created_at"
+        case memoryProposal = "memory_proposal"
+        case legacyMemoryProposal = "memoryProposal"
     }
 }
 
@@ -2055,6 +2064,7 @@ struct UnscopedChatTaskResponse: Decodable, Equatable, Identifiable {
     let externalEffects: [String]
     let agentEvent: AgentEvent?
     let createdAt: String
+    var memoryProposal: ConversationMemoryProposalReference? = nil
 
     struct AgentEvent: Decodable, Equatable {
         let kind: String
@@ -2130,7 +2140,8 @@ struct UnscopedChatTaskResponse: Decodable, Equatable, Identifiable {
             disposition: disposition,
             blocks: blocks,
             createdAt: createdAt,
-            sessionTitle: sessionTitle
+            sessionTitle: sessionTitle,
+            memoryProposal: memoryProposal?.isValid == true ? memoryProposal : nil
         )
     }
 
@@ -2140,6 +2151,7 @@ struct UnscopedChatTaskResponse: Decodable, Equatable, Identifiable {
         case contractVersion = "contract_version"
         case taskID = "task_id"
         case agentEvent = "agent_event"
+        case memoryProposal = "memory_proposal"
         case externalEffects = "external_effects"
         case createdAt = "created_at"
     }
@@ -2597,5 +2609,15 @@ extension URLPursuitWorkspaceClient {
     func imageConversationTransport() async throws -> ConversationImageTransport {
         let login = try await contactAgentLogin()
         return ConversationImageTransport(baseURL: baseURL, token: login.accessToken, session: session)
+    }
+}
+
+extension URLPursuitWorkspaceClient: ConversationMemoryReviewClientProviding {
+    func memoryReviewClient() async throws -> ConversationMemoryReviewClient {
+        let login = try await contactAgentLogin()
+        let binding = SHA256.hash(data: Data("\(baseURL.absoluteString)|\(login.account.id)|\(login.user.id)".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return ConversationMemoryReviewClient(baseURL: baseURL, bearerToken: login.accessToken,
+            accountBinding: binding, session: session)
     }
 }

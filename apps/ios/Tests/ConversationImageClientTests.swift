@@ -87,6 +87,111 @@ final class ConversationImageClientTests: XCTestCase {
         XCTAssertEqual(requests, 0)
     }
 
+    func testAuthenticatedStreamYieldsBoundMetadataAndEOFDoesNotClaimCompletion() async throws {
+        let (client, network) = makeClient(); defer { network.invalidateAndCancel(); ImageWireURLProtocol.handler = nil }
+        let sid = UUID(), mid = UUID(), run = UUID()
+        ImageWireURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/agent-sessions/\(sid.uuidString.lowercased())/conversation-queue/stream")
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-image-token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+            let row: [String: Any] = ["queue_entry_id": mid.uuidString, "message_id": mid.uuidString,
+                "run_id": run.uuidString, "status": "running", "images": []]
+            let snapshot = try JSONSerialization.data(withJSONObject: ["contract_version": TalentSignalAPIContract.version,
+                "session_id": sid.uuidString, "revision": 1, "paused": false, "active": row, "queued": []])
+            let preview = try JSONSerialization.data(withJSONObject: ["run_id": run.uuidString,
+                "message_id": mid.uuidString, "revision": 1, "stage": "contact_read", "text": "UNVALIDATED_TEXT"])
+            let body = "event: snapshot\ndata: \(String(decoding: snapshot, as: UTF8.self))\n\n"
+                + "event: preview\ndata: \(String(decoding: preview, as: UTF8.self))\n\n"
+            return (Data(body.utf8), "text/event-stream")
+        }
+        var updates: [ConversationImageQueueUpdate] = []
+        let stream = try await client.conversationImageUpdates(sessionID: sid, messageID: mid)
+        for try await update in stream { updates.append(update) }
+        let last = try XCTUnwrap(updates.last)
+        XCTAssertEqual(last.sessionID, sid); XCTAssertEqual(last.messageID, mid)
+        XCTAssertEqual(last.entry?.queueStatus, .running)
+        XCTAssertEqual(last.observedStage, .contactRead)
+        XCTAssertFalse(updates.contains { $0.entry?.queueStatus == .completed }, "EOF only ends observation.")
+    }
+
+    func testStreamUnavailableIsAReadbackConditionAndWrongMediaTypeIsRejected() async throws {
+        let (client, network) = makeClient(); defer { network.invalidateAndCancel(); ImageWireURLProtocol.handler = nil }
+        ImageWireURLProtocol.handler = { _ in (Data("event: unavailable\ndata: {}\n\n".utf8), "text/event-stream") }
+        do {
+            let stream = try await client.conversationImageUpdates(sessionID: UUID(), messageID: UUID())
+            for try await _ in stream { XCTFail("Unavailable is never a processing update") }
+            XCTFail("Unavailable must end observation")
+        } catch ConversationImageStreamError.unavailable(410) { }
+        ImageWireURLProtocol.handler = { _ in (Data("event: snapshot\ndata: {}\n\n".utf8), "text/html") }
+        do {
+            let stream = try await client.conversationImageUpdates(sessionID: UUID(), messageID: UUID())
+            for try await _ in stream { XCTFail("HTML is not a verified stream") }
+            XCTFail("Wrong media type must be rejected")
+        } catch ConversationImageStreamError.invalidFrame { }
+    }
+
+    @MainActor
+    func testCancellationBeforeStreamAdmissionMakesNoRequest() async throws {
+        let (client, network) = makeClient(); defer { network.invalidateAndCancel(); ImageWireURLProtocol.handler = nil }
+        var requests = 0
+        ImageWireURLProtocol.handler = { _ in requests += 1; throw URLError(.badServerResponse) }
+        let task = Task {
+            let stream = try await client.conversationImageUpdates(sessionID: UUID(), messageID: UUID())
+            for try await _ in stream { XCTFail("A cancelled observation cannot publish") }
+        }
+        task.cancel()
+        do { try await task.value; XCTFail("Cancelled observation must stop") }
+        catch is CancellationError { }
+        XCTAssertEqual(requests, 0)
+    }
+
+    func testCancellingObservationClosesItsLiveTransport() async throws {
+        let (client, network) = makeClient()
+        defer {
+            ImageWireURLProtocol.holdOpen = false; ImageWireURLProtocol.onStop = nil
+            network.invalidateAndCancel(); ImageWireURLProtocol.handler = nil
+        }
+        let started = expectation(description: "Stream connected")
+        let stopped = expectation(description: "Only this observation transport stopped")
+        ImageWireURLProtocol.holdOpen = true
+        ImageWireURLProtocol.onStop = { stopped.fulfill() }
+        ImageWireURLProtocol.handler = { _ in
+            started.fulfill()
+            return (Data(": heartbeat\n\n".utf8), "text/event-stream")
+        }
+        let task = Task {
+            let stream = try await client.conversationImageUpdates(sessionID: UUID(), messageID: UUID())
+            for try await _ in stream { XCTFail("A heartbeat contains no message update") }
+        }
+        await fulfillment(of: [started], timeout: 3)
+        task.cancel()
+        _ = try? await task.value
+        await fulfillment(of: [stopped], timeout: 3)
+    }
+
+    @MainActor
+    func testQueueReadStillRejectsExpiredCanonicalSession() async throws {
+        let (client, network) = makeClient(); defer { network.invalidateAndCancel(); ImageWireURLProtocol.handler = nil }
+        let store = AgentSessionStore(persistence: ImageClientSessionPersistence())
+        let sid = try XCTUnwrap(store.beginUnscopedSession(objective: "Synthetic")), mid = UUID()
+        let saved = PersistedAgentSession(try XCTUnwrap(store.session(id: sid)))
+        let payload = try JSONSerialization.jsonObject(with: JSONEncoder.agentSession.encode(saved))
+        let envelope = try JSONSerialization.data(withJSONObject: ["contract_version": TalentSignalAPIContract.version,
+            "session": ["session_id": sid.uuidString, "revision": 1, "updated_at": "2026-01-01T00:00:00Z",
+                "expires_at": "2026-01-02T00:00:00Z", "deleted_at": NSNull(), "payload": payload]])
+        let snapshot = try JSONSerialization.data(withJSONObject: ["contract_version": TalentSignalAPIContract.version,
+            "session_id": sid.uuidString, "active": NSNull(), "queued": []])
+        ImageWireURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-image-token")
+            return (request.url!.path.hasSuffix("/conversation-queue") ? snapshot : envelope, "application/json")
+        }
+        do {
+            _ = try await client.readConversationImageState(sessionID: sid, messageID: mid)
+            XCTFail("Queue availability cannot extend canonical Session expiry")
+        } catch PursuitWorkspaceClientError.invalidResponse { }
+    }
+
     private func receipt(sid:UUID,mid:UUID,queue:UUID) throws -> Data {
         try JSONSerialization.data(withJSONObject:["contract_version":TalentSignalAPIContract.version,
             "session_id":sid.uuidString.lowercased(),"message_id":mid.uuidString.lowercased(),
@@ -112,6 +217,8 @@ final class ConversationImageClientTests: XCTestCase {
 
 private final class ImageWireURLProtocol: URLProtocol {
     static var handler: ((URLRequest)throws -> (Data,String))?
+    static var holdOpen = false
+    static var onStop: (() -> Void)?
     override class func canInit(with request:URLRequest)->Bool {true}
     override class func canonicalRequest(for request:URLRequest)->URLRequest {request}
     override func startLoading() {
@@ -119,8 +226,18 @@ private final class ImageWireURLProtocol: URLProtocol {
             let (data,type)=try Self.handler!(request)
             let response=HTTPURLResponse(url:request.url!,statusCode:200,httpVersion:nil,headerFields:["Content-Type":type])!
             client?.urlProtocol(self,didReceive:response,cacheStoragePolicy:.notAllowed)
-            client?.urlProtocol(self,didLoad:data);client?.urlProtocolDidFinishLoading(self)
+            client?.urlProtocol(self,didLoad:data)
+            if !Self.holdOpen { client?.urlProtocolDidFinishLoading(self) }
         } catch {client?.urlProtocol(self,didFailWithError:error)}
     }
-    override func stopLoading() { }
+    override func stopLoading() { Self.onStop?() }
+}
+
+private final class ImageClientSessionPersistence: AgentSessionPersisting {
+    var data: Data?
+    func load() throws -> Data? { data }
+    func save(_ data: Data) throws { self.data = data }
+    func deletionPending() throws -> Bool { false }
+    func beginDeletion() throws { }
+    func completeDeletion() throws { data = nil }
 }

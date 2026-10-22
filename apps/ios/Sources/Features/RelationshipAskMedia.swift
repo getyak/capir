@@ -203,9 +203,7 @@ struct ChatMediaAlbumBubble: View {
             NavigationStack {
                 ZStack {
                     Color.black.ignoresSafeArea()
-                    Image(uiImage: preview.image)
-                        .resizable()
-                        .scaledToFit()
+                    ZoomableCaptureImage(image: preview.image)
                         .accessibilityLabel(preview.asset.fileName)
                 }
                 .navigationTitle(preview.asset.fileName)
@@ -239,38 +237,45 @@ private struct ChatMediaTile: View {
     let onOpen: (UIImage) -> Void
 
     @State private var image: UIImage?
-    @State private var failed = false
+    @State private var loadedAssetID: String?
+    @State private var failedAssetID: String?
+    @State private var attempt = 0
     @Environment(\.appLanguage) private var appLanguage
+    private var displayedImage: UIImage? { loadedAssetID == asset.id ? image : nil }
+    private var failed: Bool { failedAssetID == asset.id }
 
     var body: some View {
-        Button {
-            if let image { onOpen(image) }
-        } label: {
-            ZStack {
-                Color.tsCanvas
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else if failed {
-                    Image(systemName: "photo.badge.exclamationmark")
-                        .font(.title2)
-                        .foregroundStyle(Color.tsMutedInk)
-                } else {
-                    ProgressView()
+        ZStack {
+            Button {
+                if let displayedImage { onOpen(displayedImage) }
+            } label: {
+                ZStack {
+                    Color.tsCanvas
+                    if let displayedImage {
+                        Image(uiImage: displayedImage).resizable().scaledToFill()
+                    } else if failed {
+                        Image(systemName: "photo.badge.exclamationmark")
+                            .font(.title2).foregroundStyle(Color.tsMutedInk)
+                    } else { ProgressView() }
+                    if remainder > 0 {
+                        Color.black.opacity(0.52)
+                        Text(verbatim: "+\(remainder)").font(.title.weight(.semibold)).foregroundStyle(.white)
+                    }
                 }
-                if remainder > 0 {
-                    Color.black.opacity(0.52)
-                    Text(verbatim: "+\(remainder)")
-                        .font(.title.weight(.semibold))
-                        .foregroundStyle(.white)
-                }
+                .clipped().contentShape(Rectangle())
             }
-            .clipped()
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(displayedImage == nil)
+            if failed {
+                Button { attempt += 1 } label: {
+                    Label(appLanguage.text("Retry loading image"), systemImage: "arrow.clockwise")
+                        .font(.caption).frame(minHeight: 44).padding(.horizontal, 8)
+                        .background(Color.tsSurface, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .accessibilityIdentifier("ask-media-retry-\(index)")
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(image == nil)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(
             appLanguage.text("Image") + " \(index + 1) "
                 + appLanguage.text("of") + " \(total), \(asset.fileName)"
@@ -282,16 +287,16 @@ private struct ChatMediaTile: View {
         )
         .accessibilityHint(appLanguage.text("Opens the stored task image"))
         .accessibilityIdentifier("ask-media-album-item-\(index)")
-        .task(id: asset.id) {
+        .task(id: "\(asset.id):\(attempt)") {
+            failedAssetID = nil
             do {
                 let content = try await load(asset.id)
-                guard let decoded = UIImage(data: content.data) else {
-                    failed = true
-                    return
-                }
-                image = decoded
+                try Task.checkCancellation()
+                guard let decoded = UIImage(data: content.data) else { throw ImageConversationError.invalidReadback }
+                image = decoded; loadedAssetID = asset.id
             } catch {
-                failed = true
+                guard !Task.isCancelled else { return }
+                failedAssetID = asset.id
             }
         }
     }

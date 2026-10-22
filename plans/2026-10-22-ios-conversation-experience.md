@@ -89,10 +89,10 @@ recheck resources and the single iOS session before heavyweight operations.
 
 ## Milestones
 
-1. Active: freeze native contracts, UX states and worker ownership.
-2. Implement the non-overlapping slices and integrate one complete conversation.
-3. Main review plus independent safety/correctness review; fix confirmed P0/P1.
-4. Build once, focused tests and actual primary-device interaction; compact
+1. Complete: freeze native contracts, UX states and worker ownership.
+2. Complete: implement the non-overlapping slices and integrate one complete conversation.
+3. Source review complete: independent reviewer rechecked all confirmed P0/P1 fixes.
+4. Active: build, focused tests and actual primary-device interaction; compact
    only for long-image, keyboard and Dynamic Type layout.
 5. Current-head CI, applicable resident deployment if runtime changes, native
    release/acceptance evidence and precise resource closeout.
@@ -120,7 +120,46 @@ recheck resources and the single iOS session before heavyweight operations.
 
 ## Current status and unknowns
 
-Planning and current-source diagnosis complete. Implementation not yet started.
-No test, review, deployment or release is claimed. Live Memory route behavior,
-native review presentation, device latency and installed TestFlight fidelity
-still require proof. No task-owned long-running resources have started.
+Native Memory, progress and integration source are implemented. Independent
+review identified and workers fixed ordinary navigation draft loss, sibling
+Memory loss, implicit batch skipping, historical source binding and unknown
+operation replay. Final protected-intent retention and source-map review remains
+active. Syntax checks pass; localization passes before latest small additions.
+First build found a generic nested error decoder (fixed). Second build missed
+new operation-store source added after generation; regenerate before next build.
+The architecture gate required extracting presentation/fixtures; AskView now
+fits the existing 8820-line limit. Documentation and Wiki checks passed; full
+docs:check awaits final architecture rerun. Native tests/UI have not run.
+
+Pi media task 20261022-220909-decb4775 stalled on one model response without
+source changes, was cancelled, and its managed PIDs 93921/93926 were verified
+absent. Artifacts and source remain recoverable. Media ownership transferred to
+native_progress after cancellation; no concurrent writers remain in that slice.
+
+Main resource/artifact record: ~/.codex/artifacts/ios-conversation-experience-20261022/.
+Registered rebuildable output: /private/tmp/ai-test-ios-conversation-experience-20261022.kmczFu.
+A pinned docs command auto-installed workspace dependencies; these are owned
+rebuildable task outputs to remove only after formal evidence is preserved.
+One isolated daily test run acea8a63-ec2d-4051-8414-a7c6aebba8fb was created via
+capir under the verified test@cubxxw.com authorization. Its --open web browser
+launch timed out; run status readback succeeded. Reuse request
+ed268276-57c5-4eee-9e0f-37c0e117b732, never create a replacement. Private credentials
+remain in the private artifact/keyring only. Stop and verify cleanup at closeout.
+Live Memory behavior, actual native UI, device latency and installed TestFlight
+fidelity still require proof. No PR, deployment or release is claimed.
+
+## Source review checkpoint
+
+All source slices are frozen for native verification. Independent review closed
+all confirmed P0/P1, including historical and canonical steering provenance,
+scoped relationship Ask snake-case proposal decoding and purpose isolation,
+protected exact intent replay, source revocation/expiry cleanup and incremental
+contact/item decisions. Source review is not runtime or release proof.
+
+The new-contact layout is identity-first: name/context/source and Add contact
+precede a collapsed suggestion preview; pending Memory editors follow actual
+contact confirmation. Editorial and compact directions share the same behavior.
+Seven deterministic UI cases and one opt-in real-provider image/contact journey
+are present. Main build attempt 4 is running; no native tests have run yet.
+Documentation/architecture and localization gates passed on the pre-freeze
+source. AskView remains within the existing architecture limit (8806/8820).

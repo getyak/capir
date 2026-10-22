@@ -43,7 +43,8 @@ enum AgentSessionContextPolicy {
             createdAt: response.createdAt,
             sessionTitle: response.sessionTitle,
             citations: response.citations,
-            labFeatureReceipt: response.labFeatureReceipt
+            labFeatureReceipt: response.labFeatureReceipt,
+            memoryProposal: response.memoryProposal
         )
     }
 
