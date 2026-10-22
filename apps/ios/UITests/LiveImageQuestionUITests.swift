@@ -106,6 +106,24 @@ final class LiveImageQuestionUITests: XCTestCase {
         try inspectOriginal(app, turn: turn)
     }
 
+    private func openStudio(_ app: XCUIApplication) throws {
+        let studio = app.buttons["relationship-agent-studio"]
+        XCTAssertTrue(studio.waitForExistence(timeout: 15))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: studio)
+        guard XCTWaiter.wait(for: [ready], timeout: 10) == .completed else {
+            XCTFail("Agent Studio navigation is not hittable")
+            throw URLError(.cannotOpenFile)
+        }
+        studio.tap()
+        if !app.buttons["agent-settings"].waitForExistence(timeout: 5), studio.isHittable {
+            XCTContext.runActivity(named: "Cold Studio tap needed one read-only navigation retry") { _ in studio.tap() }
+        }
+        guard app.buttons["agent-settings"].waitForExistence(timeout: 10) else {
+            XCTFail("Native navigation did not open Agent Studio")
+            throw URLError(.cannotOpenFile)
+        }
+    }
+
     private func selectSessions(_ app: XCUIApplication) {
         let tab = app.buttons["archive-tab-sessions"]
         XCTAssertTrue(tab.waitForExistence(timeout: 15))
@@ -204,8 +222,7 @@ final class LiveImageQuestionUITests: XCTestCase {
         // whichever environment a previously running app happened to use.
         app.launch()
         XCTAssertTrue(app.buttons["relationship-guide"].waitForExistence(timeout: 60))
-        app.buttons["relationship-agent-studio"].tap()
-        XCTAssertTrue(app.buttons["agent-settings"].waitForExistence(timeout: 5))
+        try openStudio(app)
         let settings = app.buttons["agent-settings"]
         let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: settings)
         XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
