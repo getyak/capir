@@ -152,7 +152,7 @@ receives the same real TestFlight proof as an iOS product change.
 
 The iOS job uses the host simulator architecture only (`arm64` on hosted
 `macos-26`), without changing the device archive or macOS distribution targets.
-Pull requests build Debug once, run all unit tests, and execute the five core
+Pull requests build Debug once, run all unit tests, and execute the configured PR
 journeys in `scripts/ios/ci-quick-tests.txt`. Main pushes retain the separate
 Release build and all ten journeys in `scripts/ios/ci-smoke-tests.txt`, including
 both large-text/dark-mode accessibility audits. Every UI journey still uses an
