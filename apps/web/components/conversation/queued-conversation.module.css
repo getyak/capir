@@ -161,7 +161,7 @@
 .imageFileName { margin:0; max-width:60vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#fff; font-size:var(--ts-type-meta, 0.8125rem); font-weight:500; }
 .imagePosition { color:#ffffffb0; font-size:var(--ts-type-meta, 0.8125rem); font-variant-numeric:tabular-nums; }
 .imageDialog button:focus-visible { outline:2px solid #fff; outline-offset:2px; }
-.imageDialogMessage { display:grid; gap:10px; justify-items:center; color:#fff; font-size:var(--ts-type-meta, 0.8125rem); }
+.imageDialogMessage { display:grid; margin:auto; gap:10px; justify-items:center; color:#fff; font-size:var(--ts-type-meta, 0.8125rem); }
 /* While a retried image decodes, its message keeps the SAME Retry control
    mounted over the stage instead of replacing the branch before pixels. */
 .imageDialogMessage[data-overlay="true"] { position:absolute; inset:0; margin:auto; width:max-content; height:max-content; align-content:center; padding:14px 18px; border-radius:12px; background:#000000b8; }
