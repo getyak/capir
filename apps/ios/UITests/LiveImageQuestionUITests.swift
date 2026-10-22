@@ -59,7 +59,7 @@ final class LiveImageQuestionUITests: XCTestCase {
         composer.tap(); composer.typeText(unsent)
         let close = app.buttons["ask-close"]
         XCTAssertTrue(close.exists); close.tap()
-        app.buttons["archive-tab-sessions"].tap()
+        selectSessions(app)
         let latest = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "agent-session-")).firstMatch
         XCTAssertTrue(latest.waitForExistence(timeout: 60))
         let sessionIdentifier = latest.identifier
@@ -67,7 +67,7 @@ final class LiveImageQuestionUITests: XCTestCase {
         sessionReceipt.name = "visual-question-native-session-id"; sessionReceipt.lifetime = .keepAlways; self.add(sessionReceipt)
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["archive-tab-sessions"].waitForExistence(timeout: 60))
-        app.buttons["archive-tab-sessions"].tap()
+        selectSessions(app)
         let sameSession = app.buttons[sessionIdentifier]
         XCTAssertTrue(sameSession.waitForExistence(timeout: 60)); sameSession.tap()
         XCTAssertTrue(composer.waitForExistence(timeout: 10)); XCTAssertEqual(composer.value as? String, unsent)
@@ -88,14 +88,39 @@ final class LiveImageQuestionUITests: XCTestCase {
             throw XCTSkip("Requires the exact existing visual question Session.")
         }
         let app = try configuredAndVerifiedApp()
-        app.buttons["archive-tab-sessions"].tap()
+        app.terminate(); app.launch()
+        selectSessions(app)
         let row = app.buttons["agent-session-\(sessionID.uuidString)"]
         XCTAssertTrue(row.waitForExistence(timeout: 60)); row.tap()
+        let composer = app.textFields["ask-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        XCTAssertEqual(composer.value as? String, "Unsent visual draft " + marker)
+        app.swipeDown()
         let turn = try responseTurn(app, marker: marker, timeout: 30)
         XCTAssertTrue(turn.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", word)).firstMatch.exists)
         XCTAssertTrue(turn.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", code)).firstMatch.exists)
-        capture(app, "Existing visual reply recovered without resend")
+        let followup = try responseTurn(app, marker: "Follow-up " + marker, timeout: 30)
+        XCTAssertTrue(followup.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "COMET")).firstMatch.exists)
+        XCTAssertTrue(followup.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "219")).firstMatch.exists)
+        capture(app, "Existing visual replies and unsent draft recovered without resend")
         try inspectOriginal(app, turn: turn)
+    }
+
+    private func selectSessions(_ app: XCUIApplication) {
+        let tab = app.buttons["archive-tab-sessions"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 15))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: tab)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
+        for attempt in 0..<2 {
+            if tab.isSelected { return }
+            tab.tap()
+            let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: tab)
+            if XCTWaiter.wait(for: [selected], timeout: 3) == .completed { return }
+            if attempt == 0 {
+                XCTContext.runActivity(named: "Session tab needed one read-only navigation retry") { _ in }
+            }
+        }
+        XCTFail("Native navigation did not select Sessions")
     }
 
     private func inspectOriginal(_ app: XCUIApplication, turn: XCUIElement) throws {
