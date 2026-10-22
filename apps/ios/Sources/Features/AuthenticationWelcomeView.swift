@@ -67,8 +67,7 @@ struct AuthenticationWelcomeView<Content: View>: View {
                         ZStack(alignment: .bottom) {
                             AuthenticationPortraits(progress: progress)
                                 .contentShape(Rectangle())
-                                .onTapGesture { enter() }
-                                .highPriorityGesture(revealGesture(travel: travel))
+                                .highPriorityGesture(revealControlGesture(travel: travel))
                             TalentSignalBrandMark()
                                 .frame(width: 76, height: 76)
                                 .opacity(Double(1 - AuthenticationPortraitLayout.phase(progress, from: 0.04, to: 0.25)))
@@ -134,7 +133,7 @@ struct AuthenticationWelcomeView<Content: View>: View {
                             .accessibilityIdentifier("welcome-enter")
                             .accessibilityLabel(language.text("Swipe up, or tap to begin"))
                             .accessibilityHint(language.text("Explore an example link and its relationships."))
-                            .highPriorityGesture(revealGesture(travel: travel))
+                            .highPriorityGesture(revealControlGesture(travel: travel))
                         }
                     }
                     .padding(.horizontal, 28)
@@ -186,6 +185,13 @@ struct AuthenticationWelcomeView<Content: View>: View {
                 if AuthenticationWelcomeGesture.shouldEnter(translation: value.translation,
                     predicted: value.predictedEndTranslation, travel: travel) { enter() }
             }
+    }
+
+    private func revealControlGesture(travel: CGFloat) -> some Gesture {
+        // A short drag stays a drag. A stationary touch can still activate the
+        // control after the higher-priority drag recognizer fails.
+        revealGesture(travel: travel)
+            .exclusively(before: TapGesture().onEnded { enter() })
     }
 
     private func enter() {

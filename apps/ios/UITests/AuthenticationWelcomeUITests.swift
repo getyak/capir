@@ -1,6 +1,59 @@
 import XCTest
 
 final class AuthenticationWelcomeUITests: XCTestCase {
+    func testShortPullDoesNotEnterAndStationaryTapReachesSignIn() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--auth-backend-url", "http://127.0.0.1:4799",
+            "--welcome-first-meeting", "--reduce-motion",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-talent-signal.interface-language", "en"]
+        app.launch()
+        let invitation = app.buttons["welcome-enter"]
+        XCTAssertTrue(invitation.waitForExistence(timeout: 15))
+        let origin = invitation.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        origin.press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 0, dy: -32)))
+        XCTAssertTrue(invitation.exists)
+        XCTAssertFalse(app.buttons["sign-in-with-email"].exists)
+        invitation.tap()
+        XCTAssertTrue(app.buttons["sign-in-with-email"].waitForExistence(timeout: 10))
+        save(app, "A short pull returns while a stationary tap opens sign-in")
+    }
+
+    func testEmailKeyboardAdvancesSubmitsAndPreservesFailedInput() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--auth-backend-url", "http://127.0.0.1:4799",
+            "--welcome-first-meeting", "--reduce-motion",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-talent-signal.interface-language", "en"]
+        app.launch()
+        XCTAssertTrue(app.buttons["welcome-skip"].waitForExistence(timeout: 15))
+        app.buttons["welcome-skip"].tap()
+        XCTAssertTrue(app.buttons["sign-in-with-email"].waitForExistence(timeout: 5))
+        app.buttons["sign-in-with-email"].tap()
+        XCTAssertTrue(app.textFields["login-email"].waitForExistence(timeout: 5))
+        // Switching modes also clears an earlier provider challenge notice.
+        app.buttons["New here? Create an account"].tap()
+        app.buttons["Already have an account? Sign in"].tap()
+        let submit = app.buttons["login-email-submit"]
+        XCTAssertFalse(submit.isEnabled)
+        let email = app.textFields["login-email"]
+        email.tap()
+        email.typeText("ios-keyboard@example.invalid\n")
+        // Type into the actual focused responder, rather than tapping Password.
+        app.typeText("synthetic-wrong-password")
+        XCTAssertEqual(email.value as? String, "ios-keyboard@example.invalid")
+        XCTAssertTrue(submit.isEnabled, "Next must move input to the password field.")
+        app.typeText("\n")
+        XCTAssertTrue(app.staticTexts["login-email-notice"].waitForExistence(timeout: 15),
+                      "Go must perform the same guarded sign-in as the button.")
+        XCTAssertEqual(email.value as? String, "ios-keyboard@example.invalid")
+        XCTAssertTrue(submit.isEnabled, "A failed request must preserve input for retry.")
+        XCTAssertFalse(app.secureTextFields["login-password"].value as? String == "Password")
+        save(app, "Email keyboard submission preserves failed input")
+    }
+
     func testSourcePullCanReverseThenCommitAndReplay() {
         let app = XCUIApplication()
         app.launchArguments = ["--auth-backend-url", "http://127.0.0.1:4799",
