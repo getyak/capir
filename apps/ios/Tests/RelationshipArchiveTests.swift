@@ -86,31 +86,31 @@ final class RelationshipArchiveTests: XCTestCase {
         let additional = try XCTUnwrap(encoded["additional_images"] as? [[String: Any]])
         XCTAssertEqual(additional.count, 9)
         XCTAssertEqual(([first] + additional).compactMap { $0["content_hash"] as? String }, images.map(\.contentHash))
-        XCTAssertEqual(AskScreenshotResearchRoutingPolicy.route(hasSelectedRelationship: false, mediaTypes: Array(repeating: "image/png", count: 10)), .directResearch)
-        XCTAssertEqual(AskScreenshotResearchRoutingPolicy.route(hasSelectedRelationship: false, mediaTypes: Array(repeating: "image/png", count: 11)), .unsupported)
+        XCTAssertEqual(AskImageConversationRoutingPolicy.route(hasSelectedRelationship: false, mediaTypes: Array(repeating: "image/png", count: 10)), .conversation)
+        XCTAssertEqual(AskImageConversationRoutingPolicy.route(hasSelectedRelationship: false, mediaTypes: Array(repeating: "image/png", count: 11)), .unsupported)
     }
 
-    func testSingleUnscopedScreenshotRoutesDirectlyWithoutRelationshipOrToolSelection() {
+    func testImageQuestionsUseConversationWithOrWithoutRelationship() {
         XCTAssertEqual(
-            AskScreenshotResearchRoutingPolicy.route(
+            AskImageConversationRoutingPolicy.route(
                 hasSelectedRelationship: false,
                 mediaTypes: ["image/png"]
             ),
-            .directResearch
+            .conversation
         )
         XCTAssertEqual(
-            AskScreenshotResearchRoutingPolicy.route(
+            AskImageConversationRoutingPolicy.route(
                 hasSelectedRelationship: false,
                 mediaTypes: ["image/png", "image/jpeg"]
             ),
-            .directResearch
+            .conversation
         )
         XCTAssertEqual(
-            AskScreenshotResearchRoutingPolicy.route(
+            AskImageConversationRoutingPolicy.route(
                 hasSelectedRelationship: true,
                 mediaTypes: ["image/png"]
             ),
-            .notApplicable
+            .conversation
         )
     }
 

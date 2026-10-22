@@ -743,7 +743,8 @@ struct RelationshipAskView: View {
                session.isUnresolvedIntent,
                AskScreenshotAdmissionPolicy.canResumeAsText(
                    hasPendingScreenshotAdmission: session.hasPendingScreenshotAdmission,
-                   hasPendingPersonResearch: session.hasPendingPersonResearch
+                   hasPendingPersonResearch: session.hasPendingPersonResearch,
+                   hasPendingImageConversation: session.pendingImageConversation != nil
                ),
                let recoverableObjective = session.pendingObjective,
                !recoverableObjective.trimmingCharacters(
@@ -797,6 +798,11 @@ struct RelationshipAskView: View {
                     return
                 }
                 await revalidateAndDismissUnavailableCitation()
+            }
+        }
+        .task(id: activeSessionID) {
+            if pendingImageConversation != nil, !operationState.isSending {
+                checkImageConversation()
             }
         }
         .task(id: screenshotPollingKey) {
@@ -1283,6 +1289,11 @@ struct RelationshipAskView: View {
                                 onReviewPublicProfile: { source in
                                     stagePublicProfileReview(source)
                                 },
+                                loadConversationImage: { [ownerID = activeSessionID] index, manifest in
+                                    guard let ownerID else { throw ImageConversationError.invalidReadback }
+                                    return try await workspaceStore.loadConversationImage(sessionID: ownerID,
+                                        messageID: turn.id, index: index, manifest: manifest)
+                                },
                                 screenshotTask: screenshotTasks[turn.response.taskID],
                                 loadScreenshotImage: { taskID, index in
                                     try await workspaceStore.loadScreenshotContactImage(taskID: taskID, index: index)
@@ -1292,7 +1303,7 @@ struct RelationshipAskView: View {
                                 onOpenPerson: onOpenPerson,
                                 canRegenerate: !operationState.isSending && !hasBlockingContactProposal
                                     && draft.isEmpty && mediaDrafts.isEmpty
-                                    && !voiceInput.isBusy && turn.response.media.isEmpty
+                                    && !voiceInput.isBusy && turn.response.media.isEmpty && turn.images.isEmpty
                                     && !turn.response.blocks.contains { $0.kind == "screenshot_processing" || $0.kind == "contact_proposal" },
                                 onRegenerate: { send(turn.objective) },
                                 onFeedback: { feedback in
@@ -1331,6 +1342,36 @@ struct RelationshipAskView: View {
                     if hasPendingScreenshotAdmission, !operationState.isSending {
                         screenshotAdmissionRecovery
                             .id("ask-screenshot-admission-recovery")
+                    }
+
+                    if let pending = pendingImageConversation, !operationState.isSending {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(pending.objective.isEmpty ? appLanguage.text("Original image") : pending.objective)
+                                .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                            Text(appLanguage.text("The image question may still be processing. Check its reply without sending it again."))
+                                .font(.caption).foregroundStyle(Color.tsMutedInk)
+                            Button(appLanguage.text("Check reply")) { checkImageConversation() }
+                            if !pending.images.isEmpty, mediaDrafts.isEmpty, pending.state != .stopped {
+                                Menu(appLanguage.text("Reattach the same images")) {
+                                    Button(appLanguage.text("Photos")) { isPhotoLibraryPresented = true }
+                                    Button(appLanguage.text("Files")) { isFileImporterPresented = true }
+                                }
+                            }
+                            if (!mediaDrafts.isEmpty || pending.images.isEmpty), pending.state != .stopped {
+                                Button(appLanguage.text("Check original send")) {
+                                    operationState.beginSubmission(objective: pending.objective)
+                                    performImageConversation(media: mediaDrafts, objective: pending.objective, originalDraft: "")
+                                }
+                            }
+                            Button(appLanguage.text("Start new Session")) {
+                                activeSessionID = nil
+                                mediaDrafts = []; mediaNotice = nil
+                                operationState.cancelOperation()
+                                returnOperationStateToIdle()
+                            }
+                        }
+                        .padding(16)
+                        .accessibilityIdentifier("image-conversation-recovery")
                     }
 
                     if let contactDraft {
@@ -2051,6 +2092,7 @@ struct RelationshipAskView: View {
             || operationState.isSending
             || hasBlockingContactProposal
             || operationState.pendingObjective != nil
+            || pendingImageConversation != nil
     }
 
     private var compactPhotoControl: some View {
@@ -3344,6 +3386,10 @@ struct RelationshipAskView: View {
             errorMessage = appLanguage.text("This conversation was deleted. Start a new Session to continue; your draft is kept.")
             return
         }
+        if pendingImageConversation != nil, mediaDrafts.isEmpty {
+            errorMessage = appLanguage.text("Check the original image question before sending another message.")
+            return
+        }
         if hasPendingScreenshotAdmission, mediaDrafts.isEmpty {
             mediaNotice = appLanguage.text("Reattach the same screenshots to continue")
             return
@@ -3358,6 +3404,14 @@ struct RelationshipAskView: View {
               ),
               !operationState.isSending else { return }
         if mediaDrafts.isEmpty,
+           sessionStore.session(id: activeSessionID)?.turns.contains(where: { !$0.images.isEmpty }) == true {
+            flushDraftPersistence()
+            operationState.beginSubmission(objective: trimmed)
+            draft = ""; composerFocused = false
+            performImageConversation(media: [], objective: trimmed, originalDraft: trimmed)
+            return
+        }
+        if mediaDrafts.isEmpty,
            let localIntent = AgentLocalWorkspacePolicy.intent(for: trimmed) {
             flushDraftPersistence()
             performLocalWorkspaceAnswer(
@@ -3370,11 +3424,11 @@ struct RelationshipAskView: View {
         sourceReviewNotice = nil
         errorRecovery = .retry
         flushDraftPersistence()
-        let screenshotRoute = AskScreenshotResearchRoutingPolicy.route(
+        let screenshotRoute = AskImageConversationRoutingPolicy.route(
             hasSelectedRelationship: selectedScope != nil,
             mediaTypes: mediaDrafts.map(\.mediaType)
         )
-        let isUnscopedPersonResearch = screenshotRoute == .directResearch
+        let isUnscopedPersonResearch = screenshotRoute == .conversation
         if screenshotRoute == .unsupported {
             errorMessage = appLanguage.text(
                 "Choose up to ten PNG, JPEG, or WebP images."
@@ -3386,18 +3440,9 @@ struct RelationshipAskView: View {
             errorMessage = appLanguage.text("Images must total no more than 30 MB.")
             return
         }
-        let effectiveObjective = trimmed.isEmpty
-            ? isUnscopedPersonResearch
-                ? appLanguage.text("File this chat screenshot to the correct internal contact, save its messages, and explain supported changes and the next step. Research public professional context when useful.")
-                : appLanguage.text(
-                    "Read the attached material. Tell me what changed, what remains uncertain, and the smallest safe next step."
-                )
-            : trimmed
-        if let capacityNotice = screenshotAdmissionCapacityNotice {
-            errorMessage = capacityNotice
-            composerFocused = false
-            return
-        }
+        // Image-only conversation keeps an empty visible objective. The governed
+        // host supplies its bounded image-only instruction, never contact-filing intent.
+        let effectiveObjective = trimmed
         if (selectedScope != nil || isUnscopedPersonResearch), !isCanonical {
             errorMessage = appLanguage.text(
                 "This is preview data, so no question was sent. Open a signed-in workspace connected to the backend, then try again."
@@ -3412,7 +3457,11 @@ struct RelationshipAskView: View {
 
         if !mediaDrafts.isEmpty, mediaDrafts.count <= 10,
            mediaDrafts.allSatisfy({ ["image/png", "image/jpeg", "image/webp"].contains($0.mediaType) }) {
-            performScreenshotContact(media: mediaDrafts, objective: effectiveObjective, originalDraft: trimmed)
+            if hasPendingScreenshotAdmission {
+                performScreenshotContact(media: mediaDrafts, objective: effectiveObjective, originalDraft: trimmed)
+            } else {
+                performImageConversation(media: mediaDrafts, objective: effectiveObjective, originalDraft: trimmed)
+            }
             return
         }
 
@@ -3509,6 +3558,117 @@ struct RelationshipAskView: View {
                 capacityNotice: sessionStore.screenshotAdmissionNotice(sessionID: activeSessionID)
               ) else { return nil }
         return appLanguage.text(notice)
+    }
+
+    private var pendingImageConversation: PendingImageConversation? {
+        sessionStore.session(id: activeSessionID)?.pendingImageConversation
+    }
+
+    private func performImageConversation(media: [AskMediaDraft], objective: String, originalDraft: String) {
+        guard isCanonical else {
+            returnOperationStateToIdle(); draft = originalDraft
+            errorMessage = appLanguage.text("This is preview data, so no question was sent. Open a signed-in workspace connected to the backend, then try again.")
+            return
+        }
+        if activeSessionID == nil {
+            activeSessionID = selectedScope.map { scope in
+                sessionStore.beginSession(person: scope.person, context: scope.context, objective: "")
+            } ?? sessionStore.beginUnscopedSession(objective: "")
+        }
+        guard let ownerID = activeSessionID else {
+            returnOperationStateToIdle(); draft = originalDraft
+            errorMessage = ImageConversationError.persistence.errorDescription; return
+        }
+        do {
+            let incoming = try media.map { try ConversationImageUpload(id: $0.id, data: $0.data,
+                fileName: $0.fileName, mediaType: $0.mediaType) }
+            guard let pending = sessionStore.beginImageConversation(sessionID: ownerID,
+                objective: objective, images: incoming.map(\.manifest)) else {
+                throw ImageConversationError.persistence
+            }
+            let uploads = try zip(media, pending.images).map { draft, manifest in
+                try ConversationImageUpload(id: manifest.attachmentID, data: draft.data,
+                    fileName: draft.fileName, mediaType: draft.mediaType)
+            }
+            sessionStore.saveGlobalDraft("")
+            operationState.replaceOperation { operationID in
+                Task {
+                    defer {
+                        if operationState.finishOperationIfCurrent(operationID) { returnOperationStateToIdle() }
+                    }
+                    do {
+                        guard await synchronizeSessions(ownerID) else { throw sessionSynchronizationFailure(ownerID) }
+                        try Task.checkCancellation()
+                        guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID),
+                              sessionStore.session(id: ownerID)?.pendingImageConversation?.messageID == pending.messageID else { return }
+                        let receipt = try await workspaceStore.admitConversationImages(sessionID: ownerID,
+                            messageID: pending.messageID, idempotencyKey: pending.idempotencyKey,
+                            objective: pending.objective, images: uploads, timeZone: pending.timeZone)
+                        try Task.checkCancellation()
+                        guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID) else { return }
+                        guard sessionStore.recordImageAdmission(sessionID: ownerID, messageID: pending.messageID,
+                            receipt: receipt) else { throw ImageConversationError.persistence }
+                        mediaDrafts = []; mediaNotice = nil
+                        try await observeImageConversation(ownerID: ownerID, pending: pending, operationID: operationID)
+                    } catch {
+                        guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID), !Task.isCancelled else { return }
+                        sessionStore.markImageObservationUnknown(sessionID: ownerID, messageID: pending.messageID)
+                        // The protected question remains available. Never replace a newer composer draft.
+                        errorMessage = appLanguage.text(ImageConversationError.unknown.errorDescription ?? "")
+                    }
+                }
+            }
+        } catch {
+            returnOperationStateToIdle(); if draft.isEmpty { draft = originalDraft }
+            errorMessage = appLanguage.text(ImageConversationError.persistence.errorDescription ?? "")
+        }
+    }
+
+    private func checkImageConversation() {
+        guard let ownerID = activeSessionID, let pending = pendingImageConversation,
+              !operationState.isSending, isCanonical else { return }
+        operationState.beginSubmission(objective: pending.objective)
+        operationState.replaceOperation { operationID in
+            Task {
+                defer { if operationState.finishOperationIfCurrent(operationID) { returnOperationStateToIdle() } }
+                do { try await observeImageConversation(ownerID: ownerID, pending: pending, operationID: operationID) }
+                catch {
+                    guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID), !Task.isCancelled else { return }
+                    errorMessage = appLanguage.text(ImageConversationError.unknown.errorDescription ?? "")
+                }
+            }
+        }
+    }
+
+    private func observeImageConversation(ownerID: UUID, pending: PendingImageConversation, operationID: UUID) async throws {
+        for _ in 0..<120 {
+            try Task.checkCancellation()
+            guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID),
+                  sessionStore.session(id: ownerID) != nil else { return }
+            let observation = try await workspaceStore.readConversationImageState(sessionID: ownerID, messageID: pending.messageID)
+            try Task.checkCancellation()
+            guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID) else { return }
+            // A coordinated refresh may already have applied the same canonical turn.
+            if sessionStore.session(id: ownerID)?.pendingImageConversation == nil {
+                guard sessionStore.session(id: ownerID)?.turns.contains(where: { $0.id == pending.messageID }) == true else {
+                    throw ImageConversationError.invalidReadback
+                }
+                errorMessage = nil; return
+            }
+            switch try sessionStore.observeImageConversation(sessionID: ownerID, messageID: pending.messageID, observation: observation) {
+            case .completed:
+                errorMessage = nil; operationState.pendingObjective = nil
+                return
+            case .stopped:
+                errorMessage = appLanguage.text(ImageConversationError.stopped.errorDescription ?? "")
+                return
+            case .unknown:
+                throw ImageConversationError.unknown
+            case .waiting:
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+        throw ImageConversationError.unknown
     }
 
     private func performScreenshotContact(media: [AskMediaDraft], objective: String, originalDraft: String) {
@@ -7101,257 +7261,6 @@ private struct SelectedPursuitTarget: Identifiable {
     var id: String { "\(pursuit.id):\(actionID)" }
 }
 
-private struct AskPendingTurnView: View {
-    let message: String
-    let mediaDrafts: [AskMediaDraft]
-    let language: AppLanguage
-    let recallPhase: RelationshipRecallPhase
-    let onChooseCandidate: (AgentRelationshipRecallCandidate) -> Void
-    let onChangeMatch: () -> Void
-    let onContinueWithoutRelationship: () -> Void
-    @State private var recallQuery = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .trailing, spacing: 7) {
-                if !mediaDrafts.isEmpty {
-                    AskPendingMediaStrip(
-                        drafts: mediaDrafts,
-                        language: language
-                    )
-                }
-                AskUserMessageBubble(message: message)
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-
-            recallContent
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("ask-pending-turn")
-    }
-
-    @ViewBuilder
-    private var recallContent: some View {
-        switch recallPhase {
-        case .idle:
-            EmptyView()
-        case let .reading(candidate):
-            if let candidate { matchedReceipt(candidate, allowsChange: true) }
-            activityRow(
-                language.text("Reading the current record…")
-            )
-            .accessibilityIdentifier("ask-loading")
-        case .replyingWithoutRelationship:
-            activityRow(
-                language.text(
-                    "Replying without opening a relationship…"
-                )
-            )
-            .accessibilityIdentifier("ask-unscoped-loading")
-        case let .ambiguous(candidates, possibleDuplicate):
-            candidateDecision(
-                candidates: candidates,
-                possibleDuplicate: possibleDuplicate,
-                isFallback: false
-            )
-        case let .unresolved(recent):
-            candidateDecision(
-                candidates: recent,
-                possibleDuplicate: false,
-                isFallback: true
-            )
-        }
-    }
-
-    private func activityRow(_ label: String) -> some View {
-        HStack(spacing: 9) {
-            ProgressView()
-                .controlSize(.small)
-                .tint(Color.tsVermilion)
-                .accessibilityHidden(true)
-            Text(label)
-                .font(.subheadline)
-                .foregroundStyle(Color.tsMutedInk)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label)
-    }
-
-    private func matchedReceipt(
-        _ candidate: AgentRelationshipRecallCandidate,
-        allowsChange: Bool
-    ) -> some View {
-        HStack(alignment: .top, spacing: 11) {
-            Image(systemName: "checkmark")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(Color.tsInk)
-                .frame(width: 34, height: 34)
-                .background(Color.tsCanvas, in: Circle())
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(
-                    verbatim: "\(candidate.person.displayLabel) · \(candidate.context.displayLabel)"
-                )
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.tsInk)
-                Text(
-                    language.text("Matched by Agent from your contact workspace")
-                )
-                .font(.caption)
-                .foregroundStyle(Color.tsMutedInk)
-                if allowsChange {
-                    Button(language.text("Change")) {
-                        onChangeMatch()
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.tsInk)
-                    .frame(minHeight: 44, alignment: .leading)
-                    .accessibilityIdentifier("ask-recall-change")
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("ask-recall-match")
-    }
-
-    private func candidateDecision(
-        candidates: [AgentRelationshipRecallCandidate],
-        possibleDuplicate: Bool,
-        isFallback: Bool
-    ) -> some View {
-        let visibleCandidates = recallCandidates(
-            from: candidates,
-            isFallback: isFallback
-        )
-        return VStack(alignment: .leading, spacing: 10) {
-            Text(
-                language.text(
-                    possibleDuplicate
-                        ? "I found records that may represent the same person."
-                        : isFallback
-                            ? "I need one detail to find the right relationship."
-                            : "I found more than one possible relationship."
-                )
-            )
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Color.tsInk)
-
-            if possibleDuplicate {
-                Text(
-                    language.text(
-                        "Choosing below only sets this Session’s working context. Merging requires a separate evidence review."
-                    )
-                )
-                .font(.caption)
-                .foregroundStyle(Color.tsMutedInk)
-            }
-
-            if isFallback, candidates.count > 6 {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(Color.tsMutedInk)
-                        .accessibilityHidden(true)
-                    TextField(
-                        language.text("Search people or relationships"),
-                        text: $recallQuery
-                    )
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .accessibilityIdentifier("ask-recall-search")
-                }
-                .frame(minHeight: 44)
-            }
-
-            if visibleCandidates.isEmpty {
-                Text(language.text("No matching relationships"))
-                    .font(.caption)
-                    .foregroundStyle(Color.tsMutedInk)
-                    .accessibilityIdentifier("ask-recall-no-results")
-            }
-
-            ForEach(visibleCandidates) { candidate in
-                Button {
-                    onChooseCandidate(candidate)
-                } label: {
-                    HStack(alignment: .center, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(candidate.person.displayLabel)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(Color.tsInk)
-                            Text(candidate.context.displayLabel)
-                                .font(.caption)
-                                .foregroundStyle(Color.tsMutedInk)
-                        }
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.tsMutedInk)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .overlay(alignment: .bottom) {
-                    Divider().foregroundStyle(Color.tsLine)
-                }
-                .accessibilityIdentifier("ask-recall-candidate-\(candidate.id)")
-            }
-
-            if isFallback, mediaDrafts.isEmpty {
-                Button(action: onContinueWithoutRelationship) {
-                    Text(
-                        language.text(
-                            "Continue without a relationship"
-                        )
-                    )
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.tsInk)
-                .accessibilityHint(
-                    language.text(
-                        "Replies without reading candidate or relationship evidence"
-                    )
-                )
-                .accessibilityIdentifier("ask-continue-unscoped")
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(
-            possibleDuplicate
-                ? "ask-recall-possible-duplicate"
-                : isFallback
-                    ? "ask-recall-unresolved"
-                    : "ask-recall-ambiguous"
-        )
-    }
-
-    private func recallCandidates(
-        from candidates: [AgentRelationshipRecallCandidate],
-        isFallback: Bool
-    ) -> [AgentRelationshipRecallCandidate] {
-        guard isFallback else { return candidates }
-        let normalizedQuery = recallQuery.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        ).folding(
-            options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-            locale: language.locale
-        )
-        guard !normalizedQuery.isEmpty else {
-            return Array(candidates.prefix(6))
-        }
-        return candidates.filter { candidate in
-            "\(candidate.person.displayLabel) \(candidate.context.displayLabel)"
-                .folding(
-                    options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-                    locale: language.locale
-                )
-                .contains(normalizedQuery)
-        }
-    }
-}
-
 private struct AgentContactReceiptTurn: View {
     let receipt: AgentContactReceipt
     let language: AppLanguage
@@ -7728,6 +7637,9 @@ private struct AskTurnView: View {
     let onStartFreshAsk: () -> Void
     let onOpenPursuit: (String, String) -> Void
     let onReviewPublicProfile: (RelationshipAskResponse.Block.PublicSource) -> Void
+    var loadConversationImage: (Int, ConversationImageManifest) async throws -> ChatMediaContent = { _, _ in
+        throw ImageConversationError.invalidReadback
+    }
     let screenshotTask: ScreenshotContactTask?
     let loadScreenshotImage: (String, Int) async throws -> ChatMediaContent
     let onResumeScreenshot: (ScreenshotContactTask, ScreenshotContactResumeBody) -> Void
@@ -7744,6 +7656,10 @@ private struct AskTurnView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .trailing, spacing: 7) {
+                if !turn.images.isEmpty {
+                    ConversationImageAlbum(messageID: turn.id, images: turn.images, load: loadConversationImage)
+                        .frame(maxWidth: 310)
+                }
                 if !turn.response.media.isEmpty {
                     ChatMediaAlbumBubble(media: turn.response.media, load: loadMedia)
                         .frame(maxWidth: 310)
