@@ -238,10 +238,12 @@ final class LiveImageQuestionUITests: XCTestCase {
         XCTAssertTrue(identity.label.split(whereSeparator: { $0.isWhitespace || $0 == "," })
             .contains(Substring(email)), "The native account must exactly match the authorized identity.")
         app.navigationBars["Account"].buttons["Workspace"].tap()
-        XCTAssertTrue(app.buttons["close-relationship-menu"].waitForExistence(timeout: 5))
-        app.buttons["close-relationship-menu"].tap()
-        XCTAssertTrue(app.buttons["Close Agent"].waitForExistence(timeout: 5))
-        app.buttons["Close Agent"].tap()
+        let workspaceBack = app.navigationBars["Workspace"].buttons["Agent"]
+        XCTAssertTrue(workspaceBack.waitForExistence(timeout: 5))
+        workspaceBack.tap()
+        let agentBack = app.navigationBars["Agent"].buttons.element(boundBy: 0)
+        XCTAssertTrue(agentBack.waitForExistence(timeout: 5))
+        agentBack.tap()
         XCTAssertTrue(app.buttons["relationship-guide"].waitForExistence(timeout: 5))
         return app
     }

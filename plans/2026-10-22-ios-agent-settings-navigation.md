@@ -37,12 +37,14 @@ Native navigation behavior follows Apple's
 2. Completed: implement navigation and update existing live-account/image and
    language test journeys. Add a focused settings/back/interactive-pop journey
    and verify internal testing returns to settings in the test specification.
-3. Active: independent static review passed after fixing two old modal-close
-   references and deterministic light/dark test setup. Native validation moved
-   to existing GitHub CI after the host failed the resource gate during boot.
-4. Pending: inspect current-revision native results and exported screenshots,
-   resolve CI failures, and integrate only after applicable checks pass.
-   No TestFlight release or resident-service change is part of this iOS patch.
+3. Completed at 834d8b01: independent static and screenshot review passed.
+   Native CI completed 674 unit tests (one explicit live-endpoint skip) and all ten
+   quick UI journeys. Chinese light/dark and edge-back screenshots were inspected.
+4. Active: integrate main's image-question repair (PR #402), adapt its newly
+   added live-test helper to native Back, and repeat current-head CI/review.
+5. Pending: finalize the reviewable PR after applicable checks pass. Merging
+   starts the automatic TestFlight flow and requires a separate human decision.
+   No resident-service change is part of this iOS patch.
 
 ## Verification and resource gate
 
@@ -118,3 +120,22 @@ retains the destination assertion and adds a post-gesture screenshot. Chinese
 screenshots run before the gesture test so a failure cannot suppress their
 independent evidence. This is an unproven sampling hypothesis, not a confirmed
 production fix or an accepted navigation result. The PR remains draft.
+
+## Native CI checkpoint: 834d8b01 and main integration
+
+Run 39780349512 and Security run 39780349614 completed successfully. Native
+compilation passed; the 674-unit-test selection had one explicit live-endpoint
+skip and zero failures. All ten quick UI journeys passed, including Chinese
+light/dark, native Back and interactive pop, AX5 reachability, internal-testing
+return, and language switching. The exported artifact's SHA256 is
+`431691fce46cd84d67cdc7bba0ad3995baac8f7bfeb54320de5954e1cec3ab85`.
+Independent inspection of five screenshots confirmed full-screen Agent/settings,
+readable visible Chinese, and Agent visible after the synthesized edge gesture.
+This proves the sampled Simulator journey, not physical-device gesture quality.
+
+Before finalizing, main advanced to `ecea26ac75aab40cc81e2dd5fcd2fe302b167876`
+(image-question PR #402). The strict status-check rules require an up-to-date
+branch. Its changes merged without source conflicts; a newly added
+LiveImageQuestionUITests helper still used modal close controls and is adapted
+to the same native Back route as the existing live image/conversation helpers.
+Current-head CI and independent review remain required after this integration.
