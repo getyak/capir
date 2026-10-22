@@ -576,7 +576,6 @@ struct RelationshipMenuView: View {
     let internalTestingStatus: String?
     let onOpenInternalTesting: (() -> Void)?
     let onSignOut: (() async -> Bool)?
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.appLanguage) private var appLanguage
     @AppStorage(AppLanguage.storageKey) private var storedLanguage =
         AppLanguage.system.rawValue
@@ -584,223 +583,203 @@ struct RelationshipMenuView: View {
     private var isActionButtonSetupComplete = false
     @AppStorage(TalentSignalSetupPreference.screenshotShortcutReceivedAtKey)
     private var screenshotShortcutReceivedAt = 0.0
-    @State private var selectedDetent: PresentationDetent = .medium
 
     private var selectedLanguage: AppLanguage {
         AppLanguage.stored(storedLanguage)
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        List {
+            Section {
+                NavigationLink {
+                    AccountSettingsView(
+                        isCanonical: isCanonical,
+                        workspaceID: workspaceID,
+                        workspaceLabel: workspaceLabel,
+                        accountName: accountName,
+                        accountEmail: accountEmail,
+                        signOutNotice: signOutNotice,
+                        onSignOut: onSignOut
+                    )
+                } label: {
+                    RelationshipMenuAccountRow(
+                        accountName: accountName ?? "capri",
+                        subtitle: accountSubtitle
+                    )
+                }
+                .accessibilityIdentifier("open-account-settings")
+            }
+
+            if !isActionButtonSetupComplete {
                 Section {
                     NavigationLink {
-                        expandedDestination(
-                            AccountSettingsView(
-                                isCanonical: isCanonical,
-                                workspaceID: workspaceID,
-                                workspaceLabel: workspaceLabel,
-                                accountName: accountName,
-                                accountEmail: accountEmail,
-                                signOutNotice: signOutNotice,
-                                onSignOut: wrappedSignOut
-                            )
-                        )
+                        ActionButtonSetupView()
                     } label: {
-                        RelationshipMenuAccountRow(
-                            accountName: accountName ?? "capri",
-                            subtitle: accountSubtitle
-                        )
+                        RelationshipMenuSetupRow()
                     }
-                    .accessibilityIdentifier("open-account-settings")
-                }
-
-                if !isActionButtonSetupComplete {
-                    Section {
-                        NavigationLink {
-                            expandedDestination(ActionButtonSetupView())
-                        } label: {
-                            RelationshipMenuSetupRow()
-                        }
-                        .accessibilityIdentifier("open-action-button-onboarding")
-                    }
-                }
-
-                Section {
-                    NavigationLink {
-                        expandedDestination(DisplaySettingsView())
-                    } label: {
-                        RelationshipMenuUtilityRow(
-                            systemImage: "textformat.size",
-                            title: appLanguage.text("Display & text"),
-                            detail: appLanguage.text(
-                                "Adjust reading size and retrieval-card density."
-                            )
-                        )
-                    }
-                    .accessibilityIdentifier("open-display-settings")
-
-                    NavigationLink {
-                        expandedDestination(AppSettingsView())
-                    } label: {
-                        RelationshipMenuUtilityRow(
-                            systemImage: "globe",
-                            title: appLanguage.text("Interface language"),
-                            detail: appLanguage.text(
-                                "Choose the language used for controls and guidance."
-                            ),
-                            value: selectedLanguage.displayName(in: appLanguage)
-                        )
-                    }
-                    .accessibilityIdentifier("open-settings")
-                } header: {
-                    Text(appLanguage.text("Appearance"))
-                }
-
-                Section {
-                    NavigationLink {
-                        expandedDestination(AppVersionStatusView())
-                    } label: {
-                        RelationshipMenuUtilityRow(
-                            systemImage: "info.circle",
-                            title: appLanguage.text("Version & status"),
-                            detail: appLanguage.text(
-                                "Installed build on this device and update-check source."
-                            ),
-                            value: InstalledAppVersion.label()
-                        )
-                    }
-                    .accessibilityIdentifier("open-version-status")
-                } header: {
-                    Text(appLanguage.text("About this app"))
-                }
-
-                Section {
-                    if !proposals.isEmpty {
-                        NavigationLink {
-                            expandedDestination(
-                                RelationshipProposalInboxView(
-                                    proposals: proposals,
-                                    onOpenProposal: openProposal
-                                )
-                            )
-                        } label: {
-                            RelationshipMenuUtilityRow(
-                                systemImage: "checkmark.bubble",
-                                title: appLanguage.text("Review inbox"),
-                                detail: appLanguage.text(
-                                    "Open exact evidence and proposed changes."
-                                ),
-                                value: "\(proposals.count)"
-                            )
-                        }
-                        .accessibilityIdentifier("open-review-inbox")
-                    }
-
-                    NavigationLink {
-                        expandedDestination(ActionButtonSetupView())
-                    } label: {
-                        RelationshipMenuUtilityRow(
-                            systemImage: "button.programmable",
-                            title: appLanguage.text("Action Button & Shortcuts"),
-                            detail: appLanguage.text(
-                                "Capture, record, or review from the system."
-                            ),
-                            value: screenshotShortcutReceivedAt > 0
-                                ? appLanguage.text("Local receipt")
-                                : isActionButtonSetupComplete
-                                    ? appLanguage.text("Assigned")
-                                    : nil
-                        )
-                    }
-                    .accessibilityIdentifier("open-action-button-settings")
-
-                    NavigationLink {
-                        expandedDestination(CalendarSyncSettingsView())
-                    } label: {
-                        RelationshipMenuUtilityRow(
-                            systemImage: "calendar.badge.plus",
-                            title: appLanguage.text("Calendar sync"),
-                            detail: appLanguage.text(
-                                "Project confirmed events one way to Apple Calendar."
-                            )
-                        )
-                    }
-                    .accessibilityIdentifier("open-calendar-sync-settings")
-
-                    NavigationLink {
-                        expandedDestination(ApprovalSettingsView())
-                    } label: {
-                        RelationshipMenuUtilityRow(
-                            systemImage: "lock.shield",
-                            title: appLanguage.text("Approval & data"),
-                            detail: appLanguage.text(
-                                "Every consequential action stays reviewable."
-                            )
-                        )
-                    }
-                    .accessibilityIdentifier("open-approval-settings")
-                } header: {
-                    Text(appLanguage.text("Workspace tools"))
-                }
-
-                if onOpenInternalTesting != nil {
-                    Section {
-                        Button(action: openInternalTesting) {
-                            RelationshipMenuUtilityRow(
-                                systemImage: "flask",
-                                title: appLanguage.text(
-                                    "Internal testing",
-                                    zhHans: "内部测试"
-                                ),
-                                detail: appLanguage.text(
-                                    "Experiments, diagnostics, and isolated test worlds.",
-                                    zhHans: "实验、诊断与隔离测试环境。"
-                                ),
-                                value: internalTestingStatus
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("open-internal-testing")
-                    } header: {
-                        Text(
-                            appLanguage.text(
-                                "Internal build",
-                                zhHans: "内部版本"
-                            )
-                        )
-                    } footer: {
-                        Text(
-                            appLanguage.text(
-                                "Available only when this build or workspace enables internal tools.",
-                                zhHans: "仅在内部版本或工作区启用测试工具时显示。"
-                            )
-                        )
-                    }
+                    .accessibilityIdentifier("open-action-button-onboarding")
                 }
             }
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden)
-            .background(Color.tsSurface)
-            .navigationTitle(appLanguage.text("Workspace"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        dismiss()
+
+            Section {
+                NavigationLink {
+                    DisplaySettingsView()
+                } label: {
+                    RelationshipMenuUtilityRow(
+                        systemImage: "textformat.size",
+                        title: appLanguage.text("Display & text"),
+                        detail: appLanguage.text(
+                            "Adjust reading size and retrieval-card density."
+                        )
+                    )
+                }
+                .accessibilityIdentifier("open-display-settings")
+
+                NavigationLink {
+                    AppSettingsView()
+                } label: {
+                    RelationshipMenuUtilityRow(
+                        systemImage: "globe",
+                        title: appLanguage.text("Interface language"),
+                        detail: appLanguage.text(
+                            "Choose the language used for controls and guidance."
+                        ),
+                        value: selectedLanguage.displayName(in: appLanguage)
+                    )
+                }
+                .accessibilityIdentifier("open-settings")
+            } header: {
+                Text(appLanguage.text("Appearance"))
+            }
+
+            Section {
+                NavigationLink {
+                    AppVersionStatusView()
+                } label: {
+                    RelationshipMenuUtilityRow(
+                        systemImage: "info.circle",
+                        title: appLanguage.text("Version & status"),
+                        detail: appLanguage.text(
+                            "Installed build on this device and update-check source."
+                        ),
+                        value: InstalledAppVersion.label()
+                    )
+                }
+                .accessibilityIdentifier("open-version-status")
+            } header: {
+                Text(appLanguage.text("About this app"))
+            }
+
+            Section {
+                if !proposals.isEmpty {
+                    NavigationLink {
+                        RelationshipProposalInboxView(
+                            proposals: proposals,
+                            onOpenProposal: openProposal
+                        )
                     } label: {
-                        Image(systemName: "xmark")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(Color.tsInk)
-                            .frame(width: 44, height: 44)
+                        RelationshipMenuUtilityRow(
+                            systemImage: "checkmark.bubble",
+                            title: appLanguage.text("Review inbox"),
+                            detail: appLanguage.text(
+                                "Open exact evidence and proposed changes."
+                            ),
+                            value: "\(proposals.count)"
+                        )
                     }
-                    .accessibilityLabel(appLanguage.text("Close"))
-                    .accessibilityIdentifier("close-relationship-menu")
+                    .accessibilityIdentifier("open-review-inbox")
+                }
+
+                NavigationLink {
+                    ActionButtonSetupView()
+                } label: {
+                    RelationshipMenuUtilityRow(
+                        systemImage: "button.programmable",
+                        title: appLanguage.text("Action Button & Shortcuts"),
+                        detail: appLanguage.text(
+                            "Capture, record, or review from the system."
+                        ),
+                        value: screenshotShortcutReceivedAt > 0
+                            ? appLanguage.text("Local receipt")
+                            : isActionButtonSetupComplete
+                                ? appLanguage.text("Assigned")
+                                : nil
+                    )
+                }
+                .accessibilityIdentifier("open-action-button-settings")
+
+                NavigationLink {
+                    CalendarSyncSettingsView()
+                } label: {
+                    RelationshipMenuUtilityRow(
+                        systemImage: "calendar.badge.plus",
+                        title: appLanguage.text("Calendar sync"),
+                        detail: appLanguage.text(
+                            "Project confirmed events one way to Apple Calendar."
+                        )
+                    )
+                }
+                .accessibilityIdentifier("open-calendar-sync-settings")
+
+                NavigationLink {
+                    ApprovalSettingsView()
+                } label: {
+                    RelationshipMenuUtilityRow(
+                        systemImage: "lock.shield",
+                        title: appLanguage.text("Approval & data"),
+                        detail: appLanguage.text(
+                            "Every consequential action stays reviewable."
+                        )
+                    )
+                }
+                .accessibilityIdentifier("open-approval-settings")
+            } header: {
+                Text(appLanguage.text("Workspace tools"))
+            }
+
+            if onOpenInternalTesting != nil {
+                Section {
+                    Button(action: openInternalTesting) {
+                        RelationshipMenuUtilityRow(
+                            systemImage: "flask",
+                            title: appLanguage.text(
+                                "Internal testing",
+                                zhHans: "内部测试"
+                            ),
+                            detail: appLanguage.text(
+                                "Experiments, diagnostics, and isolated test worlds.",
+                                zhHans: "实验、诊断与隔离测试环境。"
+                            ),
+                            value: internalTestingStatus
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("open-internal-testing")
+                } header: {
+                    Text(
+                        appLanguage.text(
+                            "Internal build",
+                            zhHans: "内部版本"
+                        )
+                    )
+                } footer: {
+                    Text(
+                        appLanguage.text(
+                            "Available only when this build or workspace enables internal tools.",
+                            zhHans: "仅在内部版本或工作区启用测试工具时显示。"
+                        )
+                    )
                 }
             }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.tsSurface)
+        .navigationTitle(appLanguage.text("Workspace"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
         .tint(.tsInk)
-        .presentationDetents([.medium, .large], selection: $selectedDetent)
+        .accessibilityIdentifier("workspace-settings")
     }
 
     private var accountSubtitle: String {
@@ -812,39 +791,12 @@ struct RelationshipMenuView: View {
         )
     }
 
-    private var wrappedSignOut: (() async -> Bool)? {
-        onSignOut.map { signOut in
-            {
-                let didSignOut = await signOut()
-                if didSignOut { dismiss() }
-                return didSignOut
-            }
-        }
-    }
-
     private func openProposal(_ proposal: WorkspaceProposal) {
-        dismiss()
-        Task { @MainActor in
-            await Task.yield()
-            onOpenProposal(proposal)
-        }
+        onOpenProposal(proposal)
     }
 
     private func openInternalTesting() {
-        guard let onOpenInternalTesting else { return }
-        dismiss()
-        Task { @MainActor in
-            await Task.yield()
-            onOpenInternalTesting()
-        }
-    }
-
-    private func expandedDestination<Destination: View>(
-        _ destination: Destination
-    ) -> some View {
-        destination
-            .onAppear { selectedDetent = .large }
-            .onDisappear { selectedDetent = .medium }
+        onOpenInternalTesting?()
     }
 }
 

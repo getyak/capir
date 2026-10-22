@@ -21,7 +21,6 @@ struct RelationshipAgentStudioView: View {
     let onOpenInternalTesting: (() -> Void)?
     let onSignOut: (() async -> Bool)?
 
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.appLanguage) private var appLanguage
     @AppStorage(TalentSignalAgentPreference.aliasKey)
     private var storedAlias = "Signal"
@@ -33,7 +32,6 @@ struct RelationshipAgentStudioView: View {
     private var screenshotShortcutReceivedAt = 0.0
     @AppStorage(CalendarSyncPreference.isEnabledKey)
     private var isCalendarSyncEnabled = true
-    @State private var showsWorkspaceMenu = false
     @StateObject private var profileReferenceStore: AgentProfileReferenceStore
 
     init(
@@ -95,61 +93,42 @@ struct RelationshipAgentStudioView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    identityHeader
-                    destinationList
-                    approvalBoundary
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 36)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                identityHeader
+                destinationList
+                approvalBoundary
             }
-            .scrollIndicators(.hidden)
-            .background(Color.tsSurface.ignoresSafeArea())
-            .navigationTitle(appLanguage.text("Agent"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "arrow.left")
-                    }
-                    .accessibilityLabel(appLanguage.text("Close Agent"))
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 36)
+        }
+        .scrollIndicators(.hidden)
+        .background(Color.tsSurface.ignoresSafeArea())
+        .navigationTitle(appLanguage.text("Agent"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    RelationshipMenuView(
+                        isCanonical: isCanonical,
+                        workspaceID: workspaceID,
+                        workspaceLabel: workspaceLabel,
+                        accountName: accountName,
+                        accountEmail: accountEmail,
+                        proposals: proposals,
+                        signOutNotice: signOutNotice,
+                        onOpenProposal: onOpenProposal,
+                        internalTestingStatus: internalTestingStatus,
+                        onOpenInternalTesting: onOpenInternalTesting,
+                        onSignOut: onSignOut
+                    )
+                } label: {
+                    Image(systemName: "gearshape")
                 }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showsWorkspaceMenu = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel(appLanguage.text("Open workspace settings"))
-                    .accessibilityIdentifier("agent-settings")
-                }
-            }
-            .sheet(isPresented: $showsWorkspaceMenu) {
-                RelationshipMenuView(
-                    isCanonical: isCanonical,
-                    workspaceID: workspaceID,
-                    workspaceLabel: workspaceLabel,
-                    accountName: accountName,
-                    accountEmail: accountEmail,
-                    proposals: proposals,
-                    signOutNotice: signOutNotice,
-                    onOpenProposal: { proposal in
-                        showsWorkspaceMenu = false
-                        Task { @MainActor in
-                            await Task.yield()
-                            onOpenProposal(proposal)
-                        }
-                    },
-                    internalTestingStatus: internalTestingStatus,
-                    onOpenInternalTesting: onOpenInternalTesting,
-                    onSignOut: onSignOut
-                )
+                .accessibilityLabel(appLanguage.text("Open workspace settings"))
+                .accessibilityIdentifier("agent-settings")
             }
         }
         .tint(.tsInk)

@@ -27,11 +27,6 @@ final class RelationshipArchiveTests: XCTestCase {
         XCTAssertFalse(store.sessions[0].isUnread)
     }
 
-    func testAgentStudioSheetHasStableIdentifier() {
-        XCTAssertEqual(RelationshipArchiveSheet.agentStudio.id, "agent-studio")
-        XCTAssertEqual(RelationshipArchiveSheet.menu.id, "menu")
-    }
-
     func testReadingSizePreferenceNeverShrinksAccessibilitySizes() {
         XCTAssertEqual(
             WorkspaceTextSizePreference.compact.adjusted(.large),

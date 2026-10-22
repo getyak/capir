@@ -147,6 +147,70 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(app.buttons["agent-add-profile-reference"].exists)
     }
 
+    func testAgentAndWorkspaceSettingsShareNativeBackNavigation() {
+        app.launch()
+        let sessions = app.buttons["archive-tab-sessions"]
+        XCTAssertTrue(sessions.waitForExistence(timeout: 8))
+        sessions.tap()
+        app.buttons["relationship-agent-studio"].tap()
+
+        let agentBar = app.navigationBars["Agent"]
+        XCTAssertTrue(agentBar.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Close Agent"].exists)
+        preserveScreenshot("Agent in the workspace navigation stack")
+        app.buttons["agent-settings"].tap()
+
+        let workspaceBar = app.navigationBars["Workspace"]
+        XCTAssertTrue(workspaceBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(workspaceBar.buttons["Agent"].isHittable)
+        XCTAssertFalse(app.buttons["close-relationship-menu"].exists)
+        preserveScreenshot("Workspace settings without stacked sheets")
+        app.buttons["open-display-settings"].tap()
+        XCTAssertTrue(element("display-settings").waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(workspaceBar.waitForExistence(timeout: 5))
+
+        // Exercise the system's interactive pop, not only the Back button.
+        let window = app.windows.firstMatch
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo:
+                window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))
+        XCTAssertTrue(app.buttons["agent-settings"].waitForExistence(timeout: 5))
+        agentBar.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(sessions.waitForExistence(timeout: 5))
+        XCTAssertTrue(sessions.isSelected)
+        XCTAssertTrue(app.buttons["relationship-guide"].isHittable)
+        preserveScreenshot("Returning from settings preserves the selected workspace page")
+    }
+
+    func testAgentAndWorkspaceSettingsKeepOneHierarchyInChinese() {
+        for isDark in [false, true] {
+            app.launchArguments = [
+                "-AppleLanguages", "(zh-Hans)",
+                "-AppleLocale", "zh_CN",
+                "-talent-signal.interface-language", "zh-Hans",
+                "-talent-signal.display.appearance", isDark ? "dark" : "light",
+            ]
+            app.launch()
+            XCTAssertTrue(app.buttons["relationship-agent-studio"].waitForExistence(timeout: 8))
+            app.buttons["relationship-agent-studio"].tap()
+            XCTAssertTrue(app.navigationBars["Agent"].waitForExistence(timeout: 5))
+            preserveScreenshot(isDark ? "Chinese Agent dark" : "Chinese Agent light")
+            app.buttons["agent-settings"].tap()
+
+            let workspaceBar = app.navigationBars["工作区"]
+            XCTAssertTrue(workspaceBar.waitForExistence(timeout: 5))
+            XCTAssertTrue(workspaceBar.buttons["Agent"].isHittable)
+            XCTAssertFalse(app.buttons["close-relationship-menu"].exists)
+            preserveScreenshot(isDark ? "Chinese Workspace settings dark" : "Chinese Workspace settings light")
+            workspaceBar.buttons["Agent"].tap()
+            XCTAssertTrue(app.buttons["agent-settings"].waitForExistence(timeout: 5))
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(app.buttons["archive-tab-today"].waitForExistence(timeout: 5))
+            app.terminate()
+        }
+    }
+
     func testAgentStudioRemainsReachableInChineseAtAX5() {
         app.launchArguments = [
             "-AppleLanguages", "(zh-Hans)",
@@ -859,7 +923,7 @@ final class CandidateSignalUITests: XCTestCase {
         openRelationshipMenu()
 
         XCTAssertTrue(
-            app.buttons["close-relationship-menu"].waitForExistence(timeout: 5)
+            element("workspace-settings").waitForExistence(timeout: 5)
         )
         XCTAssertTrue(app.buttons["open-account-settings"].exists)
         let actionButtonOnboarding = app.buttons["open-action-button-onboarding"]
@@ -1147,7 +1211,7 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(element("editorial-today").waitForExistence(timeout: 8))
         openRelationshipMenu()
         XCTAssertTrue(
-            app.buttons["close-relationship-menu"].waitForExistence(timeout: 5)
+            element("workspace-settings").waitForExistence(timeout: 5)
         )
 
         let calendarSettings = app.buttons["open-calendar-sync-settings"]
@@ -1564,6 +1628,9 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(
             app.buttons["product-lab-done"].waitForExistence(timeout: 10)
         )
+        app.buttons["product-lab-done"].tap()
+        XCTAssertTrue(app.navigationBars["Workspace"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.navigationBars["Workspace"].buttons["Agent"].isHittable)
     }
 
     private func captureHeaderFrames() -> [String: CGRect] {
@@ -3206,7 +3273,10 @@ final class CandidateSignalUITests: XCTestCase {
         preserveScreenshot("Simplified Chinese language settings")
 
         app.navigationBars["语言"].buttons.element(boundBy: 0).tap()
-        app.buttons["close-relationship-menu"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["agent-settings"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["archive-tab-today"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["archive-tab-today"].label, "今天")
         XCTAssertEqual(app.buttons["archive-tab-sessions"].label, "会话")
         app.buttons["archive-tab-sessions"].tap()
@@ -3240,7 +3310,10 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertEqual(english.value as? String, "Selected")
 
         app.navigationBars["Language"].buttons.element(boundBy: 0).tap()
-        app.buttons["close-relationship-menu"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["agent-settings"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.buttons["archive-tab-today"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["archive-tab-today"].label, "Today")
 
         // The gate launches each UI journey in a fresh runner while retaining
@@ -6789,8 +6862,7 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout: 5))
         settings.tap()
         XCTAssertTrue(
-            app.buttons["close-relationship-menu"]
-                .waitForExistence(timeout: 5)
+            element("workspace-settings").waitForExistence(timeout: 5)
         )
     }
 

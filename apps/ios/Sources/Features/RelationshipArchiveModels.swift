@@ -3436,8 +3436,6 @@ enum RelationshipArchiveSheet: Identifiable {
     case pursuit(WorkspacePursuit)
     case workspacePerson(WorkspacePerson, [WorkspacePersonRole])
     case proposal(WorkspaceProposal)
-    case agentStudio
-    case menu
     case internalTesting
 
     var id: String {
@@ -3454,10 +3452,6 @@ enum RelationshipArchiveSheet: Identifiable {
             return "workspace-person-\(person.id)"
         case let .proposal(proposal):
             return "proposal-\(proposal.id)"
-        case .agentStudio:
-            return "agent-studio"
-        case .menu:
-            return "menu"
         case .internalTesting:
             return "internal-testing"
         }
