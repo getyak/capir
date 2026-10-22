@@ -3,49 +3,8 @@ import XCTest
 /// One live view preserves the verified scope while a loopback reviewer inspects the attachment.
 @MainActor
 final class LiveImageFlowUITests: XCTestCase {
-    func testInspectedImageCompletesCaptureWithoutPeople() async throws {
-        let inspection = try inspectionRequest()
-        let app = try configuredAndVerifiedApp()
-        let photos = app.buttons["home-attachment-photos"]
-        if !photos.exists {
-            let attachments = app.buttons["open-agent-attachments"]
-            XCTAssertTrue(attachments.waitForExistence(timeout: 15))
-            attachments.tap()
-        }
-        XCTAssertTrue(photos.waitForExistence(timeout: 5))
-        photos.tap()
-        XCTAssertTrue(app.staticTexts["Loading..."].waitForNonExistence(timeout: 15))
-        let closeIntroduction = app.buttons["Close"].firstMatch
-        if closeIntroduction.exists { closeIntroduction.tap() }
-        let image = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
-        XCTAssertTrue(image.waitForExistence(timeout: 10))
-        image.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        let add = app.buttons["Add"].firstMatch
-        if add.waitForExistence(timeout: 3) { add.tap() }
-        XCTAssertTrue(element(app, "ask-media-draft-tray").waitForExistence(timeout: 20))
-        XCTAssertTrue(element(app, "relationship-ask-screen").exists)
-        capture(app, "Inspect selected synthetic image before upload")
-        try await inspect(app.screenshot().pngRepresentation, request: inspection)
-        // Account/environment changes rebuild this view and clear its in-memory
-        // attachment. Never reselect or resend after inspection.
-        XCTAssertTrue(element(app, "ask-media-draft-tray").exists)
-        let composer = app.textFields["ask-composer"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 5))
-        let marker = "ios-image-" + String(UUID().uuidString.lowercased().prefix(8))
-        composer.tap()
-        composer.typeText("\(marker): This is a synthetic image with no people. Process this image only. Do not create people, memories, tasks or external actions.")
-        let send = app.buttons["ask-send"]
-        XCTAssertTrue(send.isEnabled)
-        send.tap() // Exactly one attempt. A failed image is never auto-resubmitted.
-        XCTAssertFalse((composer.value as? String ?? "").contains(marker))
-        let turn = try responseTurn(app, marker: marker)
-        let reply = noPersonReceipt(turn)
-        XCTAssertTrue(reply.waitForExistence(timeout: 180),
-                      "The no-person image must complete without inventing a contact.")
-        XCTAssertFalse(element(app, "ask-error").exists)
-        XCTAssertTrue(turn.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch.exists)
-        capture(app, "One inspected image completed without a person")
-    }
+    // Ordinary composer images are covered by LiveImageQuestionUITests.
+    // Historical screenshot intake is recovered below without resending it.
 
     /// Read back an already admitted image; this method never uploads or retries it.
     func testExistingImageReceiptAndSourceAreRecoverable() throws {

@@ -31284,6 +31284,174 @@
           }
         }
       }
+    },
+    "Check original send": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check original send"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "核对原发送结果"
+          }
+        }
+      }
+    },
+    "Check reply": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check reply"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "检查回复"
+          }
+        }
+      }
+    },
+    "Check the original image question before sending another message.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the original image question before sending another message."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发送新消息前，请先检查原图片问题的结果。"
+          }
+        }
+      }
+    },
+    "Image processing stopped. Its original message has not been sent again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image processing stopped. Its original message has not been sent again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片处理已停止，原消息未再次发送。"
+          }
+        }
+      }
+    },
+    "The image question could not be protected. Nothing was sent.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image question could not be protected. Nothing was sent."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法安全保存图片问题，尚未发送。"
+          }
+        }
+      }
+    },
+    "The image question may still be processing. Check its reply without sending it again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image question may still be processing. Check its reply without sending it again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片问题可能仍在处理中。请检查回复，无需再次发送。"
+          }
+        }
+      }
+    },
+    "The image reply could not be matched to its original message.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image reply could not be matched to its original message."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法确认图片回复对应原消息。"
+          }
+        }
+      }
+    },
+    "Reattach the same images": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reattach the same images"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新选择相同图片"
+          }
+        }
+      }
+    },
+    "Check the image question and attachments. Nothing was sent.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the image question and attachments. Nothing was sent."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请检查图片问题和附件。尚未发送任何内容。"
+          }
+        }
+      }
+    },
+    "The image reply could not be saved. Check its original message before continuing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image reply could not be saved. Check its original message before continuing."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片回复未能保存。请先检查原消息，再继续操作。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -187,21 +187,37 @@ Run the journey in this order:
    ordinary email sign-in when needed, verifies identity, sends one unique
    synthetic text request, checks an Agent response, and verifies the sent
    conversation and unsent draft after relaunch.
-2. `LiveImageFlowUITests/testInspectedImageCompletesCaptureWithoutPeople` requires a
-   preloaded synthetic image and `TS_IOS_LIVE_STAGE_IMAGE=synthetic-app-icon`.
+2. `LiveImageQuestionUITests/testInspectedVisualAnswerFollowupAndRelaunch` verifies
+   ordinary inline image questions through the existing governed conversation
+   queue. Use a synthetic image with two differently colored panels and distinct
+   word/code pairs. Set `TS_IOS_LIVE_STAGE_IMAGE=synthetic-visual-question`,
+   `TS_IOS_LIVE_QUESTION_MARKER=ios-vision-<unique-run>`,
+   `TS_IOS_LIVE_QUESTION_WORD=ORBIT`, and `TS_IOS_LIVE_QUESTION_CODE=734` for the
+   inspected blue panel; the red panel contains `COMET 219`. The prompt must not
+   include the expected answer. The follow-up asks about the other panel through
+   the same queue and Session, so transcript echo alone cannot pass.
    Start `python3 scripts/ios/live-image-inspection.py <private-artifact-dir>`;
-   privately load its config into runner inputs `TS_IOS_LIVE_INSPECTION_URL`
-   and `TS_IOS_LIVE_INSPECTION_NONCE` (with the `TEST_RUNNER_` prefix when
-   invoking `xcodebuild`). Inspect `selected-image.png`, then copy
-   `inspection-challenge.private` to `inspection-approved.private`. Approval
-   binds to that upload's PNG digest and fresh challenge. The same native view
-   then sends exactly once and checks the no-person capture result; it never
-   automatically reselects or resends after a failure. This exercises screenshot
-   intake, not general visual question answering. Use
-   `testExistingImageReceiptAndSourceAreRecoverable` with the explicit existing
-   Session, task and synthetic marker inputs (`TS_IOS_LIVE_IMAGE_SESSION_ID`,
-   `TS_IOS_LIVE_IMAGE_TASK_ID`, `TS_IOS_LIVE_IMAGE_MARKER`) to verify recovery
-   without another upload. Stop the owned loopback helper after the attempt.
+   privately pass `TS_IOS_LIVE_INSPECTION_URL` and `TS_IOS_LIVE_INSPECTION_NONCE`
+   to the runner (with `TEST_RUNNER_` prefixes for `xcodebuild`). Inspect the
+   actual `selected-image.png` before copying `inspection-challenge.private`
+   to `inspection-approved.private`. Approval binds one screenshot digest and
+   fresh challenge. The native test sends the image exactly once, verifies both
+   visual answers, then relaunches the same Session with an unsent draft and
+   opens its authenticated original with native zoom. Read back the exact
+   Session/message/task and product run, compare original bytes against the
+   immutable manifest, and check for unintended record/effect creation.
+
+   Preserve a failed attempt and investigate its exact admission before another
+   test. `testExistingVisualReplyRecovery` takes the explicit
+   `TS_IOS_LIVE_IMAGE_SESSION_ID` plus the same marker/expected-answer inputs;
+   it reopens the existing reply and original without upload or model retry.
+   Pending image recovery is local-only: relaunch checks the original message,
+   and a transport-uncertain send can be checked with the same ordered images,
+   filenames, hashes, message/key and timezone. It must never resume as plain
+   text on this or another device. Legacy screenshot receipts remain readable
+   with `LiveImageFlowUITests/testExistingImageReceiptAndSourceAreRecoverable`;
+   they are a separate intake path and cannot establish visual Q&A. Stop the
+   owned loopback inspection helper after the attempt.
 3. `LiveAccountFlowUITests/testLiveNavigationAndSignOut` verifies People,
    Sessions, Today and Account, then signs out and verifies the signed-out
    state after relaunch. Run it last because it revokes the native session.

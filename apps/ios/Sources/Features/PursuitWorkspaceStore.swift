@@ -1128,3 +1128,21 @@ final class PursuitWorkspaceStore: ObservableObject {
         }
     }
 }
+
+extension PursuitWorkspaceStore {
+    func admitConversationImages(sessionID: UUID, messageID: UUID, idempotencyKey: String,
+        objective: String, images: [ConversationImageUpload], timeZone: String) async throws -> ConversationImageAdmission {
+        guard let service else { throw PursuitWorkspaceClientError.askUnavailable }
+        return try await service.admitConversationImages(sessionID: sessionID, messageID: messageID,
+            idempotencyKey: idempotencyKey, objective: objective, images: images, timeZone: timeZone)
+    }
+    func readConversationImageState(sessionID: UUID, messageID: UUID) async throws -> ConversationImageObservation {
+        guard let service else { throw PursuitWorkspaceClientError.askUnavailable }
+        return try await service.readConversationImageState(sessionID: sessionID, messageID: messageID)
+    }
+    func loadConversationImage(sessionID: UUID, messageID: UUID, index: Int,
+        manifest: ConversationImageManifest) async throws -> ChatMediaContent {
+        guard let service else { throw PursuitWorkspaceClientError.askUnavailable }
+        return try await service.loadConversationImage(sessionID: sessionID, messageID: messageID, index: index, manifest: manifest)
+    }
+}
