@@ -4,6 +4,7 @@ import { useT, type TFunction } from "@/components/locale-provider";
 import * as Dialog from "@radix-ui/react-dialog";
 import { CaretDown, CaretRight, MagnifyingGlass, X } from "@phosphor-icons/react";
 import Link from "next/link";
+import { invalidatePersonMemory } from "@/lib/person-memory-invalidation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   MemoryDecision,
@@ -670,6 +671,17 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
     sessionId: props.sessionId ?? null,
   });
   const state = controller.draft;
+  const notifiedReceipt = useRef<string | null>(null);
+  const receipt = controller.receipt;
+  useEffect(() => {
+    if (props.purpose !== "people" || !props.binding || !props.personId || !receipt
+      || receipt.proposal_id !== props.proposal.proposal_id
+      || !["receipt", "undone"].includes(controller.phase)) return;
+    const key = `${props.binding}:${props.personId}:${receipt.operation_key}:${receipt.status}`;
+    if (notifiedReceipt.current === key) return;
+    notifiedReceipt.current = key;
+    invalidatePersonMemory(props.binding, props.personId);
+  }, [controller.phase, receipt, props.binding, props.personId, props.proposal.proposal_id, props.purpose]);
   const review = controller.review;
   const dispatchState = controller.dispatchDraft;
   const setState = (next: MemoryReviewDraftState) => {

@@ -2,7 +2,8 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryProposalItem, MemoryReviewView } from "@talent-signal/contracts";
+import type { MemoryProposalItem, MemoryReceipt, MemoryReviewView } from "@talent-signal/contracts";
+import { subscribePersonMemoryInvalidation } from "@/lib/person-memory-invalidation";
 
 import { MemoryReviewCard } from "./memory-review-card";
 
@@ -117,6 +118,44 @@ function clickByText(text: string) {
 }
 
 describe("shared Memory review card", () => {
+  it("invalidates the matching People list after a real commit and Undo while retaining its receipt", async () => {
+    const personId = "33333333-3333-4333-8333-333333333333";
+    const one = item("person-1", "person", "对方偏好提前收到议程");
+    const scoped: MemoryReviewView = { ...review(), purpose: "people", person_id: personId,
+      contact_decision: "existing", items: [one], visible_item_count: 1, visible_default_selected_count: 1 };
+    let receipt: MemoryReceipt = {
+      contract_version: "2026-08-24.10", commit_id: SCOPE, operation_key: SCOPE, proposal_id: PROPOSAL,
+      proposal_revision: 1, status: "applied", contact_decision: "existing", item_count: 1, applied_item_count: 1,
+      created_item_ids: ["saved"], updated_item_ids: [], skipped_item_ids: [], kept_old_item_ids: [],
+      decisions: [{ proposal_item_id: one.id, decision: "accept", memory_item_id: "saved" }],
+      undo: { token: SCOPE, allowed: true, limits: [] }, projection_status: "pending", created_at: "2026-10-22T00:00:00Z",
+    };
+    fetcher.mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith("/commits")) {
+        receipt = { ...receipt, operation_key: JSON.parse(init!.body as string).idempotency_key };
+        return Promise.resolve(Response.json({ receipt }, { status: 201 }));
+      }
+      if (path.endsWith("/undo")) return Promise.resolve(Response.json({ receipt: { ...receipt, status: "undone", undone_at: "2026-10-22T00:01:00Z" } }));
+      if (path.includes("/operation-views/")) return Promise.resolve(Response.json({ state: "applied", visible_receipt: receipt, commit_revision: 1, undo: { allowed: true, limits: [] } }));
+      return Promise.resolve(Response.json({ review_credential: "test-only-credential", review: scoped }));
+    });
+    const notifications: string[][] = [];
+    const unsubscribe = subscribePersonMemoryInvalidation((binding, person) => notifications.push([binding, person]));
+    try {
+      const props = { binding: "people-binding", personId, entryCapability: "test-entry",
+        proposal: { proposal_id: PROPOSAL, revision: 1 }, purpose: "people" as const };
+      await act(async () => root.render(createElement(MemoryReviewCard, { ...props, key: "people" })));
+      expect(notifications).toHaveLength(0);
+      await act(async () => clickByText("记住 1 条").click());
+      expect(notifications).toEqual([["people-binding", personId]]);
+      expect(mount.textContent).toContain("已记住 1 条");
+      await act(async () => root.render(createElement(MemoryReviewCard, { ...props, key: "people" })));
+      expect(notifications).toHaveLength(1);
+      await act(async () => clickByText("撤销").click());
+      expect(notifications).toEqual([["people-binding", personId], ["people-binding", personId]]);
+      expect(mount.textContent).toContain("已撤销本次保存");
+    } finally { unsubscribe(); }
+  });
   it("hides source-derived contact and Memory text when the source is withdrawn", async () => {
     fetcher.mockResolvedValue(Response.json({ review_credential: "cred-revoked", review: {
       ...review(), source_status: "unavailable",

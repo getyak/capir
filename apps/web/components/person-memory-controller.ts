@@ -5,6 +5,7 @@ import type { MemoryItemMutationResponse, MemoryRecallItem, MemoryRecallResponse
 import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./workspace-session-request";
 import { canEditMemory } from "@/lib/person-memory-projection";
 import { invalidateWorkspaceDirectory } from "@/lib/workspace-directory-cache";
+import { subscribePersonMemoryInvalidation } from "@/lib/person-memory-invalidation";
 
 export type MemoryEditPhase = "editing" | "saving" | "unknown" | "conflict";
 type Attempt = { id: string; version: number; key: string; text: string; replacement: MemoryRecallItem | null; original: MemoryRecallItem; action: "correct" | "delete"; acknowledged: boolean };
@@ -31,6 +32,8 @@ export function usePersonMemory(options: Options) {
   const [nextCursor, setNextCursor] = useState(options.nextCursor);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const refresh = useRef({ revision: 0, pending: false, allowEditing: false });
   const attempt = useRef<Attempt | null>(null);
   const busy = useRef(false);
   const pageBusy = useRef(false);
@@ -46,11 +49,12 @@ export function usePersonMemory(options: Options) {
   useLayoutEffect(() => { current.current = { items, edit }; }, [items, edit]);
   useEffect(() => { capability.current = options.entryCapability; }, [options.entryCapability]);
   useEffect(() => () => { generation.current += 1; }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     generation.current += 1;
     busy.current = false; pageBusy.current = false; attempt.current = null; expired.current = false;
     capability.current = options.entryCapability;
     confirmed.current.clear(); deleted.current.clear(); sourceSignature.current = signature;
+    refresh.current = { revision: 0, pending: false, allowEditing: false };
     // The external authenticated entry changed; retaining local state would expose another scope.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setEdit(null); setNotice(null); setLoadError(null); setLoadingMore(false);
@@ -63,6 +67,13 @@ export function usePersonMemory(options: Options) {
     if (expired.current) return;
     if (sourceSignature.current === signature) return;
     sourceSignature.current = signature;
+    // Once a live invalidation has happened, a server component snapshot may
+    // predate that operation. Re-read authority instead of restoring its rows.
+    if (refresh.current.revision > 0) {
+      refresh.current.revision += 1; refresh.current.pending = true; refresh.current.allowEditing = true;
+      setRefreshTick(value => value + 1);
+      return;
+    }
     // A fresh server snapshot retracts obsolete sources even while a draft is
     // open. A known pre-save snapshot cannot rewind a read-back correction.
     const incoming = options.items.filter(item => !deleted.current.has(item.id));
@@ -94,6 +105,7 @@ export function usePersonMemory(options: Options) {
     expired.current = true;
     generation.current += 1; attempt.current = null; busy.current = false; pageBusy.current = false;
     confirmed.current.clear(); deleted.current.clear(); capability.current = "";
+    refresh.current.pending = false; refresh.current.revision += 1;
     setItems([]); setEdit(null); setHasMore(false); setNextCursor(null); setLoadingMore(false); setNotice(null);
     setLoadError("登录已变化，请重新登录后查看记忆。");
     invalidateWorkspaceDirectory(undefined, "discard");
@@ -150,8 +162,56 @@ export function usePersonMemory(options: Options) {
     return refreshed;
   }, [readPage]);
 
+  // Layout registration precedes the sibling review card's receipt effect.
+  // Events are scoped hints, never authority to add or remove a Memory row.
+  useLayoutEffect(() => subscribePersonMemoryInvalidation((binding, personId) => {
+    if (expired.current || binding !== options.binding || personId !== options.personId) return;
+    refresh.current.revision += 1; refresh.current.pending = true;
+    setRefreshTick(value => value + 1);
+  }), [options.binding, options.personId]);
+
+  useEffect(() => {
+    const activeEdit = current.current.edit;
+    if (!refresh.current.pending || expired.current || busy.current || pageBusy.current
+      || activeEdit && (!refresh.current.allowEditing || attempt.current || !["editing", "conflict"].includes(activeEdit.phase))) return;
+    const epoch = generation.current;
+    const revision = refresh.current.revision;
+    refresh.current.pending = false;
+    pageBusy.current = true;
+    setLoadingMore(true);
+    void (async () => {
+      try {
+        const snapshot = await readSnapshot(epoch);
+        if (epoch !== generation.current || revision !== refresh.current.revision) return;
+        refresh.current.allowEditing = false;
+        setItems(snapshot.filter(item => !deleted.current.has(item.id)));
+        setHasMore(false); setNextCursor(null); setLoadError(null);
+        const active = current.current.edit;
+        if (active && !attempt.current) {
+          const previous = current.current.items.find(item => item.id === active.itemId);
+          const latest = snapshot.find(item => item.id === active.itemId);
+          if (!previous || !latest || JSON.stringify(previous) !== JSON.stringify(latest)) {
+            setEdit({ ...active, phase: "conflict", error: "来源或记忆已有变化。草稿已保留，请核对最新内容后再修改。" });
+          }
+        }
+      } catch (caught) {
+        if (epoch !== generation.current || revision !== refresh.current.revision) return;
+        refresh.current.allowEditing = false;
+        if (caught instanceof MemoryReadError && [401, 403, 404, 410].includes(caught.status)) {
+          setItems([]); setEdit(null); setHasMore(false); setNextCursor(null); setNotice(null);
+        }
+        setLoadError("最新记忆暂时无法读取，请重新打开人物页面核对。");
+      } finally {
+        if (epoch === generation.current) {
+          pageBusy.current = false; setLoadingMore(false);
+          if (refresh.current.pending) setRefreshTick(value => value + 1);
+        }
+      }
+    })();
+  }, [refreshTick, edit, loadingMore, readSnapshot]);
+
   const begin = useCallback((item: MemoryRecallItem) => {
-    if (expired.current || busy.current || attempt.current || current.current.edit || !canEditMemory(item)) return;
+    if (expired.current || busy.current || pageBusy.current || attempt.current || current.current.edit || !canEditMemory(item)) return;
     setNotice(null); setEdit({ itemId: item.id, draft: item.display_text, phase: "editing", error: null });
   }, []);
   const beginDelete = useCallback((item: MemoryRecallItem) => {
@@ -304,7 +364,7 @@ export function usePersonMemory(options: Options) {
 
   const refreshConflict = useCallback(async () => {
     const active = current.current.edit;
-    if (expired.current || !active || busy.current) return;
+    if (expired.current || !active || busy.current || pageBusy.current) return;
     const epoch = generation.current;
     busy.current = true;
     try {

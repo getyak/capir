@@ -52,9 +52,17 @@ function MemoryEditor({ edit, onChange, onSave, onCancel, onRefresh }: {
   edit: MemoryEdit; onChange: (value: string) => void; onSave: () => Promise<void>; onCancel: () => void; onRefresh: () => Promise<void>;
 }) {
   const composing = useRef(false);
+  const form = useRef<HTMLFormElement>(null);
+  useLayoutEffect(() => {
+    // Source retraction may move the retained draft outside its removed row.
+    // Reclaim only unclaimed focus; a user who moved elsewhere keeps it.
+    if (edit.phase === "conflict" && document.activeElement === document.body) {
+      form.current?.querySelector<HTMLElement>("textarea, button")?.focus();
+    }
+  }, [edit.phase, edit.itemId]);
   const frozen = edit.phase === "saving" || edit.phase === "unknown";
   function save() { if (!composing.current) void onSave(); }
-  if (edit.action === "delete") return <form className={styles.editor} aria-label="删除记忆确认"
+  if (edit.action === "delete") return <form ref={form} className={styles.editor} aria-label="删除记忆确认"
     onSubmit={event => { event.preventDefault(); save(); }}
     onKeyDown={event => { if (event.key === "Escape" && !frozen) { event.preventDefault(); onCancel(); } }}>
     <p className={styles.editLabel}>删除这条记忆？</p>
@@ -62,15 +70,15 @@ function MemoryEditor({ edit, onChange, onSave, onCancel, onRefresh }: {
     <p className={styles.quiet}>删除后不再作为已确认记忆使用。原始对话会保留。</p>
     {edit.error ? <p className={styles.error} role="alert">{edit.error}</p> : null}
     <div className={styles.editActions}>
-      <Button variant="ghost" autoFocus disabled={frozen} onClick={onCancel}>取消</Button>
+      <Button variant="ghost" autoFocus={edit.phase === "editing"} disabled={frozen} onClick={onCancel}>取消</Button>
       {edit.phase === "unknown" ? <Button variant="outline" onClick={save}>核对并重试删除</Button>
         : edit.phase === "conflict" ? <Button variant="outline" onClick={() => void onRefresh()}>核对最新记忆</Button>
           : <Button variant="outline" type="submit" disabled={frozen}>{frozen ? "正在删除并核对…" : "确认删除记忆"}</Button>}
     </div>
   </form>;
-  return <form className={styles.editor} onSubmit={event => { event.preventDefault(); save(); }}>
+  return <form ref={form} className={styles.editor} onSubmit={event => { event.preventDefault(); save(); }}>
     <label className={styles.editLabel} htmlFor={`memory-draft-${edit.itemId}`}>修改这条记忆</label>
-    <textarea id={`memory-draft-${edit.itemId}`} autoFocus rows={3} maxLength={1000} value={edit.draft} disabled={frozen}
+    <textarea id={`memory-draft-${edit.itemId}`} autoFocus={edit.phase === "editing"} rows={3} maxLength={1000} value={edit.draft} disabled={frozen}
       onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
       onChange={event => onChange(event.target.value)}
       onKeyDown={event => {

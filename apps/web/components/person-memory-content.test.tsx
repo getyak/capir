@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryRecallItem } from "@talent-signal/contracts";
 import { PersonMemoryContent } from "./person-memory-content";
 import { WorkspaceSessionBoundary } from "./workspace-session-boundary";
+import { invalidatePersonMemory } from "@/lib/person-memory-invalidation";
 
 const fetcher = vi.hoisted(() => vi.fn());
 vi.mock("./workspace-session-request", () => ({ workspaceSessionFetch: fetcher, WORKSPACE_SESSION_EXPIRED_EVENT: "session-expired" }));
@@ -41,6 +42,111 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 describe("person document interactions", () => {
+  it("reads all authoritative pages after a matching review and keeps the user's focus", async () => {
+    await mount([]);
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory()], has_more: true, next_cursor: "next" }))
+      .mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory({ id: "second", display_text: "另一条已确认记忆" })], has_more: false }));
+    const control = button("逐条记忆"); control.focus();
+    await act(async () => { invalidatePersonMemory("other-binding", personId); invalidatePersonMemory("binding", "other-person"); });
+    expect(fetcher).not.toHaveBeenCalled();
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(host.querySelectorAll("[data-memory-item]")).toHaveLength(2);
+    expect(document.activeElement).toBe(control);
+  });
+  it("discards an earlier commit read when Undo invalidates it and rejects stale server rows", async () => {
+    await mount([]);
+    let finish!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValue(Response.json({ person_id: personId, items: [], has_more: false }));
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    await act(async () => { finish(Response.json({ person_id: personId, items: [memory()], has_more: false })); });
+    expect(host.querySelectorAll("[data-memory-item]")).toHaveLength(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await mount([memory()]);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(host.querySelectorAll("[data-memory-item]")).toHaveLength(0);
+  });
+  it("defers review refresh while editing, retains the draft, then reads after cancellation", async () => {
+    await mount(); await click("修改"); await draft("尚未保存的用户草稿");
+    fetcher.mockResolvedValue(Response.json({ person_id: personId, items: [], has_more: false }));
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(host.querySelector("textarea")?.value).toBe("尚未保存的用户草稿");
+    await click("取消");
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(host.querySelectorAll("[data-memory-item]")).toHaveLength(0);
+  });
+  it("revalidates source retraction during a plain draft after a prior live recall", async () => {
+    await mount();
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory()], has_more: false }));
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    await click("修改"); const textarea = await draft("仍要保留的用户草稿"); textarea.focus();
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [], has_more: false }));
+    await mount([]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(host.querySelectorAll("[data-memory-item]")).toHaveLength(0);
+    expect(host.textContent).not.toContain("下个月可以聊一下试点");
+    expect(host.textContent).toContain("来源或记忆已有变化");
+    expect(host.querySelector("textarea")?.value).toBe("仍要保留的用户草稿");
+    expect(document.activeElement).toBe(host.querySelector("textarea"));
+  });
+  it("does not autofocus a relocated draft after the user moved during source revalidation", async () => {
+    await mount();
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory()], has_more: false }));
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    await click("修改"); await draft("仍要保留的草稿");
+    let finish!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    await mount([]);
+    const outside = document.createElement("button"); document.body.append(outside); outside.focus();
+    try {
+      await act(async () => { finish(Response.json({ person_id: personId, items: [], has_more: false })); });
+      expect(document.activeElement).toBe(outside);
+      expect(host.querySelector("textarea")?.value).toBe("仍要保留的草稿");
+      expect(host.textContent).toContain("来源或记忆已有变化");
+    } finally { outside.remove(); }
+  });
+  it("serializes a conflict refresh with an already pending server revalidation", async () => {
+    await mount();
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory()], has_more: false }));
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    await click("修改"); await draft("用户草稿");
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory({ version: 2 })], has_more: false }));
+    await mount([]);
+    expect(host.textContent).toContain("来源或记忆已有变化");
+    let finish!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    await mount([memory({ version: 3 })]);
+    const requests = fetcher.mock.calls.length;
+    await click("核对最新记忆");
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+    await act(async () => { finish(Response.json({ person_id: personId, items: [], has_more: false })); });
+    expect(host.querySelectorAll("[data-memory-item]")).toHaveLength(0);
+    expect(host.querySelector("textarea")?.value).toBe("用户草稿");
+  });
+  it("does not replace checked content with a partial refresh or describe failure as empty", async () => {
+    await mount();
+    fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [memory({ id: "new" })], has_more: true, next_cursor: "next" }))
+      .mockResolvedValueOnce(Response.json({}, { status: 503 }));
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    expect(host.querySelector('[data-memory-item="old"]')).not.toBeNull();
+    expect(host.querySelector('[data-memory-item="new"]')).toBeNull();
+    expect(host.textContent).toContain("最新记忆暂时无法读取");
+    expect(host.textContent).not.toContain("还没有已确认的记忆");
+  });
+  it("rejects late refresh JSON after an authenticated binding changes", async () => {
+    await mount([]);
+    let finish!: (body: unknown) => void;
+    fetcher.mockResolvedValue({ ok: true, status: 200, json: () => new Promise(resolve => { finish = resolve; }) });
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    await act(async () => root.render(createElement(PersonMemoryContent, { personId, binding: "next-binding", entryCapability: "next-entry", initialItems: [] })));
+    await act(async () => { finish({ person_id: personId, items: [memory()], has_more: false }); });
+    expect(host.querySelectorAll("[data-memory-item]")).toHaveLength(0);
+    await act(async () => { invalidatePersonMemory("binding", personId); });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
   it("shows the exact item before deletion and cancels to the same control without writing", async () => {
     await mount(); await click("删除");
     expect(host.querySelector('form[aria-label="删除记忆确认"]')?.textContent).toContain(memory().display_text);
