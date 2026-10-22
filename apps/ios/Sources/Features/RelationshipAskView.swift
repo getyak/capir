@@ -2706,7 +2706,8 @@ struct RelationshipAskView: View {
     }
 
     private var isNewSessionEntry: Bool {
-        sessionID == nil
+        !hasConversationExperienceFixture
+            && sessionID == nil
             && activeSessionID == nil
             && initialSeed == nil
             && contactDraft == nil

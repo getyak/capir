@@ -81,6 +81,27 @@ struct ConversationImagePresentation: Equatable {
     }
 }
 
+/// The fixed surface owns layout. The full-size image is drawing content only;
+/// neither its intrinsic height nor its unclipped accessibility bounds may
+/// expand the preview's button. The parent supplies the image's accessible action.
+struct ConversationImageBoundedPreview: View {
+    let image: UIImage
+    let layout: ConversationImagePresentation
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.tsSurfaceMuted)
+            .frame(width: layout.width, height: layout.height)
+            .overlay(alignment: .top) {
+                Image(uiImage: image)
+                    .resizable().scaledToFill()
+                    .frame(width: layout.width, height: layout.height, alignment: .top)
+            }
+            .clipped()
+            .accessibilityHidden(true)
+    }
+}
+
 /// Local previews are presentation only. The authenticated original replaces
 /// them only after byte identity and decode checks, and only in the same binding.
 @MainActor
@@ -215,9 +236,7 @@ private struct ConversationImageTile: View {
                 ZStack(alignment: .bottom) {
                     Color.tsSurfaceMuted
                     if let image {
-                        Image(uiImage: image).resizable().scaledToFill()
-                            .frame(width: layout.width, height: layout.height, alignment: .top)
-                            .clipped()
+                        ConversationImageBoundedPreview(image: image, layout: layout)
                         if layout.isLong {
                             LinearGradient(colors: [.clear, .black.opacity(0.25)], startPoint: .top, endPoint: .bottom)
                                 .frame(height: 32)
@@ -233,6 +252,7 @@ private struct ConversationImageTile: View {
             }
             .buttonStyle(.plain)
             .disabled(image == nil)
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(language.text("Image") + " \(index + 1) " + language.text("of") + " \(total)")
             .accessibilityHint(language.text("View full image"))
             .accessibilityIdentifier("conversation-image-\(messageID.uuidString.lowercased())-\(index)")

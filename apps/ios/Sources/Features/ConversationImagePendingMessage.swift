@@ -181,6 +181,7 @@ struct ConversationPendingImageSources: View {
                     .font(.caption).foregroundStyle(Color.tsMutedInk)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("conversation-local-image-message")
         .sheet(isPresented: Binding(get: { selectedImage != nil }, set: { if !$0 { selectedImage = nil } })) {
             NavigationStack {
@@ -207,13 +208,10 @@ struct ConversationPendingImageSources: View {
         let layout = ConversationImagePresentation.layout(
             imageSize: CGSize(width: CGFloat(max(1, draft.width)), height: CGFloat(max(1, draft.height))),
             availableWidth: 310, isMultiple: drafts.count > 1)
-        let isLong = layout.isLong, width = layout.width, height = layout.height
+        let isLong = layout.isLong, width = layout.width
         return Button { selectedImage = draft.id } label: {
             VStack(alignment: .leading, spacing: 0) {
-                Image(uiImage: draft.preview)
-                    .resizable().scaledToFill()
-                    .frame(width: width, height: height, alignment: .top)
-                    .clipped()
+                ConversationImageBoundedPreview(image: draft.preview, layout: layout)
                 if isLong {
                     Label(language.text("View full image"), systemImage: "arrow.up.left.and.arrow.down.right")
                         .font(.caption).foregroundStyle(Color.tsMutedInk)
@@ -225,7 +223,9 @@ struct ConversationPendingImageSources: View {
             .overlay { RoundedRectangle(cornerRadius: 16).stroke(Color.tsLine, lineWidth: 0.5) }
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(language.text("Original image") + " \((drafts.firstIndex { $0.id == draft.id } ?? 0) + 1)")
+        .accessibilityHint(language.text("View full image"))
         .accessibilityIdentifier("conversation-local-image-\(draft.id.uuidString.lowercased())")
     }
 }

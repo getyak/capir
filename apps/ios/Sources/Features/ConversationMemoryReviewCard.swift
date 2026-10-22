@@ -15,6 +15,7 @@ struct ConversationMemoryReviewCard: View {
     let onReviewSource: ((UUID, Int?) -> Void)?
     @State private var choosingPerson = false
     @FocusState private var focusedField: String?
+    @Environment(\.colorScheme) private var colorScheme
 
     init(proposal: ConversationMemoryProposalReference, sessionID: UUID, sourceMessageID: UUID? = nil,
          sourceMessageIDs: Set<UUID>? = nil,
@@ -164,6 +165,7 @@ struct ConversationMemoryReviewCard: View {
         Button { choosingPerson = true } label: {
             Label(language.text("Choose contact"), systemImage: "person.crop.circle.badge.questionmark")
                 .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
         }.buttonStyle(.bordered).disabled(store.isFrozen)
     }
 
@@ -225,7 +227,9 @@ struct ConversationMemoryReviewCard: View {
     private var saveButton: some View {
         Button { Task { await store.save() } } label: {
             Text(primaryLabel).font(.body.weight(.semibold))
+                .foregroundColor(colorScheme == .dark ? .black : .white)
                 .frame(maxWidth: .infinity, minHeight: 48)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.borderedProminent).tint(Color.primary).disabled(!store.canSave)
         .accessibilityIdentifier("conversation.memory.save")
@@ -249,13 +253,15 @@ struct ConversationMemoryReviewCard: View {
                 if let id = UUID(uuidString: store.review?.source_message_id ?? ""), let onReviewSource {
                     onReviewSource(id, nil)
                 } else { onSource?() }
-            } label: { Label(language.text("View source"), systemImage: "doc.text.magnifyingglass") }
-                .frame(minHeight: 44)
+            } label: {
+                Label(language.text("View source"), systemImage: "doc.text.magnifyingglass")
+                    .frame(minHeight: 44).contentShape(Rectangle())
+            }
         }
         if store.allowsIdentityChanges {
-            Button(language.text("Change contact")) { choosingPerson = true }.frame(minHeight: 44)
+            Button { choosingPerson = true } label: { MemoryReviewButtonLabel(title: language.text("Change contact")) }
         }
-        Button(language.text("Not now")) { Task { await store.dismiss() } }.frame(minHeight: 44)
+        Button { Task { await store.dismiss() } } label: { MemoryReviewButtonLabel(title: language.text("Not now")) }
     }
 
     private func itemRow(_ item: ConversationMemoryItem) -> some View {
@@ -267,6 +273,7 @@ struct ConversationMemoryReviewCard: View {
                 } label: {
                     Image(systemName: store.selectedItemIDs.contains(item.id) ? "checkmark.circle.fill" : "circle")
                         .font(.title3).frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).disabled(store.isFrozen || !item.canSelect || store.review?.contact_decision == "new")
                 .accessibilityLabel(language.text("Select detail") + ": " + item.display_text)
@@ -304,12 +311,12 @@ struct ConversationMemoryReviewCard: View {
                         Text(String(format: language.text("Image %d"), index + 1)).font(.subheadline).foregroundStyle(.secondary)
                     }
                     if onItemSource != nil || onSource != nil || onReviewSource != nil {
-                        Button(language.text("View original source")) {
+                        Button {
                             focusedField = nil
                             if let id = UUID(uuidString: item.source_locator.message_id ?? store.review?.source_message_id ?? ""), let onReviewSource {
                                 onReviewSource(id, item.source_locator.image_index)
                             } else if let onItemSource { onItemSource(item.source_locator) } else { onSource?() }
-                        }.frame(minHeight: 44)
+                        } label: { MemoryReviewButtonLabel(title: language.text("View original source")) }
                     }
                 }.padding(.vertical, 8)
             } label: { Text(language.text("Source")).font(.subheadline).frame(minHeight: 44) }
@@ -325,11 +332,11 @@ struct ConversationMemoryReviewCard: View {
                 Text(language.text("Saving your decision…"))
             }.frame(minHeight: 44)
         case .unknown:
-            Button(language.text("Check result")) { Task { await store.reconcile() } }
-                .frame(minHeight: 44).buttonStyle(.bordered)
+            Button { Task { await store.reconcile() } } label: { MemoryReviewButtonLabel(title: language.text("Check result")) }
+                .buttonStyle(.bordered)
         case .stale, .unavailable:
-            Button(language.text("Reload review")) { Task { await store.open() } }
-                .frame(minHeight: 44).buttonStyle(.bordered)
+            Button { Task { await store.open() } } label: { MemoryReviewButtonLabel(title: language.text("Reload review")) }
+                .buttonStyle(.bordered)
         default: EmptyView()
         }
     }
@@ -343,7 +350,7 @@ struct ConversationMemoryReviewCard: View {
                 Text(String(format: language.text("%d details saved"), destination.savedItemCount)).foregroundStyle(.secondary)
             }
             if let personID = destination.personID {
-                Button(language.text("View contact")) { onOpenPerson(personID) }.frame(minHeight: 44)
+                Button { onOpenPerson(personID) } label: { MemoryReviewButtonLabel(title: language.text("View contact")) }
             }
         }.accessibilityIdentifier("conversation.memory.saved")
     }
@@ -373,6 +380,15 @@ struct ConversationMemoryReviewCard: View {
     }
 }
 
+/// Put the size on the Button's label so UIKit's accessibility frame and the
+/// tappable region include the full target, rather than surrounding padding.
+private struct MemoryReviewButtonLabel: View {
+    let title: String
+    var body: some View {
+        Text(title).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+    }
+}
+
 private struct ConversationMemoryIdentityChoices: View {
     @ObservedObject var store: ConversationMemoryReviewStore
     let language: AppLanguage
@@ -387,8 +403,8 @@ private struct ConversationMemoryIdentityChoices: View {
                 Section {
                     TextField(language.text("Name, email, or confirmed contact detail"), text: $query)
                         .submitLabel(.search).onSubmit { search() }
-                    Button(language.text("Find existing contact"), action: search)
-                        .frame(minHeight: 44).disabled(store.isSearching || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button(action: search) { MemoryReviewButtonLabel(title: language.text("Find existing contact")) }
+                        .disabled(store.isSearching || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     if store.isSearching { ProgressView().accessibilityLabel(language.text("Finding contacts…")) }
                     if let notice = store.searchNotice { Text(language.text(notice)).foregroundStyle(.secondary) }
                     ForEach(store.people) { person in
@@ -399,10 +415,10 @@ private struct ConversationMemoryIdentityChoices: View {
                                     .foregroundStyle(.secondary)
                             } else { Text(language.text("Name match. Check who this is.")).foregroundStyle(.secondary) }
                             if person.contexts.isEmpty {
-                                Button(language.text("Use this contact")) { choose(person, contextID: nil) }.frame(minHeight: 44)
+                                Button { choose(person, contextID: nil) } label: { MemoryReviewButtonLabel(title: language.text("Use this contact")) }
                             } else {
                                 ForEach(person.contexts) { context in
-                                    Button(context.display_label) { choose(person, contextID: context.id) }.frame(minHeight: 44)
+                                    Button { choose(person, contextID: context.id) } label: { MemoryReviewButtonLabel(title: context.display_label) }
                                 }
                             }
                         }
@@ -411,21 +427,24 @@ private struct ConversationMemoryIdentityChoices: View {
                 Section {
                     TextField(language.text("Contact name"), text: $newName).textContentType(.name)
                     TextField(language.text("How you know each other (optional)"), text: $newRelationship, axis: .vertical)
-                    Button(language.text("Review as a new contact")) {
+                    Button {
                         Task { await store.chooseNewContact(name: newName, relationship: newRelationship); if store.phase == .review { close() } }
-                    }.frame(minHeight: 44).disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    } label: { MemoryReviewButtonLabel(title: language.text("Review as a new contact")) }
+                    .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } header: { Text(language.text("New contact")) }
                 Section {
-                    Button(language.text("Continue without a contact")) {
+                    Button {
                         Task { await store.chooseNoContact(); if store.phase == .review { close() } }
-                    }.frame(minHeight: 44)
+                    } label: { MemoryReviewButtonLabel(title: language.text("Continue without a contact")) }
                 }
                 if let notice = store.notice { Text(language.text(notice)).foregroundStyle(.secondary) }
             }
             .disabled(store.isFrozen)
             .navigationTitle(language.text("Choose contact"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(language.text("Done"), action: close) } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) {
+                Button(action: close) { MemoryReviewButtonLabel(title: language.text("Done")) }
+            } }
         }
     }
     private func search() { Task { await store.search(query: query) } }

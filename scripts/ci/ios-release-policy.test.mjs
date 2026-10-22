@@ -221,7 +221,16 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
   assert.match(iosCheck, /Audit failed to complete in time/);
   assert.doesNotMatch(iosCheck, /rg --files-with-matches/);
 
-  for (const scope of ["quick", "smoke"]) {
+  const tierBudgets = { quick: 14, smoke: 15 };
+  const conversationPrefix = "TalentSignalUITests/ConversationExperienceUITests/";
+  const criticalConversationTests = [
+    "testProcessingStatusBelongsToItsImageAndHasNoEmptyMessageBubble",
+    "testUnavailableReviewExplainsRecoveryAndNeverOffersSave",
+    "testAddingContactKeepsDetailsPendingAndSavingOneKeepsTheOtherPending",
+    "testNameCorrectionRequiresFreshReviewAndASecondConfirm",
+  ];
+  const uiSources = new Map();
+  for (const [scope, budget] of Object.entries(tierBudgets)) {
     const smokeTests = readFileSync(
       join(repositoryRoot, `scripts/ios/ci-${scope}-tests.txt`),
       "utf8",
@@ -229,18 +238,25 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith("#"));
-    assert.ok(smokeTests.length >= 5 && smokeTests.length <= 10);
-
-    const uiSources = [
-      "apps/ios/UITests/CandidateSignalUITests.swift",
-      "apps/ios/UITests/StandaloneOnboardingUITests.swift",
-    ].map((path) => readFileSync(join(repositoryRoot, path), "utf8"));
+    assert.equal(smokeTests.length, budget, `${scope} must keep its explicitly reviewed bounded scope`);
+    assert.equal(new Set(smokeTests).size, smokeTests.length, `${scope} must not duplicate journeys`);
+    for (const method of criticalConversationTests) {
+      assert.ok(smokeTests.includes(conversationPrefix + method), `${scope} must retain ${method}`);
+    }
+    if (scope === "smoke") {
+      assert.ok(smokeTests.includes(conversationPrefix + "testReviewAtAccessibilitySizeInDarkModeRemainsOperable"));
+    }
     for (const selector of smokeTests) {
-      const method = selector.split("/").at(-1);
-      assert.ok(
-        uiSources.some((source) => source.includes(`func ${method}(`)),
-        `expected smoke selector ${selector} to exist`,
-      );
+      const match = /^TalentSignalUITests\/([A-Za-z0-9_]+)\/(test[A-Za-z0-9_]+)$/u.exec(selector);
+      assert.ok(match, `expected a valid native selector: ${selector}`);
+      const [, klass, method] = match;
+      assert.ok(!klass.startsWith("Live"), "Live-account acceptance requires explicit opt-in");
+      if (!uiSources.has(klass)) {
+        uiSources.set(klass, readFileSync(join(repositoryRoot, `apps/ios/UITests/${klass}.swift`), "utf8"));
+      }
+      const source = uiSources.get(klass);
+      assert.match(source, new RegExp(`final class ${klass}: XCTestCase`, "u"));
+      assert.match(source, new RegExp(`\\bfunc ${method}\\s*\\(`, "u"), `expected ${scope} selector ${selector} to exist`);
     }
   }
 });

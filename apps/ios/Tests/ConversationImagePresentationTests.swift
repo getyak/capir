@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import UIKit
 import XCTest
 @testable import TalentSignal
@@ -32,6 +33,20 @@ final class ConversationImagePresentationTests: XCTestCase {
         let invalid = ConversationImagePresentation.layout(imageSize: CGSize(width: CGFloat.nan, height: 0), availableWidth: CGFloat.infinity)
         XCTAssertTrue(invalid.width.isFinite && invalid.height.isFinite)
         XCTAssertGreaterThan(invalid.width, 0); XCTAssertGreaterThan(invalid.height, 0)
+    }
+
+    func testRenderedLongPreviewMeasuresTheCropInsteadOfImageIntrinsicHeight() {
+        let source = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 280)).image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 120, height: 280))
+        }
+        let layout = ConversationImagePresentation.layout(imageSize: source.size, availableWidth: 310)
+        let host = UIHostingController(rootView: ConversationImageBoundedPreview(image: source, layout: layout))
+        let measured = host.sizeThatFits(in: CGSize(width: 310, height: 2_000))
+        XCTAssertEqual(measured.width, layout.width, accuracy: 0.5)
+        XCTAssertEqual(measured.height, layout.height, accuracy: 0.5)
+        XCTAssertLessThan(measured.height, measured.width * source.size.height / source.size.width,
+            "The full screenshot must not expand the preview's interactive surface.")
     }
 
     func testAlbumNavigationPreservesOrderWithoutWrappingAtEnds() {

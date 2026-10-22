@@ -22,7 +22,8 @@ struct ConversationExperienceFixtureView: View {
             proposal: .init(proposal_id: ConversationExperienceFixtureClient.proposalID, revision: 1),
             sessionID: ConversationExperienceFixtureClient.sessionID,
             sourceMessageID: ConversationExperienceFixtureClient.messageID,
-            client: client, defaults: defaults
+            client: client, defaults: defaults,
+            intentPersistence: ConversationExperienceMemoryIntents()
         ))
     }
 
@@ -87,6 +88,23 @@ struct ConversationExperienceFixtureView: View {
     }
 }
 
+/// The preview never depends on device Keychain entitlements. This adapter
+/// uses the production operation contract and remains confined to DEBUG data.
+private final class ConversationExperienceMemoryIntents: ConversationMemoryOperationPersisting {
+    private var values: [String: Data] = [:]
+    private var modifiedDates: [String: Date] = [:]
+    func load(key: String) throws -> Data? { values[key] }
+    func save(_ data: Data, key: String) throws { values[key] = data; modifiedDates[key] = Date() }
+    func remove(key: String) throws { values.removeValue(forKey: key); modifiedDates.removeValue(forKey: key) }
+    func removeExpired(now: Date) throws {
+        let entries = modifiedDates.map { ConversationMemoryIntentRetention.Metadata(key: $0.key, modifiedAt: $0.value) }
+        for key in ConversationMemoryIntentRetention.expiredKeys(entries, now: now) { try remove(key: key) }
+    }
+    func removeAccount(prefix: String) throws {
+        for key in Array(values.keys) where key.hasPrefix(prefix) { try remove(key: key) }
+    }
+}
+
 private actor ConversationExperienceFixtureClient: ConversationMemoryReviewServing {
     static let proposalID = "a0000000-0000-4000-8000-000000000002"
     static let sessionID = UUID(uuidString: "a0000000-0000-4000-8000-000000000003")!
@@ -109,11 +127,6 @@ private actor ConversationExperienceFixtureClient: ConversationMemoryReviewServi
     private var rebases: [String: Int] = [:]
 
     init(failsOpen: Bool) { self.failsOpen = failsOpen }
-
-    deinit {
-        try? KeychainConversationMemoryOperationStore().removeAccount(
-            prefix: ConversationMemoryIntentRetention.accountPrefix(binding: accountBinding))
-    }
 
     private func envelope() -> ConversationMemoryReviewEnvelope {
         let texts = ["Review the design draft on Friday.", "Bring the updated screens to the review."]

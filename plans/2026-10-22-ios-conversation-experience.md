@@ -120,16 +120,28 @@ recheck resources and the single iOS session before heavyweight operations.
 
 ## Current status and unknowns
 
-Native Memory, progress and integration source are implemented. Independent
-review identified and workers fixed ordinary navigation draft loss, sibling
-Memory loss, implicit batch skipping, historical source binding and unknown
-operation replay. Final protected-intent retention and source-map review remains
-active. Syntax checks pass; localization passes before latest small additions.
-First build found a generic nested error decoder (fixed). Second build missed
-new operation-store source added after generation; regenerate before next build.
-The architecture gate required extracting presentation/fixtures; AskView now
-fits the existing 8820-line limit. Documentation and Wiki checks passed; full
-docs:check awaits final architecture rerun. Native tests/UI have not run.
+Native Memory, progress and integration source are implemented and independently
+reviewed; all confirmed P0/P1 findings are closed. Build-for-testing attempt 6
+and 109 focused native tests passed on native source at 82142db. Subsequent
+commits through 81ccb05c changed documentation/CI selection only. The complete
+docs:check passed again after merging main. AskView fits the unchanged 8820-line
+architecture limit.
+
+Primary-device UI attempt 1 ran all seven cases, but every case stopped before
+the fixture mounted. The captured accessibility hierarchy showed the new-session
+composer: its entry predicate bypassed the fixture's conversation branch. A
+DEBUG-preview-only predicate correction passed build 7. UI attempt 2 reached
+the actual fixture: one case passed and six failed. Direct screenshot and
+accessibility-tree inspection found invisible dark-mode primary-button text,
+undersized secondary/recovery targets, and child image identifiers/bounds
+overridden by container/unclipped-image semantics. The synthetic fixture also
+hit protected-write failure through a Keychain dependency in the unsigned local
+test build. The fixture now uses a DEBUG-only in-memory operation adapter;
+production persistence remains protected. Button labels and bounded media
+surfaces are corrected, with build 8/UI attempt 3 pending. CI also exposed
+two obsolete policy-test assumptions (maximum ten cases and two old test classes);
+the bounded quick 14/smoke 15 policy correction passed 18 policy tests and its
+focused selector regression. Neither failure is waived.
 
 Pi media task 20261022-220909-decb4775 stalled on one model response without
 source changes, was cancelled, and its managed PIDs 93921/93926 were verified
@@ -146,7 +158,9 @@ launch timed out; run status readback succeeded. Reuse request
 ed268276-57c5-4eee-9e0f-37c0e117b732, never create a replacement. Private credentials
 remain in the private artifact/keyring only. Stop and verify cleanup at closeout.
 Live Memory behavior, actual native UI, device latency and installed TestFlight
-fidelity still require proof. No PR, deployment or release is claimed.
+fidelity still require proof. Draft PR #405 is open:
+https://github.com/getyak/capir/pull/405. Latest-head required CI and native UI
+acceptance remain pending; no merge, deployment or release is claimed.
 
 ## Source review checkpoint
 
@@ -160,6 +174,13 @@ The new-contact layout is identity-first: name/context/source and Add contact
 precede a collapsed suggestion preview; pending Memory editors follow actual
 contact confirmation. Editorial and compact directions share the same behavior.
 Seven deterministic UI cases and one opt-in real-provider image/contact journey
-are present. Main build attempt 4 is running; no native tests have run yet.
-Documentation/architecture and localization gates passed on the pre-freeze
-source. AskView remains within the existing architecture limit (8806/8820).
+are present. Build 6 and focused unit evidence are recorded above; the main agent
+owns build 8 and the actual UI rerun. Documentation/architecture and
+localization gates passed. Pending actual UI, provider and installed-build
+evidence cannot be replaced by source review or synthetic results.
+
+The complete source-based symptom, cross-platform and prioritized improvement
+register is [the dated UX audit](../docs/evaluations/2026-10-22-ios-conversation-ux-audit.md).
+Its proposed local-feedback timing target is not a measured result. The main
+agent will compare the same native content before choosing a visual direction;
+no rendered or installed-build quality score is inferred from passing source checks.
