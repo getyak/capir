@@ -25,6 +25,7 @@ struct RelationshipArchiveView: View {
     @State private var sessionRestorationPosition: UUID?
     @State private var peopleRestorationPosition: String?
     @State private var presentedSheet: RelationshipArchiveSheet?
+    @State private var showsAgentStudio = false
     @State private var askPresentation: RelationshipAskPresentation?
     /// Shared active-refresh registration for the REAL open Agent Session (or
     /// the directory-level Session list when no conversation is open).
@@ -205,7 +206,7 @@ struct RelationshipArchiveView: View {
                         onOpenCalendar: openRelationshipCalendar,
                         onOpenAgentStudio: {
                             clearTransientRetrievalIntent()
-                            presentedSheet = .agentStudio
+                            showsAgentStudio = true
                         }
                     )
                 }
@@ -214,6 +215,26 @@ struct RelationshipArchiveView: View {
                 guideRail
             }
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $showsAgentStudio) {
+                RelationshipAgentStudioView(
+                    workspaceStore: workspaceStore,
+                    sessionStore: sessionStore,
+                    isCanonical: workspaceStore.isCanonical,
+                    workspaceID: workspaceStore.snapshot?.workspaceID,
+                    runtimeScope: runtimeScope,
+                    workspaceLabel: workspaceLabel,
+                    accountName: workspaceStore.snapshot?.currentUserName,
+                    accountEmail: accountEmail,
+                    proposals: workspaceStore.snapshot?.openProposals ?? [],
+                    signOutNotice: sessionStore.persistenceNotice,
+                    onOpenProposal: { presentedSheet = .proposal($0) },
+                    internalTestingStatus: internalTestingStatus,
+                    onOpenInternalTesting: internalTestingAction,
+                    // Protected drafts and operation IDs remain owned by this
+                    // account. Closing a session is not a request to delete them.
+                    onSignOut: onSignOut
+                )
+            }
             .navigationDestination(isPresented: Binding(
                 get: { askPresentation != nil },
                 set: { if !$0 { askPresentation = nil } }
@@ -224,6 +245,9 @@ struct RelationshipArchiveView: View {
             }
         }
         .modifier(activeRefreshModifier)
+        .onChange(of: showsAgentStudio) { isPresented in
+            if !isPresented { reloadCanonicalWorkspace() }
+        }
         .onChange(of: askPresentation?.id) { presentationID in
             if presentationID == nil { completeDeferredTransition() }
         }
@@ -298,51 +322,6 @@ struct RelationshipArchiveView: View {
                     },
                     actorDisplayName: workspaceStore.snapshot?.currentUserName
                         ?? "Current user"
-                )
-            case .agentStudio:
-                RelationshipAgentStudioView(
-                    workspaceStore: workspaceStore,
-                    sessionStore: sessionStore,
-                    isCanonical: workspaceStore.isCanonical,
-                    workspaceID: workspaceStore.snapshot?.workspaceID,
-                    runtimeScope: runtimeScope,
-                    workspaceLabel: workspaceLabel,
-                    accountName: workspaceStore.snapshot?.currentUserName,
-                    accountEmail: accountEmail,
-                    proposals: workspaceStore.snapshot?.openProposals ?? [],
-                    signOutNotice: sessionStore.persistenceNotice,
-                    onOpenProposal: { proposal in
-                        Task { @MainActor in
-                            await Task.yield()
-                            presentedSheet = .proposal(proposal)
-                        }
-                    },
-                    internalTestingStatus: internalTestingStatus,
-                    onOpenInternalTesting: internalTestingAction,
-                    // Protected drafts and operation IDs remain owned by this
-                    // account. Closing a session is not a request to delete them.
-                    onSignOut: onSignOut
-                )
-            case .menu:
-                RelationshipMenuView(
-                    isCanonical: workspaceStore.isCanonical,
-                    workspaceID: workspaceStore.snapshot?.workspaceID,
-                    workspaceLabel: workspaceLabel,
-                    accountName: workspaceStore.snapshot?.currentUserName,
-                    accountEmail: accountEmail,
-                    proposals: workspaceStore.snapshot?.openProposals ?? [],
-                    signOutNotice: sessionStore.persistenceNotice,
-                    onOpenProposal: { proposal in
-                        Task { @MainActor in
-                            await Task.yield()
-                            presentedSheet = .proposal(proposal)
-                        }
-                    },
-                    internalTestingStatus: internalTestingStatus,
-                    onOpenInternalTesting: internalTestingAction,
-                    // Protected drafts and operation IDs remain owned by this
-                    // account. Closing a session is not a request to delete them.
-                    onSignOut: onSignOut
                 )
             case .internalTesting:
                 ProductLabView(
