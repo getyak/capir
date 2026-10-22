@@ -138,7 +138,12 @@ overridden by container/unclipped-image semantics. The synthetic fixture also
 hit protected-write failure through a Keychain dependency in the unsigned local
 test build. The fixture now uses a DEBUG-only in-memory operation adapter;
 production persistence remains protected. Button labels and bounded media
-surfaces are corrected, with build 8/UI attempt 3 pending. CI also exposed
+surfaces are corrected. Build 8 passed; UI attempt 3 passed five of seven cases,
+including both reading directions, original-image access, pending status,
+AX5/dark mode and unavailable recovery. The remaining two assertions queried
+receipt child text after successful actions. The receipt now has an explicit
+accessibility container; existing assertions remain unchanged. Build 9 passed,
+with its focused unit/UI verification active. CI also exposed
 two obsolete policy-test assumptions (maximum ten cases and two old test classes);
 the bounded quick 14/smoke 15 policy correction passed 18 policy tests and its
 focused selector regression. Neither failure is waived.
@@ -155,8 +160,13 @@ rebuildable task outputs to remove only after formal evidence is preserved.
 One isolated daily test run acea8a63-ec2d-4051-8414-a7c6aebba8fb was created via
 capir under the verified test@cubxxw.com authorization. Its --open web browser
 launch timed out; run status readback succeeded. Reuse request
-ed268276-57c5-4eee-9e0f-37c0e117b732, never create a replacement. Private credentials
-remain in the private artifact/keyring only. Stop and verify cleanup at closeout.
+ed268276-57c5-4eee-9e0f-37c0e117b732 until the run's expiry. Its four-hour lifetime
+elapsed before a product upload occurred. Stop/expiry cleanup readback is still
+required before provisioning another bounded acceptance run. Private credentials
+remain in the private artifact/keyring only. During a backend transport failure,
+CLI refresh became uncertain; do not replay that credential. Approval to revoke
+and re-login the exact staging CLI grant is pending because its derived entries
+may serve other work. Native verification continues independently.
 Live Memory behavior, actual native UI, device latency and installed TestFlight
 fidelity still require proof. Draft PR #405 is open:
 https://github.com/getyak/capir/pull/405. Latest-head required CI and native UI
@@ -175,12 +185,24 @@ precede a collapsed suggestion preview; pending Memory editors follow actual
 contact confirmation. Editorial and compact directions share the same behavior.
 Seven deterministic UI cases and one opt-in real-provider image/contact journey
 are present. Build 6 and focused unit evidence are recorded above; the main agent
-owns build 8 and the actual UI rerun. Documentation/architecture and
+owns build 9 and the actual UI rerun. Documentation/architecture and
 localization gates passed. Pending actual UI, provider and installed-build
 evidence cannot be replaced by source review or synthetic results.
 
 The complete source-based symptom, cross-platform and prioritized improvement
 register is [the dated UX audit](../docs/research/ios-conversation-ux-audit-2026-10-22.md).
 Its proposed local-feedback timing target is not a measured result. The main
-agent will compare the same native content before choosing a visual direction;
-no rendered or installed-build quality score is inferred from passing source checks.
+agent inspected the same native content and selected editorial presentation:
+it keeps the identity fields and primary decision prominent while fitting the
+secondary actions on one row; compact insets added a vertical action stack.
+Six inspected synthetic screenshots and the selection rationale are retained in
+the private task artifact. No installed-build quality score or real-provider
+success is inferred from synthetic tests.
+
+Latest required CI at c1b10dab passed repository policy, security, Web, backend,
+CLI and control-plane checks. Native smoke reproduced the same receipt-text
+assertion failure and remains a release blocker until the fixed head passes.
+The audit is classified under docs/research; repository hygiene remains intact.
+The existing backend recovered without intervention: scoped health/readiness
+and HTTP revision were verified on 2026-10-23. Prior transport-failure cause is
+unknown; health does not establish model completion or the native save path.

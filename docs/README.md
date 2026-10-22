@@ -80,6 +80,9 @@ updated.
   compares the mobile relationship workspace with adjacent products and records
   the current row-swipe, long-press, dismissal, motion, and navigation-gesture
   decision.
+- [iOS conversation experience audit](research/ios-conversation-ux-audit-2026-10-22.md):
+  maps screenshot handoff and contact-review gaps to Web/macOS source, prioritizes
+  native improvements, and separates implementation from required runtime proof.
 - [Local work batch analysis and merge record](research/local-work-merge-analysis-2026-10-09.md):
   records the 2026-10-09 repository divergence, per-stream boundaries and
   safety review, and the supersession decisions taken when merging the macOS

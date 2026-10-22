@@ -352,7 +352,9 @@ struct ConversationMemoryReviewCard: View {
             if let personID = destination.personID {
                 Button { onOpenPerson(personID) } label: { MemoryReviewButtonLabel(title: language.text("View contact")) }
             }
-        }.accessibilityIdentifier("conversation.memory.saved")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("conversation.memory.saved")
     }
 
     private var identityChoices: some View {
