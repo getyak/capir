@@ -171,10 +171,10 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(workspaceBar.waitForExistence(timeout: 5))
 
         // Exercise the system's interactive pop, not only the Back button.
-        let window = app.windows.firstMatch
-        window.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
-            .press(forDuration: 0.1, thenDragTo:
-                window.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.5)))
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.45))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.82, dy: 0.45))
+        start.press(forDuration: 0.1, thenDragTo: end)
+        preserveScreenshot("Navigation after the native edge-back gesture")
         XCTAssertTrue(app.buttons["agent-settings"].waitForExistence(timeout: 5))
         agentBar.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(sessions.waitForExistence(timeout: 5))

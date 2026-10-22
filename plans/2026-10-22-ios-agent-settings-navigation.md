@@ -100,3 +100,21 @@ Retain this worktree and its patch until native validation and delivery finish.
 The task-owned native session is stopped; no native helper remains. Dependency-cleanup evidence is
 saved in the chat artifact directory. The unsuccessful native boot receipts have been copied to the chat artifact
 directory. Its temporary registered artifact can now be removed.
+
+## Native CI checkpoint: c5ce0262
+
+Run 39777069964 compiled successfully. The 674-unit-test stage had zero
+failures and one skip, and the initial Today UI journey passed. The navigation
+journey opened Agent and Workspace full screen and returned from Display
+settings, but its synthesized edge gesture left Workspace visible. The following
+assertion at CandidateSignalUITests.swift:178 failed. The failed hierarchy
+identifies Workspace and its Agent Back button; it does not show a missing Agent
+toolbar or an over-pop. The failure, screen recording and attachments are saved
+in the chat artifact directory under `ios-native-c5ce0262-failure`.
+
+The next bounded experiment keeps production code unchanged and uses the same
+application-relative edge gesture coordinates as the existing Get5 test. It
+retains the destination assertion and adds a post-gesture screenshot. Chinese
+screenshots run before the gesture test so a failure cannot suppress their
+independent evidence. This is an unproven sampling hypothesis, not a confirmed
+production fix or an accepted navigation result. The PR remains draft.
