@@ -229,4 +229,3 @@ struct ConversationPendingImageSources: View {
         .accessibilityIdentifier("conversation-local-image-\(draft.id.uuidString.lowercased())")
     }
 }
-
