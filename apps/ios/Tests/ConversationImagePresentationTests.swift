@@ -29,7 +29,7 @@ final class ConversationImagePresentationTests: XCTestCase {
             XCTAssertGreaterThan(result.width / result.height, source.width / source.height,
                 "Only the preview is cropped; the exact original remains a separate full-size read.")
         }
-        let invalid = ConversationImagePresentation.layout(imageSize: CGSize(width: .nan, height: 0), availableWidth: .infinity)
+        let invalid = ConversationImagePresentation.layout(imageSize: CGSize(width: CGFloat.nan, height: 0), availableWidth: CGFloat.infinity)
         XCTAssertTrue(invalid.width.isFinite && invalid.height.isFinite)
         XCTAssertGreaterThan(invalid.width, 0); XCTAssertGreaterThan(invalid.height, 0)
     }

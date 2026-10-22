@@ -53,6 +53,26 @@ Select all rows relevant to the changed path. Record `pass`, `fail`, or `not_run
 - Retry, cancellation, app termination, and relaunch reconciliation.
 - Undo/correction where supported; audit entry always visible.
 
+## Structured conversation results
+
+- Decode a real producer-shaped response before judging native parity. HTTP
+  responses and persisted Session projections can use different field names;
+  a locally constructed model cannot prove either wire path.
+- Open the result with its actual surface, source Session and exact target
+  scope. Include a follow-up referring to an earlier image and a canonical
+  steering message; the answer turn is not necessarily the source message.
+- Perform the primary decision and read the actual destination, then return
+  to the same conversation. Adding a contact must leave undecided details
+  available; saving one detail must not silently skip its siblings.
+- Lose the response both before dispatch and after server success. Relaunch,
+  reconcile and recover the same protected operation; never substitute a new
+  operation merely because its result is unknown.
+- Read the source while editing, return, and verify the draft survives.
+  Separately revoke the source or account authority and verify pending private
+  recovery material is removed without erasing the safe operation identity.
+- Exercise native APIs against the oldest deployment target during compilation;
+  a source parse or a newer Simulator alone does not prove compatibility.
+
 ## Evidence capture
 
 For each failure retain:

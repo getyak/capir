@@ -44,7 +44,7 @@ struct ConversationMemoryReviewCard: View {
 
     var body: some View {
         observedSurface
-            .onChange(of: store.destination) { _, destination in
+            .onChange(of: store.destination) { destination in
                 if let destination { onSaved(destination) }
             }
             .sheet(isPresented: $choosingPerson) { identityChoices }
@@ -54,9 +54,9 @@ struct ConversationMemoryReviewCard: View {
         cardSurface
             .task { if store.phase == .idle { await store.open() } }
             .onDisappear { store.suspend() }
-            .onChange(of: store.selectedItemIDs) { _, _ in store.scheduleDraft() }
-            .onChange(of: store.editedText) { _, _ in store.scheduleDraft() }
-            .onChange(of: store.decisions) { _, _ in store.scheduleDraft() }
+            .onChange(of: store.selectedItemIDs) { _ in store.scheduleDraft() }
+            .onChange(of: store.editedText) { _ in store.scheduleDraft() }
+            .onChange(of: store.decisions) { _ in store.scheduleDraft() }
     }
 
     private var cardSurface: some View {
