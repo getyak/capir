@@ -194,6 +194,11 @@ contact/item decisions. Source review is not runtime or release proof.
 The new-contact layout is identity-first: name/context/source and Add contact
 precede a collapsed suggestion preview; pending Memory editors follow actual
 contact confirmation. Editorial and compact directions share the same behavior.
+Source inspection and suspension preserve edits while the same review store
+survives. Protected submitted operations can recover after store recreation;
+unsent name/context fields are not included in the server draft contract and
+are not preserved after store destruction or app termination. That broader
+draft-continuity behavior remains deferred, not an unmeasured completed feature.
 Seven deterministic UI cases and one opt-in real-provider image/contact journey
 are present. Build 6 and focused unit evidence are recorded above; the main agent
 owns build 9 and its passing primary UI rerun. Documentation/architecture and
