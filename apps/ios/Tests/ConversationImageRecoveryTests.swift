@@ -82,15 +82,16 @@ final class ConversationImageRecoveryTests: XCTestCase {
     }
 
     func testFailureBeforeAdmissionKeepsPreparedMessageForExactRecovery() throws {
+        let instant = Date(timeIntervalSince1970: 1_792_663_200)
         let persistence = ImageRecoveryPersistence()
-        let store = AgentSessionStore(persistence: persistence)
+        let store = AgentSessionStore(persistence: persistence, now: { instant })
         let session = try XCTUnwrap(store.beginUnscopedSession(objective: ""))
         let pending = try XCTUnwrap(store.beginImageConversation(sessionID: session,
             objective: "Read the blue panel", images: [try image()]))
         let message = store.recordImageConversationFailure(sessionID: session, messageID: pending.messageID,
             error: URLError(.notConnectedToInternet), admissionAttempted: false)
         XCTAssertEqual(message, "The Session could not be synced. Try again.")
-        let restored = AgentSessionStore(persistence: persistence)
+        let restored = AgentSessionStore(persistence: persistence, now: { instant })
         XCTAssertEqual(restored.session(id: session)?.pendingImageConversation, pending)
         XCTAssertEqual(restored.session(id: session)?.pendingImageConversation?.state, .prepared)
         let rejected = restored.recordImageConversationFailure(sessionID: session, messageID: pending.messageID,
