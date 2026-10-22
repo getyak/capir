@@ -52,6 +52,72 @@ final class ConversationImageRecoveryTests: XCTestCase {
         XCTAssertEqual(local.response.blocks.first?.body, "ORBIT 734")
     }
 
+    func testCanonicalFeedbackSurvivesSaveReloadAndSync() async throws {
+        let persistence = ImageRecoveryPersistence()
+        let store = AgentSessionStore(persistence: persistence)
+        let session = try XCTUnwrap(store.beginUnscopedSession(objective: ""))
+        let manifest = try image()
+        let pending = try XCTUnwrap(store.beginImageConversation(sessionID: session,
+            objective: "Read the blue panel", images: [manifest]))
+        let raw = try turn(messageID: pending.messageID, manifest: manifest)
+        let canonical = try record(store: store, sessionID: session, turn: raw)
+        XCTAssertEqual(try store.observeImageConversation(sessionID: session, messageID: pending.messageID,
+            observation: ConversationImageObservation(record: canonical, entry: nil)), .completed)
+        XCTAssertTrue(store.toggleFeedback(sessionID: session, turnID: pending.messageID, feedback: .helpful))
+        let restored = AgentSessionStore(persistence: persistence)
+        let reply = try XCTUnwrap(restored.session(id: session)?.turns.first)
+        XCTAssertEqual(reply.feedback, .helpful)
+        XCTAssertNotNil(reply.feedbackUpdatedAt)
+        XCTAssertEqual(reply.images, [manifest])
+        let client = RecordingImageSync()
+        let synced = await restored.synchronize(using: client)
+        XCTAssertTrue(synced)
+        let sent = try XCTUnwrap(client.received.first?.turns.first)
+        XCTAssertEqual(sent.feedback, .helpful)
+        XCTAssertNotNil(sent.feedbackUpdatedAt)
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder.agentSession.encode(sent)) as! NSDictionary
+        let original = try JSONSerialization.jsonObject(with: raw) as! NSDictionary
+        XCTAssertEqual(encoded["response"] as? NSDictionary, original["response"] as? NSDictionary)
+        XCTAssertEqual(encoded["images"] as? NSArray, original["images"] as? NSArray)
+    }
+
+    func testFailureBeforeAdmissionKeepsPreparedMessageForExactRecovery() throws {
+        let persistence = ImageRecoveryPersistence()
+        let store = AgentSessionStore(persistence: persistence)
+        let session = try XCTUnwrap(store.beginUnscopedSession(objective: ""))
+        let pending = try XCTUnwrap(store.beginImageConversation(sessionID: session,
+            objective: "Read the blue panel", images: [try image()]))
+        let message = store.recordImageConversationFailure(sessionID: session, messageID: pending.messageID,
+            error: URLError(.notConnectedToInternet), admissionAttempted: false)
+        XCTAssertEqual(message, "The Session could not be synced. Try again.")
+        let restored = AgentSessionStore(persistence: persistence)
+        XCTAssertEqual(restored.session(id: session)?.pendingImageConversation, pending)
+        XCTAssertEqual(restored.session(id: session)?.pendingImageConversation?.state, .prepared)
+        let rejected = restored.recordImageConversationFailure(sessionID: session, messageID: pending.messageID,
+            error: ImageConversationError.invalidInput, admissionAttempted: true)
+        XCTAssertTrue(rejected.contains("Nothing was sent"))
+        XCTAssertEqual(restored.session(id: session)?.pendingImageConversation?.state, .prepared)
+    }
+
+    func testPostAdmissionFailureRetainsIdentityAndReportsSpecificReadbackProblem() throws {
+        let store = AgentSessionStore()
+        let session = try XCTUnwrap(store.beginUnscopedSession(objective: ""))
+        let pending = try XCTUnwrap(store.beginImageConversation(sessionID: session,
+            objective: "Read the blue panel", images: [try image()]))
+        let readback = store.recordImageConversationFailure(sessionID: session, messageID: pending.messageID,
+            error: ImageConversationError.invalidReadback, admissionAttempted: true)
+        XCTAssertEqual(readback, ImageConversationError.invalidReadback.errorDescription)
+        XCTAssertEqual(store.session(id: session)?.pendingImageConversation?.state, .unknown)
+        XCTAssertEqual(store.session(id: session)?.pendingImageConversation?.messageID, pending.messageID)
+        let save = store.recordImageConversationFailure(sessionID: session, messageID: pending.messageID,
+            error: ImageConversationError.persistence, admissionAttempted: true)
+        XCTAssertEqual(save, ImageConversationError.replyPersistence.errorDescription)
+        XCTAssertFalse(save.contains("Nothing was sent"))
+        let transport = store.recordImageConversationFailure(sessionID: session, messageID: pending.messageID,
+            error: URLError(.timedOut), admissionAttempted: true)
+        XCTAssertEqual(transport, ImageConversationError.unknown.errorDescription)
+    }
+
     func testOnlyExactCanonicalMessageCompletesAndEmptyQueueIsNotSuccess() throws {
         let store = AgentSessionStore()
         let session = try XCTUnwrap(store.beginUnscopedSession(objective: "Read the blue panel"))

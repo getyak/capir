@@ -32,8 +32,16 @@ struct ConversationImageUpload: Encodable {
         manifest = ConversationImageManifest(attachmentID: id, fileName: fileName,
             mediaType: mediaType, byteSize: data.count,
             contentHash: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
-        guard manifest.isValid else { throw PursuitWorkspaceClientError.invalidResponse }
+        guard manifest.isValid else { throw ImageConversationError.invalidInput }
         self.data = data
+    }
+
+    static func validateQuestion(objective: String, images: [Self]) throws {
+        guard (!images.isEmpty || !objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty),
+              images.count <= 10, images.map(\.manifest).allSatisfy(\.isValid),
+              Set(images.map { $0.manifest.attachmentID }).count == images.count,
+              images.reduce(0, { $0 + $1.manifest.byteSize }) <= 30_000_000,
+              objective.utf16.count <= 1000 else { throw ImageConversationError.invalidInput }
     }
     private enum CodingKeys: String, CodingKey {
         case attachmentID = "attachment_id", fileName = "file_name", mediaType = "media_type"
@@ -128,10 +136,8 @@ struct ConversationImageTransport {
 
     func admitConversationImages(sessionID: UUID, messageID: UUID, idempotencyKey: String,
         objective: String, images: [ConversationImageUpload], timeZone: String = TimeZone.current.identifier) async throws -> ConversationImageAdmission {
-        guard (!images.isEmpty || !objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty), images.count <= 10, images.map(\.manifest).allSatisfy(\.isValid),
-              Set(images.map { $0.manifest.attachmentID }).count == images.count,
-              images.reduce(0, { $0 + $1.manifest.byteSize }) <= 30_000_000,
-              objective.utf16.count <= 1000, !idempotencyKey.isEmpty, idempotencyKey.count <= 128,
+        try ConversationImageUpload.validateQuestion(objective: objective, images: images)
+        guard !idempotencyKey.isEmpty, idempotencyKey.count <= 128,
               !timeZone.isEmpty, timeZone.utf16.count <= 100 else {
             throw PursuitWorkspaceClientError.invalidResponse
         }

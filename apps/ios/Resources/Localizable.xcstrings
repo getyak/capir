@@ -31420,6 +31420,38 @@
           }
         }
       }
+    },
+    "Check the image question and attachments. Nothing was sent.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check the image question and attachments. Nothing was sent."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请检查图片问题和附件。尚未发送任何内容。"
+          }
+        }
+      }
+    },
+    "The image reply could not be saved. Check its original message before continuing.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image reply could not be saved. Check its original message before continuing."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片回复未能保存。请先检查原消息，再继续操作。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

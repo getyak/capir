@@ -3781,6 +3781,16 @@ extension AgentSessionStore {
         return true
     }
 
+    func recordImageConversationFailure(sessionID: UUID, messageID: UUID, error: Error,
+        admissionAttempted: Bool) -> String {
+        let inputRejected = (error as? ImageConversationError) == .invalidInput
+            || (error as? ImageConversationError) == .changedIntent
+        if admissionAttempted, !inputRejected {
+            markImageObservationUnknown(sessionID: sessionID, messageID: messageID)
+        }
+        return ImageConversationError.recoveryMessage(for: error, admissionAttempted: admissionAttempted)
+    }
+
     func observeImageConversation(sessionID: UUID, messageID: UUID,
         observation: ConversationImageObservation) throws -> ImageConversationReadback {
         guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }),

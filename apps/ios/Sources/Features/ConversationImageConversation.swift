@@ -26,16 +26,29 @@ struct PendingImageConversation: Codable, Equatable {
 
 enum ImageConversationReadback: Equatable { case completed, waiting, stopped, unknown }
 
-enum ImageConversationError: LocalizedError {
-    case persistence, changedIntent, invalidReadback, unknown, stopped
+enum ImageConversationError: LocalizedError, Equatable {
+    case invalidInput, persistence, replyPersistence, changedIntent, invalidReadback, unknown, stopped
     var errorDescription: String? {
         switch self {
+        case .invalidInput: return "Check the image question and attachments. Nothing was sent."
         case .persistence: return "The image question could not be protected. Nothing was sent."
+        case .replyPersistence: return "The image reply could not be saved. Check its original message before continuing."
         case .changedIntent: return "Check the original image question before sending another message."
         case .invalidReadback: return "The image reply could not be matched to its original message."
         case .unknown: return "The image question may still be processing. Check its reply without sending it again."
         case .stopped: return "Image processing stopped. Its original message has not been sent again."
         }
+    }
+
+    static func recoveryMessage(for error: Error, admissionAttempted: Bool) -> String {
+        if let imageError = error as? ImageConversationError {
+            if imageError == .persistence, admissionAttempted {
+                return ImageConversationError.replyPersistence.errorDescription!
+            }
+            return imageError.errorDescription!
+        }
+        return admissionAttempted ? ImageConversationError.unknown.errorDescription!
+            : "The Session could not be synced. Try again."
     }
 }
 

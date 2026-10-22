@@ -74,6 +74,19 @@ final class ConversationImageClientTests: XCTestCase {
             from:JSONSerialization.data(withJSONObject:payload)))
     }
 
+    func testOversizeQuestionIsRejectedWithoutNetworkAdmission() async throws {
+        let (client, network) = makeClient(); defer { network.invalidateAndCancel(); ImageWireURLProtocol.handler = nil }
+        var requests = 0
+        ImageWireURLProtocol.handler = { _ in requests += 1; throw URLError(.badServerResponse) }
+        let upload = try ConversationImageUpload(id: UUID(), data: Data([1]), fileName: "synthetic.png", mediaType: "image/png")
+        do {
+            _ = try await client.admitConversationImages(sessionID: UUID(), messageID: UUID(),
+                idempotencyKey: "same-intent", objective: String(repeating: "x", count: 1001), images: [upload])
+            XCTFail("An invalid question must never reach admission")
+        } catch ImageConversationError.invalidInput { }
+        XCTAssertEqual(requests, 0)
+    }
+
     private func receipt(sid:UUID,mid:UUID,queue:UUID) throws -> Data {
         try JSONSerialization.data(withJSONObject:["contract_version":TalentSignalAPIContract.version,
             "session_id":sid.uuidString.lowercased(),"message_id":mid.uuidString.lowercased(),

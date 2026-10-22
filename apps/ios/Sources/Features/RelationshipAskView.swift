@@ -3582,6 +3582,10 @@ struct RelationshipAskView: View {
         do {
             let incoming = try media.map { try ConversationImageUpload(id: $0.id, data: $0.data,
                 fileName: $0.fileName, mediaType: $0.mediaType) }
+            try ConversationImageUpload.validateQuestion(objective: objective, images: incoming)
+            if let prior = pendingImageConversation, !prior.matches(objective: objective, images: incoming.map(\.manifest)) {
+                throw ImageConversationError.changedIntent
+            }
             guard let pending = sessionStore.beginImageConversation(sessionID: ownerID,
                 objective: objective, images: incoming.map(\.manifest)) else {
                 throw ImageConversationError.persistence
@@ -3593,6 +3597,7 @@ struct RelationshipAskView: View {
             sessionStore.saveGlobalDraft("")
             operationState.replaceOperation { operationID in
                 Task {
+                    var admissionAttempted = false
                     defer {
                         if operationState.finishOperationIfCurrent(operationID) { returnOperationStateToIdle() }
                     }
@@ -3601,6 +3606,7 @@ struct RelationshipAskView: View {
                         try Task.checkCancellation()
                         guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID),
                               sessionStore.session(id: ownerID)?.pendingImageConversation?.messageID == pending.messageID else { return }
+                        admissionAttempted = true
                         let receipt = try await workspaceStore.admitConversationImages(sessionID: ownerID,
                             messageID: pending.messageID, idempotencyKey: pending.idempotencyKey,
                             objective: pending.objective, images: uploads, timeZone: pending.timeZone)
@@ -3612,15 +3618,16 @@ struct RelationshipAskView: View {
                         try await observeImageConversation(ownerID: ownerID, pending: pending, operationID: operationID)
                     } catch {
                         guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID), !Task.isCancelled else { return }
-                        sessionStore.markImageObservationUnknown(sessionID: ownerID, messageID: pending.messageID)
                         // The protected question remains available. Never replace a newer composer draft.
-                        errorMessage = appLanguage.text(ImageConversationError.unknown.errorDescription ?? "")
+                        errorMessage = appLanguage.text(sessionStore.recordImageConversationFailure(
+                            sessionID: ownerID, messageID: pending.messageID,
+                            error: error, admissionAttempted: admissionAttempted))
                     }
                 }
             }
         } catch {
             returnOperationStateToIdle(); if draft.isEmpty { draft = originalDraft }
-            errorMessage = appLanguage.text(ImageConversationError.persistence.errorDescription ?? "")
+            errorMessage = appLanguage.text(ImageConversationError.recoveryMessage(for: error, admissionAttempted: false))
         }
     }
 
@@ -3634,7 +3641,7 @@ struct RelationshipAskView: View {
                 do { try await observeImageConversation(ownerID: ownerID, pending: pending, operationID: operationID) }
                 catch {
                     guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID), !Task.isCancelled else { return }
-                    errorMessage = appLanguage.text(ImageConversationError.unknown.errorDescription ?? "")
+                    errorMessage = appLanguage.text(ImageConversationError.recoveryMessage(for: error, admissionAttempted: true))
                 }
             }
         }
