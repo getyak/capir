@@ -322,6 +322,11 @@ protocol PursuitWorkspaceServing {
     func chatUnscoped(
         objective: String, idempotencyKey: String, sessionID: UUID?, messageID: UUID?
     ) async throws -> UnscopedChatTaskResponse
+    func admitConversationImages(sessionID: UUID, messageID: UUID, idempotencyKey: String,
+        objective: String, images: [ConversationImageUpload], timeZone: String) async throws -> ConversationImageAdmission
+    func readConversationImageState(sessionID: UUID, messageID: UUID) async throws -> ConversationImageObservation
+    func loadConversationImage(sessionID: UUID, messageID: UUID, index: Int,
+        manifest: ConversationImageManifest) async throws -> ChatMediaContent
     func createScreenshotContactTask(_ body: ScreenshotContactTaskBody) async throws -> ScreenshotContactTask
     func loadScreenshotContactTask(id: String) async throws -> ScreenshotContactTask
     func listRunArtifacts(taskID: String) async throws -> [RunArtifact]
@@ -383,6 +388,12 @@ protocol PursuitWorkspaceServing {
 }
 
 extension PursuitWorkspaceServing {
+    func admitConversationImages(sessionID: UUID, messageID: UUID, idempotencyKey: String,
+        objective: String, images: [ConversationImageUpload], timeZone: String) async throws -> ConversationImageAdmission { throw PursuitWorkspaceClientError.askUnavailable }
+    func readConversationImageState(sessionID: UUID, messageID: UUID) async throws -> ConversationImageObservation { throw PursuitWorkspaceClientError.askUnavailable }
+    func loadConversationImage(sessionID: UUID, messageID: UUID, index: Int,
+        manifest: ConversationImageManifest) async throws -> ChatMediaContent { throw PursuitWorkspaceClientError.askUnavailable }
+
     func loadReplyPreference() async throws -> AgentReplyPreference { throw PursuitWorkspaceClientError.askUnavailable }
     func saveReplyPreference(_ body: AgentReplyPreferenceMutation) async throws -> AgentReplyPreference { throw PursuitWorkspaceClientError.askUnavailable }
     func findContactMatches(
@@ -2579,5 +2590,12 @@ struct AgentCalendarDraft: Codable, Equatable, Identifiable {
         return DeviceCalendarProposal(sourceID: id, personDisplayName: "", title: title,
             startDate: start, endDate: end, timeZoneIdentifier: timeZone,
             evidenceQuote: sourceExcerpt, detectedDateText: sourceExcerpt, durationWasExplicit: true)
+    }
+}
+
+extension URLPursuitWorkspaceClient {
+    func imageConversationTransport() async throws -> ConversationImageTransport {
+        let login = try await contactAgentLogin()
+        return ConversationImageTransport(baseURL: baseURL, token: login.accessToken, session: session)
     }
 }

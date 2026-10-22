@@ -8,6 +8,11 @@ final class AskScreenshotAdmissionPolicyTests: XCTestCase {
         XCTAssertTrue(AskScreenshotAdmissionPolicy.canResumeAsText(hasPendingScreenshotAdmission: false, hasPendingPersonResearch: false))
     }
 
+    func testInterruptedImageConversationNeverResumesAsText() {
+        XCTAssertFalse(AskScreenshotAdmissionPolicy.canResumeAsText(hasPendingScreenshotAdmission: false,
+            hasPendingPersonResearch: false, hasPendingImageConversation: true))
+    }
+
     func testFingerprintReusesExactOrderedImagesWithoutPersistingBytes() throws {
         let images = [image([1, 2, 3]), image([4, 5, 6])]
         let fingerprint = try XCTUnwrap(identity(images))

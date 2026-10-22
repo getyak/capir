@@ -53,8 +53,15 @@ final class LiveConversationFlowUITests: XCTestCase {
         // Verify the native account before creating even synthetic chat content.
         app.buttons["relationship-agent-studio"].tap()
         XCTAssertTrue(app.buttons["agent-settings"].waitForExistence(timeout: 5))
-        app.buttons["agent-settings"].tap()
-        XCTAssertTrue(app.buttons["open-account-settings"].waitForExistence(timeout: 5))
+        let settings = app.buttons["agent-settings"]
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == true"), object: settings)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
+        settings.tap()
+        if !app.buttons["open-account-settings"].waitForExistence(timeout: 5), settings.isHittable {
+            XCTContext.runActivity(named: "Cold settings tap needed one read-only retry") { _ in settings.tap() }
+        }
+        capture(app, "Account navigation after settings transition")
+        XCTAssertTrue(app.buttons["open-account-settings"].waitForExistence(timeout: 10))
         app.buttons["open-account-settings"].tap()
         let identity = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", email)).firstMatch
         XCTAssertTrue(identity.waitForExistence(timeout: 10))
@@ -67,6 +74,11 @@ final class LiveConversationFlowUITests: XCTestCase {
         app.buttons["Close Agent"].tap()
         XCTAssertTrue(app.buttons["relationship-guide"].waitForExistence(timeout: 5))
         return app
+    }
+
+    func testLiveExistingIdentityReadback() throws {
+        let app = try authenticatedApp()
+        capture(app, "Existing native login has the exact authorized identity")
     }
 
     func testLiveKeyboardSignInAndIdentity() throws {
