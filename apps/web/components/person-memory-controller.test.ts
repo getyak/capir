@@ -38,6 +38,88 @@ beforeEach(async () => {
 afterEach(async () => { await act(async () => root.unmount()); mount.remove(); vi.unstubAllGlobals(); });
 
 describe("confirmed Memory correction", () => {
+  it("requires an explicit delete confirmation, a matching receipt and complete paginated absence", async () => {
+    await act(async () => controller.beginDelete(controller.items[0]!));
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(controller.edit).toMatchObject({ action: "delete", draft: "原记忆" });
+    fetcher.mockImplementationOnce(async (_path, init) => Response.json({ status: "deleted", item: null,
+      operation_key: JSON.parse(init.body).idempotency_key }))
+      .mockResolvedValueOnce(page([memory("another")], true, "next-page"))
+      .mockResolvedValueOnce(page([]));
+    await act(async () => { await controller.save(); await controller.save(); });
+    const body = JSON.parse(fetcher.mock.calls[0]![1].body);
+    expect(body).toMatchObject({ operation: "delete", expected_version: 1 });
+    expect(body.display_text).toBeUndefined();
+    expect(fetcher.mock.calls[2]![0]).toContain("cursor=next-page");
+    expect(controller.items.map(item => item.id)).toEqual(["another"]);
+    expect(controller.notice).toContain("记忆已删除");
+    expect(fetcher.mock.calls.filter(([, init]) => init.method === "POST")).toHaveLength(1);
+  });
+  it("preserves an unknown deletion and reuses the exact request after response loss", async () => {
+    await act(async () => controller.beginDelete(controller.items[0]!));
+    fetcher.mockRejectedValueOnce(new Error("lost"));
+    await act(async () => controller.save());
+    expect(controller.edit?.phase).toBe("unknown"); expect(controller.notice).toBeNull();
+    await act(async () => { controller.cancel(); controller.change("different"); });
+    expect(controller.edit?.draft).toBe("原记忆");
+    fetcher.mockImplementationOnce(async (_path, init) => Response.json({ status: "deleted", item: null,
+      operation_key: JSON.parse(init.body).idempotency_key })).mockResolvedValueOnce(page([]));
+    await act(async () => controller.save());
+    expect(fetcher.mock.calls[1]![1].body).toBe(fetcher.mock.calls[0]![1].body);
+    expect(controller.items).toEqual([]); expect(controller.notice).toContain("记忆已删除");
+  });
+  it("does not infer deletion from an invalid receipt or failed readback", async () => {
+    await act(async () => controller.beginDelete(controller.items[0]!));
+    fetcher.mockResolvedValueOnce(Response.json({ status: "deleted", item: null, operation_key: "another-request" }));
+    await act(async () => controller.save());
+    expect(controller.notice).toBeNull(); expect(controller.items).toHaveLength(1); expect(controller.edit?.phase).toBe("unknown");
+    fetcher.mockImplementationOnce(async (_path, init) => Response.json({ status: "deleted", item: null,
+      operation_key: JSON.parse(init.body).idempotency_key })).mockRejectedValueOnce(new Error("unavailable"));
+    await act(async () => controller.save());
+    expect(controller.notice).toBeNull(); expect(controller.items).toHaveLength(1);
+    fetcher.mockResolvedValueOnce(page([])); await act(async () => controller.save());
+    expect(fetcher.mock.calls.filter(([, init]) => init.method === "POST")).toHaveLength(2);
+    expect(controller.notice).toContain("记忆已删除");
+  });
+  it("does not resurrect a corrected then deleted item from an older server snapshot", async () => {
+    await start(); fetcher.mockResolvedValueOnce(mutation()).mockResolvedValueOnce(page([corrected()]));
+    await act(async () => controller.save());
+    await act(async () => controller.beginDelete(controller.items[0]!));
+    fetcher.mockImplementationOnce(async (_path, init) => Response.json({ status: "deleted", item: null,
+      operation_key: JSON.parse(init.body).idempotency_key })).mockResolvedValueOnce(page([]));
+    await act(async () => controller.save());
+    await act(async () => root.render(createElement(Probe, { entries: [memory(), memory("another")] })));
+    expect(controller.items.map(item => item.id)).toEqual(["another"]);
+  });
+  it("does not resurrect any intermediate correction after two edits and deletion", async () => {
+    await start(); fetcher.mockResolvedValueOnce(mutation()).mockResolvedValueOnce(page([corrected()]));
+    await act(async () => controller.save());
+    await start();
+    const third = memory("third", { display_text: "第二次修改", supersedes_id: "new", version: 3 });
+    await act(async () => controller.change("第二次修改"));
+    fetcher.mockResolvedValueOnce(mutation(third)).mockResolvedValueOnce(page([third]));
+    await act(async () => controller.save());
+    await act(async () => controller.beginDelete(controller.items[0]!));
+    fetcher.mockImplementationOnce(async (_path, init) => Response.json({ status: "deleted", item: null,
+      operation_key: JSON.parse(init.body).idempotency_key })).mockResolvedValueOnce(page([]));
+    await act(async () => controller.save());
+    await act(async () => root.render(createElement(Probe, { entries: [memory(), memory("another")] })));
+    expect(controller.items.map(item => item.id)).toEqual(["another"]);
+    await act(async () => root.render(createElement(Probe, { entries: [corrected(), memory("another")] })));
+    expect(controller.items.map(item => item.id)).toEqual(["another"]);
+  });
+  it("discards a late deletion result after the Person binding changes", async () => {
+    await act(async () => controller.beginDelete(controller.items[0]!));
+    let resolve!: (response: Response) => void;
+    let deletion!: Promise<string | null>;
+    fetcher.mockImplementationOnce(() => new Promise<Response>(done => { resolve = done; }));
+    await act(async () => { deletion = controller.save(); });
+    const key = JSON.parse(fetcher.mock.calls[0]![1].body).idempotency_key;
+    await act(async () => root.render(createElement(Probe, { binding: "new-account", entries: [] })));
+    await act(async () => { resolve(Response.json({ status: "deleted", item: null, operation_key: key })); await deletion; });
+    expect(controller.notice).toBeNull(); expect(controller.edit).toBeNull(); expect(controller.items).toEqual([]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it("writes only a signed item correction, reads it back, then edits the replacement ID", async () => {
     await start(); fetcher.mockResolvedValueOnce(mutation()).mockResolvedValueOnce(page([corrected()]));
     await act(async () => controller.save());

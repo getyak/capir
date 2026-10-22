@@ -7,8 +7,8 @@ import { canEditMemory } from "@/lib/person-memory-projection";
 import { invalidateWorkspaceDirectory } from "@/lib/workspace-directory-cache";
 
 export type MemoryEditPhase = "editing" | "saving" | "unknown" | "conflict";
-type Attempt = { id: string; version: number; key: string; text: string; replacement: MemoryRecallItem | null; original: MemoryRecallItem };
-export type MemoryEdit = { itemId: string; draft: string; phase: MemoryEditPhase; error: string | null };
+type Attempt = { id: string; version: number; key: string; text: string; replacement: MemoryRecallItem | null; original: MemoryRecallItem; action: "correct" | "delete"; acknowledged: boolean };
+export type MemoryEdit = { itemId: string; draft: string; phase: MemoryEditPhase; error: string | null; action?: "delete" };
 type Options = { personId: string; binding: string; entryCapability: string; items: MemoryRecallItem[]; hasMore: boolean; nextCursor: string | null };
 
 class MemoryReadError extends Error {
@@ -37,6 +37,7 @@ export function usePersonMemory(options: Options) {
   const generation = useRef(0);
   const expired = useRef(false);
   const confirmed = useRef(new Map<string, MemoryRecallItem>());
+  const deleted = useRef(new Set<string>());
   const signature = useMemo(() => JSON.stringify({ items: options.items, hasMore: options.hasMore, nextCursor: options.nextCursor }),
     [options.items, options.hasMore, options.nextCursor]);
   const sourceSignature = useRef(signature);
@@ -49,7 +50,7 @@ export function usePersonMemory(options: Options) {
     generation.current += 1;
     busy.current = false; pageBusy.current = false; attempt.current = null; expired.current = false;
     capability.current = options.entryCapability;
-    confirmed.current.clear(); sourceSignature.current = signature;
+    confirmed.current.clear(); deleted.current.clear(); sourceSignature.current = signature;
     // The external authenticated entry changed; retaining local state would expose another scope.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setEdit(null); setNotice(null); setLoadError(null); setLoadingMore(false);
@@ -64,7 +65,7 @@ export function usePersonMemory(options: Options) {
     sourceSignature.current = signature;
     // A fresh server snapshot retracts obsolete sources even while a draft is
     // open. A known pre-save snapshot cannot rewind a read-back correction.
-    const incoming = [...options.items];
+    const incoming = options.items.filter(item => !deleted.current.has(item.id));
     for (const [oldId, replacement] of confirmed.current) {
       const oldIndex = incoming.findIndex(item => item.id === oldId);
       if (oldIndex >= 0) {
@@ -73,7 +74,9 @@ export function usePersonMemory(options: Options) {
       }
     }
     // Synchronize an authoritative refreshed server snapshot, including source retractions.
-    setItems(incoming); setHasMore(options.hasMore); setNextCursor(options.nextCursor); setLoadError(null);
+    // A stale ancestor may be replaced by an intermediate correction that was
+    // itself deleted later. Filter after merging the full correction ledger.
+    setItems(incoming.filter(item => !deleted.current.has(item.id))); setHasMore(options.hasMore); setNextCursor(options.nextCursor); setLoadError(null);
     const active = current.current.edit;
     if (active && !attempt.current) {
       const prior = current.current.items.find(item => item.id === active.itemId);
@@ -90,7 +93,7 @@ export function usePersonMemory(options: Options) {
     if (expired.current) return;
     expired.current = true;
     generation.current += 1; attempt.current = null; busy.current = false; pageBusy.current = false;
-    confirmed.current.clear(); capability.current = "";
+    confirmed.current.clear(); deleted.current.clear(); capability.current = "";
     setItems([]); setEdit(null); setHasMore(false); setNextCursor(null); setLoadingMore(false); setNotice(null);
     setLoadError("登录已变化，请重新登录后查看记忆。");
     invalidateWorkspaceDirectory(undefined, "discard");
@@ -151,9 +154,13 @@ export function usePersonMemory(options: Options) {
     if (expired.current || busy.current || attempt.current || current.current.edit || !canEditMemory(item)) return;
     setNotice(null); setEdit({ itemId: item.id, draft: item.display_text, phase: "editing", error: null });
   }, []);
+  const beginDelete = useCallback((item: MemoryRecallItem) => {
+    if (expired.current || busy.current || pageBusy.current || attempt.current || current.current.edit || !canEditMemory(item)) return;
+    setNotice(null); setEdit({ itemId: item.id, draft: item.display_text, phase: "editing", error: null, action: "delete" });
+  }, []);
   const change = useCallback((draft: string) => {
     if (expired.current || busy.current || attempt.current) return;
-    setEdit(value => value ? { ...value, draft, error: null } : null);
+    setEdit(value => value && value.action !== "delete" ? { ...value, draft, error: null } : value);
   }, []);
   const cancel = useCallback(() => {
     if (busy.current || attempt.current) return;
@@ -165,21 +172,25 @@ export function usePersonMemory(options: Options) {
     const active = current.current.edit;
     const original = attempt.current?.original ?? (active && current.current.items.find(item => item.id === active.itemId));
     if (!active || !original || active.phase === "conflict" || (!attempt.current && !canEditMemory(original))) return null;
+    // A second activation can arrive after readback but before React commits.
+    if (!attempt.current && (deleted.current.has(original.id) || confirmed.current.has(original.id))) return null;
     if (!attempt.current) {
       const text = active.draft.trim();
       if (!text || text.length > 1000) { setEdit({ ...active, error: "请填写 1–1000 字的记忆。" }); return null; }
-      if (text === original.display_text) { setEdit(null); return original.id; }
-      attempt.current = { id: original.id, version: original.version, key: crypto.randomUUID(), text, replacement: null, original };
+      if (active.action !== "delete" && text === original.display_text) { setEdit(null); return original.id; }
+      attempt.current = { id: original.id, version: original.version, key: crypto.randomUUID(), text, replacement: null, original,
+        action: active.action === "delete" ? "delete" : "correct", acknowledged: false };
     }
     const operation = attempt.current;
     const epoch = generation.current;
     busy.current = true; setNotice(null); setEdit({ ...active, phase: "saving", error: null });
     try {
       // Unknown-result retries use the identical item, version, text and key.
-      if (!operation.replacement) {
+      if (!operation.acknowledged) {
         const response = await request(`/api/memory/items/${operation.id}/mutations`, { method: "POST", body: JSON.stringify({
-          operation: "correct", expected_version: operation.version, idempotency_key: operation.key,
-          display_text: operation.text, reason: "用户在人物页面修改已确认记忆。",
+          operation: operation.action, expected_version: operation.version, idempotency_key: operation.key,
+          ...(operation.action === "correct" ? { display_text: operation.text } : {}),
+          reason: operation.action === "delete" ? "用户在人物页面确认删除已确认记忆。" : "用户在人物页面修改已确认记忆。",
         }) });
         if (epoch !== generation.current) return null;
         if (!response.ok) {
@@ -219,11 +230,28 @@ export function usePersonMemory(options: Options) {
         }
         const body = await response.json() as MemoryItemMutationResponse;
         if (epoch !== generation.current) return null;
-        if (body.status !== "active" || !body.item || body.item.display_text !== operation.text
-          || body.item.supersedes_id !== operation.id || body.item.id === operation.id) throw new Error("Mutation receipt not verified");
-        operation.replacement = body.item;
+        if (operation.action === "delete") {
+          if (body.status !== "deleted" || body.item !== null || body.operation_key !== operation.key) throw new Error("Deletion receipt not verified");
+        } else {
+          if (body.status !== "active" || !body.item || body.item.display_text !== operation.text
+            || body.item.supersedes_id !== operation.id || body.item.id === operation.id) throw new Error("Mutation receipt not verified");
+          operation.replacement = body.item;
+        }
+        operation.acknowledged = true;
       }
       // An acknowledgement is insufficient: read back the governed projection.
+      if (operation.action === "delete") {
+        const snapshot = await readSnapshot(epoch);
+        if (epoch !== generation.current) return null;
+        if (snapshot.some(item => item.id === operation.id)) throw new Error("Deletion not reflected in recall");
+        deleted.current.add(operation.id);
+        for (const [oldID, replacement] of confirmed.current) if (replacement.id === operation.id) {
+          confirmed.current.delete(oldID); deleted.current.add(oldID);
+        }
+        setItems(snapshot); setHasMore(false); setNextCursor(null);
+        attempt.current = null; setEdit(null); setNotice("记忆已删除，并已核对当前列表。原始对话未删除。");
+        return operation.id;
+      }
       let cursor: string | null = null;
       const seen = new Set<string>();
       let persisted: MemoryRecallItem | undefined;
@@ -264,7 +292,9 @@ export function usePersonMemory(options: Options) {
         attempt.current = null; setItems([]); setHasMore(false); setEdit(null);
         setLoadError("访问范围已不可用，无法核对修改结果。请重新打开人物页面。");
       } else {
-        setEdit({ ...active, phase: "unknown", error: "保存结果还不能确认。草稿已保留；核对时会复用同一次请求。" });
+        setEdit({ ...active, phase: "unknown", error: operation.action === "delete"
+          ? "删除结果还不能确认。请核对并重试，将复用同一次请求。"
+          : "保存结果还不能确认。草稿已保留；核对时会复用同一次请求。" });
       }
       return null;
     } finally { if (epoch === generation.current) busy.current = false; }
@@ -279,8 +309,9 @@ export function usePersonMemory(options: Options) {
       const refreshed = await readSnapshot(epoch);
       if (epoch !== generation.current) return;
       setItems(refreshed); setHasMore(false); setNextCursor(null);
-      const newest = refreshed.find(item => item.id === active.itemId || item.supersedes_id === active.itemId);
-      if (newest && canEditMemory(newest)) setEdit({ ...active, itemId: newest.id, phase: "editing", error: "已载入最新记忆，草稿仍保留。核对后保存将基于最新版本。" });
+      const newest = refreshed.find(item => item.id === active.itemId || (active.action !== "delete" && item.supersedes_id === active.itemId));
+      if (newest && canEditMemory(newest)) setEdit({ ...active, itemId: newest.id, ...(active.action === "delete" ? { draft: newest.display_text } : {}),
+        phase: "editing", error: active.action === "delete" ? "已载入当前记录，请再次核对后决定是否删除。" : "已载入最新记忆，草稿仍保留。核对后保存将基于最新版本。" });
       else if (newest) setEdit({ ...active, itemId: newest.id, phase: "conflict", error: "这条记忆仍可读取，但当前没有修改权限。草稿已保留，可取消编辑。" });
       else setEdit({ ...active, phase: "conflict", error: "原记忆已连续更新或不可用。草稿已保留；请取消本次编辑后，从最新记录重新修改。" });
     } catch (caught) {
@@ -311,5 +342,5 @@ export function usePersonMemory(options: Options) {
       } else setLoadError("未能加载更多记忆，已有内容保留。请重试。");
     } finally { if (epoch === generation.current) { pageBusy.current = false; setLoadingMore(false); } }
   }, [hasMore, nextCursor, readPage]);
-  return { items, edit, notice, hasMore, loadingMore, loadError, begin, change, cancel, save, refreshConflict, loadMore };
+  return { items, edit, notice, hasMore, loadingMore, loadError, begin, beginDelete, change, cancel, save, refreshConflict, loadMore };
 }

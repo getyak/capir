@@ -26,6 +26,8 @@ import {
   UserPlus,
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 
 import { ProductFeedback } from "@/components/product-feedback";
 import { AgentCreatePersonCard } from "./agent-create-person-card";
@@ -394,6 +396,16 @@ export function RelationshipAgentPanel({
               </footer>
             </article>
           ))}
+          {response.memory_proposal ? (
+            <div>
+              <Button asChild variant="outline">
+                <Link href={`/workspace/people/${encodeURIComponent(scope.person.id)}#person-memory-pending`}>
+                  审阅记忆建议 <ArrowRight aria-hidden="true" size={14} />
+                </Link>
+              </Button>
+              <p>核对后由你决定是否保存。</p>
+            </div>
+          ) : null}
           <RunArtifacts taskID={response.task_id} />
           <ProductFeedback key={response.task_id} taskID={response.task_id} onCorrect={text => onObjectiveChange(`请修改上一条回答：${text}`)} />
         </div>

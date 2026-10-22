@@ -41,6 +41,30 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 describe("person document interactions", () => {
+  it("shows the exact item before deletion and cancels to the same control without writing", async () => {
+    await mount(); await click("删除");
+    expect(host.querySelector('form[aria-label="删除记忆确认"]')?.textContent).toContain(memory().display_text);
+    expect(host.textContent).toContain("原始对话会保留");
+    expect(document.activeElement).toBe(button("取消"));
+    expect(fetcher).not.toHaveBeenCalled();
+    await click("取消");
+    expect(document.activeElement).toBe(host.querySelector('[data-memory-delete="old"]'));
+    expect(fetcher).not.toHaveBeenCalled(); expect(host.textContent).toContain(memory().display_text);
+  });
+  it("does not steal focus from another source disclosure after a delayed deletion", async () => {
+    await mount([memory(), memory({ id: "other", display_text: "另一条记忆" })]);
+    await click("删除");
+    let finish!: (response: Response) => void;
+    fetcher.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce(Response.json({ surface: "people", person_id: personId, items: [memory({ id: "other", display_text: "另一条记忆" })], has_more: false }));
+    await click("确认删除记忆");
+    const other = host.querySelector<HTMLElement>('[data-memory-item="other"] summary')!;
+    other.focus();
+    const key = JSON.parse(fetcher.mock.calls[0]![1].body).idempotency_key;
+    await act(async () => { finish(Response.json({ status: "deleted", item: null, operation_key: key })); });
+    expect(host.textContent).toContain("记忆已删除");
+    expect(document.activeElement).toBe(other);
+  });
   it("names the three reading modes and preserves authority and temporal uncertainty", async () => {
     await mount(); expect(host.textContent).toContain("来源陈述 · 对方"); expect(host.textContent).toContain("来源中的计划 · 相对时间见来源（结果待核对）");
     for (const name of ["逐条记忆", "阅读概览", "原始摘录"]) expect(button(name)).toBeDefined();

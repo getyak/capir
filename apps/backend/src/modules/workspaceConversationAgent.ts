@@ -258,6 +258,26 @@ function analysisOnlyOrNoSave(text: string): boolean {
     || /\b(?:no[\s_-]+(?:actions?|sav(?:e|ing)|proposals?)|analysis[\s_-]+only|(?:just|only)\s+(?:analy[sz]e|describe|explain|summari[sz]e|translate)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:make|take|perform)\s+(?:any\s+)?(?:actions?|changes?)|save|record|remember|store|archive|create|add|update))\b/iu.test(note);
 }
 
+/** A requested review is pending authority, never permission to save or act. */
+function memoryReviewDeclined(text: string): boolean {
+  const note = authoredNote(text)
+    .replace(/‘(?:[^’]|(?<=[\p{L}\p{N}])’(?=[\p{L}\p{N}]))*’/gu, " ")
+    .replace(/(?<![\p{L}\p{N}])'(?:[^']|(?<=[\p{L}\p{N}])'(?=[\p{L}\p{N}]))*'(?![\p{L}\p{N}])/gu, " ");
+  const reviewRequested = note.split(/[，,。；;!?！？\n]/u).some(clause =>
+    !/(?:不要|不用|别|无需|不需要|禁止|请勿)|\b(?:not|never|no)\b/iu.test(clause)
+    && (/(?:准备|整理|生成|提出)[^。；;!?！？\n]{0,60}(?:待确认记忆|记忆建议)[^。；;!?！？\n]{0,30}(?:审阅|核对|确认)/u.test(clause)
+      || /\b(?:prepare|draft|propose)\b[^.;!?\n]{0,80}\bmemory\b[^.;!?\n]{0,60}\breview\b/iu.test(clause)));
+  if (!reviewRequested) return analysisOnlyOrNoSave(text);
+  if (/(?:不要|不用|别|不必|不需要|无需|不许|禁止|请勿)[^，,。；;!?！？\n]{0,12}(?:建议|提议|草稿|待确认|审阅)|\b(?:no\s+(?:memory\s+)?proposals?|(?:do\s+not|don['’]t|never)\s+(?:prepare|draft|propose|suggest|review))\b/iu.test(note)) return true;
+  // Remove only a commitment/effect opt-out accompanying the explicit review.
+  // Other refusals, quoted permission and analysis-only intent still fail closed.
+  const reviewOnly = note
+    .replace(/(?:先)?(?:不要|不用|别|不必|不需要|无需|不许|禁止|请勿)(?:直接|自动|立即)?(?:保存|写入|提交)(?:记忆)?/gu, " ")
+    .replace(/(?:不要|不用|别|不必|不需要|无需|不许|禁止|请勿)(?:执行|进行)(?:任何)?外部(?:操作|行动|写入)/gu, " ")
+    .replace(/\b(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:save|store|commit)(?:\s+(?:it|this|the\s+memory))?(?:\s+yet)?|(?:perform|take|execute)\s+(?:any\s+)?external\s+(?:actions?|writes?))\b/giu, " ");
+  return analysisOnlyOrNoSave(reviewOnly);
+}
+
 function toolFailure(
   name: string,
   code: string,
@@ -523,6 +543,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
     return true;
   };
   const declinedProposals = () => sourceTexts().some(analysisOnlyOrNoSave);
+  const declinedMemoryReview = () => sourceTexts().some(memoryReviewDeclined);
   const declinedContact = () => declinedProposals() || sourceTexts().some(text => CONTACT_DECLINE.test(authoredNote(text)));
   let stagedContactSource: { id: string; text: string } | null = null;
   let stagedMemorySourceID = sourceMessageID;
@@ -536,7 +557,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
   reconcileDeclinedProposals = () => {
     const pending = withdrawalTail.then(async () => {
       if (declinedContact()) runState.proposal = null;
-      if (runState.memoryProposal && (declinedProposals() || (stagedMemoryHasContact && declinedContact()))) {
+      if (runState.memoryProposal && (declinedMemoryReview() || (stagedMemoryHasContact && declinedContact()))) {
         if (!input.memory?.withdraw) throw new Error("MEMORY_WITHDRAWAL_UNAVAILABLE");
         const result = await input.memory.withdraw({
           proposalID: runState.memoryProposal.proposalID,
@@ -867,7 +888,7 @@ export async function executeWorkspaceConversationAgentCore(input: {
         };
       }
 
-      if (declinedProposals()) return toolFailure(name, "MEMORY_PROPOSAL_DECLINED",
+      if (declinedMemoryReview()) return toolFailure(name, "MEMORY_PROPOSAL_DECLINED",
         "The current user requested analysis only or declined saved changes. Answer without a proposal.");
       const proposalArtifactID = request.new_contact_source_locator?.kind === "image_region"
         ? request.new_contact_source_locator.artifact_id

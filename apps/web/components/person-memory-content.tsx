@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { PencilSimple, ArrowSquareOut, CaretDown } from "@phosphor-icons/react";
+import { PencilSimple, ArrowSquareOut, CaretDown, Trash } from "@phosphor-icons/react";
 import type { MemoryRecallItem, PersonDirectoryItem } from "@talent-signal/contracts";
 import { Button } from "./ui/button";
 import { ResearchNotebook, researchNoteMetadata } from "./research-notebook";
@@ -13,7 +13,7 @@ import styles from "@/app/workspace/people/[id]/person-memory.module.css";
 
 type Mode = "memory" | "reading" | "raw";
 type FocusRequest = { binding: string; personId: string } & (
-  { kind: "edit"; id: string } |
+  { kind: "edit"; id: string; action?: "delete"; owner: Element | null } |
   { kind: "page"; previous: Set<string | undefined>; button: HTMLButtonElement | null | undefined }
 );
 
@@ -54,6 +54,20 @@ function MemoryEditor({ edit, onChange, onSave, onCancel, onRefresh }: {
   const composing = useRef(false);
   const frozen = edit.phase === "saving" || edit.phase === "unknown";
   function save() { if (!composing.current) void onSave(); }
+  if (edit.action === "delete") return <form className={styles.editor} aria-label="删除记忆确认"
+    onSubmit={event => { event.preventDefault(); save(); }}
+    onKeyDown={event => { if (event.key === "Escape" && !frozen) { event.preventDefault(); onCancel(); } }}>
+    <p className={styles.editLabel}>删除这条记忆？</p>
+    <p className={styles.memoryText}>{edit.draft}</p>
+    <p className={styles.quiet}>删除后不再作为已确认记忆使用。原始对话会保留。</p>
+    {edit.error ? <p className={styles.error} role="alert">{edit.error}</p> : null}
+    <div className={styles.editActions}>
+      <Button variant="ghost" autoFocus disabled={frozen} onClick={onCancel}>取消</Button>
+      {edit.phase === "unknown" ? <Button variant="outline" onClick={save}>核对并重试删除</Button>
+        : edit.phase === "conflict" ? <Button variant="outline" onClick={() => void onRefresh()}>核对最新记忆</Button>
+          : <Button variant="outline" type="submit" disabled={frozen}>{frozen ? "正在删除并核对…" : "确认删除记忆"}</Button>}
+    </div>
+  </form>;
   return <form className={styles.editor} onSubmit={event => { event.preventDefault(); save(); }}>
     <label className={styles.editLabel} htmlFor={`memory-draft-${edit.itemId}`}>修改这条记忆</label>
     <textarea id={`memory-draft-${edit.itemId}`} autoFocus rows={3} maxLength={1000} value={edit.draft} disabled={frozen}
@@ -97,8 +111,11 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
     if (focusRequest.binding !== binding || focusRequest.personId !== personId) return;
     const modeButton = root.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
     if (focusRequest.kind === "edit") {
-      const button = Array.from(root.current?.querySelectorAll<HTMLButtonElement>("[data-memory-edit]") ?? [])
-        .find(element => element.dataset.memoryEdit === focusRequest.id);
+      const active = document.activeElement;
+      if (active !== focusRequest.owner && active !== document.body && active?.isConnected) return;
+      const selector = focusRequest.action === "delete" ? "[data-memory-delete]" : "[data-memory-edit]";
+      const button = Array.from(root.current?.querySelectorAll<HTMLButtonElement>(selector) ?? [])
+        .find(element => (focusRequest.action === "delete" ? element.dataset.memoryDelete : element.dataset.memoryEdit) === focusRequest.id);
       (button ?? modeButton)?.focus();
       return;
     }
@@ -109,13 +126,14 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
     (firstNew ?? root.current?.querySelector<HTMLElement>("[data-memory-load-more]") ?? modeButton)?.focus();
   }, [focusRequest, controller.edit, controller.loadingMore, controller.items, controller.hasMore, binding, personId]);
 
-  function restoreFocus(id: string) {
+  function restoreFocus(id: string, action?: "delete", owner = document.activeElement) {
     // Wait for React's DOM commit, which may happen after the next frame.
-    setFocusRequest({ kind: "edit", id, binding, personId });
+    setFocusRequest({ kind: "edit", id, action, owner, binding, personId });
   }
   async function save() {
+    const owner = document.activeElement;
     const id = await controller.save();
-    if (id) restoreFocus(id);
+    if (id) restoreFocus(id, edit?.action, owner);
   }
   async function loadMore() {
     const loadingButton = root.current?.querySelector<HTMLButtonElement>("[data-memory-load-more]");
@@ -130,7 +148,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   }
 
   const editor = edit ? <MemoryEditor edit={edit} onChange={controller.change} onSave={save}
-    onCancel={() => { controller.cancel(); restoreFocus(edit.itemId); }} onRefresh={controller.refreshConflict} /> : null;
+    onCancel={() => { controller.cancel(); restoreFocus(edit.itemId, edit.action); }} onRefresh={controller.refreshConflict} /> : null;
 
   return <div ref={root}>
     <section className={styles.section} aria-labelledby="person-memory-accepted">
@@ -153,10 +171,13 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
             <ul className={styles.memoryList}>{group.items.map(item => <li className={styles.memoryItem} data-memory-item={item.id} tabIndex={-1} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}>
               {edit?.itemId === item.id ? editor : <>
                 <div className={styles.memoryLine}><p className={styles.memoryText}>{item.display_text}</p>
-                  {canEditMemory(item) ? <button className={styles.editButton} data-memory-edit={item.id} disabled={Boolean(edit) || controller.loadingMore}
+                  {canEditMemory(item) ? <><button className={styles.editButton} data-memory-edit={item.id} disabled={Boolean(edit) || controller.loadingMore}
                     aria-label={`修改记忆：${item.display_text}`} type="button" onClick={() => controller.begin(item)}>
                     <PencilSimple size={15} aria-hidden="true" /><span>修改</span>
-                  </button> : null}</div>
+                  </button><button className={styles.editButton} data-memory-delete={item.id} disabled={Boolean(edit) || controller.loadingMore}
+                    aria-label={`删除记忆：${item.display_text}`} type="button" onClick={() => controller.beginDelete(item)}>
+                    <Trash size={15} aria-hidden="true" /><span>删除</span>
+                  </button></> : null}</div>
                 <div className={styles.memoryKind}><span>{memoryAttribution(item)}</span><MemoryTime item={item} />{contextLink(item)}</div>
               </>}
               <details className={styles.evidence}><summary>查看依据 <CaretDown size={12} aria-hidden="true" /></summary>
