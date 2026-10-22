@@ -85,8 +85,8 @@ SIGTERM, stopped its child group, and shut down the device it had booted. No
 application code was compiled or tested locally. Raw boot/session evidence was
 preserved in the chat artifact directory. The global pause marker is unchanged.
 
-The PR quick and release smoke selections now include both new navigation
-journeys. Existing CI exports attachments only from their result bundles into
+The PR quick selection includes both new navigation journeys. The existing
+ten-journey release smoke selection is preserved within its policy bound. Existing CI exports attachments only from their result bundles into
 a seven-day navigation-evidence artifact. This provides actual screenshots for
 inspection without adding a local build, changing release workflows, uploading
 to TestFlight, or claiming that passing assertions establish visual quality.
