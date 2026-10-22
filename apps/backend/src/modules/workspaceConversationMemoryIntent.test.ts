@@ -1,6 +1,6 @@
 import { ScriptedAgentProvider, type AgentProvider, type AgentToolResult } from "@talent-signal/agent";
 import { describe, expect, it, vi } from "vitest";
-import { executeWorkspaceConversationAgentCore, type WorkspaceMemoryLookup } from "./workspaceConversationAgent.js";
+import { executeWorkspaceConversationAgentCore, type WorkspaceMemoryLookup, type WorkspaceMemoryStagedProposal } from "./workspaceConversationAgent.js";
 
 const messageID = "77777777-7777-4777-8777-777777777777";
 const proposalID = "88888888-8888-4888-8888-888888888888";
@@ -8,13 +8,13 @@ const statement = "I prefer written agendas";
 const request = { operation: "propose", contact_decision: "none", items: [{ scope: "self", operation: "add",
   statement_kind: "source_statement", display_text: statement, source_excerpt: statement,
   source_locator: { kind: "message" }, time_status: "unknown", sensitivity: "normal", reason: "Authored preference" }] };
-const staged = { proposalID, proposalRevision: 1, itemCount: 1, defaultSelectedCount: 1,
-  scopeCounts: { self: 1, person: 0, relationship: 0 }, contactStatus: "not_applicable" as const,
+const staged: WorkspaceMemoryStagedProposal = { proposalID, proposalRevision: 1, itemCount: 1, defaultSelectedCount: 1,
+  scopeCounts: { self: 1, person: 0, relationship: 0 }, contactStatus: "pending",
   personID: null, personDisplayLabel: null };
 function memory() {
   return { recall: vi.fn(async () => ({ items: [] })),
     stage: vi.fn<WorkspaceMemoryLookup["stage"]>(async () => staged),
-    withdraw: vi.fn<NonNullable<WorkspaceMemoryLookup["withdraw"]>>(async () => ({ status: "withdrawn", hadCommittedItems: false })) };
+    withdraw: vi.fn<NonNullable<WorkspaceMemoryLookup["withdraw"]>>(async () => ({ proposalID, revision: 2, status: "withdrawn" })) };
 }
 const reply = { outcome: "reply", title: "Review", body: "Please review the suggestion." };
 const review = `请准备一条关于我的待确认记忆供我审阅：${statement}。`;
