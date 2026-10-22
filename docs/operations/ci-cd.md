@@ -152,10 +152,15 @@ receives the same real TestFlight proof as an iOS product change.
 
 The iOS job uses the host simulator architecture only (`arm64` on hosted
 `macos-26`), without changing the device archive or macOS distribution targets.
-Pull requests build Debug once, run all unit tests, and execute the five core
+Pull requests build Debug once, run all unit tests, and execute the 14 core
 journeys in `scripts/ios/ci-quick-tests.txt`. Main pushes retain the separate
-Release build and all ten journeys in `scripts/ios/ci-smoke-tests.txt`, including
-both large-text/dark-mode accessibility audits. Every UI journey still uses an
+Release build and all 15 journeys in `scripts/ios/ci-smoke-tests.txt`, including
+both existing large-text/dark-mode accessibility audits and the contact-review
+accessibility check. Both tiers cover the long-image source, image-local
+processing, unavailable-review recovery, contact-only confirmation with pending
+details, and a corrected name's separate second confirmation. These are
+deterministic native fixtures; real-provider contact acceptance remains opt-in
+and is not included in either automatic list. Every UI journey still uses an
 isolated XCTest runner to contain known Simulator failures.
 
 Automatic checks stop after a failed test part, after the existing single
