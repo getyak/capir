@@ -118,6 +118,34 @@ function clickByText(text: string) {
 }
 
 describe("shared Memory review card", () => {
+  it("exposes exact judgment evidence without selecting it and hides withdrawn excerpts", async () => {
+    const candidate = { ...item("judge", "person", "由用户补充的偏好"), admission_status: "needs_judgment" as const,
+      judgment_kind: "ambiguous_attribution" as const, default_selected: false,
+      source_excerpt: "这是由我补充的原始句子。", speaker: "用户", reporter: "用户", time_status: "unknown" as const };
+    const scoped: MemoryReviewView = { ...review(), purpose: "people", contact_decision: "existing",
+      person_id: SCOPE, items: [candidate], visible_item_count: 1, visible_default_selected_count: 0 };
+    fetcher.mockResolvedValue(Response.json({ review_credential: "test-only", review: scoped }));
+    await act(async () => root.render(createElement(MemoryReviewCard, {
+      key: "judgment", binding: "judgment-binding", personId: SCOPE, entryCapability: "test-entry",
+      proposal: { proposal_id: PROPOSAL, revision: 1 }, purpose: "people",
+    })));
+    const details = mount.querySelector<HTMLDetailsElement>('section[aria-label="需要你判断"] details')!;
+    expect(details.open).toBe(false);
+    await act(async () => details.querySelector("summary")!.click());
+    expect(details.open).toBe(true);
+    expect(details.textContent).toContain(candidate.source_excerpt);
+    expect(details.textContent).toContain("用户"); expect(details.textContent).toContain("时间未知");
+    expect(mount.textContent).toContain("已选 0 条");
+    expect(mount.textContent).not.toContain("0/0");
+    expect(fetcher.mock.calls.every(([path]) => !String(path).includes("/commits"))).toBe(true);
+    fetcher.mockResolvedValue(Response.json({ review_credential: "test-only", review: { ...scoped, source_status: "unavailable" } }));
+    await act(async () => root.render(createElement(MemoryReviewCard, {
+      key: "withdrawn-judgment", binding: "withdrawn-binding", personId: SCOPE, entryCapability: "test-entry",
+      proposal: { proposal_id: PROPOSAL, revision: 1 }, purpose: "people",
+    })));
+    expect(mount.querySelector('section[aria-label="需要你判断"] details')).toBeNull();
+    expect(mount.textContent).not.toContain(candidate.source_excerpt);
+  });
   it("invalidates the matching People list after a real commit and Undo while retaining its receipt", async () => {
     const personId = "33333333-3333-4333-8333-333333333333";
     const one = item("person-1", "person", "对方偏好提前收到议程");

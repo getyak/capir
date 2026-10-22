@@ -887,7 +887,7 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
         <p className={styles.warning} role="alert">{t("来源已失效，这些内容不能保存。")}</p>
       ) : null}
 
-      {groups.map((group) => (
+      {groups.filter((group) => eligibleItems(group.items).length > 0).map((group) => (
         <GroupSection
           dispatch={(next) => setState(next)}
           frozen={controller.frozen}
@@ -921,6 +921,17 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
                   <p>{item.display_text}</p>
                 )}
                 <small>{judgmentExplanation(item)}</small>
+                {!sourceUnavailable ? <details className={styles.judgmentEvidence}>
+                  <summary>{t("查看依据")} <CaretDown aria-hidden="true" size={13} /></summary>
+                  <blockquote>{item.source_excerpt || t("来源摘录未保留或已不可用。")}</blockquote>
+                  <dl>
+                    <dt>{t("说话者")}</dt><dd>{item.speaker || t("未标注")}</dd>
+                    {item.reporter ? <><dt>{t("转述者")}</dt><dd>{item.reporter}</dd></> : null}
+                    <dt>{t("时间")}</dt><dd>{item.time_status === "unknown" ? t("时间未知")
+                      : item.time_status === "future" ? item.valid_time ? `未来计划 · ${item.valid_time}` : t("未来计划 · 原话只给出相对时间，见来源摘录")
+                        : item.valid_time ?? t("未标注")}</dd>
+                  </dl>
+                </details> : null}
                 <div className={styles.judgmentActions}>
                   {legal.map((decision) => (
                     <button

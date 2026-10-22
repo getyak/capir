@@ -322,6 +322,15 @@
   margin-top: 6px;
 }
 
+.judgmentEvidence { margin-top: 6px; }
+.judgmentEvidence summary { display: flex; align-items: center; gap: 6px; width: fit-content; min-height: 44px; cursor: pointer; font-size: var(--ts-type-nav, 0.875rem); }
+.judgmentEvidence summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 3px; }
+.judgmentEvidence[open] summary svg { transform: rotate(180deg); }
+.judgmentEvidence blockquote { margin: 0; padding-inline-start: 12px; border-inline-start: 2px solid var(--line); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; }
+.judgmentEvidence dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 12px 0; font-size: var(--ts-type-meta, 0.8125rem); }
+.judgmentEvidence dt { color: var(--muted); }
+.judgmentEvidence dd { margin: 0; overflow-wrap: anywhere; }
+
 .decision,
 .decisionActive {
   border: 1px solid var(--line);
