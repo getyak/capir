@@ -26,6 +26,7 @@ struct RelationshipArchiveView: View {
     @State private var peopleRestorationPosition: String?
     @State private var presentedSheet: RelationshipArchiveSheet?
     @State private var showsAgentStudio = false
+    @State private var personDestinationID: String?
     @State private var askPresentation: RelationshipAskPresentation?
     /// Shared active-refresh registration for the REAL open Agent Session (or
     /// the directory-level Session list when no conversation is open).
@@ -214,7 +215,19 @@ struct RelationshipArchiveView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 guideRail
             }
+            .navigationTitle(appLanguage.text("Contacts"))
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: Binding(
+                get: { personDestinationID != nil },
+                set: { if !$0 { personDestinationID = nil } }
+            )) {
+                if let id = personDestinationID, let snapshot = workspaceStore.snapshot,
+                   let person = snapshot.person(id: id) {
+                    WorkspacePersonDetailView(person: person, roles: roles(for: id, in: snapshot),
+                        workspaceStore: workspaceStore, isPushed: true,
+                        onContinue: { contextID in continueWithPerson(person, contextID: contextID) })
+                }
+            }
             .navigationDestination(isPresented: $showsAgentStudio) {
                 RelationshipAgentStudioView(
                     workspaceStore: workspaceStore,
@@ -309,7 +322,8 @@ struct RelationshipArchiveView: View {
                     }
                 )
             case let .workspacePerson(person, roles):
-                WorkspacePersonDetailView(person: person, roles: roles, workspaceStore: workspaceStore)
+                WorkspacePersonDetailView(person: person, roles: roles, workspaceStore: workspaceStore,
+                    onContinue: { contextID in continueWithPerson(person, contextID: contextID) })
             case let .proposal(proposal):
                 RelationshipChangeReviewView(
                     person: previewPerson(for: proposal),
@@ -739,10 +753,8 @@ struct RelationshipArchiveView: View {
                     }
                 ),
                 onSelect: { person in
-                    presentedSheet = .workspacePerson(
-                        person,
-                        roles(for: person.id, in: snapshot)
-                    )
+                    clearTransientRetrievalIntent()
+                    personDestinationID = person.id
                 },
                 onAsk: askAboutPerson
             )
@@ -764,7 +776,8 @@ struct RelationshipArchiveView: View {
                           let person = current.person(id: personID) else { return nil }
                     return AnyView(WorkspacePersonDetailView(
                         person: person, roles: roles(for: person.id, in: current),
-                        workspaceStore: workspaceStore
+                        workspaceStore: workspaceStore,
+                        onContinue: { contextID in continueWithPerson(person, contextID: contextID) }
                     ))
                 },
                 onRecordNotes: { stageCalendarSession($0, intent: .notes) },
@@ -814,6 +827,21 @@ struct RelationshipArchiveView: View {
         askPresentation = .init(
             sessionID: nil,
             seed: nil,
+            preferredPersonID: person.id,
+            preferredPersonLabel: person.displayLabel,
+            entryMode: .text
+        )
+    }
+
+    private func continueWithPerson(_ entry: WorkspacePerson, contextID: String?) {
+        guard readScopeIsCurrent(), let person = workspaceStore.snapshot?.person(id: entry.id),
+              contextID == nil || person.contexts.contains(where: { $0.id == contextID }) else { return }
+        personDestinationID = nil
+        clearTransientRetrievalIntent()
+        askPresentation = .init(
+            sessionID: nil,
+            seed: contextID.map { AgentSessionSeed(personID: person.id,
+                relationshipContextID: $0, suggestedObjective: "") },
             preferredPersonID: person.id,
             preferredPersonLabel: person.displayLabel,
             entryMode: .text
@@ -4044,7 +4072,7 @@ private struct WorkspacePersonRow: View {
 
 }
 
-private struct WorkspacePersonAvatar: View {
+struct WorkspacePersonAvatar: View {
     let person: WorkspacePerson
     let size: CGFloat
 
@@ -4924,180 +4952,6 @@ private struct PursuitDefinitionSection: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-private struct WorkspacePersonDetailView: View {
-    let person: WorkspacePerson
-    let roles: [WorkspacePersonRole]
-    @ObservedObject var workspaceStore: PursuitWorkspaceStore
-    @State private var sourceTasks: [ScreenshotContactTask] = []
-    @State private var sourceError: String?
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.appLanguage) private var appLanguage
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    @ViewBuilder
-    private var identityHeader: some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: 12) {
-                WorkspacePersonAvatar(person: person, size: 54)
-                identityName
-            }
-        } else {
-            HStack(alignment: .center, spacing: 14) {
-                WorkspacePersonAvatar(person: person, size: 54)
-                identityName
-            }
-        }
-    }
-
-    private var identityName: some View {
-        Text(person.displayLabel)
-            .font(.custom("Georgia", size: 34, relativeTo: .largeTitle))
-            .foregroundStyle(Color.tsInk)
-            .tracking(-0.7)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityIdentifier("person-detail-name")
-    }
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    RelationshipEyebrow(appLanguage.text("Stable person identity"), color: .tsMutedInk)
-                        .padding(.top, 26)
-                    identityHeader
-                        .padding(.top, 10)
-                    RelationshipEyebrow(appLanguage.text("Pursuit roles"), color: .tsMutedInk)
-                        .accessibilityAddTraits(.isHeader)
-                        .padding(.top, 26)
-                    if roles.isEmpty {
-                        Text(appLanguage.text("No active Pursuit role is recorded."))
-                            .font(.subheadline)
-                            .foregroundStyle(Color.tsMutedInk)
-                            .padding(.top, 12)
-                    } else {
-                        ForEach(roles) { role in
-                            VStack(alignment: .leading, spacing: 7) {
-                                Text(role.pursuitTitle)
-                                    .font(.headline)
-                                    .foregroundStyle(Color.tsInk)
-                                    .accessibilityIdentifier("person-detail-role-title-\(role.id)")
-                                Text(WorkspacePersonRolePresentation.summary(for: role, language: appLanguage))
-                                    .font(.caption)
-                                    .foregroundStyle(Color.tsMutedInk)
-                                Text(role.evidenceState.explanation)
-                                    .font(.caption2)
-                                    .foregroundStyle(
-                                        role.evidenceState.availability == "unavailable"
-                                            ? Color.tsVermilion
-                                            : Color.tsMutedInk
-                                    )
-                            }
-                            .padding(.vertical, 16)
-                            .overlay(alignment: .bottom) { Divider().overlay(Color.tsLine) }
-                        }
-                    }
-
-                    Text(
-                        appLanguage.text(
-                            "Roles are contextual. They do not redefine identity or rank this person."
-                        )
-                    )
-                        .font(.footnote)
-                        .foregroundStyle(Color.tsMutedInk)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 12)
-
-                    if !sourceTasks.isEmpty {
-                        RelationshipEyebrow(appLanguage.text("Conversation and sourced context"), color: .tsMutedInk)
-                            .accessibilityAddTraits(.isHeader)
-                            .padding(.top, 30)
-                        ForEach(sourceTasks) { task in
-                            ScreenshotContactCard(task: task, language: appLanguage,
-                                onLoadImage: { index in try await workspaceStore.loadScreenshotContactImage(taskID: task.taskID, index: index) }).padding(.top, 16)
-                        }
-                    }
-                    if let sourceError { Text(sourceError).font(.caption).foregroundStyle(Color.tsMutedInk).padding(.top, 16) }
-
-                    if let profile = person.profile {
-                        RelationshipEyebrow(appLanguage.text("About"), color: .tsMutedInk)
-                            .accessibilityAddTraits(.isHeader)
-                            .accessibilityIdentifier("person-detail-about")
-                            .padding(.top, 30)
-                        Text(profile.headline)
-                            .font(.headline)
-                            .foregroundStyle(Color.tsInk)
-                            .padding(.top, 12)
-                        Text(profile.summary)
-                            .font(.body)
-                            .foregroundStyle(Color.tsInk)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.top, 8)
-                        Label(
-                            profile.provenanceKind == "reviewed_public_source"
-                                ? appLanguage.text("Confirmed from a reviewed public source")
-                                : appLanguage.text("Written by the workspace owner"),
-                            systemImage: profile.provenanceKind == "reviewed_public_source"
-                                ? "link.badge.plus"
-                                : "person.crop.circle.badge.checkmark"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(Color.tsMutedInk)
-                        .accessibilityIdentifier("person-detail-profile-provenance")
-                        .padding(.top, 10)
-                        if let sourceURL = profile.sourceProfileURL,
-                           let url = URL(string: sourceURL),
-                           url.scheme?.lowercased() == "https" {
-                            Link(destination: url) {
-                                Label(
-                                    profile.sourcePlatform ?? appLanguage.text("Public source"),
-                                    systemImage: "arrow.up.right.square"
-                                )
-                                .font(.caption.weight(.semibold))
-                                .frame(minHeight: 44)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Color.tsInk)
-                        }
-                    }
-
-                    PursuitDefinitionSection(
-                        title: appLanguage.text("Governed identity"),
-                        headingColor: .tsMutedInk,
-                        rows: [
-                            (appLanguage.text("Sources"), "\(person.captureCount)"),
-                            (appLanguage.text("Identity clues"), "\(person.confirmedIdentityCount)"),
-                            (appLanguage.text("Contexts"), "\(person.contextCount)"),
-                        ]
-                    )
-                }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 40)
-            }
-            .background(Color.tsSurface.ignoresSafeArea())
-            .navigationTitle(appLanguage.text("Person"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(appLanguage.text("Close"), action: dismiss.callAsFunction)
-                }
-            }
-        }
-        .accessibilityIdentifier("workspace-person-detail")
-        .task(id: person.id) {
-            guard workspaceStore.isCanonical else { return }
-            do {
-                var results: [ScreenshotContactTask] = []
-                for context in person.contexts {
-                    let envelope = try await workspaceStore.loadContactIntelligence(personID: person.id, contextID: context.id)
-                    results.append(contentsOf: envelope.tasks)
-                }
-                sourceTasks = Array(results.prefix(20))
-            } catch { sourceError = appLanguage.text("Source context could not be refreshed.") }
         }
     }
 }

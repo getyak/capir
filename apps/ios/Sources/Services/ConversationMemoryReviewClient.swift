@@ -29,7 +29,7 @@ extension ConversationMemoryReviewServing {
 
 /// Credentials remain private and transient. Every response crosses the same
 /// current-login lease as the request, including requests already in flight.
-struct ConversationMemoryReviewClient: ConversationMemoryReviewServing {
+struct ConversationMemoryReviewClient: ConversationMemoryReviewServing, PersonMemoryServing {
     private struct Failure: Decodable {
         let code: String?
         let details: Details?
@@ -58,6 +58,27 @@ struct ConversationMemoryReviewClient: ConversationMemoryReviewServing {
         var copy = self; copy.reviewScope = scope; return copy
     }
     func isCurrentScope() async -> Bool { await isCurrent() }
+
+    func recallPersonMemory(personID: String, contextID: String?, cursor: String? = nil) async throws -> PersonMemoryPage {
+        let person = try identifier(personID)
+        let context = try contextID.map { try identifier($0) }
+        var query = [URLQueryItem(name: "surface", value: context == nil ? "people" : "relationship"),
+                     URLQueryItem(name: "person_id", value: person),
+                     URLQueryItem(name: "limit", value: "50")]
+        if let context {
+            query.append(.init(name: "relationship_context_id", value: context))
+        } else {
+            // A multi-context contact has no implicit relationship selection.
+            query.append(.init(name: "scope", value: "person"))
+        }
+        if let cursor {
+            guard !cursor.isEmpty, cursor.count <= 500 else { throw ConversationMemoryReviewError.invalidScope }
+            query.append(.init(name: "cursor", value: cursor))
+        }
+        let page: PersonMemoryPage = try await request("v1/memory/items", method: "GET", query: query)
+        try page.validate(personID: person, contextID: context)
+        return page
+    }
 
     private func requireCurrentScope() async throws {
         guard await isCurrent() else {
