@@ -221,10 +221,11 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
   assert.match(iosCheck, /Audit failed to complete in time/);
   assert.doesNotMatch(iosCheck, /rg --files-with-matches/);
 
-  const tierBudgets = { quick: 14, smoke: 15 };
+  const tierBudgets = { quick: 15, smoke: 16 };
   const conversationPrefix = "TalentSignalUITests/ConversationExperienceUITests/";
   const criticalConversationTests = [
     "testProcessingStatusBelongsToItsImageAndHasNoEmptyMessageBubble",
+    "testQueuedStatusNaturallyExpiresWithoutAnotherObservation",
     "testUnavailableReviewExplainsRecoveryAndNeverOffersSave",
     "testAddingContactKeepsDetailsPendingAndSavingOneKeepsTheOtherPending",
     "testNameCorrectionRequiresFreshReviewAndASecondConfirm",
