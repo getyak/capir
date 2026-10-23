@@ -177,3 +177,19 @@ full Web ESLint and `pnpm docs:check` passed. The unified focused run passed
 copy. Added useT and eight catalog keys in all five locales; the 40-test
 frame/i18n rerun and targeted ESLint pass. The other 134 focused tests were
 unchanged after that failure. Final combined CI is still required.
+
+Final independent source review approved `a89bba22..b34de5be` with no confirmed
+P0/P1/P2. The first combined CI passed 2,755 Web tests and failed seven obsolete
+setup clicks in two existing recent-list suites: the removed group disclosure
+no longer exists. Removed only that setup/helper; retain every sorting, pin,
+archive/restore, selection, arrival-motion, reduced-motion and storage-failure
+assertion. The original failure reproduces locally. Full single-worker Web
+tests and a review of this test-only correction are in progress.
+
+Acceptance uses one owned daily run `27e044aa-8151-4a4c-9c9f-5f32ed82b0c2`,
+request `a95a7914-57c4-4de9-b22e-d70cb98339ed`, provisioned by the reused default
+account CLI grant. Owner and target readbacks are recorded separately in the
+sanitized receipt. The CLI browser verified active 12/30/4 synthetic data and
+was gracefully closed (PID 48969); the isolated IAB context is reused for QA.
+No messages or external effects have been sent. The run must be stopped and
+its cleanup read back before handoff.

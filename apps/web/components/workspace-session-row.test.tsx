@@ -174,12 +174,6 @@ describe("swipe-to-organize session rows", () => {
 });
 
 describe("local organization in the recent list", () => {
-  function expand() {
-    act(() => {
-      host!.querySelector<HTMLButtonElement>("button[aria-controls]")!.click();
-    });
-  }
-
   it("keeps pinned rows first, archives locally and restores without losing the row", () => {
     const stamp = new Date().toISOString();
     window.localStorage.setItem(
@@ -194,7 +188,6 @@ describe("local organization in the recent list", () => {
       }),
     );
     mount(createElement(WorkspaceRecentSessions, { binding: "binding", storageScope: SCOPE }));
-    expand();
 
     const visibleLinks = [...host!.querySelectorAll<HTMLAnchorElement>('a[href^="/workspace/sessions/"]')]
       .filter((link) => link.getAttribute("data-archived") !== "true");
@@ -222,7 +215,6 @@ describe("local organization in the recent list", () => {
 
   it("falls back visibly to page-local flags when storage writes fail", () => {
     mount(createElement(WorkspaceRecentSessions, { binding: "binding", storageScope: SCOPE }));
-    expand();
     const working = window.localStorage;
     const failing = {
       getItem: (key: string) => working.getItem(key),
