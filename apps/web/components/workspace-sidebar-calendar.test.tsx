@@ -8,11 +8,12 @@ import { timeHref } from "@/lib/time-workspace";
 import { requestWorkspaceRefresh } from "@/lib/workspace-refresh";
 import { invalidateWorkspaceDirectory } from "@/lib/workspace-directory-cache";
 const mock = vi.hoisted(() => ({ query: "day=2026-09-21&view=week&tz=UTC", request: vi.fn() }));
-vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(mock.query) }));
+vi.mock("next/navigation", () => ({ usePathname: () => "/workspace/meetings", useSearchParams: () => new URLSearchParams(mock.query) }));
 vi.mock("@/lib/time-workspace-client", async (original) => ({ ...await original<typeof import("@/lib/time-workspace-client")>(), timeRequest: mock.request }));
 import { TimeRequestError } from "@/lib/time-workspace-client";
 import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./workspace-session-request";
 import { WorkspaceSidebarCalendar } from "./workspace-sidebar-calendar";
+import { WorkspaceBrowseProvider, useWorkspaceBrowse } from "./workspace-browse";
 
 let host: HTMLDivElement, root: Root;
 const nativeReplace = window.history.replaceState.bind(window.history);
@@ -35,6 +36,10 @@ async function click(label: string) {
   await act(async () => button!.click());
 }
 function dateLink(day: string) { return host.querySelector<HTMLAnchorElement>(`[data-calendar-day="${day}"]`)!; }
+function IndependentCalendar() {
+  const browse = useWorkspaceBrowse();
+  return <WorkspaceSidebarCalendar binding="a" browseHref={browse!.href("/workspace/meetings")} />;
+}
 async function key(day: string, value: string) {
   await act(async () => { dateLink(day).focus(); dateLink(day).dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true })); });
 }
@@ -50,6 +55,28 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); Reflect.deleteProperty(document, "visibilityState"); Reflect.deleteProperty(document, "hidden"); });
 
 describe("workspace calendar sidebar", () => {
+  it("browses dates and the upcoming horizon without changing the working URL or following its later scope", async () => {
+    nativeReplace(null, "", "/workspace?draft_session=11111111-1111-4111-8111-111111111111");
+    const original = window.location.href;
+    async function renderBrowser() {
+      await act(async () => root.render(<WorkspaceBrowseProvider scope={"a".repeat(64)}><IndependentCalendar /></WorkspaceBrowseProvider>));
+    }
+    await renderBrowser();
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    await act(async () => dateLink("2026-09-23").dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(true);
+    expect(dateLink("2026-09-23").getAttribute("aria-current")).toBe("date");
+    await changeHorizon("30");
+    expect(host.querySelector('select')?.value).toBe("30");
+    expect(window.location.href).toBe(original);
+    mock.query = "day=2026-10-10&tz=UTC&upcoming=7"; await renderBrowser();
+    expect(dateLink("2026-09-23").getAttribute("aria-current")).toBe("date");
+    expect(host.querySelector('select')?.value).toBe("30");
+    expect(window.location.href).toBe(original);
+    const [url] = mock.request.mock.calls.at(-1)!;
+    expect(new URL(url, "http://localhost").searchParams.get("from")).toBe("2026-09-23");
+  });
+
   it("renders one selected date with an accessible fixed month grid and exact date URLs", async () => {
     mock.query += `&person=${timeFixtureActivity.source_id}&kind=session_activity&range=custom&from=2026-09-01&to=2026-09-30&item=old&draft=old&upcoming=30`;
     await render();

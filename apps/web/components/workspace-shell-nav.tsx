@@ -14,16 +14,14 @@ import {
 import type { Icon } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useLayoutEffect, useRef, useSyncExternalStore, type MouseEvent } from "react";
+import { useContext, useLayoutEffect, useRef, useSyncExternalStore, type MouseEvent } from "react";
 
 import {
   WORKSPACE_COMPOSE_HREF,
   WORKSPACE_FOCUS_AGENT_EVENT,
   WORKSPACE_NEW_CONVERSATION_EVENT,
   WORKSPACE_NAV_ROUTES,
-  WORKSPACE_RAIL_COLLAPSED_KEY,
   WORKSPACE_RAIL_CONTROLS,
-  WORKSPACE_RAIL_PREFERENCE_EVENT,
   type WorkspaceNavRoute,
   type WorkspaceRailControlId,
   workspaceCaptureIntent,
@@ -32,10 +30,12 @@ import {
 } from "@/lib/workspace-navigation";
 import { recentSessionRows } from "@/lib/workspace-recent-sessions";
 import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-session-organization";
+import { useWorkspaceSidebarLayout, WorkspaceSidebarPresentation } from "@/lib/workspace-sidebar-layout";
 
 import { WorkspaceSessionAvatar } from "./workspace-session-avatar";
 import { useT } from "./locale-provider";
 import { useWorkspaceNavigationHref } from "./workspace-navigation-continuity";
+import { useWorkspaceBrowse, type WorkspaceBrowseSection } from "./workspace-browse";
 import { WorkspaceGlobalSearchDialog, useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-shell.module.css";
 
@@ -70,76 +70,49 @@ const RAIL_ICONS: Record<Exclude<WorkspaceRailControlId, "search">, Icon> = {
 const mobileSnapshot = () => window.matchMedia("(max-width: 760px)").matches;
 const mobileSubscribe = (notify: () => void) => {const query = window.matchMedia("(max-width: 760px)"); query.addEventListener("change",notify); return () => query.removeEventListener("change",notify);};
 
-const COLLAPSED_KEY = WORKSPACE_RAIL_COLLAPSED_KEY;
-const COLLAPSED_EVENT = WORKSPACE_RAIL_PREFERENCE_EVENT;
-let collapsedFallback = false;
-
-function collapsedSnapshot() {
-  try {
-    return window.localStorage.getItem(COLLAPSED_KEY) === "true";
-  } catch {
-    return collapsedFallback;
-  }
-}
-
-function subscribeToCollapsedPreference(onChange: () => void) {
-  window.addEventListener("storage", onChange);
-  window.addEventListener(COLLAPSED_EVENT, onChange);
-  return () => {
-    window.removeEventListener("storage", onChange);
-    window.removeEventListener(COLLAPSED_EVENT, onChange);
-  };
-}
-
-function useCollapsedState() {
-  const collapsed = useSyncExternalStore(
-    subscribeToCollapsedPreference,
-    collapsedSnapshot,
-    () => false,
-  );
-  return {
-    collapsed,
-    setCollapsed(next: boolean) {
-      collapsedFallback = next;
-      try {
-        window.localStorage.setItem(COLLAPSED_KEY, String(next));
-      } catch {
-        // Keep this interaction usable when browser storage is unavailable.
-      }
-      window.dispatchEvent(new Event(COLLAPSED_EVENT));
-    },
-  };
-}
-
 function RailControl({
   control,
   current,
   route,
   compact = false,
+  onBrowse,
 }: {
   control: Exclude<WorkspaceRailControlId, "search">;
   current: boolean;
   route: WorkspaceNavRoute;
   compact?: boolean;
+  onBrowse?: (control: WorkspaceBrowseSection) => void;
 }) {
   const router = useRouter();
+  const browse = useWorkspaceBrowse();
   const mobile = useSyncExternalStore(mobileSubscribe,mobileSnapshot,() => false);
-  const rememberedHref = useWorkspaceNavigationHref(route.href);
+  const rememberedRouteHref = useWorkspaceNavigationHref(route.href);
+  const rememberedHref = !mobile && browse ? browse.href(route.href) : rememberedRouteHref;
   const isNew = !compact && mobile && control === "conversation";
   const label = isNew ? "新对话" : RAIL_LABELS[control];
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
     <Link
-      aria-current={current ? "page" : undefined}
+      aria-current={current ? !mobile && browse?.enabled ? "location" : "page" : undefined}
+      aria-controls={!mobile && browse?.enabled ? "workspace-sidebar-browser" : undefined}
       aria-label={label}
       className={compact ? styles.railIconLink : styles.railControl}
       data-mobile={route.mobile ? "true" : "false"}
       data-selected={current ? "true" : undefined}
+      data-browse-section={control}
       href={isNew ? route.href : rememberedHref}
+      prefetch={false}
       key={route.id}
       title={label}
       onClick={event => {
-        if (!isNew || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        if (!mobile && browse?.enabled) {
+          event.preventDefault();
+          browse.select(control);
+          onBrowse?.(control);
+          return;
+        }
+        if (!isNew) return;
         event.preventDefault();
         const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT,{cancelable:true}));
         if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`);
@@ -198,12 +171,24 @@ export function WorkspaceShellNav({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { collapsed, setCollapsed } = useCollapsedState();
-  const selection = workspaceRailSelection(pathname);
+  const { layout, setLayout } = useWorkspaceSidebarLayout();
+  const presentation = useContext(WorkspaceSidebarPresentation) ?? layout;
+  const collapsed = presentation.collapsed;
+  const setCollapsed = (next: boolean) => setLayout({ ...layout, collapsed: next, hidden: false });
+  const browse = useWorkspaceBrowse();
+  const mobile = useSyncExternalStore(mobileSubscribe, mobileSnapshot, () => false);
+  const selection = !mobile && browse?.enabled ? browse.selection : workspaceRailSelection(pathname);
   const collapseToggle = useRef<HTMLButtonElement>(null);
   const expandToggle = useRef<HTMLButtonElement>(null);
+  const primaryNav = useRef<HTMLElement>(null);
+  const pendingBrowseFocus = useRef<WorkspaceBrowseSection | null>(null);
 
   useLayoutEffect(() => {
+    if (!collapsed && pendingBrowseFocus.current) {
+      primaryNav.current?.querySelector<HTMLAnchorElement>(`[data-browse-section="${pendingBrowseFocus.current}"]`)?.focus({ preventScroll: true });
+      pendingBrowseFocus.current = null;
+      return;
+    }
     const hidden = collapsed ? collapseToggle.current : expandToggle.current;
     if (document.activeElement === hidden) {
       (collapsed ? expandToggle.current : collapseToggle.current)?.focus();
@@ -244,7 +229,7 @@ export function WorkspaceShellNav({
         </div>
       </div>
 
-      <nav aria-label="工作台导航" className={styles.railRow}>
+      <nav aria-label="工作台导航" className={styles.railRow} ref={primaryNav}>
         {WORKSPACE_RAIL_CONTROLS.map((control) =>
           control === "search" ? (
             <WorkspaceGlobalSearchDialog
@@ -274,7 +259,7 @@ export function WorkspaceShellNav({
           {WORKSPACE_RAIL_CONTROLS.map(control => control === "search" ? (
             <WorkspaceGlobalSearchDialog binding={binding} key={control} label={RAIL_LABELS.search} presentation="rail" />
           ) : (
-            <RailControl compact control={control} current={selection === control} key={control} route={workspaceRailRoute(control)!} />
+            <RailControl compact control={control} current={selection === control} key={control} route={workspaceRailRoute(control)!} onBrowse={section => { pendingBrowseFocus.current = section; setCollapsed(false); }} />
           ))}
         </div>
         <div className={styles.railCollapsedTop}>

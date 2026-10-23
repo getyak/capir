@@ -84,7 +84,6 @@ describe("one shared sliding selection highlight", () => {
       row(SESSION_B, "较早的置顶会话"),
     ] } };
     mount(createElement(WorkspaceRecentSessions, { binding: "binding", storageScope: "c".repeat(64) }));
-    act(() => host!.querySelector<HTMLButtonElement>("button[aria-controls]")!.click());
     const rows = host!.querySelectorAll("[data-arrival]");
     expect(rows).toHaveLength(8);
     expect(rows[0]!.textContent).toContain("较早的置顶会话");
@@ -93,7 +92,6 @@ describe("one shared sliding selection highlight", () => {
   it("keeps the first successful asynchronous history static", () => {
     directory.loading = true; directory.data = null;
     mount(createElement(WorkspaceRecentSessions, { binding: "binding", storageScope: "c".repeat(64) }));
-    act(() => host!.querySelector<HTMLButtonElement>("button[aria-controls]")!.click());
     directory.loading = false;
     directory.data = { sessions: { session_version: "binding", sessions: [row(SESSION_A, "历史会话")] } };
     act(() => root!.render(createElement(WorkspaceRecentSessions, { binding: "binding", storageScope: "c".repeat(64) })));
@@ -108,10 +106,6 @@ describe("one shared sliding selection highlight", () => {
         storageScope: "c".repeat(64),
       }),
     );
-    act(() => {
-      // Expand the group (it starts collapsed in current HEAD behavior).
-      host!.querySelector<HTMLButtonElement>("button[aria-controls]")!.click();
-    });
     let marks = selectionMarks();
     expect(marks).toHaveLength(1);
     const firstRow = marks[0]!.closest("a")!;
@@ -144,11 +138,6 @@ describe("one shared sliding selection highlight", () => {
         storageScope: "c".repeat(64),
       }),
     );
-    act(() => {
-      // Expand the group (it starts collapsed in current HEAD behavior).
-      const disclosure = host!.querySelector<HTMLButtonElement>("button[aria-controls]");
-      disclosure!.click();
-    });
     const marks = selectionMarks();
     expect(marks).toHaveLength(1);
     const rowLink = marks[0]!.closest("a")!;
@@ -165,9 +154,6 @@ describe("new session insertion motion", () => {
         storageScope: "c".repeat(64),
       }),
     );
-    act(() => {
-      host!.querySelector<HTMLButtonElement>("button[aria-controls]")!.click();
-    });
     const before = [...host!.querySelectorAll<HTMLElement>("[data-arrival]")];
     expect(before.map((item) => item.dataset.arrival)).toEqual(["false", "false"]);
 
@@ -215,9 +201,6 @@ describe("new session insertion motion", () => {
           storageScope: "c".repeat(64),
         }),
       );
-      act(() => {
-        host!.querySelector<HTMLButtonElement>("button[aria-controls]")!.click();
-      });
       const SESSION_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
       directory.data = {
         sessions: {

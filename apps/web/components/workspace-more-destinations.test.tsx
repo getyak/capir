@@ -41,6 +41,16 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); });
 
 describe("expanded and collapsed workspace navigation", () => {
+  it("keeps the recent list open with one icon-only add action", async () => {
+    await render();
+    const recent = host.querySelector('section[aria-label="最近对话"]')!;
+    const add = recent.querySelector('button[aria-label="开始新对话"]')!;
+    expect(add.textContent).toBe("");
+    expect(recent.querySelector('button[aria-controls]')).toBeNull();
+    expect(recent.querySelector('a[title="Conversation 1"]')).toBeTruthy();
+    expect(recent.textContent).not.toContain("最近对话");
+  });
+
   it.each([
     ["en", "原始标题 (Unread)", "Unread"],
     ["ja", "原始标题（未読）", "未読"],
@@ -95,7 +105,7 @@ describe("expanded and collapsed workspace navigation", () => {
     } }));
     await render();
     const recent = host.querySelector('section[aria-label="最近对话"]')!;
-    expect(recent.querySelector('button[aria-expanded="true"]')?.textContent).toContain("最近对话");
+    expect(recent.querySelector('a[title="Conversation 2"]')).toBeTruthy();
     const collapsed = host.querySelector('[data-collapsed-only="true"]')!;
     const shortcuts = [...collapsed.querySelectorAll<HTMLAnchorElement>('a[title^="Conversation"]')];
     expect(shortcuts.map(link => link.getAttribute("href"))).toEqual([10, 2, 3, 4, 5].map(n => `/workspace/sessions/${id(n)}`));
