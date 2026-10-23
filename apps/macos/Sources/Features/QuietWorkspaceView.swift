@@ -98,6 +98,8 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     /// owns the signed-out browser-login surface and Web never paints its
     /// password, registration or provider forms inside this window.
     @Published var signedOut = false
+    private(set) var explicitlySignedOut = false
+    var onExplicitSignOut: (() -> Void)?
     var openSettings: (() -> Void)? {
         didSet { flushPendingSettingsOpen() }
     }
@@ -112,6 +114,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private var pendingSettingsOpen = false
     private let storeSelection: LoginStoreSelection?
     private var retired = false
+    private var draftOwnerReadGeneration = UUID()
     private var storeObservation: AnyCancellable?
     private let accountBrowser: AccountSettingsBrowser
 
@@ -237,10 +240,74 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     }
 
     var loginReturnTarget: URL? { lastWorkbenchURL }
-    func completeBrowserLogin(returnTarget: URL?) {
+    @discardableResult
+    func enterSignedOut(at url: URL) -> Bool {
+        guard origin.contains(url), url.path == "/login" else { return false }
+        let intents = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.filter { $0.name == "intent" } ?? []
+        explicitlySignedOut = intents.count == 1 && intents[0].value == "sign-out"
+        if explicitlySignedOut {
+            lastWorkbenchURL = nil; workbenchNotice = nil
+            // Intent can arrive after expiry already set signedOut=true.
+            // Deliver it synchronously rather than relying on a Bool change.
+            onExplicitSignOut?()
+        }
+        signedOut = true; loading = false
+        return true
+    }
+    func verifiedCurrentDraftOwner() async -> DesktopDraftOwner? {
+        guard !retired, !signedOut, let selection = storeSelection,
+              LoginStoreRegistry.shared.isCurrent(selection),
+              webView.url.map(origin.contains) == true else { return nil }
+        let readGeneration = UUID(); draftOwnerReadGeneration = readGeneration
+        let result = await DesktopDraftScriptRead.read(timeout: .seconds(6)) { completion in
+            webView.callAsyncJavaScript(DesktopDraftRecovery.ownerScript,
+                arguments: ["statusURL": origin.url.appendingPathComponent("api/desktop-auth/status").absoluteString],
+                in: nil, in: DesktopDraftRecovery.world) { result in
+                    completion((try? result.get()) as? String)
+                }
+        }
+            guard !retired, !signedOut, draftOwnerReadGeneration == readGeneration, LoginStoreRegistry.shared.isCurrent(selection),
+                  webView.url.map(origin.contains) == true, let text = result,
+                  let owner = DesktopDraftRecovery.readOwner(text) else { return nil }
+            return owner
+    }
+
+    private func recordDraftOwnerIfNeeded() async {
+        guard let selection = storeSelection,
+              (try? LoginStoreRegistry.shared.selection(for: selection.origin).verifiedDraftOwner) == nil,
+              let owner = await verifiedCurrentDraftOwner() else { return }
+        try? LoginStoreRegistry.shared.recordVerifiedDraftOwner(owner, selection: selection)
+    }
+
+    func captureDraftRecovery() async -> DesktopDraftRecovery? {
+        guard !retired, let selection = storeSelection, LoginStoreRegistry.shared.isCurrent(selection),
+              let owner = try? LoginStoreRegistry.shared.selection(for: selection.origin).verifiedDraftOwner,
+              owner.valid, let target = lastWorkbenchURL, origin.contains(target),
+              WorkspaceSurfacePolicy.isOrdinaryWorkspaceDestination(target),
+              target.absoluteString.count <= 4096, webView.url.map(origin.contains) == true else { return nil }
+        let id = DesktopDraftRecovery.sessionID(in: target)
+        var draft: DesktopDraftRecovery.Draft?
+        if let id {
+                let result = await DesktopDraftScriptRead.read { completion in
+                    webView.callAsyncJavaScript(DesktopDraftRecovery.readScript,
+                        arguments: ["scope": owner.storageScope, "session": id], in: nil,
+                        in: DesktopDraftRecovery.world) { result in
+                            completion((try? result.get()) as? String)
+                        }
+                }
+                guard !retired, LoginStoreRegistry.shared.isCurrent(selection),
+                      webView.url.map(origin.contains) == true, let text = result else { return nil }
+                draft = DesktopDraftRecovery.readDraft(text)
+        }
+        return DesktopDraftRecovery(owner: owner, target: target, sessionID: id, draft: draft)
+    }
+
+    func completeBrowserLogin(returnTarget: URL?, recoveryNotice: String? = nil) {
         guard !retired, let storeSelection, LoginStoreRegistry.shared.isCurrent(storeSelection),
               !LoginStoreRegistry.shared.hasUnresolvedLogin(for: origin.url.absoluteString) else { return }
         signedOut = false; failure = nil; loading = true
+        explicitlySignedOut = false
+        if let recoveryNotice { workbenchNotice = recoveryNotice }
         webView.load(URLRequest(url: returnTarget ?? origin.entryURL))
     }
 
@@ -285,7 +352,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private func observeWorkbenchLocationForSettingsTransition() {
         guard !retired, let url = webView.url else { return }
         if origin.contains(url), url.path == "/login" {
-            signedOut = true; loading = false; webView.stopLoading(); return
+            enterSignedOut(at: url); webView.stopLoading(); return
         }
         guard let transition = WorkspaceSurfacePolicy.workbenchSettingsTransition(
             from: lastWorkbenchURL, to: url, origin: origin) else {
@@ -409,7 +476,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                 // Native owns the signed-out entry (ADR 0022): intercept the
                 // actual /login route and publish the native browser-login UI,
                 // so no Web login form can paint inside the app.
-                signedOut = true; loading = false
+                enterSignedOut(at: url)
                 decisionHandler(.cancel)
                 return
             }
@@ -499,6 +566,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        draftOwnerReadGeneration = UUID()
         loading = true
         failure = nil
     }
@@ -507,6 +575,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         loading = false
         canGoBack = webView.canGoBack
         publishDesktopChrome(state: DesktopUpdater.shared.presentation)
+        Task { @MainActor [weak self] in await self?.recordDraftOwnerIfNeeded() }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -646,7 +715,8 @@ private struct ConnectedQuietWorkspace: View {
             if browser.signedOut {
                 // Native signed-out surface only: the Web login page never
                 // paints inside the workspace window.
-                DesktopBrowserLoginView(origin: browser.origin, returnTarget: browser.loginReturnTarget, coordinator: login)
+                DesktopBrowserLoginView(origin: browser.origin, returnTarget: browser.loginReturnTarget,
+                                        coordinator: login, captureDraft: { await browser.captureDraftRecovery() })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(TSBrand.canvas)
             }
@@ -664,8 +734,23 @@ private struct ConnectedQuietWorkspace: View {
             if let notice = browser.visibleWorkbenchNotice {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
-                    Text(notice).font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Button("关闭") { browser.dismissWorkbenchNotice() }
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(notice).font(.callout).fixedSize(horizontal: false, vertical: true)
+                        ForEach(Array(login.visibleRetainedDrafts.enumerated()), id: \.element.id) { index, retained in
+                            HStack {
+                                Button(login.visibleRetainedDrafts.count == 1 ? "复制保留的文字" : "复制第\(index + 1)份文字") {
+                                    Task { @MainActor in
+                                        let copied = await login.copyRetainedDraft(retained.id, verifying: { await browser.verifiedCurrentDraftOwner() })
+                                        browser.workbenchNotice = copied ? "文字已复制。可粘贴到当前对话，核对后再发送。" : "未复制。请核对登录状态、草稿保留期限或剪贴板权限后重试。"
+                                    }
+                                }
+                                Button("放弃这份恢复") { login.discardRetainedDraft(retained.id) }
+                            }
+                        }
+                    }
+                    if login.visibleRetainedDrafts.isEmpty {
+                        Button("关闭") { browser.dismissWorkbenchNotice() }
+                    }
                 }
                 .padding(12)
                 .frame(maxWidth: 560, alignment: .leading)
@@ -701,22 +786,30 @@ private struct ConnectedQuietWorkspace: View {
         .focusedSceneObject(browser)
         .background(WorkspaceWindowBehavior(floating: floating))
         .onAppear {
+            browser.onExplicitSignOut = { [weak coordinator = login, origin = browser.origin] in
+                coordinator?.explicitlySignedOut(in: origin)
+            }
             browser.openSettings = { openSettings() }
             CaptureRuntime.shared.start()
             CaptureRuntime.shared.setOpenWorkspace { openWindow(id: "workspace") }
-            if case .completed = login.phase {
+            if browser.signedOut && browser.explicitlySignedOut {
+                login.explicitlySignedOut(in: browser.origin)
+            } else if case .completed = login.phase {
                 // Exchange can finish before the reopened view's phase
                 // observer is attached. Consume the current result as well.
-                browser.completeBrowserLogin(returnTarget: login.returnTarget)
-            } else if browser.signedOut { login.signedOut(in: browser.origin) }
+                browser.completeBrowserLogin(returnTarget: login.returnTarget, recoveryNotice: login.recoveryNotice)
+            } else if browser.signedOut {
+                if browser.explicitlySignedOut { login.explicitlySignedOut(in: browser.origin) }
+                else { login.signedOut(in: browser.origin) }
+            }
             consumeDestination()
         }
         .onDisappear { browser.retireIfOwnershipChanged(to: connection.origin) }
         .onChange(of: browser.signedOut) { _, signedOut in
-            if signedOut { login.signedOut(in: browser.origin) }
+            if signedOut && !browser.explicitlySignedOut { login.signedOut(in: browser.origin) }
         }
         .onChange(of: login.phase) { _, phase in
-            if case .completed = phase { browser.completeBrowserLogin(returnTarget: login.returnTarget); consumeDestination() }
+            if case .completed = phase { browser.completeBrowserLogin(returnTarget: login.returnTarget, recoveryNotice: login.recoveryNotice); consumeDestination() }
         }
         .onChange(of: connection.inspectorEnabled) { _, enabled in browser.webView.isInspectable = enabled }
         .onChange(of: navigation.pending) { _, _ in consumeDestination() }

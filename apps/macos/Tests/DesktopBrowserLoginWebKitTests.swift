@@ -33,13 +33,14 @@ final class DesktopBrowserLoginWebKitTests: XCTestCase {
         let expected = try XCTUnwrap(grant.identity)
         let exchanger = DesktopBrowserLoginWKExchanger(registry: registry)
         let outcome = try await exchanger.exchange(operation: operation, code: try XCTUnwrap(approved["code"] as? String), expected: expected)
-        XCTAssertEqual(outcome, expected)
+        XCTAssertTrue(outcome.matches(expected))
+        XCTAssertNotNil(outcome.draftOwner)
         let committed = try await transport.result(operation: operation)
         XCTAssertTrue(committed.committed); XCTAssertEqual(committed.state, "consumed")
         try registry.resolveLogin(for: selection.origin, epoch: selection.epoch)
         let reopened = DesktopBrowserLoginWKExchanger(registry: registry)
         let second = try await reopened.readStatus(operation: operation, expected: expected)
-        XCTAssertEqual(second, expected)
+        XCTAssertTrue(second.matches(expected))
         // A new deliberate login must fence the old native exchanger/store.
         _ = try registry.beginFreshPrimaryLogin(for: selection.origin)
         do { _ = try await reopened.readStatus(operation: operation, expected: expected); XCTFail("Retired store admitted status") }

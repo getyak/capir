@@ -4,32 +4,12 @@ import {
   invalidateWorkspaceDirectory,
   workspaceDirectoryMutationInvalidates,
 } from "@/lib/workspace-directory-cache";
+import { WORKSPACE_SESSION_STATUS_HEADER, workspaceSessionExpired } from "@/lib/backend-session";
+
+export { workspaceSessionExpired };
 
 export const WORKSPACE_SESSION_EXPIRED_EVENT =
   "talent-signal:workspace-session-expired";
-
-function responseCode(payload: unknown): unknown {
-  if (!payload || typeof payload !== "object") return null;
-  if ("code" in payload) return payload.code;
-  if (
-    "error" in payload &&
-    payload.error &&
-    typeof payload.error === "object" &&
-    "code" in payload.error
-  ) {
-    return payload.error.code;
-  }
-  return null;
-}
-
-export function workspaceSessionExpired(
-  status: number,
-  payload: unknown,
-): boolean {
-  const code = responseCode(payload);
-  return status === 401 && typeof code === "string" &&
-    ["backend_session_expired", "SESSION_INVALID", "SESSION_EXPIRED", "AUTHENTICATION_REQUIRED"].includes(code);
-}
 
 export async function workspaceSessionFetch(
   input: RequestInfo | URL,
@@ -67,15 +47,26 @@ export async function workspaceSessionFetch(
     return response;
   }
   // Any 401 on the scoped workspace API must not leave a cached private
-  // snapshot available. Discard first so live readers fail closed; the
-  // recognized credential-loss codes additionally start recovery.
+  // snapshot available. A cancelled/old-scope reply cannot expire a new scope.
+  const signal = init?.signal ?? (input instanceof Request ? input.signal : null);
+  const currentScope = () => !signal?.aborted &&
+    scope === document.querySelector<HTMLElement>("[data-workspace-scope]")?.dataset.workspaceScope?.trim();
+  if (local && !currentScope()) {
+    return response;
+  }
   if (local && target) {
+    // Directory discard aborts this very response body. Recognize the route's
+    // closed metadata BEFORE cancellation rather than trying to decode it later.
+    const expired = response.headers.get(WORKSPACE_SESSION_STATUS_HEADER) === "expired";
+    if (expired) window.dispatchEvent(new Event(WORKSPACE_SESSION_EXPIRED_EVENT));
     invalidateWorkspaceDirectory(undefined, "discard");
+    if (expired) return response;
   }
   try {
     const payload = (await response.clone().json()) as unknown;
     if (
       local &&
+      currentScope() &&
       workspaceSessionExpired(response.status, payload) &&
       typeof window !== "undefined"
     ) {
