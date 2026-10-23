@@ -323,7 +323,16 @@ export async function deleteChatMediaAsset(
       );
     }
     if (row.storage_provider === storage.provider) {
-      await storage.delete(row.object_key);
+      if (storage.provider === "s3") {
+        // A delete marker leaves historical private image bytes recoverable.
+        // Acknowledge deletion only after every exact-key version is removed.
+        if (!storage.purge) {
+          throw new ApiError(503, "CHAT_MEDIA_PERMANENT_PURGE_UNAVAILABLE", "The image cannot be permanently removed with the configured storage adapter.");
+        }
+        await storage.purge(row.object_key);
+      } else {
+        await storage.delete(row.object_key);
+      }
     }
     await client.query(
       `UPDATE chat_media_assets
