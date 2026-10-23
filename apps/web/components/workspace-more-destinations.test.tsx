@@ -52,16 +52,19 @@ describe("expanded and collapsed workspace navigation", () => {
   });
 
   it.each([
-    ["en", "原始标题 (Unread)", "Unread"],
-    ["ja", "原始标题（未読）", "未読"],
-    ["ko", "原始标题 (읽지 않음)", "읽지 않음"],
-  ] as const)("localizes unread state in %s without translating the user's title", async (locale, label, status) => {
+    ["en", "原始标题 (Unread)", "Unread", "Recent conversation shortcuts", "Recent conversations"],
+    ["ja", "原始标题（未読）", "未読", "最近の会話ショートカット", "最近の会話"],
+    ["ko", "原始标题 (읽지 않음)", "읽지 않음", "최근 대화 바로가기", "최근 대화"],
+    ["zh-TW", "原始标题（未讀）", "未讀", "最近對話捷徑", "最近對話"],
+  ] as const)("localizes unread state in %s without translating the user's title", async (locale, label, status, shortcutsLabel, recentLabel) => {
     state.rows = [{ ...state.rows[0]!, title: "原始标题", is_unread: true }];
     await render(SCOPE, locale);
-    const shortcut = host.querySelector(`[aria-label="最近对话快捷方式"] a[href="/workspace/sessions/${id(1)}"]`)!;
+    const shortcut = host.querySelector(`[data-collapsed-only="true"] a[href="/workspace/sessions/${id(1)}"]`)!;
+    expect(shortcut.closest("div[aria-label]")?.getAttribute("aria-label")).toBe(shortcutsLabel);
     expect(shortcut.getAttribute("aria-label")).toBe(label);
     expect(shortcut.getAttribute("title")).toBe(label);
-    const expanded = host.querySelector(`section[aria-label="最近对话"] a[href="/workspace/sessions/${id(1)}"]`)!;
+    const expanded = host.querySelector(`section a[href="/workspace/sessions/${id(1)}"]`)!;
+    expect(expanded.closest("section")?.getAttribute("aria-label")).toBe(recentLabel);
     expect(expanded.textContent).toContain("原始标题");
     expect(expanded.textContent).toContain(status);
   });
