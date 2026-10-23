@@ -1037,6 +1037,7 @@ struct PersistedRelationshipAskResponse: Codable {
     let createdAt: String
     let labFeatureReceipt: LabFeatureAdoptionReceipt?
     var savedBlocks: [RelationshipAskResponse.Block]? = nil
+    var memoryProposal: ConversationMemoryProposalReference? = nil
 
     init(
         _ value: RelationshipAskResponse,
@@ -1071,6 +1072,7 @@ struct PersistedRelationshipAskResponse: Codable {
         media = isRetracted ? nil : value.media
         createdAt = value.createdAt
         labFeatureReceipt = value.labFeatureReceipt
+        memoryProposal = isRetracted ? nil : value.memoryProposal
         savedBlocks = isRetracted ? nil : value.blocks.map {
             AgentSessionContextPolicy.readOnlyBlock(
                 $0,
@@ -1100,7 +1102,8 @@ struct PersistedRelationshipAskResponse: Codable {
             media: media ?? [],
             createdAt: createdAt,
             citations: [],
-            labFeatureReceipt: labFeatureReceipt
+            labFeatureReceipt: labFeatureReceipt,
+            memoryProposal: memoryProposal?.isValid == true ? memoryProposal : nil
         )
     }
 }

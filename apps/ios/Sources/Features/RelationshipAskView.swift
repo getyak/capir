@@ -421,6 +421,10 @@ struct RelationshipAskView: View {
     @State private var isFileImporterPresented = false
     @State private var isHomeAttachmentChooserPresented = false
     @State private var mediaDrafts: [AskMediaDraft] = []
+    // Bytes are local presentation only. Durable message identity and delivery
+    // authority remain in the Session store, including after an uncertain send.
+    @StateObject private var localImagePreviews = ConversationImageLocalPreviewStore()
+    @StateObject private var imageProgress = ConversationImageProgressTracker()
     @State private var screenshotContactTask: ScreenshotContactTask?
     @State private var screenshotTasks: [String: ScreenshotContactTask] = [:]
     @State private var screenshotContactRequest: ScreenshotContactTaskBody?
@@ -772,7 +776,8 @@ struct RelationshipAskView: View {
                     )
                 }
             }
-            if sessionID == nil,
+            if !hasConversationExperienceFixture,
+               sessionID == nil,
                activeSessionID == nil,
                initialSeed == nil,
                contactDraft == nil,
@@ -1222,7 +1227,20 @@ struct RelationshipAskView: View {
                             .id("ask-scope-choices")
                     }
 
-                    if conversationItems.isEmpty, contactDraft == nil, screenshotContactTask == nil {
+                    #if DEBUG
+                    if hasConversationExperienceFixture {
+                        ConversationExperienceFixtureView(
+                            language: appLanguage,
+                            mode: ProcessInfo.processInfo.environment["TS_IOS_CONVERSATION_EXPERIENCE"] ?? "review",
+                            compact: ProcessInfo.processInfo.arguments.contains("--fixture-conversation-experience-compact"),
+                            onSource: { proxy.scrollTo("conversation-experience-source", anchor: .top) }
+                        )
+                        .id("conversation-experience-fixture")
+                    }
+                    #endif
+
+                    if !hasConversationExperienceFixture,
+                       conversationItems.isEmpty, contactDraft == nil, screenshotContactTask == nil {
                         starterGrid
                             .padding(.top, 24)
                     }
@@ -1294,6 +1312,17 @@ struct RelationshipAskView: View {
                                     return try await workspaceStore.loadConversationImage(sessionID: ownerID,
                                         messageID: turn.id, index: index, manifest: manifest)
                                 },
+                                initialConversationImages: localImagePreviews.previews(for: turn.id),
+                                onAuthenticatedConversationImage: { localImagePreviews.authenticatedLoad(messageID: turn.id, attachmentID: $0) },
+                                memoryReview: memoryReviewSurface(for: turn, onSource: { sourceID, _ in
+                                    if reduceMotion {
+                                        proxy.scrollTo("ask-turn-\(sourceID.uuidString)", anchor: .top)
+                                    } else {
+                                        withAnimation(.easeOut(duration: 0.2)) {
+                                            proxy.scrollTo("ask-turn-\(sourceID.uuidString)", anchor: .top)
+                                        }
+                                    }
+                                }),
                                 screenshotTask: screenshotTasks[turn.response.taskID],
                                 loadScreenshotImage: { taskID, index in
                                     try await workspaceStore.loadScreenshotContactImage(taskID: taskID, index: index)
@@ -1344,34 +1373,9 @@ struct RelationshipAskView: View {
                             .id("ask-screenshot-admission-recovery")
                     }
 
-                    if let pending = pendingImageConversation, !operationState.isSending {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(pending.objective.isEmpty ? appLanguage.text("Original image") : pending.objective)
-                                .font(.subheadline).fixedSize(horizontal: false, vertical: true)
-                            Text(appLanguage.text("The image question may still be processing. Check its reply without sending it again."))
-                                .font(.caption).foregroundStyle(Color.tsMutedInk)
-                            Button(appLanguage.text("Check reply")) { checkImageConversation() }
-                            if !pending.images.isEmpty, mediaDrafts.isEmpty, pending.state != .stopped {
-                                Menu(appLanguage.text("Reattach the same images")) {
-                                    Button(appLanguage.text("Photos")) { isPhotoLibraryPresented = true }
-                                    Button(appLanguage.text("Files")) { isFileImporterPresented = true }
-                                }
-                            }
-                            if (!mediaDrafts.isEmpty || pending.images.isEmpty), pending.state != .stopped {
-                                Button(appLanguage.text("Check original send")) {
-                                    operationState.beginSubmission(objective: pending.objective)
-                                    performImageConversation(media: mediaDrafts, objective: pending.objective, originalDraft: "")
-                                }
-                            }
-                            Button(appLanguage.text("Start new Session")) {
-                                activeSessionID = nil
-                                mediaDrafts = []; mediaNotice = nil
-                                operationState.cancelOperation()
-                                returnOperationStateToIdle()
-                            }
-                        }
-                        .padding(16)
-                        .accessibilityIdentifier("image-conversation-recovery")
+                    if let pending = pendingImageConversation {
+                        pendingImageTurn(pending)
+                            .id("ask-loading")
                     }
 
                     if let contactDraft {
@@ -1400,7 +1404,8 @@ struct RelationshipAskView: View {
                         .id("contact-proposal-turn")
                     }
 
-                    if let pendingObjective = operationState.pendingObjective {
+                    if let pendingObjective = operationState.pendingObjective,
+                       pendingImageConversation == nil {
                         AskPendingTurnView(
                             message: pendingObjective,
                             mediaDrafts: mediaDrafts,
@@ -1426,7 +1431,7 @@ struct RelationshipAskView: View {
                         .accessibilityIdentifier("ask-source-review-notice")
                     }
 
-                    if let errorMessage {
+                    if let errorMessage, pendingImageConversation == nil {
                         askFailureCard(errorMessage)
                         .id("ask-error")
                     }
@@ -2701,7 +2706,8 @@ struct RelationshipAskView: View {
     }
 
     private var isNewSessionEntry: Bool {
-        sessionID == nil
+        !hasConversationExperienceFixture
+            && sessionID == nil
             && activeSessionID == nil
             && initialSeed == nil
             && contactDraft == nil
@@ -3564,6 +3570,61 @@ struct RelationshipAskView: View {
         sessionStore.session(id: activeSessionID)?.pendingImageConversation
     }
 
+    private var hasConversationExperienceFixture: Bool {
+#if DEBUG
+        !isCanonical && ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_PREVIEW_WORKSPACE"] == "true"
+            && ["review", "processing", "error"].contains(
+                ProcessInfo.processInfo.environment["TS_IOS_CONVERSATION_EXPERIENCE"] ?? ""
+            )
+#else
+        false
+#endif
+    }
+
+    private func memoryReviewSurface(for turn: AgentSessionTurn, onSource: @escaping (UUID, Int?) -> Void) -> AnyView? {
+        guard isCanonical, let ownerID = activeSessionID,
+              let proposal = turn.response.memoryProposal,
+              let session = sessionStore.session(id: ownerID) else { return nil }
+        let reviewScope = ConversationMemoryReviewScopePolicy.resolve(contextManifestID: turn.response.contextManifestID, sessionScope: session.scope)
+        return AnyView(ConversationMemoryReviewHost(
+            proposal: proposal, sessionID: ownerID, reviewScope: reviewScope,
+            sourceIndex: ConversationMemorySourceIndex(turns: session.turns),
+            workspaceStore: workspaceStore, language: appLanguage,
+            onSaved: { _ in Task { await workspaceStore.load() } },
+            onOpenPerson: onOpenPerson, onSource: onSource
+        ).id("\(ownerID.uuidString)|\(proposal.proposal_id)|\(proposal.revision)|\(reviewScope?.bindingKey ?? "unavailable")"))
+    }
+
+    @ViewBuilder
+    private func pendingImageTurn(_ pending: PendingImageConversation) -> some View {
+        let local = localImagePreviews.drafts(for: pending.messageID)
+        let progress = imageProgress.state(for: pending, isSending: operationState.isSending)
+        ConversationImagePendingMessage(
+            pending: pending, localDrafts: local, language: appLanguage, progress: progress,
+            isSending: operationState.isSending, errorMessage: errorMessage,
+            canCheckOriginalSend: !local.isEmpty || !mediaDrafts.isEmpty || pending.images.isEmpty,
+            loadImage: { [ownerID = activeSessionID] index, manifest in
+                guard let ownerID else { throw ImageConversationError.invalidReadback }
+                return try await workspaceStore.loadConversationImage(sessionID: ownerID,
+                    messageID: pending.messageID, index: index, manifest: manifest)
+            },
+            onCheck: checkImageConversation,
+            onCheckOriginalSend: {
+                operationState.beginSubmission(objective: pending.objective)
+                performImageConversation(media: mediaDrafts.isEmpty ? local : mediaDrafts,
+                    objective: pending.objective, originalDraft: "")
+            },
+            onChoosePhotos: { isPhotoLibraryPresented = true },
+            onChooseFiles: { isFileImporterPresented = true },
+            onNewSession: {
+                activeSessionID = nil
+                mediaDrafts = []; mediaNotice = nil
+                operationState.cancelOperation()
+                returnOperationStateToIdle()
+            }
+        )
+    }
+
     private func performImageConversation(media: [AskMediaDraft], objective: String, originalDraft: String) {
         guard isCanonical else {
             returnOperationStateToIdle(); draft = originalDraft
@@ -3590,6 +3651,8 @@ struct RelationshipAskView: View {
                 objective: objective, images: incoming.map(\.manifest)) else {
                 throw ImageConversationError.persistence
             }
+            if !media.isEmpty { localImagePreviews.retain(messageID: pending.messageID, manifests: pending.images, drafts: media) }
+            imageProgress.reset(for: pending.messageID)
             let uploads = try zip(media, pending.images).map { draft, manifest in
                 try ConversationImageUpload(id: manifest.attachmentID, data: draft.data,
                     fileName: draft.fileName, mediaType: draft.mediaType)
@@ -3634,6 +3697,7 @@ struct RelationshipAskView: View {
     private func checkImageConversation() {
         guard let ownerID = activeSessionID, let pending = pendingImageConversation,
               !operationState.isSending, isCanonical else { return }
+        if imageProgress.messageID != pending.messageID { imageProgress.reset(for: pending.messageID) }
         operationState.beginSubmission(objective: pending.objective)
         operationState.replaceOperation { operationID in
             Task {
@@ -3648,6 +3712,24 @@ struct RelationshipAskView: View {
     }
 
     private func observeImageConversation(ownerID: UUID, pending: PendingImageConversation, operationID: UUID) async throws {
+        imageProgress.beginChecking(messageID: pending.messageID)
+        // The stream carries verified metadata only. Every result still goes
+        // through canonical Session readback below; EOF resumes the same poll.
+        let events = Task { @MainActor in
+            do {
+                let updates = try await workspaceStore.conversationImageUpdates(sessionID: ownerID, messageID: pending.messageID)
+                for try await update in updates {
+                    try Task.checkCancellation()
+                    guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID),
+                          imageProgress.messageID == pending.messageID else { return }
+                    imageProgress.apply(update)
+                }
+            } catch { /* Connection loss is not failed delivery. Read back the same message. */ }
+        }
+        defer {
+            events.cancel()
+            imageProgress.finishChecking(messageID: pending.messageID)
+        }
         for _ in 0..<120 {
             try Task.checkCancellation()
             guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID),
@@ -3655,6 +3737,7 @@ struct RelationshipAskView: View {
             let observation = try await workspaceStore.readConversationImageState(sessionID: ownerID, messageID: pending.messageID)
             try Task.checkCancellation()
             guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID) else { return }
+            imageProgress.apply(observation, messageID: pending.messageID)
             // A coordinated refresh may already have applied the same canonical turn.
             if sessionStore.session(id: ownerID)?.pendingImageConversation == nil {
                 guard sessionStore.session(id: ownerID)?.turns.contains(where: { $0.id == pending.messageID }) == true else {
@@ -7647,6 +7730,9 @@ private struct AskTurnView: View {
     var loadConversationImage: (Int, ConversationImageManifest) async throws -> ChatMediaContent = { _, _ in
         throw ImageConversationError.invalidReadback
     }
+    var initialConversationImages: [UUID: UIImage] = [:]
+    var onAuthenticatedConversationImage: ((UUID) -> Void)? = nil
+    var memoryReview: AnyView? = nil
     let screenshotTask: ScreenshotContactTask?
     let loadScreenshotImage: (String, Int) async throws -> ChatMediaContent
     let onResumeScreenshot: (ScreenshotContactTask, ScreenshotContactResumeBody) -> Void
@@ -7664,14 +7750,17 @@ private struct AskTurnView: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .trailing, spacing: 7) {
                 if !turn.images.isEmpty {
-                    ConversationImageAlbum(messageID: turn.id, images: turn.images, load: loadConversationImage)
+                    ConversationImageAlbum(messageID: turn.id, images: turn.images, initialImages: initialConversationImages,
+                        load: loadConversationImage, onAuthenticatedLoad: onAuthenticatedConversationImage)
                         .frame(maxWidth: 310)
                 }
                 if !turn.response.media.isEmpty {
                     ChatMediaAlbumBubble(media: turn.response.media, load: loadMedia)
                         .frame(maxWidth: 310)
                 }
-                AskUserMessageBubble(message: turn.objective)
+                if !turn.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    AskUserMessageBubble(message: turn.objective)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
 
@@ -7712,7 +7801,7 @@ private struct AskTurnView: View {
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(responseTitle(for: block))
-                            .font(.headline)
+                            .font(.body.weight(.semibold))
                             .foregroundStyle(Color.tsInk)
                         Spacer(minLength: 8)
                         if block.requiresUserDecision {
@@ -7835,6 +7924,7 @@ private struct AskTurnView: View {
                     onLoadImage: { try await loadScreenshotImage(screenshotTask.taskID, $0) }
                 )
             }
+            if let memoryReview { memoryReview }
             responseControls
 
             ForEach(evidenceReviews) { operation in
@@ -7937,12 +8027,7 @@ private struct AskTurnView: View {
         if turn.response.knowledgeSnapshotID == "local-workspace-index" {
             return language.text("On-device workspace index")
         }
-        switch block.kind {
-        case "answer", "clarification", "question_set":
-            return language.text("Agent answer")
-        default:
-            return nil
-        }
+        return nil
     }
 
     private func responseTitle(
@@ -8598,7 +8683,7 @@ private struct AskCitationDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(language.text("Done", zhHans: "完成")) { dismiss() }
+                    Button(language.text("Done")) { dismiss() }
                 }
             }
         }

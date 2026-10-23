@@ -31452,6 +31452,1116 @@
           }
         }
       }
+    },
+    "%d details saved": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已记住 %d 条内容"
+          }
+        }
+      }
+    },
+    "About me": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关于我"
+          }
+        }
+      }
+    },
+    "About this contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关于对方"
+          }
+        }
+      }
+    },
+    "Add contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加联系人"
+          }
+        }
+      }
+    },
+    "Add contact and save selected details": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加联系人并记住所选内容"
+          }
+        }
+      }
+    },
+    "Between us": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "我们之间"
+          }
+        }
+      }
+    },
+    "Change contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更换联系人"
+          }
+        }
+      }
+    },
+    "Check result": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "核对结果"
+          }
+        }
+      }
+    },
+    "Check the same message without sending it again": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "核对同一条消息，不会重复发送"
+          }
+        }
+      }
+    },
+    "Checking the original message…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在核对原消息…"
+          }
+        }
+      }
+    },
+    "Checking the saved result…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在核对保存结果…"
+          }
+        }
+      }
+    },
+    "Choose a decision": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请选择处理方式"
+          }
+        }
+      }
+    },
+    "Choose contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择联系人"
+          }
+        }
+      }
+    },
+    "Choose who this is before saving": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先确认这是谁，再保存"
+          }
+        }
+      }
+    },
+    "Confirmed contact detail": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已确认的联系方式"
+          }
+        }
+      }
+    },
+    "Contact name": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "联系人姓名"
+          }
+        }
+      }
+    },
+    "Contacts could not be loaded. Try searching again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂时无法读取联系人，请重试查找。"
+          }
+        }
+      }
+    },
+    "Continue without a contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂不关联联系人"
+          }
+        }
+      }
+    },
+    "Delivery is unconfirmed. Check before sending again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "送达结果待确认，请先核对。"
+          }
+        }
+      }
+    },
+    "Detail to remember": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要记住的内容"
+          }
+        }
+      }
+    },
+    "Elapsed": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已用时"
+          }
+        }
+      }
+    },
+    "Existing contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已有联系人"
+          }
+        }
+      }
+    },
+    "Find existing contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查找已有联系人"
+          }
+        }
+      }
+    },
+    "Finding contacts…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在查找联系人…"
+          }
+        }
+      }
+    },
+    "Historical contact detail": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "历史联系方式"
+          }
+        }
+      }
+    },
+    "How you know each other (optional)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "如何认识（可选）"
+          }
+        }
+      }
+    },
+    "Image %d": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "第 %d 张图片"
+          }
+        }
+      }
+    },
+    "Keep both accounts": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留两种说法"
+          }
+        }
+      }
+    },
+    "Keep earlier detail": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留原有内容"
+          }
+        }
+      }
+    },
+    "Keep this detail": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "记住这条内容"
+          }
+        }
+      }
+    },
+    "Loading contact review…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在加载联系人卡片…"
+          }
+        }
+      }
+    },
+    "Looking up relevant people…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在查找相关人物…"
+          }
+        }
+      }
+    },
+    "Message is ready to send": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "消息已准备好，尚未发送"
+          }
+        }
+      }
+    },
+    "Message received. Check the reply status.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已收到，请核对回复状态。"
+          }
+        }
+      }
+    },
+    "Message received. Waiting for reply status…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已收到，正在获取回复状态…"
+          }
+        }
+      }
+    },
+    "Name match. Check who this is.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "姓名相同，请核对身份。"
+          }
+        }
+      }
+    },
+    "Name, email, or confirmed contact detail": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "姓名、邮箱或已确认的联系方式"
+          }
+        }
+      }
+    },
+    "New contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新联系人"
+          }
+        }
+      }
+    },
+    "No matching contacts. You can create a new contact.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有找到匹配的联系人，可以新建联系人。"
+          }
+        }
+      }
+    },
+    "Not now": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次不保存"
+          }
+        }
+      }
+    },
+    "Not saved": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次未保存"
+          }
+        }
+      }
+    },
+    "Preparing a calendar draft…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在整理日程草稿…"
+          }
+        }
+      }
+    },
+    "Preparing a reply…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在准备回复…"
+          }
+        }
+      }
+    },
+    "Processing did not finish. Check its status.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次处理未完成，请核对状态。"
+          }
+        }
+      }
+    },
+    "Processing is paused": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理已暂停"
+          }
+        }
+      }
+    },
+    "Processing stopped": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理已停止"
+          }
+        }
+      }
+    },
+    "Processing timed out. Check the original message.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理超时，请核对原消息。"
+          }
+        }
+      }
+    },
+    "Processing your message…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在处理…"
+          }
+        }
+      }
+    },
+    "Queued for processing": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "排队等待处理"
+          }
+        }
+      }
+    },
+    "Reading relevant records…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在阅读相关记录…"
+          }
+        }
+      }
+    },
+    "Reading the saved reply…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在读取已保存的回复…"
+          }
+        }
+      }
+    },
+    "Recovery could not be protected. Nothing was sent.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保留恢复信息，本次尚未提交。"
+          }
+        }
+      }
+    },
+    "Reload review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新加载卡片"
+          }
+        }
+      }
+    },
+    "Reply status could not be verified": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂时无法核实回复状态"
+          }
+        }
+      }
+    },
+    "Reply status needs checking": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要核对回复状态"
+          }
+        }
+      }
+    },
+    "Review access changed. Reopen this conversation.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "审阅权限已变化，请重新打开这段会话。"
+          }
+        }
+      }
+    },
+    "Review as a new contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "作为新联系人核对"
+          }
+        }
+      }
+    },
+    "Review corrected contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新核对联系人"
+          }
+        }
+      }
+    },
+    "Review this detail before saving.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请核对后再记住这条内容。"
+          }
+        }
+      }
+    },
+    "Save selected details": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "记住所选内容"
+          }
+        }
+      }
+    },
+    "Saving the reply…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在保存回复…"
+          }
+        }
+      }
+    },
+    "Saving your decision…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在保存你的选择…"
+          }
+        }
+      }
+    },
+    "Select detail": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择这条内容"
+          }
+        }
+      }
+    },
+    "Selected details saved": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "所选内容已记住"
+          }
+        }
+      }
+    },
+    "Sending your message…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在发送…"
+          }
+        }
+      }
+    },
+    "Stopping processing…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在停止…"
+          }
+        }
+      }
+    },
+    "The contact choice is not confirmed. Check its status before continuing.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "联系人选择结果尚未确认，请先核对状态。"
+          }
+        }
+      }
+    },
+    "The decision result is not confirmed. Check its status before continuing.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理结果尚未确认，请先核对状态。"
+          }
+        }
+      }
+    },
+    "The earlier record changed. Reload before saving.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原有记录已变化，请重新加载后核对。"
+          }
+        }
+      }
+    },
+    "The review changed or could not be saved. Refresh and check it again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "卡片已变化或未能保存，请刷新后重新核对。"
+          }
+        }
+      }
+    },
+    "The review changed. Check the latest details before saving.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "卡片已更新，请核对最新内容后再保存。"
+          }
+        }
+      }
+    },
+    "The save result is not confirmed. Check its status before trying again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保存结果尚未确认，请先核对状态，不要重复提交。"
+          }
+        }
+      }
+    },
+    "The source is unavailable. These details cannot be saved.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来源已失效，这些内容暂时不能保存。"
+          }
+        }
+      }
+    },
+    "The source or review access changed. Reopen this conversation.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来源或审阅权限已变化，请重新打开这段会话。"
+          }
+        }
+      }
+    },
+    "These details differ from an earlier record. Choose what to keep.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这条内容与原有记录不同，请选择保留哪一种。"
+          }
+        }
+      }
+    },
+    "This detail concerns another person. Confirm the contact first.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这条内容涉及他人，请先确认联系人。"
+          }
+        }
+      }
+    },
+    "This detail is private. Decide whether it needs to be kept.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这条内容较私密，请确认是否需要记住。"
+          }
+        }
+      }
+    },
+    "This review could not be opened. Try loading it again.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂时无法打开卡片，请重新加载。"
+          }
+        }
+      }
+    },
+    "This review was already processed. Open the contact to check its current state.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这次卡片已处理，请打开联系人查看当前记录。"
+          }
+        }
+      }
+    },
+    "This save was undone.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这次保存已撤销。"
+          }
+        }
+      }
+    },
+    "Use new detail": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "采用新内容"
+          }
+        }
+      }
+    },
+    "Use this contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择此联系人"
+          }
+        }
+      }
+    },
+    "View contact": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看联系人"
+          }
+        }
+      }
+    },
+    "View original source": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看原始来源"
+          }
+        }
+      }
+    },
+    "Waiting for your review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待你核对"
+          }
+        }
+      }
+    },
+    "Waiting to start": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待开始"
+          }
+        }
+      }
+    },
+    "Who said this is unclear. Correct the source before saving.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂时无法确认这句话属于谁，请先纠正来源。"
+          }
+        }
+      }
+    },
+    "Writing a reply…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在回复…"
+          }
+        }
+      }
+    },
+    "More options": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更多选项"
+          }
+        }
+      }
+    },
+    "Contact review could not be loaded.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "联系人卡片暂时无法加载。"
+          }
+        }
+      }
+    },
+    "Images": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "张图片"
+          }
+        }
+      }
+    },
+    "View full image": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "查看完整图片"
+          }
+        }
+      }
+    },
+    "Synthetic preview · no account data changes": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合成预览 · 不更改任何账号数据"
+          }
+        }
+      }
+    },
+    "Review the contact and the detail you want to keep.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "核对联系人，再选择要保留的内容。"
+          }
+        }
+      }
+    },
+    "Contact added": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "联系人已添加"
+          }
+        }
+      }
+    },
+    "Review decision saved": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "核对结果已保存"
+          }
+        }
+      }
+    },
+    "Contact added. Choose which details to remember.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "联系人已添加，请选择要记住的内容。"
+          }
+        }
+      }
+    },
+    "Your confirmed change is saved. Reload to review the remaining details.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已确认的改动已保存，请重新加载以核对剩余内容。"
+          }
+        }
+      }
+    },
+    "Draft changes are not synced. Retry before leaving.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "草稿尚未同步，请重试后再离开。"
+          }
+        }
+      }
+    },
+    "Add the contact first, then choose which details to remember.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先添加联系人，再选择要记住的内容。"
+          }
+        }
+      }
+    },
+    "The original image could not be loaded.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "原始图片暂时无法加载。"
+          }
+        }
+      }
+    },
+    "Reopen the conversation to check its current source.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请重新打开会话，核对当前来源。"
+          }
+        }
+      }
+    },
+    "Remaining details not saved": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其余内容本次未保存"
+          }
+        }
+      }
+    },
+    "Loading image…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在读取图片…"
+          }
+        }
+      }
+    },
+    "Retry loading image": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新读取图片"
+          }
+        }
+      }
+    },
+    "Long image": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "长图"
+          }
+        }
+      }
+    },
+    "Previous image": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一张图片"
+          }
+        }
+      }
+    },
+    "Next image": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下一张图片"
+          }
+        }
+      }
+    },
+    "Original image could not be loaded": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂时无法读取原图"
+          }
+        }
+      }
+    },
+    "Loading original…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在读取原图…"
+          }
+        }
+      }
+    },
+    "%d suggested details to review next": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接下来可核对 %d 条内容"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

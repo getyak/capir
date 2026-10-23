@@ -95,6 +95,39 @@ test("quick checks compile once for arm64 and execute only selected journeys", (
   assert.equal(result.preserved, true);
 });
 
+test("real native tiers retain critical image/contact decisions and exclude live acceptance", () => {
+  const tiers = Object.fromEntries(["quick", "smoke"].map((scope) => [scope,
+    readFileSync(new URL(`./ci-${scope}-tests.txt`, import.meta.url), "utf8")
+      .split(/\r?\n/u).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")),
+  ]));
+  const prefix = "TalentSignalUITests/ConversationExperienceUITests/";
+  const critical = [
+    "testProcessingStatusBelongsToItsImageAndHasNoEmptyMessageBubble",
+    "testQueuedStatusNaturallyExpiresWithoutAnotherObservation",
+    "testUnavailableReviewExplainsRecoveryAndNeverOffersSave",
+    "testAddingContactKeepsDetailsPendingAndSavingOneKeepsTheOtherPending",
+    "testNameCorrectionRequiresFreshReviewAndASecondConfirm",
+  ];
+  for (const [scope, selectors] of Object.entries(tiers)) {
+    assert.equal(selectors.length, new Set(selectors).size, `${scope} must not execute a journey twice`);
+    for (const name of critical) assert.ok(selectors.includes(prefix + name), `${scope} omitted critical native decision: ${name}`);
+    for (const selector of selectors) {
+      const match = /^TalentSignalUITests\/([A-Za-z0-9_]+)\/(test[A-Za-z0-9_]+)$/u.exec(selector);
+      assert.ok(match, `Invalid native selector: ${selector}`);
+      const [, klass, method] = match;
+      assert.ok(!klass.startsWith("Live"), "Live-account/provider tests require explicit opt-in, not automatic CI");
+      const source = readFileSync(new URL(`../../apps/ios/UITests/${klass}.swift`, import.meta.url), "utf8");
+      assert.match(source, new RegExp(`final class ${klass}: XCTestCase`, "u"));
+      assert.match(source, new RegExp(`\\bfunc ${method}\\s*\\(`, "u"), `${scope} configured an undiscoverable method`);
+    }
+  }
+  assert.ok(tiers.smoke.includes(prefix + "testReviewAtAccessibilitySizeInDarkModeRemainsOperable"),
+    "Release smoke must exercise the actual contact card at large text size in dark mode");
+  const documentation = readFileSync(new URL("../../docs/operations/ci-cd.md", import.meta.url), "utf8");
+  assert.ok(documentation.includes(`execute the ${tiers.quick.length} core`), "Document the actual quick scope");
+  assert.ok(documentation.includes(`all ${tiers.smoke.length} journeys`), "Document the actual release smoke scope");
+});
+
 test("unit failure stops automatic UI work and preserves its native result", () => {
   const result = check({ TEST_FAIL_SELECTOR: "TalentSignalTests" });
   assert.equal(result.status, 65, result.output);

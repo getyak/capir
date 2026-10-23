@@ -327,9 +327,18 @@ final class PursuitWorkspaceStore: ObservableObject {
     /// Scope/lifetime change: a completed People fetch from the old scope must
     /// never publish into the new one.
     private var readEpoch = 0
+    private var conversationImageReadTasks: [UUID: Task<Void, Never>] = [:]
+    private var memoryReviewRecoveryBindings = Set<String>()
     func invalidateReadScope() {
         readEpoch += 1
         readScopeActive = false
+        conversationImageReadTasks.values.forEach { $0.cancel() }
+        conversationImageReadTasks.removeAll()
+        for binding in memoryReviewRecoveryBindings {
+            try? KeychainConversationMemoryOperationStore().removeAccount(
+                prefix: ConversationMemoryIntentRetention.accountPrefix(binding: binding))
+        }
+        memoryReviewRecoveryBindings.removeAll()
         isReadInFlight = false
         if let activeRefreshRegistration {
             WorkspaceActiveRefresh.shared.unregister(activeRefreshRegistration)
@@ -1130,6 +1139,67 @@ final class PursuitWorkspaceStore: ObservableObject {
 }
 
 extension PursuitWorkspaceStore {
+    /// Typed capabilities keep authentication inside the service. A restored
+    /// proposal still needs a fresh, scope-bound authenticated read.
+    func memoryReviewClient() async throws -> ConversationMemoryReviewClient {
+        guard readScopeActive, readScopeIsCurrent(),
+              let provider = service as? any ConversationMemoryReviewClientProviding else {
+            throw PursuitWorkspaceClientError.askUnavailable
+        }
+        let epoch = readEpoch
+        let client = try await provider.memoryReviewClient()
+        guard epoch == readEpoch, readScopeActive, readScopeIsCurrent() else {
+            throw CancellationError()
+        }
+        memoryReviewRecoveryBindings.insert(client.accountBinding)
+        return client.boundToCurrentScope { [weak self] in
+            guard let self else { return false }
+            return epoch == self.readEpoch && self.readScopeActive && self.readScopeIsCurrent()
+        }
+    }
+
+    /// Queue events are observations, never final-answer authority. Stop
+    /// forwarding and cancel the connection when this workspace loses scope.
+    func conversationImageUpdates(sessionID: UUID, messageID: UUID) async throws
+        -> AsyncThrowingStream<ConversationImageQueueUpdate, Error> {
+        guard readScopeActive, readScopeIsCurrent(),
+              let source = service as? any ConversationImageStreaming else {
+            throw PursuitWorkspaceClientError.askUnavailable
+        }
+        let epoch = readEpoch
+        let upstream = try await source.conversationImageUpdates(sessionID: sessionID, messageID: messageID)
+        guard epoch == readEpoch, readScopeActive, readScopeIsCurrent() else {
+            throw CancellationError()
+        }
+        let streamID = UUID()
+        return AsyncThrowingStream { continuation in
+            let reader = Task { @MainActor [weak self] in
+                do {
+                    for try await update in upstream {
+                        try Task.checkCancellation()
+                        guard let self, epoch == self.readEpoch,
+                              self.readScopeActive, self.readScopeIsCurrent() else {
+                            continuation.finish()
+                            return
+                        }
+                        guard update.sessionID == sessionID, update.messageID == messageID else { continue }
+                        continuation.yield(update)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            conversationImageReadTasks[streamID] = reader
+            continuation.onTermination = { [weak self] _ in
+                reader.cancel()
+                Task { @MainActor in
+                    self?.conversationImageReadTasks.removeValue(forKey: streamID)
+                }
+            }
+        }
+    }
+
     func admitConversationImages(sessionID: UUID, messageID: UUID, idempotencyKey: String,
         objective: String, images: [ConversationImageUpload], timeZone: String) async throws -> ConversationImageAdmission {
         guard let service else { throw PursuitWorkspaceClientError.askUnavailable }
