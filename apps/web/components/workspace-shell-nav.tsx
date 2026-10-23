@@ -51,14 +51,15 @@ import styles from "./workspace-shell.module.css";
  * (Next.js favicon route), never an icon source.
  */
 
-/** Presentation labels for the compact rail; registry labels stay canonical. */
-const RAIL_LABELS: Record<WorkspaceRailControlId, string> = {
+/** Presentation label keys for the compact rail; registry labels stay canonical. */
+const RAIL_LABEL_KEYS: Record<Exclude<WorkspaceRailControlId, "search">, string> = {
   today: "今日",
-  conversation: "对话",
-  people: "人物",
+  conversation: "nav.rail.conversation",
+  people: "nav.rail.people",
   meetings: "时间",
-  search: "搜索人物或对话",
 };
+
+const RAIL_SEARCH_KEY = "nav.rail.search";
 
 const RAIL_ICONS: Record<Exclude<WorkspaceRailControlId, "search">, Icon> = {
   today: House,
@@ -84,12 +85,13 @@ function RailControl({
   onBrowse?: (control: WorkspaceBrowseSection) => void;
 }) {
   const router = useRouter();
+  const t = useT();
   const browse = useWorkspaceBrowse();
   const mobile = useSyncExternalStore(mobileSubscribe,mobileSnapshot,() => false);
   const rememberedRouteHref = useWorkspaceNavigationHref(route.href);
   const rememberedHref = !mobile && browse ? browse.href(route.href) : rememberedRouteHref;
   const isNew = !compact && mobile && control === "conversation";
-  const label = isNew ? "新对话" : RAIL_LABELS[control];
+  const label = t(isNew ? "conversation.new" : RAIL_LABEL_KEYS[control]);
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
     <Link
@@ -143,7 +145,7 @@ function RailSessionShortcuts({ binding, storageScope }: { binding: string | nul
   const rows = projected ? organizeSessionRows(projected, snapshot.entries).visible : null;
   if (!binding || !rows || loading || failed || !rows.length) return null;
   return (
-    <div aria-label="最近对话快捷方式" className={styles.railSessions}>
+    <div aria-label={t("nav.sessions.shortcut")} className={styles.railSessions}>
       {rows.slice(0, 5).map((row) => (
         <Link
           aria-current={pathname === `/workspace/sessions/${row.id}` ? "page" : undefined}
@@ -169,6 +171,7 @@ export function WorkspaceShellNav({
   /** The same account/user-stable scope used by the expanded Session list. */
   storageScope?: string | null;
 }) {
+  const t = useT();
   const pathname = usePathname();
   const router = useRouter();
   const { layout, setLayout } = useWorkspaceSidebarLayout();
@@ -207,7 +210,7 @@ export function WorkspaceShellNav({
     >
       <div className={styles.brandRow}>
         <Link
-          aria-label="capri 工作台"
+          aria-label={t("capri 工作台")}
           className={styles.brand}
           href="/workspace"
         >
@@ -216,12 +219,12 @@ export function WorkspaceShellNav({
         </Link>
         <div className={styles.brandActions}>
           <button
-            aria-label="收起侧边栏"
+            aria-label={t("nav.collapse")}
             aria-pressed={false}
             className={styles.iconButton}
             onClick={() => setCollapsed(true)}
             ref={collapseToggle}
-            title="收起侧边栏"
+            title={t("nav.collapse")}
             type="button"
           >
             <SidebarSimple aria-hidden="true" size={17} />
@@ -229,13 +232,13 @@ export function WorkspaceShellNav({
         </div>
       </div>
 
-      <nav aria-label="工作台导航" className={styles.railRow} ref={primaryNav}>
+      <nav aria-label={t("nav.label")} className={styles.railRow} ref={primaryNav}>
         {WORKSPACE_RAIL_CONTROLS.map((control) =>
           control === "search" ? (
             <WorkspaceGlobalSearchDialog
               binding={binding}
               key="search"
-              label={RAIL_LABELS.search}
+              label={t(RAIL_SEARCH_KEY)}
               presentation="rail"
             />
           ) : (
@@ -254,41 +257,41 @@ export function WorkspaceShellNav({
           The collapsed rail stays in the DOM so
           the destinations remain reachable links in every state; CSS owns the
           collapsed/expanded swap. */}
-      <nav aria-label="工作台导航（已收起）" className={styles.railCollapsed} data-collapsed-only="true">
+      <nav aria-label={t("nav.labelCollapsed")} className={styles.railCollapsed} data-collapsed-only="true">
         <div className={styles.railCollapsedTop}>
           {WORKSPACE_RAIL_CONTROLS.map(control => control === "search" ? (
-            <WorkspaceGlobalSearchDialog binding={binding} key={control} label={RAIL_LABELS.search} presentation="rail" />
+            <WorkspaceGlobalSearchDialog binding={binding} key={control} label={t(RAIL_SEARCH_KEY)} presentation="rail" />
           ) : (
             <RailControl compact control={control} current={selection === control} key={control} route={workspaceRailRoute(control)!} onBrowse={section => { pendingBrowseFocus.current = section; setCollapsed(false); }} />
           ))}
         </div>
         <div className={styles.railCollapsedTop}>
-          <button aria-label="开始新对话" className={styles.iconButton} onClick={startNewConversation} title="开始新对话" type="button">
+          <button aria-label={t("conversation.startNew")} className={styles.iconButton} onClick={startNewConversation} title={t("conversation.startNew")} type="button">
             <Plus aria-hidden="true" size={18} />
           </button>
         </div>
         <RailSessionShortcuts binding={binding} storageScope={storageScope} />
         <div className={styles.railUtility}>
-          <Link aria-label="打开对话记录" className={styles.railIconLink} href="/workspace/sessions" title="对话记录">
+          <Link aria-label={t("nav.openSessions")} className={styles.railIconLink} href="/workspace/sessions" title={t("nav.sessionsTitle")}>
             <ClockCounterClockwise aria-hidden="true" size={18} />
           </Link>
           <button
-            aria-label="展开侧边栏"
+            aria-label={t("nav.expand")}
             aria-pressed
             className={styles.iconButton}
             onClick={() => setCollapsed(false)}
             ref={expandToggle}
-            title="展开侧边栏"
+            title={t("nav.expand")}
             type="button"
           >
             <SidebarSimple aria-hidden="true" size={17} />
           </button>
           <Link
-            aria-label="连接应用（打开扩展工作区；不会自动连接任何服务）"
+            aria-label={t("nav.extensionsHint")}
             className={styles.railIconLink}
             href="/workspace/extensions"
             aria-current={WORKSPACE_NAV_ROUTES.find(route => route.id === "plugs")?.matches(pathname) ? "page" : undefined}
-            title="连接应用"
+            title={t("nav.extensionsTitle")}
           >
             <LinkSimple aria-hidden="true" size={18} />
           </Link>
@@ -300,6 +303,7 @@ export function WorkspaceShellNav({
 
 export function WorkspaceCaptureLink() {
   const pathname = usePathname();
+  const t = useT();
 
   function focusAgent(event: MouseEvent<HTMLAnchorElement>) {
     const intent = workspaceCaptureIntent(pathname, window.location.search);
@@ -313,37 +317,38 @@ export function WorkspaceCaptureLink() {
 
   return (
     <Link
-      aria-label="在当前关系情境中继续对话"
+      aria-label={t("nav.capture")}
       className={styles.navLink}
       href={WORKSPACE_COMPOSE_HREF}
       onClick={focusAgent}
     >
       <ChatCircleDots aria-hidden="true" size={17} />
-      <span>围绕此人对话</span>
+      <span>{t("nav.captureLabel")}</span>
     </Link>
   );
 }
 
 export function WorkspaceMobileSourcesLink() {
+  const t = useT();
   return (
     <>
       <Link
-        aria-label="打开对话记录"
+        aria-label={t("nav.openSessions")}
         className={styles.mobileSources}
         href="/workspace/sessions"
-        title="对话记录"
+        title={t("nav.sessionsTitle")}
       >
         <ClockCounterClockwise aria-hidden="true" size={18} />
-        <span>对话</span>
+        <span>{t("nav.sessions.mobileLabel")}</span>
       </Link>
       <Link
-        aria-label="打开扩展"
+        aria-label={t("nav.openExtensions")}
         className={styles.mobileSources}
         href="/workspace/extensions"
-        title="扩展"
+        title={t("扩展")}
       >
         <Plugs aria-hidden="true" size={18} />
-        <span>扩展</span>
+        <span>{t("扩展")}</span>
       </Link>
     </>
   );

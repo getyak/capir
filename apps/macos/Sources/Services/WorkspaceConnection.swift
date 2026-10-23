@@ -66,6 +66,59 @@ struct ConnectionProbeResult: Equatable {
     let detail: String
 }
 
+/// A diagnostic result belongs to one endpoint and one explicit check.
+/// Endpoint changes and closing Settings revoke even a non-cooperative task's
+/// ability to publish a result. Callers also resolve presentation by endpoint,
+/// so an old result cannot paint during SwiftUI's change-notification turn.
+@MainActor
+final class WorkspaceConnectionProbeController: ObservableObject {
+    typealias Probe = @MainActor (WorkspaceOrigin) async -> ConnectionProbeResult
+    @Published private var completed: ConnectionProbeResult?
+    @Published private var checking = false
+    private var origin: WorkspaceOrigin?
+    private var requestID = UUID()
+    private var task: Task<Void, Never>?
+    private let probe: Probe
+
+    init(probe: @escaping Probe = { await WorkspaceConnectionProbe(origin: $0).run() }) {
+        self.probe = probe
+    }
+
+    func result(for origin: WorkspaceOrigin?) -> ConnectionProbeResult? {
+        origin != nil && self.origin == origin ? completed : nil
+    }
+
+    func isChecking(for origin: WorkspaceOrigin?) -> Bool {
+        origin != nil && self.origin == origin && checking
+    }
+
+    func reset(for origin: WorkspaceOrigin?) {
+        task?.cancel()
+        task = nil
+        requestID = UUID()
+        self.origin = origin
+        completed = nil
+        checking = false
+    }
+
+    func check(_ origin: WorkspaceOrigin?) {
+        guard let origin, !isChecking(for: origin) else { return }
+        reset(for: origin)
+        checking = true
+        let requestID = self.requestID
+        task = Task { [weak self, probe] in
+            let result = await probe(origin)
+            guard !Task.isCancelled, let self,
+                  self.origin == origin, self.requestID == requestID else { return }
+            self.completed = result
+            self.checking = false
+            self.task = nil
+        }
+    }
+
+    deinit { task?.cancel() }
+}
+
 /// No cookies, credentials, response body retention or redirect-based host discovery.
 final class WorkspaceConnectionProbe: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     let origin: WorkspaceOrigin

@@ -42,7 +42,8 @@ describe("persistent workspace shell", () => {
     expect(layout).toContain(
       "合成测试工作台——仅含评测数据，不是真实招聘记录",
     );
-    expect(navigation).toContain('aria-label="工作台导航"');
+    // Localized landmark and destination names are asserted on the actual
+    // rendered navigation in workspace-navigation-accessibility.test.tsx.
     // Rendered navigation semantics for page links versus the independent
     // browser are covered by workspace-browse.test.tsx and accessibility tests.
     expect(navigation).toContain("workspaceRailSelection");
@@ -54,7 +55,6 @@ describe("persistent workspace shell", () => {
     expect(navigation).toContain('href: "/workspace/captures"');
     expect(navigation).toContain('href: "/workspace/extensions"');
     expect(navigation).toContain("WorkspaceMobileSourcesLink");
-    expect(navigation).toContain('aria-label="打开扩展"');
     // The generic More disclosure is gone, and Sources is a direct primary row.
     expect(navigation).not.toContain("WorkspaceMoreDestinations");
     expect(navigation).not.toContain("更多目的地");

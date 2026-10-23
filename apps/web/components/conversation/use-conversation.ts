@@ -152,12 +152,16 @@ export function useConversation(options: Options) {
   }
   async function refreshDetail(generation?: number) {
     if (!id) return;
+    // The mounted lifecycle captured at request start owns this readback. A
+    // JSON body that arrives after the account/session scope replaced it is
+    // stale evidence and must never paint the new scope.
+    const controller = lifecycle.current;
     const response = await request(`/api/workspace-sessions/${id}`, {}, detailBinding);
     const body = await response.json();
     // Scope fencing: a late readback from a previous account, endpoint or
     // scope generation is dropped instead of painting stale data.
     if (generation !== undefined && generation !== workspaceRefreshGeneration(scope)) return;
-    if (body.detail && !lifecycle.current?.signal.aborted) applyDetail(body.detail);
+    if (body.detail && stillCurrent(controller)) applyDetail(body.detail);
   }
 
   // Shared bounded active refresh for the OPEN conversation on the default

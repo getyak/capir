@@ -14,6 +14,7 @@ import {
 import { animate, motion, useMotionValue } from "motion/react";
 import { useReducedMotionPreference } from "@/lib/use-reduced-motion";
 import type { SessionOrganizationFlag } from "@/lib/workspace-session-organization";
+import { useT } from "./locale-provider";
 import styles from "./workspace-shell.module.css";
 
 /**
@@ -52,21 +53,24 @@ export function SessionRowActionTray({
 }: {
   organization: SessionRowOrganization;
 }) {
+  const t = useT();
   const { archived, pinned, onToggle, rowLabel } = organization;
+  const pinLabel = t(pinned ? "sessionRow.unpin" : "sessionRow.pin");
+  const archiveLabel = t(archived ? "sessionRow.restore" : "sessionRow.archive");
   return (
     <div className={styles.sessionRowTray}>
       <button
-        aria-label={`${pinned ? "取消置顶" : "置顶"}：${rowLabel}`}
+        aria-label={t("sessionRow.actionForTitle", { action: pinLabel, title: rowLabel })}
         className={styles.sessionRowTrayButton}
         data-action="pin"
         onClick={() => onToggle("pinned", !pinned)}
         type="button"
       >
         <PushPin aria-hidden="true" size={15} weight={pinned ? "fill" : "regular"} />
-        <span>{pinned ? "取消置顶" : "置顶"}</span>
+        <span>{pinLabel}</span>
       </button>
       <button
-        aria-label={`${archived ? "恢复" : "归档"}：${rowLabel}`}
+        aria-label={t("sessionRow.actionForTitle", { action: archiveLabel, title: rowLabel })}
         className={styles.sessionRowTrayButton}
         data-action="archive"
         onClick={() => onToggle("archived", !archived)}
@@ -77,7 +81,7 @@ export function SessionRowActionTray({
         ) : (
           <Archive aria-hidden="true" size={15} />
         )}
-        <span>{archived ? "恢复" : "归档"}</span>
+        <span>{archiveLabel}</span>
       </button>
     </div>
   );
@@ -89,6 +93,7 @@ export function SessionRowMenu({
 }: {
   organization: SessionRowOrganization;
 }) {
+  const t = useT();
   const menu = useRef<HTMLDetailsElement>(null);
   const { archived, pinned, onToggle, rowLabel } = organization;
   useEffect(() => {
@@ -114,9 +119,9 @@ export function SessionRowMenu({
       ref={menu}
     >
       <summary
-        aria-label={`更多操作：${rowLabel}`}
+        aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}
         className={styles.sessionRowMenuTrigger}
-        title="更多操作"
+        title={t("sessionRow.more")}
       >
         <DotsThreeVertical aria-hidden="true" size={15} />
       </summary>
@@ -129,7 +134,7 @@ export function SessionRowMenu({
           type="button"
         >
           <PushPin aria-hidden="true" size={15} weight={pinned ? "fill" : "regular"} />
-          <span>{pinned ? "取消置顶" : "置顶"}</span>
+          <span>{t(pinned ? "sessionRow.unpin" : "sessionRow.pin")}</span>
         </button>
         <button
           onClick={() => {
@@ -143,9 +148,9 @@ export function SessionRowMenu({
           ) : (
             <Archive aria-hidden="true" size={15} />
           )}
-          <span>{archived ? "恢复" : "归档"}</span>
+          <span>{t(archived ? "sessionRow.restore" : "sessionRow.archive")}</span>
         </button>
-        <span className={styles.sessionRowMenuNote}>本机整理</span>
+        <span className={styles.sessionRowMenuNote}>{t("sessionRow.localOrganization")}</span>
       </div>
     </details>
   );

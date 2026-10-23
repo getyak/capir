@@ -136,7 +136,9 @@ struct WorkspaceSettingsSearchState: Equatable {
 
     mutating func update(_ value: String) {
         query = value
-        activeIndex = -1
+        // The highlighted destination is also the Return-key destination.
+        // Replacing a query must never submit a selection from the old list.
+        activeIndex = results.isEmpty ? -1 : 0
     }
 
     mutating func clearQuery() {

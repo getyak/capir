@@ -14,7 +14,7 @@ import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
 import type { ConversationImageManifest, ConversationQueueEntry, MemoryProposalItem } from "@talent-signal/contracts";
 import type { LocalMessage } from "@/lib/conversation-local";
 import { WorkspaceComposer } from "../workspace-composer";
-import { useT } from "../locale-provider";
+import { useLocale, useT, type TFunction } from "../locale-provider";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { conversationNearBottom } from "../session-workbench/session-presentation";
 import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
@@ -45,24 +45,52 @@ export function displayText(objective: string, images: readonly ConversationImag
   if (objective.trim()) return objective;
   // An attached image strip already renders this message; its per-image alt
   // text plus the loading/error/retry states carry the accessible meaning, so
-  // no redundant visible "（图片）" placeholder is shown. Without an attachment
+  // no redundant visible image placeholder is shown. Without an attachment
   // the (empty) objective is returned unchanged.
   return images?.length ? "" : objective;
 }
 
-export function queueFailureText(code: string | null, hasImages: boolean): string {
-  if (code === "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED" || code === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED") return hasImages
-    ? "图片分析已达到本次处理的 token 预算，原图已保留。可重试或移除。"
-    : "本次处理已达到 token 预算，消息已保留。可重试或移除。";
-  if (code === "MODEL_RUN_TIMEOUT") return hasImages
-    ? "图片分析超时，原图已保留。可重试；反复失败时请移除并重新发送较小的图片。"
-    : "本次处理超时，消息已保留。可重试。";
-  return "上次未完成，请重试或移除";
+/**
+ * Bounded failure copy for a failed or interrupted queue entry.
+ *
+ * The default (no translator) return is compatibility-stable: each zh-CN
+ * source string is its own gettext key, so the untranslated call returns
+ * exactly the historical copy. Rendering passes `useT()` to localize at the
+ * boundary; raw provider or backend errors never reach this text.
+ */
+export function queueFailureText(code: string | null, hasImages: boolean, t?: TFunction): string {
+  const key = code === "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED" || code === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED"
+    ? hasImages
+      ? "图片分析已达到本次处理的 token 预算，原图已保留。可重试或移除。"
+      : "本次处理已达到 token 预算，消息已保留。可重试或移除。"
+    : code === "MODEL_RUN_TIMEOUT"
+      ? hasImages
+        ? "图片分析超时，原图已保留。可重试；反复失败时请移除并重新发送较小的图片。"
+        : "本次处理超时，消息已保留。可重试。"
+      : "上次未完成，请重试或移除";
+  return t ? t(key) : key;
+}
+
+type QueueEditOperation = {
+  entry: string;
+  owner: symbol;
+  sessionId: string | null;
+  token: symbol;
+  focusOwned: boolean;
+  saveToken: symbol | null;
+};
+
+/** Body is a valid fallback only after this editor actually owned focus and
+ * no explicit pointer or focus transfer relinquished that ownership. */
+function editorOwnedFocus(form: HTMLFormElement | null, operation: QueueEditOperation | null): boolean {
+  const active = document.activeElement;
+  return Boolean(operation?.focusOwned && (!active || active === document.body || form?.contains(active)));
 }
 
 type Props = { bootstrap?: { sessionId: string; capability: string } | null; focusComposer?: boolean; initialDetail?: SessionDetail; scope: string; chatBinding: string; detailBinding: string; meetingLinks?: Array<{id: string; title: string}>; meetingReadFailed?: boolean; legacyRecovery?: LegacyConversationRecovery | null; entryCapability?: string | null };
 export function QueuedConversation(props: Props) {
   const t = useT();
+  const locale = useLocale();
   const router = useRouter();
   const [id, setId] = useState<string | null>(props.initialDetail?.session_id ?? null);
   const [admitted, setAdmitted] = useState(Boolean(props.initialDetail));
@@ -127,10 +155,20 @@ export function QueuedConversation(props: Props) {
       window.history.replaceState(null, "", `/workspace/sessions/${sessionId}${anchor}`);
     }
   } });
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Pick<QueueEditOperation, "entry" | "owner" | "sessionId" | "token"> | null>(null);
   const [editValue, setEditValue] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [away, setAway] = useState(false);
+  // Queue edit focus lifecycle: the auto-focused form is transient, so its
+  // departure records who owned focus and where it returns. Restoration lands
+  // on the same row's Edit button, or on the composer when that row left the
+  // queue — never into a new account/session, a disabled control or a
+  // detached node, and never after the user intentionally moved elsewhere.
+  const editForm = useRef<HTMLFormElement | null>(null);
+  const editButtons = useRef(new Map<string, HTMLButtonElement>());
+  const editingRef = useRef<string | null>(null);
+  const editOwner = useRef<QueueEditOperation | null>(null);
+  const editReturn = useRef<QueueEditOperation | null>(null);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
   useConversationAxis(viewport);
   const reading = useConversationReadingPosition({ viewportRef: viewport, contentRef: content, followsLatestRef: follows, onAwayChange: setAway,
@@ -160,6 +198,9 @@ export function QueuedConversation(props: Props) {
   const composerSession = props.initialDetail?.session_id ?? props.bootstrap?.sessionId ?? "home";
   const composerScope = `${props.scope}:${props.chatBinding}:${props.detailBinding}:${composerSession}`;
   const composerOwner = useMemo(() => Symbol(composerScope), [composerScope]);
+  // Readback and queue edits belong to the actual live Session, while Home
+  // deliberately retains its stable IME owner during local ID resolution.
+  const readbackOwner = useMemo(() => Symbol(`${composerScope}:${id ?? "unresolved"}`), [composerScope, id]);
   const composingRef = useRef<{ owner: symbol | null; value: boolean }>({ owner: composerOwner, value: false });
   const [composition, setComposition] = useState({ owner: composerOwner, value: false });
   useLayoutEffect(() => {
@@ -172,6 +213,63 @@ export function QueuedConversation(props: Props) {
     composingRef.current = { owner: composerOwner, value };
     setComposition({ owner: composerOwner, value });
   }
+  useLayoutEffect(() => () => {
+    editOwner.current = null;
+    editingRef.current = null;
+    editReturn.current = null;
+  }, [readbackOwner, id]);
+  function beginEdit(entryId: string, objective: string) {
+    const operation: QueueEditOperation = { entry: entryId, owner: readbackOwner, sessionId: id,
+      token: Symbol(entryId), focusOwned: false, saveToken: null };
+    editOwner.current = operation;
+    editReturn.current = null;
+    editingRef.current = entryId;
+    setEditValue(objective);
+    setEditing({ entry: operation.entry, owner: operation.owner, sessionId: operation.sessionId, token: operation.token });
+  }
+  // A pointer on nonfocusable space can leave document.activeElement at body.
+  // Record that user intent before native blur, only while an editor is open.
+  useLayoutEffect(() => {
+    if (!editing || editing.owner !== readbackOwner || editing.sessionId !== id) return;
+    const moved = (event: PointerEvent) => {
+      const operation = editOwner.current;
+      if (operation?.token !== editing.token) return;
+      operation.focusOwned = Boolean(event.target instanceof Node && editForm.current?.contains(event.target));
+    };
+    document.addEventListener("pointerdown", moved, true);
+    return () => document.removeEventListener("pointerdown", moved, true);
+  }, [editing, readbackOwner, id]);
+  function finishEditing(entryId: string, restore: boolean, operation = editOwner.current) {
+    if (!operation || editOwner.current?.token !== operation.token || editingRef.current !== entryId
+      || operation.entry !== entryId || operation.owner !== readbackOwner || operation.sessionId !== id) return;
+    editReturn.current = restore && editorOwnedFocus(editForm.current, operation) ? operation : null;
+    editingRef.current = null;
+    editOwner.current = null;
+    setEditing(null);
+  }
+  function restoreEditFocus() {
+    const target = editReturn.current;
+    editReturn.current = null;
+    if (!target || editOwner.current) return;
+    // Never restore into a new account, Session or a reopened editor.
+    if (target.owner !== readbackOwner || target.sessionId !== id) return;
+    const button = editButtons.current.get(target.entry);
+    if (button?.isConnected && !button.disabled) { button.focus({ preventScroll: true }); return; }
+    const composer = document.getElementById("queued-conversation-composer");
+    if (composer instanceof HTMLElement && composer.isConnected && !("disabled" in composer && composer.disabled)) composer.focus({ preventScroll: true });
+  }
+  useLayoutEffect(() => {
+    if (!editing) restoreEditFocus();
+  });
+  useLayoutEffect(() => {
+    const operation = editOwner.current;
+    if (!operation || queued.some(entry => entry.queue_entry_id === operation.entry)) return;
+    // The row has unmounted; the recorded focus ownership distinguishes that
+    // automatic loss from an earlier deliberate move to blank space.
+    finishEditing(operation.entry, true, operation);
+    restoreEditFocus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queued]);
   const imageCount = chat.attachments.length;
   const canSend = !composing && chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && unresolvedConversationCount(chat.messages, chat.snapshot) < 50;
   const acceptsSteering = Boolean(active?.accepts_steering && !active.cancel_requested);
@@ -189,8 +287,9 @@ export function QueuedConversation(props: Props) {
   const personId = (chat.detail ?? props.initialDetail)?.person_id ?? null;
   const personContextPanel = usePersonContextPanel();
   const contextLabel = chat.detail?.context_label ?? props.initialDetail?.context_label ?? "";
-  const scopeLabel = personLabel && contextLabel ? `${personLabel} · ${contextLabel}` : personLabel || contextLabel || "未绑定联系人或关系情境";
-  const status = chat.unavailable ? "这段对话已不可用" : chat.connection === "reconnecting" && hasContent ? "连接恢复中，消息已保留" : active?.cancel_requested ? "正在停止…" : active ? (conversationStageLabel(forming?.stage ?? active.stage) ?? "正在处理") : paused ? "已暂停，可继续发送到队列" : queued.length ? `${queued.length} 条消息等待处理` : "";
+  const scopeLabel = personLabel && contextLabel ? `${personLabel} · ${contextLabel}` : personLabel || contextLabel || t("conversation.detail.unbound");
+  const stageLabel = active ? t(conversationStageLabel(forming?.stage ?? active.stage) ?? "正在处理") : "";
+  const status = chat.unavailable ? t("conversation.status.unavailable") : chat.connection === "reconnecting" && hasContent ? t("conversation.status.reconnecting") : active?.cancel_requested ? t("conversation.status.stopping") : active ? stageLabel : paused ? t("conversation.status.paused") : queued.length ? t("conversation.status.waiting", { count: queued.length }) : "";
   // Canonical history owns a settled message. Until then the local outbox row
   // (or its observed server entry) is the only truthful representation; rows
   // already projected from history, the active run or the queue are hidden
@@ -241,6 +340,79 @@ export function QueuedConversation(props: Props) {
     }
     return map;
   }, [outboxRows, chat.connection, chat.runOutcome, chat.readbackStalled, settledIds, paused, forming, active, queued, chat.handoffEntries]);
+  // Explicit readback refresh: local idle/loading/failed feedback per message
+  // with a synchronous in-flight fence against repeat clicks. Success returns
+  // to idle without claiming a persisted answer; failure keeps the retained
+  // row and offers a usable retry. Stale feedback is dropped when the
+  // account/session owner or the message lifecycle changes.
+  type RefreshOperation = { owner: symbol; token: symbol; lifecycle: symbol };
+  type RefreshFeedback = { phase: "loading" | "failed"; lifecycle: symbol };
+  const [refreshFeedback, setRefreshFeedback] = useState<{ owner: symbol; messages: Record<string, RefreshFeedback> }>({ owner: readbackOwner, messages: {} });
+  const refreshPending = useRef(new Map<string, RefreshOperation>());
+  const refreshScope = useRef<symbol | null>(null);
+  const refreshLifecycles = useRef(new Map<string, { signature: string; token: symbol }>());
+  useLayoutEffect(() => {
+    const pending = refreshPending.current;
+    refreshScope.current = readbackOwner;
+    pending.clear();
+    refreshLifecycles.current.clear();
+    return () => {
+      if (refreshScope.current !== readbackOwner) return;
+      refreshScope.current = null;
+      pending.clear();
+    };
+  }, [readbackOwner]);
+  useLayoutEffect(() => {
+    const next = new Map<string, { signature: string; token: symbol }>();
+    for (const [messageId, work] of Object.entries(workByMessageId)) {
+      if (work.recover !== "refresh") continue;
+      const runId = chat.handoffEntries[messageId]?.run_id ?? (active?.message_id === messageId ? active.run_id : null);
+      const signature = JSON.stringify([work.phase, runId]);
+      const previous = refreshLifecycles.current.get(messageId);
+      next.set(messageId, previous?.signature === signature ? previous : { signature, token: Symbol(messageId) });
+    }
+    refreshLifecycles.current = next;
+    for (const [messageId, operation] of refreshPending.current) {
+      if (next.get(messageId)?.token !== operation.lifecycle) refreshPending.current.delete(messageId);
+    }
+    queueMicrotask(() => {
+      if (refreshScope.current !== readbackOwner || refreshLifecycles.current !== next) return;
+      setRefreshFeedback(state => {
+        if (state.owner !== readbackOwner) return { owner: readbackOwner, messages: {} };
+        const messages = Object.fromEntries(Object.entries(state.messages).filter(([messageId, feedback]) => next.get(messageId)?.token === feedback.lifecycle));
+        return Object.keys(messages).length === Object.keys(state.messages).length ? state : { owner: readbackOwner, messages };
+      });
+    });
+  }, [readbackOwner, workByMessageId, chat.handoffEntries, active]);
+  function completeRefresh(messageId: string, operation: RefreshOperation, succeeded: boolean) {
+    const pending = refreshPending.current.get(messageId);
+    // Check the exact request before deleting its lock: an old A1 completion
+    // must never release A2 after an owner or message-lifecycle round trip.
+    if (refreshScope.current !== operation.owner || pending?.owner !== operation.owner
+      || pending.token !== operation.token || refreshLifecycles.current.get(messageId)?.token !== operation.lifecycle) return;
+    refreshPending.current.delete(messageId);
+    setRefreshFeedback(state => {
+      if (state.owner !== operation.owner || state.messages[messageId]?.lifecycle !== operation.lifecycle) return state;
+      const messages = { ...state.messages };
+      if (succeeded) delete messages[messageId];
+      else messages[messageId] = { phase: "failed", lifecycle: operation.lifecycle };
+      return { owner: operation.owner, messages };
+    });
+  }
+  function refreshReadback(messageId: string) {
+    const lifecycle = refreshLifecycles.current.get(messageId);
+    if (refreshScope.current !== readbackOwner || !lifecycle || refreshPending.current.has(messageId)) return;
+    const operation = { owner: readbackOwner, token: Symbol(messageId), lifecycle: lifecycle.token };
+    refreshPending.current.set(messageId, operation);
+    setRefreshFeedback(state => ({ owner: readbackOwner, messages: {
+      ...(state.owner === readbackOwner ? state.messages : {}),
+      [messageId]: { phase: "loading", lifecycle: lifecycle.token },
+    } }));
+    void chat.refreshDetail().then(
+      () => completeRefresh(messageId, operation, true),
+      () => completeRefresh(messageId, operation, false),
+    );
+  }
   const sourceImagesByMessageId = useMemo(() => Object.fromEntries(
     turns.flatMap(sessionHumanMessages).map((turn) => [turn.id, turn.images ?? []]),
   ), [turns]);
@@ -259,15 +431,18 @@ export function QueuedConversation(props: Props) {
     recoveryActions: (messageId: string) => {
       const work = workByMessageId[messageId];
       const message = chat.messages.find(item => item.id === messageId);
-      if (work?.recover === "check" && message) return <><button onClick={() => void chat.retryDelivery(message)}>核对并重试</button>{message.delivery === "rejected" ? <button onClick={() => chat.discardRejectedDelivery(message.id)}>移除</button> : null}</>;
-      if (work?.recover === "refresh") return <button onClick={() => void chat.refreshDetail().catch(() => {})}>刷新</button>;
+      if (work?.recover === "check" && message) return <><button onClick={() => void chat.retryDelivery(message)}>{t("conversation.recovery.check")}</button>{message.delivery === "rejected" ? <button onClick={() => chat.discardRejectedDelivery(message.id)}>{t("conversation.recovery.discard")}</button> : null}</>;
+      if (work?.recover === "refresh") {
+        const phase = refreshFeedback.owner === readbackOwner ? refreshFeedback.messages[messageId]?.phase ?? "idle" : "idle";
+        return <><button disabled={phase === "loading"} onClick={() => refreshReadback(messageId)}>{phase === "loading" ? t("conversation.recovery.refreshing") : phase === "failed" ? t("conversation.recovery.refreshRetry") : t("conversation.recovery.refresh")}</button>{phase === "failed" ? <small role="status">{t("conversation.recovery.refreshFailed")}</small> : null}</>;
+      }
       return null;
     },
     sourceImagesByMessageId,
     sourceTextByMessageId,
     onCardComment: (item: MemoryProposalItem) => {
       const label = item.display_text.length > 48 ? `${item.display_text.slice(0, 48)}…` : item.display_text;
-      const next = `${chat.draft}${chat.draft ? "\n" : ""}关于「${label}」：`;
+      const next = `${chat.draft}${chat.draft ? "\n" : ""}${t("conversation.card.comment", { text: label })}`;
       if (next.length <= 1000) chat.changeDraft(next);
       document.getElementById("queued-conversation-composer")?.focus();
     },
@@ -297,7 +472,25 @@ export function QueuedConversation(props: Props) {
       if (unhandled) router.replace("/workspace");
     }
   }
-  async function applyEdit(entry: string) { if (await chat.mutate({ kind: "edit", queue_entry_id: entry, objective: editValue.trim() })) setEditing(null); }
+  async function applyEdit(entry: string) {
+    const operation = editOwner.current;
+    if (!operation || operation.entry !== entry || operation.owner !== readbackOwner || operation.sessionId !== id || operation.saveToken) return;
+    const token = Symbol("save");
+    operation.saveToken = token;
+    const ok = await chat.mutate({ kind: "edit", queue_entry_id: entry, objective: editValue.trim() });
+    const current = editOwner.current;
+    if (current?.token !== operation.token || current.owner !== operation.owner || current.sessionId !== operation.sessionId
+      || operation.saveToken !== token || editingRef.current !== entry) return;
+    operation.saveToken = null;
+    if (!ok) {
+      if (editorOwnedFocus(editForm.current, operation)) {
+        const field = editForm.current?.querySelector("textarea");
+        if (field instanceof HTMLElement && field.isConnected && !field.disabled) field.focus({ preventScroll: true });
+      }
+      return;
+    }
+    finishEditing(entry, true, operation);
+  }
   // Escape pauses the queue while a run is live. IME composition owns Enter
   // and Escape: a composing key event is never an action.
   function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
@@ -311,59 +504,59 @@ export function QueuedConversation(props: Props) {
     }
   }
   async function prioritize(queueEntryId: string, position: number) {
-    if (active && !window.confirm(`停止当前回复，优先处理第 ${position} 条？其他待处理消息顺序保留。`)) return;
-    if (!active && paused && !window.confirm(`优先处理第 ${position} 条并继续队列？`)) return;
+    if (active && !window.confirm(t("conversation.queue.prioritizeConfirmStop", { position }))) return;
+    if (!active && paused && !window.confirm(t("conversation.queue.prioritizeConfirmResume", { position }))) return;
     await chat.mutate({ kind: "prioritize", queue_entry_id: queueEntryId });
   }
 
-  return <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label="对话" data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
+  return <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
     {admitted && <header className={styles.header}>
-      <div className={styles.headingText}><h1 title={chat.detail?.title || "新对话"}>{chat.detail?.title || "新对话"}</h1></div>
-      {personId && !chat.unavailable && <button className={styles.personContext} aria-label={`查看 ${personLabel || "联系人"} 的人物背景`} onClick={event => personContextPanel.open(personId,event.currentTarget)}>人物背景</button>}
-      <details className={styles.details}><summary aria-label="对话详情"><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>对话详情</span></summary><div className={styles.detailPanel}>
+      <div className={styles.headingText}><h1 title={chat.detail?.title || t("conversation.new")}>{chat.detail?.title || t("conversation.new")}</h1></div>
+      {personId && !chat.unavailable && <button className={styles.personContext} aria-label={t("conversation.person.view", { person: personLabel || t("conversation.person.fallback") })} onClick={event => personContextPanel.open(personId,event.currentTarget)}>{t("conversation.person.context")}</button>}
+      <details className={styles.details}><summary aria-label={t("conversation.detail.label")}><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>{t("conversation.detail.label")}</span></summary><div className={styles.detailPanel}>
       <p className={styles.detailScope}>{scopeLabel}</p>
-      <p>历史回复保留当时的判断，执行前请核对当前信息。</p>
-      {chat.detail && <p>保留至 {new Date(chat.detail.expires_at).toLocaleDateString("zh-CN")}</p>}
+      <p>{t("conversation.detail.historyHint")}</p>
+      {chat.detail && <p>{t("conversation.detail.retention", { date: new Date(chat.detail.expires_at).toLocaleDateString(locale) })}</p>}
       {props.meetingLinks?.map(meeting => <a key={meeting.id} href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>{meeting.title}</a>)}
-      {props.meetingReadFailed && <p>相关日程暂时无法读取。</p>}
-      {!chat.unavailable && (confirmDelete ? <div className={styles.confirm}><p>删除对话、草稿和待处理消息？</p><button onClick={() => void remove()}>确认删除</button><button onClick={() => setConfirmDelete(false)}>保留</button></div> : <button className={styles.textButton} onClick={() => setConfirmDelete(true)}><Trash size={16}/>删除对话</button>)}
+      {props.meetingReadFailed && <p>{t("conversation.detail.meetingsFailed")}</p>}
+      {!chat.unavailable && (confirmDelete ? <div className={styles.confirm}><p>{t("conversation.detail.deleteConfirm")}</p><button onClick={() => void remove()}>{t("conversation.detail.deleteConfirmAction")}</button><button onClick={() => setConfirmDelete(false)}>{t("conversation.detail.deleteKeep")}</button></div> : <button className={styles.textButton} onClick={() => setConfirmDelete(true)}><Trash size={16}/>{t("conversation.detail.delete")}</button>)}
     </div></details></header>}
     <SessionRuntime key={`${props.chatBinding}:${id ?? "draft"}`} messages={projectedMessages} running={Boolean(activeVisible)}>
     <ThreadPrimitive.Root className={styles.runtimeRoot} data-session-runtime>
-    <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} scrollToBottomOnRunStart={false} className={styles.transcript} ref={viewport} role="region" aria-label="对话记录" tabIndex={0} onWheel={event => { reading.cancelRestore(); userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { reading.cancelRestore(); userScroll.current = true; }} onPointerDown={() => { reading.cancelRestore(); userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) { reading.cancelRestore(); userScroll.current = true; } if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (!reading.restoring.current && viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); reading.remember(); } }}>
+    <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} scrollToBottomOnRunStart={false} className={styles.transcript} ref={viewport} role="region" aria-label={t("conversation.transcript.label")} tabIndex={0} onWheel={event => { reading.cancelRestore(); userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { reading.cancelRestore(); userScroll.current = true; }} onPointerDown={() => { reading.cancelRestore(); userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) { reading.cancelRestore(); userScroll.current = true; } if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (!reading.restoring.current && viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); reading.remember(); } }}>
       <div className={styles.content} ref={content}>
-        {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><div><h2>把没聊完的，接着聊。</h2><p>带来一段聊天、一个人的近况，或一件还没结束的事。先理清，再决定留下什么。</p></div></div>}
+        {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><div><h2>{t("conversation.welcome.title")}</h2><p>{t("conversation.welcome.body")}</p></div></div>}
         <ThreadPrimitive.Messages>{({ message }) => message.role === "user"
           ? <Fragment key={message.id}><SessionSendTime at={(message as { createdAt?: unknown }).createdAt}/><SessionUserMessage context={renderContext}/></Fragment>
           : <SessionAssistantMessage key={message.id} context={renderContext}/>}</ThreadPrimitive.Messages>
-        {props.meetingLinks?.filter(meeting=>!turns.some(turn=>turn.response.meetingDraft?.id===meeting.id)).map(meeting=><section key={meeting.id} className="context-calendar-draft-handoff" aria-label="日历草稿核对入口"><strong>{meeting.title}</strong><a href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>核对日历草稿 →</a></section>)}
+        {props.meetingLinks?.filter(meeting=>!turns.some(turn=>turn.response.meetingDraft?.id===meeting.id)).map(meeting=><section key={meeting.id} className="context-calendar-draft-handoff" aria-label={t("conversation.meeting.entry")}><strong>{meeting.title}</strong><a href={`/workspace/meetings?draft=${encodeURIComponent(meeting.id)}`}>{t("conversation.meeting.review")}</a></section>)}
       </div>
     </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
     </SessionRuntime>
     <div className={styles.dock}>
-      {away && <button className={styles.latest} onClick={latest}><ArrowDown size={15}/>回到最新</button>}
+      {away && <button className={styles.latest} onClick={latest}><ArrowDown size={15}/>{t("conversation.latest")}</button>}
       {props.legacyRecovery && <LegacyRecoveryNotice key={props.legacyRecovery.sessionId} recovery={props.legacyRecovery}/>}
-      {queued.length > 0 && <section className={styles.queue} aria-label="可控补充"><div className={styles.queueHeading}><span>{paused ? "已暂停" : queued.some(entry => entry.steers_run_id && entry.steer_state !== "unsupported") ? "本次补充" : "接下来"}<small>{queued.length}</small></span>{paused && <button disabled={chat.mutating || Boolean(active) || queued.some(entry => entry.status !== "queued")} onClick={() => void chat.mutate({kind:"continue"})}>继续处理<ArrowUp size={13}/></button>}</div>
-        <ol>{queued.map((entry, index) => <li key={entry.queue_entry_id} data-status={entry.status}>{editing === entry.queue_entry_id ? <form className={styles.edit} onSubmit={event => { event.preventDefault(); void applyEdit(entry.queue_entry_id); }}><label htmlFor={`edit-${entry.queue_entry_id}`}>编辑待处理消息</label><textarea autoFocus id={`edit-${entry.queue_entry_id}`} value={editValue} maxLength={1000} onChange={event => setEditValue(event.target.value)}/><div><button type="button" onClick={() => setEditing(null)}>取消</button><button type="submit" disabled={!editValue.trim() || chat.mutating}>保存</button></div></form> : <><span className={styles.number}>{index + 1}</span><span className={styles.queueText}>{entry.host_result ? "MCP 结果已记录，继续原任务" : displayText(entry.objective, entry.images)}{entry.images?.length ? <ConversationImageStrip binding={props.chatBinding} compact images={entry.images} local={false} messageId={entry.message_id} scope={props.scope} sessionId={id ?? ""}/> : null}{entry.status === "queued" && (active || paused) && <small>{entry.steer_state === "unsupported" ? "这条消息将完整保留到下一任务" : entry.steers_run_id ? entry.steer_delivered ? "已并入当前任务" : entry.steer_state === "dispatching" ? "补充已冻结，正在并入当前任务" : "当前工具完成后并入本次任务" : active ? "完成或停止当前回复后处理" : "已暂停，继续后按此顺序处理"}</small>}{["failed", "interrupted"].includes(entry.status) && <small>{queueFailureText(entry.failure_code, Boolean(entry.images?.length))}</small>}</span><div className={styles.queueActions}>{entry.status === "queued" && entry.objective.trim() && !entry.host_result ? <button aria-label={`编辑第 ${index + 1} 条待处理消息`} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => { setEditing(entry.queue_entry_id); setEditValue(entry.objective); }}><PencilSimple size={16}/></button> : entry.status === "queued" ? null : <button disabled={chat.mutating} onClick={async () => { if (await chat.mutate({kind:"retry",queue_entry_id:entry.queue_entry_id})) await chat.mutate({kind:"continue"}); }}>重试</button>}{entry.status === "queued" && !entry.steers_run_id && (active || paused || index > 0) && <button className={styles.prioritize} disabled={chat.mutating} title={active ? "停止当前回复并优先处理这条" : "优先处理这条"} aria-label={`优先处理第 ${index + 1} 条待处理消息`} onClick={() => void prioritize(entry.queue_entry_id, index + 1)}><ArrowUp size={14}/>优先</button>}<button aria-label={`移除第 ${index + 1} 条待处理消息`} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => void chat.mutate({kind:"withdraw",queue_entry_id:entry.queue_entry_id})}><X size={16}/></button></div></>}</li>)}</ol>
+      {queued.length > 0 && <section className={styles.queue} aria-label={t("conversation.queue.label")}><div className={styles.queueHeading}><span>{paused ? t("conversation.queue.paused") : queued.some(entry => entry.steers_run_id && entry.steer_state !== "unsupported") ? t("conversation.queue.thisSupplement") : t("conversation.queue.upNext")}<small>{queued.length}</small></span>{paused && <button disabled={chat.mutating || Boolean(active) || queued.some(entry => entry.status !== "queued")} onClick={() => void chat.mutate({kind:"continue"})}>{t("conversation.queue.continue")}<ArrowUp size={13}/></button>}</div>
+        <ol>{queued.map((entry, index) => <li key={entry.queue_entry_id} data-status={entry.status}>{editing?.entry === entry.queue_entry_id && editing.owner === readbackOwner && editing.sessionId === id ? <form className={styles.edit} ref={editForm} onFocusCapture={() => { const operation = editOwner.current; if (operation?.token === editing.token) operation.focusOwned = true; }} onBlurCapture={event => { const operation = editOwner.current; if (operation?.token !== editing.token || event.currentTarget.contains(event.relatedTarget)) return; const target = event.target; if (!target.isConnected || (target instanceof HTMLButtonElement && target.disabled && !event.relatedTarget)) return; operation.focusOwned = false; }} onSubmit={event => { event.preventDefault(); void applyEdit(entry.queue_entry_id); }}><label htmlFor={`edit-${entry.queue_entry_id}`}>{t("conversation.queue.editLabel")}</label><textarea autoFocus id={`edit-${entry.queue_entry_id}`} value={editValue} maxLength={1000} onChange={event => setEditValue(event.target.value)}/><div><button type="button" onClick={() => finishEditing(entry.queue_entry_id, true)}>{t("conversation.queue.cancel")}</button><button type="submit" disabled={!editValue.trim() || chat.mutating}>{t("conversation.queue.save")}</button></div></form> : <><span className={styles.number}>{index + 1}</span><span className={styles.queueText}>{entry.host_result ? t("conversation.queue.hostResult") : displayText(entry.objective, entry.images)}{entry.images?.length ? <ConversationImageStrip binding={props.chatBinding} compact images={entry.images} local={false} messageId={entry.message_id} scope={props.scope} sessionId={id ?? ""}/> : null}{entry.status === "queued" && (active || paused) && <small>{entry.steer_state === "unsupported" ? t("conversation.queue.steerUnsupported") : entry.steers_run_id ? entry.steer_delivered ? t("conversation.queue.steerDelivered") : entry.steer_state === "dispatching" ? t("conversation.queue.steerDispatching") : t("conversation.queue.steerPending") : active ? t("conversation.queue.afterRun") : t("conversation.queue.afterResume")}</small>}{["failed", "interrupted"].includes(entry.status) && <small>{queueFailureText(entry.failure_code, Boolean(entry.images?.length), t)}</small>}</span><div className={styles.queueActions}>{entry.status === "queued" && entry.objective.trim() && !entry.host_result ? <button ref={node => { if (node) editButtons.current.set(entry.queue_entry_id, node); else editButtons.current.delete(entry.queue_entry_id); }} aria-label={t("conversation.queue.editItem", { position: index + 1 })} disabled={entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => beginEdit(entry.queue_entry_id, entry.objective)}><PencilSimple size={16}/></button> : entry.status === "queued" ? null : <button disabled={chat.mutating} onClick={async () => { if (await chat.mutate({kind:"retry",queue_entry_id:entry.queue_entry_id})) await chat.mutate({kind:"continue"}); }}>{t("conversation.queue.retry")}</button>}{entry.status === "queued" && !entry.steers_run_id && (active || paused || index > 0) && <button className={styles.prioritize} disabled={chat.mutating} title={active ? t("conversation.queue.prioritizeStopTitle") : t("conversation.queue.prioritizeTitle")} aria-label={t("conversation.queue.prioritizeItem", { position: index + 1 })} onClick={() => void prioritize(entry.queue_entry_id, index + 1)}><ArrowUp size={14}/>{t("conversation.queue.prioritize")}</button>}<button aria-label={t("conversation.queue.removeItem", { position: index + 1 })} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => void chat.mutate({kind:"withdraw",queue_entry_id:entry.queue_entry_id})}><X size={16}/></button></div></>}</li>)}</ol>
       </section>}
-      {(chat.error || chat.draftConflict || chat.unavailable) && <div className={styles.notice} role="status">{chat.unavailable ? "这段对话已结束或登录状态发生变化，请重新打开工作台。" : chat.draftConflict ? <>另一处也修改了草稿，当前输入已保留。<button onClick={() => void chat.keepDraft()}>保留当前草稿</button></> : chat.error}</div>}
-      {imageCount > 0 && <div className={styles.composerImages} aria-label="要发送的图片">
+      {(chat.error || chat.draftConflict || chat.unavailable) && <div className={styles.notice} role="status">{chat.unavailable ? t("conversation.notice.unavailable") : chat.draftConflict ? <>{t("conversation.notice.draftConflict")}<button onClick={() => void chat.keepDraft()}>{t("conversation.notice.keepDraft")}</button></> : chat.error}</div>}
+      {imageCount > 0 && <div className={styles.composerImages} aria-label={t("conversation.images.label")}>
         {chat.attachments.map((attachment, index) => <span className={styles.composerImage} key={attachment.id}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={attachment.manifest.file_name} src={attachment.url} />
-          <button aria-label={`移除第 ${index + 1} 张图片`} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable} onClick={() => chat.removeAttachment(attachment.id)} type="button"><X size={12} weight="bold"/></button>
+          <button aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable} onClick={() => chat.removeAttachment(attachment.id)} type="button"><X size={12} weight="bold"/></button>
         </span>)}
       </div>}
-      {imageCount >= 10 && <p className={styles.composerImageHint} role="status">已达到每条消息 10 张图片的上限。</p>}
-      {chat.preparing && <p className={styles.composerImageHint} role="status">正在准备图片…</p>}
-      {chat.submitting && <p className={styles.composerImageHint} role="status">正在发送…</p>}
+      {imageCount >= 10 && <p className={styles.composerImageHint} role="status">{t("conversation.images.limit")}</p>}
+      {chat.preparing && <p className={styles.composerImageHint} role="status">{t("conversation.images.preparing")}</p>}
+      {chat.submitting && <p className={styles.composerImageHint} role="status">{t("conversation.images.sending")}</p>}
       <div className={styles.composer}>
-        <WorkspaceComposer key={composerScope} id="queued-conversation-composer" label="消息" value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? "继续补充，会并入当前任务…" : "继续补充，会按顺序处理…" : paused ? "继续输入，消息会加入暂停的队列…" : imageCount ? "可加一句话说明，或直接发送图片…" : "有什么想一起理清的？"} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onComposingChange={composingChanged} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
-          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? "补充当前任务" : active || queued.length || paused ? "加入队列" : "发送消息"} title={acceptsSteering ? "补充当前任务" : active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? t("conversation.send.steer") : t("conversation.send.queue")}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
+        <WorkspaceComposer key={composerScope} id="queued-conversation-composer" label={t("conversation.composer.label")} value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? t("conversation.composer.steerPlaceholder") : t("conversation.composer.queuePlaceholder") : paused ? t("conversation.composer.pausedPlaceholder") : imageCount ? t("conversation.composer.imagesPlaceholder") : t("conversation.composer.defaultPlaceholder")} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onComposingChange={composingChanged} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
+          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label={t("conversation.stop.action")} title={t("conversation.stop.title")} disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>{t("conversation.stop.label")}</span></button>}<button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? t("conversation.send.steerAction") : active || queued.length || paused ? t("conversation.send.queueAction") : t("conversation.send.label")} title={acceptsSteering ? t("conversation.send.steerAction") : active || paused ? t("conversation.send.queueAction") : t("conversation.send.title")} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? t("conversation.send.steer") : t("conversation.send.queue")}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
-      {!hasContent && <div className={styles.starters} aria-label="开始一个话题">{["你可以帮我做什么？", "准备下一次交流"].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
-      <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>Enter 发送 · Shift+Enter 换行</span></div>
+      {!hasContent && <div className={styles.starters} aria-label={t("conversation.starters.label")}>{[t("conversation.starters.help"), t("conversation.starters.prepare")].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
+      <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>{t("conversation.footer.keys")}</span></div>
     </div>
   </main>;
 }

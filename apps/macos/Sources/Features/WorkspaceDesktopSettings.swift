@@ -312,8 +312,7 @@ struct WorkspaceDesktopSettings: View {
     @Environment(\.openWindow) private var openWindow
     @State private var search = WorkspaceSettingsSearchState()
     @State private var searchMessage: String?
-    @State private var connectionProbe: ConnectionProbeResult?
-    @State private var connectionProbing = false
+    @StateObject private var connectionProbe = WorkspaceConnectionProbeController()
     @State private var accountLaunchFailed = false
     @State private var screenRecordingAllowed = CGPreflightScreenCaptureAccess()
     @FocusState private var searchFocused: Bool
@@ -334,6 +333,9 @@ struct WorkspaceDesktopSettings: View {
                maxWidth: .infinity, minHeight: 600, idealHeight: 680, maxHeight: .infinity)
         .background(SettingsWindowTitle(title: "此 Mac 设置"))
         .task { updater.start() }
+        .onAppear { connectionProbe.reset(for: connection.origin) }
+        .onChange(of: connection.origin) { _, origin in connectionProbe.reset(for: origin) }
+        .onDisappear { connectionProbe.reset(for: nil) }
     }
 
     private var rail: some View {
@@ -482,11 +484,7 @@ struct WorkspaceDesktopSettings: View {
     private func railButton(_ section: WorkspaceSettingsSection) -> some View {
         let selected = navigation.selection == section
         return Button {
-            searchFocused = false
-            navigation.selection = section
-            focusedSection = section
-            search.reset()
-            searchMessage = nil
+            selectSection(section)
         } label: {
             Text(section.title)
                 .font(.system(size: 13, weight: selected ? .medium : .regular))
@@ -605,10 +603,12 @@ struct WorkspaceDesktopSettings: View {
                 DisclosureGroup("高级诊断") {
                     VStack(alignment: .leading, spacing: 12) {
                         LabeledContent("当前工作区", value: connection.origin?.url.host ?? "尚未连接")
-                        Button(connectionProbing ? "正在检查…" : "测试连接") { runConnectionProbe() }
-                            .disabled(connection.origin == nil || connectionProbing)
+                        Button(connectionProbe.isChecking(for: connection.origin) ? "正在检查…" : "测试连接") {
+                            connectionProbe.check(connection.origin)
+                        }
+                            .disabled(connection.origin == nil || connectionProbe.isChecking(for: connection.origin))
                             .accessibilityIdentifier("connection.probe")
-                        if let result = connectionProbe {
+                        if let result = connectionProbe.result(for: connection.origin) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(result.summary).font(.callout.weight(.medium))
                                 Text(result.detail).font(.caption).foregroundStyle(.secondary)
@@ -622,16 +622,6 @@ struct WorkspaceDesktopSettings: View {
                 }
             }.padding(32).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
         }.background(.background)
-    }
-
-    private func runConnectionProbe() {
-        guard let origin = connection.origin else { return }
-        connectionProbing = true
-        connectionProbe = nil
-        Task { @MainActor in
-            connectionProbe = await WorkspaceConnectionProbe(origin: origin).run()
-            connectionProbing = false
-        }
     }
 
     private var updatesPane: some View {
@@ -744,9 +734,7 @@ struct WorkspaceDesktopSettings: View {
         guard let entry else { return }
         switch entry.action {
         case .section(let section):
-            navigation.selection = section
-            search.reset()
-            searchMessage = nil
+            selectSection(section)
         case .accountBrowser(let destination):
             searchMessage = nil
             accountLaunchFailed = false
@@ -770,6 +758,14 @@ struct WorkspaceDesktopSettings: View {
             }
             searchMessage = "已请求打开 macOS 系统设置。权限状态返回后请重新检查。"
         }
+    }
+
+    private func selectSection(_ section: WorkspaceSettingsSection) {
+        searchFocused = false
+        navigation.selection = section
+        focusedSection = section
+        search.reset()
+        searchMessage = nil
     }
 }
 

@@ -50,10 +50,10 @@ let chat: ReturnType<typeof useConversation>;
 let root: Root;
 let mount: HTMLDivElement;
 
-function Probe() {
+function Probe({ scope = "owner" }: { scope?: string }) {
   const current = useConversation({
     id: sid,
-    scope: "owner",
+    scope,
     chatBinding: "chat",
     detailBinding: "detail",
     initial: detail(),
@@ -193,6 +193,34 @@ it("drops a late readback after the surface unmounts", async () => {
   });
   // The unmounted scope publishes nothing and nothing crashes.
   expect(chat.draft).toBe("");
+});
+
+it("rejects a JSON body from a retired lifecycle even after returning to the same account and session", async () => {
+  let resolveBody!: (body: unknown) => void;
+  const body = new Promise(resolve => { resolveBody = resolve; });
+  const response = Response.json({});
+  const parseBody = vi.spyOn(response, "json").mockImplementation(() => body);
+  fetcher.mockImplementation((url: string) => String(url).endsWith("/stream")
+    ? Promise.resolve(new Response(new ReadableStream()))
+    : Promise.resolve(response));
+  let oldRead!: Promise<void>;
+  await act(async () => { oldRead = chat.refreshDetail(); await Promise.resolve(); });
+  await flush();
+  expect(parseBody).toHaveBeenCalledOnce();
+
+  await act(async () => root.render(createElement(Probe, { scope: "other-owner" })));
+  await flush();
+  await act(async () => root.render(createElement(Probe)));
+  await flush();
+  mockDetailReadback(detail({ revision: 5, title: "Current owner", turns: [turn("current-turn", "Current evidence")] }));
+  await act(async () => { await chat.refreshDetail(); });
+  await act(async () => {
+    resolveBody({ detail: detail({ revision: 99, title: "Retired owner", turns: [turn("old-turn", "Retired evidence")] }) });
+    await oldRead;
+  });
+  expect(chat.detail?.revision).toBe(5);
+  expect(chat.detail?.title).toBe("Current owner");
+  expect(chat.detail?.turns.map(entry => entry.id)).toEqual(["current-turn"]);
 });
 
 it("never lets a refresh overwrite a concurrent remote draft silently", async () => {
