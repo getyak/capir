@@ -29,12 +29,14 @@ async function openAccount() {
 }
 beforeEach(() => { directory.data = { sessions: { session_version: "a", sessions: [] } }; directory.loading = false; directory.failed = false; });
 describe("quiet workspace chrome states", () => {
-  it("keeps a named history entry without an empty placeholder or all link", () => {
+  it("keeps directory access beneath an icon-only header when history is empty", () => {
     const html = renderToStaticMarkup(createElement(WorkspaceRecentSessions, { binding: "a" }));
     expect(html).toContain('href="/workspace/sessions"');
     expect(html).toContain("对话记录");
     expect(html).not.toContain("还没有对话");
     expect(html).not.toContain(">全部<");
+    expect(html).not.toContain(">新对话<");
+    expect(html).not.toContain("aria-expanded");
   });
   it("keeps read failure distinct from empty with a real retry", () => {
     directory.failed = true;

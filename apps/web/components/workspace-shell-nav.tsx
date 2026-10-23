@@ -14,16 +14,14 @@ import {
 import type { Icon } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useLayoutEffect, useRef, useSyncExternalStore, type MouseEvent } from "react";
+import { useContext, useLayoutEffect, useRef, useSyncExternalStore, type MouseEvent } from "react";
 
 import {
   WORKSPACE_COMPOSE_HREF,
   WORKSPACE_FOCUS_AGENT_EVENT,
   WORKSPACE_NEW_CONVERSATION_EVENT,
   WORKSPACE_NAV_ROUTES,
-  WORKSPACE_RAIL_COLLAPSED_KEY,
   WORKSPACE_RAIL_CONTROLS,
-  WORKSPACE_RAIL_PREFERENCE_EVENT,
   type WorkspaceNavRoute,
   type WorkspaceRailControlId,
   workspaceCaptureIntent,
@@ -32,6 +30,7 @@ import {
 } from "@/lib/workspace-navigation";
 import { recentSessionRows } from "@/lib/workspace-recent-sessions";
 import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-session-organization";
+import { useWorkspaceSidebarLayout, WorkspaceSidebarPresentation } from "@/lib/workspace-sidebar-layout";
 
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { useWorkspaceNavigationHref } from "./workspace-navigation-continuity";
@@ -68,47 +67,6 @@ const RAIL_ICONS: Record<Exclude<WorkspaceRailControlId, "search">, Icon> = {
 
 const mobileSnapshot = () => window.matchMedia("(max-width: 760px)").matches;
 const mobileSubscribe = (notify: () => void) => {const query = window.matchMedia("(max-width: 760px)"); query.addEventListener("change",notify); return () => query.removeEventListener("change",notify);};
-
-const COLLAPSED_KEY = WORKSPACE_RAIL_COLLAPSED_KEY;
-const COLLAPSED_EVENT = WORKSPACE_RAIL_PREFERENCE_EVENT;
-let collapsedFallback = false;
-
-function collapsedSnapshot() {
-  try {
-    return window.localStorage.getItem(COLLAPSED_KEY) === "true";
-  } catch {
-    return collapsedFallback;
-  }
-}
-
-function subscribeToCollapsedPreference(onChange: () => void) {
-  window.addEventListener("storage", onChange);
-  window.addEventListener(COLLAPSED_EVENT, onChange);
-  return () => {
-    window.removeEventListener("storage", onChange);
-    window.removeEventListener(COLLAPSED_EVENT, onChange);
-  };
-}
-
-function useCollapsedState() {
-  const collapsed = useSyncExternalStore(
-    subscribeToCollapsedPreference,
-    collapsedSnapshot,
-    () => false,
-  );
-  return {
-    collapsed,
-    setCollapsed(next: boolean) {
-      collapsedFallback = next;
-      try {
-        window.localStorage.setItem(COLLAPSED_KEY, String(next));
-      } catch {
-        // Keep this interaction usable when browser storage is unavailable.
-      }
-      window.dispatchEvent(new Event(COLLAPSED_EVENT));
-    },
-  };
-}
 
 function RailControl({
   control,
@@ -203,7 +161,10 @@ export function WorkspaceShellNav({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { collapsed, setCollapsed } = useCollapsedState();
+  const { layout, setLayout } = useWorkspaceSidebarLayout();
+  const presentation = useContext(WorkspaceSidebarPresentation) ?? layout;
+  const collapsed = presentation.collapsed;
+  const setCollapsed = (next: boolean) => setLayout({ ...layout, collapsed: next, hidden: false });
   const selection = workspaceRailSelection(pathname);
   const conversationHref = useWorkspaceNavigationHref("/workspace");
   const peopleHref = useWorkspaceNavigationHref("/workspace/people");

@@ -24,6 +24,7 @@
   min-height: 0;
   min-width: 320px;
   overflow: clip;
+  position: relative;
   grid-template-rows: minmax(0, 1fr);
 }
 
@@ -1270,12 +1271,7 @@
   }
 }
 
-/* One quiet history entry; no placeholder card for a successfully empty list. */
-.historyHeader { align-items: center; border-radius: 8px; color: var(--muted); display: flex; font-size: var(--workspace-meta-size, 0.8125rem); gap: 9px; min-height: 36px; padding: 0 8px; text-decoration: none; transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out), color var(--workspace-transition-duration, 180ms) var(--ease-out); }
-.historyHeader > span { flex: 1; }
-.historyHeader:hover { background: var(--hover); color: var(--ink); }
-.historyHeader:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.historyHeader[data-empty="true"] { color: var(--muted-strong); font-size: var(--workspace-meta-size, 0.8125rem); min-height: 40px; }
+/* History stays visible; only the optional archive group has a disclosure. */
 .historyDisclosure { background: transparent; border: 0; border-radius: 4px; cursor: pointer; font-family: inherit; height: auto; min-height: 36px; text-align: left; transition: color var(--workspace-transition-duration, 180ms) var(--ease-out); width: 100%; }
 .historyDisclosure:hover { color: var(--ink); }
 .historyDisclosure:focus-visible, .historyAll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -1759,7 +1755,6 @@
   .sessionRow,
   .accountTrigger,
   .searchResult,
-  .historyHeader,
   .historyAll,
   .historyDisclosure,
   .groupTitle a,
@@ -1876,10 +1871,8 @@
 .railCollapsed { display:none; }
 .sidebarScroll { margin-top:20px; }
 .groupTitle { font-size:var(--workspace-meta-size,0.8125rem); line-height:18px; padding:0 10px; }
-.historyBar { align-items:center; display:flex; gap:2px; margin-bottom:4px; }
-.historyBar > .historyDisclosure { flex:1 1 auto; min-width:0; width:auto; }
-.historyHeader { flex:1; font-size:var(--workspace-meta-size,0.8125rem); min-width:0; }
-.newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; font-size:var(--workspace-meta-size,0.8125rem); gap:4px; height:44px; padding:0 6px; transition:background-color var(--workspace-transition-duration,180ms) var(--ease-out),color var(--workspace-transition-duration,180ms) var(--ease-out); }
+.historyBar { align-items:center; display:flex; justify-content:flex-end; gap:2px; margin-bottom:4px; }
+.newConversation { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--muted-strong); cursor:pointer; display:flex; flex:none; font:inherit; height:32px; width:32px; justify-content:center; padding:0; transition:background-color var(--workspace-transition-duration,180ms) var(--ease-out),color var(--workspace-transition-duration,180ms) var(--ease-out); }
 .newConversation:hover { background:var(--hover); color:var(--ink); }
 .personChips { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; padding:0 8px; }
 .personChip { align-items:center; background:transparent; border:0; border-radius:8px; color:var(--ink); cursor:pointer; display:flex; font:inherit; font-size:var(--workspace-body-size,0.9375rem); gap:6px; height:32px; width:100%; min-width:0; padding:4px 0; text-align:left; }
@@ -1917,4 +1910,47 @@
   .newConversation,
   .railSessionAvatar,
   .railIconLink { transition:none; }
+}
+
+/* A quiet, reversible desktop split: the edge remains reachable when hidden. */
+.sidebarResizeHandle {
+  bottom: 0;
+  cursor: col-resize;
+  left: max(0px, calc(var(--workspace-sidebar-width) - 5px));
+  outline-offset: -2px;
+  position: absolute;
+  top: 0;
+  touch-action: none;
+  width: 10px;
+  z-index: 41;
+}
+.sidebarResizeHandle::after {
+  background: var(--muted);
+  bottom: 0;
+  content: "";
+  left: 4px;
+  opacity: 0;
+  position: absolute;
+  top: 0;
+  width: 2px;
+}
+.sidebarResizeHandle:hover::after,
+.sidebarResizeHandle:focus-visible::after,
+.shell[data-sidebar-resizing="true"] .sidebarResizeHandle::after { opacity: 0.45; }
+.sidebarResizeHandle:focus-visible { outline: 2px solid var(--focus, var(--accent)); }
+.shell[data-sidebar-resizing="true"] { cursor: col-resize; user-select: none; }
+.shell[data-sidebar-hidden="true"] > .sidebar {
+  border: 0;
+  overflow: clip;
+  padding-left: 0;
+  padding-right: 0;
+  visibility: hidden;
+}
+.shell[data-sidebar-compact="true"] .railRow .railControl { flex: 1 1 0; min-width: 28px; }
+.shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: none; }
+:global(html[data-desktop-surface="settings"]) .sidebarResizeHandle,
+.shell:has(.stage > :global(.review-workspace)) > .sidebarResizeHandle { display: none; }
+@media (max-width: 760px) {
+  .sidebarResizeHandle { display: none; }
+  .shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: inline; }
 }
