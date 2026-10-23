@@ -122,10 +122,13 @@ describe("independent desktop browser", () => {
     await render();
     await click(host.querySelector('[aria-label="收起侧边栏"]')!);
     expect(host.querySelector('[data-collapsed]')?.getAttribute("data-collapsed")).toBe("true");
-    await click(host.querySelector('nav[aria-label="工作台导航（已收起）"] a[aria-label="人物"]')!);
+    const compactPeople = host.querySelector<HTMLAnchorElement>('nav[aria-label="工作台导航（已收起）"] a[aria-label="人物"]')!;
+    compactPeople.focus();
+    await click(compactPeople);
     expect(route.navigations).toEqual([]);
     expect(host.querySelector('[data-collapsed]')?.getAttribute("data-collapsed")).toBe("false");
     expect(primary("人物").getAttribute("aria-current")).toBe("location");
+    expect(document.activeElement).toBe(primary("人物"));
   });
 
   it("withdraws retained panels and locators on expiry and resets at a new authenticated scope", async () => {
@@ -136,6 +139,12 @@ describe("independent desktop browser", () => {
     expect(host.querySelector("output")?.textContent).toBe("/workspace/people");
     await click([...host.querySelectorAll("button")].find(button => button.textContent === "保存目录位置")!);
     expect(host.querySelector("output")?.textContent).toBe("/workspace/people");
+    route.pathname = "/workspace/people";
+    await render();
+    expect(primary("人物").getAttribute("aria-current")).toBe("page");
+    expect(primary("对话").getAttribute("aria-current")).toBeNull();
+    expect(host.querySelector("#workspace-sidebar-browser input")).toBeNull();
+    route.pathname = "/workspace";
     await render("b".repeat(64));
     expect(host.querySelector("output")?.textContent).toBe("/workspace/people");
     expect(primary("对话").getAttribute("aria-current")).toBe("location");

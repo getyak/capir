@@ -43,7 +43,9 @@ describe("persistent workspace shell", () => {
       "合成测试工作台——仅含评测数据，不是真实招聘记录",
     );
     expect(navigation).toContain('aria-label="工作台导航"');
-    expect(navigation).toContain('aria-current={current ? "page" : undefined}');
+    // Rendered navigation semantics for page links versus the independent
+    // browser are covered by workspace-browse.test.tsx and accessibility tests.
+    expect(navigation).toContain("workspaceRailSelection");
     expect(navigation).toContain('href: "/workspace"');
     expect(navigation).toContain('href: "/workspace/today"');
     expect(navigation).toContain('href: "/workspace/sessions"');

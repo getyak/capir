@@ -8,6 +8,7 @@ import { WorkspaceRecentSessions } from "./workspace-recent-sessions";
 import { WorkspaceSidebarCalendar } from "./workspace-sidebar-calendar";
 import { WorkspaceSidebarPeople } from "./workspace-sidebar-people";
 import { useWorkspaceBrowse } from "./workspace-browse";
+import { useT } from "./locale-provider";
 import styles from "./workspace-shell.module.css";
 import directoryStyles from "./workspace-sidebar-people.module.css";
 
@@ -19,6 +20,7 @@ export function WorkspaceSidebarContext({
   binding: string | null;
   storageScope: string | null;
 }) {
+  const t = useT();
   const pathname = usePathname();
   const browse = useWorkspaceBrowse();
   if (!binding) return null;
@@ -29,9 +31,9 @@ export function WorkspaceSidebarContext({
           {section === "people" ? <WorkspaceSidebarPeople binding={binding} browseHref={browse.href("/workspace/people")} /> :
             section === "meetings" ? <WorkspaceSidebarCalendar binding={binding} browseHref={browse.href("/workspace/meetings")} /> :
               section === "conversation" ? <WorkspaceRecentSessions binding={binding} storageScope={storageScope} /> :
-                <section aria-label="今日导航" className={directoryStyles.directory}>
-                  <h2 className={directoryStyles.heading}>今日</h2>
-                  <Link className={directoryStyles.person} href="/workspace/today" prefetch={false}>查看今日</Link>
+                <section aria-label={t("今日导航")} className={directoryStyles.directory}>
+                  <h2 className={directoryStyles.heading}>{t("今日")}</h2>
+                  <Link className={directoryStyles.person} href="/workspace/today" prefetch={false}>{t("查看今日")}</Link>
                 </section>}
         </div>
       )) : null}

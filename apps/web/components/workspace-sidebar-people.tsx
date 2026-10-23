@@ -12,6 +12,7 @@ import { peopleDirectoryHref, personMemoryHref, readPeopleDirectoryQuery } from 
 import { validReturnSessionId } from "./session-return-navigation";
 import { useRememberWorkspaceNavigationHref } from "./workspace-navigation-continuity";
 import { useWorkspaceBrowse } from "./workspace-browse";
+import { useT } from "./locale-provider";
 import { useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-sidebar-people.module.css";
 
@@ -33,6 +34,7 @@ export function WorkspaceSidebarPeople({ binding, browseHref }: { binding: strin
 }
 
 function PeopleDirectory({ binding, browseHref }: { binding: string | null; browseHref?: string }) {
+  const t = useT();
   const pathname = usePathname();
   const routeSearchParams = useSearchParams();
   const searchParams = browseHref === undefined ? routeSearchParams : new URLSearchParams(browseHref.split("?")[1]);
@@ -159,7 +161,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
             </Link>
           ) : null}
           <button
-            aria-label={browseHref === undefined ? "在人物目录中搜索" : "筛选侧栏人物"}
+            aria-label={browseHref === undefined ? "在人物目录中搜索" : t("筛选侧栏人物")}
             className={styles.searchControl}
             disabled={composing}
             type="submit"
@@ -212,7 +214,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
       )}
 
       {binding && !loading && !failed && normalizedDraft && !matches.length ? (
-        <p className={styles.scope}>{browseHref === undefined ? "按 Enter 在人物目录中搜索姓名或已确认联系方式。" : "查看全部人物以搜索姓名或已确认联系方式。"}</p>
+        <p className={styles.scope}>{browseHref === undefined ? "按 Enter 在人物目录中搜索姓名或已确认联系方式。" : t("查看全部人物以搜索姓名或已确认联系方式。")}</p>
       ) : null}
     </section>
   );

@@ -36,7 +36,7 @@ import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-ses
 import { WorkspaceSessionAvatar } from "./workspace-session-avatar";
 import { useT } from "./locale-provider";
 import { useWorkspaceNavigationHref } from "./workspace-navigation-continuity";
-import { useWorkspaceBrowse } from "./workspace-browse";
+import { useWorkspaceBrowse, type WorkspaceBrowseSection } from "./workspace-browse";
 import { WorkspaceGlobalSearchDialog, useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-shell.module.css";
 
@@ -123,7 +123,7 @@ function RailControl({
   current: boolean;
   route: WorkspaceNavRoute;
   compact?: boolean;
-  onBrowse?: () => void;
+  onBrowse?: (control: WorkspaceBrowseSection) => void;
 }) {
   const router = useRouter();
   const browse = useWorkspaceBrowse();
@@ -135,12 +135,13 @@ function RailControl({
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
     <Link
-      aria-current={current ? !mobile && browse ? "location" : "page" : undefined}
-      aria-controls={!mobile && browse ? "workspace-sidebar-browser" : undefined}
+      aria-current={current ? !mobile && browse?.enabled ? "location" : "page" : undefined}
+      aria-controls={!mobile && browse?.enabled ? "workspace-sidebar-browser" : undefined}
       aria-label={label}
       className={compact ? styles.railIconLink : styles.railControl}
       data-mobile={route.mobile ? "true" : "false"}
       data-selected={current ? "true" : undefined}
+      data-browse-section={control}
       href={isNew ? route.href : rememberedHref}
       prefetch={false}
       key={route.id}
@@ -150,7 +151,7 @@ function RailControl({
         if (!mobile && browse?.enabled) {
           event.preventDefault();
           browse.select(control);
-          onBrowse?.();
+          onBrowse?.(control);
           return;
         }
         if (!isNew) return;
@@ -215,11 +216,18 @@ export function WorkspaceShellNav({
   const { collapsed, setCollapsed } = useCollapsedState();
   const browse = useWorkspaceBrowse();
   const mobile = useSyncExternalStore(mobileSubscribe,mobileSnapshot,() => false);
-  const selection = !mobile && browse ? browse.selection : workspaceRailSelection(pathname);
+  const selection = !mobile && browse?.enabled ? browse.selection : workspaceRailSelection(pathname);
   const collapseToggle = useRef<HTMLButtonElement>(null);
   const expandToggle = useRef<HTMLButtonElement>(null);
+  const primaryNav = useRef<HTMLElement>(null);
+  const pendingBrowseFocus = useRef<WorkspaceBrowseSection | null>(null);
 
   useLayoutEffect(() => {
+    if (!collapsed && pendingBrowseFocus.current) {
+      primaryNav.current?.querySelector<HTMLAnchorElement>(`[data-browse-section="${pendingBrowseFocus.current}"]`)?.focus({ preventScroll: true });
+      pendingBrowseFocus.current = null;
+      return;
+    }
     const hidden = collapsed ? collapseToggle.current : expandToggle.current;
     if (document.activeElement === hidden) {
       (collapsed ? expandToggle.current : collapseToggle.current)?.focus();
@@ -260,7 +268,7 @@ export function WorkspaceShellNav({
         </div>
       </div>
 
-      <nav aria-label="工作台导航" className={styles.railRow}>
+      <nav aria-label="工作台导航" className={styles.railRow} ref={primaryNav}>
         {WORKSPACE_RAIL_CONTROLS.map((control) =>
           control === "search" ? (
             <WorkspaceGlobalSearchDialog
@@ -290,7 +298,7 @@ export function WorkspaceShellNav({
           {WORKSPACE_RAIL_CONTROLS.map(control => control === "search" ? (
             <WorkspaceGlobalSearchDialog binding={binding} key={control} label={RAIL_LABELS.search} presentation="rail" />
           ) : (
-            <RailControl compact control={control} current={selection === control} key={control} route={workspaceRailRoute(control)!} onBrowse={() => setCollapsed(false)} />
+            <RailControl compact control={control} current={selection === control} key={control} route={workspaceRailRoute(control)!} onBrowse={section => { pendingBrowseFocus.current = section; setCollapsed(false); }} />
           ))}
         </div>
         <div className={styles.railCollapsedTop}>
