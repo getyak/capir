@@ -37,3 +37,17 @@ Use ignored output/evaluation/2026-10-23-macos-craft-recovery for focused test r
 - Later the native app navigated to People and began downloading an update without this task sending either input. Stop native input because the input owner is unknown (concurrent use or automatic behavior is possible); do not cancel that update or claim ownership of it. Native account session remains intentionally signed in.
 - Resident manifest advanced externally to 1dbb74dcc6358d17277fa799b1d42824a3d50732, whose source matches main for the four changed production components checked (menu, boundary, provider, directory cache). Preserve the complete active source lineage before eventual deployment. Manifest is not served-revision proof.
 - Pause remains active: no Pi, sub-agent, heavy build, deployment or PR-triggered build dispatched. Independent review, compiled checks, live changed-behavior acceptance, all remaining findings and >=97 target remain incomplete.
+
+## User-authorized serial acceptance exception
+
+2026-10-23: user explicitly allowed this task to perform serial independent review, Web build and deployment acceptance while retaining the global pause marker. Preserve other tasks/processes, keep the >=30 GiB preflight and post-dependency gate, and do not treat this as permission for parallel heavy work or unrelated cleanup. Independent reviewer recovery_review is auditing 979b62a85 read-only.
+
+## Initial independent review and P1 correction
+
+The reviewer role could not start because its fixed model is unavailable on this account; no review result was accepted from that failed attempt. An independent default agent recovery_review_v2 completed the fixed 979b62a85 audit and found one P1: directory invalidation aborts its own real 401 body before code recognition, so the boundary event never arrives. The original Response.json test did not model that cancellation.
+
+Correction uses a closed same-origin `X-Talent-Signal-Session-Status: expired` response header from the two real directory route producers; only canonical credential failures receive it. The client recognizes it before cache discard aborts transport, retaining immediate private-cache removal. Missing Web auth in the People producer is normalized to existing canonical AUTHENTICATION_REQUIRED. Legacy body-only behavior remains, with current-scope and cancellation checks both before and after asynchronous decoding; old replies cannot expire the new account.
+
+A new integration test uses the actual Session route's status, headers and body with a real abort-linked Fetch body through the shared cache, directory reader, request wrapper and mounted native boundary. It failed with private content remaining before the fix, then passed. Producer, malformed/error-status, foreign-origin and cancelled/changed-scope counterexamples cover metadata trust and stale replies. This deterministic behavior belongs in executable production-path tests, consistent with project-knowledge-steward; no new global rule or memory update is needed.
+
+Retired-release cleanup preflight detected that a required old build receipt disappeared during inspection. This task executed no deletion; a fresh VM mount inventory only exposes data/workspace, not Library. Do not attribute a concurrent free-space increase or another task's cache removal to this task.

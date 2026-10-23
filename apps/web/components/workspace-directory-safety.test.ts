@@ -439,3 +439,45 @@ describe("directory request deadlines", () => {
     await expect(cache.load("b", async () => "other account")).resolves.toBe("other account");
   });
 });
+
+it.each(["aborted", "changed-scope"])("does not expire a current account from a late %s response", async (transition) => {
+  const event = vi.fn();
+  let scope = "account-a";
+  vi.stubGlobal("window", { location: { href: "http://localhost:3000/workspace", origin: "http://localhost:3000" }, dispatchEvent: event });
+  vi.stubGlobal("document", { querySelector: () => ({ dataset: { workspaceScope: scope } }) });
+  const controller = new AbortController();
+  const pending = deferred<Response>();
+  const result = workspaceSessionFetch("/api/workspace-sessions", { signal: controller.signal }, () => pending.promise);
+  if (transition === "aborted") controller.abort(); else scope = "account-b";
+  const current: WorkspaceDirectorySnapshot = { people: { people: [{ id: "current" }] }, sessions: {} };
+  await loadWorkspaceDirectory("current", async () => current);
+  pending.resolve(Response.json({ code: "SESSION_EXPIRED" }, { status: 401, headers: { "X-Talent-Signal-Session-Status": "expired" } }));
+  await result;
+  expect(event).not.toHaveBeenCalled();
+  expect(readCachedWorkspaceDirectory("current")).toEqual(current);
+});
+
+it("does not trust an expiry header from another origin or a non-401 reply", async () => {
+  const event = vi.fn();
+  vi.stubGlobal("window", { location: { href: "http://localhost:3000/workspace", origin: "http://localhost:3000" }, dispatchEvent: event });
+  vi.stubGlobal("document", { querySelector: () => ({ dataset: { workspaceScope: "account-a" } }) });
+  for (const [url, status] of [["https://other.invalid/api/read", 401], ["/api/workspace-sessions", 503]] as const) {
+    await workspaceSessionFetch(url, {}, async () => Response.json({}, { status, headers: { "X-Talent-Signal-Session-Status": "expired" } }));
+  }
+  expect(event).not.toHaveBeenCalled();
+});
+
+it("does not apply a legacy body-only expiry after the account changes during decoding", async () => {
+  const event = vi.fn();
+  let scope = "account-a";
+  vi.stubGlobal("window", { location: { href: "http://localhost:3000/workspace", origin: "http://localhost:3000" }, dispatchEvent: event });
+  vi.stubGlobal("document", { querySelector: () => ({ dataset: { workspaceScope: scope } }) });
+  const reading = deferred<void>(), body = deferred<unknown>();
+  const response = { status: 401, headers: new Headers(), clone: () => ({ json: () => { reading.resolve(); return body.promise; } }) } as Response;
+  const pending = workspaceSessionFetch("/api/workspace-sessions", {}, async () => response);
+  await reading.promise;
+  scope = "account-b";
+  body.resolve({ code: "SESSION_EXPIRED" });
+  await pending;
+  expect(event).not.toHaveBeenCalled();
+});
