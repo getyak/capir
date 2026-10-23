@@ -1,4 +1,12 @@
 {
+  "capri 工作台": "capri workspace",
+  "显示侧边栏": "Show sidebar",
+  "调整侧边栏宽度": "Resize sidebar",
+  "已隐藏，向右拖动或按回车显示": "Hidden. Drag right or press Enter to show",
+  "紧凑侧栏": "Compact sidebar",
+  "{width} 像素": "{width} pixels",
+  "向右拖动或双击显示侧边栏": "Drag right or double-click to show the sidebar",
+  "拖动调整宽度，向左收起": "Drag to resize; drag left to hide",
   "今日导航": "Today navigation",
   "今日": "Today",
   "查看今日": "Open Today",

@@ -9,6 +9,7 @@ import {
   WorkspaceSidebarPresentation,
   type SidebarLayout,
 } from "@/lib/workspace-sidebar-layout";
+import { useT } from "./locale-provider";
 import styles from "./workspace-shell.module.css";
 
 const mobileSnapshot = () => window.matchMedia("(max-width: 760px)").matches;
@@ -24,6 +25,7 @@ function subscribeViewport(notify: () => void) {
 
 /** Local presentation only; Session and account state remain server-owned. */
 export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
+  const t = useT();
   const { layout, setLayout } = useWorkspaceSidebarLayout();
   const [preview, setPreview] = useState<SidebarLayout | null>(null);
   const mobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
@@ -86,18 +88,18 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
       ref={shell}
       style={{ "--workspace-sidebar-width": `${width}px` } as CSSProperties}
     >
-      <aside aria-hidden={hidden || undefined} aria-label="capri 工作台" className={styles.sidebar} id={sidebarId} inert={hidden}>
+      <aside aria-hidden={hidden || undefined} aria-label={t("capri 工作台")} className={styles.sidebar} id={sidebarId} inert={hidden}>
         <WorkspaceSidebarPresentation value={current}>{sidebar}</WorkspaceSidebarPresentation>
       </aside>
       {children}
       <div
         aria-controls={sidebarId}
-        aria-label={hidden ? "显示侧边栏" : "调整侧边栏宽度"}
+        aria-label={hidden ? t("显示侧边栏") : t("调整侧边栏宽度")}
         aria-orientation="vertical"
         aria-valuemax={availableWidth}
         aria-valuemin={0}
         aria-valuenow={width}
-        aria-valuetext={hidden ? "已隐藏，向右拖动或按回车显示" : current.collapsed ? "紧凑侧栏" : `${width} 像素`}
+        aria-valuetext={hidden ? t("已隐藏，向右拖动或按回车显示") : current.collapsed ? t("紧凑侧栏") : t("{width} 像素", { width })}
         className={styles.sidebarResizeHandle}
         onDoubleClick={() => setLayout({ ...layout, hidden: false, collapsed: false })}
         onKeyDown={onKeyDown}
@@ -124,7 +126,7 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
         onPointerUp={event => finish(event)}
         role="separator"
         tabIndex={0}
-        title={hidden ? "向右拖动或双击显示侧边栏" : "拖动调整宽度，向左收起"}
+        title={hidden ? t("向右拖动或双击显示侧边栏") : t("拖动调整宽度，向左收起")}
       />
     </div>
   );

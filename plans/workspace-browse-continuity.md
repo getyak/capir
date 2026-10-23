@@ -140,3 +140,40 @@ are not part of this slice's release claim.
 Required before merging/publishing: independent review with no confirmed P0/P1,
 all current-head applicable CI checks, recovery of the host resource gate,
 clean-source resident Web build/activation, and live desktop/narrow acceptance.
+
+## 2026-10-23 unified release approval and integration
+
+The user approved a one-release exception to the existing resource pause and
+explicitly authorized coordination with the sidebar-resize task for one combined
+release. The pause marker remains untouched. This task owns final integration,
+CI, merge, resident Web build, activation and live acceptance; the resize task
+will not start a competing deployment. Preserve the 30 GiB build gate and
+current plus rollback releases.
+
+- Integrated the complete resize branch through `ba9e02e0`: adjustable sidebar,
+  hide/restore edge, persisted non-sensitive layout preferences and plus-only
+  recent header. The final merge uses its shared layout presentation and the
+  independent browser's enabled selection and keyboard-focus restoration.
+- Initial independent source review found no P0/P1; its compact-category focus
+  P2 is fixed, tested and re-reviewed. A final integration review is requested.
+- Remote head `71fb750d` failed Web CI on missing i18n entries and an obsolete
+  implementation-string assertion. `ea395ef7` adds all five locale entries,
+  updates that assertion, restores compact category keyboard focus and clears
+  browse selection semantics after expiry without remounting revoked panels.
+- MiMo first review was published against `71fb750d`. Its mobile P2 was not
+  confirmed: the entire sidebar column is hidden at <=760px; desktop retained
+  panels must survive a temporary breakpoint change. Its expired-provider P3
+  is fixed. No second paid review was started for that same head.
+- The prior local tests used borrowed, stale compiled contracts; their six
+  dependency/export failures are not passes. Replace borrowed links with an
+  independent frozen-lockfile install before final verification.
+- Host sample before dependency preparation: 37.96 GiB available, 7.59 GiB swap,
+  142 Node/npm processes. Docker VM has 9.39 GiB available. Only one bounded
+  integration test/build owner is active. No production activation yet.
+
+Independent frozen install with pnpm 11.18.0 succeeded. Full Web typecheck,
+full Web ESLint and `pnpm docs:check` passed. The unified focused run passed
+173/174 tests; its only failure was the new frame's untranslated accessibility
+copy. Added useT and eight catalog keys in all five locales; the 40-test
+frame/i18n rerun and targeted ESLint pass. The other 134 focused tests were
+unchanged after that failure. Final combined CI is still required.
