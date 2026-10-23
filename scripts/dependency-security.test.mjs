@@ -424,7 +424,7 @@ function resolvedVersions(name) {
 test("resolved production repairs are recorded in the lockfile", () => {
   assert.deepEqual(resolvedVersions("@modelcontextprotocol/sdk"), ["1.32.0"]);
   assert.deepEqual(resolvedVersions("hono"), ["4.13.11"]);
-  assert.deepEqual(resolvedVersions("ip-address"), ["10.7.1"]);
+  assert.deepEqual(resolvedVersions("ip-address"), ["10.7.4"]);
   assert.deepEqual(resolvedVersions("fast-uri"), ["3.1.8", "4.1.5"]);
   assert.deepEqual(resolvedVersions("source-map-js"), ["1.2.2"]);
   assert.ok(lock.includes("\n  mammoth@1.13.0:"));
