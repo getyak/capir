@@ -231,7 +231,6 @@ export function WorkspaceShellNav({
     if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`);
   }
 
-
   return (
     <div
       className={styles.sidebarState}
@@ -301,7 +300,6 @@ export function WorkspaceShellNav({
         </div>
         <RailSessionShortcuts binding={binding} storageScope={storageScope} />
         <div className={styles.railUtility}>
-
           <Link aria-label="打开对话记录" className={styles.railIconLink} href="/workspace/sessions" title="对话记录">
             <ClockCounterClockwise aria-hidden="true" size={18} />
           </Link>

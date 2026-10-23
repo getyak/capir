@@ -108,4 +108,35 @@ remaining requested behaviors. Preserve this worktree until delivery.
 Full typecheck/build, independent review, resident deployment, changed-runtime
 desktop/narrow acceptance, right tabs and source-preview acceptance remain
 incomplete. Keep this branch/worktree and its evidence for continuation; do not
-merge, close an issue or describe the requested feature as delivered.
+close an issue or describe the full requested feature as delivered. The verified
+sidebar slice may be released separately after its release gates pass.
+
+## 2026-10-23 remote delivery continuation
+
+The user explicitly requested pushing the change and publishing a new version.
+Publish the independently verified sidebar slice as the next release; right-side
+tabs and source-preview acceptance remain disclosed follow-up requirements and
+are not part of this slice's release claim.
+
+- Repository canonical name resolved by GitHub: `getyak/capir` (the existing
+  `getyak/talent-signal` remote redirects there).
+- Published branch: `codex/workspace-browse-continuity-20261023`.
+- PR: https://github.com/getyak/capir/pull/410 (draft until release gates pass).
+- Merged current remote main `a89bba220af54b16d777a16f444173d994a273e2`
+  into the task branch, preserving its shared compact rail, avatar and unread
+  behavior. The compact rail now expands the browser through the same category
+  control used by the expanded rail.
+- After integration, 118 focused tests passed and four shell tests failed
+  because the borrowed local contracts distribution lacks `LOCALE_ENDONYMS`.
+  The source exports it; current-head CI's clean shared-package build must
+  validate that path. Do not misreport these four local results as passes.
+- Targeted ESLint passed. The build-cache maintenance dry run found zero safe
+  candidates. No cache or other task's artifacts were deleted.
+- Host resources remain below the 30 GiB production-build gate; the existing
+  `current-chat-sre` resource pause is still present. No new local build,
+  resident service or review worker was started. No resident activation or
+  live changed-behavior verification has occurred.
+
+Required before merging/publishing: independent review with no confirmed P0/P1,
+all current-head applicable CI checks, recovery of the host resource gate,
+clean-source resident Web build/activation, and live desktop/narrow acceptance.
