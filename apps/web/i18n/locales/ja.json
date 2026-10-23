@@ -1591,5 +1591,14 @@
   "这个 Mac 登录请求无效、已过期或与当前浏览器不匹配。请回到 Mac，重新发起登录。": "この Mac のログイン要求は無効、有効期限切れ、または現在のブラウザと一致しません。Mac に戻り、ログインをやり直してください。",
   "暂时无法连接登录服务。请稍后回到 Mac 重试；这不代表你已经退出登录。": "現在、ログインサービスに接続できません。しばらくしてから Mac で再試行してください。ログアウトしたという意味ではありません。",
   "未读": "未読",
-  "{title}（未读）": "{title}（未読）"
+  "{title}（未读）": "{title}（未読）",
+  "conversation.copy.user": "メッセージをコピー",
+  "conversation.copy.answer": "回答をコピー",
+  "conversation.copy.retryUser": "メッセージのコピーを再試行",
+  "conversation.copy.retryAnswer": "回答のコピーを再試行",
+  "conversation.copy.failed": "コピーできませんでした。もう一度お試しください。",
+  "conversation.copy.success": "コピーしました",
+  "conversation.copy.busy": "コピー中",
+  "conversation.send.steer": "補足",
+  "conversation.send.queue": "キューに追加"
 }

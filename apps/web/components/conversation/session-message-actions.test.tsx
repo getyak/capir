@@ -12,6 +12,7 @@ vi.mock("./conversation-images", () => ({ ConversationImageStrip: () => <div dat
 import { extractSessionMessageCopy } from "./session-message-actions";
 import { SessionAssistantMessage, SessionUserMessage, type SessionProjectedMessage } from "./session-message-parts";
 import { SessionRuntime } from "./session-runtime";
+import { LocaleProvider } from "../locale-provider";
 
 const data = (name: string, value: Record<string, unknown>) => ({ type: "data" as const, name: `talent-signal.${name}`, data: value });
 function execution(phase = "completed", endedAt: string | null = "2026-10-23T00:00:08Z") {
@@ -83,11 +84,11 @@ afterEach(async () => {
   else Reflect.deleteProperty(navigator, "clipboard");
   vi.useRealTimers(); vi.unstubAllGlobals();
 });
-async function render(messages: SessionProjectedMessage[]) {
-  await act(async () => root!.render(<SessionRuntime messages={messages} running={false}>
+async function render(messages: SessionProjectedMessage[], locale: "zh-CN" | "en" = "zh-CN") {
+  await act(async () => root!.render(<LocaleProvider locale={locale}><SessionRuntime messages={messages} running={false}>
     <ThreadPrimitive.Root><ThreadPrimitive.Messages>{({ message: current }) => current.role === "user"
       ? <SessionUserMessage context={context}/> : <SessionAssistantMessage context={context}/>}</ThreadPrimitive.Messages></ThreadPrimitive.Root>
-  </SessionRuntime>));
+  </SessionRuntime></LocaleProvider>));
 }
 const action = (label = "复制回答") => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 
@@ -115,6 +116,20 @@ it("never renders a copy control for incomplete answers or image-only messages",
     message("user", [data("user-images", { messageId: "user-1", images: [{}] })])]);
   expect(host.querySelector("[data-message-actions]")).toBeNull();
   expect(writeText).not.toHaveBeenCalled();
+});
+it("uses the active display locale for copy, retry and feedback while preserving source text", async () => {
+  const source = "  用户\n原文  ";
+  await render([message("user", [{ type: "text", text: source }]), message("assistant", [execution(), answer()])], "en");
+  expect(action("Copy answer")).not.toBeNull();
+  writeText.mockRejectedValueOnce(new Error("denied"));
+  await act(async () => action("Copy message").click());
+  expect(host.querySelector('[role="status"]')?.textContent).toBe("Could not copy. Try again.");
+  await act(async () => action("Retry copying message").click());
+  expect(writeText).toHaveBeenLastCalledWith(source);
+  expect(host.textContent).toContain("Copied");
+  writeText.mockRejectedValueOnce(new Error("denied"));
+  await act(async () => action("Copy answer").click());
+  expect(action("Retry copying answer")).not.toBeNull();
 });
 it("offers visible retry after a rejected clipboard write and clears success feedback", async () => {
   writeText.mockRejectedValueOnce(new Error("denied"));

@@ -4,6 +4,7 @@ import { useAuiState } from "@assistant-ui/react";
 import { Check, Copy } from "@phosphor-icons/react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "../ui/button";
+import { useT } from "../locale-provider";
 import { sessionBlockTitle } from "../session-workbench/session-presentation";
 import styles from "./session-message-actions.module.css";
 
@@ -51,6 +52,7 @@ export function extractSessionMessageCopy(message: CopyMessage): CopyPayload | n
 type Feedback = "idle" | "busy" | "copied" | "failed";
 
 export function SessionMessageActions({ afterBlockId }: { afterBlockId?: string }) {
+  const t = useT();
   const message = useAuiState(s => s.message);
   const payload = extractSessionMessageCopy(message);
   const text = payload?.text ?? null;
@@ -69,7 +71,6 @@ export function SessionMessageActions({ afterBlockId }: { afterBlockId?: string 
   }, [identity, state]);
 
   if (!payload || (message.role === "assistant" && payload.anchorBlockId !== afterBlockId)) return null;
-  const noun = message.role === "user" ? "消息" : "回答";
   async function copy() {
     if (!text || current.current.busy) return;
     current.current.busy = true;
@@ -86,14 +87,16 @@ export function SessionMessageActions({ afterBlockId }: { afterBlockId?: string 
       if (stillCurrent()) current.current.busy = false;
     }
   }
-  const label = state === "failed" ? `重试复制${noun}` : `复制${noun}`;
+  const label = message.role === "user"
+    ? t(state === "failed" ? "conversation.copy.retryUser" : "conversation.copy.user")
+    : t(state === "failed" ? "conversation.copy.retryAnswer" : "conversation.copy.answer");
   return <div className={styles.actions} data-message-actions={message.role} data-state={state}>
     <Button className={styles.copy} variant="ghost" size="icon" aria-label={label} title={label}
       aria-busy={state === "busy"} disabled={state === "busy"} onClick={() => void copy()}>
       {state === "copied" ? <Check size={16} weight="regular" aria-hidden="true"/> : <Copy size={16} weight="regular" aria-hidden="true"/>}
     </Button>
     <span className={state === "failed" ? styles.failure : "sr-only"} role={state === "idle" ? undefined : "status"} aria-live="polite" aria-atomic="true">
-      {state === "failed" ? "复制失败，请重试" : state === "copied" ? "已复制" : state === "busy" ? "正在复制" : ""}
+      {state === "failed" ? t("conversation.copy.failed") : state === "copied" ? t("conversation.copy.success") : state === "busy" ? t("conversation.copy.busy") : ""}
     </span>
   </div>;
 }

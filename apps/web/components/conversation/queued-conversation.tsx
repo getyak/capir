@@ -14,6 +14,7 @@ import { WORKSPACE_NEW_CONVERSATION_EVENT } from "@/lib/workspace-navigation";
 import type { ConversationImageManifest, ConversationQueueEntry, MemoryProposalItem } from "@talent-signal/contracts";
 import type { LocalMessage } from "@/lib/conversation-local";
 import { WorkspaceComposer } from "../workspace-composer";
+import { useT } from "../locale-provider";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { conversationNearBottom } from "../session-workbench/session-presentation";
 import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
@@ -61,6 +62,7 @@ export function queueFailureText(code: string | null, hasImages: boolean): strin
 
 type Props = { bootstrap?: { sessionId: string; capability: string } | null; focusComposer?: boolean; initialDetail?: SessionDetail; scope: string; chatBinding: string; detailBinding: string; meetingLinks?: Array<{id: string; title: string}>; meetingReadFailed?: boolean; legacyRecovery?: LegacyConversationRecovery | null; entryCapability?: string | null };
 export function QueuedConversation(props: Props) {
+  const t = useT();
   const router = useRouter();
   const [id, setId] = useState<string | null>(props.initialDetail?.session_id ?? null);
   const [admitted, setAdmitted] = useState(Boolean(props.initialDetail));
@@ -152,7 +154,11 @@ export function QueuedConversation(props: Props) {
     queueMicrotask(() => { if (current) setMilestoneRecords(records => records[messageId] === milestones ? records : { ...records, [messageId]: milestones }); });
     return () => { current = false; };
   }, [active?.message_id, milestones]);
-  const composerScope = `${props.scope}:${props.chatBinding}:${props.detailBinding}:${id ?? "draft"}`;
+  // Resolving the local Home session ID is initialization, not a new editing
+  // context. Keep the same native editor through readiness and focus handoff;
+  // explicit Session or account changes still create a new composition owner.
+  const composerSession = props.initialDetail?.session_id ?? props.bootstrap?.sessionId ?? "home";
+  const composerScope = `${props.scope}:${props.chatBinding}:${props.detailBinding}:${composerSession}`;
   const composerOwner = useMemo(() => Symbol(composerScope), [composerScope]);
   const composingRef = useRef<{ owner: symbol | null; value: boolean }>({ owner: composerOwner, value: false });
   const [composition, setComposition] = useState({ owner: composerOwner, value: false });
@@ -354,7 +360,7 @@ export function QueuedConversation(props: Props) {
       {chat.submitting && <p className={styles.composerImageHint} role="status">正在发送…</p>}
       <div className={styles.composer}>
         <WorkspaceComposer key={composerScope} id="queued-conversation-composer" label="消息" value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? "继续补充，会并入当前任务…" : "继续补充，会按顺序处理…" : paused ? "继续输入，消息会加入暂停的队列…" : imageCount ? "可加一句话说明，或直接发送图片…" : "有什么想一起理清的？"} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onComposingChange={composingChanged} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
-          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? "补充当前任务" : active || queued.length || paused ? "加入队列" : "发送消息"} title={acceptsSteering ? "补充当前任务" : active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? "补充" : "排队"}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
+          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? "补充当前任务" : active || queued.length || paused ? "加入队列" : "发送消息"} title={acceptsSteering ? "补充当前任务" : active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? t("conversation.send.steer") : t("conversation.send.queue")}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
       {!hasContent && <div className={styles.starters} aria-label="开始一个话题">{["你可以帮我做什么？", "准备下一次交流"].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
       <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>Enter 发送 · Shift+Enter 换行</span></div>
