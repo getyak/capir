@@ -199,8 +199,10 @@ lock or sustained CPU saturation; a later login took238ms. No raw personal
 screenshot was uploaded.
 
 Real-provider native image -> review -> one contact confirmation -> destination
-and relaunch remains incomplete. On continuation use the private run journal,
-verify expiry and ownership, and start a fresh loopback inspection challenge.
+and relaunch remains incomplete. Both owned isolated runs were canonically
+verified deleted and their generated credentials removed. Continuation requires
+a fresh isolated run, a new canonical baseline and a fresh loopback inspection
+challenge; the closed run journal is historical evidence, not a usable login.
 Never replay an uncertain one-use credential or silently resend an image. On
 handoff stop the isolated run and verify deleted/cleanup-error state; retain
 sanitized evidence and remove only its own generated credentials after cleanup.
@@ -208,19 +210,28 @@ sanitized evidence and remove only its own generated credentials after cleanup.
 ## Resource and delivery checkpoint
 
 The global operations pause is preserved under the user's explicit task
-exception. Only main builds/runs Simulator. No safe cache/artifact candidates
-sufficient for five additional GiB were established; unknown worktrees,
-databases, active runtimes and unique screenshots remain protected. The
-browser VM is the existing profile restored with its original4GiB configuration.
-A reversible temporary2GiB plan awaits explicit approval required by the local
-operations policy; it has not been applied. Recheck live activity, daemon
-identity, context and actual storage before any approved adjustment or new
-Simulator attempt, then restore and verify the original configuration.
+exception. Only main builds/runs Simulator. The user approved a temporary
+reduction of the existing browser VM from 4GiB to 2GiB, followed by restoration.
+Both settings passed a real public-page browser probe. The original 4GiB
+configuration, its hash, Docker context and resident container identities were
+verified restored after the attempt. Two superseded Web releases outside the
+retained five had four unreferenced generated directories removed, accounting
+for 2.37GiB of directory allocation; exclusive physical recovery is unknown.
+Primary cold boot completed, but free disk fell to 26.14GiB. Main interrupted
+the guarded session before any test case, new isolated run, upload or contact
+save, then verified the owned device was Shutdown. Source, active runtimes,
+databases, rollback versions and unique evidence remain protected. Recheck
+actual headroom and ownership before any further Simulator attempt.
 
-Draft PR405 remains open and unmerged:
-https://github.com/getyak/capir/pull/405.
-Neither local source review, green historical CI nor deployed runtime probes
-establish the outstanding native provider journey.
+On 2026-10-23 the user explicitly authorized merging
+https://github.com/getyak/capir/pull/405, superseding the earlier draft-only
+delivery choice. Merge must satisfy the repository's strict up-to-date
+CI/Security rules and independent review without bypass. The merge preparation
+integrated main's permanent chat-media deletion fix; native frozen source was
+unchanged and the integration review found no new P0/P1. Read actual merge
+state and current-head check receipts from GitHub and the private journal.
+Merge authorization does not establish the outstanding native provider journey,
+production Keychain write, physical-device acceptance or TestFlight delivery.
 
 Private formal task evidence and current journal:
 `~/.codex/artifacts/ios-conversation-experience-20261022/`.
