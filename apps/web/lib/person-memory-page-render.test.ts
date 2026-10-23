@@ -18,6 +18,7 @@ import PersonMemoryPage from "@/app/workspace/people/[id]/page";
 
 const personId = "11111111-1111-4111-8111-111111111111";
 const contextId = "22222222-2222-4222-8222-222222222222";
+const otherContextId = "44444444-4444-4444-8444-444444444444";
 const sessionId = "33333333-3333-4333-8333-333333333333";
 const fixture = () => ({
   person: { id: personId, display_label: "陈知远", avatar: null, identity_matches: [], profile: null,
@@ -84,11 +85,15 @@ describe("saved Person destination", () => {
     expect(html.includes("已确认的联系方式")).toBe(kind === "confirmed_handle");
   });
 
-  it("passes exact authority and revision to pending review, without rendering it as a saved fact", async () => {
-    loadPersonMemory.mockResolvedValue({ ...fixture(), items: [], proposals: [{ proposal_id: "pending-id", revision: 7, relationship_context_id: contextId }] });
+  it.each([contextId, otherContextId, null])("keeps proposal context %s separate from the signed Person entry authority", async (relationshipContextId) => {
+    const data = fixture();
+    data.person.contexts.push({ id: otherContextId, display_label: "项目协作" });
+    loadPersonMemory.mockResolvedValue({ ...data, items: [], proposals: [{ proposal_id: "pending-id", revision: 7, relationship_context_id: relationshipContextId }] });
     const html = await render();
     expect(html).toContain("待审核的内容");
-    expect(review).toHaveBeenCalledWith(expect.objectContaining({ binding: "binding", entryCapability: "scoped-entry", personId, contextId, purpose: "people", proposal: { proposal_id: "pending-id", revision: 7 } }));
+    expect(mint).toHaveBeenCalledWith(expect.anything(), { purpose: "people", personId });
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ binding: "binding", entryCapability: "scoped-entry", personId, contextId: null, purpose: "people", proposal: { proposal_id: "pending-id", revision: 7 } }));
     expect(html).not.toContain("我们通过读书会认识");
   });
 

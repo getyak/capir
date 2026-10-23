@@ -28,6 +28,7 @@ import {
 import { clearConversationImageStore } from "@/lib/conversation-image-lifecycle";
 import { forgetSessionOrganization } from "@/lib/workspace-session-organization";
 import { sameConversationImages, unresolvedConversationCount } from "./conversation-feedback";
+import { useT } from "../locale-provider";
 
 type Options = { entryCapability?: string | null; bootstrap?: string | null; id: string | null; scope: string; chatBinding: string; detailBinding: string; initial?: SessionDetail; onAdmitted?: (id: string) => void };
 class RequestError extends Error { constructor(message: string, readonly status: number, readonly code?: string) { super(message); } }
@@ -44,6 +45,7 @@ export type ConversationAttachment = {
 };
 
 export function useConversation(options: Options) {
+  const t = useT();
   const { id, scope, chatBinding, detailBinding, initial } = options;
   const [entryCapability, setEntryCapability] = useState(options.entryCapability ?? null);
   const [renderedEntry, setRenderedEntry] = useState(options.entryCapability);
@@ -137,7 +139,7 @@ export function useConversation(options: Options) {
     const images = await Promise.allSettled(messageIds.map(messageId => removeConversationImagesConfirmed(scope, id, messageId)));
     if (!stillCurrent(owner)) return false;
     const clean = metadataRemoved && images.every(result => result.status === "fulfilled" && result.value);
-    if (!clean) setError("队列已移除，但本机副本清理未完成，请恢复本机存储后核对。");
+    if (!clean) setError(t("队列已移除，但本机副本清理未完成，请恢复本机存储后核对。"));
     return clean;
   }
 
@@ -593,7 +595,7 @@ export function useConversation(options: Options) {
     if (mutationBusy.current || !snapshotRef.current) return false;
     const owner = lifecycle.current;
     const withdrawnEntry = input.kind === "withdraw" ? snapshotRef.current.queued.find(entry => entry.queue_entry_id === input.queue_entry_id) : null;
-    if (input.kind === "withdraw" && !withdrawnEntry) { setError("队列刚刚有变化，请核对后再操作。"); return false; }
+    if (input.kind === "withdraw" && !withdrawnEntry) { setError(t("队列刚刚有变化，请核对后再操作。")); return false; }
     mutationBusy.current = true; setMutating(true); setError("");
     try {
       const operation = crypto.randomUUID();
@@ -614,10 +616,10 @@ export function useConversation(options: Options) {
       if (input.kind === "withdraw") {
         const ids = body.applied?.withdrawn_message_ids;
         if (body.applied?.kind !== "withdraw" || body.applied.queue_entry_id !== input.queue_entry_id || body.applied.status !== null || body.applied.run_id !== null || body.snapshot?.session_id !== id || !Array.isArray(ids) || !ids.includes(withdrawnEntry!.message_id) || [body.snapshot.active, ...(body.snapshot.queued ?? [])].some(entry => entry?.queue_entry_id === input.queue_entry_id)) {
-          setError("撤销回执尚不完整，本机内容已保留，请核对后再操作。"); return false;
+          setError(t("撤销回执尚不完整，本机内容已保留，请核对后再操作。")); return false;
         }
         if (!writeConversationWithdrawal(scope, id!, operation, ids, expiry())) {
-          setError("队列已移除，但本机撤销记录未能保存，请恢复本机存储后核对。"); return false;
+          setError(t("队列已移除，但本机撤销记录未能保存，请恢复本机存储后核对。")); return false;
         }
         return await retireWithdrawn(ids);
       }

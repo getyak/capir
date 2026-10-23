@@ -6,6 +6,7 @@ import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./worksp
 import { canEditMemory } from "@/lib/person-memory-projection";
 import { invalidateWorkspaceDirectory } from "@/lib/workspace-directory-cache";
 import { subscribePersonMemoryInvalidation } from "@/lib/person-memory-invalidation";
+import { useT } from "./locale-provider";
 
 export type MemoryEditPhase = "editing" | "saving" | "unknown" | "conflict";
 type Attempt = { id: string; version: number; key: string; text: string; replacement: MemoryRecallItem | null; original: MemoryRecallItem; action: "correct" | "delete"; acknowledged: boolean };
@@ -25,6 +26,7 @@ async function memoryErrorCode(response: Response): Promise<string | null> {
 }
 
 export function usePersonMemory(options: Options) {
+  const t = useT();
   const [items, setItems] = useState(options.items);
   const [edit, setEdit] = useState<MemoryEdit | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -200,7 +202,7 @@ export function usePersonMemory(options: Options) {
         if (caught instanceof MemoryReadError && [401, 403, 404, 410].includes(caught.status)) {
           setItems([]); setEdit(null); setHasMore(false); setNextCursor(null); setNotice(null);
         }
-        setLoadError("最新记忆暂时无法读取，请重新打开人物页面核对。");
+        setLoadError(t("最新记忆暂时无法读取，请重新打开人物页面核对。"));
       } finally {
         if (epoch === generation.current) {
           pageBusy.current = false; setLoadingMore(false);
@@ -208,7 +210,7 @@ export function usePersonMemory(options: Options) {
         }
       }
     })();
-  }, [refreshTick, edit, loadingMore, readSnapshot]);
+  }, [refreshTick, edit, loadingMore, readSnapshot, t]);
 
   const begin = useCallback((item: MemoryRecallItem) => {
     if (expired.current || busy.current || pageBusy.current || attempt.current || current.current.edit || !canEditMemory(item)) return;
@@ -309,7 +311,7 @@ export function usePersonMemory(options: Options) {
           confirmed.current.delete(oldID); deleted.current.add(oldID);
         }
         setItems(snapshot); setHasMore(false); setNextCursor(null);
-        attempt.current = null; setEdit(null); setNotice("记忆已删除，并已核对当前列表。原始对话未删除。");
+        attempt.current = null; setEdit(null); setNotice(t("记忆已删除，并已核对当前列表。原始对话未删除。"));
         return operation.id;
       }
       const replacement = operation.replacement;
@@ -346,7 +348,7 @@ export function usePersonMemory(options: Options) {
         if (index >= 0) next.splice(index, 1, persisted!); else next.push(persisted!);
         return next;
       });
-      attempt.current = null; setEdit(null); setNotice("修改已保存，并已核对最新记忆。");
+      attempt.current = null; setEdit(null); setNotice(t("修改已保存，并已核对最新记忆。"));
       return persisted.id;
     } catch (caught) {
       if (epoch !== generation.current) return null;
@@ -355,12 +357,12 @@ export function usePersonMemory(options: Options) {
         setLoadError("访问范围已不可用，无法核对修改结果。请重新打开人物页面。");
       } else {
         setEdit({ ...active, phase: "unknown", error: operation.action === "delete"
-          ? "删除结果还不能确认。请核对并重试，将复用同一次请求。"
+          ? t("删除结果还不能确认。请核对并重试，将复用同一次请求。")
           : "保存结果还不能确认。草稿已保留；核对时会复用同一次请求。" });
       }
       return null;
     } finally { if (epoch === generation.current) busy.current = false; }
-  }, [readPage, readSnapshot, request]);
+  }, [readPage, readSnapshot, request, t]);
 
   const refreshConflict = useCallback(async () => {
     const active = current.current.edit;
@@ -373,7 +375,7 @@ export function usePersonMemory(options: Options) {
       setItems(refreshed); setHasMore(false); setNextCursor(null);
       const newest = refreshed.find(item => item.id === active.itemId || (active.action !== "delete" && item.supersedes_id === active.itemId));
       if (newest && canEditMemory(newest)) setEdit({ ...active, itemId: newest.id, ...(active.action === "delete" ? { draft: newest.display_text } : {}),
-        phase: "editing", error: active.action === "delete" ? "已载入当前记录，请再次核对后决定是否删除。" : "已载入最新记忆，草稿仍保留。核对后保存将基于最新版本。" });
+        phase: "editing", error: active.action === "delete" ? t("已载入当前记录，请再次核对后决定是否删除。") : "已载入最新记忆，草稿仍保留。核对后保存将基于最新版本。" });
       else if (newest) setEdit({ ...active, itemId: newest.id, phase: "conflict", error: "这条记忆仍可读取，但当前没有修改权限。草稿已保留，可取消编辑。" });
       else setEdit({ ...active, phase: "conflict", error: "原记忆已连续更新或不可用。草稿已保留；请取消本次编辑后，从最新记录重新修改。" });
     } catch (caught) {
@@ -383,7 +385,7 @@ export function usePersonMemory(options: Options) {
         setLoadError("记忆或访问范围已不可用，请重新打开人物页面。");
       } else setEdit({ ...active, error: "无法读取最新记忆，草稿仍保留。请稍后核对。" });
     } finally { if (epoch === generation.current) busy.current = false; }
-  }, [readSnapshot]);
+  }, [readSnapshot, t]);
 
   const loadMore = useCallback(async () => {
     if (expired.current || !hasMore || !nextCursor || pageBusy.current || busy.current) return;

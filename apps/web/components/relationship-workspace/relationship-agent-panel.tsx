@@ -28,6 +28,7 @@ import {
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { useT } from "@/components/locale-provider";
 
 import { ProductFeedback } from "@/components/product-feedback";
 import { AgentCreatePersonCard } from "./agent-create-person-card";
@@ -97,6 +98,7 @@ export function RelationshipAgentPanel({
   scope,
   submittedObjective,
 }: Props) {
+  const t = useT();
   const reviewMode = mode === "review";
   const [collapsed, setCollapsed] = useState(!createOpen);
   const [isComposing, setIsComposing] = useState(false);
@@ -400,10 +402,10 @@ export function RelationshipAgentPanel({
             <div>
               <Button asChild variant="outline">
                 <Link href={`/workspace/people/${encodeURIComponent(scope.person.id)}#person-memory-pending`}>
-                  审阅记忆建议 <ArrowRight aria-hidden="true" size={14} />
+                  {t("审阅记忆建议")} <ArrowRight aria-hidden="true" size={14} />
                 </Link>
               </Button>
-              <p>核对后由你决定是否保存。</p>
+              <p>{t("核对后由你决定是否保存。")}</p>
             </div>
           ) : null}
           <RunArtifacts taskID={response.task_id} />

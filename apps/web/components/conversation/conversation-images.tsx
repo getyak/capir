@@ -8,6 +8,7 @@ import type { ConversationImageManifest } from "@talent-signal/contracts";
 
 import { workspaceSessionFetch } from "../workspace-session-request";
 import { loadConversationImages } from "@/lib/conversation-image-store";
+import { useT } from "../locale-provider";
 import styles from "./queued-conversation.module.css";
 
 type Props = {
@@ -73,6 +74,7 @@ function LoadedConversationImageStrip({
   local,
   compact = false,
 }: Props) {
+  const t = useT();
   const [attempt, setAttempt] = useState(0);
   const [reading, setReading] = useState(true);
   const [recoveryId, setRecoveryId] = useState<string | null>(null);
@@ -377,7 +379,7 @@ function LoadedConversationImageStrip({
   const activeRetry = inlineRetry?.position === index ? inlineRetry : null;
   const showInlineRetry = failed[index] || activeRetry !== null;
   const viewerMessage = activeRetry
-    ? (activeRetry.recovered ? "图片已恢复。" : activeRetry.pending ? "正在重新读取图片…" : "正在读取图片…")
+    ? (activeRetry.recovered ? t("图片已恢复。") : activeRetry.pending ? t("正在重新读取图片…") : "正在读取图片…")
     : failed[index] ? "这张图片暂时无法读取。" : "正在读取图片…";
 
   return (
@@ -421,11 +423,11 @@ function LoadedConversationImageStrip({
         </div>
       ) : null}
       {anyFailed || recoveryId ? (
-        <button aria-busy={reading || undefined} aria-disabled={reading || undefined} aria-label={recovered ? `已重新读取，查看原图 ${recoveryPosition + 1}` : undefined} className={styles.imageRetry} onClick={event => { if (readBusy.current) return; if (recovered) openAt(recoveryPosition, event.currentTarget); else retryAll(); }} type="button">
-          {recovered ? `查看原图 ${recoveryPosition + 1}` : recoveryId && reading ? "正在重新读取" : "重新读取图片"}
+        <button aria-busy={reading || undefined} aria-disabled={reading || undefined} aria-label={recovered ? t("已重新读取，查看原图 {index}", { index: recoveryPosition + 1 }) : undefined} className={styles.imageRetry} onClick={event => { if (readBusy.current) return; if (recovered) openAt(recoveryPosition, event.currentTarget); else retryAll(); }} type="button">
+          {recovered ? `查看原图 ${recoveryPosition + 1}` : recoveryId && reading ? t("正在重新读取") : "重新读取图片"}
         </button>
       ) : null}
-      {recoveryId ? <span className="sr-only" role="status">{reading ? "正在重新读取图片。" : anyFailed ? "仍有图片暂时无法读取，可重试。" : "图片已重新读取，可查看原图。"}</span> : null}
+      {recoveryId ? <span className="sr-only" role="status">{reading ? t("正在重新读取图片。") : anyFailed ? t("仍有图片暂时无法读取，可重试。") : t("图片已重新读取，可查看原图。")}</span> : null}
       <Dialog.Root open={open} onOpenChange={onOpenChange}>
         <Dialog.Portal>
           <Dialog.Overlay className={styles.imageBackdrop} />
@@ -491,7 +493,7 @@ function LoadedConversationImageStrip({
                       ref={inlineRetryButtonRef}
                       type="button"
                     >
-                      {activeRetry?.recovered ? "查看已恢复图片" : "重新读取"}
+                      {activeRetry?.recovered ? t("查看已恢复图片") : "重新读取"}
                     </button>
                   ) : null}
                 </div>

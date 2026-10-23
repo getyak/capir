@@ -1,12 +1,14 @@
 "use client";
 
 import { useLayoutEffect, useRef } from "react";
+import { useT } from "./locale-provider";
 
 /** Next's hash navigation scrolls, but does not focus the requested section. */
 export function PersonMemoryReviewHeading({ personId, className }: {
   personId: string;
   className?: string;
 }) {
+  const t = useT();
   const heading = useRef<HTMLHeadingElement>(null);
   useLayoutEffect(() => {
     const node = heading.current;
@@ -21,5 +23,5 @@ export function PersonMemoryReviewHeading({ personId, className }: {
     node.scrollIntoView({ block: "start" });
   }, [personId]);
   return <h2 className={className} id="person-memory-pending" ref={heading}
-    style={{ scrollMarginTop: "6rem" }} tabIndex={-1}>待确认变化</h2>;
+    style={{ scrollMarginTop: "6rem" }} tabIndex={-1}>{t("待确认变化")}</h2>;
 }

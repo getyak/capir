@@ -4,7 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const navigation = vi.hoisted(() => ({ pathname: "/workspace", binding: "a" }));
-vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => navigation.pathname,
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
 vi.mock("./workspace-session-request", () => ({
   WORKSPACE_SESSION_EXPIRED_EVENT: "test-session-expired",
   workspaceSessionFetch: vi.fn(),

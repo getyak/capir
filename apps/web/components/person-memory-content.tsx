@@ -5,6 +5,7 @@ import Link from "next/link";
 import { PencilSimple, ArrowSquareOut, CaretDown, Trash } from "@phosphor-icons/react";
 import type { MemoryRecallItem, PersonDirectoryItem } from "@talent-signal/contracts";
 import { Button } from "./ui/button";
+import { useT } from "./locale-provider";
 import { ResearchNotebook, researchNoteMetadata } from "./research-notebook";
 import { usePersonMemory, type MemoryEdit } from "./person-memory-controller";
 import { MEMORY_SCOPE_LABELS, canEditMemory, memoryAttribution, memoryDate, memoryGroups, memorySourceLabel, memorySources } from "@/lib/person-memory-projection";
@@ -51,6 +52,7 @@ function MemoryTime({ item }: { item: MemoryRecallItem }) {
 function MemoryEditor({ edit, onChange, onSave, onCancel, onRefresh }: {
   edit: MemoryEdit; onChange: (value: string) => void; onSave: () => Promise<void>; onCancel: () => void; onRefresh: () => Promise<void>;
 }) {
+  const t = useT();
   const composing = useRef(false);
   const form = useRef<HTMLFormElement>(null);
   useLayoutEffect(() => {
@@ -62,18 +64,18 @@ function MemoryEditor({ edit, onChange, onSave, onCancel, onRefresh }: {
   }, [edit.phase, edit.itemId]);
   const frozen = edit.phase === "saving" || edit.phase === "unknown";
   function save() { if (!composing.current) void onSave(); }
-  if (edit.action === "delete") return <form ref={form} className={styles.editor} aria-label="删除记忆确认"
+  if (edit.action === "delete") return <form ref={form} className={styles.editor} aria-label={t("删除记忆确认")}
     onSubmit={event => { event.preventDefault(); save(); }}
     onKeyDown={event => { if (event.key === "Escape" && !frozen) { event.preventDefault(); onCancel(); } }}>
-    <p className={styles.editLabel}>删除这条记忆？</p>
+    <p className={styles.editLabel}>{t("删除这条记忆？")}</p>
     <p className={styles.memoryText}>{edit.draft}</p>
-    <p className={styles.quiet}>删除后不再作为已确认记忆使用。原始对话会保留。</p>
+    <p className={styles.quiet}>{t("删除后不再作为已确认记忆使用。原始对话会保留。")}</p>
     {edit.error ? <p className={styles.error} role="alert">{edit.error}</p> : null}
     <div className={styles.editActions}>
       <Button variant="ghost" autoFocus={edit.phase === "editing"} disabled={frozen} onClick={onCancel}>取消</Button>
-      {edit.phase === "unknown" ? <Button variant="outline" onClick={save}>核对并重试删除</Button>
+      {edit.phase === "unknown" ? <Button variant="outline" onClick={save}>{t("核对并重试删除")}</Button>
         : edit.phase === "conflict" ? <Button variant="outline" onClick={() => void onRefresh()}>核对最新记忆</Button>
-          : <Button variant="outline" type="submit" disabled={frozen}>{frozen ? "正在删除并核对…" : "确认删除记忆"}</Button>}
+          : <Button variant="outline" type="submit" disabled={frozen}>{frozen ? t("正在删除并核对…") : t("确认删除记忆")}</Button>}
     </div>
   </form>;
   return <form ref={form} className={styles.editor} onSubmit={event => { event.preventDefault(); save(); }}>
@@ -101,6 +103,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   personId: string; binding: string; entryCapability: string; initialItems: MemoryRecallItem[];
   hasMore?: boolean; nextCursor?: string | null; contexts?: PersonDirectoryItem["contexts"]; returnSessionId?: string | null;
 }) {
+  const t = useT();
   const controller = usePersonMemory({ personId, binding, entryCapability, items: initialItems, hasMore, nextCursor });
   const [mode, setMode] = useState<Mode>("memory");
   const root = useRef<HTMLDivElement>(null);
@@ -183,7 +186,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
                     aria-label={`修改记忆：${item.display_text}`} type="button" onClick={() => controller.begin(item)}>
                     <PencilSimple size={15} aria-hidden="true" /><span>修改</span>
                   </button><button className={styles.editButton} data-memory-delete={item.id} disabled={Boolean(edit) || controller.loadingMore}
-                    aria-label={`删除记忆：${item.display_text}`} type="button" onClick={() => controller.beginDelete(item)}>
+                    aria-label={t("删除记忆：{text}", { text: item.display_text })} type="button" onClick={() => controller.beginDelete(item)}>
                     <Trash size={15} aria-hidden="true" /><span>删除</span>
                   </button></> : null}</div>
                 <div className={styles.memoryKind}><span>{memoryAttribution(item)}</span><MemoryTime item={item} />{contextLink(item)}</div>
