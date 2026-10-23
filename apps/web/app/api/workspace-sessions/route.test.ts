@@ -103,3 +103,11 @@ describe("workspace Session directory route", () => {
     expect(mocked.create).not.toHaveBeenCalled();
   });
 });
+
+it("publishes expiry metadata before a client can cancel the response body", async () => {
+  mocked.claims.mockResolvedValue(null);
+  const response = await GET(new Request("http://localhost:3000/api/workspace-sessions"));
+  expect(response.status).toBe(401);
+  expect(response.headers.get("X-Talent-Signal-Session-Status")).toBe("expired");
+  expect(await response.json()).toMatchObject({ code: "backend_session_expired" });
+});

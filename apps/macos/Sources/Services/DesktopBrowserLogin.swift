@@ -7,6 +7,13 @@ import Combine
 struct DesktopLoginIdentity: Equatable {
     let accountID: String
     let userID: String
+    var draftStorageScope: String? = nil
+    func matches(_ other: Self) -> Bool { accountID == other.accountID && userID == other.userID }
+    var draftOwner: DesktopDraftOwner? {
+        guard let draftStorageScope else { return nil }
+        let owner = DesktopDraftOwner(accountID: accountID, userID: userID, storageScope: draftStorageScope)
+        return owner.valid ? owner : nil
+    }
 }
 
 enum DesktopBrowserLoginPhase: Equatable {
@@ -132,6 +139,7 @@ final class DesktopBrowserLoginTransport: NSObject, URLSessionTaskDelegate, Desk
 protocol DesktopLoginExchanging: AnyObject {
     func exchange(operation: DesktopBrowserLoginOperation, code: String, expected: DesktopLoginIdentity) async throws -> DesktopLoginIdentity
     func readStatus(operation: DesktopBrowserLoginOperation, expected: DesktopLoginIdentity) async throws -> DesktopLoginIdentity
+    func restoreDraft(_ recovery: DesktopDraftRecovery, operation: DesktopBrowserLoginOperation) async throws
     func cancel()
 }
 
@@ -143,6 +151,8 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
     static let shared = DesktopBrowserLoginCoordinator()
     @Published private(set) var phase: DesktopBrowserLoginPhase = .idle
     @Published private(set) var matchingHint: String?
+    @Published private(set) var recoveryNotice: String?
+    @Published private(set) var retainedDrafts: [DesktopRetainedDraft] = []
     private(set) var operation: DesktopBrowserLoginOperation?
     private(set) var returnTarget: URL?
     private let registry: LoginStoreRegistry
@@ -153,6 +163,7 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
     /// default browser. The Bool only reports that the OS accepted the launch;
     /// it is never a login outcome.
     private let browserOpener: (URL) -> Bool
+    private let copyText: (String) -> Bool
     private var workspacePresenter: (() -> Void)?
     private var exchanger: DesktopLoginExchanging?
     private var work: Task<Void, Never>?
@@ -160,17 +171,23 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
     private var generation = UUID()
     private var activeOrigin: WorkspaceOrigin?
     private var exchangeDispatched = false
+    private var recovery: DesktopDraftRecovery?
+    private var recoveryCaptureCompleted = false
     var canCheckResult: Bool { operation != nil && phase == .unresolved }
 
     init(registry: LoginStoreRegistry? = nil, originProvider: (() -> WorkspaceOrigin?)? = nil,
          transportFactory: ((WorkspaceOrigin) -> DesktopLoginTransporting)? = nil,
          exchangerFactory: (() -> DesktopLoginExchanging)? = nil,
-         browserOpener: ((URL) -> Bool)? = nil) {
+         browserOpener: ((URL) -> Bool)? = nil, copyText: ((String) -> Bool)? = nil) {
         self.registry = registry ?? .shared
         self.originProvider = originProvider ?? { WorkspaceConnection.shared.origin }
         self.transportFactory = transportFactory ?? { DesktopBrowserLoginTransport(origin: $0) }
         self.exchangerFactory = exchangerFactory ?? { DesktopBrowserLoginWKExchanger() }
         self.browserOpener = browserOpener ?? { NSWorkspace.shared.open($0) }
+        self.copyText = copyText ?? { text in
+            NSPasteboard.general.clearContents()
+            return NSPasteboard.general.setString(text, forType: .string)
+        }
     }
 
     enum SecretGenerationError: Error { case randomSourceUnavailable }
@@ -195,28 +212,50 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
     }
     func signedOut(in origin: WorkspaceOrigin) {
         if activeOrigin != nil && activeOrigin != origin { originChanged() }
-        if case .completed = phase { operation = nil; phase = .idle }
+        if case .completed = phase { operation = nil; returnTarget = nil; recovery = nil; recoveryCaptureCompleted = false; recoveryNotice = nil; phase = .idle }
         if phase == .idle && registry.hasUnresolvedLogin(for: origin.url.absoluteString) { phase = .unresolved }
     }
+    /// The fixed first-party logout destination revokes local recovery intent;
+    /// it grants no authentication or permission to enter a workspace.
+    func explicitlySignedOut(in origin: WorkspaceOrigin) {
+        guard originProvider() == origin else { return }
+        originChanged()
+    }
     func originChanged() {
-        cancel(); generation = UUID(); operation = nil; activeOrigin = nil; matchingHint = nil; phase = .idle
+        cancel(); generation = UUID(); operation = nil; activeOrigin = nil; matchingHint = nil
+        returnTarget = nil; recovery = nil; recoveryCaptureCompleted = false; retainedDrafts = []; recoveryNotice = nil; phase = .idle
     }
 
-    func start(in origin: WorkspaceOrigin, returningTo target: URL?) {
+    func start(in origin: WorkspaceOrigin, returningTo target: URL?, captureDraft: (() async -> DesktopDraftRecovery?)? = nil) {
         switch phase { case .preparing, .waiting, .exchanging: return; default: break }
         guard originProvider() == origin else { return }
+        let retrying: Bool
+        switch phase { case .cancelled, .failed, .unresolved: retrying = activeOrigin == origin; default: retrying = false }
+        if !retrying {
+            returnTarget = target.flatMap { origin.contains($0) && (($0.path == "/workspace" || $0.path.hasPrefix("/workspace/")) || $0.path == "/onboarding") && !WorkspaceSurfacePolicy.isSettingsOwned($0) ? $0 : nil }
+            recovery = nil; recoveryCaptureCompleted = false; recoveryNotice = nil
+        }
         work?.cancel(); expiryTask?.cancel(); exchanger?.cancel()
         generation = UUID(); let ticket = generation
         operation = nil; matchingHint = nil; exchangeDispatched = false; activeOrigin = origin
-        returnTarget = target.flatMap { origin.contains($0) && (($0.path == "/workspace" || $0.path.hasPrefix("/workspace/")) || $0.path == "/onboarding") && !WorkspaceSurfacePolicy.isSettingsOwned($0) ? $0 : nil }
         phase = .preparing
-        do {
+        work = Task { [weak self] in
+          guard let self else { return }
+          do {
+            if !self.recoveryCaptureCompleted {
+                let captured = await captureDraft?()
+                guard ticket == self.generation, self.originProvider() == origin, !Task.isCancelled else { return }
+                if let captured, captured.owner.valid, origin.contains(captured.target),
+                   captured.target == self.returnTarget,
+                   WorkspaceSurfacePolicy.isOrdinaryWorkspaceDestination(captured.target),
+                   captured.target.absoluteString.count <= 4096 {
+                    self.recovery = captured
+                }
+                self.recoveryCaptureCompleted = true
+            }
             let secrets = try Self.newSecrets()
             let selection = try registry.beginFreshPrimaryLogin(for: origin.url.absoluteString)
             let transport = transportFactory(origin)
-            work = Task { [weak self] in
-                guard let self else { return }
-                do {
                     let prepared = try await transport.prepare(challenge: secrets.challenge, state: secrets.state, cancelSecret: secrets.cancelSecret)
                     guard let expiry = desktopLoginDate(prepared.expires_at), let entry = URL(string: prepared.authorization_url) else { throw URLError(.badServerResponse) }
                     let operation = DesktopBrowserLoginOperation(attemptID: prepared.attempt_id, state: secrets.state,
@@ -235,16 +274,83 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
                     // callback returns through application(_:open:). Launch
                     // acceptance is not a login outcome.
                     if !self.browserOpener(entry) { self.cancel(); self.phase = .failed("无法打开系统浏览器，请检查默认浏览器后重试。") }
-                } catch {
-                    guard self.current(ticket, selection, origin), !Task.isCancelled else { return }
-                    self.phase = .failed("暂时无法连接登录服务，请重试或检查工作区地址。")
-                }
-            }
-        } catch LoginStoreRegistryError.anotherInstance {
-            phase = .failed("另一个 capri 实例正在使用登录状态。请关闭该实例后重试。")
-        } catch {
-            phase = .failed("无法保存本地登录状态。请检查磁盘与应用权限后重试。")
+          } catch {
+            guard ticket == self.generation, self.originProvider() == origin, !Task.isCancelled else { return }
+            self.phase = .failed(error is LoginStoreRegistryError
+                ? "无法保存本地登录状态。请检查磁盘、应用权限或另一个 capri 实例后重试。"
+                : "暂时无法连接登录服务，请重试或检查工作区地址。")
+          }
         }
+    }
+
+    private func restoreRecovery(_ live: DesktopLoginIdentity, operation: DesktopBrowserLoginOperation,
+                                 origin: WorkspaceOrigin, ticket: UUID, exchanger: DesktopLoginExchanging) async throws {
+        guard current(ticket, operation.selection, origin), !Task.isCancelled else { throw CancellationError() }
+        retainedDrafts.removeAll { $0.recovery.owner != live.draftOwner || $0.recovery.draft?.valid(at: Date()) != true }
+        if let recovery {
+            if live.draftOwner == recovery.owner {
+                var expired = recovery.draft.map { !$0.valid(at: Date()) } ?? false
+                var restored = true
+                var retained = false
+                if recovery.draft != nil && !expired {
+                    do { try await exchanger.restoreDraft(recovery, operation: operation) }
+                    catch {
+                        guard current(ticket, operation.selection, origin), !Task.isCancelled else { throw CancellationError() }
+                        restored = false
+                        expired = recovery.draft?.valid(at: Date()) != true
+                        retained = retainedDrafts.contains(where: { $0.recovery.owner == recovery.owner && $0.recovery.target == recovery.target && $0.recovery.draft?.value == recovery.draft?.value })
+                        if !expired, !retained, retainedDrafts.count < 8 {
+                            retainedDrafts.append(DesktopRetainedDraft(recovery: recovery))
+                            retained = true
+                        }
+                    }
+                }
+                guard current(ticket, operation.selection, origin), !Task.isCancelled else { throw CancellationError() }
+                returnTarget = expired ? nil : recovery.target
+                if expired {
+                    recoveryNotice = "文字草稿已超过本地保留期限，没有自动恢复。"
+                } else if !restored {
+                    recoveryNotice = retained
+                        ? "登录已完成，未能确认草稿已完整恢复。可复制保留的文字，核对后粘贴到对话；图片和附件需要重新添加。"
+                        : "登录已完成。设备已保留8份未恢复文字；本次原文仍在旧存储中，尚未带入。请先处理已保留文字。"
+                } else {
+                    recoveryNotice = expired ? "文字草稿已超过本地保留期限，没有自动恢复。" :
+                        (recovery.draft == nil ? nil : "已找回未发送的文字草稿。图片和附件需要重新添加。")
+                }
+            } else {
+                returnTarget = nil
+                recoveryNotice = "登录的账号或草稿分区已改变。原账号的文字未导入当前工作区。"
+            }
+        } else if let target = returnTarget {
+            // A legacy store with no verified owner must not lend its private
+            // destination to a potentially different account.
+            returnTarget = nil
+            if target != origin.entryURL { recoveryNotice = "原页面或文字恢复信息无法核对。请从工作区重新打开；旧存储未被导入。" }
+        }
+        if !retainedDrafts.isEmpty, recoveryNotice == nil { recoveryNotice = "还有未自动恢复的文字。可复制后粘贴到对话，或放弃这次恢复。" }
+        if let owner = live.draftOwner { try registry.recordVerifiedDraftOwner(owner, selection: operation.selection) }
+    }
+
+    var visibleRetainedDrafts: [DesktopRetainedDraft] {
+        guard case .completed(let account, let user) = phase else { return [] }
+        return retainedDrafts.filter { $0.recovery.owner.accountID == account && $0.recovery.owner.userID == user && $0.recovery.draft?.valid(at: Date()) == true }
+    }
+
+    func copyRetainedDraft(_ id: UUID, verifying verify: () async -> DesktopDraftOwner?) async -> Bool {
+        guard let retained = visibleRetainedDrafts.first(where: { $0.id == id }), let text = retained.recovery.draft?.value,
+              let origin = activeOrigin, let selection = try? registry.selection(for: origin.url.absoluteString) else { return false }
+        let ticket = generation
+        let live = await verify()
+        guard ticket == generation, originProvider() == origin, registry.isCurrent(selection),
+              live == retained.recovery.owner, visibleRetainedDrafts.contains(where: { $0.id == id }) else { return false }
+        guard copyText(text) else { return false }
+        retainedDrafts.removeAll { $0.id == id }
+        return true
+    }
+
+    func discardRetainedDraft(_ id: UUID) {
+        guard visibleRetainedDrafts.contains(where: { $0.id == id }) else { return }
+        retainedDrafts.removeAll { $0.id == id }
     }
 
     /// Entry point for unsolicited OS-delivered callback URLs. A global URL
@@ -277,8 +383,11 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
                 guard result.state == "approved", !result.committed, let expected = result.identity else { throw URLError(.badServerResponse) }
                 self.exchangeDispatched = true
                 let live = try await exchange.exchange(operation: operation, code: parsed.code, expected: expected)
-                guard self.current(ticket, operation.selection, origin), !Task.isCancelled, live == expected else { return }
+                guard self.current(ticket, operation.selection, origin), !Task.isCancelled, live.matches(expected) else { return }
+                try await self.restoreRecovery(live, operation: operation, origin: origin, ticket: ticket, exchanger: exchange)
+                guard self.current(ticket, operation.selection, origin), !Task.isCancelled else { return }
                 try self.registry.resolveLogin(for: operation.selection.origin, epoch: operation.storeEpoch)
+                self.recovery = nil
                 self.operation = nil; self.matchingHint = nil; self.exchanger = nil
                 self.phase = .completed(accountID: live.accountID, userID: live.userID)
             } catch {
@@ -318,8 +427,11 @@ final class DesktopBrowserLoginCoordinator: NSObject, ObservableObject {
                     self.phase = .failed("这次登录尚未完成，请重新登录。"); return
                 }
                 let live = try await exchange.readStatus(operation: operation, expected: expected)
-                guard self.current(ticket, operation.selection, origin), !Task.isCancelled, live == expected else { return }
+                guard self.current(ticket, operation.selection, origin), !Task.isCancelled, live.matches(expected) else { return }
+                try await self.restoreRecovery(live, operation: operation, origin: origin, ticket: ticket, exchanger: exchange)
+                guard self.current(ticket, operation.selection, origin), !Task.isCancelled else { return }
                 try self.registry.resolveLogin(for: operation.selection.origin, epoch: operation.storeEpoch)
+                self.recovery = nil
                 self.operation = nil; self.matchingHint = nil; self.exchanger = nil
                 self.phase = .completed(accountID: live.accountID, userID: live.userID)
             } catch {
@@ -344,6 +456,7 @@ final class DesktopBrowserLoginWKExchanger: NSObject, DesktopLoginExchanging, WK
     private var continuation: CheckedContinuation<Void, Error>?
     private var timeout: Task<Void, Never>?
     private var allowedURL: URL?
+    private var verifiedDraftOwner: DesktopDraftOwner?
     private static let world = WKContentWorld.world(name: "TalentSignalDesktopLoginReadback")
     init(registry: LoginStoreRegistry? = nil) { self.registry = registry ?? .shared }
 
@@ -354,7 +467,7 @@ final class DesktopBrowserLoginWKExchanger: NSObject, DesktopLoginExchanging, WK
         try validate(operation)
         guard let origin = WorkspaceOrigin(operation.selection.origin, allowLocalDevelopment: true) else { throw ExchangeError.storeChanged }
         if let prior = self.operation, prior.selection.storeIdentifier != operation.selection.storeIdentifier {
-            cancel(); webView = nil
+            cancel(); webView = nil; verifiedDraftOwner = nil
         }
         self.origin = origin; self.operation = operation
         if webView == nil {
@@ -384,7 +497,7 @@ final class DesktopBrowserLoginWKExchanger: NSObject, DesktopLoginExchanging, WK
         let pending = continuation; continuation = nil; navigation = nil
         timeout?.cancel(); timeout = nil; pending?.resume(with: result)
     }
-    func cancel() { finish(.failure(CancellationError())); webView?.stopLoading() }
+    func cancel() { verifiedDraftOwner = nil; finish(.failure(CancellationError())); webView?.stopLoading() }
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard action.targetFrame?.isMainFrame != false, action.request.url == allowedURL,
               let operation, registry.isCurrent(operation.selection) else { decisionHandler(.cancel); finish(.failure(ExchangeError.navigationFailed)); return }
@@ -428,6 +541,7 @@ final class DesktopBrowserLoginWKExchanger: NSObject, DesktopLoginExchanging, WK
         let user: Identity
         let attempt: Attempt
         let session_expires_at: String
+        let draft_storage_scope: String?
     }
     func readStatus(operation: DesktopBrowserLoginOperation, expected: DesktopLoginIdentity) async throws -> DesktopLoginIdentity {
         try configure(operation)
@@ -442,6 +556,22 @@ final class DesktopBrowserLoginWKExchanger: NSObject, DesktopLoginExchanging, WK
               status.attempt.account_id == expected.accountID, status.attempt.user_id == expected.userID,
               UUID(uuidString: status.attempt.device_session_id) != nil,
               let expiry = desktopLoginDate(status.session_expires_at), expiry > Date() else { throw ExchangeError.statusMismatch }
-        return expected
+        let live = DesktopLoginIdentity(accountID: status.account.id, userID: status.user.id,
+                                        draftStorageScope: status.draft_storage_scope)
+        verifiedDraftOwner = live.draftOwner
+        return live
+    }
+
+    func restoreDraft(_ recovery: DesktopDraftRecovery, operation: DesktopBrowserLoginOperation) async throws {
+        try validate(operation)
+        guard let view = webView, verifiedDraftOwner == recovery.owner, let origin,
+              origin.contains(recovery.target), let id = recovery.sessionID, let draft = recovery.draft,
+              draft.valid(at: Date()), DesktopDraftRecovery.sessionID(in: recovery.target) == id else { throw ExchangeError.statusMismatch }
+        let value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(draft))
+        let restored = try await view.callAsyncJavaScript(DesktopDraftRecovery.restoreScript,
+            arguments: ["scope": recovery.owner.storageScope, "session": id, "value": value,
+                        "home": recovery.target.path == "/workspace"], in: nil, contentWorld: DesktopDraftRecovery.world)
+        try validate(operation)
+        guard verifiedDraftOwner == recovery.owner, restored as? Bool == true else { throw ExchangeError.statusMismatch }
     }
 }

@@ -8,6 +8,7 @@ struct LoginStoreSelection: Codable, Equatable {
     var epoch: UInt64
     var unresolved: Bool
     var updatedAt: Date
+    var verifiedDraftOwner: DesktopDraftOwner? = nil
 }
 
 protocol LoginStoreRegistryPersisting: AnyObject {
@@ -49,7 +50,8 @@ enum LoginStoreRegistryError: Error {
 /// One process owns this application's store registry for its entire lifetime.
 /// A second instance cannot dispatch through cached routing state. A fresh
 /// primary login commits a new UUID and unresolved marker before any request;
-/// old cookies, local storage, drafts and stores are never copied or deleted.
+/// old cookies and stores are never copied or deleted. ADR 0025 permits only
+/// one bounded text draft after matching fresh live identity readback.
 @MainActor
 final class LoginStoreRegistry {
     static let shared = LoginStoreRegistry()
@@ -162,6 +164,17 @@ final class LoginStoreRegistry {
         guard current.epoch == epoch else { throw LoginStoreRegistryError.staleSelection }
         current.unresolved = false; current.updatedAt = Date()
         var next = cached; next[origin] = current
+        try commit(next, publish: nil)
+    }
+
+    /// The caller supplies only an identity verified by the first-party live
+    /// readback in this exact store. This metadata carries no access authority.
+    func recordVerifiedDraftOwner(_ owner: DesktopDraftOwner, selection: LoginStoreSelection) throws {
+        guard owner.valid, isCurrent(selection) else { throw LoginStoreRegistryError.staleSelection }
+        var current = try self.selection(for: selection.origin)
+        guard current.verifiedDraftOwner == nil || current.verifiedDraftOwner == owner else { throw LoginStoreRegistryError.staleSelection }
+        current.verifiedDraftOwner = owner
+        var next = cached; next[selection.origin] = current
         try commit(next, publish: nil)
     }
 

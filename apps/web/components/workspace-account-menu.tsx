@@ -10,6 +10,8 @@ import {
   SignOut,
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { LOCALE_ENDONYMS } from "@talent-signal/contracts";
+import { useAccountLanguage, useLocale, useT } from "./locale-provider";
 
 import {
   accountDisplayName,
@@ -163,6 +165,14 @@ export function WorkspaceAccountMenu({
 }) {
   const [open, setOpen] = useState(false);
   const hosted = useDesktopChrome() !== null;
+  const locale = useLocale();
+  const language = useAccountLanguage();
+  const t = useT();
+  const languageValue = language === "system"
+    ? `${t("language.option.system")} · ${LOCALE_ENDONYMS[locale]}`
+    : language === null
+      ? t("language.preference.unavailable", { language: LOCALE_ENDONYMS[locale] })
+      : LOCALE_ENDONYMS[language];
   const popover = useRef<HTMLDivElement>(null);
   const scopeKey = usageBinding;
   const [usageScope, setUsageScope] = useState<{
@@ -313,10 +323,10 @@ export function WorkspaceAccountMenu({
             <DesktopAccountLink onClick={() => close()} />
             <DesktopAccountNotice />
             <DesktopDeviceSettingsLink onClick={() => close()} />
-            <span className={styles.accountMetaRow}>
+            <span className={styles.accountMetaRow} role="group" aria-label={t("language.display.label")}>
               <Globe aria-hidden="true" size={16} />
-              <span>语言</span>
-              <strong>简体中文</strong>
+              <span>{t("language.display.label")}</span>
+              <strong>{languageValue}</strong>
             </span>
             <ThemeToggle label="切换工作区明暗主题" showValue variant="row" />
             <hr />
@@ -327,6 +337,7 @@ export function WorkspaceAccountMenu({
               </span>
             ) : null}
             <form action={signOutAction} onSubmit={clearPendingLocalIntents}>
+              <input type="hidden" name="desktopHost" value={String(hosted)} />
               <button type="submit">
                 <SignOut aria-hidden="true" size={16} />
                 <span>退出登录</span>

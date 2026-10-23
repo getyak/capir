@@ -5,13 +5,14 @@ struct DesktopBrowserLoginView: View {
     let origin: WorkspaceOrigin
     let returnTarget: URL?
     @ObservedObject var coordinator: DesktopBrowserLoginCoordinator
+    let captureDraft: () async -> DesktopDraftRecovery?
 
     var body: some View {
         DesktopBrowserLoginSurface(
             phase: coordinator.phase,
             matchingHint: coordinator.matchingHint,
             canCheckResult: coordinator.canCheckResult,
-            onStart: { coordinator.start(in: origin, returningTo: returnTarget) },
+            onStart: { coordinator.start(in: origin, returningTo: returnTarget, captureDraft: captureDraft) },
             onCancel: { coordinator.cancel() },
             onCheckResult: { coordinator.checkResult() }
         )
@@ -119,7 +120,6 @@ struct DesktopBrowserLoginSurface: View {
                     Button("检查登录结果", action: onCheckResult)
                         .buttonStyle(.borderedProminent)
                         .tint(TSBrand.ink)
-                        .foregroundStyle(TSBrand.canvas)
                         .controlSize(.large)
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("desktop.login.checkResult")
@@ -151,7 +151,6 @@ struct DesktopBrowserLoginSurface: View {
         loginButton
             .buttonStyle(.borderedProminent)
             .tint(TSBrand.ink)
-            .foregroundStyle(TSBrand.canvas)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
     }

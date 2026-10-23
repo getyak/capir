@@ -61,6 +61,7 @@ vi.mock("@talent-signal/contracts", async importOriginal => {
 });
 
 import { TalentSignalHttpError } from "@talent-signal/contracts";
+import { workspaceSessionDraftStorageScope } from "./workspaceSessions";
 import {
   DesktopAuthRequestError,
   approveDesktopBrowserLoginRequest,
@@ -256,6 +257,7 @@ it("correlates a live session to the exact grant attempt without a cookie write"
   const payload = await response.json();
   expect(payload).toMatchObject({
     status: "authenticated",
+    draft_storage_scope: workspaceSessionDraftStorageScope({ backendAccountId: "account-one", backendUserId: "user-one" } as never),
     account: { id: "account-one" },
     user: { id: "user-one" },
     attempt: { attempt_id: ATTEMPT, state: "consumed", account_id: "account-one", user_id: "user-one" },

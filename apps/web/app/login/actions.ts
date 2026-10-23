@@ -264,7 +264,7 @@ export async function signInWithDefaultAccount(formData: FormData) {
   });
 }
 
-export async function signOutOfWorkspace() {
+export async function signOutOfWorkspace(formData?: FormData) {
   try {
     const backend = await authenticatedBackendClient();
     if (backend) {
@@ -279,7 +279,10 @@ export async function signOutOfWorkspace() {
     if (primary) await logoutBackendWithinDeadline(() => new TalentSignalClient(backendAuthBaseUrl(), primary.backendAccessToken).logout());
   } catch { /* Local sign-out remains available during an outage. */ }
   await clearTestWorkspaceSession();
-  await signOut({ redirectTo: "/" });
+  // Presentation hint only: both destinations are fixed first-party paths.
+  // A real /login navigation lets the native host own its signed-out surface.
+  await signOut({ redirectTo: formData?.get("desktopHost") === "true"
+    ? "/login?callbackUrl=%2Fworkspace&intent=sign-out" : "/" });
 }
 
 /** Intentional completion of the emailed verification link/code. */

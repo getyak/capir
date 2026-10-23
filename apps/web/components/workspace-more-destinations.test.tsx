@@ -4,8 +4,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_ORGANIZATION_PREFIX, resetSessionOrganizationStores } from "@/lib/workspace-session-organization";
 import { WORKSPACE_NEW_CONVERSATION_EVENT, WORKSPACE_RAIL_COLLAPSED_KEY } from "@/lib/workspace-navigation";
+import type { MarketingLocale } from "@/lib/marketing-locale";
+import { LocaleProvider } from "./locale-provider";
 
-const state = vi.hoisted(() => ({ pathname: "/workspace", search: "", mobile: false, binding: "current", failed: false, loading: false, push: vi.fn(), retry: vi.fn(), rows: [] as { session_id: string; state: string; expires_at: string; title: string }[] }));
+const state = vi.hoisted(() => ({ pathname: "/workspace", search: "", mobile: false, binding: "current", failed: false, loading: false, push: vi.fn(), retry: vi.fn(), rows: [] as { session_id: string; state: string; expires_at: string; title: string; person_id?: string; person_label?: string; is_unread?: boolean }[] }));
 vi.mock("next/navigation", () => ({ usePathname: () => state.pathname, useSearchParams: () => new URLSearchParams(state.search), useRouter: () => ({ push: state.push }) }));
 vi.mock("./workspace-search", () => ({
   useWorkspaceDirectory: () => ({ data: { sessions: { session_version: state.binding, sessions: state.rows }, people: { people: [] } }, loading: state.loading, failed: state.failed, retry: state.retry }),
@@ -19,12 +21,13 @@ import { WorkspaceSidebarPeople } from "./workspace-sidebar-people";
 const SCOPE = "a".repeat(64), OTHER_SCOPE = "b".repeat(64);
 const id = (n: number) => `11111111-1111-4111-8111-${String(n).padStart(12, "0")}`;
 let host: HTMLDivElement, root: Root;
-async function render(scope = SCOPE) {
-  await act(async () => root.render(createElement(WorkspaceNavigationContinuityProvider, { scope }, createElement("div", null,
+async function render(scope = SCOPE, locale?: MarketingLocale) {
+  const content = createElement(WorkspaceNavigationContinuityProvider, { scope }, createElement("div", null,
     createElement(WorkspaceShellNav, { binding: "current", storageScope: scope }),
     createElement(WorkspaceRecentSessions, { binding: "current", storageScope: scope }),
     state.pathname.startsWith("/workspace/people") ? createElement(WorkspaceSidebarPeople, { binding: "current" }) : null,
-  ))));
+  ));
+  await act(async () => root.render(locale ? <LocaleProvider locale={locale}>{content}</LocaleProvider> : content));
 }
 function button(label: string) { return host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!; }
 beforeEach(() => {
@@ -46,6 +49,36 @@ describe("expanded and collapsed workspace navigation", () => {
     expect(recent.querySelector('button[aria-controls]')).toBeNull();
     expect(recent.querySelector('a[title="Conversation 1"]')).toBeTruthy();
     expect(recent.textContent).not.toContain("最近对话");
+  });
+
+  it.each([
+    ["en", "原始标题 (Unread)", "Unread"],
+    ["ja", "原始标题（未読）", "未読"],
+    ["ko", "原始标题 (읽지 않음)", "읽지 않음"],
+  ] as const)("localizes unread state in %s without translating the user's title", async (locale, label, status) => {
+    state.rows = [{ ...state.rows[0]!, title: "原始标题", is_unread: true }];
+    await render(SCOPE, locale);
+    const shortcut = host.querySelector(`[aria-label="最近对话快捷方式"] a[href="/workspace/sessions/${id(1)}"]`)!;
+    expect(shortcut.getAttribute("aria-label")).toBe(label);
+    expect(shortcut.getAttribute("title")).toBe(label);
+    const expanded = host.querySelector(`section[aria-label="最近对话"] a[href="/workspace/sessions/${id(1)}"]`)!;
+    expect(expanded.textContent).toContain("原始标题");
+    expect(expanded.textContent).toContain(status);
+  });
+
+  it("keeps primary destinations in the same keyboard order and places compose after them", async () => {
+    await render();
+    const expected = ["今日", "对话", "人物", "时间", "搜索人物或对话"];
+    for (const label of ["工作台导航", "工作台导航（已收起）"]) {
+      const nav = host.querySelector(`nav[aria-label="${label}"]`)!;
+      const controls = [...nav.querySelectorAll<HTMLElement>('a[aria-label],button[aria-label]')];
+      expect(controls.map(item => item.getAttribute("aria-label")).filter(name => expected.includes(name!))).toEqual(expected);
+      if (label.endsWith("（已收起）")) {
+        const compose = controls.findIndex(item => item.getAttribute("aria-label") === "开始新对话");
+        const search = controls.findIndex(item => item.getAttribute("aria-label") === "搜索人物或对话");
+        expect(compose).toBeGreaterThan(search);
+      }
+    }
   });
 
   it("wires remembered exact locations into both presentations of the actual navigation", async () => {
@@ -80,6 +113,35 @@ describe("expanded and collapsed workspace navigation", () => {
     expect(recent.querySelector('a[title="Conversation 10"]')).toBeTruthy();
     await render(OTHER_SCOPE);
     expect([...collapsed.querySelectorAll<HTMLAnchorElement>('a[title^="Conversation"]')][0]!.title).toBe("Conversation 1");
+  });
+
+  it("uses a neutral conversation symbol without inventing a person and preserves real avatars and unread meaning", async () => {
+    const person = "22222222-2222-4222-8222-222222222222";
+    state.rows = [
+      { ...state.rows[0]!, title: "Unbound conversation", is_unread: true },
+      { ...state.rows[1]!, title: "Pilot scope", person_id: person, person_label: "林岚" },
+      { ...state.rows[2]!, title: "Next meeting", person_id: person, person_label: "林岚" },
+    ];
+    await render();
+    for (const selector of ['section[aria-label="最近对话"]', '[aria-label="最近对话快捷方式"]']) {
+      const list = host.querySelector(selector)!;
+      const unbound = list.querySelector(`a[href="/workspace/sessions/${id(1)}"]`)!;
+      expect(unbound.querySelector('[data-avatar-style]')).toBeNull();
+      expect(unbound.querySelector('[aria-hidden="true"] svg')).toBeTruthy();
+      for (const n of [2, 3]) {
+        expect(list.querySelector(`a[href="/workspace/sessions/${id(n)}"] [data-avatar-style]`)).toBeTruthy();
+      }
+    }
+    const recent = host.querySelector('section[aria-label="最近对话"]')!;
+    expect(recent.querySelector(`a[href="/workspace/sessions/${id(1)}"]`)?.textContent).toContain("未读");
+    const collapsed = host.querySelector('[aria-label="最近对话快捷方式"]')!;
+    expect(collapsed.querySelector(`a[href="/workspace/sessions/${id(1)}"]`)?.getAttribute("aria-label")).toBe("Unbound conversation（未读）");
+    expect(collapsed.querySelector(`a[href="/workspace/sessions/${id(2)}"]`)?.getAttribute("aria-label")).toBe("Pilot scope");
+    expect(collapsed.querySelector(`a[href="/workspace/sessions/${id(3)}"]`)?.getAttribute("aria-label")).toBe("Next meeting");
+    await act(async () => button("归档：Pilot scope").click());
+    const archived = [...host.querySelectorAll("button")].find(item => item.textContent?.startsWith("已归档"))!;
+    await act(async () => archived.click());
+    expect(recent.querySelector(`a[data-archived="true"][href="/workspace/sessions/${id(2)}"] [data-avatar-style]`)).toBeTruthy();
   });
 
   it.each([

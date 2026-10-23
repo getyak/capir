@@ -32,7 +32,8 @@ import { recentSessionRows } from "@/lib/workspace-recent-sessions";
 import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-session-organization";
 import { useWorkspaceSidebarLayout, WorkspaceSidebarPresentation } from "@/lib/workspace-sidebar-layout";
 
-import { PersonDirectoryAvatar } from "./person-directory-avatar";
+import { WorkspaceSessionAvatar } from "./workspace-session-avatar";
+import { useT } from "./locale-provider";
 import { useWorkspaceNavigationHref } from "./workspace-navigation-continuity";
 import { WorkspaceGlobalSearchDialog, useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-shell.module.css";
@@ -72,22 +73,24 @@ function RailControl({
   control,
   current,
   route,
+  compact = false,
 }: {
   control: Exclude<WorkspaceRailControlId, "search">;
   current: boolean;
   route: WorkspaceNavRoute;
+  compact?: boolean;
 }) {
   const router = useRouter();
   const mobile = useSyncExternalStore(mobileSubscribe,mobileSnapshot,() => false);
   const rememberedHref = useWorkspaceNavigationHref(route.href);
-  const isNew = mobile && control === "conversation";
+  const isNew = !compact && mobile && control === "conversation";
   const label = isNew ? "新对话" : RAIL_LABELS[control];
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
     <Link
       aria-current={current ? "page" : undefined}
       aria-label={label}
-      className={styles.railControl}
+      className={compact ? styles.railIconLink : styles.railControl}
       data-mobile={route.mobile ? "true" : "false"}
       data-selected={current ? "true" : undefined}
       href={isNew ? route.href : rememberedHref}
@@ -106,7 +109,7 @@ function RailControl({
         size={18}
         weight={current ? "fill" : "regular"}
       />
-      <span className={styles.railControlLabel}>{label}</span>
+      {!compact && <span className={styles.railControlLabel}>{label}</span>}
     </Link>
   );
 }
@@ -117,6 +120,7 @@ function RailControl({
  * never an implicit personal ranking.
  */
 function RailSessionShortcuts({ binding, storageScope }: { binding: string | null; storageScope: string | null }) {
+  const t = useT();
   const pathname = usePathname();
   const { data, loading, failed } = useWorkspaceDirectory(binding, true);
   const { snapshot } = useSessionOrganization(storageScope);
@@ -128,23 +132,14 @@ function RailSessionShortcuts({ binding, storageScope }: { binding: string | nul
       {rows.slice(0, 5).map((row) => (
         <Link
           aria-current={pathname === `/workspace/sessions/${row.id}` ? "page" : undefined}
-          aria-label={row.title}
+          aria-label={row.unread ? t("{title}（未读）", { title: row.title }) : row.title}
           className={styles.railSessionAvatar}
           href={`/workspace/sessions/${row.id}`}
           key={row.id}
-          title={row.title}
+          title={row.unread ? t("{title}（未读）", { title: row.title }) : row.title}
         >
-          {row.personId ? (
-            <PersonDirectoryAvatar
-              className={styles.avatar}
-              dataSize="small"
-              id={row.personId}
-              label={row.personLabel || row.title}
-            />
-          ) : (
-            /* Sessions without a person reuse the brand mark; no fixture faces. */
-            <span aria-hidden="true" className={styles.sessionMark} />
-          )}
+          <WorkspaceSessionAvatar personId={row.personId} label={row.personLabel || row.title} />
+          {row.unread && <span aria-hidden="true" className={styles.railSessionUnread} />}
         </Link>
       ))}
     </div>
@@ -166,9 +161,6 @@ export function WorkspaceShellNav({
   const collapsed = presentation.collapsed;
   const setCollapsed = (next: boolean) => setLayout({ ...layout, collapsed: next, hidden: false });
   const selection = workspaceRailSelection(pathname);
-  const conversationHref = useWorkspaceNavigationHref("/workspace");
-  const peopleHref = useWorkspaceNavigationHref("/workspace/people");
-  const meetingsHref = useWorkspaceNavigationHref("/workspace/meetings");
   const collapseToggle = useRef<HTMLButtonElement>(null);
   const expandToggle = useRef<HTMLButtonElement>(null);
 
@@ -233,35 +225,26 @@ export function WorkspaceShellNav({
         )}
       </nav>
 
-      {/* Collapsed 72px rail: Session avatar shortcuts plus the lower utility
-          group (search, people, collapse, connections). It stays in the DOM so
+      {/* Both presentations share the primary destination order. Compose and
+          recent conversations follow it; lower utilities stay at the end.
+          The collapsed rail stays in the DOM so
           the destinations remain reachable links in every state; CSS owns the
           collapsed/expanded swap. */}
       <nav aria-label="工作台导航（已收起）" className={styles.railCollapsed} data-collapsed-only="true">
         <div className={styles.railCollapsedTop}>
-          <Link aria-current={selection === "today" ? "page" : undefined} aria-label="今日" className={styles.railIconLink} href="/workspace/today" title="今日">
-            <House aria-hidden="true" size={18} />
-          </Link>
-          <Link aria-current={selection === "conversation" ? "page" : undefined} aria-label="对话" className={styles.railIconLink} href={conversationHref} title="继续对话">
-            <ChatCircleDots aria-hidden="true" size={18} />
-          </Link>
+          {WORKSPACE_RAIL_CONTROLS.map(control => control === "search" ? (
+            <WorkspaceGlobalSearchDialog binding={binding} key={control} label={RAIL_LABELS.search} presentation="rail" />
+          ) : (
+            <RailControl compact control={control} current={selection === control} key={control} route={workspaceRailRoute(control)!} />
+          ))}
+        </div>
+        <div className={styles.railCollapsedTop}>
           <button aria-label="开始新对话" className={styles.iconButton} onClick={startNewConversation} title="开始新对话" type="button">
             <Plus aria-hidden="true" size={18} />
           </button>
-          <Link aria-current={selection === "meetings" ? "page" : undefined} aria-label="时间" className={styles.railIconLink} href={meetingsHref} title="时间">
-            <CalendarBlank aria-hidden="true" size={18} />
-          </Link>
         </div>
         <RailSessionShortcuts binding={binding} storageScope={storageScope} />
         <div className={styles.railUtility}>
-          <WorkspaceGlobalSearchDialog
-            binding={binding}
-            label={RAIL_LABELS.search}
-            presentation="rail"
-          />
-          <Link aria-current={selection === "people" ? "page" : undefined} aria-label="人物" className={styles.railIconLink} href={peopleHref} title="人物">
-            <Users aria-hidden="true" size={18} />
-          </Link>
           <Link aria-label="打开对话记录" className={styles.railIconLink} href="/workspace/sessions" title="对话记录">
             <ClockCounterClockwise aria-hidden="true" size={18} />
           </Link>
