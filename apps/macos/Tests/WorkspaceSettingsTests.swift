@@ -4,6 +4,27 @@ import WebKit
 @testable import TalentSignalMac
 
 final class WorkspaceSettingsTests: XCTestCase {
+    @MainActor
+    func testOnlyFirstPartyExplicitLogoutDropsThePrivateReturnTarget() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
+        let browser = WorkspaceBrowser(origin: origin)
+        browser.webView.stopLoading()
+        var explicitEvents = 0
+        browser.onExplicitSignOut = { explicitEvents += 1 }
+        XCTAssertFalse(browser.enterSignedOut(at: URL(string: "https://foreign.example/login?intent=sign-out")!))
+        XCTAssertFalse(browser.explicitlySignedOut)
+        XCTAssertTrue(browser.enterSignedOut(at: URL(string: "https://workspace.example/login?callbackUrl=%2Fworkspace")!))
+        XCTAssertFalse(browser.explicitlySignedOut)
+        XCTAssertNotNil(browser.loginReturnTarget)
+        XCTAssertTrue(browser.signedOut)
+        XCTAssertEqual(explicitEvents, 0)
+        XCTAssertTrue(browser.enterSignedOut(at: URL(string: "https://workspace.example/login?callbackUrl=%2Fworkspace&intent=sign-out")!))
+        XCTAssertTrue(browser.explicitlySignedOut)
+        XCTAssertTrue(browser.signedOut)
+        XCTAssertEqual(explicitEvents, 1, "Logout intent must arrive even when expiry already set signedOut=true")
+        XCTAssertNil(browser.loginReturnTarget)
+    }
+
     // MARK: Native-only surface inventory
 
     func testDesktopPetDragPositionPersistsWithinVisibleScreen() {

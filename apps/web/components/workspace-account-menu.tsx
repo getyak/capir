@@ -337,6 +337,7 @@ export function WorkspaceAccountMenu({
               </span>
             ) : null}
             <form action={signOutAction} onSubmit={clearPendingLocalIntents}>
+              <input type="hidden" name="desktopHost" value={String(hosted)} />
               <button type="submit">
                 <SignOut aria-hidden="true" size={16} />
                 <span>退出登录</span>

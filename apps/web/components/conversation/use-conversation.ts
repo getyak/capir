@@ -196,7 +196,14 @@ export function useConversation(options: Options) {
       return;
     }
     if (error instanceof RequestError && (error.status === 401 || error.status === 403 || error.status === 410 || error.code === "session_stale")) {
-      setUnavailable(true); setPreview(null); previewRef.current = null; setDetail(null); setDraft(""); storeMessages([]); setHandoffEntries({}); setHandoffPreviews({}); clearAttachments(); if (id) { clearConversationLocal(scope, id); clearConversationImageStore(scope, id); }
+      // A fresh credential can recover this owner's bounded text. Never
+      // transfer the outbox, image bytes or a deleted/denied Session's draft.
+      const retained = id && error.status === 401 ? readConversationDraft(scope, id) : null;
+      setUnavailable(true); setPreview(null); previewRef.current = null; setDetail(null); setDraft(""); storeMessages([]); setHandoffEntries({}); setHandoffPreviews({}); clearAttachments();
+      if (id) {
+        clearConversationLocal(scope, id); clearConversationImageStore(scope, id);
+        if (retained) writeConversationDraft(scope, id, retained);
+      }
     }
   }
   function updateMessage(id: string, update: Partial<LocalMessage>) {

@@ -4,7 +4,6 @@ import { clearAllSessionOrganization } from "@/lib/workspace-session-organizatio
 import { useEffect } from "react";
 
 import {
-  clearAllPendingSessionDrafts,
   prunePendingSessionDrafts,
 } from "./session-workbench/session-draft-pending";
 
@@ -16,7 +15,10 @@ export function SessionDraftSessionBoundary({
   useEffect(() => {
     if (storageScope) prunePendingSessionDrafts(storageScope);
     else {
-      clearAllPendingSessionDrafts();
+      // Missing credentials may be temporary expiry or a failed read. Keep
+      // bounded owner-partitioned text quarantined until verified re-entry.
+      // Explicit sign-out clears it in the account form; another verified
+      // scope prunes it above. A null scope never permits reading a draft.
       clearAllSessionOrganization();
     }
   }, [storageScope]);

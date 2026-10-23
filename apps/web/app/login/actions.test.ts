@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { signInMock } = vi.hoisted(() => ({ signInMock: vi.fn() }));
+const { signInMock, signOutMock } = vi.hoisted(() => ({ signInMock: vi.fn(), signOutMock: vi.fn() }));
 
-vi.mock("@/auth", () => ({ signIn: signInMock, signOut: vi.fn() }));
+vi.mock("@/auth", () => ({ signIn: signInMock, signOut: signOutMock }));
 const { registerBackendAccountMock } = vi.hoisted(() => ({
   registerBackendAccountMock: vi.fn(),
 }));
@@ -36,6 +36,7 @@ vi.mock("next-auth", () => {
 });
 
 import { clearTestWorkspaceSession } from "@/lib/server/testWorkspaceSession";
+import { authenticatedBackendClient } from "@/lib/server/backendAuth";
 import { TalentSignalHttpError } from "@talent-signal/contracts";
 import { CredentialsSignin } from "next-auth";
 import { redirect } from "next/navigation";
@@ -48,6 +49,7 @@ import {
   signInWithApple,
   signInWithEmail,
   signInWithPasswordAccount,
+  signOutOfWorkspace,
   type SignInState,
 } from "./actions";
 
@@ -73,12 +75,37 @@ function formOf(entries: Record<string, string>) {
 
 beforeEach(() => {
   signInMock.mockReset();
+  signOutMock.mockReset();
   vi.mocked(clearTestWorkspaceSession).mockReset();
   vi.mocked(redirect).mockReset();
   registerBackendAccountMock.mockReset();
+  vi.mocked(authenticatedBackendClient).mockResolvedValue(null);
 });
 
 describe("login action failure contract", () => {
+  it("finishes local desktop sign-out when backend logout never responds", async () => {
+    vi.useFakeTimers();
+    vi.mocked(authenticatedBackendClient).mockResolvedValue({ logout: () => new Promise(() => {}) } as never);
+    try {
+      const pending = signOutOfWorkspace(formOf({ desktopHost: "true" }));
+      await vi.advanceTimersByTimeAsync(1_501);
+      await pending;
+      expect(signOutMock).toHaveBeenCalledWith({ redirectTo: "/login?callbackUrl=%2Fworkspace&intent=sign-out" });
+    } finally { vi.useRealTimers(); }
+  });
+  it("hands desktop sign-out to the bounded native login destination", async () => {
+    await signOutOfWorkspace(formOf({ desktopHost: "true", redirectTo: "https://foreign.invalid/" }));
+    expect(signOutMock).toHaveBeenCalledWith({ redirectTo: "/login?callbackUrl=%2Fworkspace&intent=sign-out" });
+    expect(clearTestWorkspaceSession).toHaveBeenCalledOnce();
+  });
+
+  it.each([undefined, formOf({ desktopHost: "false" }), formOf({ desktopHost: "https://foreign.invalid/" })])(
+    "retains ordinary browser sign-out without accepting a caller redirect", async form => {
+      await signOutOfWorkspace(form);
+      expect(signOutMock).toHaveBeenCalledWith({ redirectTo: "/" });
+    },
+  );
+
   it("clears a stale test selection only after a successful replacement login", async () => {
     signInMock.mockResolvedValue("/onboarding?callbackUrl=%2Fworkspace");
     await signInWithPasswordAccount(initialState, formOf({identifier:"proof@example.invalid",password:"synthetic-password",redirectTo:"/workspace"}));

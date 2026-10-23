@@ -13,6 +13,7 @@ import {
 } from "@talent-signal/contracts";
 import { decode, encode } from "next-auth/jwt";
 import { headers } from "next/headers";
+import { workspaceSessionDraftStorageScope } from "./workspaceSessions";
 
 import {
   AUTH_SESSION_COOKIE,
@@ -247,6 +248,8 @@ export type DesktopAuthStatusBody = {
   account: { id: string; name: string; slug: string };
   user: { id: string; email: string; display_name: string };
   session_expires_at: string;
+  /** Non-authorizing local text partition, issued only after live identity readback. */
+  draft_storage_scope: string;
 };
 
 /**
@@ -298,6 +301,8 @@ export async function desktopBrowserLoginStatusRoute(request: Request): Promise<
         display_name: live.user.display_name,
       },
       session_expires_at: live.expires_at,
+      draft_storage_scope: workspaceSessionDraftStorageScope({ ...claims,
+        backendAccountId: live.account.id, backendUserId: live.user.id }),
     };
     return jsonBody(body, 200);
   } catch (error) {
