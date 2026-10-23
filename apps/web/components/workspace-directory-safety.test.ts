@@ -385,3 +385,99 @@ describe("directory cache lifecycle through workspaceSessionFetch", () => {
     expect(readCachedWorkspaceDirectory("account-a")).toBeNull();
   });
 });
+
+describe("directory request deadlines", () => {
+  it("releases a hung shared read for retry and never caches its late result", async () => {
+    vi.useFakeTimers();
+    const cache = new WorkspaceDirectoryCache<{ id: string }>({ timeoutMs: 50 });
+    const late = deferred<{ id: string }>();
+    let signal!: AbortSignal;
+    try {
+      const pending = cache.load("a", input => { signal = input; return late.promise; });
+      expect(cache.load("a", async () => ({ id: "unused" }), { force: true })).toBe(pending);
+      let failure: unknown = null;
+      void pending.catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(failure).toMatchObject({ name: "TimeoutError" });
+      expect(signal.aborted).toBe(true);
+      await expect(cache.load("a", async () => ({ id: "fresh" }), { force: true }))
+        .resolves.toEqual({ id: "fresh" });
+      late.resolve({ id: "old" });
+      await Promise.resolve();
+      expect(cache.read("a")).toEqual({ id: "fresh" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { cache.invalidateAll(); vi.useRealTimers(); }
+  });
+
+  it("bounds body decoding as well as waiting for response headers", async () => {
+    vi.useFakeTimers();
+    const cache = new WorkspaceDirectoryCache<WorkspaceDirectorySnapshot | null>({ timeoutMs: 50 });
+    const body = deferred<unknown>();
+    const request = vi.fn()
+      .mockResolvedValueOnce(Response.json({ people: [] }))
+      .mockResolvedValueOnce({ ok: true, json: () => body.promise });
+    try {
+      let failure: unknown = null;
+      const pending = cache.load("account-a", signal => readWorkspaceDirectory("account-a", signal, request));
+      void pending.catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(failure).toMatchObject({ name: "TimeoutError" });
+      body.resolve(sessions);
+      await Promise.resolve();
+      expect(cache.read("account-a")).toBeNull();
+    } finally { cache.invalidateAll(); vi.useRealTimers(); }
+  });
+
+  it("settles an invalidated read even if the loader ignores cancellation", async () => {
+    const cache = new WorkspaceDirectoryCache<unknown>();
+    let failure: unknown = null;
+    const pending = cache.load("a", () => new Promise(() => {}));
+    void pending.catch(error => { failure = error; });
+    cache.invalidate("a", "discard");
+    await vi.waitFor(() => expect(failure).toMatchObject({ name: "AbortError" }), { timeout: 100, interval: 5 });
+    await expect(cache.load("b", async () => "other account")).resolves.toBe("other account");
+  });
+});
+
+it.each(["aborted", "changed-scope"])("does not expire a current account from a late %s response", async (transition) => {
+  const event = vi.fn();
+  let scope = "account-a";
+  vi.stubGlobal("window", { location: { href: "http://localhost:3000/workspace", origin: "http://localhost:3000" }, dispatchEvent: event });
+  vi.stubGlobal("document", { querySelector: () => ({ dataset: { workspaceScope: scope } }) });
+  const controller = new AbortController();
+  const pending = deferred<Response>();
+  const result = workspaceSessionFetch("/api/workspace-sessions", { signal: controller.signal }, () => pending.promise);
+  if (transition === "aborted") controller.abort(); else scope = "account-b";
+  const current: WorkspaceDirectorySnapshot = { people: { people: [{ id: "current" }] }, sessions: {} };
+  await loadWorkspaceDirectory("current", async () => current);
+  pending.resolve(Response.json({ code: "SESSION_EXPIRED" }, { status: 401, headers: { "X-Talent-Signal-Session-Status": "expired" } }));
+  await result;
+  expect(event).not.toHaveBeenCalled();
+  expect(readCachedWorkspaceDirectory("current")).toEqual(current);
+});
+
+it("does not trust an expiry header from another origin or a non-401 reply", async () => {
+  const event = vi.fn();
+  vi.stubGlobal("window", { location: { href: "http://localhost:3000/workspace", origin: "http://localhost:3000" }, dispatchEvent: event });
+  vi.stubGlobal("document", { querySelector: () => ({ dataset: { workspaceScope: "account-a" } }) });
+  for (const [url, status] of [["https://other.invalid/api/read", 401], ["/api/workspace-sessions", 503]] as const) {
+    await workspaceSessionFetch(url, {}, async () => Response.json({}, { status, headers: { "X-Talent-Signal-Session-Status": "expired" } }));
+  }
+  expect(event).not.toHaveBeenCalled();
+});
+
+it("does not apply a legacy body-only expiry after the account changes during decoding", async () => {
+  const event = vi.fn();
+  let scope = "account-a";
+  vi.stubGlobal("window", { location: { href: "http://localhost:3000/workspace", origin: "http://localhost:3000" }, dispatchEvent: event });
+  vi.stubGlobal("document", { querySelector: () => ({ dataset: { workspaceScope: scope } }) });
+  const reading = deferred<void>(), body = deferred<unknown>();
+  const response = { status: 401, headers: new Headers(), clone: () => ({ json: () => { reading.resolve(); return body.promise; } }) } as Response;
+  const pending = workspaceSessionFetch("/api/workspace-sessions", {}, async () => response);
+  await reading.promise;
+  scope = "account-b";
+  body.resolve({ code: "SESSION_EXPIRED" });
+  await pending;
+  expect(event).not.toHaveBeenCalled();
+});

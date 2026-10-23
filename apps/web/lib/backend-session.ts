@@ -1,5 +1,24 @@
 import { TalentSignalHttpError } from "@talent-signal/contracts";
 
+/** Same-origin API metadata remains readable after its transport is cancelled. */
+export const WORKSPACE_SESSION_STATUS_HEADER = "X-Talent-Signal-Session-Status";
+
+export function workspaceSessionExpired(status: number, payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const nested = "error" in payload && payload.error && typeof payload.error === "object"
+    ? payload.error : null;
+  const code = "code" in payload ? payload.code
+    : nested && "code" in nested ? nested.code : null;
+  return status === 401 && typeof code === "string" &&
+    ["backend_session_expired", "SESSION_INVALID", "SESSION_EXPIRED", "AUTHENTICATION_REQUIRED"].includes(code);
+}
+
+/** Only confirmed credential failures receive this closed, non-personal value. */
+export function workspaceSessionExpiryHeaders(status: number, payload: unknown): Record<string, string> {
+  return workspaceSessionExpired(status, payload)
+    ? { [WORKSPACE_SESSION_STATUS_HEADER]: "expired" } : {};
+}
+
 export class BackendSessionExpiredError extends TalentSignalHttpError {
   constructor() {
     super(

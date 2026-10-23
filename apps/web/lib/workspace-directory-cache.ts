@@ -56,9 +56,13 @@ export const WORKSPACE_DIRECTORY_CACHE_MAX_ENTRIES = 4;
 /** Background revalidation cadence while the surface stays visible. */
 export const WORKSPACE_DIRECTORY_REFRESH_INTERVAL_MS = 60_000;
 
+/** Includes response bodies; a stalled read must release its retry slot. */
+export const WORKSPACE_DIRECTORY_REQUEST_TIMEOUT_MS = 15_000;
+
 export type WorkspaceDirectoryCacheOptions = {
   ttlMs?: number;
   maxEntries?: number;
+  timeoutMs?: number;
   /** Injectable clock so expiry and races can be tested deterministically. */
   now?: () => number;
 };
@@ -88,11 +92,11 @@ export function isWorkspaceDirectoryAbort(error: unknown): boolean {
 export function workspaceDirectoryAbortError(): Error {
   if (typeof DOMException !== "undefined") {
     return new DOMException(
-      "Workspace directory read invalidated",
+      "Workspace directory read aborted after invalidation",
       "AbortError",
     );
   }
-  const error = new Error("Workspace directory read invalidated");
+  const error = new Error("Workspace directory read aborted after invalidation");
   error.name = "AbortError";
   return error;
 }
@@ -141,6 +145,7 @@ export type WorkspaceDirectoryInvalidationListener = (
 export class WorkspaceDirectoryCache<T> {
   private readonly ttlMs: number;
   private readonly maxEntries: number;
+  private readonly timeoutMs: number;
   private readonly now: () => number;
   private readonly entries = new Map<string, Entry<T>>();
   private readonly inflight = new Map<string, Inflight<T>>();
@@ -153,6 +158,8 @@ export class WorkspaceDirectoryCache<T> {
       options.maxEntries ?? WORKSPACE_DIRECTORY_CACHE_MAX_ENTRIES,
     );
     this.now = options.now ?? Date.now;
+    this.timeoutMs = Number.isFinite(options.timeoutMs)
+      ? Math.max(1, options.timeoutMs!) : WORKSPACE_DIRECTORY_REQUEST_TIMEOUT_MS;
   }
 
   /** Fresh value for `key`, or null once missing or past its TTL. */
@@ -207,13 +214,28 @@ export class WorkspaceDirectoryCache<T> {
     if (existing) return existing.promise;
 
     const record = { controller: new AbortController(), deliver: true } as Inflight<T>;
-    record.promise = loader(record.controller.signal)
-      .then((value) => {
-        if (!record.deliver) throw workspaceDirectoryAbortError();
+    let timer: ReturnType<typeof setTimeout>;
+    let onAbort: () => void;
+    record.promise = new Promise<T>((resolve, reject) => {
+      onAbort = () => reject(workspaceDirectoryAbortError());
+      record.controller.signal.addEventListener("abort", onAbort, { once: true });
+      timer = setTimeout(() => {
+        record.deliver = false;
+        // Settle as a timeout before aborting transport: callers must show a
+        // retryable failure rather than silently ignoring cancellation.
+        reject(Object.assign(new Error("Workspace directory read timed out"), { name: "TimeoutError" }));
+        record.controller.abort();
+      }, this.timeoutMs);
+      // The executor also converts a synchronous loader failure to a rejection.
+      loader(record.controller.signal).then(value => {
+        if (!record.deliver) { reject(workspaceDirectoryAbortError()); return; }
         if (value !== null && value !== undefined) this.set(key, value);
-        return value;
-      })
+        resolve(value);
+      }, reject);
+    })
       .finally(() => {
+        clearTimeout(timer);
+        record.controller.signal.removeEventListener("abort", onAbort);
         if (this.inflight.get(key) === record) this.inflight.delete(key);
       });
     this.inflight.set(key, record);

@@ -88,7 +88,7 @@ export default async function RootLayout({
         <a lang={locale} className="skip-link" href="#main-content">
           {translate(locale, "nav.skipToContent")}
         </a>
-        <MarketingLocaleProvider locale={locale} accountLocale={accountLanguage !== null}>
+        <MarketingLocaleProvider locale={locale} accountLocale={accountLanguage !== null} accountLanguage={accountLanguage}>
           {children}
         </MarketingLocaleProvider>
       </body>

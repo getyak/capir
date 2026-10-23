@@ -33,7 +33,10 @@ describe("persistent workspace shell", () => {
     expect(sessionBoundary).toContain(
       "if (storageScope) prunePendingSessionDrafts(storageScope)",
     );
-    expect(sessionBoundary).toContain("clearAllPendingSessionDrafts()");
+    // Null can mean temporary auth loss. Actual quarantine, verified scope
+    // pruning and explicit logout behavior live in the rendered boundary test.
+    expect(sessionBoundary).not.toContain("clearAllPendingSessionDrafts()");
+    expect(accountMenu).toContain("clearAllPendingSessionDrafts()");
     expect(sessionBoundary).toContain("clearAllSessionOrganization()");
     expect(layout).toContain("fixtureWorkspace");
     expect(layout).toContain(
@@ -208,7 +211,8 @@ describe("persistent workspace shell", () => {
 
     expect(actions).toContain("BACKEND_LOGOUT_TIMEOUT_MS");
     expect(actions).toContain("logoutBackendWithinDeadline");
-    expect(actions).toContain('await signOut({ redirectTo: "/" })');
+    // The real action's bounded outage and destination behavior is exercised
+    // in app/login/actions.test.ts for browser and desktop presentations.
   });
 });
 

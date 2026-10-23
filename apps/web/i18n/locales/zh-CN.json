@@ -1,4 +1,7 @@
 {
+  "登录已失效": "登录已失效",
+  "当前登录无法继续访问这个空间。重新登录后，再核对最新内容。": "当前登录无法继续访问这个空间。重新登录后，再核对最新内容。",
+  "language.preference.unavailable": "偏好暂不可读 · {language}",
   "nav.skipToContent": "跳到主要内容",
   "language.section.title": "语言",
   "language.display.label": "界面语言",
@@ -11,5 +14,7 @@
   "language.saved": "已保存。",
   "language.unavailable": "此工作空间尚未启用回复偏好。",
   "language.prompt.option.system": "自动（当前请求）",
-  "暂时连不上服务，请重试。": "暂时连不上服务，请重试。"
+  "暂时连不上服务，请重试。": "暂时连不上服务，请重试。",
+  "未读": "未读",
+  "{title}（未读）": "{title}（未读）"
 }

@@ -2,6 +2,7 @@ import { TalentSignalHttpError } from "@talent-signal/contracts";
 import { NextRequest, NextResponse } from "next/server";
 
 import { auth } from "@/auth";
+import { workspaceSessionExpiryHeaders } from "@/lib/backend-session";
 import {
   isIntegrationMode,
   loadPeopleDirectory,
@@ -15,6 +16,7 @@ function response(body: unknown, status = 200) {
     headers: {
       "Cache-Control": "no-store, max-age=0",
       "X-Content-Type-Options": "nosniff",
+      ...workspaceSessionExpiryHeaders(status, body),
     },
   });
 }
@@ -25,7 +27,7 @@ export async function GET(request: NextRequest) {
   }
   const session = await auth();
   if (!session?.user) {
-    return response({ code: "authentication_required" }, 401);
+    return response({ code: "AUTHENTICATION_REQUIRED" }, 401);
   }
   const query = request.nextUrl.searchParams.get("query")?.trim() ?? "";
   if (query.length > 160) {

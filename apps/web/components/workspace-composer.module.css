@@ -22,18 +22,12 @@
     box-shadow 180ms var(--ease-out);
 }
 
-.composer:focus-within {
-  border-color: color-mix(in srgb, var(--focus) 42%, var(--line));
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--focus) 12%, transparent),
-    0 7px 24px color-mix(in srgb, var(--ink) 6%, transparent);
-}
-
-/* One clear 2px container cue for keyboard input. The editor itself keeps no
-   outline, so the focus ring never doubles on the textarea. */
+/* One 2px band at the editor's edge. Matching the border and drawing inward
+   avoids stacked contours. Toolbar buttons retain their own focus cue. */
 .composer:has(textarea:focus-visible) {
+  border-color: var(--focus);
   outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
 .composer textarea {
@@ -375,8 +369,8 @@
 @media (forced-colors: active) {
   .mentionMark { background: transparent; box-shadow: none; text-decoration: underline; text-decoration-color: Highlight; }
   .reference { background: Canvas; border-color: Highlight; color: CanvasText; }
-  .composer:focus-within,
   .composer:has(textarea:focus-visible) {
+    border-color: Highlight;
     outline: 2px solid Highlight;
   }
 

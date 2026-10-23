@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useConversation } from "./use-conversation";
 import { requestWorkspaceRefresh } from "@/lib/workspace-refresh";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
+import { readConversationDraft } from "@/lib/conversation-local";
 
 const fetcher = vi.hoisted(() => vi.fn());
 vi.mock("../workspace-session-request", () => ({ workspaceSessionFetch: fetcher }));
@@ -116,6 +117,16 @@ it("shows another device's committed message in the open conversation and keeps 
   const turnIds = (chat.detail?.turns ?? []).map((entry) => entry.id);
   expect(turnIds).toContain("9faf5af8-9979-4275-9493-215c7f842599");
   expect(chat.draft).toBe("Web 未发送草稿：远端更新后必须保留。");
+});
+
+it.each([401, 403, 410])("retains text only for reauthentication, not denied/deleted access (%s)", async status => {
+  await act(async () => chat.changeDraft("Bounded synthetic recovery text"));
+  fetcher.mockImplementation(async () => Response.json({ code: status === 401 ? "SESSION_EXPIRED" : "SESSION_UNAVAILABLE" }, { status }));
+  await act(async () => { await chat.keepDraft(); });
+  expect(chat.unavailable).toBe(true);
+  expect(chat.detail).toBeNull();
+  expect(chat.draft).toBe("");
+  expect(readConversationDraft("owner", sid)?.value ?? null).toBe(status === 401 ? "Bounded synthetic recovery text" : null);
 });
 
 it("applies a remote tombstone without resurrecting deleted history", async () => {

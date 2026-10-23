@@ -1,7 +1,7 @@
 import { TalentSignalHttpError } from "@talent-signal/contracts";
 import { NextResponse } from "next/server";
 
-import { backendSessionIsExpired } from "@/lib/backend-session";
+import { backendSessionIsExpired, workspaceSessionExpiryHeaders } from "@/lib/backend-session";
 import { isAllowedMutationOrigin } from "@/lib/request-origin";
 import { readBackendSessionClaims } from "@/lib/server/backendAuth";
 import {
@@ -24,7 +24,7 @@ const noStore = {
 } as const;
 
 function reply(body: unknown, status = 200) {
-  return NextResponse.json(body, { status, headers: noStore });
+  return NextResponse.json(body, { status, headers: { ...noStore, ...workspaceSessionExpiryHeaders(status, body) } });
 }
 
 function failure(error: unknown) {

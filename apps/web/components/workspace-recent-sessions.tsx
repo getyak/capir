@@ -15,7 +15,8 @@ import {
   organizeSessionRows,
   useSessionOrganization,
 } from "@/lib/workspace-session-organization";
-import { PersonDirectoryAvatar } from "./person-directory-avatar";
+import { WorkspaceSessionAvatar } from "./workspace-session-avatar";
+import { useT } from "./locale-provider";
 import { useWorkspaceDirectory } from "./workspace-search";
 import { WorkspaceListRow, useArrivalRegistry } from "./workspace-list-motion";
 import {
@@ -37,6 +38,7 @@ export function WorkspaceRecentSessions({
   /** Stable account/user storage scope for local list organization. */
   storageScope?: string | null;
 }) {
+  const t = useT();
   const pathname = usePathname();
   const router = useRouter();
   const [expanded, setExpanded] = useState(true);
@@ -136,12 +138,7 @@ export function WorkspaceRecentSessions({
                         href={`/workspace/sessions/${row.id}`}
                         title={row.title}
                       >
-                        {row.personId ? (
-                          <PersonDirectoryAvatar className={styles.avatar} dataSize="small" id={row.personId} label={row.personLabel || row.title} />
-                        ) : (
-                          /* Sessions without a person reuse the brand mark; no fixture faces. */
-                          <span aria-hidden="true" className={styles.sessionMark} />
-                        )}
+                        <WorkspaceSessionAvatar personId={row.personId} label={row.personLabel || row.title} />
                         <span className={styles.sessionTitle}>{row.title}</span>
                         {snapshot.entries[row.id]?.pinned ? (
                           <small>
@@ -149,7 +146,7 @@ export function WorkspaceRecentSessions({
                             置顶
                           </small>
                         ) : null}
-                        {row.unread ? <small>未读</small> : null}
+                        {row.unread ? <small>{t("未读")}</small> : null}
                         <WorkspaceSelectionHighlight
                           selected={pathname === `/workspace/sessions/${row.id}`}
                         />
@@ -192,11 +189,7 @@ export function WorkspaceRecentSessions({
                         href={`/workspace/sessions/${row.id}`}
                         title={row.title}
                       >
-                        {row.personId ? (
-                          <PersonDirectoryAvatar className={styles.avatar} dataSize="small" id={row.personId} label={row.personLabel || row.title} />
-                        ) : (
-                          <span aria-hidden="true" className={styles.sessionMark} />
-                        )}
+                        <WorkspaceSessionAvatar personId={row.personId} label={row.personLabel || row.title} />
                         <span className={styles.sessionTitle}>{row.title}</span>
                       </Link>
                     </WorkspaceSessionRow>
