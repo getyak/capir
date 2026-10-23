@@ -13,6 +13,8 @@ and at least one usable login method always remains.
 
 The Mac primary-login surface offers **Sign in in your browser**; it never collects account passwords, registration fields or provider credentials. The default browser can reuse its valid Web session, then asks the user to confirm the displayed account for this Mac request. Otherwise the ordinary Web login and onboarding flow returns to that confirmation. A matching request hint helps identify the operation being approved. Use the Mac cancel action to stop waiting; closing the browser tab does not notify the app, and pending requests expire after five minutes. Cancelling keeps a usable retry surface.
 
+Browser confirmation distinguishes an invalid/expired or proof/origin-mismatched request from a temporary service failure. A network failure does not establish that the user signed out. Restricted Lab identities cannot inspect or approve a real Mac login request; use the default account's ordinary browser login and explicitly confirm its identity instead.
+
 Browser approval creates a separate, revocable Mac backend session through a short-lived, one-use grant. It does not copy the browser cookie, attach a credential, change the account or grant local capture permission. Browser and Mac sign-outs remain independent. The Mac opens the workspace only after live backend identity readback in its selected WebKit store; seeing a callback or a browser success page alone is insufficient.
 
 Existing healthy Mac sessions reopen directly. An expired session returns to the same browser-only entry. An uncertain exchange offers **Check sign-in result** and deliberate **Sign in again**; recovery does not replay a potentially consumed grant or report cancellation as rollback. A new primary login isolates old late cookie responses in a separate persistent store and preserves quarantined local drafts. [ADR 0022](../decisions/0022-browser-owned-macos-login.md) owns the design and [the active plan](../../plans/2026-10-01-macos-browser-login.md) distinguishes implementation proof, live-provider verification and installed-release acceptance.
@@ -274,6 +276,17 @@ while device controls remain local. Settings never use the legacy fixture
 fallback. Profile names and workspace names are editable; email and provider
 identity remain unchanged.
 
+Web Settings uses the same category links at every width. At narrow widths,
+the current-category button reveals search and the complete category list;
+Escape dismisses it and returns focus. Category URLs remain directly loadable,
+and browser history selects the matching category. Visited editors keep
+unsaved choices and save errors in memory while switching categories. Hidden
+editors suspend their effects: an unsaved theme preview applies only while
+Appearance is visible. Leaving Settings, reloading, or changing the authenticated
+account/workspace/session clears these temporary drafts; they are never copied
+to browser storage. Saving still requires each editor's explicit action and
+normal authorization, revision and retry checks.
+
 ## Ownership and management
 
 A new personal workspace explicitly belongs to its creator. Migration assigns an
@@ -522,6 +535,13 @@ the primary product request: private trace content must use the same
 request cannot undo telemetry already retained under the wrong account.
 Test data may contain synthetic or explicitly authorized testing material only;
 isolation is not consent for external processing or retention.
+
+Visual acceptance evidence follows the same purpose boundary. A collapsed native
+sidebar can still expose unrelated conversation titles in its accessibility tree.
+Filter inspection output to the exact approved controls or synthetic fixture
+before emitting or retaining it; collapsing chrome is not redaction. Use matched
+fictional content for shared screenshots, and keep unrelated primary-workspace
+lists out of published comparison artifacts.
 
 Ending a test workspace revokes access before data cleanup. The UI distinguishes
 cleanup pending/failed from verified deletion. New database tables must be

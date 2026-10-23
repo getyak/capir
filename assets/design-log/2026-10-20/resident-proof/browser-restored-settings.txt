@@ -1,0 +1,10 @@
+										21 pop-up button Device type, Value: Responsive
+										23 stepper (settable, float) Width, Value: 390
+										25 stepper (settable, float) Height (leave empty for full), Value: 844
+										26 pop-up button Zoom, Value: 75%
+											30 pop-up button Device pixel ratio, Value: 2 (default)
+										32 pop-up button Device type, Value: Mobile
+														430 Tick box Emulate a focused page Keep page focused. Commonly used for debugging disappearing elements., Value: 0
+														438 pop-up button Emulate CSS media feature prefers-color-scheme, Value: No emulation
+														446 pop-up button Emulate CSS media feature forced-colors, Value: No emulation
+														454 pop-up button Emulate CSS media feature prefers-reduced-motion, Value: No emulation

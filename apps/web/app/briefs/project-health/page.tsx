@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { translate } from "@/lib/i18n";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
 import {
   getFindingEvidence,
   getHeadlineFindings,
@@ -9,14 +11,16 @@ import {
 } from "@/lib/projectHealthBrief";
 import styles from "./project-health.module.css";
 
-export const metadata: Metadata = {
-  title: "工程决策简报",
-  description: "capri 当前项目健康度、工程风险与下一步决策的分层证据简报。",
-  robots: {
-    index: false,
-    follow: false,
-  },
-};
+type PageT = (key: string, vars?: Record<string, string | number>) => string;
+
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMarketingLocale();
+  return {
+    title: translate(locale, "工程决策简报"),
+    description: translate(locale, "capri 当前项目健康度、工程风险与下一步决策的分层证据简报。"),
+    robots: { index: false, follow: false },
+  };
+}
 
 const claimLabels = {
   observation: "观察",
@@ -53,7 +57,7 @@ function EvidenceLink({ evidence }: { evidence: EvidenceReference }) {
   );
 }
 
-function FindingDossier({ finding }: { finding: BriefFinding }) {
+function FindingDossier({ finding, t }: { finding: BriefFinding; t: PageT }) {
   const evidence = getFindingEvidence(finding);
 
   return (
@@ -62,9 +66,9 @@ function FindingDossier({ finding }: { finding: BriefFinding }) {
         <p className={styles.findingNumber}>{finding.number}</p>
         <div>
           <div className={styles.labels}>
-            <span>{claimLabels[finding.kind]}</span>
-            <span data-state={finding.state}>{stateLabels[finding.state]}</span>
-            <span>{attentionLabels[finding.attention]}</span>
+            <span>{t(claimLabels[finding.kind])}</span>
+            <span data-state={finding.state}>{t(stateLabels[finding.state])}</span>
+            <span>{t(attentionLabels[finding.attention])}</span>
           </div>
           <h3>{finding.title}</h3>
           <p className={styles.findingSummary}>{finding.executiveSummary}</p>
@@ -73,17 +77,17 @@ function FindingDossier({ finding }: { finding: BriefFinding }) {
 
       <div className={styles.findingBody}>
         <section className={styles.impactBlock}>
-          <p className={styles.sectionLabel}>为什么重要</p>
+          <p className={styles.sectionLabel}>{t("为什么重要")}</p>
           <p>{finding.impact}</p>
         </section>
 
         <section className={styles.judgementGuard}>
           <div>
-            <p className={styles.sectionLabel}>这说明什么</p>
+            <p className={styles.sectionLabel}>{t("这说明什么")}</p>
             <p>{finding.implication}</p>
           </div>
           <div>
-            <p className={styles.sectionLabel}>需要承担的取舍</p>
+            <p className={styles.sectionLabel}>{t("需要承担的取舍")}</p>
             <ul className={styles.plainList}>
               {finding.tradeoffs.map((tradeoff) => (
                 <li key={tradeoff}>{tradeoff}</li>
@@ -91,8 +95,8 @@ function FindingDossier({ finding }: { finding: BriefFinding }) {
             </ul>
           </div>
           <div>
-            <p className={styles.sectionLabel}>反证与约束</p>
-            <p>这些依据限制了结论的强度，避免把风险信号写成已确认缺陷。</p>
+            <p className={styles.sectionLabel}>{t("反证与约束")}</p>
+            <p>{t("这些依据限制了结论的强度，避免把风险信号写成已确认缺陷。")}</p>
             <div>
               {finding.counterevidenceIds.map((evidenceId) => {
                 const reference = projectHealthBrief.evidence.find(
@@ -107,7 +111,7 @@ function FindingDossier({ finding }: { finding: BriefFinding }) {
         </section>
 
         <section>
-          <p className={styles.sectionLabel}>因果链</p>
+          <p className={styles.sectionLabel}>{t("因果链")}</p>
           <ol className={styles.causalChain}>
             {finding.causalChain.map((step, index) => (
               <li key={step}>
@@ -120,7 +124,7 @@ function FindingDossier({ finding }: { finding: BriefFinding }) {
 
         <div className={styles.detailColumns}>
           <section>
-            <p className={styles.sectionLabel}>仍然不知道</p>
+            <p className={styles.sectionLabel}>{t("仍然不知道")}</p>
             <ul className={styles.plainList}>
               {finding.unknowns.map((unknown) => (
                 <li key={unknown}>{unknown}</li>
@@ -128,11 +132,11 @@ function FindingDossier({ finding }: { finding: BriefFinding }) {
             </ul>
           </section>
           <section>
-            <p className={styles.sectionLabel}>建议</p>
+            <p className={styles.sectionLabel}>{t("建议")}</p>
             <p>{finding.recommendation}</p>
           </section>
           <section>
-            <p className={styles.sectionLabel}>如何算完成</p>
+            <p className={styles.sectionLabel}>{t("如何算完成")}</p>
             <ul className={styles.checkList}>
               {finding.verification.map((proof) => (
                 <li key={proof}>{proof}</li>
@@ -142,7 +146,7 @@ function FindingDossier({ finding }: { finding: BriefFinding }) {
         </div>
 
         <footer className={styles.findingEvidence}>
-          <p className={styles.sectionLabel}>依据</p>
+          <p className={styles.sectionLabel}>{t("依据")}</p>
           <div>
             {evidence.map((reference) => (
               <EvidenceLink evidence={reference} key={reference.id} />
@@ -154,69 +158,65 @@ function FindingDossier({ finding }: { finding: BriefFinding }) {
   );
 }
 
-export default function ProjectHealthBriefPage() {
+export default async function ProjectHealthBriefPage() {
+  const locale = await getMarketingLocale();
+  const t: PageT = (key, vars) => translate(locale, key, vars);
   const headlineFindings = getHeadlineFindings();
   const commitLabel = projectHealthBrief.snapshot.commit.slice(0, 7);
 
   return (
     <div className={styles.page} lang="zh-CN">
-      <aside className={styles.rail} aria-label="简报层级导航">
+      <aside className={styles.rail} aria-label={t("简报层级导航")}>
         <Link className={styles.brand} href="/">
           <span aria-hidden="true">TS</span>
           <strong>capri</strong>
         </Link>
         <nav>
           <a href="#brief">
-            <span>01</span>
-            一页结论
-          </a>
+            <span>01</span>{t("一页结论")}</a>
           <a href="#dossier">
-            <span>02</span>
-            工程拆解
-          </a>
+            <span>02</span>{t("工程拆解")}</a>
           <a href="#evidence">
-            <span>03</span>
-            原始依据
-          </a>
+            <span>03</span>{t("原始依据")}</a>
         </nav>
-        <p className={styles.railMeta}>内部评审 · {projectHealthBrief.snapshot.date}</p>
+        <p className={styles.railMeta}>{t("内部评审 · {date}", { date: projectHealthBrief.snapshot.date })}</p>
       </aside>
 
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.brief} id="brief">
           <div className={styles.eyebrowRow}>
-            <p>工程决策简报</p>
-            <span>草案 · 等待决策</span>
+            <p>{t("工程决策简报")}</p>
+            <span>{t("草案 · 等待决策")}</span>
           </div>
 
           <header className={styles.hero}>
             <p className={styles.kicker}>{projectHealthBrief.question}</p>
             <h1>
               <span>capri</span>
-              <span>工程决策简报</span>
+              <span>{t("工程决策简报")}</span>
             </h1>
             <p className={styles.conclusion}>{projectHealthBrief.conclusion}</p>
           </header>
 
           <div className={styles.executiveGrid}>
             <section>
-              <p className={styles.sectionLabel}>这意味着什么</p>
+              <p className={styles.sectionLabel}>{t("这意味着什么")}</p>
               <p>{projectHealthBrief.significance}</p>
             </section>
             <section>
-              <p className={styles.sectionLabel}>建议方向</p>
+              <p className={styles.sectionLabel}>{t("建议方向")}</p>
               <p>{projectHealthBrief.recommendation}</p>
             </section>
             <section className={styles.decisionBlock}>
-              <p className={styles.sectionLabel}>需要拍板</p>
+              <p className={styles.sectionLabel}>{t("需要拍板")}</p>
               <p>{projectHealthBrief.decisionRequest}</p>
             </section>
           </div>
 
           <section className={styles.headlines} aria-labelledby="headline-title">
             <div className={styles.sectionHeading}>
-              <p className={styles.sectionLabel}>三个判断</p>
-              <h2 id="headline-title">先看约束，不看功能清单</h2>
+              <p className={styles.sectionLabel}>{t("三个判断")}</p>
+              <h2 id="headline-title">{t("先看约束，不看功能清单")}</h2>
             </div>
             <div className={styles.headlineList}>
               {headlineFindings.map((finding) => (
@@ -231,7 +231,7 @@ export default function ProjectHealthBriefPage() {
           </section>
 
           <footer className={styles.snapshotBar}>
-            <span>快照 {projectHealthBrief.snapshot.date}</span>
+            <span>{t("快照 {date}", { date: projectHealthBrief.snapshot.date })}</span>
             <span>main@{commitLabel}</span>
             <span>{projectHealthBrief.audience}</span>
           </footer>
@@ -241,20 +241,18 @@ export default function ProjectHealthBriefPage() {
           <header className={styles.layerHeader}>
             <div>
               <p className={styles.layerNumber}>02</p>
-              <p className={styles.sectionLabel}>工程档案</p>
+              <p className={styles.sectionLabel}>{t("工程档案")}</p>
             </div>
             <div>
-              <h2>问题不是“哪里不好”，而是下一阶段受什么约束。</h2>
-              <p>
-                以下判断把症状、机制、系统条件、能力缺口和业务后果分开。每项都给出未知数与完成证据。
-              </p>
+              <h2>{t("问题不是“哪里不好”，而是下一阶段受什么约束。")}</h2>
+              <p>{t("以下判断把症状、机制、系统条件、能力缺口和业务后果分开。每项都给出未知数与完成证据。")}</p>
             </div>
           </header>
 
           <section className={styles.strengths} aria-labelledby="strength-title">
             <div className={styles.sectionHeading}>
-              <p className={styles.sectionLabel}>先保护已有优势</p>
-              <h2 id="strength-title">不为了修问题，破坏已经成立的东西</h2>
+              <p className={styles.sectionLabel}>{t("先保护已有优势")}</p>
+              <h2 id="strength-title">{t("不为了修问题，破坏已经成立的东西")}</h2>
             </div>
             <div className={styles.strengthGrid}>
               {projectHealthBrief.strengths.map((strength) => (
@@ -278,14 +276,14 @@ export default function ProjectHealthBriefPage() {
 
           <div className={styles.findings}>
             {projectHealthBrief.findings.map((finding) => (
-              <FindingDossier finding={finding} key={finding.id} />
+              <FindingDossier finding={finding} t={t} key={finding.id} />
             ))}
           </div>
 
           <section className={styles.choiceSection}>
             <div className={styles.sectionHeading}>
-              <p className={styles.sectionLabel}>选择</p>
-              <h2>建议不是唯一选项，但需要把代价说清楚</h2>
+              <p className={styles.sectionLabel}>{t("选择")}</p>
+              <h2>{t("建议不是唯一选项，但需要把代价说清楚")}</h2>
             </div>
             <div className={styles.optionList}>
               {projectHealthBrief.options.map((option) => (
@@ -293,10 +291,10 @@ export default function ProjectHealthBriefPage() {
                   <div>
                     <span>
                       {option.stance === "recommended"
-                        ? "建议"
+                        ? t("建议")
                         : option.stance === "reject"
-                          ? "不建议"
-                          : "可选"}
+                          ? t("不建议")
+                          : t("可选")}
                     </span>
                     <h3>{option.name}</h3>
                   </div>
@@ -309,8 +307,8 @@ export default function ProjectHealthBriefPage() {
 
           <section className={styles.actionSection}>
             <div className={styles.sectionHeading}>
-              <p className={styles.sectionLabel}>行动顺序</p>
-              <h2>从消除未知开始，而不是从新功能开始</h2>
+              <p className={styles.sectionLabel}>{t("行动顺序")}</p>
+              <h2>{t("从消除未知开始，而不是从新功能开始")}</h2>
             </div>
             <ol className={styles.actionList}>
               {projectHealthBrief.actions.map((action, index) => (
@@ -322,7 +320,7 @@ export default function ProjectHealthBriefPage() {
                   </div>
                   <p>{action.detail}</p>
                   <p>
-                    <strong>完成证据</strong>
+                    <strong>{t("完成证据")}</strong>
                     {action.proof}
                   </p>
                 </li>
@@ -335,13 +333,11 @@ export default function ProjectHealthBriefPage() {
           <header className={styles.layerHeader}>
             <div>
               <p className={styles.layerNumber}>03</p>
-              <p className={styles.sectionLabel}>依据轨迹</p>
+              <p className={styles.sectionLabel}>{t("依据轨迹")}</p>
             </div>
             <div>
-              <h2>每个结论都能下钻，也能看到它不能证明什么。</h2>
-              <p>
-                这是一份日期化投影，不替代代码、工作流、评估记录或 GitHub 运行。点击编号查看原始依据。
-              </p>
+              <h2>{t("每个结论都能下钻，也能看到它不能证明什么。")}</h2>
+              <p>{t("这是一份日期化投影，不替代代码、工作流、评估记录或 GitHub 运行。点击编号查看原始依据。")}</p>
             </div>
           </header>
 
@@ -354,8 +350,8 @@ export default function ProjectHealthBriefPage() {
                 <div className={styles.evidenceTitle}>
                   <div className={styles.labels}>
                     <span>{reference.type.replace("_", " ")}</span>
-                    <span>{reference.authority === "direct" ? "直接" : "推导"}</span>
-                    <span>{reference.freshness === "current" ? "当前" : "日期快照"}</span>
+                    <span>{reference.authority === "direct" ? t("直接") : t("推导")}</span>
+                    <span>{reference.freshness === "current" ? t("当前") : t("日期快照")}</span>
                   </div>
                   <h3>{reference.title}</h3>
                   <p>
@@ -365,7 +361,7 @@ export default function ProjectHealthBriefPage() {
                 <div className={styles.evidenceSummary}>
                   <p>{reference.summary}</p>
                   <p>
-                    <strong>局限</strong>
+                    <strong>{t("局限")}</strong>
                     {reference.limitations.join("；")}
                   </p>
                 </div>
@@ -375,12 +371,10 @@ export default function ProjectHealthBriefPage() {
           </div>
 
           <footer className={styles.methodNote}>
-            <p className={styles.sectionLabel}>方法</p>
+            <p className={styles.sectionLabel}>{t("方法")}</p>
+            <p>{t("使用仓库 Skill")}<code>engineering-decision-brief</code>{t("：限制最高层判断数量；分离观察、解释、建议与决策；要求每个议题同时包含依据、未知、建议和验证方式。")}</p>
             <p>
-              使用仓库 Skill <code>engineering-decision-brief</code>：限制最高层判断数量；分离观察、解释、建议与决策；要求每个议题同时包含依据、未知、建议和验证方式。
-            </p>
-            <p>
-              范围：{projectHealthBrief.snapshot.scope}。编号 {projectHealthBrief.id}。
+              {t("范围：{scope}。编号 {id}。", { scope: projectHealthBrief.snapshot.scope, id: projectHealthBrief.id })}
             </p>
           </footer>
         </section>

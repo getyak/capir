@@ -1,0 +1,30 @@
+{
+  "variant": "SwiftUI preferredColorScheme",
+  "decision": "inconclusive for release-to-system",
+  "observed_facts": [
+    {
+      "choice": "dark",
+      "native": "NSAppearanceNameDarkAqua",
+      "web": "dark"
+    },
+    {
+      "choice": "system-after-dark",
+      "native": "NSAppearanceNameAqua",
+      "web": "dark",
+      "repeated_inspect": "unchanged"
+    },
+    {
+      "choice": "light",
+      "native": "NSAppearanceNameAqua",
+      "web": "light"
+    },
+    {
+      "choice": "unknown",
+      "result": "rejected; retained light"
+    }
+  ],
+  "automated_verdict": "no automated pass inferred from screenshots",
+  "human_choice": "unreviewed",
+  "AI_hypothesis": "SwiftUI preference reset or hosting-view appearance propagation may leave WebKit inherited preference stale; not a proven mechanism",
+  "remaining_uncertainty": "installed product behavior and system appearance change are not established"
+}

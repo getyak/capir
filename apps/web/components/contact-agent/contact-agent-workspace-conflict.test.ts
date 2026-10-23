@@ -125,7 +125,8 @@ it("preserves profile edits only while their source evidence is unchanged", asyn
   };
   await paint(1); await type('input[maxlength="300"]', "我的核对"); await paint(2);
   expect(host.querySelector<HTMLInputElement>('input[maxlength="300"]')!.value).toBe("我的核对");
-  await click("确认资料并保存"); expect(confirm.mock.calls[0][0].expected_revision).toBe(2);
+  await click("添加为新联系人"); expect(confirm.mock.calls[0][0].expected_revision).toBe(2);
+  expect(confirm.mock.calls[0][0].create_new).toBe(true);
   await paint(3, { ...draft, fields: [{ ...draft.fields[0], value: "新公司", source_excerpt: "新的来源依据" }] });
   expect(host.querySelector<HTMLInputElement>('input[maxlength="300"]')!.value).toBe("新公司");
   expect(host.textContent).toContain("资料依据已变化");

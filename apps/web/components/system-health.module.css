@@ -23,17 +23,18 @@
 .eyebrow {
   color: var(--accent-strong);
   font-family: var(--font-mono), monospace;
-  font-size: 0.69rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   font-weight: 780;
   letter-spacing: 0.14em;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .header h1 {
-  font-family: var(--font-serif), serif;
+  font-family: inherit;
   font-size: var(--workspace-title-size);
-  font-weight: 650;
-  letter-spacing: -0.04em;
-  line-height: 1.02;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: var(--ts-leading-heading, 1.4);
 }
 
 .header > div > p:last-child {
@@ -50,10 +51,10 @@
   color: var(--background);
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 0.78rem;
-  font-weight: 720;
+  font-size: var(--ts-type-nav, 0.875rem);
+  font-weight: 500;
   gap: 7px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 16px;
 }
 
@@ -114,8 +115,8 @@
 }
 
 .summary p {
-  font-size: 1.05rem;
-  font-weight: 730;
+  font-size: var(--ts-type-section, 1.125rem);
+  font-weight: 600;
 }
 
 .summary small,
@@ -178,8 +179,10 @@
 }
 
 .componentCopy strong {
-  font-size: 0.9rem;
+  font-size: var(--ts-type-body, 0.9375rem);
   font-weight: 730;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .componentMeta {
@@ -189,8 +192,9 @@
 
 .componentMeta > span {
   color: var(--muted-strong);
-  font-size: 0.74rem;
+  font-size: var(--ts-type-meta, 0.8125rem);
   font-weight: 760;
+  line-height: var(--ts-leading-meta, 1.5);
 }
 
 .empty {
@@ -204,9 +208,11 @@
 
 .recovery {
   color: var(--accent-strong);
-  font-size: 0.78rem;
+  font-size: var(--ts-type-body, 0.9375rem);
   font-weight: 760;
   width: fit-content;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .recovery:focus-visible {
@@ -222,15 +228,18 @@
 }
 
 .boundary p {
-  font-size: 0.75rem;
+  font-size: var(--ts-type-body, 0.9375rem);
   font-weight: 780;
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .boundary span {
   color: var(--muted);
-  font-size: 0.78rem;
-  line-height: 1.65;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
   max-width: 750px;
+  overflow-wrap: anywhere;
 }
 
 .notice {
@@ -262,7 +271,9 @@
 
 .notice p,
 .notice a {
-  font-size: 0.75rem;
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  overflow-wrap: anywhere;
 }
 
 .notice a {
@@ -303,5 +314,5 @@
 @media (prefers-reduced-motion: reduce) {
   .refresh {
     transition: none;
-  }
+   font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; font-weight: 500; }
 }

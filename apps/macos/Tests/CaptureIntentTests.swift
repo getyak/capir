@@ -3,6 +3,22 @@ import XCTest
 @testable import TalentSignalMac
 
 final class CaptureIntentTests: XCTestCase {
+    func testPreviewInstructionSurvivesRecoveryAndLegacyIntentsDefaultToImageOnly() throws {
+        let context = CaptureContext(origin: "https://workspace.example", ownerScope: "scope", loginBinding: "binding",
+            expiresAt: .distantFuture, processing: .init(policyVersion: "policy", workspaceLabel: "Workspace",
+                processorLabels: ["Actual Inspector"], sourceRetentionDays: 30, available: true))
+        let intent = try CaptureIntent(imagePNG: Data([1, 2, 3]), context: context, objective: "请核对这段可见文字")
+        let recovered = try JSONDecoder().decode(CaptureIntent.self, from: JSONEncoder().encode(intent))
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: CaptureTransportPayload.encode(recovered)) as? [String: Any])
+        XCTAssertEqual(body["objective"] as? String, "请核对这段可见文字")
+        XCTAssertEqual(recovered.messageId, intent.messageId)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(intent)) as? [String: Any])
+        legacy.removeValue(forKey: "objective")
+        let old = try JSONDecoder().decode(CaptureIntent.self, from: JSONSerialization.data(withJSONObject: legacy))
+        let oldBody = try XCTUnwrap(JSONSerialization.jsonObject(with: CaptureTransportPayload.encode(old)) as? [String: Any])
+        XCTAssertEqual(oldBody["objective"] as? String, "")
+        XCTAssertThrowsError(try CaptureIntent(imagePNG: Data([1]), context: context, objective: String(repeating: "x", count: 1001)))
+    }
     private let date = Date(timeIntervalSince1970: 1_800_000_000)
     private let png = Data([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3])
 

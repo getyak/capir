@@ -169,27 +169,14 @@ export function agentRelationshipContexts(
 }
 
 export function canCreateDistinctPerson({
-  differentPersonConfirmed,
-  lookupState,
-  matches,
   name,
 }: {
-  differentPersonConfirmed: boolean;
-  lookupState: "error" | "idle" | "loading" | "ready";
-  matches: PersonDirectoryItem[];
   name: string;
 }): boolean {
-  if (lookupState !== "ready") {
-    return false;
-  }
-  if (confirmedHandlePersonMatches(matches).length > 0) {
-    return false;
-  }
-  return (
-    (exactPersonNameMatches(name, matches).length === 0 &&
-      expiredHandlePersonMatches(matches).length === 0) ||
-    differentPersonConfirmed
-  );
+  // Directory matches advise the human; a failed lookup or namesake never
+  // prevents an explicitly requested separate contact. Handle confirmation
+  // keeps its own ownership checks after the contact is saved.
+  return name.trim().length > 0;
 }
 
 export function agentPersonScopeFields(
@@ -215,7 +202,7 @@ export function agentPersonScopeFields(
   return {
     scope_mode: "new_person",
     contact_name: name.trim(),
-    relationship_context_label: contextLabel.trim(),
+    relationship_context_label: contextLabel.trim() || "联系人资料",
   };
 }
 

@@ -33,6 +33,11 @@ import {
   type SlashCommand,
 } from "@/lib/workspace-composer";
 import {
+  composerMenuClipBounds,
+  composerMenuClippingAncestors,
+  composerMenuPlacement,
+} from "@/lib/composer-menu-layout";
+import {
   COMPOSER_DOCUMENT_SEPARATOR,
   composerFileIntakePlan,
   type ComposerDocumentType,
@@ -134,6 +139,7 @@ export function WorkspaceComposer({
   const meterId = `${base}-meter`;
   const mentionNoteId = `${base}-mention`;
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const composerRoot = useRef<HTMLDivElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -289,38 +295,45 @@ export function WorkspaceComposer({
     };
   }, [value, variant, layout]);
 
-  // Fit the popup into the visible area, away from the sticky header and dock.
+  // Fit the popup into the region a reader can actually see: the visual
+  // viewport intersected with every clipping ancestor's scrollport, anchored
+  // to the outer composer the popup's `calc(100% + 8px)` gap is measured from.
   useLayoutEffect(() => {
     if (!menuOpen) return;
     const popup = menu.current;
-    const anchor = textarea.current?.parentElement;
+    const anchor = composerRoot.current;
     if (!popup || !anchor) return;
+    // The popup and its list never clip themselves; the walk starts at the
+    // composer's parent so scrolling ancestors alone bound the placement.
+    const clips = composerMenuClippingAncestors(anchor.parentElement, popup);
     function position() {
       if (!popup || !anchor) return;
       const rect = anchor.getBoundingClientRect();
       const viewport = window.visualViewport;
-      const top = viewport?.offsetTop ?? 0;
-      const bottom = top + (viewport?.height ?? window.innerHeight);
-      const mobile = window.innerWidth <= 760;
-      const above = Math.max(0, rect.top - top - 72);
-      const below = Math.max(0, bottom - rect.bottom - (mobile ? 92 : 20));
-      const side = Math.max(above, below) < 140
-        ? "inline"
-        : above >= 220 || above >= below ? "above" : "below";
-      popup.dataset.side = side;
-      popup.style.maxHeight = `${side === "inline"
-        ? Math.max(140, Math.min(220, (bottom - top) * 0.45))
-        : Math.max(140, Math.min(360, side === "above" ? above : below))}px`;
+      const placement = composerMenuPlacement({
+        outer: { top: rect.top, bottom: rect.bottom },
+        viewport: {
+          top: viewport?.offsetTop ?? 0,
+          height: viewport?.height ?? window.innerHeight,
+        },
+        clip: composerMenuClipBounds(clips),
+        mobile: window.innerWidth <= 760,
+      });
+      popup.dataset.side = placement.side;
+      popup.style.maxHeight = `${placement.maxHeight}px`;
     }
     position();
-    const observer = new ResizeObserver(position);
-    observer.observe(anchor);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(position);
+    // A QA/health banner or window chrome change moves the clip bounds without
+    // resizing the composer, so the clipping ancestors are observed too.
+    observer?.observe(anchor);
+    for (const clip of clips) observer?.observe(clip);
     window.addEventListener("resize", position);
     window.addEventListener("scroll", position, true);
     window.visualViewport?.addEventListener("resize", position);
     window.visualViewport?.addEventListener("scroll", position);
     return () => {
-      observer.disconnect();
+      observer?.disconnect();
       window.removeEventListener("resize", position);
       window.removeEventListener("scroll", position, true);
       window.visualViewport?.removeEventListener("resize", position);
@@ -655,7 +668,11 @@ export function WorkspaceComposer({
         key={item.id}
         onClick={() => choose(item)}
         onPointerDown={(event) => event.preventDefault()}
-        onMouseEnter={() => setActiveIndex(index)}
+        onPointerMove={(event) => {
+          // Layout can move an option under a stationary pointer. Only real
+          // hover movement may replace the keyboard selection; touch pans do not.
+          if (event.pointerType !== "touch") setActiveIndex(index);
+        }}
         role="option"
       >
         {item.person ? <PersonDirectoryAvatar id={item.person.id} label={item.person.label} url={item.person.avatarUrl} size={28} /> : null}
@@ -702,6 +719,7 @@ export function WorkspaceComposer({
 
   return (
     <div className={styles.composer} data-dragging={dragging ? "true" : undefined} data-variant={variant} data-layout={layout}
+      ref={composerRoot}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) close();
       }}

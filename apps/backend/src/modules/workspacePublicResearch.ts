@@ -9,6 +9,7 @@ import {
   AgentPersonResearchPolicyError,
   assertPersonResearchQuery,
   admitPublicContextAnchor,
+  admitAuthoredPublicHomepage,
   type ContactPublicSource,
   type ContactResearchChannel,
   type ContactResearchToolRequest,
@@ -126,9 +127,24 @@ export const WORKSPACE_PUBLIC_RESEARCH_MAX_LISTED_SUBJECTS = 10;
 export function workspacePublicResearchQuery(
   name: string,
   contextAnchors: readonly WorkspacePublicResearchContextAnchor[] = [],
+  authoredHomepage?: string,
 ): string {
   const nameText = name.normalize("NFKC").trim();
   const parts = [nameText];
+  if (authoredHomepage !== undefined) {
+    // The host-admitted authored homepage is never silently dropped or
+    // truncated into name-only research. It is re-validated here and joins the
+    // query unconditionally; a combination that cannot fit the existing
+    // 100-character bound is honestly rejected by the query policy instead.
+    const homepage = admitAuthoredPublicHomepage(authoredHomepage);
+    if (!homepage) {
+      throw new AgentPersonResearchPolicyError(
+        "PERSON_RESEARCH_QUERY_INVALID",
+        "An authored homepage clue must be a canonical public homepage.",
+      );
+    }
+    parts.push(homepage);
+  }
   for (const anchor of contextAnchors) {
     if (!admitPublicContextAnchor(anchor.kind, anchor.text, [anchor.text])) continue;
     const text = anchor.text.normalize("NFKC").trim();
@@ -163,6 +179,12 @@ export interface WorkspacePublicResearchSubject {
   name: string;
   /** Admitted source-grounded context entering the query and anchors. */
   contextAnchors?: readonly WorkspacePublicResearchContextAnchor[];
+  /**
+   * The user-authored canonical public homepage for this name, assigned only
+   * by the positive authored objective parser and re-validated here. A search
+   * query anchor only: model tool arguments never accept URLs or provenance.
+   */
+  authoredHomepage?: string;
   /** Optional currency guard, asserted before and after every dispatch. */
   isCurrent?: () => Promise<boolean>;
 }
@@ -521,8 +543,12 @@ export function createWorkspacePublicResearch(
   let fetchCalls = 0;
 
   const subjectAnchors = (subject: WorkspacePublicResearchSubject): string[] => {
+    const homepage = subject.authoredHomepage === undefined
+      ? null
+      : admitAuthoredPublicHomepage(subject.authoredHomepage);
     const texts = [
       subject.name,
+      ...(homepage ? [homepage] : []),
       ...(subject.contextAnchors ?? []).filter(anchor => admitPublicContextAnchor(anchor.kind, anchor.text, [anchor.text])).map((anchor) => anchor.text),
     ];
     const bounded: string[] = [];
@@ -535,7 +561,7 @@ export function createWorkspacePublicResearch(
     return bounded;
   };
   const subjectQuery = (subject: WorkspacePublicResearchSubject): string =>
-    workspacePublicResearchQuery(subject.name, subject.contextAnchors ?? []);
+    workspacePublicResearchQuery(subject.name, subject.contextAnchors ?? [], subject.authoredHomepage);
 
   const resolveSubject = (subjectID: string): WorkspacePublicResearchSubject | null =>
     options.authorizedSubjects().find((subject) => subject.id === subjectID) ?? null;
@@ -586,6 +612,16 @@ export function createWorkspacePublicResearch(
         callID,
         "PUBLIC_RESEARCH_SUBJECT_NOT_AUTHORIZED",
         "Only host-authorized public subjects can be researched.",
+      );
+    }
+    if (subject.authoredHomepage !== undefined && admitAuthoredPublicHomepage(subject.authoredHomepage) === null) {
+      // Defense in depth: a non-canonical host homepage clue fails honestly
+      // before any dispatch instead of degrading into name-only research.
+      return failure(
+        name,
+        callID,
+        "PUBLIC_RESEARCH_QUERY_INVALID",
+        "The authorized homepage clue is not a canonical public homepage; no search was sent.",
       );
     }
     try {
@@ -744,7 +780,11 @@ export function createWorkspacePublicResearch(
     for (const source of response.sources) {
       const existing = discoveredSources.get(source.source_id);
       if (existing) {
-        discoveredSources.set(source.source_id, { source:existing.source.stage === "fetched" ? existing.source : source, subjectID: subject.id });
+        // A discovered source stays bound to the complete-clue authority that
+        // FIRST discovered it in this run; a repeat receipt (even from another
+        // subject) updates the slot content but never switches the authorizing
+        // subject, so one authority can never borrow another's cached receipt.
+        discoveredSources.set(source.source_id, { source:existing.source.stage === "fetched" ? existing.source : source, subjectID: existing.subjectID });
         const membership = subjectSources.get(subject.id) ?? new Set<string>();
         membership.add(source.source_id); subjectSources.set(subject.id,membership);
         accepted.push(source);

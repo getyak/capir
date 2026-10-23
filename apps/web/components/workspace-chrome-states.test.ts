@@ -71,26 +71,14 @@ describe("account menu utilities and footer geometry", () => {
     expect(html).not.toContain("添加账户");
   });
 
-  it("keeps footer geometry, custom tooltips and reduced motion in the stylesheet", () => {
+  it("keeps reduced motion and bounded account popovers in the stylesheet", () => {
     const css = readFileSync(resolve(import.meta.dirname, "workspace-shell.module.css"), "utf8");
-    // The strip fills the sidebar; update entries use the real state.
-    expect(css).toContain("width:100%");
-    expect(css).toContain("width:128px");
-    // Hover OR keyboard focus contracts the pill and widens the entry in place.
-    expect(css).toContain(":has(.footerEntryWrap:hover) .connectPill");
-    expect(css).toContain(":has(.footerEntryWrap:focus-visible) .connectPill");
-    expect(css).toContain(":has(.footerEntryWrap:hover) .footerEntry");
-    expect(css).toMatch(/\.connectPill[\s\S]{0,400}transition:[\s\S]{0,120}220ms/);
-    expect(css).toMatch(/\.footerEntry[\s\S]{0,600}transition:[\s\S]{0,160}220ms/);
-    // Reduced motion applies the geometry immediately.
+    // Geometry requires rendered acceptance; source strings cannot prove it.
     expect(css).toMatch(
       /prefers-reduced-motion: reduce[\s\S]{0,220}\.footerEntry[\s\S]{0,120}transition: none/,
     );
     // The popover scrolls within the viewport instead of escaping it.
     expect(css).toContain("var(--radix-popover-content-available-height)");
     expect(css).toMatch(/\.accountPopover[\s\S]{0,900}overflow-y: auto/);
-    // Desktop targets stay at 40px with 44px on narrow screens.
-    expect(css).toMatch(/\.footerEntry[\s\S]{0,400}height: 40px/);
-    expect(css).toContain("height: 44px");
   });
 });

@@ -122,7 +122,6 @@ function PrivateConversationRoom({ binding, accountId }: { binding: string; acco
     </header>
     <div className={styles.body}>
       {turns.length === 0 ? <div className={styles.welcome}>
-        <span className={styles.orbit}><Ghost size={23} weight="fill" aria-hidden="true"/></span>
         <h1>只属于此刻的对话</h1>
         <p>留一点空间，把想法慢慢理清。<br/>退出后，这里的内容随即清空。</p>
       </div> : <div className={styles.transcript} ref={transcript} tabIndex={0} role="region" aria-label="本次隐私对话" onScroll={() => {

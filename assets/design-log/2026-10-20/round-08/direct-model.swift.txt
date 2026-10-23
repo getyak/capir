@@ -1,0 +1,59 @@
+import SwiftUI
+import AppKit
+import WebKit
+
+@MainActor final class AppearanceProbe: ObservableObject {
+    @Published var preference = "system"
+    @Published var trace = "No observation yet. Synthetic local content only."
+    let webView = WKWebView()
+    var colorScheme: ColorScheme? { preference == "dark" ? .dark : preference == "light" ? .light : nil }
+    init() {
+        webView.loadHTMLString("""
+        <!doctype html><meta name="color-scheme" content="light dark"><style>
+        :root{color-scheme:light dark;font:16px -apple-system}body{margin:36px;background:Canvas;color:CanvasText}p{line-height:1.7;color:GrayText}h1{font-size:26px;font-weight:600}article{border-top:1px solid GrayText;margin-top:32px;padding-top:24px}
+        </style><h1>One window, one appearance</h1><p>Synthetic WKWebView content. No network or account access.</p><article>Content remains the visual anchor.</article>
+        """, baseURL: nil)
+    }
+    func select(_ value: String) {
+        guard ["system", "light", "dark"].contains(value) else { trace = "Rejected invalid value. Preference remains: \(preference)"; return }
+        preference = value
+        webView.window?.appearance = value == "dark" ? NSAppearance(named: .darkAqua) : value == "light" ? NSAppearance(named: .aqua) : nil
+        trace = "Requested: \(value). Inspect after paint to read actual host state."
+    }
+    func inspect() {
+        let native = webView.window?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua])?.rawValue ?? "no-window"
+        webView.evaluateJavaScript("matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'") { [weak self] value, error in
+            Task { @MainActor in
+                self?.trace = "Preference: \(self?.preference ?? "none") · Native: \(native) · Web: \(value as? String ?? "error") · Network: none"
+            }
+        }
+    }
+}
+struct ProbeWebView: NSViewRepresentable {
+    let probe: AppearanceProbe
+    func makeNSView(context: Context) -> WKWebView { probe.webView }
+    func updateNSView(_ view: WKWebView, context: Context) {}
+}
+struct AppearanceProbeView: View {
+    @StateObject private var probe = AppearanceProbe()
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                ForEach(["system", "light", "dark"], id: \.self) { value in
+                    Button(value.capitalized) { probe.select(value) }.accessibilityIdentifier("appearance.\(value)")
+                }
+                Button("Invalid value") { probe.select("unknown") }
+                Spacer()
+                Button("Inspect actual state") { probe.inspect() }
+            }
+            Text(probe.trace).font(.system(size: 13)).textSelection(.enabled).accessibilityIdentifier("appearance.trace")
+            ProbeWebView(probe: probe).frame(maxWidth: .infinity, maxHeight: .infinity)
+        }.padding(24).frame(minWidth: 700, minHeight: 420)
+
+    }
+}
+@main struct AppearanceBoundaryApp: App {
+    var body: some Scene {
+        Window("Appearance boundary · synthetic", id: "appearance-boundary") { AppearanceProbeView() }.defaultSize(width: 900, height: 620)
+    }
+}

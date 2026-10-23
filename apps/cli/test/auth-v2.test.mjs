@@ -3,6 +3,7 @@ import {randomUUID,randomBytes,createHash} from 'node:crypto';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {get} from 'node:http';
 import {after,it} from 'node:test';
 import {runCli} from '../dist/run.js';
 import {runAuthLogin} from '../dist/login.js';
@@ -85,6 +86,116 @@ it('the login deadline aborts discovery before opening a browser or writing a cr
  const dir=mkdtempSync(join(tmpdir(),'capir-deadline-v2-'));dirs.push(dir);const s=store();let aborted=false,browser=0;
  await assert.rejects(runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:0.03,noninteractive:false,protocolV2:true},{store:s,txn:createCredentialTxn(s,join(dir,'mutex.sqlite')),interactive:true,openBrowser:async()=>{browser++;},fetchImpl:async(_url,init)=>new Promise((_resolve,reject)=>{init.signal.addEventListener('abort',()=>{aborted=true;reject(new DOMException('Aborted','AbortError'));},{once:true});})}),{code:'CAPIR_LOGIN_TIMEOUT'});
  assert.equal(aborted,true);assert.equal(browser,0);assert.equal(s.value,null);assert.equal(s.writes,0);
+});
+
+// Reproduce Node's millisecond timer boundary without scheduler luck: the
+// request timer fires while Date.now is still one millisecond before login's
+// deadline, and the outer login timer has not fired. Production callbacks,
+// abort propagation and error handling remain real.
+function loginClock(t) {
+ const started=Date.now(),timers=[];
+ let now=started;
+ t.mock.method(Date,'now',()=>now);
+ t.mock.method(globalThis,'setTimeout',(callback,ms,...args)=>{
+  const timer={ms,cleared:false,fired:false,unref(){return this;},fire(){
+   if(this.cleared||this.fired)return;
+   this.fired=true;callback(...args);
+  }};
+  timers.push(timer);return timer;
+ });
+ const clear=globalThis.clearTimeout;
+ t.mock.method(globalThis,'clearTimeout',timer=>{
+  if(timers.includes(timer))timer.cleared=true;
+  else clear(timer);
+ });
+ return {timers,beforeDeadline(){now=started+29;},atDeadline(){now=started+30;}};
+}
+
+for(const phase of ['fetch','body']) it(`a ${phase} deadline before the login timer is still a login timeout`,async t=>{
+ const clock=loginClock(t),s=store();let browser=0,commits=0,aborted=false;
+ const pending=new Promise(()=>{});
+ let requestReady;
+ const ready=new Promise(resolve=>{requestReady=resolve;});
+ const login=runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:0.03,noninteractive:false,protocolV2:true},{
+  store:s,txn:{async commitIfAbsent(){commits++;return 'committed';}},interactive:true,
+  openBrowser:async()=>{browser++;},fetchImpl:async(_url,init)=>{
+   init.signal.addEventListener('abort',()=>{aborted=true;},{once:true});
+   if(phase==='fetch'){requestReady();return pending;}
+   return {ok:true,status:200,async text(){requestReady();return pending;}};
+  },
+ });
+ const rejection=assert.rejects(login,{code:'CAPIR_LOGIN_TIMEOUT'});
+ // Wait for the named protocol stage without advancing either clock.
+ await ready;
+ assert.equal(clock.timers.length,2);
+ clock.beforeDeadline();clock.timers[1].fire();
+ await rejection;
+ assert.equal(clock.timers[0].fired,false,'the transport deadline wins the timer race');
+ assert.equal(aborted,true);assert.equal(browser,0);assert.equal(commits,0);
+ assert.equal(s.value,null);assert.equal(s.writes,0);
+ assert.ok(clock.timers.every(timer=>timer.cleared));
+});
+
+for(const failure of ['fetch','body','backend-code']) it(`an immediate ${failure} failure before the deadline remains transport failure`,async t=>{
+ const clock=loginClock(t),s=store();let browser=0,commits=0;
+ await assert.rejects(runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:0.03,noninteractive:false,protocolV2:true},{
+  store:s,txn:{async commitIfAbsent(){commits++;return 'committed';}},interactive:true,
+  openBrowser:async()=>{browser++;},fetchImpl:async()=>{
+   if(failure==='fetch')throw Error('private network detail');
+   if(failure==='body')return {ok:true,status:200,async text(){throw Error('private body detail');}};
+   return Response.json({error:{code:'CAPIR_TRANSPORT',message:'Upstream refusal'}},{status:503});
+  },
+ }),error=>{assert.equal(error.code,'CAPIR_TRANSPORT');assert.doesNotMatch(error.message,/private/);return true;});
+ assert.equal(clock.timers.some(timer=>timer.fired),false);
+ assert.equal(browser,0);assert.equal(commits,0);assert.equal(s.writes,0);
+});
+
+for(const first of ['SIGINT','login timer']) it(`${first} remains the first terminal reason when a request timer also fires`,async t=>{
+ const clock=loginClock(t),s=store();let commits=0;
+ const login=runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:0.03,noninteractive:false,protocolV2:true},{
+  store:s,txn:{async commitIfAbsent(){commits++;return 'committed';}},interactive:true,
+  openBrowser:async()=>assert.fail('must not open'),fetchImpl:async()=>new Promise(()=>{}),
+ });
+ const rejection=assert.rejects(login,{code:first==='SIGINT'?'CAPIR_LOGIN_CANCELLED':'CAPIR_LOGIN_TIMEOUT'});
+ if(first==='SIGINT'){clock.beforeDeadline();process.emit('SIGINT');}
+ else {clock.atDeadline();clock.timers[0].fire();}
+ clock.timers[1].fire();
+ await rejection;
+ assert.equal(commits,0);assert.equal(s.writes,0);
+});
+
+it('a post-mint request deadline is latched before cleanup and never writes a credential',async t=>{
+ const clock=loginClock(t),s=store(),c=credentials();let commits=0,revoked=0,statusTimer;
+ let statusStarted;
+ const ready=new Promise(resolve=>{statusStarted=resolve;});
+ const login=runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:0.03,noninteractive:false,protocolV2:true},{
+  store:s,txn:{async commitIfAbsent(){commits++;return 'committed';},async removeIfMatch(){return 'already_absent';}},interactive:true,
+  openBrowser:async url=>{
+   const consent=new URL(url),callback=new URL(consent.searchParams.get('redirect_uri'));
+   callback.searchParams.set('state',consent.searchParams.get('state'));callback.searchParams.set('code',secret());
+   await new Promise((resolve,reject)=>get(callback,res=>{res.resume();res.on('end',resolve);}).on('error',reject));
+  },
+  fetchImpl:async(url)=>{
+   const path=new URL(url).pathname;
+   if(path.endsWith('/capabilities'))return response({schema_version:'capir-auth.v2',enabled:true,capabilities:Object.fromEntries(['auth.authorize','auth.exchange','auth.refresh','auth.status','auth.logout','auth.grants'].map(k=>[k,'supported'])),device_auth:'unsupported',scopes:c.grant.scopes,backend_origin:environment.backendOrigin,web_origin:environment.webOrigin,lifetimes:{code_seconds:60,access_seconds:900,refresh_idle_seconds:604800,refresh_absolute_seconds:2592000},unsupported:['device_auth']});
+   if(path.endsWith('/exchange'))return response(c);
+   if(path.endsWith('/status')){statusTimer=clock.timers.at(-1);statusStarted();return new Promise(()=>{});}
+   if(path.endsWith('/logout')){
+    revoked++;
+    // The request timeout happened before this later cancellation.
+    process.emit('SIGINT');
+    return response({schema_version:'capir-auth.v2',revoked_grant_id:c.grant.id,revoked_at:new Date().toISOString()});
+   }
+   throw Error('Unexpected dispatch');
+  },
+ });
+ const rejection=assert.rejects(login,error=>{
+  assert.equal(error.code,'CAPIR_LOGIN_TIMEOUT');
+  assert.deepEqual(error.clientState,{remote_revoked:true,local_minted_credential_absent:true});return true;
+ });
+ await ready;clock.beforeDeadline();statusTimer.fire();await rejection;
+ assert.equal(clock.timers[0].fired,false);assert.equal(revoked,1);
+ assert.equal(commits,0);assert.equal(s.value,null);assert.equal(s.writes,0);
 });
 
 it('post-mint timeout preserves failed remote-revoke evidence without persisting the token',async()=>{

@@ -1,4 +1,11 @@
 /* Authenticated host adapter: shared palette, no changes to public surfaces. */
+/* The viewport owns chrome; individual workspace content regions own scrolling.
+   Scope this to the mounted product so public pages retain document scrolling. */
+html:has(.quiet-workspace),
+html:has(.quiet-workspace) body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 .quiet-workspace {
   --background: var(--ts-panel-surface);
   --surface: var(--ts-panel-surface);
@@ -11,15 +18,17 @@
   --muted-strong: var(--ts-chrome-muted);
   --line: var(--ts-divider);
   --line-soft: var(--ts-divider);
-  --accent: var(--ts-accent);
-  --accent-strong: var(--ts-accent);
-  --workspace-title-size: 1.5rem;
-  --workspace-object-size: 1.375rem;
-  --workspace-section-size: 1.125rem;
-  --workspace-body-size: 0.9375rem;
-  --workspace-meta-size: 0.8125rem;
+  --accent: var(--ink);
+  --accent-strong: var(--ink);
+  --focus: var(--ink);
+  --workspace-title-size: var(--ts-type-title);
+  --workspace-object-size: var(--ts-type-object);
+  --workspace-section-size: var(--ts-type-section);
+  --workspace-body-size: var(--ts-type-body);
+  --workspace-meta-size: var(--ts-type-meta);
   --workspace-page-padding: clamp(20px, 3vw, 40px);
   --workspace-section-gap: 24px;
+  --workspace-transition-duration: 180ms;
   --button-radius: 8px;
   --input-radius: 8px;
   --card-radius: 12px;
@@ -29,6 +38,7 @@
   --ts-rail-width: 72px;
   --workspace-agent-bubble: var(--ts-chrome-surface);
   --workspace-user-bubble: #eceae4;
+  --workspace-brand-image: url("/brand/symbol.svg");
   --shadow-object: none;
   --shadow-accent: none;
   background: var(--background);
@@ -37,6 +47,7 @@
 :root[data-theme="dark"] .quiet-workspace {
   --background: var(--ts-content-surface);
   --workspace-user-bubble: var(--ts-selected-surface);
+  --workspace-brand-image: url("/brand/symbol-reverse.svg");
 }
 @media (prefers-color-scheme: dark) {
   .quiet-workspace:not(:where([data-theme="light"] *)) {
@@ -62,17 +73,9 @@
   box-shadow: none;
   background: transparent;
 }
-.quiet-workspace .context-chat__composer textarea { font-size: 15px; }
-.quiet-workspace .context-chat__response-meta { font-size: 13px; }
 .quiet-workspace .context-onboarding__header h1 { font-size: 24px; }
-.quiet-workspace :focus-visible { outline-offset: 3px; }
-
-.quiet-workspace { --workspace-brand-image: url("/brand/symbol.svg"); }
-:root[data-theme="dark"] .quiet-workspace { --workspace-brand-image: url("/brand/symbol-reverse.svg"); }
+.quiet-workspace :focus-visible { outline-color: var(--ink); outline-offset: 3px; }
 
 html[data-desktop-surface="workspace"]:has(.quiet-workspace),
 html[data-desktop-surface="workspace"]:has(.quiet-workspace) body { background: transparent; }
-.quiet-workspace { --accent: var(--ink); --accent-strong: var(--ink); --focus: var(--ink); }
-
-.quiet-workspace :focus-visible { outline-color: var(--ink); }
 @media (forced-colors: active) { .quiet-workspace :focus-visible { outline-color: Highlight; } }

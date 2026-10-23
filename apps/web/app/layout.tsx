@@ -2,8 +2,9 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { siteConfig } from "@/lib/site";
 import "./globals.css";
-import { getMarketingLocale } from "@/lib/server/marketing-locale";
+import { accountDisplayLanguage, getMarketingLocale } from "@/lib/server/marketing-locale";
 import { MarketingLocaleProvider } from "@/components/marketing/locale-provider";
+import { translate } from "@/lib/i18n";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteConfig.url),
@@ -77,17 +78,17 @@ const themeScript = `
 export default async function RootLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
-  const locale = await getMarketingLocale();
+  const [locale, accountLanguage] = await Promise.all([getMarketingLocale(), accountDisplayLanguage()]);
   return (
     <html lang={locale} data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body lang="zh-CN">
+      <body lang={locale}>
         <a lang={locale} className="skip-link" href="#main-content">
-          {locale === "en" ? "Skip to main content" : "跳到主要内容"}
+          {translate(locale, "nav.skipToContent")}
         </a>
-        <MarketingLocaleProvider locale={locale}>
+        <MarketingLocaleProvider locale={locale} accountLocale={accountLanguage !== null}>
           {children}
         </MarketingLocaleProvider>
       </body>

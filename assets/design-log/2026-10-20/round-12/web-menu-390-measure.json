@@ -1,0 +1,43 @@
+{
+  "viewport": {
+    "innerWidth": 390,
+    "innerHeight": 844,
+    "dpr": 2,
+    "vv": {
+      "width": 390,
+      "height": 844,
+      "scale": 1,
+      "top": 0
+    }
+  },
+  "documentWidth": 390,
+  "bodyWidth": 390,
+  "composer": {
+    "x": 16,
+    "y": 442,
+    "width": 358,
+    "height": 62
+  },
+  "input": {
+    "x": 79,
+    "y": 461,
+    "width": 232,
+    "height": 24
+  },
+  "font": "16px",
+  "menu": {
+    "x": 18,
+    "y": 195,
+    "width": 354,
+    "height": 239
+  },
+  "maxHeight": "",
+  "selected": {
+    "x": 24,
+    "y": 201,
+    "width": 342,
+    "height": 44
+  },
+  "focus": "TEXTAREA",
+  "hit": true
+}

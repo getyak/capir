@@ -14,6 +14,7 @@ struct RelationshipArchiveView: View {
     @StateObject private var askDeepLinkRouter = AgentAskDeepLinkRouter.shared
     @StateObject private var workspaceStore: PursuitWorkspaceStore
     @StateObject private var sessionStore: AgentSessionStore
+    @StateObject private var todayScheduleStore = TodayScheduleStore()
     @StateObject private var labStore: TalentSignalLabStore
     @State private var selectedPage: RelationshipArchivePage = .today
     // Published changes update only the header, not the workspace.
@@ -24,6 +25,7 @@ struct RelationshipArchiveView: View {
     @State private var sessionRestorationPosition: UUID?
     @State private var peopleRestorationPosition: String?
     @State private var presentedSheet: RelationshipArchiveSheet?
+    @State private var showsAgentStudio = false
     @State private var askPresentation: RelationshipAskPresentation?
     /// Shared active-refresh registration for the REAL open Agent Session (or
     /// the directory-level Session list when no conversation is open).
@@ -40,6 +42,7 @@ struct RelationshipArchiveView: View {
     private let readScopeIsCurrent: () -> Bool
     private let reviewBaseURL: URL?
     private let authenticatedAccessToken: String?
+    private let authenticatedExpiresAt: Date?
     private let authenticatedUserID: String?
     private let accountEmail: String?
     private let workspaceLabel: String?
@@ -173,6 +176,7 @@ struct RelationshipArchiveView: View {
         authenticatedUserID = session?.userID
         reviewBaseURL = session?.baseURL
         authenticatedAccessToken = session?.accessToken
+        authenticatedExpiresAt = session?.expiresAt
         accountEmail = session?.userEmail
         workspaceLabel = session?.accountSlug
         self.onSignOut = onSignOut
@@ -202,7 +206,7 @@ struct RelationshipArchiveView: View {
                         onOpenCalendar: openRelationshipCalendar,
                         onOpenAgentStudio: {
                             clearTransientRetrievalIntent()
-                            presentedSheet = .agentStudio
+                            showsAgentStudio = true
                         }
                     )
                 }
@@ -211,6 +215,26 @@ struct RelationshipArchiveView: View {
                 guideRail
             }
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(isPresented: $showsAgentStudio) {
+                RelationshipAgentStudioView(
+                    workspaceStore: workspaceStore,
+                    sessionStore: sessionStore,
+                    isCanonical: workspaceStore.isCanonical,
+                    workspaceID: workspaceStore.snapshot?.workspaceID,
+                    runtimeScope: runtimeScope,
+                    workspaceLabel: workspaceLabel,
+                    accountName: workspaceStore.snapshot?.currentUserName,
+                    accountEmail: accountEmail,
+                    proposals: workspaceStore.snapshot?.openProposals ?? [],
+                    signOutNotice: sessionStore.persistenceNotice,
+                    onOpenProposal: { presentedSheet = .proposal($0) },
+                    internalTestingStatus: internalTestingStatus,
+                    onOpenInternalTesting: internalTestingAction,
+                    // Protected drafts and operation IDs remain owned by this
+                    // account. Closing a session is not a request to delete them.
+                    onSignOut: onSignOut
+                )
+            }
             .navigationDestination(isPresented: Binding(
                 get: { askPresentation != nil },
                 set: { if !$0 { askPresentation = nil } }
@@ -221,6 +245,9 @@ struct RelationshipArchiveView: View {
             }
         }
         .modifier(activeRefreshModifier)
+        .onChange(of: showsAgentStudio) { isPresented in
+            if !isPresented { reloadCanonicalWorkspace() }
+        }
         .onChange(of: askPresentation?.id) { presentationID in
             if presentationID == nil { completeDeferredTransition() }
         }
@@ -295,51 +322,6 @@ struct RelationshipArchiveView: View {
                     },
                     actorDisplayName: workspaceStore.snapshot?.currentUserName
                         ?? "Current user"
-                )
-            case .agentStudio:
-                RelationshipAgentStudioView(
-                    workspaceStore: workspaceStore,
-                    sessionStore: sessionStore,
-                    isCanonical: workspaceStore.isCanonical,
-                    workspaceID: workspaceStore.snapshot?.workspaceID,
-                    runtimeScope: runtimeScope,
-                    workspaceLabel: workspaceLabel,
-                    accountName: workspaceStore.snapshot?.currentUserName,
-                    accountEmail: accountEmail,
-                    proposals: workspaceStore.snapshot?.openProposals ?? [],
-                    signOutNotice: sessionStore.persistenceNotice,
-                    onOpenProposal: { proposal in
-                        Task { @MainActor in
-                            await Task.yield()
-                            presentedSheet = .proposal(proposal)
-                        }
-                    },
-                    internalTestingStatus: internalTestingStatus,
-                    onOpenInternalTesting: internalTestingAction,
-                    // Protected drafts and operation IDs remain owned by this
-                    // account. Closing a session is not a request to delete them.
-                    onSignOut: onSignOut
-                )
-            case .menu:
-                RelationshipMenuView(
-                    isCanonical: workspaceStore.isCanonical,
-                    workspaceID: workspaceStore.snapshot?.workspaceID,
-                    workspaceLabel: workspaceLabel,
-                    accountName: workspaceStore.snapshot?.currentUserName,
-                    accountEmail: accountEmail,
-                    proposals: workspaceStore.snapshot?.openProposals ?? [],
-                    signOutNotice: sessionStore.persistenceNotice,
-                    onOpenProposal: { proposal in
-                        Task { @MainActor in
-                            await Task.yield()
-                            presentedSheet = .proposal(proposal)
-                        }
-                    },
-                    internalTestingStatus: internalTestingStatus,
-                    onOpenInternalTesting: internalTestingAction,
-                    // Protected drafts and operation IDs remain owned by this
-                    // account. Closing a session is not a request to delete them.
-                    onSignOut: onSignOut
                 )
             case .internalTesting:
                 ProductLabView(
@@ -629,35 +611,60 @@ struct RelationshipArchiveView: View {
 
     @ViewBuilder
     private func pageContent(for page: RelationshipArchivePage) -> some View {
-        switch workspaceStore.phase {
-        case .loading:
-            PursuitWorkspaceLoadingView()
-        case let .failed(message):
-            PursuitWorkspaceFailureView(
-                message: message,
-                isRetrying: workspaceStore.isReadInFlight,
-                completedReadCount: workspaceStore.completedReadCount
-            ) {
-                Task { await workspaceStore.load() }
-            }
-        case .empty:
-            PursuitWorkspaceEmptyView(
-                selectedPage: page,
-                pendingCaptureCount: captureHandoff.attentionCount,
-                onOpenCaptureInbox: {
-                    clearTransientRetrievalIntent()
-                    isCaptureInboxPresented = true
+        if page == .today, workspaceStore.isCanonical {
+            canonicalTodayPage
+        } else {
+            switch workspaceStore.phase {
+            case .loading:
+                PursuitWorkspaceLoadingView()
+            case let .failed(message):
+                PursuitWorkspaceFailureView(
+                    message: message,
+                    isRetrying: workspaceStore.isReadInFlight,
+                    completedReadCount: workspaceStore.completedReadCount
+                ) {
+                    Task { await workspaceStore.load() }
                 }
-            )
-        case let .preview(snapshot), let .loaded(snapshot):
-            loadedPage(page, snapshot: snapshot)
+            case .empty:
+                PursuitWorkspaceEmptyView(
+                    selectedPage: page,
+                    pendingCaptureCount: captureHandoff.attentionCount,
+                    onOpenCaptureInbox: {
+                        clearTransientRetrievalIntent()
+                        isCaptureInboxPresented = true
+                    }
+                )
+            case let .preview(snapshot), let .loaded(snapshot):
+                loadedPage(page, snapshot: snapshot)
+            }
         }
+    }
+
+    private var canonicalTodayPage: some View {
+        CanonicalTodayPage(workspace: workspaceStore, schedules: todayScheduleStore,
+            context: todayScheduleContext, isActive: selectedPage == .today,
+            unreadSessions: sessionStore.unreadSessions,
+            allowsLegacyScope: authenticatedAccessToken == nil,
+            legacyReadScopeIsCurrent: readScopeIsCurrent, onOpenSession: openSession) { snapshot in
+            loadedPage(.today, snapshot: snapshot, inlineToday: true)
+        }
+    }
+
+    private var todayScheduleContext: TodayScheduleContext? {
+        guard readScopeIsCurrent(), let endpoint = reviewBaseURL, let token = authenticatedAccessToken, !token.isEmpty,
+              let accountID = legacyAccountID, !accountID.isEmpty, let userID = authenticatedUserID, !userID.isEmpty,
+              let lease = AgentSessionActiveRefreshConsumer.lease(endpoint: endpoint, accessToken: token,
+                accountID: accountID, userID: userID, openSessionID: nil) else { return nil }
+        return TodayScheduleContext(scopeID: "\(lease.scopeID):\(authenticatedExpiresAt?.timeIntervalSince1970 ?? 0)",
+            service: TodayScheduleClient(baseURL: endpoint, bearerToken: token), expiresAt: authenticatedExpiresAt,
+            isCurrent: readScopeIsCurrent)
     }
 
     @ViewBuilder
     private func loadedPage(
         _ page: RelationshipArchivePage,
-        snapshot: PursuitWorkspaceSnapshot
+        snapshot: PursuitWorkspaceSnapshot,
+        inlineToday: Bool = false
     ) -> some View {
         switch page {
         case .today:
@@ -665,7 +672,7 @@ struct RelationshipArchiveView: View {
                 snapshot: snapshot,
                 isPreview: !workspaceStore.isCanonical,
                 calendarActivities: relationshipCalendarActivities,
-                unreadSessions: sessionStore.unreadSessions,
+                unreadSessions: inlineToday ? [] : sessionStore.unreadSessions,
                 actionRecovery: workspaceStore.latestActionRecovery(in: snapshot),
                 onOpenSession: openSession,
                 onOpenCalendar: {
@@ -683,7 +690,8 @@ struct RelationshipArchiveView: View {
                 onOpenCaptureInbox: {
                     clearTransientRetrievalIntent()
                     isCaptureInboxPresented = true
-                }
+                },
+                showsDailyContext: !inlineToday
             )
         case .sessions:
             AgentSessionListView(
@@ -1500,6 +1508,7 @@ struct PursuitTodayView: View {
     let onOpenActionRecovery: (String) -> Void
     let pendingCaptureCount: Int
     let onOpenCaptureInbox: () -> Void
+    let showsDailyContext: Bool
     @State private var showsAllAttention = false
     @State private var decisionStates: [String: TodayInlineDecisionStatus] = [:]
     @State private var decisionOverrides: [String: TodayInlineDecision] = [:]
@@ -1519,7 +1528,8 @@ struct PursuitTodayView: View {
         onOpenPursuit: @escaping (WorkspacePursuit) -> Void,
         onOpenActionRecovery: @escaping (String) -> Void,
         pendingCaptureCount: Int = 0,
-        onOpenCaptureInbox: @escaping () -> Void = {}
+        onOpenCaptureInbox: @escaping () -> Void = {},
+        showsDailyContext: Bool = true
     ) {
         self.snapshot = snapshot
         self.isPreview = isPreview
@@ -1533,11 +1543,33 @@ struct PursuitTodayView: View {
         self.onOpenActionRecovery = onOpenActionRecovery
         self.pendingCaptureCount = pendingCaptureCount
         self.onOpenCaptureInbox = onOpenCaptureInbox
+        self.showsDailyContext = showsDailyContext
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+        Group {
+            if showsDailyContext {
+                ScrollView { todayContent }
+                    .scrollIndicators(.hidden)
+                    .relationshipContentBounce()
+            } else {
+                todayContent
+            }
+        }
+        .accessibilityIdentifier(
+            isPreview ? "editorial-today" : showsDailyContext ? "canonical-pursuit-today" : "canonical-pursuit-attention"
+        )
+        .sheet(item: $editingDecision) { decision in
+            TodayInlineDecisionEditor(decision: decision) { updated in
+                decisionOverrides[decision.id] = updated
+                editingDecision = nil
+            }
+        }
+    }
+
+    private var todayContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if showsDailyContext {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Text(formattedToday)
                         .font(.subheadline.weight(.medium))
@@ -1553,36 +1585,25 @@ struct PursuitTodayView: View {
                     onOpen: onOpenCalendar
                 )
                 .padding(.top, 14)
-
-                if pendingCaptureCount > 0 {
-                    TodayCaptureInboxRow(
-                        count: pendingCaptureCount,
-                        action: onOpenCaptureInbox
-                    )
-                    .padding(.top, 14)
-                }
-
-                if isPreview {
-                    previewDecisionContent
-                } else {
-                    canonicalAttentionContent
-                }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 28)
-        }
-        .scrollIndicators(.hidden)
-        .relationshipContentBounce()
-        .accessibilityIdentifier(
-            isPreview ? "editorial-today" : "canonical-pursuit-today"
-        )
-        .sheet(item: $editingDecision) { decision in
-            TodayInlineDecisionEditor(decision: decision) { updated in
-                decisionOverrides[decision.id] = updated
-                editingDecision = nil
+
+            if pendingCaptureCount > 0 {
+                TodayCaptureInboxRow(
+                    count: pendingCaptureCount,
+                    action: onOpenCaptureInbox
+                )
+                .padding(.top, 14)
+            }
+
+            if isPreview {
+                previewDecisionContent
+            } else {
+                canonicalAttentionContent
             }
         }
+        .padding(.horizontal, showsDailyContext ? 20 : 0)
+        .padding(.top, showsDailyContext ? 16 : 0)
+        .padding(.bottom, showsDailyContext ? 28 : 0)
     }
 
     private var previewDecisionContent: some View {
@@ -2354,64 +2375,6 @@ private struct TodayActionRecoveryCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("today-action-recovery-\(item.actionID)")
-    }
-}
-
-private struct TodayUnreadSessionRow: View {
-    let session: AgentSession
-    let remainingCount: Int
-    let action: () -> Void
-    @Environment(\.appLanguage) private var appLanguage
-
-    var body: some View {
-        Button(action: action) {
-            HStack(alignment: .center, spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(Color.tsInk)
-                        .frame(width: 42, height: 42)
-                    Image(systemName: "sparkles")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.tsSurface)
-                }
-                .accessibilityHidden(true)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(session.displayTitle(in: appLanguage))
-                        .font(.headline)
-                        .foregroundStyle(Color.tsInk)
-                        .lineLimit(1)
-                    Text(
-                        "\(session.personDisplayLabel) · \(session.displayContextLabel(in: appLanguage))"
-                    )
-                        .font(.caption)
-                        .foregroundStyle(Color.tsMutedInk)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                if remainingCount > 0 {
-                    Text("+\(remainingCount)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.tsMutedInk)
-                }
-                Circle()
-                    .fill(Color.tsVermilion)
-                    .frame(width: 7, height: 7)
-                    .accessibilityHidden(true)
-            }
-            .frame(minHeight: 66)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(
-            appLanguage.text(
-                "Unread session: \(session.displayTitle(in: appLanguage)), \(session.personDisplayLabel)",
-                zhHans: "未读会话：\(session.displayTitle(in: appLanguage))，\(session.personDisplayLabel)"
-            )
-        )
-        .accessibilityIdentifier("today-unread-session")
     }
 }
 
@@ -4251,7 +4214,7 @@ private struct PursuitNoActionView: View {
     @Environment(\.appLanguage) private var appLanguage
 
     var body: some View {
-        Label(appLanguage.text("Nothing needs attention"), systemImage: "checkmark.circle")
+        Label(appLanguage.text("No goal items need attention"), systemImage: "checkmark.circle")
             .font(.headline)
             .foregroundStyle(Color.tsMutedInk)
             .padding(.vertical, 20)
@@ -4293,6 +4256,7 @@ struct PursuitWorkspaceFailureView: View {
     let isRetrying: Bool
     let completedReadCount: Int
     var isSynthetic = false
+    var producerTitle: String? = nil
     let retry: () -> Void
     @Environment(\.appLanguage) private var appLanguage
 
@@ -4301,12 +4265,12 @@ struct PursuitWorkspaceFailureView: View {
             RelationshipEyebrow(
                 appLanguage.text("Read failed", zhHans: "读取失败")
             )
-            Text(isSynthetic ? appLanguage.text("Synthetic workspace unavailable") :
+            Text(producerTitle ?? (isSynthetic ? appLanguage.text("Synthetic workspace unavailable") :
                 appLanguage.text(
                     "Canonical workspace unavailable",
                     zhHans: "权威工作区不可用"
                 )
-            )
+            ))
                 .font(.custom("Georgia", size: 28, relativeTo: .title2))
                 .foregroundStyle(Color.tsInk)
                 .accessibilityIdentifier("workspace-failed")

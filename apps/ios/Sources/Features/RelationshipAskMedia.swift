@@ -25,13 +25,13 @@ struct AskMediaDraft: Identifiable {
     }
 }
 
-enum AskScreenshotResearchRoute: Equatable {
+enum AskImageConversationRoute: Equatable {
     case notApplicable
-    case directResearch
+    case conversation
     case unsupported
 }
 
-enum AskScreenshotResearchRoutingPolicy {
+enum AskImageConversationRoutingPolicy {
     private static let supportedMediaTypes: Set<String> = [
         "image/jpeg", "image/png", "image/webp",
     ]
@@ -39,15 +39,15 @@ enum AskScreenshotResearchRoutingPolicy {
     static func route(
         hasSelectedRelationship: Bool,
         mediaTypes: [String]
-    ) -> AskScreenshotResearchRoute {
-        guard !hasSelectedRelationship, !mediaTypes.isEmpty else {
-            return .notApplicable
-        }
+    ) -> AskImageConversationRoute {
+        guard !mediaTypes.isEmpty else { return .notApplicable }
+        // A relationship scope does not turn an image question into intake.
+        _ = hasSelectedRelationship
         guard mediaTypes.count <= 10,
               mediaTypes.allSatisfy(supportedMediaTypes.contains) else {
             return .unsupported
         }
-        return .directResearch
+        return .conversation
     }
 }
 

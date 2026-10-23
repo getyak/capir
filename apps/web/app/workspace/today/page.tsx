@@ -5,12 +5,15 @@ import { auth } from "@/auth";
 import { PursuitTodayPage } from "@/components/pursuit-today-page";
 import {
   backendSessionRecoveryHref,
+  backendSessionIsExpired,
   isBackendSessionExpiredError,
 } from "@/lib/backend-session";
 import {
   isPursuitIntegrationMode,
   loadPursuitToday,
 } from "@/lib/server/pursuitBackend";
+import { readBackendSessionClaims } from "@/lib/server/backendAuth";
+import { workspaceSessionsBinding } from "@/lib/server/workspaceSessions";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +33,9 @@ export default async function TodayPage({
   if (!session?.user) {
     redirect("/login?callbackUrl=%2Fworkspace%2Ftoday");
   }
-  if (!isPursuitIntegrationMode()) redirect("/workspace");
+  const pursuitEnabled = isPursuitIntegrationMode();
+  const claims = await readBackendSessionClaims();
+  const binding = claims && !backendSessionIsExpired(claims.backendExpiresAt) ? workspaceSessionsBinding(claims) : "";
 
   const parameters = await searchParams;
   const expanded = parameters.view === "all";
@@ -38,7 +43,7 @@ export default async function TodayPage({
   let error: string | null = null;
   let sessionRecoveryHref: string | null = null;
   try {
-    data = await loadPursuitToday({ expanded });
+    if (pursuitEnabled) data = await loadPursuitToday({ expanded });
   } catch (caught) {
     if (isBackendSessionExpiredError(caught)) {
       error = caught.message;
@@ -51,6 +56,9 @@ export default async function TodayPage({
 
   return (
     <PursuitTodayPage
+      binding={binding}
+      expiresAt={claims?.backendExpiresAt ?? null}
+      pursuitEnabled={pursuitEnabled}
       error={error}
       expanded={expanded}
       projection={data?.projection ?? null}

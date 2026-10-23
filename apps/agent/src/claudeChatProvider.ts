@@ -1,7 +1,8 @@
 import {runFileTools} from "./runFileTools.js";
 import { z } from "zod";
 import { responsePreferenceTool, responsePreferenceContext, RESPONSE_PREFERENCE_INSTRUCTIONS } from "./responsePreference.js";
-import { MEMORY_CONTEXT_INSTRUCTIONS } from "./memoryContext.js";
+import { MEMORY_CONTEXT_INSTRUCTIONS, RELATIONSHIP_MEMORY_REVIEW_GUIDANCE, RELATIONSHIP_SNAPSHOT_FILE_GUIDANCE,
+  WORKSPACE_MEMORY_REVIEW_GUIDANCE } from "./memoryContext.js";
 import { evidenceImageTools } from "./evidenceImageTool.js";
 import { calendarDraftCapability } from "./calendarDraft.js";
 import { ClaudeHarnessFailure, ClaudeHarnessInterruption, runClaudeHarness, type ClaudeHarnessResult, type HarnessTool } from "./claudeHarness.js";
@@ -12,6 +13,7 @@ import {
   MEMORY_REVIEW_TOOL_DESCRIPTION,
   MemoryReviewInputSchema,
   MemoryReviewToolInputSchema,
+  memoryReviewSDKOperationTools,
   memoryLocatorAdmissionError,
 } from "./memorySchemas.js";
 import { AGENT_TOOL_CATALOG, contactWorkspaceOperationTools } from "./toolCatalog.js";
@@ -36,7 +38,7 @@ export const CLAUDE_NATURAL_OUTPUT_GUIDANCE = "For this SDK execution, respond w
 
 /** Workspace routing has no scoped evidence-reading tools. Keep that unrelated
  * protocol out of image Runs, whose tool round trips resend the visual context. */
-export const CLAUDE_WORKSPACE_OUTPUT_GUIDANCE = `Respond in natural prose, not JSON or a code fence. Use tools only through their function interface. If context.session_title_requested is true, begin the final reply with <session_title>concise concrete title in the user's language, within 32 characters</session_title>, then a blank line and the useful answer. Otherwise omit this metadata. Never claim a contact, memory, or calendar was saved without a successful commit receipt. A staged proposal is only ready for human review. For an authored-text question about a named contact, first search the exact current clue; a name is sufficient for a read-only lookup, but never identity confirmation or a contact write. A uniquely authorized contact read completes routing: briefly acknowledge it and stop; the host continues in that relationship scope. For a name-only direct-chat screenshot in the current message, prepare an optional memory_review contact decision only when the current request permits proposals; analysis-only/no_action/no-save requests take precedence. A historical image does not trigger a new default proposal, and a name cannot authorize private recall. Essential conclusions belong in the final answer. Omit internal IDs and tool terminology.`;
+export const CLAUDE_WORKSPACE_OUTPUT_GUIDANCE = `Respond in natural prose, not JSON or a code fence. Use tools only through their function interface. If context.session_title_requested is true, begin the final reply with <session_title>concise concrete title in the user's language, within 32 characters</session_title>, then a blank line and the useful answer. Otherwise omit this metadata. Never claim a contact, memory, or calendar was saved without a successful commit receipt. A staged proposal is only ready for human review. For an authored-text question about a named contact, first search the exact current clue; a name is sufficient for a read-only lookup, but never identity confirmation or a contact write. A uniquely authorized contact read completes routing: briefly acknowledge it and stop; the host continues in that relationship scope. For any admitted screenshot showing a person the user wants to add, guide them to an editable memory_review contact draft without requiring a private chat, stable clue or relationship background; analysis-only/no_action/no-save requests take precedence. A historical image can support a requested contact draft; do not revive unrelated old proposals. A name cannot authorize private recall. Essential conclusions belong in the final answer. Omit internal IDs and tool terminology.`;
 
 /**
  * Bounded, one-line fallback label derived from the objective. Mirrors the
@@ -251,7 +253,10 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
       ...(request.observation ? { observation: request.observation } : {}),
       ...(request.continuation && !sourceImageTools.length ? { continuation: request.continuation } : {}),
       imageToolResults: Boolean(sourceImageTools.length),
-      objective: request.objective, systemPrompt: [prompt.text, calendar.instructions, request.responsePreference ? RESPONSE_PREFERENCE_INSTRUCTIONS : "", files.tools.length ? "For a requested calculation or file export, lead with the result and artifact name, and attribute the inputs to the record once. Read source review status from evidence_review; a proposed relationship block does not make the reviewed source excerpt unreviewed. Do not expose internal status words such as proposed or repeat an uncertainty caveat after already attributing the result to recorded data. Preserve any actual ambiguity that affects the calculation." : ""].filter(Boolean).join("\n\n"), tools, images,
+      objective: request.objective, systemPrompt: [prompt.text, calendar.instructions, request.responsePreference ? RESPONSE_PREFERENCE_INSTRUCTIONS : "",
+        request.memoryReview ? RELATIONSHIP_MEMORY_REVIEW_GUIDANCE : "",
+        files.tools.length ? RELATIONSHIP_SNAPSHOT_FILE_GUIDANCE : "",
+        files.tools.length ? "For a requested calculation or file export, lead with the result and artifact name, and attribute the inputs to the record once. Read source review status from evidence_review; a proposed relationship block does not make the reviewed source excerpt unreviewed. Do not expose internal status words such as proposed or repeat an uncertainty caveat after already attributing the result to recorded data. Preserve any actual ambiguity that affects the calculation." : ""].filter(Boolean).join("\n\n"), tools, images,
       context: JSON.stringify({ calendar_clock: calendar.clock, reference_time: request.reference_time, conversation: boundedConversationHistory(request.conversation_history),
         session_title_requested: sessionTitleRequested,
         run_files: files.inventory,
@@ -332,11 +337,12 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
           return { name: description.name, description: description.description,
             schema: (schema as z.ZodObject).omit({ operation: true }), readOnly: operation === "search" || operation === "read", operation };
         })
+        : name === "memory_review" && boundedDiscovery ? memoryReviewSDKOperationTools()
         : [{ name, description: definition.description, schema: definition.schema, readOnly: definition.readOnly, operation: undefined }];
       return variants.map(variant => ({ name: variant.name, description: variant.description,
-        // Deferred behind bounded discovery only; legacy configurations load
-        // the full admitted catalog eagerly, unchanged.
-        schema: variant.schema, readOnly: variant.readOnly, alwaysLoad: !boundedDiscovery,
+        // Core Memory must be usable without a discovery hop or a contact.
+        // Secondary capabilities defer; legacy contexts retain eager loading.
+        schema: variant.schema, readOnly: variant.readOnly, alwaysLoad: name === "memory_review" || !boundedDiscovery,
         execute: async (input, executionSignal) => {
           executionSignal.throwIfAborted();
           if (name === "contact_workspace") {
@@ -345,7 +351,10 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
           // Validate even direct adapter dispatch; operation is host-selected.
           const parsed = variant.schema.safeParse(input);
           if (!parsed.success) return { content: [{ type: "text", text: JSON.stringify({ error: "TOOL_INPUT_INVALID" }) }], isError: true };
-          const result = await invokeTool(name, variant.operation ? { ...parsed.data, operation: variant.operation } : parsed.data, executionSignal);
+          const hostInput = variant.operation ? { ...parsed.data, operation: variant.operation } : parsed.data;
+          if (name === "memory_review" && boundedDiscovery && !MemoryReviewInputSchema.safeParse(hostInput).success)
+            return { content: [{ type: "text", text: JSON.stringify({ error: "TOOL_INPUT_INVALID" }) }], isError: true };
+          const result = await invokeTool(name, hostInput, executionSignal);
           if (result.ok) {
             const data = result.data as Record<string, any> | undefined;
             if (data?.operation === "search") searched = true;
@@ -359,7 +368,9 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
           return { content: [{ type: "text", text: JSON.stringify(result) }], isError: !result.ok };
         } }));
     });
-    tools.push(...responsePreferenceTool(request.responsePreference), ...calendar.tools, ...(request.supplementalTools ?? []));
+    const boundedMemory = boundedDiscovery && request.toolManifest.includes("memory_review");
+    tools.push(...responsePreferenceTool(request.responsePreference),
+      ...calendar.tools.map(tool => boundedMemory ? { ...tool, alwaysLoad: false } : tool), ...(request.supplementalTools ?? []));
     // Host-observed partial text is a forming response only. A host callback
     // exception or abort must never trigger a fallback model execution here.
     const onText = request.outputMode !== "json" && request.onVisibleText
@@ -379,7 +390,9 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
       systemPrompt: [request.outputMode === "json" ? applyChatPreset(request.systemPrompt, preset).text
         : configuredClaudeChatPrompt(request.systemPrompt, preset, "workspace").text, calendar.instructions,
         request.responsePreference ? RESPONSE_PREFERENCE_INSTRUCTIONS : "",
-        request.selfMemoryContext ? MEMORY_CONTEXT_INSTRUCTIONS : ""].filter(Boolean).join("\n\n"), tools,
+        request.selfMemoryContext ? MEMORY_CONTEXT_INSTRUCTIONS : "",
+        request.toolManifest.includes("memory_review") ? WORKSPACE_MEMORY_REVIEW_GUIDANCE : "",
+        boundedMemory ? "Memory SDK operations are memory_review_recall and memory_review_propose. Do not send a top-level operation or proposal-level scope; every proposed item requires its own scope and operation." : ""].filter(Boolean).join("\n\n"), tools,
       context: JSON.stringify({ calendar_clock: calendar.clock, scope: request.scopeSummary, conversation: boundedConversationHistory(request.conversationHistory),
         session_title_requested: sessionTitleRequested,
         input_images: userImages.map(part => ({ artifact_id: part.artifactID, mime_type: part.mimeType, byte_size: part.byteSize, content_hash: part.contentHash })),

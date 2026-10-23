@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import {
   maskIdentityHandle,
   parseIdentityHandleQuery,
@@ -31,7 +32,6 @@ import {
   canSelectPersonForIdentityClue,
   confirmedHandlePersonMatches,
   exactPersonNameMatches,
-  expiredHandlePersonMatches,
   mergePersonDirectoryMatches,
   personIdentityTemporalRole,
 } from "@/lib/agent-person-resolution";
@@ -275,6 +275,7 @@ export function AgentCreatePersonCard({
   onDeferred: (caseId: string) => void;
   onReviewDuplicates?: () => void;
 }) {
+  const t = useT();
   const sourceRequestRef = useRef<ResourceRequestIdentity | null>(null);
   const handleRequestRef = useRef<ResourceRequestIdentity | null>(null);
   const deferRequestRef = useRef<ResourceRequestIdentity | null>(null);
@@ -304,8 +305,6 @@ export function AgentCreatePersonCard({
   const [target, setTarget] = useState<AgentPersonTarget>({
     mode: "new_person",
   });
-  const [differentPersonConfirmed, setDifferentPersonConfirmed] =
-    useState(false);
   const [identityDetailsOpen, setIdentityDetailsOpen] = useState(
     !initialDraft || !initialDraft.name || !initialDraft.relationshipContext,
   );
@@ -416,7 +415,7 @@ export function AgentCreatePersonCard({
       navigationEndedRef.current = true;
       admissionRef.current = null;
       setSealed(true);
-      setError("已结束本次创建流程，后续提交已停止。已发出的内容可能已保存，请从人物列表核实。");
+      setError(t("已结束本次创建流程，后续提交已停止。已发出的内容可能已保存，请从人物列表核实。"));
     };
     const historyGuard = () => {
       if (window.location.pathname + window.location.search !== currentRoute) {
@@ -471,7 +470,7 @@ export function AgentCreatePersonCard({
       document.removeEventListener("click", linkGuard, true);
       window.removeEventListener("popstate", historyGuard, true);
     };
-  }, [trackedRequest]);
+  }, [t, trackedRequest]);
   const parsedIdentityClue = useMemo(
     () => parseIdentityHandleQuery(identityClue),
     [identityClue],
@@ -491,15 +490,12 @@ export function AgentCreatePersonCard({
     : [];
   const confirmedHandleMatches =
     confirmedHandlePersonMatches(matches);
-  const expiredHandleMatches = expiredHandlePersonMatches(matches);
   const visibleMatches = showAllMatches ? matches : matches.slice(0, 3);
   const newPersonAllowed = canCreateDistinctPerson({
-    differentPersonConfirmed,
-    lookupState,
-    matches,
     name,
   });
   const targetHasContext =
+    target.mode === "new_person" ||
     target.mode === "existing_context" ||
     contextLabel.trim().length > 0;
   const targetSelectable =
@@ -512,11 +508,11 @@ export function AgentCreatePersonCard({
     (matches.length > 1 || confirmedHandleMatches.length > 0);
   const ready =
     name.trim().length > 0 &&
-    (identityClue.trim().length === 0 ||
+    (!identityClueConfirmed ||
       parsedIdentityClue !== null) &&
     targetHasContext &&
     targetSelectable &&
-    firstNote.trim().length > 0 &&
+    (target.mode === "new_person" || firstNote.trim().length > 0) &&
     (target.mode !== "new_person" || newPersonAllowed);
   // Keep the complete match set; the intake contract admits 2–20 candidates.
   const reviewCandidateCountValid = matches.length >= 2 && matches.length <= 20;
@@ -603,9 +599,9 @@ export function AgentCreatePersonCard({
         type: "note",
         title:
           target.mode === "new_person"
-            ? "你提供的首条背景"
+            ? firstNote.trim() ? "你提供的首条背景" : "你填写的联系人名称"
             : "智能助理附加的、由你提供的背景",
-        value: firstNote.trim(),
+        value: firstNote.trim() || name.trim(),
       },
       personLabel:
         target.mode === "new_person"
@@ -614,7 +610,7 @@ export function AgentCreatePersonCard({
       contextLabel:
         target.mode === "existing_context"
           ? target.relationshipContext.display_label
-          : contextLabel.trim(),
+          : contextLabel.trim() || "联系人资料",
       outcome: agentPersonOutcome(target),
       resumeClue: Boolean(identityClueConfirmed && parsedIdentityClue),
     };
@@ -819,7 +815,7 @@ export function AgentCreatePersonCard({
     ) {
       // Defensive: validated receipts always carry these; seal anyway.
       setSealed(true);
-      setError("打开人物页面前，此来源仍需完成身份审阅。");
+      setError(t("打开人物页面前，此来源仍需完成身份审阅。"));
       return;
     }
     const scope: RelationshipScope = {
@@ -910,7 +906,7 @@ export function AgentCreatePersonCard({
       result.receipts[0]?.identity.resolution_case_id ?? null;
     if (!caseId) {
       setSealed(true);
-      setError("来源已保存，但没有可继续处理的身份审阅案例。");
+      setError(t("来源已保存，但没有可继续处理的身份审阅案例。"));
       return;
     }
     settleCompletion({ kind: "review", caseId });
@@ -1064,7 +1060,7 @@ export function AgentCreatePersonCard({
     }
     if (!reviewReady) {
       setError(
-        "保存身份审阅前，请添加预期的关系背景和首个来源。",
+        t("保存身份审阅前，请添加预期的关系背景和首个来源。"),
       );
       return;
     }
@@ -1132,16 +1128,16 @@ export function AgentCreatePersonCard({
         </span>
         <div>
           <strong id="agent-create-title">
-            {initialDraft ? "新联系人草稿" : "创建前先确认人物身份"}
+            {initialDraft ? "新联系人草稿" : "添加联系人"}
           </strong>
           <p>
             {initialDraft
-              ? "智能助理从你的消息中提取了一个提议。任何内容变化前，请审阅身份结果。"
-              : "先查找现有身份，再绑定一段关系和一个来源。"}
+              ? "核对姓名后即可添加，其他信息可以稍后补充。"
+              : "填写姓名即可添加，现有匹配供你参考。"}
           </p>
         </div>
         <button
-          aria-label="取消人物草稿"
+          aria-label={t("取消人物草稿")}
           className="context-icon-button"
           disabled={busy}
           onClick={() => handleClose()}
@@ -1154,7 +1150,7 @@ export function AgentCreatePersonCard({
         <div className="context-agent-create__draft-summary">
           <p>
             <strong>{name || "需要姓名"}</strong>
-            <span>{contextLabel || "需要关系背景"}</span>
+            <span>{contextLabel || "关系背景可稍后补充"}</span>
           </p>
           <small>{firstNote}</small>
           <i>{draftStateLine()}</i>
@@ -1193,9 +1189,7 @@ export function AgentCreatePersonCard({
               disabled={busy || sessionBlocked || sealed}
               onClick={() => void retryTrackedRequest()}
               type="button"
-            >
-              用相同内容重试核实
-            </button>
+            >{t("用相同内容重试核实")}</button>
           ) : null}
         </div>
       ) : null}
@@ -1223,7 +1217,7 @@ export function AgentCreatePersonCard({
       >
         <summary>{initialDraft ? "编辑已提取信息" : "联系人信息"}</summary>
       <label>
-        <span>人物</span>
+        <span>{t("人物")}</span>
         <input
           autoComplete="off"
           disabled={editsLocked}
@@ -1240,17 +1234,15 @@ export function AgentCreatePersonCard({
                 : "idle",
             );
             setTarget({ mode: "new_person" });
-            setDifferentPersonConfirmed(false);
             setShowAllMatches(false);
             resetDraftRequests();
           }}
-          placeholder="例如：陈雅宁"
+          placeholder={t("例如：陈雅宁")}
           value={name}
         />
       </label>
       <label>
-        <span>
-          已知身份线索 <small>可选</small>
+        <span>{t("已知身份线索")}<small>{t("可选")}</small>
         </span>
         <input
           autoComplete="off"
@@ -1268,21 +1260,16 @@ export function AgentCreatePersonCard({
                 : "idle",
             );
             setTarget({ mode: "new_person" });
-            setDifferentPersonConfirmed(false);
             setShowAllMatches(false);
             resetDraftRequests();
           }}
-          placeholder="邮箱、电话、LinkedIn 网址或 wechat:ID"
+          placeholder={t("邮箱、电话、LinkedIn 网址或 wechat:ID")}
           value={identityClue}
         />
-        <small>
-          仅用于账号范围内的查找；结果不会返回原始值。
-        </small>
+        <small>{t("仅用于账号范围内的查找；结果不会返回原始值。")}</small>
       </label>
       {identityClue.trim() && !parsedIdentityClue ? (
-        <p className="context-agent-create__error">
-          请使用邮箱、电话、公开资料网址或明确的“wechat:ID”。
-        </p>
+        <p className="context-agent-create__error">{t("请使用邮箱、电话、公开资料网址或明确的“wechat:ID”。")}</p>
       ) : null}
       </details>
       <div
@@ -1298,7 +1285,7 @@ export function AgentCreatePersonCard({
         }
       >
         <header>
-          <span>身份检查</span>
+          <span>{t("现有联系人匹配")}</span>
           <i>
             {committedSource
               ? "已确定"
@@ -1312,7 +1299,7 @@ export function AgentCreatePersonCard({
                     ? `${matches.length} 个可能匹配`
                     : lookupState === "error"
                       ? "不可用"
-                      : "必需"}
+                      : "可选"}
           </i>
         </header>
         {committedSource ? (
@@ -1322,28 +1309,19 @@ export function AgentCreatePersonCard({
             。不会再根据新的查找结果更改、合并或重新绑定此人物。
           </p>
         ) : scopeStatus === "checking" ? (
-          <p role="status">正在确认当前登录空间，确认后可填写人物信息。</p>
+          <p role="status">{t("正在确认当前登录空间，确认后可填写人物信息。")}</p>
         ) : trackedRequest || sealed ? (
-          <p>
-            提交处理中或结果未核实，身份与范围已锁定，避免重复写入。
-            可在下方通知中重试核实，或关闭本卡片；关闭不会撤销任何已提交内容。
-          </p>
+          <p>{t("提交处理中或结果未核实，身份与范围已锁定，避免重复写入。 可在下方通知中重试核实，或关闭本卡片；关闭不会撤销任何已提交内容。")}</p>
         ) : sessionBlocked ? (
-          <p>当前登录空间尚未通过核验，已停止提交。请重新打开工作台后继续。</p>
+          <p>{t("当前登录空间尚未通过核验，已停止提交。请重新打开工作台后继续。")}</p>
         ) : lookupState === "idle" ? (
-          <p>
-            选择新建或现有身份前，请输入姓名或已知身份线索。
-          </p>
+          <p>{t("填写姓名即可新建，也可以提供线索查找现有联系人。")}</p>
         ) : lookupState === "loading" ? (
           <p>
-            <CircleNotch aria-hidden="true" className="spin" size={13} />
-            仅在你的账号内查找。
-          </p>
+            <CircleNotch aria-hidden="true" className="spin" size={13} />{t("仅在你的账号内查找。")}</p>
         ) : lookupState === "error" ? (
           <div className="context-agent-identity-error">
-            <p>
-              无法检查现有人物，已暂停创建新人物。
-            </p>
+            <p>{t("暂时无法查找现有联系人，仍可创建新联系人。")}</p>
             <button
               className="context-secondary-button"
               onClick={() => {
@@ -1351,15 +1329,11 @@ export function AgentCreatePersonCard({
                 setLookupRevision((value) => value + 1);
               }}
               type="button"
-            >
-              重试身份检查
-            </button>
+            >{t("重试身份检查")}</button>
           </div>
         ) : matches.length > 0 ? (
           <div className="context-agent-person-matches">
-            <p>
-              已确认账号标识是当前身份依据。过期标识仅作为审阅线索；绑定仍由你决定。
-            </p>
+            <p>{t("已确认账号标识是当前身份依据。过期标识仅作为审阅线索；绑定仍由你决定。")}</p>
             {visibleMatches.map((person) => {
               const temporalRole =
                 personIdentityTemporalRole(person);
@@ -1390,16 +1364,12 @@ export function AgentCreatePersonCard({
                   <i className="context-agent-temporal-status">
                     {temporalRole === "current" ? (
                       <>
-                        <ShieldCheck aria-hidden="true" size={12} />
-                        当前线索
-                      </>
+                        <ShieldCheck aria-hidden="true" size={12} />{t("当前线索")}</>
                     ) : temporalRole === "historical" ? (
                       <>
-                        <Clock aria-hidden="true" size={12} />
-                        历史线索
-                      </>
+                        <Clock aria-hidden="true" size={12} />{t("历史线索")}</>
                     ) : (
-                      "仅姓名"
+                      t("仅姓名")
                     )}
                   </i>
                 </header>
@@ -1417,7 +1387,7 @@ export function AgentCreatePersonCard({
                       }
                     >
                       {match.kind === "name" ? (
-                        <>仅姓名匹配</>
+                        <>{t("仅姓名匹配")}</>
                       ) : match.kind === "expired_handle" ? (
                         <>
                           <Clock aria-hidden="true" size={12} />
@@ -1468,7 +1438,6 @@ export function AgentCreatePersonCard({
                         });
                         setName(person.display_label);
                         setContextLabel(context.display_label);
-                        setDifferentPersonConfirmed(false);
                         resetDraftRequests();
                       }}
                       type="button"
@@ -1489,14 +1458,11 @@ export function AgentCreatePersonCard({
                         person,
                       });
                       setName(person.display_label);
-                      setDifferentPersonConfirmed(false);
                       resetDraftRequests();
                     }}
                     type="button"
                   >
-                    <Plus aria-hidden="true" size={13} />
-                    新建关系
-                  </button>
+                    <Plus aria-hidden="true" size={13} />{t("新建关系")}</button>
                 </div>
                 </article>
               );
@@ -1514,9 +1480,7 @@ export function AgentCreatePersonCard({
                 className="context-agent-show-matches"
                 onClick={() => setShowAllMatches(false)}
                 type="button"
-              >
-                收起匹配
-              </button>
+              >{t("收起匹配")}</button>
             ) : null}
             {duplicateMatches.length > 0 && onReviewDuplicates ? (
               <button
@@ -1525,41 +1489,13 @@ export function AgentCreatePersonCard({
                 type="button"
               >
                 审阅{duplicateMatches.length === 1 ? "可能重复项" : `${duplicateMatches.length} 个可能重复项`}
-                <small>
-                  打开可逆的合并预览；此联系人草稿不会直接合并任何内容。
-                </small>
+                <small>{t("打开可逆的合并预览；此联系人草稿不会直接合并任何内容。")}</small>
               </button>
             ) : null}
           </div>
         ) : (
-          <p>
-            没有找到匹配姓名或已确认身份线索的现有人物，可以创建新人物。
-          </p>
+          <p>{t("没有找到匹配姓名或已确认身份线索的现有人物，可以创建新人物。")}</p>
         )}
-        {!editsLocked &&
-        lookupState === "ready" &&
-        (exactMatches.length > 0 || expiredHandleMatches.length > 0) &&
-        confirmedHandleMatches.length === 0 &&
-        target.mode === "new_person" ? (
-          <label className="context-agent-distinct-person">
-            <input
-              checked={differentPersonConfirmed}
-              onChange={(event) => {
-                setDifferentPersonConfirmed(event.target.checked);
-                resetDraftRequests();
-              }}
-              type="checkbox"
-            />
-            <span>
-              这与现有身份线索指向的不是同一个人
-              <small>
-                {expiredHandleMatches.length > 0
-                  ? "这条线索曾有归属但已不再有效，因此必须确认。"
-                  : "账号范围内已存在完全相同的姓名，因此必须确认。"}
-              </small>
-            </span>
-          </label>
-        ) : null}
         {lookupState === "ready" &&
         confirmedHandleMatches.length > 0 &&
         (Boolean(committedSource)
@@ -1582,7 +1518,7 @@ export function AgentCreatePersonCard({
                   ? `人物已固定为 ${committedSource.scope.person.display_label}。请核对这条线索是否属于此人；不确定时请取消确认，直接打开已保存的人物。`
                   : reviewCandidateCountValid
                     ? "请选择当前人物、移除线索，或将此来源保留为未解决。历史归属者仍可用于对比，但不能接收此来源。"
-                    : "如果确认是同一人，请选择当前人物；否则先移除线索，再继续核对。身份未确认前，此来源不会保存。"}
+                    : "如果确认是同一人，请选择当前人物；也可以移除线索或另建联系人；未确认的线索不会绑定到新人物。"}
               </small>
             </p>
           </div>
@@ -1603,13 +1539,10 @@ export function AgentCreatePersonCard({
             onClick={() => {
               setTarget({ mode: "new_person" });
               setContextLabel("");
-              setDifferentPersonConfirmed(false);
               resetDraftRequests();
             }}
             type="button"
-          >
-            改为创建另一个人
-          </button>
+          >{t("改为创建另一个人")}</button>
         ) : null}
       </div>
       {parsedIdentityClue && maskedIdentityClue ? (
@@ -1645,9 +1578,9 @@ export function AgentCreatePersonCard({
         onToggle={(event) => setSourceDetailsOpen(event.currentTarget.open)}
         open={sourceDetailsOpen}
       >
-        <summary>关系与来源</summary>
+        <summary>{t("关系与来源")}</summary>
         <label>
-          <span>关系背景</span>
+          <span>{t("关系背景")}</span>
           <input
             autoComplete="off"
             disabled={
@@ -1658,12 +1591,12 @@ export function AgentCreatePersonCard({
               setContextLabel(event.target.value);
               resetDraftRequests();
             }}
-            placeholder="例如：合作项目 · 首次沟通"
+            placeholder={t("例如：合作项目 · 首次沟通")}
             value={contextLabel}
           />
         </label>
         <label>
-          <span>首个来源</span>
+          <span>{t("首个来源")}</span>
           <textarea
             disabled={editsLocked}
             maxLength={8_000}
@@ -1671,7 +1604,7 @@ export function AgentCreatePersonCard({
               setFirstNote(event.target.value);
               resetDraftRequests();
             }}
-            placeholder="粘贴由你提供、可说明为何创建此关系的备注。"
+            placeholder={t("粘贴由你提供、可说明为何创建此关系的备注。")}
             rows={3}
             value={firstNote}
           />
@@ -1689,7 +1622,7 @@ export function AgentCreatePersonCard({
                   ? "这会将备注附到所选的现有关系。"
                   : target.mode === "existing_person_new_context"
                     ? "这会保留现有人物，仅创建独立的关系背景。"
-                    : "只有完成账号范围内的身份检查后，才会创建一个独立人物。"}{" "}
+                    : "填写姓名即可创建，关系和首条来源可以稍后补充。"}{" "}
           它不会合并人物或联系任何人。
         </p>
         <div className="context-agent-create__footer-actions">
@@ -1699,9 +1632,7 @@ export function AgentCreatePersonCard({
               disabled={busy}
               onClick={() => void deferIdentityReview()}
               type="button"
-            >
-              保存待身份审阅
-            </button>
+            >{t("保存待身份审阅")}</button>
           ) : null}
           {completed && settleFailed ? (
             <button
@@ -1709,9 +1640,7 @@ export function AgentCreatePersonCard({
               disabled={busy}
               onClick={() => invokeHostCallback(completed)}
               type="button"
-            >
-              重试打开
-            </button>
+            >{t("重试打开")}</button>
           ) : null}
           {committedSource ? (
             <button
@@ -1719,9 +1648,7 @@ export function AgentCreatePersonCard({
               disabled={busy || requestTracked || sealed || sessionBlocked}
               onClick={() => openSavedPerson()}
               type="button"
-            >
-              打开已保存的人物
-            </button>
+            >{t("打开已保存的人物")}</button>
           ) : null}
           <button
             className={`context-primary-button context-primary-button--compact ${styles.primaryAction}`}
@@ -1741,7 +1668,7 @@ export function AgentCreatePersonCard({
               sessionBlocked ||
               (committedSource
                 ? !(
-                    identityClue.trim().length === 0 ||
+                    !identityClueConfirmed ||
                     parsedIdentityClue !== null
                   )
                 : !ready)

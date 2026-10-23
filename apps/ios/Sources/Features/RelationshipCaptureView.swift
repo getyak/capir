@@ -60,7 +60,7 @@ private struct CaptureSourceInspectionView: View {
     }
 }
 
-private struct ZoomableCaptureImage: UIViewRepresentable {
+struct ZoomableCaptureImage: UIViewRepresentable {
     let image: UIImage
 
     func makeCoordinator() -> Coordinator {

@@ -102,6 +102,46 @@ describe("person document interactions", () => {
     expect(host.querySelector("[data-memory-edit='new']")).not.toBeNull(); expect(host.querySelector("[data-memory-edit='old']")).toBeNull();
     expect(fetcher.mock.calls[1]![1].body).toBe(fetcher.mock.calls[0]![1].body);
   });
+  it("keeps the selected reading mode inert through saving and unknown recovery, then restores focus", async () => {
+    // DOM state and interaction checks, not rendered contrast/native evidence.
+    await mount(); await click("修改"); await draft("Synthetic GET-207 correction");
+    let loseResponse!: (reason: Error) => void;
+    fetcher.mockImplementationOnce(() => new Promise((_resolve, reject) => { loseResponse = reject; }));
+    await click("保存修改");
+    const selected = button("逐条记忆");
+    const assertFrozenSelection = () => {
+      expect(selected.getAttribute("aria-pressed")).toBe("true");
+      for (const label of ["逐条记忆", "阅读概览", "原始摘录"]) {
+        expect(button(label).disabled).toBe(true);
+      }
+      expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Synthetic GET-207 correction");
+      expect(host.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    };
+    assertFrozenSelection();
+    await click("阅读概览"); await click("原始摘录"); await click("逐条记忆");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    assertFrozenSelection();
+
+    await act(async () => loseResponse(new Error("response lost")));
+    expect(host.querySelector('[role="alert"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("修改已保存");
+    expect(button("取消").disabled).toBe(true);
+    assertFrozenSelection();
+
+    const replacement = memory({ id: "get207-replacement", display_text: "Synthetic GET-207 correction", supersedes_id: "old", version: 2 });
+    fetcher.mockResolvedValueOnce(Response.json({ status: "active", item: replacement }))
+      .mockResolvedValueOnce(Response.json({ surface: "people", person_id: personId, items: [replacement], has_more: false, next_cursor: null }));
+    await click("核对并重试");
+    expect(fetcher.mock.calls[1]![1].body).toBe(fetcher.mock.calls[0]![1].body);
+    expect(host.querySelector("textarea")).toBeNull();
+    expect(host.querySelectorAll("[data-memory-item='get207-replacement']")).toHaveLength(1);
+    expect(host.querySelector("[data-memory-item='old']")).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector("[data-memory-edit='get207-replacement']"));
+    expect(selected.getAttribute("aria-pressed")).toBe("true");
+    expect(selected.disabled).toBe(false);
+    await click("原始摘录");
+    expect(button("原始摘录").getAttribute("aria-pressed")).toBe("true");
+  });
   it.each(["逐条记忆", "阅读概览", "原始摘录"])("loads remaining data and focuses the first appended item in %s", async mode => {
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));

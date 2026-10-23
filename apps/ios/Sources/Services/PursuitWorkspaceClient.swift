@@ -38,63 +38,6 @@ struct AgentReplyPreferenceMutation: Encodable {
     enum CodingKeys: String, CodingKey { case idempotencyKey = "idempotency_key", expectedRevision = "expected_revision", responseStyle = "response_style" }
 }
 
-struct PursuitWorkspaceSession: Equatable {
-    let baseURL: URL
-    let accountSlug: String
-    let userEmail: String
-    let accessToken: String?
-    let accountID: String?
-    let userID: String?
-    let userDisplayName: String?
-
-    var persistenceScope: String {
-        RuntimeEndpoint.scope(baseURL, accountID: accountID ?? accountSlug, userID: userID ?? userEmail)
-    }
-
-    static func authenticated(_ session: TalentSignalSession) -> PursuitWorkspaceSession {
-        PursuitWorkspaceSession(
-            baseURL: session.baseURL,
-            accountSlug: session.account.slug,
-            userEmail: session.user.email,
-            accessToken: session.accessToken,
-            accountID: session.account.id,
-            userID: session.user.id,
-            userDisplayName: session.user.displayName
-        )
-    }
-
-    static func configured(arguments: [String]) -> PursuitWorkspaceSession? {
-#if DEBUG
-        guard let backend = value(after: "--workspace-backend-url", in: arguments),
-              let baseURL = URL(string: backend),
-              URLFixtureLoader.isLoopback(baseURL) else {
-            return nil
-        }
-        return PursuitWorkspaceSession(
-            baseURL: baseURL,
-            accountSlug: value(after: "--workspace-account-slug", in: arguments)
-                ?? "fixture-alpha",
-            userEmail: value(after: "--workspace-user-email", in: arguments)
-                ?? "recruiter@alpha.local",
-            accessToken: nil,
-            accountID: value(after: "--workspace-account-id", in: arguments),
-            userID: nil,
-            userDisplayName: nil
-        )
-#else
-        return nil
-#endif
-    }
-
-    private static func value(after argument: String, in arguments: [String]) -> String? {
-        guard let index = arguments.firstIndex(of: argument),
-              arguments.indices.contains(index + 1) else {
-            return nil
-        }
-        return arguments[index + 1]
-    }
-}
-
 struct PursuitEvidenceReviewResult: Equatable {
     let reviewID: String
     let priorReviewID: String?
@@ -379,6 +322,11 @@ protocol PursuitWorkspaceServing {
     func chatUnscoped(
         objective: String, idempotencyKey: String, sessionID: UUID?, messageID: UUID?
     ) async throws -> UnscopedChatTaskResponse
+    func admitConversationImages(sessionID: UUID, messageID: UUID, idempotencyKey: String,
+        objective: String, images: [ConversationImageUpload], timeZone: String) async throws -> ConversationImageAdmission
+    func readConversationImageState(sessionID: UUID, messageID: UUID) async throws -> ConversationImageObservation
+    func loadConversationImage(sessionID: UUID, messageID: UUID, index: Int,
+        manifest: ConversationImageManifest) async throws -> ChatMediaContent
     func createScreenshotContactTask(_ body: ScreenshotContactTaskBody) async throws -> ScreenshotContactTask
     func loadScreenshotContactTask(id: String) async throws -> ScreenshotContactTask
     func listRunArtifacts(taskID: String) async throws -> [RunArtifact]
@@ -440,6 +388,12 @@ protocol PursuitWorkspaceServing {
 }
 
 extension PursuitWorkspaceServing {
+    func admitConversationImages(sessionID: UUID, messageID: UUID, idempotencyKey: String,
+        objective: String, images: [ConversationImageUpload], timeZone: String) async throws -> ConversationImageAdmission { throw PursuitWorkspaceClientError.askUnavailable }
+    func readConversationImageState(sessionID: UUID, messageID: UUID) async throws -> ConversationImageObservation { throw PursuitWorkspaceClientError.askUnavailable }
+    func loadConversationImage(sessionID: UUID, messageID: UUID, index: Int,
+        manifest: ConversationImageManifest) async throws -> ChatMediaContent { throw PursuitWorkspaceClientError.askUnavailable }
+
     func loadReplyPreference() async throws -> AgentReplyPreference { throw PursuitWorkspaceClientError.askUnavailable }
     func saveReplyPreference(_ body: AgentReplyPreferenceMutation) async throws -> AgentReplyPreference { throw PursuitWorkspaceClientError.askUnavailable }
     func findContactMatches(
@@ -2636,5 +2590,12 @@ struct AgentCalendarDraft: Codable, Equatable, Identifiable {
         return DeviceCalendarProposal(sourceID: id, personDisplayName: "", title: title,
             startDate: start, endDate: end, timeZoneIdentifier: timeZone,
             evidenceQuote: sourceExcerpt, detectedDateText: sourceExcerpt, durationWasExplicit: true)
+    }
+}
+
+extension URLPursuitWorkspaceClient {
+    func imageConversationTransport() async throws -> ConversationImageTransport {
+        let login = try await contactAgentLogin()
+        return ConversationImageTransport(baseURL: baseURL, token: login.accessToken, session: session)
     }
 }

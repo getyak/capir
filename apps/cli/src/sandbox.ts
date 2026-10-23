@@ -56,6 +56,15 @@ export function requestIds(entry: JournalEntry | undefined, requestId: string) {
   };
 }
 
+/**
+ * The explicitly selected `--timeout` becomes the client request duration and
+ * survives `withToken`; when it was not supplied the transport default (30s)
+ * is preserved untouched.
+ */
+function selectedRequestTimeout(args: ParsedArgs): number | undefined {
+  return args.suppliedFlags?.includes("--timeout") ? args.timeoutSeconds * 1000 : undefined;
+}
+
 async function discover(
   client: CapirBackendClient,
   environment: CapirEnvironment,
@@ -182,7 +191,12 @@ export async function runSandboxStart(
   environment: CapirEnvironment,
   deps: SandboxDeps,
 ): Promise<Record<string, unknown>> {
-  const client = new CapirBackendClient(environment.backendOrigin, deps.fetchImpl, deps.token);
+  const client = new CapirBackendClient(
+    environment.backendOrigin,
+    deps.fetchImpl,
+    deps.token,
+    selectedRequestTimeout(args),
+  );
   const capabilities = await discover(client, environment);
   if (!capabilities.enabled) {
     throw new CapirCliError(
@@ -276,7 +290,12 @@ export async function runSandboxStatus(
   environment: CapirEnvironment,
   deps: SandboxDeps,
 ): Promise<Record<string, unknown>> {
-  const client = new CapirBackendClient(environment.backendOrigin, deps.fetchImpl, deps.token);
+  const client = new CapirBackendClient(
+    environment.backendOrigin,
+    deps.fetchImpl,
+    deps.token,
+    selectedRequestTimeout(args),
+  );
   const sandboxId = args.sandboxId!;
   // Strictly a read unless --open requests a handoff; TTLs are never renewed.
   const response = await client.readSandbox(sandboxId);

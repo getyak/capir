@@ -49,6 +49,8 @@ struct AgentSessionTurn: Identifiable, Equatable {
     let requiresRefresh: Bool
     var feedback: AgentSessionFeedback? = nil
     var feedbackUpdatedAt: Date? = nil
+    var images: [ConversationImageManifest] = []
+    var canonicalWire: JSONValue? = nil
 
     init(
         id: UUID,
@@ -57,7 +59,9 @@ struct AgentSessionTurn: Identifiable, Equatable {
         createdAt: Date,
         requiresRefresh: Bool,
         feedback: AgentSessionFeedback? = nil,
-        feedbackUpdatedAt: Date? = nil
+        feedbackUpdatedAt: Date? = nil,
+        images: [ConversationImageManifest] = [],
+        canonicalWire: JSONValue? = nil
     ) {
         self.id = id
         self.objective = objective
@@ -69,6 +73,8 @@ struct AgentSessionTurn: Identifiable, Equatable {
         self.requiresRefresh = requiresRefresh
         self.feedback = feedback
         self.feedbackUpdatedAt = feedbackUpdatedAt
+        self.images = images
+        self.canonicalWire = canonicalWire
     }
 }
 
@@ -364,6 +370,7 @@ struct AgentSession: Identifiable, Equatable {
     var contactReceipts: [AgentContactReceipt]
     var pendingObjective: String? = nil
     var pendingUnscopedChatIdempotencyKey: String? = nil
+    var pendingImageConversation: PendingImageConversation? = nil
     var pendingPersonResearchIdempotencyKey: String? = nil
     var pendingPersonResearchRequestIdentity: String? = nil
     var updatedAt: Date
@@ -787,7 +794,7 @@ struct PersistedAgentSession: Codable {
     let title: String
     let turns: [PersistedAgentSessionTurn]
     let contactReceipts: [PersistedAgentContactReceipt]?
-    let pendingObjective: String?
+    var pendingObjective: String?
     let pendingUnscopedChatIdempotencyKey: String?
     let pendingPersonResearchIdempotencyKey: String?
     let pendingPersonResearchRequestIdentity: String?
@@ -809,6 +816,7 @@ struct PersistedAgentSession: Codable {
     var createdAt: Date? = nil
     var retentionExpiresAt: Date? = nil
     var contextWasTrimmed: Bool? = nil
+    var pendingImageConversation: PendingImageConversation? = nil
 
     init(_ value: AgentSession) {
         id = value.id
@@ -825,6 +833,7 @@ struct PersistedAgentSession: Codable {
         contactReceipts = value.contactReceipts.map(PersistedAgentContactReceipt.init)
         pendingObjective = value.pendingObjective
         pendingUnscopedChatIdempotencyKey = value.pendingUnscopedChatIdempotencyKey
+        pendingImageConversation = value.pendingImageConversation
         pendingPersonResearchIdempotencyKey = value.pendingPersonResearchIdempotencyKey
         pendingPersonResearchRequestIdentity = value.pendingPersonResearchRequestIdentity
         updatedAt = value.updatedAt
@@ -877,6 +886,7 @@ struct PersistedAgentSession: Codable {
             contactReceipts: (contactReceipts ?? []).map(\.value),
             pendingObjective: pendingObjective,
             pendingUnscopedChatIdempotencyKey: pendingUnscopedChatIdempotencyKey,
+            pendingImageConversation: pendingImageConversation,
             pendingPersonResearchIdempotencyKey: pendingPersonResearchIdempotencyKey,
             pendingPersonResearchRequestIdentity: pendingPersonResearchRequestIdentity,
             updatedAt: updatedAt,
@@ -955,29 +965,63 @@ struct PersistedAgentSessionTurn: Codable {
     let createdAt: Date
     var feedback: AgentSessionFeedback? = nil
     var feedbackUpdatedAt: Date? = nil
+    var images: [ConversationImageManifest] = []
+    // Keep the server's immutable response shape, including nulls and host-only
+    // provenance. Display projection is read-only; it is never re-encoded as fact.
+    var canonicalWire: JSONValue? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, objective, response, createdAt, feedback, feedbackUpdatedAt, images
+    }
 
     init(_ value: AgentSessionTurn) {
-        id = value.id
-        objective = value.objective
-        response = PersistedRelationshipAskResponse(
-            value.response,
-            requireExistingShareClassification: value.requiresRefresh
-        )
-        createdAt = value.createdAt
-        feedback = value.feedback
+        id = value.id; objective = value.objective
+        response = PersistedRelationshipAskResponse(value.response,
+            requireExistingShareClassification: value.requiresRefresh)
+        createdAt = value.createdAt; feedback = value.feedback
         feedbackUpdatedAt = value.feedbackUpdatedAt
+        images = value.images; canonicalWire = value.canonicalWire
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        objective = try c.decode(String.self, forKey: .objective)
+        response = try c.decode(PersistedRelationshipAskResponse.self, forKey: .response)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        feedback = try c.decodeIfPresent(AgentSessionFeedback.self, forKey: .feedback)
+        feedbackUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .feedbackUpdatedAt)
+        images = try c.decodeIfPresent([ConversationImageManifest].self, forKey: .images) ?? []
+        let raw = try JSONValue(from: decoder)
+        if case let .object(turn) = raw, case let .object(reply)? = turn["response"],
+           reply["execution"] != nil || (reply["contextManifestID"] == .string("")
+               && reply["unboundConversationBlocks"] != nil) {
+            canonicalWire = raw
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        if case var .object(wire)? = canonicalWire {
+            wire["feedback"] = feedback.map { .string($0.rawValue) }
+            if let feedbackUpdatedAt {
+                wire["feedbackUpdatedAt"] = try JSONDecoder().decode(JSONValue.self,
+                    from: JSONEncoder.agentSession.encode(feedbackUpdatedAt))
+            } else { wire.removeValue(forKey: "feedbackUpdatedAt") }
+            try JSONValue.object(wire).encode(to: encoder)
+            return
+        }
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id); try c.encode(objective, forKey: .objective)
+        try c.encode(response, forKey: .response); try c.encode(createdAt, forKey: .createdAt)
+        try c.encodeIfPresent(feedback, forKey: .feedback)
+        try c.encodeIfPresent(feedbackUpdatedAt, forKey: .feedbackUpdatedAt)
+        if !images.isEmpty { try c.encode(images, forKey: .images) }
     }
 
     var value: AgentSessionTurn {
-        AgentSessionTurn(
-            id: id,
-            objective: objective,
-            response: response.value,
-            createdAt: createdAt,
-            requiresRefresh: true,
-            feedback: feedback,
-            feedbackUpdatedAt: feedbackUpdatedAt
-        )
+        AgentSessionTurn(id: id, objective: objective, response: response.value,
+            createdAt: createdAt, requiresRefresh: true, feedback: feedback,
+            feedbackUpdatedAt: feedbackUpdatedAt, images: images, canonicalWire: canonicalWire)
     }
 }
 
@@ -2303,7 +2347,8 @@ final class AgentSessionStore: ObservableObject {
                     createdAt: turn.createdAt,
                     requiresRefresh: true,
                     feedback: turn.feedback,
-                    feedbackUpdatedAt: turn.feedbackUpdatedAt
+                    feedbackUpdatedAt: turn.feedbackUpdatedAt,
+                    images: turn.images, canonicalWire: turn.canonicalWire
                 )
             }
             return next
@@ -2329,7 +2374,8 @@ final class AgentSessionStore: ObservableObject {
                     createdAt: turn.createdAt,
                     requiresRefresh: true,
                     feedback: turn.feedback,
-                    feedbackUpdatedAt: turn.feedbackUpdatedAt
+                    feedbackUpdatedAt: turn.feedbackUpdatedAt,
+                    images: turn.images, canonicalWire: turn.canonicalWire
                 )
             }
             return next
@@ -2837,6 +2883,8 @@ extension AgentSessionStore {
     private func syncPayload(_ session: AgentSession) -> PersistedAgentSession {
         var payload = PersistedAgentSession(session)
         payload.retentionExpiresAt = nil
+        payload.pendingImageConversation = nil // Device-local recovery is not a backend payload field.
+        if session.pendingImageConversation != nil { payload.pendingObjective = nil }
         if let proposal = storedContactProposals.first(where: { $0.sessionID == session.id }) {
             payload.contactProposal = AgentContactProposalDraft(
                 draft: proposal.draft, idempotencyKey: proposal.idempotencyKey,
@@ -2869,7 +2917,8 @@ extension AgentSessionStore {
                 let old = AgentSessionTurn(
                     id: existing.id, objective: existing.objective, response: existing.response,
                     createdAt: incoming.createdAt, requiresRefresh: existing.requiresRefresh,
-                    feedback: existing.feedback, feedbackUpdatedAt: existing.feedbackUpdatedAt
+                    feedback: existing.feedback, feedbackUpdatedAt: existing.feedbackUpdatedAt,
+                    images: incoming.images, canonicalWire: incoming.canonicalWire
                 )
                 let unchangedDisplay = AgentSessionContextPolicy.readOnlyResponse(old.response)
                     == AgentSessionContextPolicy.readOnlyResponse(incoming.response)
@@ -2892,6 +2941,15 @@ extension AgentSessionStore {
         merged.screenshotTaskIDs = Array(Set(local.screenshotTaskIDs + remoteSession.screenshotTaskIDs)).sorted()
         if local.originSessionID != nil || remoteSession.originSessionID != nil {
             merged.inheritedScreenshotTaskIDs = Array(local.readOnlyScreenshotTaskIDs.union(remoteSession.readOnlyScreenshotTaskIDs)).sorted()
+        }
+        if let pending = local.pendingImageConversation,
+           !remoteSession.turns.contains(where: { $0.id == pending.messageID }) {
+            merged.pendingImageConversation = pending
+        } else {
+            merged.pendingImageConversation = nil
+            if let pending = local.pendingImageConversation, merged.pendingObjective == pending.objective {
+                merged.pendingObjective = nil
+            }
         }
         // A locally pending operation keeps its stable recovery token across a remote read.
         if local.hasPendingUnscopedChat || local.hasPendingPersonResearch || local.pendingScopedAskIdempotencyKey != nil || local.hasPendingScreenshotAdmission {
@@ -2945,7 +3003,8 @@ extension AgentSessionStore {
                 return AgentSessionTurn(
                     id: existing.id, objective: existing.objective, response: existing.response,
                     createdAt: incoming.createdAt, requiresRefresh: existing.requiresRefresh,
-                    feedback: existing.feedback, feedbackUpdatedAt: existing.feedbackUpdatedAt
+                    feedback: existing.feedback, feedbackUpdatedAt: existing.feedbackUpdatedAt,
+                    images: incoming.images, canonicalWire: incoming.canonicalWire
                 )
             }
             storedSessions[index] = repaired
@@ -3436,8 +3495,6 @@ enum RelationshipArchiveSheet: Identifiable {
     case pursuit(WorkspacePursuit)
     case workspacePerson(WorkspacePerson, [WorkspacePersonRole])
     case proposal(WorkspaceProposal)
-    case agentStudio
-    case menu
     case internalTesting
 
     var id: String {
@@ -3454,10 +3511,6 @@ enum RelationshipArchiveSheet: Identifiable {
             return "workspace-person-\(person.id)"
         case let .proposal(proposal):
             return "proposal-\(proposal.id)"
-        case .agentStudio:
-            return "agent-studio"
-        case .menu:
-            return "menu"
         case .internalTesting:
             return "internal-testing"
         }
@@ -3669,5 +3722,111 @@ enum WorkspacePeopleRetrievalPolicy {
 
     private static func parseDate(_ value: String) -> Date? {
         fractionalDateParser.date(from: value) ?? standardDateParser.date(from: value)
+    }
+}
+
+// Inline image recovery is device-owned. The backend receives only canonical
+// Session history, then owns admission and execution of the protected message.
+extension AgentSessionStore {
+    func beginImageConversation(sessionID: UUID, objective: String,
+        images: [ConversationImageManifest], messageID: UUID = UUID()) -> PendingImageConversation? {
+        guard (!images.isEmpty || !objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty), images.count <= 10,
+              let index = storedSessions.firstIndex(where: { $0.id == sessionID }),
+              !storedSessions[index].hasPendingScreenshotAdmission,
+              !storedSessions[index].hasPendingUnscopedChat,
+              !storedSessions[index].hasPendingPersonResearch,
+              storedSessions[index].pendingScopedAskIdempotencyKey == nil else { return nil }
+        if let prior = storedSessions[index].pendingImageConversation {
+            return prior.matches(objective: objective, images: images) ? prior : nil
+        }
+        let before = storedSessions[index]
+        let pending = PendingImageConversation(messageID: messageID,
+            idempotencyKey: "ios:image-conversation:\(messageID.uuidString.lowercased())",
+            objective: objective, images: images, createdAt: now(), timeZone: TimeZone.current.identifier, state: .prepared)
+        storedSessions[index].pendingImageConversation = pending
+        storedSessions[index].pendingObjective = nil
+        storedSessions[index].updatedAt = now()
+        guard persist() else { storedSessions[index] = before; return nil }
+        return pending
+    }
+
+    @discardableResult
+    func recordImageAdmission(sessionID: UUID, messageID: UUID, receipt: ConversationImageAdmission) -> Bool {
+        guard receipt.sessionID == sessionID, receipt.messageID == messageID,
+              let index = storedSessions.firstIndex(where: { $0.id == sessionID }),
+              var pending = storedSessions[index].pendingImageConversation,
+              pending.messageID == messageID,
+              pending.queueEntryID == nil || pending.queueEntryID == receipt.queueEntryID else { return false }
+        let before = storedSessions[index]
+        pending.queueEntryID = receipt.queueEntryID; pending.state = .admitted
+        storedSessions[index].pendingImageConversation = pending
+        guard persist() else { storedSessions[index] = before; return false }
+        return true
+    }
+
+    @discardableResult
+    func markImageObservationUnknown(sessionID: UUID, messageID: UUID) -> Bool {
+        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }),
+              var pending = storedSessions[index].pendingImageConversation,
+              pending.messageID == messageID else { return false }
+        let before = storedSessions[index]
+        pending.state = .unknown; storedSessions[index].pendingImageConversation = pending
+        guard persist() else { storedSessions[index] = before; return false }
+        return true
+    }
+
+    func recordImageConversationFailure(sessionID: UUID, messageID: UUID, error: Error,
+        admissionAttempted: Bool) -> String {
+        let inputRejected = (error as? ImageConversationError) == .invalidInput
+            || (error as? ImageConversationError) == .changedIntent
+        if admissionAttempted, !inputRejected {
+            markImageObservationUnknown(sessionID: sessionID, messageID: messageID)
+        }
+        return ImageConversationError.recoveryMessage(for: error, admissionAttempted: admissionAttempted)
+    }
+
+    func observeImageConversation(sessionID: UUID, messageID: UUID,
+        observation: ConversationImageObservation) throws -> ImageConversationReadback {
+        guard let index = storedSessions.firstIndex(where: { $0.id == sessionID }),
+              let pending = storedSessions[index].pendingImageConversation,
+              pending.messageID == messageID, observation.record.sessionID == sessionID,
+              observation.record.deletedAt == nil, observation.record.expiresAt > now(),
+              let payload = observation.record.payload, payload.id == sessionID,
+              try payload.value().scope == storedSessions[index].scope else {
+            throw ImageConversationError.invalidReadback
+        }
+        if let entry = observation.entry {
+            guard entry.messageID == messageID,
+                  pending.queueEntryID == nil || entry.queueEntryID == pending.queueEntryID,
+                  entry.images == pending.images else { throw ImageConversationError.invalidReadback }
+            if ["failed", "interrupted", "cancelled"].contains(entry.status) {
+                var stopped = pending; stopped.state = .stopped
+                storedSessions[index].pendingImageConversation = stopped
+                guard persist() else { throw ImageConversationError.persistence }
+                return .stopped
+            }
+        }
+        if let turn = payload.turns.first(where: { $0.id == messageID }) {
+            guard turn.objective == pending.objective, turn.images == pending.images,
+                  turn.canonicalWire != nil else { throw ImageConversationError.invalidReadback }
+            let before = storedSessions
+            let beforeRevisions = syncRevisions, beforeDigests = syncDigests, beforeTombstones = syncTombstones
+            let beforeProposals = storedContactProposals, beforeRetired = retiredContactProposalIntentHashes
+            do {
+                try applyRemote(observation.record)
+                sortSessions()
+                guard persist() else { throw ImageConversationError.persistence }
+            } catch {
+                storedSessions = before; syncRevisions = beforeRevisions
+                syncDigests = beforeDigests; syncTombstones = beforeTombstones
+                storedContactProposals = beforeProposals; retiredContactProposalIntentHashes = beforeRetired
+                scheduleNextExpiration()
+                throw error
+            }
+            if UUID(uuidString: turn.response.taskID) == nil
+                || turn.response.value.blocks.contains(where: { $0.status == "failed" }) { return .stopped }
+            return .completed
+        }
+        return observation.entry == nil ? .unknown : .waiting
     }
 }

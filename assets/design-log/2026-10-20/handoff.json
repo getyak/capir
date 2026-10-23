@@ -1,0 +1,73 @@
+{
+  "implementation_frozen_local": "2026-10-20T11:30:00+08:00",
+  "deadline_local": "2026-10-20T12:00:00+08:00",
+  "branch": "codex/design-noon-20261020",
+  "active": {
+    "revision": "2b4cd303b08d868daad9abd45cf984c0085315a3",
+    "buildID": "CUmCARtl8cbaMXZZgPw1m",
+    "release": "/Users/cubxxw/Library/Application Support/Talent Signal/web/releases/2b4cd303",
+    "port": 3000
+  },
+  "candidate": {
+    "revision": "1c7e1a4a6ebb797ac039b005534df96186287298",
+    "build_id": "K1LOQCHQFtwESnV-W2-Ah",
+    "deployed": false,
+    "attempts_failed": 2,
+    "automatic_rollback_verified": true,
+    "actual_candidate_label_fix_verified": true
+  },
+  "native": {
+    "version": "0.2.8",
+    "build": "125",
+    "binary_changed": false,
+    "latest_after_acceptance": "blocked by expired session and normal browser-login recovery/connectivity",
+    "window": "1123x865; recovery state; expanded sidebar restoration unavailable while signed out"
+  },
+  "test_cleanup": {
+    "run_id": "45910cd3-e607-4f06-9041-b7a3d70964be",
+    "stop_ok": true,
+    "state": "deleted",
+    "cleanup_error": null,
+    "credential_removed": true,
+    "journal_status": "completed",
+    "status_read_only": true
+  },
+  "previews_stopped": true,
+  "ios_test_session_started": false,
+  "simulator_prune": {
+    "deleted": 0,
+    "retained_allowlisted": 3
+  },
+  "temporary_docker_stack_started": false,
+  "docker_context": "colima",
+  "browser_restore": "Mobile390x844,75%,DPR2; no media emulation; focused-page0 read back",
+  "comparison_board": "Seven original before/after pairs; actual macOS filter verified; no private unmarked titles",
+  "remaining": [
+    "candidate activation through existing readiness gates",
+    "latest native after screenshots",
+    "fresh resident replay of composer final keyboard and narrow Time inspector",
+    "remaining private dark/forced/error and selected/disabled match actual state coverage"
+  ],
+  "recorded_utc": "2026-10-20T03:53:31.419532+00:00",
+  "final_health_observation": {
+    "https_login": "A5-second final probe timed out; ordinary sign-out page subsequently renders in the real browser. Intermittent Web readiness remains unresolved.",
+    "api_readiness": "200",
+    "no_new_restart_or_deployment_after_two_failures": true
+  },
+  "cleanup_status": "Synthetic run deleted/read back; derived credential removed; previews stopped; task browser session signed out and window closed; original fixture source/check evidence archived before exact private-artifact removal.",
+  "browser_cleanup": {
+    "task_https_session_signed_out": true,
+    "login_form_read_back": true,
+    "owned_guest_window_closed": true,
+    "other_windows_targeted": false,
+    "earlier_unresponsive_iab_tabs": "Close not confirmed; no host restart or broader browser cleanup used"
+  },
+  "checks": {
+    "targeted_tests": "passed, per-batch receipts",
+    "web_lint": "passed",
+    "candidate_production_build": "passed",
+    "documentation": "passed",
+    "latest_candidate_deployment": "failed; previous release restored"
+  },
+  "private_artifact_removed": true
+}

@@ -4,7 +4,8 @@ import WebKit
 import UniformTypeIdentifiers
 import Combine
 
-/// The page receives display-only chrome metadata, never native capability APIs.
+/// The page receives display-only chrome metadata and appearance synchronization,
+/// never native capability APIs.
 /// Update consent is captured in an isolated script world from a trusted click.
 /// Native intake remains a separate, explicitly opened window with its own scope.
 struct WorkspaceOrigin: Equatable {
@@ -76,11 +77,20 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     @Published var failure: String?
     @Published var loading = true
     @Published var canGoBack = false
+    @Published private(set) var appearancePreference: WorkspaceAppearance = .system
+    @Published private(set) var savingAppearance = false
+    @Published private(set) var appearanceSaveNotice: String?
     @Published var externalURL: URL?
     @Published var downloadStatus: String?
     /// Explicit, honest notice when the main window could not restore the prior
     /// workbench state after a client-side Settings hop.
     @Published var workbenchNotice: String?
+    var visibleWorkbenchNotice: String? { workbenchNotice ?? appearanceSaveNotice }
+
+    func dismissWorkbenchNotice() {
+        if workbenchNotice != nil { workbenchNotice = nil }
+        else { appearanceSaveNotice = nil }
+    }
     /// Set only when the OS refuses to open the default browser for account
     /// settings. Device controls stay available; the view offers a retry.
     @Published var browserLaunchFailure: String?
@@ -126,6 +136,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     static func workbenchUserScripts(chromeScript: String) -> [WKUserScript] {
         WorkspaceSettingsPaintGuard.userScripts + [
             DesktopUpdateClickBridge.userScript,
+            WorkspaceAppearanceBridge.userScript,
             WKUserScript(source: chromeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true),
         ]
     }
@@ -162,6 +173,10 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                     url, source: frame.request.url, origin: self.origin,
                     mainFrame: frame.isMainFrame, userActivated: true) else { return }
             DesktopUpdater.shared.installUpdate(offerID: offerID)
+        }
+        _ = WorkspaceAppearanceBridge(controller: configuration.userContentController, origin: origin) { [weak self] value in
+            guard let self, !self.retired else { return }
+            self.appearancePreference = value
         }
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -320,6 +335,25 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         }
         if let current = webView.url, origin.contains(current) { webView.reload() }
         else { webView.load(URLRequest(url: origin.entryURL)) }
+    }
+
+    func selectAppearance(_ preference: WorkspaceAppearance) {
+        guard !retired, !signedOut, !loading, !savingAppearance,
+              let current = webView.url, origin.contains(current) else { return }
+        savingAppearance = true
+        webView.callAsyncJavaScript(WorkspaceAppearanceBridge.selectionScript,
+            arguments: ["preference": preference.rawValue, "expectedOrigin": origin.url.absoluteString],
+            in: nil, in: .page) { [weak self] result in
+                guard let self else { return }
+                self.savingAppearance = false
+                guard !self.retired, self.webView.url == current else { return }
+                guard case .success(let saved) = result, saved as? Bool == true else {
+                    self.appearanceSaveNotice = "无法确认外观已保存，请重新载入后检查。"
+                    return
+                }
+                self.appearanceSaveNotice = nil
+                self.appearancePreference = preference
+            }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -553,16 +587,19 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 struct WorkspaceWebSurface: NSViewRepresentable {
     let browser: WorkspaceBrowser
     let zoom: Double
+    let appearance: WorkspaceAppearance
     func makeNSView(context: Context) -> WorkspaceMaterialSurface {
         browser.webView.pageZoom = min(1.5, max(0.9, zoom))
-        return WorkspaceMaterialSurface(webView: browser.webView)
+        return WorkspaceMaterialSurface(webView: browser.webView, preference: appearance)
     }
     func updateNSView(_ nsView: WorkspaceMaterialSurface, context: Context) {
         nsView.webView.pageZoom = min(1.5, max(0.9, zoom))
+        nsView.preference = appearance
     }
 }
 
 private struct ConnectedQuietWorkspace: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject private var navigation = WorkspaceNavigation.shared
     @ObservedObject var login: DesktopBrowserLoginCoordinator
     @StateObject private var browser: WorkspaceBrowser
@@ -575,6 +612,11 @@ private struct ConnectedQuietWorkspace: View {
     init(origin: WorkspaceOrigin, login: DesktopBrowserLoginCoordinator) {
         self.login = login
         _browser = StateObject(wrappedValue: WorkspaceBrowser(origin: origin))
+    }
+
+    private var presentationAppearance: WorkspaceAppearance? {
+        if model.isDarkAppearancePreview { return .dark }
+        return browser.signedOut || browser.failure != nil ? nil : browser.appearancePreference
     }
 
     private func consumeDestination() {
@@ -598,7 +640,8 @@ private struct ConnectedQuietWorkspace: View {
             // and keyboard. Detach only its presentation; browser retains the
             // same WebView and navigation/session ownership for recovery.
             if !browser.signedOut && browser.failure == nil {
-                WorkspaceWebSurface(browser: browser, zoom: zoom)
+                WorkspaceWebSurface(browser: browser, zoom: zoom,
+                                    appearance: presentationAppearance ?? .system)
             }
             if browser.signedOut {
                 // Native signed-out surface only: the Web login page never
@@ -618,11 +661,11 @@ private struct ConnectedQuietWorkspace: View {
                 }.padding(12).background(.regularMaterial).clipShape(RoundedRectangle(cornerRadius: 8))
                     .padding().accessibilityElement(children: .contain)
             }
-            if let notice = browser.workbenchNotice {
+            if let notice = browser.visibleWorkbenchNotice {
                 HStack(alignment: .top, spacing: 12) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
                     Text(notice).font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Button("关闭") { browser.workbenchNotice = nil }
+                    Button("关闭") { browser.dismissWorkbenchNotice() }
                 }
                 .padding(12)
                 .frame(maxWidth: 560, alignment: .leading)
@@ -654,6 +697,7 @@ private struct ConnectedQuietWorkspace: View {
                 .background(TSBrand.canvas)
             }
         }
+        .modifier(WorkspaceAppearancePresentation(preference: presentationAppearance))
         .focusedSceneObject(browser)
         .background(WorkspaceWindowBehavior(floating: floating))
         .onAppear {
@@ -677,23 +721,6 @@ private struct ConnectedQuietWorkspace: View {
         .onChange(of: connection.inspectorEnabled) { _, enabled in browser.webView.isInspectable = enabled }
         .onChange(of: navigation.pending) { _, _ in consumeDestination() }
         .onChange(of: navigation.pendingURL) { _, _ in consumeDestination() }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
-                Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left") }
-                    .disabled(!browser.canGoBack).help("返回")
-            }
-            ToolbarItem {
-                Menu {
-                    Button("新对话") { browser.navigate(.home) }
-                    Button("设置…") { openSettings() }
-                    Divider()
-                    Button("重新载入", action: browser.retry)
-                    Button("本机工具") { openWindow(id: "native-tools") }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }.help("工作区操作")
-            }
-        }
         .alert(browser.externalURL?.scheme == "mailto" ? "在邮件应用中准备草稿？" : "在浏览器中打开？", isPresented: Binding(
             get: { browser.externalURL != nil }, set: { if !$0 { browser.externalURL = nil } }
         )) {
@@ -741,12 +768,6 @@ struct QuietWorkspaceView: View {
                 // a deliberate new primary login never leaves a stale host
                 // signed in or bound to the previous store.
                 .id("\(origin.url.absoluteString)-\(connection.storeEpoch)")
-                .toolbar {
-                    ToolbarItem {
-                        Button("设置", systemImage: "slider.horizontal.3") { openSettings() }
-                            .help("设置（⌘,）")
-                    }
-                }
         } else {
             FirstRunExperience(reduceMotionPreview: model.isReducedMotionPreview)
             .frame(maxWidth: .infinity, maxHeight: .infinity)

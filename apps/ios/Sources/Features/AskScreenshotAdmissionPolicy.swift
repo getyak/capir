@@ -44,8 +44,9 @@ enum AskScreenshotAdmissionPolicy {
         return capacityNotice
     }
 
-    static func canResumeAsText(hasPendingScreenshotAdmission: Bool, hasPendingPersonResearch: Bool) -> Bool {
-        !hasPendingScreenshotAdmission && !hasPendingPersonResearch
+    static func canResumeAsText(hasPendingScreenshotAdmission: Bool, hasPendingPersonResearch: Bool,
+        hasPendingImageConversation: Bool = false) -> Bool {
+        !hasPendingScreenshotAdmission && !hasPendingPersonResearch && !hasPendingImageConversation
     }
 }
 

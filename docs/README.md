@@ -18,6 +18,7 @@ stable, and free of implementation-level detail.
 | What should the product feel like? | [Design system](design-system.md) |
 | What should be built next? | [Delivery](delivery.md) |
 | Which integrations are allowed? | [Integrations](integrations.md) |
+| How is the product localized? | [Internationalization](internationalization.md) |
 
 Read only the documents needed for the task. For example, a visual change
 usually needs Product and Design System, while a retention change needs
@@ -85,6 +86,10 @@ updated.
   material, session-organization and conversation-delivery work into `main`.
 
 ## Operations and evaluation
+
+- [Local Symphony delivery](operations/symphony-local-automation.md) explains
+  single-issue ownership, visible Project sessions, bounded dispatch, delivery
+  gates and recovery while the legacy fleet remains paused.
 
 - [macOS download and distribution](operations/macos-distribution.md): Universal
   packages, workspace setup, release automation, signing, and updates.

@@ -210,7 +210,7 @@ describe("workspace footer strip", () => {
     expect(tooltip?.textContent).toContain("下载");
   });
 
-  it("widens into an update entry with the real host version in a custom tooltip, never a native one", async () => {
+  it("labels the update entry with the real host version in a custom tooltip, never a native one", async () => {
     const host = await render(createElement(WorkspaceDownloadEntry));
     await showDesktop({
       protocolVersion: 1, availableVersion: "0.2.0 (12)", phase: "available",
@@ -254,7 +254,19 @@ describe("workspace footer strip", () => {
     const status = host.querySelector("[role='status']");
     expect(status?.getAttribute("data-interactive")).toBe("false");
     expect(status?.getAttribute("aria-label")).toContain("41%");
+    expect(status?.textContent).toBe("41%");
+    expect(status?.getAttribute("tabindex")).toBe("0");
+    await act(async () => (status as HTMLElement).focus());
+    expect(document.activeElement).toBe(status);
+    expect(status?.getAttribute("aria-describedby")).toBe(host.querySelector("[role='tooltip']")?.id);
+    expect(host.querySelector("[role='tooltip']")?.textContent).toContain("校验后将安装并重启");
 
+    await showDesktop({
+      protocolVersion: 1, availableVersion: "0.2.0 (12)", phase: "downloading",
+      offerID: "b75e9546-2b27-4ee6-bdb2-bcb11f882652",
+    });
+    expect(host.querySelector("[role='status']")?.textContent).toBe("下载中");
+    expect(host.querySelector("[role='status']")?.textContent).not.toContain("%");
     await showDesktop({
       protocolVersion: 1, availableVersion: "0.2.0 (12)", phase: "installing",
       offerID: "b75e9546-2b27-4ee6-bdb2-bcb11f882652",
@@ -266,6 +278,17 @@ describe("workspace footer strip", () => {
     const retry = host.querySelector("a");
     expect(retry?.getAttribute("href")).toBe("talentsignal-desktop://updates");
     expect(retry?.getAttribute("aria-label")).toContain("重新检查");
+    expect(retry?.textContent).toBe("重试");
+    expect(document.activeElement).toBe(retry);
+
+    await showDesktop({ protocolVersion: 1, availableVersion: null, phase: "downloading" });
+    expect(document.activeElement).toBe(host.querySelector("[role='status']"));
+
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    outside.focus();
+    await showDesktop({ protocolVersion: 1, availableVersion: null, phase: "failed" });
+    expect(document.activeElement).toBe(outside);
   });
 
   it("puts an explicit install/restart banner at the top of the avatar popover", async () => {
@@ -400,4 +423,3 @@ describe("account popover keyboard", () => {
     expect(document.activeElement?.textContent).toContain("退出登录");
   });
 });
-

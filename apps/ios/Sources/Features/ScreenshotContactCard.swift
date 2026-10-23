@@ -169,8 +169,19 @@ struct ScreenshotContactCard: View {
             .accessibilityIdentifier("screenshot-contact-card")
             .sheet(isPresented: $showsSourceImage, onDismiss: { sourceImage = nil }) {
                 NavigationStack {
-                    ScrollView([.horizontal, .vertical]) { if let sourceImage { Image(uiImage: sourceImage).resizable().scaledToFit() } }
+                    ZStack {
+                        Color.black.ignoresSafeArea()
+                        if let sourceImage {
+                            ZoomableCaptureImage(image: sourceImage)
+                                .accessibilityLabel(language.text("Original image"))
+                                .accessibilityIdentifier("screenshot-original-image")
+                        }
+                    }
                         .navigationTitle(language.text("Original image"))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbarBackground(Color.black, for: .navigationBar)
+                        .toolbarColorScheme(.dark, for: .navigationBar)
+                        .tint(.white)
                         .toolbar { ToolbarItem(placement: .cancellationAction) { Button(language.text("Done")) { showsSourceImage = false } } }
                 }
             }

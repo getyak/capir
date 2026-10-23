@@ -1,0 +1,35 @@
+{
+  "decision": "inconclusive for production; no product code promoted",
+  "mode": "Boundary",
+  "observed_facts": [
+    "SwiftUI explicit dark: NativeDarkAqua and Webdark",
+    "SwiftUI nil after dark: NativeAqua, Webdark on repeated explicit inspect",
+    "SwiftUI explicit light: NativeAqua and Weblight",
+    "Invalid value rejected; light retained",
+    "Direct action and NSViewRepresentable owner variants: requested dark, NativeAqua and Webdark"
+  ],
+  "automated_verdicts": "none; screenshots and explicit readback are observations, not automated pass",
+  "human_choice": "unreviewed; no case promoted to regression or Gold",
+  "AI_hypotheses": [
+    "SwiftUI presentation/lifecycle ownership may override AppKit appearance assignments",
+    "Background WebKit paint or appearance propagation may affect these observations"
+  ],
+  "remaining_uncertainty": [
+    "Exact host timing and system-mode reset in production",
+    "System appearance-change propagation while user selects system",
+    "No production bridge, capability or account-state change was implemented"
+  ],
+  "side_effects": {
+    "network": false,
+    "credentials": false,
+    "system_appearance_changed": false,
+    "product_data_changed": false,
+    "probe_process": "quit through its application menu",
+    "primary_product_theme": "restored light"
+  },
+  "source_sha256": {
+    "swiftui-preference.swift.txt": "35f76afdbe50453f4e6b0043f9fd24dd9bb12cad6b883bd983d27a9704713f90",
+    "direct-model.swift.txt": "220bd5a2bc2e823c696959cfb266085e01be3c95bb3f3d6e36d5293748f67435",
+    "window-owner.swift.txt": "0a67eed889f752ca687f4bd1792a158f89e73b63a261ededce830cc8415b7d38"
+  }
+}

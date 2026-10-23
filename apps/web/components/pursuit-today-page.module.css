@@ -1,10 +1,12 @@
 /*
- * Today — restored from Figma frame 63:1453.
+ * Today — editorial daily brief.
  *
- * One primary next step in a quiet white card (12px radius, hairline, 28px
- * padding), a restrained right rail for continuation, and no ornamental
- * accent. Type follows the shared scale: title 24, object 22, section 18,
- * body 15, meta 13. Pending review is the only accent consumer.
+ * One primary next step as a content-first section: no card frame or
+ * artificial surface, one subtle section separator, and title, body, facts
+ * and action on the same left edge. A restrained right rail carries
+ * continuation and no ornamental accent. Type follows the shared scale:
+ * title 24, object 22, section 18, body 15, meta 13. Pending review is the
+ * only accent consumer.
  */
 
 .pageShell {
@@ -15,7 +17,12 @@
 .main {
   margin: 0 auto;
   max-width: 1040px;
-  padding: 40px 40px 80px;
+  padding: 40px;
+}
+
+/* Preserve reading room in short desktop windows without a trailing blank scroll. */
+@media (min-width: 761px) and (max-height: 720px) {
+  .main { padding-block: 24px; }
 }
 
 .errorStack {
@@ -54,16 +61,15 @@
   max-width: 1040px;
 }
 
-/* ── Focus card ──────────────────────────────────────────────────────── */
+/* ── Focus section ───────────────────────────────────────────────────── */
 
+/* Content-first: one subtle separator marks the section; nothing frames it. */
 .focus {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--ts-radius-frame, 12px);
+  border-top: 1px solid var(--line-soft);
   display: flex;
   flex-direction: column;
   gap: 20px;
-  padding: clamp(22px, 2.6vw, 28px);
+  padding-top: clamp(24px, 2.6vw, 32px);
 }
 
 .kicker {
@@ -94,6 +100,7 @@
   line-height: 1.45;
   margin: 0;
   max-width: 760px;
+  overflow-wrap: anywhere;
 }
 
 .contextLine {
@@ -102,6 +109,7 @@
   line-height: 1.55;
   margin: -8px 0 0;
   max-width: 760px;
+  overflow-wrap: anywhere;
 }
 
 .focusDetail {
@@ -110,15 +118,14 @@
   line-height: 1.55;
   margin: -8px 0 0;
   max-width: 760px;
+  overflow-wrap: anywhere;
 }
 
 .focusFacts {
-  border-top: 1px solid var(--line-soft);
   display: grid;
   gap: 24px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
-  padding-top: 20px;
 }
 
 .focusFacts > div {
@@ -139,17 +146,20 @@
   margin: 0;
 }
 
+/* Supporting work stays plain content grouped by whitespace, not surfaces. */
 .supportingWork {
   display: grid;
-  gap: 12px;
+  gap: 16px;
 }
 
 .supportingWork > div {
-  background: var(--surface-muted);
-  border-radius: var(--ts-radius-control, 8px);
   display: grid;
   gap: 8px;
-  padding: 20px;
+}
+
+.supportingWork p,
+.supportingWork small {
+  overflow-wrap: anywhere;
 }
 
 .supportingWork span {
@@ -177,6 +187,7 @@
   justify-content: flex-start;
 }
 
+/* The one filled primary CTA on the focus section. */
 .focusLink a {
   align-items: center;
   background: var(--ink);
@@ -189,7 +200,7 @@
   min-height: 44px;
   padding: 0 16px;
   text-decoration: none;
-  transition: opacity 140ms var(--ease-out);
+  transition: opacity var(--workspace-transition-duration, 180ms) var(--ease-out);
 }
 
 .focusLink a:hover {
@@ -351,10 +362,10 @@
 
 .agentActions button {
   align-items: center;
-  background: var(--ink);
-  border: 0;
+  background: transparent;
+  border: 1px solid var(--line);
   border-radius: var(--ts-radius-control, 8px);
-  color: var(--background);
+  color: var(--ink);
   cursor: pointer;
   display: inline-flex;
   flex: 0 0 auto;
@@ -366,7 +377,7 @@
 }
 
 .agentActions button:hover:not(:disabled) {
-  opacity: 0.88;
+  background: var(--surface-muted);
 }
 
 .agentActions button:disabled {
@@ -457,9 +468,9 @@
 .continuation {
   border-bottom: 1px solid var(--line);
   display: block;
-  padding: 16px 2px;
+  padding: 16px 0;
   text-decoration: none;
-  transition: background 140ms var(--ease-out);
+  transition: background var(--workspace-transition-duration, 180ms) var(--ease-out);
 }
 
 .continuation:hover {
@@ -486,6 +497,7 @@
   font-weight: 600;
   line-height: 1.55;
   margin: 8px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .continuation > p {
@@ -493,6 +505,7 @@
   font-size: var(--workspace-meta-size);
   line-height: 1.54;
   margin: 6px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .continuation footer {
@@ -665,7 +678,7 @@
   }
 
   .main {
-    padding: 24px 24px 64px;
+    padding: 24px;
   }
 
   .todayGrid {
@@ -681,7 +694,7 @@
 
 @media (max-width: 760px) {
   .main {
-    padding: 20px 20px 56px;
+    padding: 20px;
   }
 
   .errorStack {
@@ -693,7 +706,7 @@
   }
 
   .focus {
-    padding: 21px;
+    padding-top: 24px;
   }
 
   .focusFacts {
@@ -745,5 +758,15 @@
   .focusLink a,
   .agentActions button {
     transition: none;
+  }
+}
+
+/* Filled actions keep a real boundary once forced colors strips their fill. */
+@media (forced-colors: active) {
+  .focusLink a,
+  .empty a,
+  .pageError a,
+  .agentActions button {
+    border: 1px solid CanvasText;
   }
 }

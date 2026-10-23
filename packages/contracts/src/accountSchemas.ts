@@ -1,5 +1,6 @@
 import { Type, type Static } from "@sinclair/typebox";
 import { CONTRACT_VERSION } from "./constants.js";
+import { LanguagePreferenceSchema } from "./i18nSchemas.js";
 
 const ID = Type.String({ format: "uuid" });
 const Time = Type.String({ format: "date-time" });
@@ -31,6 +32,12 @@ export const AccountSettingsSchema = Type.Object({
     role: Role, status: Status, is_owner: Type.Boolean() })),
   activity: Type.Array(Type.Object({ id: ID, kind: Type.String(), actor_name: Type.String(), created_at: Time })),
   lab_enabled: Type.Boolean(),
+  // User-owned presentation preferences. Optional in schema so older
+  // fixtures and responses remain readable; absent display_language means
+  // "system" (follow the platform language).
+  preferences: Type.Optional(Type.Object({
+    display_language: Type.Optional(LanguagePreferenceSchema),
+  }, { additionalProperties: false })),
 }, { additionalProperties: false });
 
 const OnboardingStatus = Type.Union([
@@ -99,6 +106,8 @@ export const AccountMutationSchema = Type.Union([
   Type.Object({ ...Common, kind: Type.Literal("member"), user_id: ID, role: Role, status: Status }, { additionalProperties: false }),
   Type.Object({ ...Common, kind: Type.Literal("transfer"), user_id: ID }, { additionalProperties: false }),
   Type.Object({ id: ID, kind: Type.Literal("revoke_session"), session_id: ID }, { additionalProperties: false }),
+  // Presentation-only, user-scoped: never access, roles, or person data.
+  Type.Object({ ...Common, kind: Type.Literal("preferences"), display_language: LanguagePreferenceSchema }, { additionalProperties: false }),
 ]);
 export type AccountSettings = Static<typeof AccountSettingsSchema>;
 export type AccountMutation = Static<typeof AccountMutationSchema>;

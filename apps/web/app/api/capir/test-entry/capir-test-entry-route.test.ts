@@ -99,6 +99,65 @@ afterEach(() => {
 });
 
 describe("capir test entry exchange route", () => {
+  for (const failure of ["body-read", "invalid-json", "invalid-schema"]) {
+    it(`returns_502_without_cookie_or_reexchange_for_${failure}`, async () => {
+      state.fetch.mockImplementation(async () => {
+        if (failure === "body-read") {
+          return new Response(new ReadableStream({
+            start(controller) { controller.error(new Error("synthetic-sensitive-body-error")); },
+          }), { status: 200 });
+        }
+        return new Response(failure === "invalid-json" ? "{" : JSON.stringify({ session: null }), { status: 200 });
+      });
+      const response = await POST(request(WEB_ORIGIN));
+      expect(response.status).toBe(502);
+      expect(jar.has(AUTH_SESSION_COOKIE)).toBe(false);
+      expect(state.fetch).toHaveBeenCalledTimes(1);
+      const body = await response.text();
+      expect(body.includes(SECRET)).toBe(false);
+      expect(body).not.toContain("synthetic-sensitive-body-error");
+    });
+  }
+
+  for (const [label, status] of [["fractional", 500.5], ["runtime-string", "500"]] as const) {
+    it(`normalizes_a_${label}_typed_status_to_502_at_the_response_boundary`, async () => {
+      // Injected typed upstream error whose runtime status is not an actual
+      // integer; only a valid integer 400-599 may ever reach the Response.
+      state.fetch.mockImplementation(async () => ({
+        ok: false,
+        status,
+        text: async () => JSON.stringify({
+          error: { code: "CAPIR_TEST_UPSTREAM", message: "untrusted upstream text hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh" },
+        }),
+      }));
+      const response = await POST(request(WEB_ORIGIN));
+      expect(response.status).toBe(502);
+      expect(jar.has(AUTH_SESSION_COOKIE)).toBe(false);
+      expect(state.fetch).toHaveBeenCalledTimes(1);
+      const body = await response.text();
+      expect(body).toContain("The one-use test handoff could not be exchanged.");
+      expect(body).not.toContain("hhhh");
+      expect(body.includes(SECRET)).toBe(false);
+    });
+  }
+
+  for (const status of [400, 401, 403, 429, 500, 599]) {
+    it(`retains_the_real_refusal_status_${status}_at_the_response_boundary`, async () => {
+      state.fetch.mockImplementation(async () =>
+        new Response(
+          JSON.stringify({ error: { code: "CAPIR_TEST_REFUSED", message: "untrusted refusal text" } }),
+          { status },
+        ),
+      );
+      const response = await POST(request(WEB_ORIGIN));
+      expect(response.status).toBe(status);
+      expect(jar.has(AUTH_SESSION_COOKIE)).toBe(false);
+      const body = await response.text();
+      expect(body).toContain("The one-use test handoff could not be exchanged.");
+      expect(body).not.toContain("untrusted refusal text");
+    });
+  }
+
   it("cross_origin_handoff_no_cookie", async () => {
     okBackend();
     const response = await POST(request("https://evil.example.test"));

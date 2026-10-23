@@ -42,7 +42,7 @@ struct TalentSignalMacApp: App {
                 }
                     .environmentObject(model)
                     .environment(\.dynamicTypeSize, model.isAccessibilityZoomPreview ? .accessibility2 : .large)
-                    .preferredColorScheme(model.isDarkAppearancePreview ? .dark : nil)
+                    .modifier(NativeAppearancePreview(enabled: model.isDarkAppearancePreview))
                     .task {
                         CaptureRuntime.shared.start()
                         updater.start()
@@ -91,7 +91,7 @@ struct TalentSignalMacApp: App {
                 NativeInitializationBoundary { QuickPanelView() }
                     .environmentObject(model)
                     .environment(\.dynamicTypeSize, model.isAccessibilityZoomPreview ? .accessibility2 : .large)
-                    .preferredColorScheme(model.isDarkAppearancePreview ? .dark : nil)
+                    .modifier(NativeAppearancePreview(enabled: model.isDarkAppearancePreview))
             }
             .frame(minWidth: 520, idealWidth: 560, minHeight: 580, idealHeight: 640)
         }
@@ -106,6 +106,21 @@ struct TalentSignalMacApp: App {
                 .accessibilityLabel("capri")
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// An absent preview must not emit a higher-level nil preference: SwiftUI
+/// would let that cancel the connected workspace's presentation preference.
+struct NativeAppearancePreview: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.preferredColorScheme(.dark)
+        } else {
+            content
+        }
     }
 }
 

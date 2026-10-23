@@ -121,16 +121,30 @@ function backendFetchTimeoutGuard() {
   return guard;
 }
 
-test("the backend dependency cache is opt-in and only imports the pnpm store", () => {
+test("the backend dependency cache only imports verified package stores before bootstrap", () => {
   const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
   assert.match(dockerfile, /^ARG PNPM_DEPENDENCY_CACHE_IMAGE=node:24-bookworm-slim$/m);
   assert.match(dockerfile, /^FROM \$\{PNPM_DEPENDENCY_CACHE_IMAGE\} AS dependency-cache$/m);
-  assert.match(dockerfile, /^RUN mkdir -p \/root\/\.local\/share\/pnpm\/store$/m);
+  assert.match(dockerfile, /^RUN mkdir -p \/root\/\.local\/share\/pnpm\/store \/root\/\.npm\/_cacache$/m);
   assert.deepEqual(
     [...dockerfile.matchAll(/^COPY --from=dependency-cache (.+)$/mg)].map((match) => match[1]),
-    ["/root/.local/share/pnpm/store /root/.local/share/pnpm/store"],
-    "only the dependency store may cross the cache-image boundary",
+    ["/root/.npm/_cacache /root/.npm/_cacache", "/root/.local/share/pnpm/store /root/.local/share/pnpm/store", "/root/.cache/pnpm/lockfile-verified.jsonl /root/.cache/pnpm/lockfile-verified.jsonl"],
+    "only package caches may cross the cache-image boundary",
   );
+  assert.match(dockerfile, /^RUN npm install --global pnpm@11\.18\.0 --prefer-offline$/m);
+  assert.ok(dockerfile.indexOf("COPY --from=dependency-cache /root/.npm/_cacache") < dockerfile.indexOf("RUN npm install --global"));
+});
+
+test("offline prepared-cache builds are explicit and reject malformed mode values", () => {
+  const dockerfile = readFileSync(join(repositoryRoot, "apps/backend/Dockerfile"), "utf8");
+  assert.match(dockerfile, /^ARG PNPM_INSTALL_OFFLINE=false$/m);
+  assert.match(dockerfile, /pnpm install --offline="\$PNPM_INSTALL_OFFLINE" --frozen-lockfile --ignore-scripts/);
+  const guard = dockerfile.match(/^RUN (case "\$PNPM_INSTALL_OFFLINE".*esac)$/m)?.[1];
+  assert.ok(guard);
+  for (const value of ["true", "false", "", "1", "TRUE", "false; exit 0"]) {
+    const result = spawnSync("/bin/sh", ["-c", guard], { env: { ...process.env, PNPM_INSTALL_OFFLINE: value } });
+    assert.equal(result.status, ["true", "false"].includes(value) ? 0 : 1);
+  }
 });
 
 test("the backend install has bounded transport settings without bypassing supply-chain checks", () => {
@@ -145,7 +159,7 @@ test("the backend install has bounded transport settings without bypassing suppl
   ]) {
     assert.ok(install.includes(flag), `the backend install must retain ${flag}`);
   }
-  assert.match(dockerfile, /^RUN npm install --global pnpm@11\.18\.0$/m);
+  assert.match(dockerfile, /^RUN npm install --global pnpm@11\.18\.0 --prefer-offline$/m);
   assert.match(dockerfile, /^ARG PNPM_REGISTRY=https:\/\/registry\.npmjs\.org$/m);
   assert.match(dockerfile, /^ARG PNPM_FETCH_TIMEOUT_MS=180000$/m);
   assert.doesNotMatch(dockerfile, /^ENV PNPM_FETCH_TIMEOUT_MS=/m);
@@ -153,7 +167,8 @@ test("the backend install has bounded transport settings without bypassing suppl
   assert.match(dockerfile, /&& pnpm config set --location=project --json networkConcurrency 4/);
   assert.match(dockerfile, /&& pnpm config set --location=project --json verifyStoreIntegrity true/);
   assert.match(dockerfile, /&& pnpm config set --location=project fetch-timeout "\$PNPM_FETCH_TIMEOUT_MS"/);
-  assert.match(dockerfile, /&& node apps\/agent\/scripts\/prefetch-native-runtime\.cjs\n\nRUN pnpm install/);
+  const prefetch = dockerfile.indexOf("&& node apps/agent/scripts/prefetch-native-runtime.cjs");
+  assert.ok(prefetch >= 0 && prefetch < dockerfile.indexOf("RUN pnpm install"));
   assert.match(dockerfile, /&& node apps\/agent\/scripts\/verify-native-runtime\.cjs/);
   assert.match(dockerfile, /^COPY apps\/agent\/scripts\/prefetch-native-runtime\.cjs apps\/agent\/scripts\/prefetch-native-runtime\.cjs$/m);
   assert.match(dockerfile, /^COPY apps\/agent\/scripts\/verify-dependency-cache\.cjs apps\/agent\/scripts\/verify-dependency-cache\.cjs$/m);
@@ -230,7 +245,7 @@ test("pnpm 11.18 uses bounded deadlines and numeric maxSockets in real frozen of
     assert.equal(rejected.status, 1);
     assert.match(rejected.stdout + rejected.stderr, /Unknown option: 'maxsockets'/);
     const installScript = `${backendFetchTimeoutGuard()} && printf 'INSTALL_REACHED\\n' \
-      && "$PNPM_TEST_BIN" install --frozen-lockfile --offline --ignore-scripts \
+      && "$PNPM_TEST_BIN" install --frozen-lockfile --offline=true --ignore-scripts \
       --store-dir="$PNPM_TEST_STORE" --fetch-timeout="$PNPM_FETCH_TIMEOUT_MS" --network-concurrency=4`;
     const validatedInstall = (value) => spawnSync("/bin/sh", ["-c", installScript], {
       cwd: fixture,
@@ -407,8 +422,8 @@ function resolvedVersions(name) {
 }
 
 test("resolved production repairs are recorded in the lockfile", () => {
-  assert.deepEqual(resolvedVersions("@modelcontextprotocol/sdk"), ["1.31.0"]);
-  assert.deepEqual(resolvedVersions("hono"), ["4.13.7"]);
+  assert.deepEqual(resolvedVersions("@modelcontextprotocol/sdk"), ["1.32.0"]);
+  assert.deepEqual(resolvedVersions("hono"), ["4.13.11"]);
   assert.deepEqual(resolvedVersions("ip-address"), ["10.7.1"]);
   assert.deepEqual(resolvedVersions("fast-uri"), ["3.1.8", "4.1.5"]);
   assert.deepEqual(resolvedVersions("source-map-js"), ["1.2.2"]);

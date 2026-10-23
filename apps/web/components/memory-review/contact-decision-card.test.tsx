@@ -58,12 +58,13 @@ describe("Session contact decision card", () => {
     expect(add).not.toHaveBeenCalled();
   });
 
-  it("does not preselect or create a person when identity is ambiguous", async () => {
+  it("allows an explicit separate new contact when a same-name record exists", async () => {
     await act(async () => render("ambiguous"));
     expect(mount.textContent).toContain("同名");
-    expect([...mount.querySelectorAll("button")].some((node) => node.textContent === "添加联系人")).toBe(false);
+    expect(add).not.toHaveBeenCalled();
     await act(async () => button("核对人物").click());
     expect(compare).toHaveBeenCalledTimes(1);
-    expect(add).not.toHaveBeenCalled();
+    await act(async () => button("添加为新联系人").click());
+    expect(add).toHaveBeenCalledWith("陈宇", "试点合作");
   });
 });

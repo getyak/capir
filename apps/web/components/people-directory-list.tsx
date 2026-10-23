@@ -1,3 +1,5 @@
+import { useT, useLocale, type TFunction } from "@/components/locale-provider";
+import type { MarketingLocale } from "@/lib/marketing-locale";
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
 import { ArrowRight } from "@phosphor-icons/react/dist/ssr/ArrowRight";
 import Link from "next/link";
@@ -8,13 +10,13 @@ import { PeopleDirectoryReturnList } from "./people-directory-return-list";
 
 type ListProps = { people: PersonDirectoryItem[]; query: string; returnSessionId: string | null };
 
-function formatActivity(value: string) {
+function formatActivity(value: string, locale: MarketingLocale, t: TFunction) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return "已有活动记录";
+    return t("已有活动记录");
   }
   const includeYear = date.getUTCFullYear() !== new Date().getUTCFullYear();
-  return new Intl.DateTimeFormat("zh-CN", {
+  return new Intl.DateTimeFormat(locale, {
     day: "numeric",
     month: "short",
     ...(includeYear ? { year: "numeric" } : {}),
@@ -22,37 +24,44 @@ function formatActivity(value: string) {
   }).format(date);
 }
 
-function identityHandleLabel(type: string) {
+function identityHandleLabel(type: string, t: TFunction) {
   const labels: Record<string, string> = {
     email: "邮箱", phone: "电话", wechat: "微信", linkedin_url: " LinkedIn",
     public_profile_url: "公开主页", source_native_id: "来源标识",
   };
-  return labels[type] ?? "联系方式";
+  return t(labels[type] ?? "联系方式");
 }
 
 function identityMatchLabel(
   match: PersonDirectoryItem["identity_matches"][number],
+  t: TFunction,
 ) {
   if (match.kind === "name") {
-    return "姓名匹配";
+    return t("姓名匹配");
   }
+  const handle = identityHandleLabel(match.handle_type, t);
   if (match.kind === "confirmed_handle") {
-    return `当前${identityHandleLabel(match.handle_type)}：${match.display_hint}`;
+    return t("当前{handle}：{hint}", { handle, hint: match.display_hint });
   }
-  return `历史${identityHandleLabel(match.handle_type)}：${match.display_hint}`;
+  return t("历史{handle}：{hint}", { handle, hint: match.display_hint });
 }
 
-function personChange(person: PersonDirectoryItem) {
+function personChange(person: PersonDirectoryItem, t: TFunction) {
   if (person.contexts.length > 1) {
-    return `${person.contexts.length} 个关系情境`;
+    return t("{count} 个关系情境", { count: person.contexts.length });
   }
   if (person.capture_count > 0) {
-    return `来源 ${person.capture_count} · 已确认线索 ${person.confirmed_identity_count}`;
+    return t("来源 {capture} · 已确认线索 {confirmed}", {
+      capture: person.capture_count,
+      confirmed: person.confirmed_identity_count,
+    });
   }
-  return "暂无已确认的来源";
+  return t("暂无已确认的来源");
 }
 
 function PersonRow({ person, query, returnSessionId }: { person: PersonDirectoryItem; query: string; returnSessionId: string | null }) {
+  const t = useT();
+  const locale = useLocale();
   const match = person.identity_matches[0];
   const context = person.contexts[0];
   return <>
@@ -66,19 +75,19 @@ function PersonRow({ person, query, returnSessionId }: { person: PersonDirectory
         <span className={styles.personName}>
           <strong>{person.display_label}</strong>
           <small>
-            {match ? identityMatchLabel(match) : person.profile?.headline ?? "身份待补充"}
+            {match ? identityMatchLabel(match, t) : person.profile?.headline ?? t("身份待补充")}
           </small>
         </span>
       </span>
       <span className={styles.personChange}>
         <span className={styles.contextLabel}>
-          {context?.display_label ?? "没有活跃情境"}
+          {context?.display_label ?? t("没有活跃情境")}
         </span>
-        <small>{personChange(person)}</small>
+        <small>{personChange(person, t)}</small>
       </span>
       <span className={styles.personMeta}>
         <time dateTime={person.last_activity_at}>
-          {formatActivity(person.last_activity_at)}
+          {formatActivity(person.last_activity_at, locale, t)}
         </time>
         <ArrowRight aria-hidden="true" size={15} />
       </span>

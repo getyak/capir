@@ -1,0 +1,86 @@
+{
+  "status": "Core deployed and actual Web/native Escape verified; narrow inspector correction reviewed and tested, awaiting deployment; final restart proof pending",
+  "review_diff_sha256": "e2c1b31de7b2725d3a9610dfca1be7f5b119a81257ded1f179b1685aeacb9da6",
+  "pi_task": "20261020-050334-0975503a",
+  "pi_final_credits_estimate": 95779072,
+  "credit_unit": "MiMo Token Plan Credits estimate, not USD",
+  "parent_tests": {
+    "files": 8,
+    "tests": 108,
+    "started_local": "2026-10-20 06:07:50 +08:00",
+    "passed": true
+  },
+  "parent_lint": "passed",
+  "parent_typecheck": "passed",
+  "tdd_capture_checkpoint": "Old patch fails strengthened real-event-order regression; final patch passes.",
+  "actual_ui": {
+    "local_390_chrome": "Escape dirty confirm cancel preserves exact synthetic title; confirm close removes editor and returns Add; no Save performed. Native select Escape closes its menu first.",
+    "local_390_iab": "Pristine Escape closes editor and focuses Add. Dirty confirm blocks IAB control; not counted as passed and target retained.",
+    "unknown_save_fallback": "Unit integration only: unchanged pending receipt and enabled recovery-action focus; no actual save attempted.",
+    "resident_390_chrome": "Pristine Escape removes editor and inspector; actual focus returns to Add. Normal list subsequently settles with 12 synthetic records and no service notice. DevTools export itself moves browser focus.",
+    "resident_native": "Pristine Escape closes editor and returns visible Add focus at 1123 and 900. A persistent 44px empty inspector at 900 clears after resize; its new explicit display-state correction is reviewed and tested but not yet deployed."
+  },
+  "screenshot": {
+    "web-390-dirty-cancel.png": {
+      "viewport_css": [
+        390,
+        844
+      ],
+      "png": [
+        780,
+        1688
+      ],
+      "dpr": 2,
+      "source": "Chrome native DevTools Capture screenshot"
+    },
+    "web-390-escape-before.png": {
+      "viewport_css": [
+        390,
+        844
+      ],
+      "png": [
+        780,
+        1688
+      ],
+      "dpr": 2,
+      "source": "resident576a1b8b; Chrome native DevTools capture; pristine Escape retains editor"
+    }
+  },
+  "native_before": {
+    "revision": "576a1b8b914fdeb2494273690f04f88b589cf43e",
+    "binary": "0.2.8 (125)",
+    "account": "primary authorized workspace; empty schedule day",
+    "records": 0,
+    "windows": [
+      [
+        1123,
+        865
+      ],
+      [
+        900,
+        720
+      ]
+    ],
+    "action": "Pristine title focus + Escape retains editor at both sizes; blank Close control used after capture; no values entered or saved.",
+    "restored_window": [
+      1123,
+      865
+    ]
+  },
+  "resident": {
+    "revision": "0dd218319a9f4b661a9efbcb4d9cdecc368ae9a4",
+    "build_id": "SniPHYkFXvRdf_rI_dZEb",
+    "activation_seconds": 37.47,
+    "rollback": false,
+    "https_login": "200; certificate validation 0",
+    "api_readiness": "/health/ready 200; the earlier /health probe returned 404 and is not readiness evidence",
+    "restart": "pending final narrow correction deployment"
+  },
+  "narrow_inspector_correction": {
+    "review_diff_sha256": "b4d5163508ba5997cc6a379f7f6da06427828a74024ba364c226af13effe8581",
+    "tests": 40,
+    "lint": "passed",
+    "files": 2,
+    "scope": "data-open derived from existing editor/selectedActivity; replace two :has display rules; no state, requests or persistence changes"
+  }
+}

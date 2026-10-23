@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import Link from "next/link";
 import type {
   MemoryProposalRecord,
@@ -28,16 +29,15 @@ export function PursuitMemoryReview({
   pursuitId: string;
   scopes: PursuitMemoryScopeEntry[];
 }) {
+  const t = useT();
   return (
     <section aria-labelledby="pursuit-memory-heading">
       <header>
-        <p>关系记忆</p>
-        <h2 id="pursuit-memory-heading">当前目标的待确认变化</h2>
+        <p>{t("关系记忆")}</p>
+        <h2 id="pursuit-memory-heading">{t("当前目标的待确认变化")}</h2>
       </header>
       {scopes.length === 0 ? (
-        <p>
-          尚无可关联的关系记忆。可以回到人物目录查看已保存的关系；
-          <Link href="/workspace/people">打开人物</Link>。
+        <p>{t("尚无可关联的关系记忆。可以回到人物目录查看已保存的关系；")}<Link href="/workspace/people">{t("打开人物")}</Link>。
         </p>
       ) : (
         scopes.map((scope) => (
@@ -47,7 +47,7 @@ export function PursuitMemoryReview({
               {scope.relationship_display_label ? ` · ${scope.relationship_display_label}` : ""}
             </h3>
             {scope.proposals.length === 0 ? (
-              <p>没有等待确认的变化。</p>
+              <p>{t("没有等待确认的变化。")}</p>
             ) : (
               scope.proposals.map((proposal) => (
                 <MemoryReviewCard

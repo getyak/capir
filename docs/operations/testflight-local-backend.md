@@ -152,9 +152,21 @@ For a prepared image on a constrained connection, the optional build-only
 cache image. Its default is the Node24 base with an empty store. Admit only a
 trusted image for the target Linux architecture and pnpm11.18 store format;
 record and check its actual image ID before and after the build rather than
-trusting a mutable tag. The cache stage copies only the pnpm store, never
-installed modules, application source, dist or environment files. The builder
-explicitly enables store-file integrity verification; cache presence does not
+trusting a mutable tag. The cache stage copies only the pnpm store, npm's
+content-addressed download cache and pnpm's lockfile-policy verification receipts.
+It never imports installed modules, application source, dist or environment files.
+The builder bootstraps the pinned pnpm version from npm's cached downloads with integrity checks
+and prefer-offline behavior; a missing package still uses the official registry.
+Validate a chosen image's cached bootstrap without networking before relying on
+it on a constrained connection. pnpm validates the receipts against the current
+lockfile and policy. The
+default install still uses normal official-registry fallback. A prepared complete
+cache may explicitly set `--build-arg PNPM_INSTALL_OFFLINE=true` after a fresh
+network-disabled install of the exact manifests and required native execution
+have passed. This build-only mode fails on missing required dependencies and
+does not bypass the frozen graph, supply-chain policies or native gate. Missing
+optional packages are not evidence that the required Agent runtime is usable.
+The builder explicitly enables store-file integrity verification; cache presence does not
 replace the current frozen graph, complete supply-chain policy or native gate.
 pnpm11.18 has a timestamp fast path, so the builder additionally streams and
 hashes incoming v11 content-addressed files before prefetch, independently of
@@ -205,7 +217,18 @@ Never write credentials into a LaunchAgent or source checkout.
 Before each host production build, apply the local storage guard. Check actual
 free bytes again after dependency preparation; a printed audit warning is not
 a gate and an unrelated log warning must not be mistaken for sufficient space.
-When local policy requires 30 GiB, stop below that threshold. Do not chain an
+When local policy requires 30 GiB, stop below that threshold. Audit the Docker
+VM's data filesystem separately (`colima ssh -- df -k /var/lib/docker`): free
+space on the Mac does not establish free space inside that volume. Reserve
+room for image layers, temporary build snapshots and database/WAL writes before
+building, then recheck before activation. A full Docker volume can stop
+PostgreSQL writes while the Mac still has ample space. Stop the build on
+insufficient VM capacity; reclaim only independently verified, unused,
+reproducible caches by exact ID, preserving volumes, active images and immediate
+rollback releases. A cache parent may remain until its unused descendants are
+also selected; never use a global volume prune to release build space.
+
+Do not chain an
 unchecked audit and build. Follow the global artifact-cleanup policy: independently
 verify that a task is complete and its output is reproducible before removing
 registered artifacts, including completed work from other projects. Preserve
@@ -260,7 +283,15 @@ Logs are under `~/Library/Logs/Talent Signal/web`; the active revision is in
 `web/active-release.json`. Retain the previous release for rollback. Do not
 rebuild, modify, or remove the live release worktree. After switching, verify
 Tailscale HTTPS login, an authenticated workspace request, and launchd restart
-recovery. The Mac must be awake and the owning user logged in; clients must
+recovery. Each activation retains private `web/readiness-last.json`: candidate revision/build ID,
+probe count, elapsed time, bounded category counts and last HTTP status. It separates
+transport/timeout, HTTP errors, invalid/missing password providers and listener
+ownership failures without storing response bodies, URLs, exception text or secrets.
+A provider probe is only the activation gate; protected login/workspace and native
+recovery still require their own acceptance. The existing45-probe, ownership,
+clean-receipt and rollback gates remain mandatory.
+
+The Mac must be awake and the owning user logged in; clients must
 join the authorized tailnet. Physical Wi-Fi/LAN address changes do not change
 `AUTH_URL`. Never automatically replace it with a `192.168.x.x` address.
 

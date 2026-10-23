@@ -545,6 +545,26 @@ jobs:
           RESULT_BUNDLE_PATH: ${{ github.workspace }}/build/ios/TestResults.xcresult
         run: ./scripts/ios/check.sh
 
+      - name: Export Agent settings navigation evidence
+        if: always()
+        run: |
+          for bundle in build/ios/TestResults.parts/*-testAgentAndWorkspaceSettings*.xcresult; do
+            [ -d "$bundle" ] || continue
+            label="$(basename "$bundle" .xcresult)"
+            xcrun xcresulttool export attachments \
+              --path "$bundle" \
+              --output-path "build/ios/navigation-evidence/$label"
+          done
+
+      - name: Preserve Agent settings navigation evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ios-navigation-evidence-${{ github.run_id }}
+          path: build/ios/navigation-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Preserve failed test results
         if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

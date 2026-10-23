@@ -249,7 +249,7 @@ export function firstContactNameCandidate(input: {
   sourceWarning?: "ai_generated_or_fictional";
 }): MemoryProposalCandidateInput | null {
   const name = input.name.normalize("NFKC").trim();
-  const excerpt = input.nameExcerpt.normalize("NFKC").trim();
+  const excerpt = input.nameExcerpt.normalize("NFKC").replace(/\s+/gu," ").trim();
   if (!name || !excerpt || !excerpt.includes(name) || name.length > 200) return null;
   return {
     scope: "person",

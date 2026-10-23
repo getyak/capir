@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type Dispatch } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, ArrowCounterClockwise, ArrowUpRight, Check, LinkSimple, Pause, Play, Trash, Image as ImageIcon, CaretLeft, DotsThree } from "@phosphor-icons/react";
 import type { MarketingLocale } from "@/lib/marketing-locale";
+import { translate } from "@/lib/i18n";
 import { siteConfig } from "@/lib/site";
 import { useReducedMotionPreference } from "@/lib/use-reduced-motion";
 import type { PersonalAgentDemoState, PersonalAgentDemoEvent } from "@/lib/personal-agent-demo";
@@ -49,8 +50,7 @@ function noteNarrative(state: PersonalAgentDemoState, t: Translate) {
  * one path onward; every interaction stays in the single full demo below.
  */
 export function PersonalAgentDemoCover({ locale, state }: { locale: MarketingLocale; state: PersonalAgentDemoState }) {
-  const en = locale === "en";
-  const t: Translate = (zh, english) => en ? english : zh;
+  const t: Translate = (zh, english) => translate(locale, zh, undefined, english);
   const note = noteNarrative(state, t);
   const later = state.newReply || state.updateConfirmed;
   return <div className={s.coverScene} aria-label={t("合成对话与待确认的关系笔记", "Synthetic conversation and a relationship note awaiting review")}>
@@ -84,8 +84,7 @@ export function PersonalAgentDemoCover({ locale, state }: { locale: MarketingLoc
 }
 
 export function PersonalAgentDemo({ locale, state, dispatch }: { locale: MarketingLocale; state: PersonalAgentDemoState; dispatch: Dispatch<PersonalAgentDemoEvent> }) {
-  const en = locale === "en";
-  const t: Translate = (zh, english) => en ? english : zh;
+  const t: Translate = (zh, english) => translate(locale, zh, undefined, english);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);
   const reduced = useReducedMotionPreference();

@@ -5,14 +5,22 @@
  * the workspace rail, header and account controls are owned by the shell.
  * The native macOS settings scene hides this inner navigation through
  * `html[data-desktop-surface="settings"]` because it renders its own rail.
+ *
+ * Type scale: 24px page titles / 15-18px section headings / 15px body,
+ * labels and actions / 13px metadata, status and scope labels.
  */
 
 .page {
   color: var(--ink);
+  font-size: 15px;
   margin: 0 auto;
   max-width: 1240px;
-  padding: 40px 30px 80px;
+  padding: 40px 30px;
   width: 100%;
+}
+
+@media (min-width: 761px) and (max-height: 720px) {
+  .page { padding-block: 24px; }
 }
 
 .layout {
@@ -31,11 +39,15 @@
 }
 
 .sidebarHeading {
-  font-size: 1.25rem;
+  font-size: 1.125rem;
   font-weight: 600;
   letter-spacing: 0;
   line-height: 1.3;
   margin: 0 0 14px;
+}
+
+.categoryTrigger {
+  display: none;
 }
 
 .search {
@@ -51,12 +63,16 @@
   color: var(--muted);
   display: flex;
   gap: 8px;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 10px;
+  transition: border-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease);
 }
 
+/* The field input hides its own outline; the field carries one clear 2px ring. */
 .searchField:focus-within {
   border-color: var(--ink);
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .searchField input {
@@ -65,7 +81,7 @@
   color: var(--ink);
   flex: 1;
   font: inherit;
-  font-size: 14px;
+  font-size: 15px;
   min-height: 38px;
   min-width: 0;
   outline: none;
@@ -81,7 +97,7 @@
   border-radius: 5px;
   color: var(--muted);
   font: inherit;
-  font-size: 11px;
+  font-size: 13px;
   padding: 2px 5px;
 }
 
@@ -129,14 +145,14 @@
 
 .searchResultText strong {
   display: block;
-  font-size: 14px;
-  font-weight: 550;
+  font-size: 15px;
+  font-weight: 500;
 }
 
 .searchResultText small {
   color: var(--muted);
   display: block;
-  font-size: 12.5px;
+  font-size: 15px;
   line-height: 1.5;
   margin-top: 3px;
 }
@@ -154,23 +170,23 @@
   border: 1px solid var(--line);
   border-radius: 999px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
   padding: 1px 8px;
-  white-space: nowrap;
 }
 
 .searchDestination {
   align-items: center;
   color: var(--muted);
   display: inline-flex;
-  font-size: 12px;
+  font-size: 13px;
   gap: 4px;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .searchEmpty {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.7;
   padding: 14px 10px;
 }
@@ -198,15 +214,31 @@
   border-radius: 8px;
   color: var(--muted);
   display: flex;
-  font-size: 14px;
-  min-height: 40px;
+  gap: 12px;
+  justify-content: space-between;
+  font-size: 15px;
+  min-height: 44px;
   padding: 9px 12px;
   text-decoration: none;
+  transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), color var(--workspace-transition-duration, 180ms) var(--ease-out, ease);
+}
+
+.navigation a span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.navigation a svg {
+  flex-shrink: 0;
 }
 
 .navigation a:hover {
   background: var(--surface-muted);
   color: var(--ink);
+}
+
+.navigation a:active {
+  background: var(--surface-strong);
 }
 
 .navigation a[aria-current="page"] {
@@ -233,7 +265,7 @@
 
 .breadcrumb {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 13px;
   margin: 0 0 8px;
 }
 
@@ -245,9 +277,14 @@
   margin: 0;
 }
 
+.heading h2:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 4px;
+}
+
 .hint {
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: 15px;
   line-height: 1.6;
   margin: 6px 0 0;
 }
@@ -257,9 +294,9 @@
   border-radius: 999px;
   color: var(--muted);
   flex-shrink: 0;
-  font-size: 12.5px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
   padding: 6px 12px;
-  white-space: nowrap;
 }
 
 /* Display-only pairing: the macOS Settings scene says "this Mac", the Web
@@ -302,14 +339,14 @@
 
 .boundary li strong {
   display: block;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   margin: 10px 0 4px;
 }
 
 .boundary li p {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.55;
   margin: 0;
 }
@@ -320,7 +357,7 @@
   border-radius: 50%;
   color: var(--accent);
   display: inline-flex;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   height: 26px;
   justify-content: center;
@@ -336,6 +373,11 @@
   min-height: 72px;
   padding: 18px 4px;
   text-decoration: none;
+  transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease);
+}
+
+.destination > span:first-child {
+  min-width: 0;
 }
 
 .destination + .destination {
@@ -346,16 +388,20 @@
   background: var(--surface-muted);
 }
 
+.destination:active {
+  background: var(--surface-strong);
+}
+
 .destination strong {
   display: block;
-  font-size: 14px;
-  font-weight: 550;
+  font-size: 15px;
+  font-weight: 500;
 }
 
 .destination small {
   color: var(--muted);
   display: block;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.6;
   margin-top: 5px;
 }
@@ -371,14 +417,14 @@
 .destinationBadge {
   border: 1px solid var(--line);
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
   padding: 2px 9px;
-  white-space: nowrap;
 }
 
 .destinationNote {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 15px;
   line-height: 1.7;
   margin: 14px 4px 0;
 }
@@ -389,14 +435,14 @@
 }
 
 .devicePermissions h3 {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   margin: 0;
 }
 
 .devicePermissions p {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.7;
   margin: 0;
 }
@@ -439,7 +485,7 @@
 }
 
 .versionHead strong {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -454,14 +500,14 @@
   color: var(--muted);
   display: flex;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: 13px;
   gap: 2px 14px;
   line-height: 1.45;
   margin: 0;
 }
 
 .versionStatus {
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.45;
   margin: 0;
 }
@@ -482,15 +528,20 @@
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  font-size: 12px;
+  font-size: 15px;
   gap: 6px;
-  min-height: 34px;
+  min-height: 44px;
   padding: 5px 11px;
   text-decoration: none;
+  transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), border-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), opacity var(--workspace-transition-duration, 180ms) var(--ease-out, ease);
 }
 
-.versionRefresh:hover {
+.versionRefresh:hover:not(:disabled) {
   background: var(--surface-muted);
+}
+
+.versionRefresh:active:not(:disabled) {
+  background: var(--surface-strong);
 }
 
 .versionRefresh:disabled {
@@ -517,7 +568,7 @@
 
 .callout p {
   color: color-mix(in srgb, var(--background) 72%, transparent);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.6;
   margin: 6px 0 0;
 }
@@ -527,7 +578,7 @@
   color: var(--background);
   display: inline-flex;
   flex-shrink: 0;
-  font-size: 13.5px;
+  font-size: 15px;
   gap: 6px;
   text-decoration: none;
   white-space: nowrap;
@@ -550,6 +601,15 @@
   font: inherit;
   padding: 8px;
   text-align: left;
+  transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), border-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease);
+}
+
+.themes button:hover {
+  background: var(--surface-muted);
+}
+
+.themes button:active {
+  background: var(--surface-strong);
 }
 
 .themes button[aria-checked="true"] {
@@ -635,7 +695,7 @@
   display: flex;
   gap: 7px;
   padding: 12px 5px 5px;
-  font-size: 13.5px;
+  font-size: 15px;
 }
 
 .themeName {
@@ -644,7 +704,7 @@
 
 .themeName small {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13px;
   margin-top: 1px;
 }
 
@@ -652,7 +712,7 @@
   align-items: center;
   color: var(--accent);
   display: inline-flex;
-  font-size: 12px;
+  font-size: 13px;
   gap: 2px;
   margin-left: auto;
   white-space: nowrap;
@@ -661,7 +721,7 @@
 .scopeNote,
 .sampleNote {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 15px;
   line-height: 1.7;
   margin: 14px 0 0;
 }
@@ -684,7 +744,7 @@
 }
 
 .sampleHead strong {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -695,13 +755,13 @@
 
 .sampleHead small {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 13px;
   margin-left: auto;
 }
 
 .sampleLine {
   border-top: 1px solid var(--line-soft);
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.6;
   margin: 16px 0 0;
   padding-top: 16px;
@@ -711,7 +771,7 @@
   align-items: center;
   color: var(--muted);
   display: inline-flex;
-  font-size: 12.5px;
+  font-size: 13px;
   gap: 5px;
   margin: 12px 0 0;
 }
@@ -743,7 +803,7 @@
 
 .errorNote {
   color: var(--accent);
-  font-size: 12.5px;
+  font-size: 15px;
   line-height: 1.6;
   margin: 0;
 }
@@ -768,9 +828,18 @@
   color: var(--ink);
   cursor: pointer;
   font: inherit;
-  font-size: 14px;
-  min-height: 40px;
+  font-size: 15px;
+  min-height: 44px;
   padding: 8px 18px;
+  transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), border-color var(--workspace-transition-duration, 180ms) var(--ease-out, ease), opacity var(--workspace-transition-duration, 180ms) var(--ease-out, ease);
+}
+
+.actionButtons button:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.actionButtons button:active:not(:disabled) {
+  background: var(--surface-strong);
 }
 
 .actionButtons button:disabled {
@@ -784,6 +853,10 @@
   color: var(--background) !important;
 }
 
+.actionButtons .primaryButton:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
 /* ── Shared rows and states ───────────────────────────────────────────── */
 
 .row {
@@ -795,7 +868,7 @@
 }
 
 .row span {
-  font-size: 13.5px;
+  font-size: 15px;
 }
 
 .rowValue {
@@ -812,7 +885,7 @@
 
 .disclosure {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.7;
 }
 
@@ -828,12 +901,13 @@
 }
 
 .unavailable h3 {
-  font-size: 16px;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .unavailable p {
   color: var(--muted);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.7;
   margin: 12px 0;
 }
@@ -847,7 +921,7 @@
 .unavailable a {
   align-items: center;
   display: inline-flex;
-  font-size: 14px;
+  font-size: 15px;
   gap: 6px;
   min-height: 44px;
   text-decoration: underline;
@@ -884,7 +958,7 @@
 
 @media (max-width: 1000px) {
   .page {
-    padding: 28px 24px 64px;
+    padding: 28px 24px;
   }
   .layout {
     column-gap: 24px;
@@ -899,21 +973,78 @@
     display: block;
   }
   .sidebar {
-    margin-bottom: 24px;
-    position: static;
+    margin-bottom: 20px;
+    position: relative;
+    top: auto;
+  }
+  .sidebarHeading,
+  .breadcrumb {
+    display: none;
+  }
+  .categoryTrigger {
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--ink);
+    display: flex;
+    font: inherit;
+    gap: 12px;
+    min-height: 44px;
+    padding: 10px 12px;
+    text-align: start;
+    width: 100%;
+  }
+  .categoryContext {
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .categoryLabel {
+    flex: 1;
+    font-weight: 600;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .categoryTrigger svg {
+    flex-shrink: 0;
+  }
+  .categoryTrigger[aria-expanded="true"] svg {
+    transform: rotate(180deg);
+  }
+  .categoryPanel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 14px 34px color-mix(in srgb, var(--ink) 12%, transparent);
+    display: none;
+    inset-inline: 0;
+    max-height: min(70dvh, 520px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px;
+    position: absolute;
+    top: calc(100% + 8px);
+    z-index: 20;
+  }
+  .sidebar[data-open="true"] .categoryPanel {
+    display: block;
   }
   .search {
-    max-width: 260px;
+    margin-bottom: 8px;
+  }
+  .searchPanel {
+    box-shadow: none;
+    margin-top: 8px;
+    max-height: none;
+    position: static;
+    width: 100%;
   }
   .navigation {
-    display: grid;
-    gap: 4px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
   .navigation a {
-    justify-content: center;
     min-width: 0;
-    text-align: center;
+    text-align: start;
   }
   .content {
     max-width: none;
@@ -931,6 +1062,10 @@
 }
 
 @media (max-width: 760px) {
+  /* 16px keeps mobile search and form entry free of focus zoom. */
+  .searchField input {
+    font-size: 16px;
+  }
   .searchResult {
     align-items: flex-start;
     flex-direction: column;
@@ -942,6 +1077,15 @@
     flex-wrap: wrap;
     text-align: left;
   }
+  /* Long workspace badges wrap instead of pushing the row past the page. */
+  .destination {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px 24px;
+  }
+  .destinationMeta {
+    flex-wrap: wrap;
+  }
   .page {
     padding: 20px 20px 80px;
   }
@@ -949,11 +1093,7 @@
     display: block;
   }
   .sidebar {
-    margin-bottom: 28px;
-    position: static;
-  }
-  .navigation {
-    gap: 4px;
+    margin-bottom: 20px;
   }
   .scopePill {
     align-self: flex-start;
@@ -986,7 +1126,76 @@
   }
 }
 
+@media (forced-colors: active) {
+  .categoryTrigger,
+  .categoryPanel {
+    border-color: ButtonBorder;
+  }
+  .navigation a[aria-current="page"] {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
+  }
+  /* Filled and selected controls use the system palette without Canvas
+   * backplates; selection keeps its ring, check icon and label. */
+  .primaryButton,
+  .primaryButton:hover:not(:disabled),
+  .primaryButton:active:not(:disabled) {
+    background: ButtonText !important;
+    border-color: ButtonText !important;
+    color: ButtonFace !important;
+    forced-color-adjust: none;
+    opacity: 1;
+  }
+  .themes button,
+  .themes button:hover,
+  .themes button:active {
+    background: ButtonFace;
+    border-color: ButtonBorder;
+    color: ButtonText;
+  }
+  .themes button[aria-checked="true"],
+  .themes button[aria-checked="true"]:hover,
+  .themes button[aria-checked="true"]:active {
+    background: Highlight;
+    border-color: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+  .themes button[aria-checked="true"] .themeName small,
+  .themes button[aria-checked="true"] .themeSelected {
+    color: HighlightText;
+  }
+  .callout {
+    background: Canvas;
+    border: 1px solid ButtonBorder;
+    color: ButtonText;
+    forced-color-adjust: none;
+  }
+  .callout p,
+  .callout a {
+    color: ButtonText;
+  }
+  .searchField:focus-within,
+  .heading h2:focus-visible,
+  .page :is(a, button, summary):focus-visible {
+    outline-color: Highlight;
+  }
+  .versionRefresh,
+  .versionRefresh:hover:not(:disabled),
+  .versionRefresh:active:not(:disabled) {
+    background: ButtonFace;
+    border-color: ButtonBorder;
+    color: ButtonText;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .page *,
+  .page *::before,
+  .page *::after {
+    animation: none !important;
+    transition: none !important;
+  }
   .searchPanel {
     scroll-behavior: auto;
   }

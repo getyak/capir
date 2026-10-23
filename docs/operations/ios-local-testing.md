@@ -158,3 +158,72 @@ teardown, and shutdown/readback/inventory cleanup failures.
 `bash -n scripts/ios/check.sh` checks the integration syntax. The session's real
 behavior on a device is observed through the ordinary `check.sh` output and
 result bundles.
+
+## Opt-in live account journey
+
+The `LiveConversationFlowUITests`, `LiveImageFlowUITests`, and
+`LiveAccountFlowUITests` suites are opt-in acceptance against an explicit
+backend and authorized password account. Missing environment inputs skip the
+tests; a skip is not a live pass. Follow
+[account access](account-access.md) before using a long-lived workspace. Use
+synthetic content only and verify the native Account screen's exact email before
+sending it. These tests do not exercise Apple/Google sign-in or TestFlight
+distribution.
+
+Build for testing once with normal Simulator signing, then run
+`test-without-building` inside the selected `dev-ios-session`. Pass
+`TEST_RUNNER_TS_IOS_LIVE_BACKEND_URL`, `TEST_RUNNER_TS_IOS_LIVE_EMAIL`, and
+`TEST_RUNNER_TS_IOS_LIVE_PASSWORD` to `xcodebuild` through a private process
+environment, never literal command arguments or tracked files. Treat runner
+configuration, logs, recordings, and result bundles as private: XCTest can log
+typed text. Keep only sanitized receipts after acceptance.
+
+Run the journey in this order:
+
+1. From signed-out state, `LiveConversationFlowUITests/testLiveKeyboardSignInAndIdentity`
+   verifies keyboard Next/Go submission and the exact native identity without
+   saving credentials in Passwords. Then
+   `LiveConversationFlowUITests/testLiveTextRoundTripAndDraftRecovery` performs
+   ordinary email sign-in when needed, verifies identity, sends one unique
+   synthetic text request, checks an Agent response, and verifies the sent
+   conversation and unsent draft after relaunch.
+2. `LiveImageQuestionUITests/testInspectedVisualAnswerFollowupAndRelaunch` verifies
+   ordinary inline image questions through the existing governed conversation
+   queue. Use a synthetic image with two differently colored panels and distinct
+   word/code pairs. Set `TS_IOS_LIVE_STAGE_IMAGE=synthetic-visual-question`,
+   `TS_IOS_LIVE_QUESTION_MARKER=ios-vision-<unique-run>`,
+   `TS_IOS_LIVE_QUESTION_WORD=ORBIT`, and `TS_IOS_LIVE_QUESTION_CODE=734` for the
+   inspected blue panel; the red panel contains `COMET 219`. The prompt must not
+   include the expected answer. The follow-up asks about the other panel through
+   the same queue and Session, so transcript echo alone cannot pass.
+   Start `python3 scripts/ios/live-image-inspection.py <private-artifact-dir>`;
+   privately pass `TS_IOS_LIVE_INSPECTION_URL` and `TS_IOS_LIVE_INSPECTION_NONCE`
+   to the runner (with `TEST_RUNNER_` prefixes for `xcodebuild`). Inspect the
+   actual `selected-image.png` before copying `inspection-challenge.private`
+   to `inspection-approved.private`. Approval binds one screenshot digest and
+   fresh challenge. The native test sends the image exactly once, verifies both
+   visual answers, then relaunches the same Session with an unsent draft and
+   opens its authenticated original with native zoom. Read back the exact
+   Session/message/task and product run, compare original bytes against the
+   immutable manifest, and check for unintended record/effect creation.
+
+   Preserve a failed attempt and investigate its exact admission before another
+   test. `testExistingVisualReplyRecovery` takes the explicit
+   `TS_IOS_LIVE_IMAGE_SESSION_ID` plus the same marker/expected-answer inputs;
+   it reopens the existing reply and original without upload or model retry.
+   Pending image recovery is local-only: relaunch checks the original message,
+   and a transport-uncertain send can be checked with the same ordered images,
+   filenames, hashes, message/key and timezone. It must never resume as plain
+   text on this or another device. Legacy screenshot receipts remain readable
+   with `LiveImageFlowUITests/testExistingImageReceiptAndSourceAreRecoverable`;
+   they are a separate intake path and cannot establish visual Q&A. Stop the
+   owned loopback inspection helper after the attempt.
+3. `LiveAccountFlowUITests/testLiveNavigationAndSignOut` verifies People,
+   Sessions, Today and Account, then signs out and verifies the signed-out
+   state after relaunch. Run it last because it revokes the native session.
+
+Use only the narrow suite needed while iterating. The offline
+`AuthenticationWelcomeUITests` cover tap/short-pull behavior and keyboard
+progression with synthetic credentials; they do not establish a live login.
+`LiveProtectedStorageTests` checks only protected-store status metadata for the
+explicit endpoint and never exposes its contents.

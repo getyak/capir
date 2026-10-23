@@ -101,7 +101,7 @@ struct AuthenticationPortraits: View, Animatable {
                         .position(AuthenticationPortraitLayout.position(index, progress: layoutProgress, size: geometry.size))
                 }
                 sourceCard
-                    .frame(width: typeSize.isAccessibilitySize ? geometry.size.width - 48 : 228)
+                    .frame(width: typeSize.isAccessibilitySize ? max(0, geometry.size.width - 48) : 228)
                     .scaleEffect(reduceMotion ? 1 : 1 - progress * 0.15)
                     .rotationEffect(.degrees(reduceMotion ? 0 : -4 * (1 - progress)))
                     .shadow(color: Color.tsInk.opacity(0.06 + 0.05 * Double(progress)),

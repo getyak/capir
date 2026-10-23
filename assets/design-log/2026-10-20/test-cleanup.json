@@ -1,0 +1,9 @@
+{
+  "run_id": "45910cd3-e607-4f06-9041-b7a3d70964be",
+  "stop_ok": true,
+  "state": "deleted",
+  "cleanup_error": null,
+  "credential_removed": true,
+  "journal_status": "completed",
+  "status_read_only": true
+}

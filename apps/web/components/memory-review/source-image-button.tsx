@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useState } from "react";
 import { workspaceSessionFetch } from "../workspace-session-request";
@@ -15,6 +16,7 @@ export type SourceImage = {
 };
 
 export function SourceImageButton({ source }: { source: SourceImage }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -48,20 +50,20 @@ export function SourceImageButton({ source }: { source: SourceImage }) {
     setOpen(next);
     if (!next) { setUrl(null); setFailed(false); }
   }}>
-    <Dialog.Trigger asChild><button className={styles.actionSourceImage} type="button">查看原图</button></Dialog.Trigger>
+    <Dialog.Trigger asChild><button className={styles.actionSourceImage} type="button">{t("查看原图")}</button></Dialog.Trigger>
     <Dialog.Portal>
       <Dialog.Overlay className={styles.sourceImageBackdrop}/>
       <Dialog.Content className={styles.sourceImageDialog} aria-describedby={undefined}>
-        <Dialog.Title>来源原图</Dialog.Title>
-        <Dialog.Close asChild><button type="button" aria-label="关闭原图">关闭</button></Dialog.Close>
+        <Dialog.Title>{t("来源原图")}</Dialog.Title>
+        <Dialog.Close asChild><button type="button" aria-label={t("关闭原图")}>{t("关闭")}</button></Dialog.Close>
         {url ? <div className={styles.sourceImageFrame}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={source.fileName} src={url}/>
-          {source.region ? <span aria-label="引用区域" className={styles.sourceImageRegion} style={{
+          {source.region ? <span aria-label={t("引用区域")} className={styles.sourceImageRegion} style={{
             left: `${source.region.x * 100}%`, top: `${source.region.y * 100}%`,
             width: `${source.region.width * 100}%`, height: `${source.region.height * 100}%`,
           }}/> : null}
-        </div> : <p role={failed ? "alert" : "status"}>{failed ? "原图暂时无法读取，请关闭后重试。" : "正在读取原图…"}</p>}
+        </div> : <p role={failed ? "alert" : "status"}>{failed ? t("原图暂时无法读取，请关闭后重试。") : t("正在读取原图…")}</p>}
       </Dialog.Content>
     </Dialog.Portal>
   </Dialog.Root>;

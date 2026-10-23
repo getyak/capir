@@ -1,0 +1,15 @@
+{
+  "nav.skipToContent": "跳到主要内容",
+  "language.section.title": "语言",
+  "language.display.label": "界面语言",
+  "language.display.hint": "更改此账号在所有设备上的界面语言。默认跟随系统语言。",
+  "language.option.system": "跟随系统",
+  "language.prompt.label": "助手回复语言",
+  "language.prompt.hint": "只改变助手写作使用的语言。已保存的证据、来源摘录与引用对话仍保持原文。",
+  "language.prompt.systemHint": "自动时按当前请求的语言回复，只影响助手生成的内容。",
+  "language.save": "保存",
+  "language.saved": "已保存。",
+  "language.unavailable": "此工作空间尚未启用回复偏好。",
+  "language.prompt.option.system": "自动（当前请求）",
+  "暂时连不上服务，请重试。": "暂时连不上服务，请重试。"
+}

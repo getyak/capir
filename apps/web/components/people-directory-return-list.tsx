@@ -1,5 +1,6 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
 import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { personDirectoryEntryId } from "./people-directory-navigation";
@@ -8,6 +9,7 @@ export function PeopleDirectoryReturnList({ children, className }: {
   children: ReactNode;
   className: string;
 }) {
+  const t = useT();
   const list = useRef<HTMLOListElement>(null);
   const pathname = usePathname();
 
@@ -41,5 +43,5 @@ export function PeopleDirectoryReturnList({ children, className }: {
     try { window.history.replaceState(window.history.state, "", current.href); } catch { /* Explicit return remains available. */ }
   }
 
-  return <ol ref={list} className={className} aria-label="联系人列表" onClickCapture={rememberEntry}>{children}</ol>;
+  return <ol ref={list} className={className} aria-label={t("联系人列表")} onClickCapture={rememberEntry}>{children}</ol>;
 }
