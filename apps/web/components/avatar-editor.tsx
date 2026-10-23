@@ -24,7 +24,7 @@ export function AvatarEditor({ id, label, url, self = false, size = 72, shape, c
   const ready = useClientReady();
   return <button type="button" className={`${styles.trigger} ${className ?? ""}`} disabled={!openEditor || !ready}
     data-compact={size <= 40} data-labelled={Boolean(triggerLabel)} aria-haspopup="dialog" aria-label={self ? "编辑我的头像" : `编辑 ${label} 的头像`}
-    onClick={event => openEditor?.({ id, label, url, self }, event.currentTarget)}>
+    onClick={event => openEditor?.({ id, label, url, self, shape }, event.currentTarget)}>
     <PersonDirectoryAvatar id={id} label={label} url={url} self={self} size={size} shape={shape} />
     <span className={styles.camera}><Camera size={13} aria-hidden="true" /></span>
     {triggerLabel && <span className={styles.triggerLabel}>{triggerLabel}</span>}

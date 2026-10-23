@@ -27,9 +27,9 @@ async function click(text: string) {
     await new Promise(resolve => setTimeout(resolve, 0));
   });
 }
-async function render(scope = "account-a") {
+async function render(scope = "account-a", shape?: "circle" | "squircle") {
   await act(() => root.render(<AvatarPreferencesProvider scope={scope}>
-    <AvatarEditor id="one" label="张伟" />
+    <AvatarEditor id="one" label="张伟" size={64} shape={shape} />
     <div data-testid="readback"><PersonDirectoryAvatar id="one" label="张伟" /></div>
     <AvatarDefaultSettings />
   </AvatarPreferencesProvider>));
@@ -37,6 +37,35 @@ async function render(scope = "account-a") {
 const readback = () => host.querySelector('[data-testid="readback"] [data-avatar-style]')!;
 
 describe("avatar editing through the rendered controls", () => {
+  it.each([
+    { shape: undefined, expectedShape: "circle" },
+    { shape: "squircle" as const, expectedShape: "squircle" },
+  ])("keeps the $expectedShape display mask through the dialog and crop without persisting it", async ({ shape, expectedShape }) => {
+    const bitmap = { width: 400, height: 300, close: vi.fn() } as unknown as ImageBitmap;
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => bitmap));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      clearRect() {}, drawImage() {},
+    } as unknown as CanvasRenderingContext2D);
+    await render("account-a", shape);
+    expect(host.querySelector("[aria-haspopup='dialog'] [data-avatar-style]")?.getAttribute("data-shape")).toBe(expectedShape);
+    await click("编辑 张伟 的头像");
+    const expectPreviewShape = () => {
+      const previews = document.querySelectorAll("[data-avatar-editor][role='dialog'] [data-avatar-style]");
+      expect(previews.length).toBeGreaterThan(0);
+      for (const preview of previews) expect(preview.getAttribute("data-shape")).toBe(expectedShape);
+    };
+    expectPreviewShape();
+    const input = document.querySelector<HTMLInputElement>("input[type='file']")!;
+    Object.defineProperty(input, "files", { value: [new File(["synthetic raster"], "synthetic.png", { type: "image/png" })] });
+    await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); await Promise.resolve(); });
+    expect(document.querySelector("canvas[aria-label='头像裁切预览']")?.getAttribute("data-shape")).toBe(expectedShape);
+    await click("取消裁切");
+    expectPreviewShape();
+    await click("几何"); await click("保存头像");
+    expect(createAvatarStore("account-a", () => localStorage).getSnapshot().people["person:one"]).toEqual({ style: "shapes" });
+    expect(bitmap.close).toHaveBeenCalledOnce();
+  });
+
   it("reveals a cached photo that finished loading before hydration attaches handlers", async () => {
     vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
     vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(128);

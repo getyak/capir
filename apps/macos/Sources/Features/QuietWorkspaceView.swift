@@ -115,6 +115,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private let storeSelection: LoginStoreSelection?
     private var retired = false
     private var draftOwnerReadGeneration = UUID()
+    private var documentGeneration = UUID()
     private var storeObservation: AnyCancellable?
     private let accountBrowser: AccountSettingsBrowser
 
@@ -315,6 +316,26 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         guard !retired, !signedOut else { return }
         if destination == .settings { requestSettingsOpen(); return }
         webView.load(URLRequest(url: destination.url(in: origin)))
+    }
+
+    /// The same explicit intent as the Web plus button, without reloading an
+    /// already mounted conversation. A detached callback cannot navigate a
+    /// replacement account or a newer document.
+    func startNewConversation() {
+        guard !retired, !signedOut, !loading, let current = webView.url,
+              origin.contains(current), let selection = storeSelection,
+              LoginStoreRegistry.shared.isCurrent(selection) else { return }
+        let generation = documentGeneration
+        webView.callAsyncJavaScript(WorkspaceNewConversation.script, arguments: [:],
+                                   in: nil, in: .page) { [weak self] result in
+            guard let self, !self.retired, !self.signedOut, self.webView.url == current,
+                  !self.loading, self.documentGeneration == generation,
+                  LoginStoreRegistry.shared.isCurrent(selection) else { return }
+            // Failure can mean a handler ran before script evaluation failed.
+            // Preserve the document instead of issuing a second navigation.
+            guard case .success(let value) = result, let handled = value as? Bool else { return }
+            if !handled { self.webView.load(URLRequest(url: WorkspaceNewConversation.url(in: self.origin))) }
+        }
     }
 
     /// Opens the one native Settings scene, deferring until the view has wired
@@ -567,6 +588,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         draftOwnerReadGeneration = UUID()
+        documentGeneration = UUID()
         loading = true
         failure = nil
     }
@@ -645,11 +667,13 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
-        guard let url = frame.request.url, origin.contains(url) else { completionHandler(nil); return }
+        guard let url = frame.request.url, origin.contains(url), let window = webView.window else {
+            completionHandler(nil); return
+        }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
-        panel.begin { result in completionHandler(result == .OK ? panel.urls : nil) }
+        panel.beginSheetModal(for: window) { result in completionHandler(result == .OK ? panel.urls : nil) }
     }
 }
 
@@ -658,11 +682,11 @@ struct WorkspaceWebSurface: NSViewRepresentable {
     let zoom: Double
     let appearance: WorkspaceAppearance
     func makeNSView(context: Context) -> WorkspaceMaterialSurface {
-        browser.webView.pageZoom = min(1.5, max(0.9, zoom))
+        browser.webView.pageZoom = WorkspaceContentZoom.clamp(zoom)
         return WorkspaceMaterialSurface(webView: browser.webView, preference: appearance)
     }
     func updateNSView(_ nsView: WorkspaceMaterialSurface, context: Context) {
-        nsView.webView.pageZoom = min(1.5, max(0.9, zoom))
+        nsView.webView.pageZoom = WorkspaceContentZoom.clamp(zoom)
         nsView.preference = appearance
     }
 }

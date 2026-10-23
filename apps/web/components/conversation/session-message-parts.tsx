@@ -28,6 +28,7 @@ import { sessionHumanMessages } from "@/lib/session-human-messages";
 export { sessionHumanMessages } from "@/lib/session-human-messages";
 import type { AnswerSeamRegistry } from "./answer-seam";
 import { ConversationWorkRow } from "./conversation-feedback-row";
+import { SessionMessageActions } from "./session-message-actions";
 import type { ConversationWorkStatus } from "./conversation-feedback";
 import styles from "./queued-conversation.module.css";
 
@@ -335,7 +336,7 @@ export function AnswerBlockFrame({
   const title = typeof block.title === "string" ? sessionBlockTitle(block.title) : null;
   return (
     <div className={styles.answerSeam} data-seam={seam === "playing" ? "new" : undefined}>
-      <div className={styles.semanticBubble}>
+      <div className={styles.semanticBubble} data-presentation={block.kind === "answer" && block.status === "informational" && block.requires_user_decision !== true ? "prose" : "object"}>
         {title && <h3>{title}</h3>}
         <ConversationResponse foldable={block.kind === "answer" && block.requires_user_decision === false} lead={!title}>{block.body}</ConversationResponse>
       </div>
@@ -375,7 +376,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
     const block = dataRecord(data.block);
     if (!block || typeof block.body !== "string") return <span>这段回复暂时无法显示。</span>;
     if (!block.body.trim()) return null; // Silence retains execution, without a fabricated dialogue bubble.
-    return <AnswerBlockFrame block={{
+    return <><AnswerBlockFrame block={{
       id: typeof block.id === "string" ? block.id : "",
       title: typeof block.title === "string" ? block.title : null,
       body: block.body,
@@ -383,7 +384,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
       kind: typeof block.kind === "string" ? block.kind : "",
       requires_user_decision: block.requires_user_decision !== false,
       public_source_refs: Array.isArray(block.public_source_refs) ? block.public_source_refs as never : undefined,
-    }} messageId={typeof data.messageId === "string" ? data.messageId : ""} sessionId={context.sessionId} attention={context.attention}/>;
+    }} messageId={typeof data.messageId === "string" ? data.messageId : ""} sessionId={context.sessionId} attention={context.attention}/><SessionMessageActions afterBlockId={typeof block.id === "string" ? block.id : ""}/></>;
   }
   if (name === "talent-signal.work-row" && typeof data.messageId === "string") {
     const work = context.workByMessageId?.[data.messageId];
@@ -469,6 +470,7 @@ export function SessionUserMessage({ context }: { context: RenderContext }) {
         : <></>}</MessagePrimitive.Parts>
       <MessagePrimitive.Parts>{({ part }) => part.type === "data" ? renderSessionData(part.name, part.data, context)
         : part.type === "text" ? <></> : null}</MessagePrimitive.Parts>
+      <SessionMessageActions/>
     </div></div>
   </MessagePrimitive.Root>;
 }

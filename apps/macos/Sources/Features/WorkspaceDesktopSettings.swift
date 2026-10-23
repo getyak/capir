@@ -21,11 +21,13 @@ final class WorkspaceNavigation: ObservableObject {
 
 struct WorkspaceDesktopCommands: Commands {
     @FocusedObject private var browser: WorkspaceBrowser?
+    @AppStorage("workspace.desktop.zoom") private var zoom = 1.0
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("新对话") { browser?.navigate(.home) }
-                .keyboardShortcut("n").disabled(browser == nil)
+            Button("新对话") { browser?.startNewConversation() }
+                .keyboardShortcut("n")
+                .disabled(browser == nil || browser?.signedOut == true || browser?.loading == true)
         }
         CommandGroup(after: .toolbar) {
             Divider()
@@ -35,6 +37,15 @@ struct WorkspaceDesktopCommands: Commands {
                 .keyboardShortcut("]").disabled(browser?.webView.canGoForward != true)
             Button("重新载入") { browser?.retry() }
                 .keyboardShortcut("r").disabled(browser == nil)
+            Divider()
+            Button("放大内容") { zoom = WorkspaceContentZoom.step(zoom, direction: 1) }
+                .keyboardShortcut("+", modifiers: [.command])
+                .disabled(browser == nil || WorkspaceContentZoom.clamp(zoom) >= 2)
+            Button("缩小内容") { zoom = WorkspaceContentZoom.step(zoom, direction: -1) }
+                .keyboardShortcut("-", modifiers: [.command])
+                .disabled(browser == nil || WorkspaceContentZoom.clamp(zoom) <= 0.9)
+            Button("实际大小") { zoom = 1 }
+                .keyboardShortcut("0", modifiers: [.command]).disabled(browser == nil)
             Menu("工作区外观") {
                 Picker("工作区外观", selection: Binding(
                     get: { browser?.appearancePreference ?? .system },
@@ -57,6 +68,29 @@ struct WorkspaceDesktopCommands: Commands {
             Button("此 Mac 设置…") { browser?.requestSettingsOpen() }
                 .keyboardShortcut(",", modifiers: [.command, .shift]).disabled(browser == nil)
         }
+    }
+}
+
+/// One scale for the View menu, Settings and WebKit. Invalid persisted values
+/// recover to actual size rather than propagating NaN to the renderer.
+enum WorkspaceContentZoom {
+    static let steps: [Double] = [0.9, 1, 1.1, 1.25, 1.5, 1.75, 2]
+    static func clamp(_ value: Double) -> Double { value.isFinite ? min(2, max(0.9, value)) : 1 }
+    static func step(_ value: Double, direction: Int) -> Double {
+        let current = clamp(value)
+        if direction > 0 { return steps.first { $0 > current + 0.001 } ?? 2 }
+        if direction < 0 { return steps.last { $0 < current - 0.001 } ?? 0.9 }
+        return current
+    }
+}
+
+enum WorkspaceNewConversation {
+    static let script = "return !window.dispatchEvent(new Event('talent-signal:new-conversation', { cancelable: true }));"
+    static func url(in origin: WorkspaceOrigin, id: UUID = UUID()) -> URL {
+        var components = URLComponents(url: origin.entryURL, resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "draft_session", value: id.uuidString.lowercased()),
+                                 URLQueryItem(name: "intent", value: "compose")]
+        return components.url!
     }
 }
 
@@ -99,6 +133,12 @@ extension WorkspaceSettingsSection {
         .init(title: "此 Mac", sections: [.general, .companion, .permissions, .updates]),
         .init(title: "支持", sections: [.connection]),
     ]
+
+    func moved(by offset: Int) -> WorkspaceSettingsSection {
+        let order = Self.groups.flatMap(\.sections)
+        guard let index = order.firstIndex(of: self) else { return self }
+        return order[min(order.count - 1, max(0, index + offset))]
+    }
 }
 
 /// The single pane a selection shows. Every pane is a native device control and
@@ -277,6 +317,7 @@ struct WorkspaceDesktopSettings: View {
     @State private var accountLaunchFailed = false
     @State private var screenRecordingAllowed = CGPreflightScreenCaptureAccess()
     @FocusState private var searchFocused: Bool
+    @FocusState private var focusedSection: WorkspaceSettingsSection?
 
     private var pane: WorkspaceSettingsPane {
         WorkspaceSettingsPane.resolve(selection: navigation.selection)
@@ -348,10 +389,16 @@ struct WorkspaceDesktopSettings: View {
         .frame(maxHeight: .infinity)
         .background(.bar)
         .onMoveCommand { direction in
-            switch direction {
-            case .down: search.moveDown()
-            case .up: search.moveUp()
-            default: break
+            if search.isSearching {
+                switch direction {
+                case .down: search.moveDown()
+                case .up: search.moveUp()
+                default: break
+                }
+            } else if !searchFocused, direction == .down || direction == .up {
+                let next = (focusedSection ?? navigation.selection).moved(by: direction == .down ? 1 : -1)
+                navigation.selection = next
+                focusedSection = next
             }
         }
     }
@@ -421,6 +468,8 @@ struct WorkspaceDesktopSettings: View {
             } else {
                 Button { search.reset(); searchMessage = nil } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12))
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(.tertiary)
                 .accessibilityLabel("清除搜索")
@@ -433,7 +482,9 @@ struct WorkspaceDesktopSettings: View {
     private func railButton(_ section: WorkspaceSettingsSection) -> some View {
         let selected = navigation.selection == section
         return Button {
+            searchFocused = false
             navigation.selection = section
+            focusedSection = section
             search.reset()
             searchMessage = nil
         } label: {
@@ -451,6 +502,8 @@ struct WorkspaceDesktopSettings: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusable()
+        .focused($focusedSection, equals: section)
         .accessibilityIdentifier("settings.section.\(section.rawValue)")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -482,8 +535,9 @@ struct WorkspaceDesktopSettings: View {
                     .font(.callout).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 16) {
                     Picker("内容大小", selection: $zoom) {
-                        Text("90%").tag(0.9); Text("100%").tag(1.0); Text("110%").tag(1.1)
-                        Text("125%").tag(1.25); Text("150%").tag(1.5)
+                        ForEach(WorkspaceContentZoom.steps, id: \.self) { value in
+                            Text("\(Int((value * 100).rounded()))%").tag(value)
+                        }
                     }
                     Toggle("工作窗口保持在最前", isOn: $floating)
                 }
@@ -493,6 +547,7 @@ struct WorkspaceDesktopSettings: View {
                 DisclosureGroup("键盘快捷键") {
                     VStack(spacing: 12) {
                         LabeledContent("新对话", value: "⌘ N")
+                        LabeledContent("放大 / 缩小 / 实际大小", value: "⌘ + / ⌘ − / ⌘ 0")
                         LabeledContent("人物 / 日程", value: "⌘ 1 / ⌘ 2")
                         LabeledContent("此 Mac 设置", value: "⌘ ,")
                         LabeledContent("重新载入", value: "⌘ R")

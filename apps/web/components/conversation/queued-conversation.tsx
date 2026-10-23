@@ -2,7 +2,7 @@
 
 import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Stop, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { conversationHome } from "@/lib/conversation-local";
 import {
@@ -152,8 +152,22 @@ export function QueuedConversation(props: Props) {
     queueMicrotask(() => { if (current) setMilestoneRecords(records => records[messageId] === milestones ? records : { ...records, [messageId]: milestones }); });
     return () => { current = false; };
   }, [active?.message_id, milestones]);
+  const composerScope = `${props.scope}:${props.chatBinding}:${props.detailBinding}:${id ?? "draft"}`;
+  const composerOwner = useMemo(() => Symbol(composerScope), [composerScope]);
+  const composingRef = useRef<{ owner: symbol | null; value: boolean }>({ owner: composerOwner, value: false });
+  const [composition, setComposition] = useState({ owner: composerOwner, value: false });
+  useLayoutEffect(() => {
+    composingRef.current = { owner: composerOwner, value: false };
+    return () => { composingRef.current = { owner: null, value: false }; };
+  }, [composerOwner]);
+  const composing = composition.owner === composerOwner && composition.value;
+  function composingChanged(value: boolean) {
+    if (composingRef.current.owner !== composerOwner) return;
+    composingRef.current = { owner: composerOwner, value };
+    setComposition({ owner: composerOwner, value });
+  }
   const imageCount = chat.attachments.length;
-  const canSend = chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && unresolvedConversationCount(chat.messages, chat.snapshot) < 50;
+  const canSend = !composing && chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && unresolvedConversationCount(chat.messages, chat.snapshot) < 50;
   const acceptsSteering = Boolean(active?.accepts_steering && !active.cancel_requested);
   const activeVisible = active && !turns.some(turn => turn.id === active.message_id);
   const paused = chat.snapshot?.paused ?? false;
@@ -268,7 +282,7 @@ export function QueuedConversation(props: Props) {
     composer.focus({ preventScroll: true });
   }, [chat.ready, chat.unavailable, props.initialDetail]);
   function latest() { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
-  async function send() { if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
+  async function send() { if (composingRef.current.owner === composerOwner && composingRef.current.value) return; if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
   function navigate(href: string) { navigating.current = true; router.push(href); }
   async function remove() {
     if (await chat.remove()) {
@@ -281,10 +295,11 @@ export function QueuedConversation(props: Props) {
   // Escape pauses the queue while a run is live. IME composition owns Enter
   // and Escape: a composing key event is never an action.
   function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (event.defaultPrevented) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[role="dialog"]')) return;
     const run = active && !active.cancel_requested && active.run_id ? active : null;
-    if (conversationRunKeyAction({ key: event.key, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode, hasActiveRun: Boolean(run) }) === "pause-run" && run?.run_id) {
+    if (conversationRunKeyAction({ key: event.key, isComposing: event.nativeEvent.isComposing || composingRef.current.value, keyCode: event.nativeEvent.keyCode, hasActiveRun: Boolean(run) }) === "pause-run" && run?.run_id) {
       event.preventDefault();
       void chat.mutate({ kind: "stop", run_id: run.run_id });
     }
@@ -338,8 +353,8 @@ export function QueuedConversation(props: Props) {
       {chat.preparing && <p className={styles.composerImageHint} role="status">正在准备图片…</p>}
       {chat.submitting && <p className={styles.composerImageHint} role="status">正在发送…</p>}
       <div className={styles.composer}>
-        <WorkspaceComposer id="queued-conversation-composer" label="消息" value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? "继续补充，会并入当前任务…" : "继续补充，会按顺序处理…" : paused ? "继续输入，消息会加入暂停的队列…" : imageCount ? "可加一句话说明，或直接发送图片…" : "有什么想一起理清的？"} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
-          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} aria-label={acceptsSteering ? "补充当前任务" : active || queued.length || paused ? "加入队列" : "发送消息"} title={acceptsSteering ? "补充当前任务" : active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}><ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
+        <WorkspaceComposer key={composerScope} id="queued-conversation-composer" label="消息" value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? "继续补充，会并入当前任务…" : "继续补充，会按顺序处理…" : paused ? "继续输入，消息会加入暂停的队列…" : imageCount ? "可加一句话说明，或直接发送图片…" : "有什么想一起理清的？"} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onComposingChange={composingChanged} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
+          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label="停止当前回复" title="停止当前回复，保留后续队列" disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>停止</span></button>}<button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? "补充当前任务" : active || queued.length || paused ? "加入队列" : "发送消息"} title={acceptsSteering ? "补充当前任务" : active || paused ? "加入队列" : "发送"} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? "补充" : "排队"}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
       {!hasContent && <div className={styles.starters} aria-label="开始一个话题">{["你可以帮我做什么？", "准备下一次交流"].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
       <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>Enter 发送 · Shift+Enter 换行</span></div>

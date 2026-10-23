@@ -90,6 +90,8 @@ export type WorkspaceComposerProps = {
   binding: string | null;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
+  /** Marked text remains provisional until the input method commits it. */
+  onComposingChange?: (composing: boolean) => void;
   onNavigate: (href: string) => void;
   onCapture?: () => void;
   /**
@@ -127,6 +129,7 @@ export function WorkspaceComposer({
   binding,
   onValueChange,
   onSubmit,
+  onComposingChange,
   onNavigate,
   onCapture,
   onFiles,
@@ -146,6 +149,14 @@ export function WorkspaceComposer({
   const pickerContext = useRef<{ binding: string | null } | null>(null);
   const pendingCaret = useRef<number | null>(null);
   const dragDepth = useRef(0);
+  const composition = useRef<{ binding: string | null; notify: WorkspaceComposerProps["onComposingChange"] } | null>(null);
+  // A scope change or unmount releases only the callback that began this
+  // composition. It must never clear a newer parent scope's marked-text state.
+  useLayoutEffect(() => () => {
+    const previous = composition.current;
+    composition.current = null;
+    previous?.notify?.(false);
+  }, [binding, disabled, readOnly]);
   const documentRun = useRef<{
     key: number;
     controller: AbortController;
@@ -432,7 +443,7 @@ export function WorkspaceComposer({
       metaKey: event.metaKey,
       ctrlKey: event.ctrlKey,
       altKey: event.altKey,
-      isComposing: event.nativeEvent.isComposing,
+      isComposing: event.nativeEvent.isComposing || composition.current !== null,
       keyCode: event.nativeEvent.keyCode,
       menuOpen,
       canSubmit,
@@ -451,6 +462,7 @@ export function WorkspaceComposer({
       choose(activeItem);
     } else if (action === "dismiss") {
       event.preventDefault();
+      event.stopPropagation();
       close();
     } else if (action === "submit") {
       event.preventDefault();
@@ -836,6 +848,17 @@ export function WorkspaceComposer({
             event.preventDefault();
             setPasteError(`这段内容会超过 ${maxLength} 字上限，未粘贴。请分段输入，当前草稿已保留。`);
           }
+        }}
+        onCompositionStart={() => {
+          if (disabled || readOnly || composition.current) return;
+          composition.current = { binding, notify: onComposingChange };
+          onComposingChange?.(true);
+        }}
+        onCompositionEnd={() => {
+          const previous = composition.current;
+          if (!previous || previous.binding !== binding) return;
+          composition.current = null;
+          previous.notify?.(false);
         }}
         onClick={syncCaret}
         onFocus={syncCaret}
