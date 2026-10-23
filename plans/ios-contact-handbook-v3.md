@@ -93,3 +93,13 @@ The independent reviewer confirmed export scope and retention; all 18 release
 policy checks passed. Native-only presentation is frozen pending actual UI
 results (ink navigation tint, localized evidence availability, and the
 selected-person unsent-chat assertion are included).
+
+The first hosted run on `aa162d5` passed the unit suite and preceding native
+journeys, then failed to locate the Continue control in the contact overview.
+The exported recording shows the entire control on screen. The next change
+moves the page accessibility identifier before its safe-area inset, so it does
+not wrap the inset control; the original hit-test assertion remains and now
+captures a synthetic accessibility tree on failure. This is a hypothesis until
+the hosted overview and unsent-conversation tests pass. The same reviewer
+approved the narrow change and moving the four independent contact journeys
+immediately after launch, without changing either tier's coverage or budget.

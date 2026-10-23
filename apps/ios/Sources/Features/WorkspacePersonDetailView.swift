@@ -134,6 +134,7 @@ struct WorkspacePersonDetailView: View {
                 .accessibilityLabel(appLanguage.text("More person actions"))
             }
         }
+        .accessibilityIdentifier("workspace-person-detail")
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if currentPerson != nil, onContinue != nil {
                 Button {
@@ -162,7 +163,6 @@ struct WorkspacePersonDetailView: View {
             }
         }
         .refreshable { await refresh() }
-        .accessibilityIdentifier("workspace-person-detail")
     }
 
     private func identity(_ person: WorkspacePerson) -> some View {
