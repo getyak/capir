@@ -385,3 +385,57 @@ describe("directory cache lifecycle through workspaceSessionFetch", () => {
     expect(readCachedWorkspaceDirectory("account-a")).toBeNull();
   });
 });
+
+describe("directory request deadlines", () => {
+  it("releases a hung shared read for retry and never caches its late result", async () => {
+    vi.useFakeTimers();
+    const cache = new WorkspaceDirectoryCache<{ id: string }>({ timeoutMs: 50 });
+    const late = deferred<{ id: string }>();
+    let signal!: AbortSignal;
+    try {
+      const pending = cache.load("a", input => { signal = input; return late.promise; });
+      expect(cache.load("a", async () => ({ id: "unused" }), { force: true })).toBe(pending);
+      let failure: unknown = null;
+      void pending.catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(failure).toMatchObject({ name: "TimeoutError" });
+      expect(signal.aborted).toBe(true);
+      await expect(cache.load("a", async () => ({ id: "fresh" }), { force: true }))
+        .resolves.toEqual({ id: "fresh" });
+      late.resolve({ id: "old" });
+      await Promise.resolve();
+      expect(cache.read("a")).toEqual({ id: "fresh" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { cache.invalidateAll(); vi.useRealTimers(); }
+  });
+
+  it("bounds body decoding as well as waiting for response headers", async () => {
+    vi.useFakeTimers();
+    const cache = new WorkspaceDirectoryCache<WorkspaceDirectorySnapshot | null>({ timeoutMs: 50 });
+    const body = deferred<unknown>();
+    const request = vi.fn()
+      .mockResolvedValueOnce(Response.json({ people: [] }))
+      .mockResolvedValueOnce({ ok: true, json: () => body.promise });
+    try {
+      let failure: unknown = null;
+      const pending = cache.load("account-a", signal => readWorkspaceDirectory("account-a", signal, request));
+      void pending.catch(error => { failure = error; });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(failure).toMatchObject({ name: "TimeoutError" });
+      body.resolve(sessions);
+      await Promise.resolve();
+      expect(cache.read("account-a")).toBeNull();
+    } finally { cache.invalidateAll(); vi.useRealTimers(); }
+  });
+
+  it("settles an invalidated read even if the loader ignores cancellation", async () => {
+    const cache = new WorkspaceDirectoryCache<unknown>();
+    let failure: unknown = null;
+    const pending = cache.load("a", () => new Promise(() => {}));
+    void pending.catch(error => { failure = error; });
+    cache.invalidate("a", "discard");
+    await vi.waitFor(() => expect(failure).toMatchObject({ name: "AbortError" }), { timeout: 100, interval: 5 });
+    await expect(cache.load("b", async () => "other account")).resolves.toBe("other account");
+  });
+});

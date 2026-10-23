@@ -1,4 +1,7 @@
 {
+  "登录已失效": "登录已失效",
+  "当前登录无法继续访问这个空间。重新登录后，再核对最新内容。": "当前登录无法继续访问这个空间。重新登录后，再核对最新内容。",
+  "language.preference.unavailable": "偏好暂不可读 · {language}",
   "nav.skipToContent": "跳到主要内容",
   "language.section.title": "语言",
   "language.display.label": "界面语言",

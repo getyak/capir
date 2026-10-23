@@ -1,4 +1,7 @@
 {
+  "登录已失效": "Your session has expired",
+  "当前登录无法继续访问这个空间。重新登录后，再核对最新内容。": "This session can no longer access this workspace. Sign in again, then check the latest content.",
+  "language.preference.unavailable": "Preference unavailable · {language}",
   "nav.skipToContent": "Skip to main content",
   "language.section.title": "Language",
   "language.display.label": "Display language",

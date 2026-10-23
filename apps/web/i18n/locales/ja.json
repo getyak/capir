@@ -1,4 +1,7 @@
 {
+  "登录已失效": "セッションの有効期限が切れました",
+  "当前登录无法继续访问这个空间。重新登录后，再核对最新内容。": "このセッションではワークスペースにアクセスできません。再度ログインして最新の内容を確認してください。",
+  "language.preference.unavailable": "設定を確認できません · {language}",
   "nav.skipToContent": "メインコンテンツへ移動",
   "language.section.title": "言語",
   "language.display.label": "表示言語",

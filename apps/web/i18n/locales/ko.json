@@ -1,4 +1,7 @@
 {
+  "登录已失效": "세션이 만료되었습니다",
+  "当前登录无法继续访问这个空间。重新登录后，再核对最新内容。": "현재 세션으로 이 워크스페이스에 접근할 수 없습니다. 다시 로그인한 후 최신 내용을 확인하세요.",
+  "language.preference.unavailable": "설정을 확인할 수 없음 · {language}",
   "nav.skipToContent": "본문으로 건너뛰기",
   "language.section.title": "언어",
   "language.display.label": "표시 언어",

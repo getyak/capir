@@ -12,7 +12,7 @@ vi.mock("./workspace-session-request", () => ({
 import { workspaceSessionFetch } from "./workspace-session-request";
 import { useWorkspaceDirectory, WorkspaceGlobalSearchDialog } from "./workspace-search";
 import { WorkspaceDirectoryScope } from "./workspace-directory-cache";
-import { invalidateWorkspaceDirectory, readCachedWorkspaceDirectory } from "@/lib/workspace-directory-cache";
+import { WORKSPACE_DIRECTORY_REQUEST_TIMEOUT_MS, invalidateWorkspaceDirectory, readCachedWorkspaceDirectory } from "@/lib/workspace-directory-cache";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -102,4 +102,31 @@ describe("rendered workspace directory continuity", () => {
     await act(async () => root.render(tree("a", true)));
     expect(host.textContent).toBe("合成人物合成人物");
   });
+});
+
+it("turns a hung production search read into a retry without losing the query or modal", async () => {
+  vi.useFakeTimers();
+  request.mockImplementation(() => new Promise(() => {}));
+  try {
+    await act(async () => root.render(createElement(WorkspaceGlobalSearchDialog, { binding: "a" })));
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="搜索"]')!.click());
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    const input = dialog.querySelector<HTMLInputElement>("input")!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await act(async () => {
+      setValue.call(input, "合成人物");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(dialog.textContent).toContain("正在读取当前账号的目录");
+    await act(async () => { await vi.advanceTimersByTimeAsync(WORKSPACE_DIRECTORY_REQUEST_TIMEOUT_MS); });
+    expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("暂时无法读取人物与对话");
+    expect(dialog.textContent).not.toContain("没有找到");
+    request.mockImplementation(async () => Response.json(payload()));
+    const retry = Array.from(dialog.querySelectorAll("button")).find(button => button.textContent === "重新载入")!;
+    await act(async () => retry.click());
+    expect(input.value).toBe("合成人物");
+    expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+    expect(dialog.querySelector("[data-search-result]")?.textContent).toContain("合成人物");
+    expect(request).toHaveBeenCalledTimes(4);
+  } finally { vi.useRealTimers(); }
 });
