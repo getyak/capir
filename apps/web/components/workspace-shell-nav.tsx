@@ -35,6 +35,7 @@ import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-ses
 
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { useWorkspaceNavigationHref } from "./workspace-navigation-continuity";
+import { useWorkspaceBrowse, type WorkspaceBrowseSection } from "./workspace-browse";
 import { WorkspaceGlobalSearchDialog, useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-shell.module.css";
 
@@ -120,23 +121,33 @@ function RailControl({
   route: WorkspaceNavRoute;
 }) {
   const router = useRouter();
+  const browse = useWorkspaceBrowse();
   const mobile = useSyncExternalStore(mobileSubscribe,mobileSnapshot,() => false);
-  const rememberedHref = useWorkspaceNavigationHref(route.href);
+  const rememberedRouteHref = useWorkspaceNavigationHref(route.href);
+  const rememberedHref = !mobile && browse ? browse.href(route.href) : rememberedRouteHref;
   const isNew = mobile && control === "conversation";
   const label = isNew ? "新对话" : RAIL_LABELS[control];
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
     <Link
-      aria-current={current ? "page" : undefined}
+      aria-current={current ? !mobile && browse ? "location" : "page" : undefined}
+      aria-controls={!mobile && browse ? "workspace-sidebar-browser" : undefined}
       aria-label={label}
       className={styles.railControl}
       data-mobile={route.mobile ? "true" : "false"}
       data-selected={current ? "true" : undefined}
       href={isNew ? route.href : rememberedHref}
+      prefetch={false}
       key={route.id}
       title={label}
       onClick={event => {
-        if (!isNew || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+        if (!mobile && browse?.enabled) {
+          event.preventDefault();
+          browse.select(control);
+          return;
+        }
+        if (!isNew) return;
         event.preventDefault();
         const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT,{cancelable:true}));
         if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`);
@@ -204,7 +215,9 @@ export function WorkspaceShellNav({
   const pathname = usePathname();
   const router = useRouter();
   const { collapsed, setCollapsed } = useCollapsedState();
-  const selection = workspaceRailSelection(pathname);
+  const browse = useWorkspaceBrowse();
+  const mobile = useSyncExternalStore(mobileSubscribe,mobileSnapshot,() => false);
+  const selection = !mobile && browse ? browse.selection : workspaceRailSelection(pathname);
   const conversationHref = useWorkspaceNavigationHref("/workspace");
   const peopleHref = useWorkspaceNavigationHref("/workspace/people");
   const meetingsHref = useWorkspaceNavigationHref("/workspace/meetings");
@@ -221,6 +234,13 @@ export function WorkspaceShellNav({
   function startNewConversation() {
     const unhandled = window.dispatchEvent(new Event(WORKSPACE_NEW_CONVERSATION_EVENT, { cancelable: true }));
     if (unhandled) router.push(`/workspace?draft_session=${crypto.randomUUID()}&intent=compose`);
+  }
+
+  function browseCollapsed(event: MouseEvent<HTMLAnchorElement>, section: WorkspaceBrowseSection) {
+    if (mobile || !browse?.enabled || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    browse.select(section);
+    setCollapsed(false);
   }
 
   return (
@@ -278,16 +298,16 @@ export function WorkspaceShellNav({
           collapsed/expanded swap. */}
       <nav aria-label="工作台导航（已收起）" className={styles.railCollapsed} data-collapsed-only="true">
         <div className={styles.railCollapsedTop}>
-          <Link aria-current={selection === "today" ? "page" : undefined} aria-label="今日" className={styles.railIconLink} href="/workspace/today" title="今日">
+          <Link aria-current={selection === "today" ? browse ? "location" : "page" : undefined} aria-label="今日" className={styles.railIconLink} href="/workspace/today" title="今日" prefetch={false} onClick={event => browseCollapsed(event, "today")}>
             <House aria-hidden="true" size={18} />
           </Link>
-          <Link aria-current={selection === "conversation" ? "page" : undefined} aria-label="对话" className={styles.railIconLink} href={conversationHref} title="继续对话">
+          <Link aria-current={selection === "conversation" ? browse ? "location" : "page" : undefined} aria-label="对话" className={styles.railIconLink} href={browse?.href("/workspace") ?? conversationHref} title="继续对话" prefetch={false} onClick={event => browseCollapsed(event, "conversation")}>
             <ChatCircleDots aria-hidden="true" size={18} />
           </Link>
           <button aria-label="开始新对话" className={styles.iconButton} onClick={startNewConversation} title="开始新对话" type="button">
             <Plus aria-hidden="true" size={18} />
           </button>
-          <Link aria-current={selection === "meetings" ? "page" : undefined} aria-label="时间" className={styles.railIconLink} href={meetingsHref} title="时间">
+          <Link aria-current={selection === "meetings" ? browse ? "location" : "page" : undefined} aria-label="时间" className={styles.railIconLink} href={browse?.href("/workspace/meetings") ?? meetingsHref} title="时间" prefetch={false} onClick={event => browseCollapsed(event, "meetings")}>
             <CalendarBlank aria-hidden="true" size={18} />
           </Link>
         </div>
@@ -298,7 +318,7 @@ export function WorkspaceShellNav({
             label={RAIL_LABELS.search}
             presentation="rail"
           />
-          <Link aria-current={selection === "people" ? "page" : undefined} aria-label="人物" className={styles.railIconLink} href={peopleHref} title="人物">
+          <Link aria-current={selection === "people" ? browse ? "location" : "page" : undefined} aria-label="人物" className={styles.railIconLink} href={browse?.href("/workspace/people") ?? peopleHref} title="人物" prefetch={false} onClick={event => browseCollapsed(event, "people")}>
             <Users aria-hidden="true" size={18} />
           </Link>
           <Link aria-label="打开对话记录" className={styles.railIconLink} href="/workspace/sessions" title="对话记录">

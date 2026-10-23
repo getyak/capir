@@ -11,6 +11,7 @@ import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { peopleDirectoryHref, personMemoryHref, readPeopleDirectoryQuery } from "./people-directory-navigation";
 import { validReturnSessionId } from "./session-return-navigation";
 import { useRememberWorkspaceNavigationHref } from "./workspace-navigation-continuity";
+import { useWorkspaceBrowse } from "./workspace-browse";
 import { useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-sidebar-people.module.css";
 
@@ -27,22 +28,25 @@ function selectedPersonId(pathname: string): string | null {
 }
 
 /** A credential change remounts drafts as well as the authorized projection. */
-export function WorkspaceSidebarPeople({ binding }: { binding: string | null }) {
-  return <PeopleDirectory key={binding ?? "unbound"} binding={binding} />;
+export function WorkspaceSidebarPeople({ binding, browseHref }: { binding: string | null; browseHref?: string }) {
+  return <PeopleDirectory key={binding ?? "unbound"} binding={binding} browseHref={browseHref} />;
 }
 
-function PeopleDirectory({ binding }: { binding: string | null }) {
+function PeopleDirectory({ binding, browseHref }: { binding: string | null; browseHref?: string }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const routeSearchParams = useSearchParams();
+  const searchParams = browseHref === undefined ? routeSearchParams : new URLSearchParams(browseHref.split("?")[1]);
   const selectedId = selectedPersonId(pathname);
-  const queryParameter = selectedId ? "directory_query" : "query";
+  const queryParameter = browseHref === undefined && selectedId ? "directory_query" : "query";
   // Repeated parameters are ambiguous, just as they are on a directory return.
   const queryValues = searchParams.getAll(queryParameter);
   const query = binding && queryValues.length === 1
     ? readPeopleDirectoryQuery(queryValues[0])
     : "";
   const returnSessionId = validReturnSessionId(searchParams.get("session"));
-  const rememberNavigationHref = useRememberWorkspaceNavigationHref();
+  const rememberRouteHref = useRememberWorkspaceNavigationHref();
+  const browse = useWorkspaceBrowse();
+  const rememberNavigationHref = browseHref !== undefined && browse ? browse.remember : rememberRouteHref;
   const [search, setSearch] = useState({ query, draft: query, committedDraft: query });
   const [composing, setComposing] = useState(false);
   const composingInput = useRef(false);
@@ -80,11 +84,12 @@ function PeopleDirectory({ binding }: { binding: string | null }) {
     <section aria-label="人物目录" className={styles.directory}>
       <header className={styles.headingRow}>
         <h2 className={styles.heading}>人物目录</h2>
-        {binding ? <Link className={styles.allPeople} href={peopleDirectoryHref(search.committedDraft, returnSessionId)} onClick={() => rememberDirectory()} scroll={false}>查看全部人物</Link> : null}
+        {binding ? <Link className={styles.allPeople} href={peopleDirectoryHref(search.committedDraft, returnSessionId)} onClick={() => rememberDirectory()} prefetch={false} scroll={false}>查看全部人物</Link> : null}
       </header>
       {binding ? (
         <Form
           action="/workspace/people"
+          prefetch={false}
           className={styles.search}
           onKeyDown={event => {
             // Some engines end composition before dispatching the Enter submit.
@@ -101,6 +106,7 @@ function PeopleDirectory({ binding }: { binding: string | null }) {
               event.preventDefault();
               return;
             }
+            if (browseHref !== undefined) event.preventDefault();
             rememberDirectory();
           }}
           scroll={false}
@@ -139,7 +145,11 @@ function PeopleDirectory({ binding }: { binding: string | null }) {
               aria-label="清除侧栏人物搜索"
               className={styles.searchControl}
               href={peopleDirectoryHref("", returnSessionId)}
-              onClick={() => {
+              onClick={event => {
+                if (browseHref !== undefined) {
+                  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+                  event.preventDefault();
+                }
                 commitDraft("");
                 input.current?.focus({ preventScroll: true });
               }}
@@ -149,7 +159,7 @@ function PeopleDirectory({ binding }: { binding: string | null }) {
             </Link>
           ) : null}
           <button
-            aria-label="在人物目录中搜索"
+            aria-label={browseHref === undefined ? "在人物目录中搜索" : "筛选侧栏人物"}
             className={styles.searchControl}
             disabled={composing}
             type="submit"
@@ -202,7 +212,7 @@ function PeopleDirectory({ binding }: { binding: string | null }) {
       )}
 
       {binding && !loading && !failed && normalizedDraft && !matches.length ? (
-        <p className={styles.scope}>按 Enter 在人物目录中搜索姓名或已确认联系方式。</p>
+        <p className={styles.scope}>{browseHref === undefined ? "按 Enter 在人物目录中搜索姓名或已确认联系方式。" : "查看全部人物以搜索姓名或已确认联系方式。"}</p>
       ) : null}
     </section>
   );

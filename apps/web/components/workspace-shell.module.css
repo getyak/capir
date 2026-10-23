@@ -225,6 +225,11 @@
   scrollbar-width: thin;
 }
 
+.sidebarScroll:has(.browsePanels) { overflow: hidden; }
+.browsePanels { flex: 1 1 auto; height: 100%; min-height: 0; }
+.browsePanel { height: 100%; overflow: auto; scrollbar-gutter: stable; }
+.browsePanel[hidden] { display: none; }
+
 .shell:has(.sidebarState[data-collapsed="true"]) .brandRow {
   flex-direction: column;
   gap: 8px;
@@ -1891,7 +1896,7 @@
 .railCollapsedTop { flex:none; }
 .railSessions { display:flex; flex:none; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; overflow:auto; scrollbar-width:none; }
 .railSessionAvatar,.railIconLink { align-items:center; border-radius:12px; color:var(--muted-strong); display:flex; flex:none; height:44px; justify-content:center; text-decoration:none; transition:background-color var(--workspace-transition-duration,180ms) var(--ease-out),color var(--workspace-transition-duration,180ms) var(--ease-out); width:44px; }
-.railSessionAvatar[aria-current="page"],.railSessionAvatar:hover,.railIconLink[aria-current="page"],.railIconLink:hover { background:var(--surface-selected); color:var(--ink); }
+.railSessionAvatar[aria-current="page"],.railSessionAvatar:hover,.railIconLink[aria-current="page"],.railIconLink[aria-current="location"],.railIconLink:hover { background:var(--surface-selected); color:var(--ink); }
 .railCollapsedTop { display:flex; flex-direction:column; align-items:center; }
 .railCollapsedTop .iconButton { height:44px; width:44px; }
 .railSessionAvatar .avatar { flex:none; height:28px; width:28px; }

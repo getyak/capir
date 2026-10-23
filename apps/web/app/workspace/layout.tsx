@@ -15,6 +15,7 @@ import {
 } from "@/components/workspace-shell-nav";
 import { WorkspaceSidebarContext } from "@/components/workspace-sidebar-context";
 import { WorkspaceNavigationContinuityProvider } from "@/components/workspace-navigation-continuity";
+import { WorkspaceBrowseProvider } from "@/components/workspace-browse";
 import { WorkspaceGlobalSearchDialog } from "@/components/workspace-search";
 import { WorkspacePrivacyEntry, WorkspaceRouteHeader } from "@/components/workspace-route-header";
 import { WorkspacePrivacyBoundary } from "@/components/workspace-privacy-boundary";
@@ -178,6 +179,7 @@ export default async function WorkspaceLayout({
     <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
       <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope}>
+      <WorkspaceBrowseProvider key={pendingSessionDraftScope} scope={pendingSessionDraftScope} binding={pendingBinding}>
       <PersonContextPanelProvider binding={pendingBinding}>
       <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
         {pendingBinding ? (
@@ -251,6 +253,7 @@ export default async function WorkspaceLayout({
         </div>
       </div>
       </PersonContextPanelProvider>
+      </WorkspaceBrowseProvider>
       </WorkspaceNavigationContinuityProvider>
       </AvatarPreferencesProvider>
     </WorkspacePrivacyBoundary></WorkspaceSessionBoundary>

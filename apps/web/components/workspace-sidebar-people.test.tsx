@@ -22,8 +22,8 @@ vi.mock("next/link", () => ({
   },
 }));
 vi.mock("next/form", () => ({
-  default: ({ action, scroll, onSubmit, ...props }: ComponentProps<"form"> & { scroll?: boolean }) => {
-    void scroll;
+  default: ({ action, scroll, prefetch, onSubmit, ...props }: ComponentProps<"form"> & { scroll?: boolean; prefetch?: boolean }) => {
+    void scroll; void prefetch;
     return createElement("form", {
       ...props,
       action,
@@ -69,9 +69,9 @@ function allowRead(people = rows, binding = mocks.binding) {
     url.includes("/people") ? { people } : { session_version: binding, sessions: [] },
   ));
 }
-async function render(binding: string | null = mocks.binding) {
+async function render(binding: string | null = mocks.binding, browseHref?: string) {
   await act(async () => root.render(
-    <WorkspaceDirectoryScope binding={binding}><WorkspaceSidebarPeople binding={binding} /></WorkspaceDirectoryScope>,
+    <WorkspaceDirectoryScope binding={binding}><WorkspaceSidebarPeople binding={binding} browseHref={browseHref} /></WorkspaceDirectoryScope>,
   ));
 }
 function searchInput() {
@@ -113,6 +113,25 @@ afterEach(async () => {
 });
 
 describe("contextual People directory", () => {
+  it("filters, submits and clears independently of the working route when used as a browser", async () => {
+    mocks.pathname = "/workspace"; mocks.search = "query=right-work&person=not-directory-scope";
+    const browseHref = `/workspace/people?query=${encodeURIComponent("同名")}`;
+    await render(mocks.binding, browseHref);
+    expect(searchInput().value).toBe("同名"); expect(links()).toHaveLength(2);
+    await type("合作伙伴"); await submit();
+    expect(mocks.submitted).toEqual([]);
+    expect(mocks.remember).toHaveBeenLastCalledWith(`/workspace/people?query=${encodeURIComponent("合作伙伴")}`);
+    mocks.pathname = `/workspace/people/${secondId}`; mocks.search = "directory_query=unrelated";
+    await render(mocks.binding, browseHref);
+    expect(searchInput().value).toBe("合作伙伴"); expect(links()).toHaveLength(1);
+    expect(links()[0].getAttribute("aria-current")).toBe("page");
+    const clearEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
+    await act(async () => host.querySelector('[aria-label="清除侧栏人物搜索"]')!.dispatchEvent(clearEvent));
+    expect(clearEvent.defaultPrevented).toBe(true); expect(searchInput().value).toBe("");
+    expect(mocks.remember).toHaveBeenLastCalledWith("/workspace/people");
+    expect(mocks.search).toBe("directory_query=unrelated");
+  });
+
   it("opens exact living pages for same-name people and preserves the directory/session return", async () => {
     mocks.pathname = `/workspace/people/${secondId}`;
     mocks.search = `directory_query=${encodeURIComponent("同名")}&session=${session}`;
