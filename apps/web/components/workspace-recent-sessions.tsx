@@ -1,6 +1,6 @@
 "use client";
 
-import { CaretRight, ClockCounterClockwise, Plus, PushPin } from "@phosphor-icons/react";
+import { CaretRight, Plus, PushPin } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useId, useState } from "react";
@@ -41,9 +41,7 @@ export function WorkspaceRecentSessions({
   const t = useT();
   const pathname = usePathname();
   const router = useRouter();
-  const [expanded, setExpanded] = useState(true);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
-  const listId = useId();
   const archiveId = useId();
   const { data, loading, failed, retry } = useWorkspaceDirectory(binding, true);
   const { snapshot, setFlag } = useSessionOrganization(storageScope);
@@ -57,8 +55,6 @@ export function WorkspaceRecentSessions({
   const visibleRows = current?.state === "ready" ? current.rows.visible : [];
   const archivedRows = current?.state === "ready" ? current.rows.archived : [];
   const arrival = useArrivalRegistry(projected?.map((row) => row.id) ?? [], current?.state === "ready");
-  const empty = current?.state === "ready" && !current.rows.visible.length &&
-    !current.rows.archived.length;
 
   function organizationFor(row: { id: string; title: string }): SessionRowOrganization {
     const entry = snapshot.entries[row.id];
@@ -83,24 +79,6 @@ export function WorkspaceRecentSessions({
   return (
     <section aria-label="最近对话" className={styles.group}>
       <div className={styles.historyBar}>
-        {empty ? (
-          <Link aria-label="打开对话记录" className={styles.historyHeader} data-empty="true" href="/workspace/sessions">
-            <ClockCounterClockwise aria-hidden="true" size={16} />
-            <span>对话记录</span>
-            <CaretRight aria-hidden="true" size={12} />
-          </Link>
-        ) : (
-          <button
-            aria-controls={listId}
-            aria-expanded={expanded}
-            className={`${styles.groupTitle} ${styles.historyDisclosure}`}
-            onClick={() => setExpanded((value) => !value)}
-            type="button"
-          >
-            <span>最近对话</span>
-            <CaretRight aria-hidden="true" className={styles.personCaret} size={12} />
-          </button>
-        )}
         <button
           aria-label="开始新对话"
           className={styles.newConversation}
@@ -108,8 +86,7 @@ export function WorkspaceRecentSessions({
           title="开始新对话"
           type="button"
         >
-          <Plus aria-hidden="true" size={14} />
-          <span>新对话</span>
+          <Plus aria-hidden="true" size={18} />
         </button>
       </div>
       {snapshot.pendingInMemory ? (
@@ -117,7 +94,7 @@ export function WorkspaceRecentSessions({
           本机存储不可用 · 归档与置顶仅在本页保留
         </p>
       ) : null}
-      <div hidden={!expanded} id={listId}>
+      <div>
         {current?.state === "ready" ? (
           visibleRows.length ? (
             <WorkspaceSelectionScope>
@@ -160,11 +137,9 @@ export function WorkspaceRecentSessions({
         ) : current?.state === "error" ? null : (
           <div aria-label="正在读取对话" role="status"><div aria-hidden="true" className={styles.historySkeleton} /></div>
         )}
-        {empty ? null : (
-          <Link aria-label="打开对话记录" className={styles.historyAll} href="/workspace/sessions">
-            查看全部对话
-          </Link>
-        )}
+        <Link aria-label="打开对话记录" className={styles.historyAll} href="/workspace/sessions">
+          查看全部对话
+        </Link>
         {archivedRows.length ? (
           <div className={styles.archivedGroup}>
             <button

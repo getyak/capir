@@ -14,6 +14,7 @@ import {
   WorkspaceShellNav,
 } from "@/components/workspace-shell-nav";
 import { WorkspaceSidebarContext } from "@/components/workspace-sidebar-context";
+import { WorkspaceShellFrame } from "@/components/workspace-shell-frame";
 import { WorkspaceNavigationContinuityProvider } from "@/components/workspace-navigation-continuity";
 import { WorkspaceBrowseProvider } from "@/components/workspace-browse";
 import { WorkspaceGlobalSearchDialog } from "@/components/workspace-search";
@@ -181,13 +182,7 @@ export default async function WorkspaceLayout({
       <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope}>
       <WorkspaceBrowseProvider key={pendingSessionDraftScope} scope={pendingSessionDraftScope} binding={pendingBinding}>
       <PersonContextPanelProvider binding={pendingBinding}>
-      <div lang="zh-CN" className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
-        {pendingBinding ? (
-          <MeetingDraftSessionBoundary sessionVersion={pendingBinding} />
-        ) : null}
-        <SessionDraftSessionBoundary storageScope={pendingSessionDraftScope} />
-        <WorkspaceDirectoryScope binding={pendingBinding} />
-        <aside aria-label="capri 工作台" className={styles.sidebar}>
+      <WorkspaceShellFrame sidebar={<>
           <WorkspaceShellNav binding={pendingBinding} storageScope={pendingSessionDraftScope} />
           <div className={styles.sidebarScroll}>
             <WorkspaceSidebarContext binding={pendingBinding} storageScope={pendingSessionDraftScope} />
@@ -203,7 +198,12 @@ export default async function WorkspaceLayout({
               workspaceName={workspaceName}
             />
           </div>
-        </aside>
+        </>}>
+        {pendingBinding ? (
+          <MeetingDraftSessionBoundary sessionVersion={pendingBinding} />
+        ) : null}
+        <SessionDraftSessionBoundary storageScope={pendingSessionDraftScope} />
+        <WorkspaceDirectoryScope binding={pendingBinding} />
 
         <div className={styles.workspace}>
           <header className={styles.mobileHeader}>
@@ -251,7 +251,7 @@ export default async function WorkspaceLayout({
             </div>
           </TalentSignalLabShell>
         </div>
-      </div>
+      </WorkspaceShellFrame>
       </PersonContextPanelProvider>
       </WorkspaceBrowseProvider>
       </WorkspaceNavigationContinuityProvider>
