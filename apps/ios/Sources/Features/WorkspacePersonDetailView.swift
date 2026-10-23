@@ -60,6 +60,7 @@ struct WorkspacePersonDetailView: View {
                 }
             }
         }
+        .tint(.tsInk)
         .onAppear { isVisible = true }
         .onDisappear {
             isVisible = false

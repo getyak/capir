@@ -33106,6 +33106,70 @@
           }
         }
       }
+    },
+    "Source evidence available": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source evidence available"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来源可用"
+          }
+        }
+      }
+    },
+    "Some source evidence is unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some source evidence is unavailable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "部分来源不可用"
+          }
+        }
+      }
+    },
+    "Manually recorded · no source cited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manually recorded · no source cited"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "人工记录 · 未引用来源"
+          }
+        }
+      }
+    },
+    "Source evidence unavailable · review required": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source evidence unavailable · review required"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来源不可用 · 需重新核对"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

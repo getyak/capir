@@ -125,6 +125,15 @@ enum PersonHandbookPolicy {
 }
 
 enum PersonMemoryPresentation {
+    static func evidenceKey(_ availability: String) -> String {
+        switch availability {
+        case "available": "Source evidence available"
+        case "partial": "Some source evidence is unavailable"
+        case "not_required": "Manually recorded · no source cited"
+        default: "Source evidence unavailable · review required"
+        }
+    }
+
     static func kindKey(_ item: PersonMemoryItem) -> String {
         switch item.statement_kind {
         case "source_statement": "Source statement"

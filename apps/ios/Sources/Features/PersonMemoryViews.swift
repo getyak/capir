@@ -257,7 +257,8 @@ struct PersonInformationView: View {
                                 .accessibilityIdentifier("person-detail-role-title-\(role.id)")
                             Text(WorkspacePersonRolePresentation.summary(for: role, language: appLanguage))
                                 .font(.subheadline).foregroundStyle(Color.tsMutedInk)
-                            Text(role.evidenceState.explanation).font(.caption).foregroundStyle(Color.tsMutedInk)
+                            Text(appLanguage.text(PersonMemoryPresentation.evidenceKey(role.evidenceState.availability)))
+                                .font(.caption).foregroundStyle(Color.tsMutedInk)
                         }
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     }
