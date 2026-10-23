@@ -34,9 +34,8 @@ toggle; the removed disclosure is the one in the recent-conversations header.
 1. Complete: implement the compact header and reversible resize interaction.
 2. Complete: focused single-worker interaction/regression checks using existing
    dependencies; inspect the diff. See verification below.
-3. Blocked by the existing resource pause: obtain independent review, run applicable
-   build/type checks, deploy the affected resident Web from clean committed
-   source and verify desktop/mobile, light/dark and reload on the real surface.
+3. Active: review the integrated slice, satisfy clean build/CI gates, then deploy
+   once through the shared release owner and verify desktop/mobile behavior.
 
 ## Acceptance
 
@@ -83,3 +82,34 @@ desktop drag and edge recovery at expanded/compact widths; keyboard focus;
 narrow/mobile navigation; light/dark/reduced motion; reload; then clean-source
 resident Web deployment and live revision/behavior readback. No PR, merge or
 deployment is claimed. Retain the worktree because this task is not delivered.
+
+## Authorized continuation and shared deployment
+
+The user explicitly allowed continuing build and deployment, then authorized
+coordination with the parallel “sidebar browsing continuity” task and one final
+deployment. The global pause file stays in place for unrelated tasks. This is
+not permission to discard source, active data, rollback versions or CI gates.
+
+- Latest main `a89bba22` was merged into this task as `0ec23197`, retaining its
+  shared compact navigation, Session avatars and unread indicators. The single
+  test rename/content conflict was resolved by preserving both sets of cases.
+- Independent review found no P0/P1 and confirmed two P2 defects: returning a
+  drag to its origin retained the previous preview, and unrelated cross-window
+  storage events discarded the in-memory fallback after a quota failure.
+  Both were reproduced with failing tests and fixed with focused regressions.
+- After these fixes, four focused suites passed **84 tests**, and targeted
+  ESLint, documentation and Wiki checks passed. Full shell rendering still
+  needs clean dependency validation: borrowing the primary checkout's stale
+  contracts distribution causes four `LOCALE_ENDONYMS` failures after the main
+  update. Do not remove those tests or change source to conceal that mismatch.
+- The parallel task at
+  `/Users/cubxxw/.codex/worktrees/workspace-browse-continuity-20261023/talent-signal`
+  owns integration, PR #410, resource recovery, a single clean production build
+  and activation. This task owns this header/resizer slice, review follow-up and
+  readback of the changed behavior after the integrated deployment. User
+  authorization for coordinating messages was explicit in this conversation.
+- No release directories or unrelated caches have been deleted by this task.
+  No production service has been restarted by this task.
+
+Before declaring delivery, read back the integrated revision, applicable CI,
+resident build receipt and actual desktop/narrow resize/recovery behavior.

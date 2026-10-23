@@ -29,7 +29,7 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
   const mobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
   const viewportWidth = useSyncExternalStore(subscribeViewport, () => window.innerWidth, () => 1024);
   const shell = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ pointerId: number; startX: number; startWidth: number; next: SidebarLayout } | null>(null);
+  const drag = useRef<{ pointerId: number; startX: number; startWidth: number; initial: SidebarLayout; next: SidebarLayout } | null>(null);
   const sidebarId = useId();
   const current = preview ?? layout;
   const hidden = !mobile && current.hidden;
@@ -108,12 +108,16 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
           event.preventDefault();
           event.currentTarget.focus();
           event.currentTarget.setPointerCapture(event.pointerId);
-          drag.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: width, next: layout };
+          drag.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: width, initial: layout, next: layout };
         }}
         onPointerMove={event => {
           const active = drag.current;
           if (!active || active.pointerId !== event.pointerId) return;
-          if (Math.abs(event.clientX - active.startX) < 3) return;
+          if (Math.abs(event.clientX - active.startX) < 3) {
+            active.next = active.initial;
+            setPreview(null);
+            return;
+          }
           active.next = resized(active.startWidth + event.clientX - active.startX);
           setPreview(active.next);
         }}

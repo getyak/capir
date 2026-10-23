@@ -43,7 +43,19 @@ function snapshot(): string {
 }
 
 function subscribe(notify: () => void) {
-  const onStorage = () => { memoryPreference = null; notify(); };
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== null && event.key !== SIDEBAR_LAYOUT_KEY && event.key !== WORKSPACE_RAIL_COLLAPSED_KEY) return;
+    try {
+      const storage = window.localStorage;
+      if (event.storageArea && event.storageArea !== storage) return;
+      storage.getItem(SIDEBAR_LAYOUT_KEY);
+    } catch {
+      // An unreadable external change cannot replace the working local fallback.
+      return;
+    }
+    memoryPreference = null;
+    notify();
+  };
   window.addEventListener("storage", onStorage);
   window.addEventListener(WORKSPACE_RAIL_PREFERENCE_EVENT, notify);
   return () => {

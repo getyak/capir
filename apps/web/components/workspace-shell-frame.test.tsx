@@ -59,6 +59,16 @@ afterEach(async () => {
 });
 
 describe("desktop sidebar split", () => {
+  it.each([140, 320])("restores the starting width when a drag returns from %s", async destination => {
+    await render();
+    await pointer("pointerdown", 248);
+    await pointer("pointermove", destination);
+    await pointer("pointermove", 248);
+    await pointer("pointerup", 248);
+    expect(width()).toBe(248);
+    expect(saved()).toEqual({ width: 248, hidden: false, collapsed: false });
+  });
+
   it("previews a drag and only persists its final width, including reload", async () => {
     await render();
     await pointer("pointerdown", 248);
@@ -173,5 +183,16 @@ describe("desktop sidebar split", () => {
     await key("Home"); expect(width()).toBe(0);
     await key("Enter"); expect(width()).toBe(248);
     await key("ArrowRight"); expect(width()).toBe(264);
+  });
+
+  it("preserves in-memory sizing across unrelated storage events when writes fail", async () => {
+    await render();
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("quota"); });
+    await key("Home"); expect(width()).toBe(0);
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "theme" })));
+    expect(width()).toBe(0);
+    await key("Enter"); await key("ArrowRight");
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "locale" })));
+    expect(width()).toBe(264);
   });
 });
