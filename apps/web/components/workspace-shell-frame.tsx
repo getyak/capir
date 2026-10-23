@@ -9,7 +9,7 @@ import {
   WorkspaceSidebarPresentation,
   type SidebarLayout,
 } from "@/lib/workspace-sidebar-layout";
-import { useT } from "./locale-provider";
+import { useLocale, useT } from "./locale-provider";
 import styles from "./workspace-shell.module.css";
 
 const mobileSnapshot = () => window.matchMedia("(max-width: 760px)").matches;
@@ -26,6 +26,7 @@ function subscribeViewport(notify: () => void) {
 /** Local presentation only; Session and account state remain server-owned. */
 export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
   const t = useT();
+  const locale = useLocale();
   const { layout, setLayout } = useWorkspaceSidebarLayout();
   const [preview, setPreview] = useState<SidebarLayout | null>(null);
   const mobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
@@ -84,7 +85,7 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
       data-sidebar-compact={width < 248}
       data-sidebar-hidden={hidden}
       data-sidebar-resizing={preview !== null}
-      lang="zh-CN"
+      lang={locale}
       ref={shell}
       style={{ "--workspace-sidebar-width": `${width}px` } as CSSProperties}
     >

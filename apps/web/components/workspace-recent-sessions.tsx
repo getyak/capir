@@ -77,13 +77,13 @@ export function WorkspaceRecentSessions({
   }
 
   return (
-    <section aria-label="最近对话" className={styles.group}>
+    <section aria-label={t("sessions.recent")} className={styles.group}>
       <div className={styles.historyBar}>
         <button
-          aria-label="开始新对话"
+          aria-label={t("conversation.startNew")}
           className={styles.newConversation}
           onClick={startNewConversation}
-          title="开始新对话"
+          title={t("conversation.startNew")}
           type="button"
         >
           <Plus aria-hidden="true" size={18} />
@@ -91,7 +91,7 @@ export function WorkspaceRecentSessions({
       </div>
       {snapshot.pendingInMemory ? (
         <p className={styles.orgNotice} role="status">
-          本机存储不可用 · 归档与置顶仅在本页保留
+          {t("sessions.storageUnavailable")}
         </p>
       ) : null}
       <div>
@@ -109,7 +109,7 @@ export function WorkspaceRecentSessions({
                             : undefined
                         }
                         aria-label={snapshot.entries[row.id]?.pinned
-                          ? `${row.title}（已置顶）`
+                          ? t("sessions.pinnedTitle", { title: row.title })
                           : undefined}
                         className={styles.sessionRow}
                         href={`/workspace/sessions/${row.id}`}
@@ -120,7 +120,7 @@ export function WorkspaceRecentSessions({
                         {snapshot.entries[row.id]?.pinned ? (
                           <small>
                             <PushPin aria-hidden="true" size={10} weight="fill" />
-                            置顶
+                            {t("sessions.pinned")}
                           </small>
                         ) : null}
                         {row.unread ? <small>{t("未读")}</small> : null}
@@ -135,10 +135,10 @@ export function WorkspaceRecentSessions({
             </WorkspaceSelectionScope>
           ) : null
         ) : current?.state === "error" ? null : (
-          <div aria-label="正在读取对话" role="status"><div aria-hidden="true" className={styles.historySkeleton} /></div>
+          <div aria-label={t("sessions.loading")} role="status"><div aria-hidden="true" className={styles.historySkeleton} /></div>
         )}
-        <Link aria-label="打开对话记录" className={styles.historyAll} href="/workspace/sessions">
-          查看全部对话
+        <Link aria-label={t("nav.openSessions")} className={styles.historyAll} href="/workspace/sessions">
+          {t("sessions.all")}
         </Link>
         {archivedRows.length ? (
           <div className={styles.archivedGroup}>
@@ -149,7 +149,7 @@ export function WorkspaceRecentSessions({
               onClick={() => setArchiveExpanded((value) => !value)}
               type="button"
             >
-              <span>已归档 · 本机整理（{archivedRows.length}）</span>
+              <span>{t("sessions.archived", { count: archivedRows.length })}</span>
               <CaretRight aria-hidden="true" className={styles.personCaret} size={12} />
             </button>
             <div hidden={!archiveExpanded} id={archiveId}>
@@ -176,7 +176,7 @@ export function WorkspaceRecentSessions({
         ) : null}
       </div>
       {current?.state === "error" ? (
-        <p className={styles.historyRecovery}>暂时无法读取<button onClick={retry} type="button">重试</button></p>
+        <p className={styles.historyRecovery}>{t("sessions.error")}<button onClick={retry} type="button">{t("sessions.retry")}</button></p>
       ) : null}
     </section>
   );

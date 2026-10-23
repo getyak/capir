@@ -3,6 +3,67 @@ import XCTest
 
 @MainActor
 final class DesktopConnectionTests: XCTestCase {
+    func testDiagnosticsRetireOldEndpointRequestsAndCompletedResults() async throws {
+        let a = try XCTUnwrap(WorkspaceOrigin("https://a.example"))
+        let b = try XCTUnwrap(WorkspaceOrigin("https://b.example"))
+        let started = [expectation(description: "A started"), expectation(description: "B started")]
+        let finished = [expectation(description: "A returned"), expectation(description: "B returned")]
+        let pending = PendingConnectionProbes(started: started, finished: finished)
+        defer { pending.finishAll() }
+        let model = WorkspaceConnectionProbeController { await pending.run($0) }
+        model.check(a)
+        await fulfillment(of: [started[0]], timeout: 3)
+        XCTAssertTrue(model.isChecking(for: a))
+
+        model.reset(for: b)
+        XCTAssertNil(model.result(for: a))
+        XCTAssertFalse(model.isChecking(for: b))
+        model.check(b)
+        model.check(b)
+        await fulfillment(of: [started[1]], timeout: 3)
+        XCTAssertEqual(pending.origins, [a, b], "Repeated clicks must not start another check")
+        pending.finish(0, result: .init(reachable: true, summary: "A", detail: "old"))
+        await fulfillment(of: [finished[0]], timeout: 3)
+        XCTAssertNil(model.result(for: b))
+        XCTAssertTrue(model.isChecking(for: b), "A must not end B's pending check")
+
+        let current = ConnectionProbeResult(reachable: false, summary: "B", detail: "current")
+        pending.finish(1, result: current)
+        await fulfillment(of: [finished[1]], timeout: 3)
+        XCTAssertEqual(model.result(for: b), current)
+        XCTAssertFalse(model.isChecking(for: b))
+        XCTAssertNil(model.result(for: a), "Presentation rejects the old result before onChange runs")
+        model.reset(for: a)
+        XCTAssertNil(model.result(for: a), "Changing endpoint clears even a completed check")
+    }
+
+    func testRevisitingAnEndpointAndClosingSettingsCannotReviveAnOldCheck() async throws {
+        let a = try XCTUnwrap(WorkspaceOrigin("https://a.example"))
+        let b = try XCTUnwrap(WorkspaceOrigin("https://b.example"))
+        let started = [expectation(description: "first A started"), expectation(description: "new A started")]
+        let finished = [expectation(description: "old A returned"), expectation(description: "new A returned")]
+        let pending = PendingConnectionProbes(started: started, finished: finished)
+        defer { pending.finishAll() }
+        let model = WorkspaceConnectionProbeController { await pending.run($0) }
+        model.check(a)
+        await fulfillment(of: [started[0]], timeout: 3)
+        model.reset(for: b)
+        model.reset(for: a)
+        model.check(a)
+        await fulfillment(of: [started[1]], timeout: 3)
+        pending.finish(0, result: .init(reachable: true, summary: "old A", detail: "stale"))
+        await fulfillment(of: [finished[0]], timeout: 3)
+        XCTAssertNil(model.result(for: a))
+        XCTAssertTrue(model.isChecking(for: a))
+
+        model.reset(for: nil)
+        pending.finish(1, result: .init(reachable: true, summary: "new A", detail: "closed"))
+        await fulfillment(of: [finished[1]], timeout: 3)
+        XCTAssertNil(model.result(for: a))
+        XCTAssertNil(model.result(for: nil))
+        XCTAssertFalse(model.isChecking(for: a))
+    }
+
     func testWorkspaceLinksNormalizeWithoutAdmittingCredentials() throws {
         let link = try XCTUnwrap(WorkspaceConnection.parseInput(" https://WORK.example:443/workspace/today ", allowLocalDevelopment: false))
         XCTAssertEqual(link.url.absoluteString, "https://work.example")
@@ -76,6 +137,46 @@ final class DesktopConnectionTests: XCTestCase {
         XCTAssertNil(DesktopChromeAction.resolve(target, source: URL(string: "https://elsewhere.example"), origin: origin, mainFrame: true, userActivated: true))
         for suffix in ["", "?offer=invalid", "?offer=\(offer.uuidString)&offer=\(offer.uuidString)", "?offer=\(offer.uuidString)&url=https://elsewhere.example"] {
             XCTAssertNil(DesktopChromeAction.resolve(URL(string: "talentsignal-desktop://install-update\(suffix)")!, source: origin.entryURL, origin: origin, mainFrame: true, userActivated: true))
+        }
+    }
+}
+
+/// Deliberately ignores task cancellation so the production controller must
+/// enforce ownership even when a transport returns after cancellation.
+@MainActor
+private final class PendingConnectionProbes {
+    let started: [XCTestExpectation]
+    let finished: [XCTestExpectation]
+    private(set) var origins: [WorkspaceOrigin] = []
+    private var pending: [Int: CheckedContinuation<ConnectionProbeResult, Never>] = [:]
+
+    init(started: [XCTestExpectation], finished: [XCTestExpectation]) {
+        self.started = started
+        self.finished = finished
+    }
+
+    func run(_ origin: WorkspaceOrigin) async -> ConnectionProbeResult {
+        let index = origins.count
+        origins.append(origin)
+        let result = await withCheckedContinuation { continuation in
+            pending[index] = continuation
+            if started.indices.contains(index) { started[index].fulfill() }
+        }
+        if finished.indices.contains(index) { finished[index].fulfill() }
+        return result
+    }
+
+    func finish(_ index: Int, result: ConnectionProbeResult) {
+        let continuation = pending.removeValue(forKey: index)
+        XCTAssertNotNil(continuation)
+        continuation?.resume(returning: result)
+    }
+
+    func finishAll() {
+        let remaining = Array(pending.values)
+        pending.removeAll()
+        for continuation in remaining {
+            continuation.resume(returning: .init(reachable: false, summary: "test cleanup", detail: ""))
         }
     }
 }

@@ -13,6 +13,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { WorkspaceShellNav, WorkspaceMobileSourcesLink } from "@/components/workspace-shell-nav";
+import { LocaleProvider } from "@/components/locale-provider";
 import {
   WORKSPACE_NAV_ROUTES,
   workspaceMobileNavRoutes,
@@ -60,7 +61,7 @@ describe("workspace navigation accessibility and reachability", () => {
     expect(indices).toEqual([...indices].sort((a, b) => a - b));
   });
 
-  it("keeps the compact dock to four destinations plus a named extension button", () => {
+  it("keeps the compact dock to four destinations", () => {
     expect(workspaceMobileNavRoutes().map((item) => item.id)).toEqual([
       "home",
       "today",
@@ -73,9 +74,21 @@ describe("workspace navigation accessibility and reachability", () => {
         `data-mobile="${route.mobile ? "true" : "false"}"`,
       );
     }
-    expect(read("components/workspace-shell-nav.tsx")).toContain(
-      'aria-label="打开扩展"',
-    );
+  });
+
+  it("uses the account display language for desktop and mobile navigation without changing destinations", () => {
+    const html = renderToStaticMarkup(<LocaleProvider locale="en">
+      <WorkspaceShellNav binding={null} />
+      <WorkspaceMobileSourcesLink />
+    </LocaleProvider>);
+    for (const label of ["Workspace navigation", "Today", "Conversation", "People", "Time", "Search people or conversations", "Open the conversation log", "Open extensions"]) {
+      expect(html).toContain(`aria-label="${label}"`);
+    }
+    for (const href of ["/workspace/today", "/workspace", "/workspace/people", "/workspace/meetings", "/workspace/sessions", "/workspace/extensions"]) {
+      expect(html).toContain(`href="${href}"`);
+    }
+    expect(html).not.toContain('aria-label="打开扩展"');
+    expect(html).not.toContain('aria-label="搜索人物或对话"');
   });
 
   it("keeps both conversations and extensions directly reachable on narrow screens", () => {

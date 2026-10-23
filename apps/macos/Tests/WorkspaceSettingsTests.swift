@@ -261,10 +261,6 @@ final class WorkspaceSettingsTests: XCTestCase {
         var state = WorkspaceSettingsSearchState()
         state.update("截图")
         XCTAssertGreaterThanOrEqual(state.results.count, 2)
-        XCTAssertEqual(state.activeIndex, -1)
-        XCTAssertNil(state.activeEntry)
-
-        state.moveDown()
         XCTAssertEqual(state.activeIndex, 0)
         XCTAssertNotNil(state.activeEntry)
         for _ in 0..<state.results.count { state.moveDown() }
@@ -282,6 +278,21 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertTrue(state.isEmptyResult)
         state.moveDown()
         XCTAssertEqual(state.activeIndex, -1, "An empty result list cannot select a row")
+        XCTAssertNil(state.activeEntry)
+    }
+
+    func testSearchReturnDestinationAlwaysMatchesTheNewTopResult() {
+        var state = WorkspaceSettingsSearchState()
+        state.update("截图")
+        state.moveUp()
+        XCTAssertEqual(state.activeIndex, state.results.count - 1)
+
+        state.update("软件更新")
+        XCTAssertEqual(state.activeIndex, 0)
+        XCTAssertEqual(state.activeEntry?.action, .section(.updates))
+        state.update("不存在的设置名称")
+        XCTAssertNil(state.activeEntry)
+        state.update("   ")
         XCTAssertNil(state.activeEntry)
     }
 
