@@ -173,10 +173,12 @@ ed268276-57c5-4eee-9e0f-37c0e117b732 until the run's expiry. Its four-hour lifet
 elapsed before a product upload occurred. Stop/expiry cleanup readback is still
 required before provisioning another bounded acceptance run. Private credentials
 remain in the private artifact/keyring only. During a backend transport failure,
-CLI refresh became uncertain; do not replay that credential. Approval to revoke
-and re-login the exact staging CLI grant is pending because its derived entries
-may serve other work. Native verification continues independently.
-Live Memory behavior, direct VoiceOver/Chinese input checks, compact layout,
+CLI refresh became uncertain; do not replay that credential. The user approved
+recovering exactly this staging grant on 2026-10-23. Standard logout confirmed
+remote revocation of grant 95150c8b-306a-4291-b478-c2bc05e202da and exact local
+removal. Normal browser re-login was submitted, but renewed API readiness
+timeouts prevented completion; no new grant or replacement test run is claimed.
+Live Memory behavior, direct VoiceOver/Chinese input checks,
 device latency and installed TestFlight fidelity still require proof. The
 primary native UI result uses synthetic data and does not prove these paths.
 Draft PR #405 is open:
@@ -229,3 +231,22 @@ The audit is classified under docs/research; repository hygiene remains intact.
 The existing backend recovered without intervention: scoped health/readiness
 and HTTP revision were verified on 2026-10-23. Prior transport-failure cause is
 unknown; health does not establish model completion or the native save path.
+
+## Latest verification and security follow-through
+
+At ad037092, CI completed successfully: 754 unit tests with one skipped and no
+failures, plus all 14 quick UI cases. The compact retry reused build 9 at
+27c95988 and passed its two selected long-image/editing and AX5-dark cases;
+the first infrastructure failure remains recorded. These results do not prove
+provider, physical-device or TestFlight behavior.
+
+The independent Security workflow then reported GHSA-rxp7-6hxx-x8q5 in the
+existing ip-address 10.7.1 override. The narrow patch moves that package to
+10.7.4 without any unrelated lockfile changes. Production audit and independent
+source/integrity review passed. Latest-head checks remain required after this
+commit. Because the package is in the existing backend/Agent runtime closure,
+the native-only deployment exemption no longer applies: prepare clean committed
+canonical API/research, browser-executor and Web releases, verify no active
+work before switching, and require the existing deployment/readback gates.
+Preserve unrelated legacy stacks and the shared database. Recheck host resource
+pressure before serial builds; no global VM restart or unrelated process kill.
