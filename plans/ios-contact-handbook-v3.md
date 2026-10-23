@@ -32,7 +32,7 @@ infer a context-to-Pursuit link or manufacture missing profile/contact fields.
 1. [complete] Implement scoped, validated read models and minimal contact page.
 2. [complete for unit/source; runtime pending] Verify wire scope, stale-response rejection, pagination, empty/failure
    recovery and real navigation with focused tests and independent review.
-3. [blocked by native test environment] Build and inspect the native primary-iPhone result against v3;
+3. [active: hosted CI after local environment failure] Build and inspect the native primary-iPhone result against v3;
    record unresolved blockers truthfully, then deliver the clean source change.
 
 ## Completion evidence
@@ -86,3 +86,10 @@ the same independent reviewer confirmed selectors and documentation counts.
 Hosted macOS CI will provide native interaction and screenshot acceptance
 without starting another local Simulator session. Keep the PR draft until the
 relevant UI outcomes and screenshots are checked.
+
+Successful hosted contact journeys now retain their screenshot attachments,
+using exact result-part filenames alongside existing Agent settings evidence.
+The independent reviewer confirmed export scope and retention; all 18 release
+policy checks passed. Native-only presentation is frozen pending actual UI
+results (ink navigation tint, localized evidence availability, and the
+selected-person unsent-chat assertion are included).

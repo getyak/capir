@@ -239,6 +239,13 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
     "testContactContinueOpensAnUnsentScopedConversation",
     "testContactMemoryKeepsFutureStatementAndSourceReachable",
   ];
+  const contactEvidence = ciWorkflow.match(/      - name: Export native navigation and contact evidence\n([\s\S]*?)(?=\n      - name:)/);
+  assert.ok(contactEvidence, "Contact screenshots must survive successful CI runs");
+  assert.match(contactEvidence[1], /if: always\(\)/);
+  assert.match(contactEvidence[1], /xcresulttool export attachments/);
+  for (const method of criticalContactTests) {
+    assert.ok(contactEvidence[1].includes(`*-${method}.xcresult`), `CI must retain screenshots for ${method}`);
+  }
   const uiSources = new Map();
   for (const [scope, budget] of Object.entries(tierBudgets)) {
     const smokeTests = readFileSync(
