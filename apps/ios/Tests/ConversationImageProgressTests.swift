@@ -47,10 +47,19 @@ final class ConversationImageProgressTests: XCTestCase {
         XCTAssertNil(value.elapsedText(at: started.addingTimeInterval(9)))
     }
 
-    func testCompletedQueueRowIsReadbackAndAbsentRowIsNeverSuccess() throws {
+    func testCompletedQueueRowOnlyShowsReadbackDuringAnActiveCanonicalReplyCheck() throws {
         var pending = pending(); pending.state = .admitted
         let row = try entry(messageID: pending.messageID, status: "completed")
-        XCTAssertEqual(progress(pending, checking: true, entry: row, observedAt: now).phase, .readback)
+        let checking = progress(pending, checking: true, entry: row, observedAt: now)
+        XCTAssertEqual(checking.phase, .readback)
+        XCTAssertTrue(checking.showsActivity)
+        XCTAssertFalse(checking.canCheck)
+        let unresolved = progress(pending, entry: row, observedAt: now)
+        XCTAssertEqual(unresolved.messageID, pending.messageID)
+        XCTAssertEqual(unresolved.phase, .unknown)
+        XCTAssertEqual(unresolved.textKey, "Reply status needs checking")
+        XCTAssertFalse(unresolved.showsActivity)
+        XCTAssertTrue(unresolved.canCheck)
         XCTAssertEqual(progress(pending, entry: nil, observedAt: now).phase, .unknown)
     }
 
@@ -130,8 +139,9 @@ final class ConversationImageProgressTests: XCTestCase {
         let completed = ConversationImageProgressState.derive(pending: pending, isSending: false,
             isChecking: false, entry: try entry(messageID: pending.messageID, status: "completed"),
             observedAt: later, now: later)
-        XCTAssertEqual(completed.presentation(at: later.addingTimeInterval(66)).phase, .readback)
+        XCTAssertEqual(completed.presentation(at: later.addingTimeInterval(66)).phase, .unknown)
         XCTAssertFalse(completed.showsActivity)
+        XCTAssertTrue(completed.canCheck)
     }
 
     func testFutureObservationAndClockRollbackFailClosedOutsideExistingTolerance() throws {
@@ -150,7 +160,7 @@ final class ConversationImageProgressTests: XCTestCase {
         XCTAssertTrue(anomalous.canCheck)
     }
 
-    func testStoppingObservationExpiresButLocalSendAndTerminalStatesDoNot() throws {
+    func testStoppingObservationExpiresButLocalSendAndFailureStatesDoNot() throws {
         var pending = pending()
         let stopping = progress(pending, entry: try entry(messageID: pending.messageID,
             status: "running", extra: ["cancel_requested": true]), observedAt: now)
@@ -168,8 +178,11 @@ final class ConversationImageProgressTests: XCTestCase {
         XCTAssertNil(checkingAdmission.observationExpiresAt)
         XCTAssertEqual(checkingAdmission.presentation(at: now.addingTimeInterval(300)), checkingAdmission)
 
-        for status in ["completed", "failed", "interrupted", "cancelled"] {
+        for status in ["failed", "interrupted", "cancelled"] {
             let terminal = progress(pending, entry: try entry(messageID: pending.messageID, status: status), observedAt: now)
+            XCTAssertEqual(terminal.phase, status == "cancelled" ? .stopped : .failed)
+            XCTAssertFalse(terminal.showsActivity)
+            XCTAssertTrue(terminal.canCheck)
             XCTAssertNil(terminal.observationExpiresAt)
             XCTAssertEqual(terminal.presentation(at: now.addingTimeInterval(300)), terminal)
         }

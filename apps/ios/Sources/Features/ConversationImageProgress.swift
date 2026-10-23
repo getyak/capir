@@ -51,7 +51,11 @@ struct ConversationImageProgressState: Equatable {
                 return state(.running, stageText(observedStage ?? entry.progressStage), activity: true,
                     elapsed: entry.startedAt, expiresAt: expiresAt)
             case .completed:
-                return state(.readback, "Reading the saved reply…", activity: isChecking)
+                // Queue completion does not establish that this Session has
+                // its canonical reply. A failed/finished check stays recoverable
+                // until that reply actually removes the protected pending row.
+                return isChecking ? state(.readback, "Reading the saved reply…", activity: true)
+                    : state(.unknown, "Reply status needs checking", check: true)
             case .failed, .interrupted:
                 return state(.failed, entry.failureCode == "MODEL_RUN_TIMEOUT"
                     ? "Processing timed out. Check the original message." : "Processing did not finish. Check its status.", check: true)

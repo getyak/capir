@@ -33,6 +33,37 @@ final class ConversationImageProgressTrackerTests: XCTestCase {
         XCTAssertEqual(terminal.textKey, "Reading the saved reply…")
     }
 
+    func testCompletedQueueWithoutCanonicalReplyIsCheckableAfterReadbackFinishes() throws {
+        let pending = pending()
+        let tracker = ConversationImageProgressTracker()
+        tracker.beginChecking(messageID: pending.messageID)
+        // The real polling producer can observe a completed queue row while
+        // the Session record still has no canonical reply payload.
+        tracker.apply(observation(row: try entry(pending: pending, runID: UUID(), status: "completed"),
+            revision: 1), messageID: pending.messageID)
+        let checking = tracker.state(for: pending, isSending: false)
+        XCTAssertEqual(checking.phase, .readback)
+        XCTAssertTrue(checking.showsActivity)
+        XCTAssertFalse(checking.canCheck)
+
+        // Production ends this checking window after a failed GET or a
+        // readback that still cannot reconcile the canonical turn.
+        tracker.finishChecking(messageID: pending.messageID)
+        let unresolved = tracker.state(for: pending, isSending: false)
+        XCTAssertEqual(unresolved.messageID, pending.messageID)
+        XCTAssertEqual(unresolved.phase, .unknown)
+        XCTAssertEqual(unresolved.textKey, "Reply status needs checking")
+        XCTAssertFalse(unresolved.showsActivity)
+        XCTAssertTrue(unresolved.canCheck)
+
+        tracker.beginChecking(messageID: pending.messageID)
+        let retriedCheck = tracker.state(for: pending, isSending: false)
+        XCTAssertEqual(retriedCheck.messageID, pending.messageID)
+        XCTAssertEqual(retriedCheck.phase, .readback)
+        XCTAssertTrue(retriedCheck.showsActivity)
+        XCTAssertFalse(retriedCheck.canCheck)
+    }
+
     func testOlderOrForeignObservationCannotReplaceCurrentMessageProgress() throws {
         let pending = pending(), runID = UUID()
         let tracker = ConversationImageProgressTracker()
