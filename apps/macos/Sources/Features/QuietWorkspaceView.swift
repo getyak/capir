@@ -262,7 +262,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         let result = await DesktopDraftScriptRead.read(timeout: .seconds(6)) { completion in
             webView.callAsyncJavaScript(DesktopDraftRecovery.ownerScript,
                 arguments: ["statusURL": origin.url.appendingPathComponent("api/desktop-auth/status").absoluteString],
-                in: nil, contentWorld: DesktopDraftRecovery.world) { result in
+                in: nil, in: DesktopDraftRecovery.world) { result in
                     completion((try? result.get()) as? String)
                 }
         }
@@ -291,7 +291,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                 let result = await DesktopDraftScriptRead.read { completion in
                     webView.callAsyncJavaScript(DesktopDraftRecovery.readScript,
                         arguments: ["scope": owner.storageScope, "session": id], in: nil,
-                        contentWorld: DesktopDraftRecovery.world) { result in
+                        in: DesktopDraftRecovery.world) { result in
                             completion((try? result.get()) as? String)
                         }
                 }
