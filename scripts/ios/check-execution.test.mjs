@@ -103,6 +103,7 @@ test("real native tiers retain critical image/contact decisions and exclude live
   const prefix = "TalentSignalUITests/ConversationExperienceUITests/";
   const critical = [
     "testProcessingStatusBelongsToItsImageAndHasNoEmptyMessageBubble",
+    "testQueuedStatusNaturallyExpiresWithoutAnotherObservation",
     "testUnavailableReviewExplainsRecoveryAndNeverOffersSave",
     "testAddingContactKeepsDetailsPendingAndSavingOneKeepsTheOtherPending",
     "testNameCorrectionRequiresFreshReviewAndASecondConfirm",
