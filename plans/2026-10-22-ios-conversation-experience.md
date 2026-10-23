@@ -93,9 +93,9 @@ recheck resources and the single iOS session before heavyweight operations.
 1. Complete: freeze native contracts, UX states and worker ownership.
 2. Complete: implement the non-overlapping slices and integrate one complete conversation.
 3. Source review complete: independent reviewer rechecked all confirmed P0/P1 fixes.
-4. Primary proof at 27c95988: build, 110 focused tests and seven deterministic
-   primary-device UI cases passed. Compact layout proof remains incomplete;
-   its Simulator runner failed before entering a test body.
+4. Device proof at 27c95988: build, 110 focused tests, seven deterministic
+   primary-device UI cases and two compact layout/AX5 cases passed. The earlier
+   compact installation failure is retained separately, not counted as a pass.
 5. Current-head CI, applicable resident deployment if runtime changes, native
    release/acceptance evidence and precise resource closeout.
 
@@ -122,131 +122,112 @@ recheck resources and the single iOS session before heavyweight operations.
 
 ## Current status and unknowns
 
-Native Memory, progress and integration source are implemented and independently
-reviewed; all confirmed P0/P1 findings are closed. Build-for-testing attempt 6
-and 109 focused native tests passed on native source at 82142db. Subsequent
-commits through 81ccb05c changed documentation/CI selection only. The complete
-docs:check passed again after merging main. AskView fits the unchanged 8820-line
-architecture limit.
+Native source is frozen at cf1dc3c9f after independent re-review of both final
+progress corrections. Main-owned build-for-testing 12 passed and matches the
+three-file source freeze in the private task evidence. Current-head CI remains
+required; source/build review is not a substitute for its result or live proof.
+The latest status and exact-head checks are recorded under the private task
+artifact listed below rather than copied into a second chronological log.
 
-Primary-device UI attempt 1 ran all seven cases, but every case stopped before
-the fixture mounted. The captured accessibility hierarchy showed the new-session
-composer: its entry predicate bypassed the fixture's conversation branch. A
-DEBUG-preview-only predicate correction passed build 7. UI attempt 2 reached
-the actual fixture: one case passed and six failed. Direct screenshot and
-accessibility-tree inspection found invisible dark-mode primary-button text,
-undersized secondary/recovery targets, and child image identifiers/bounds
-overridden by container/unclipped-image semantics. The synthetic fixture also
-hit protected-write failure through a Keychain dependency in the unsigned local
-test build. The fixture now uses a DEBUG-only in-memory operation adapter;
-production persistence remains protected. Button labels and bounded media
-surfaces are corrected. Build 8 passed; UI attempt 3 passed five of seven cases,
-including both reading directions, original-image access, pending status,
-AX5/dark mode and unavailable recovery. The remaining two assertions queried
-receipt child text after successful actions. The receipt now has an explicit
-accessibility container; existing assertions remain unchanged. Build 9 passed,
-with 110 focused unit tests and all seven primary-device UI cases passing on
-native source 27c95988. The same interaction assertions were retained. Compact
-verification reused this build for the justified long-image/keyboard/AX5 layout
-cases; CoreSimulator stalled at installation/runner launch and never entered a
-test body. Main canceled only its verified driver PID 60557 with SIGINT under
-renewed resource pressure. The guarded session ended and shut down its owned
-device; no simulator data was erased. This is not a compact passing result.
-CI also exposed
-two obsolete policy-test assumptions (maximum ten cases and two old test classes);
-the bounded quick 14/smoke 15 policy correction passed 18 policy tests and its
-focused selector regression. Neither failure is waived.
+The identity-first editorial direction was selected against the compact option
+using identical native synthetic content. Name, context, source and Add contact
+precede a collapsed suggestion preview. Contact confirmation and each Memory
+item remain separate decisions. Correcting identity requires refreshed review
+and another confirmation. Protected submitted operations recover with their
+same identity. Unsent name/context survives source-viewer return only while the
+same Store survives; Store destruction/app termination continuity is deferred.
+Authorized photos or readable initials identify people; private screenshot
+avatars are not automatically imported as permanent contact photos.
 
-Pi media task 20261022-220909-decb4775 stalled on one model response without
-source changes, was cancelled, and its managed PIDs 93921/93926 were verified
-absent. Artifacts and source remain recoverable. Media ownership transferred to
-native_progress after cancellation; no concurrent writers remain in that slice.
+## Verification evidence and boundaries
 
-Main resource/artifact record: ~/.codex/artifacts/ios-conversation-experience-20261022/.
-Registered rebuildable output: /private/tmp/ai-test-ios-conversation-experience-20261022.kmczFu.
-A pinned docs command auto-installed workspace dependencies; these are owned
-rebuildable task outputs to remove only after formal evidence is preserved.
-One isolated daily test run acea8a63-ec2d-4051-8414-a7c6aebba8fb was created via
-capir under the verified test@cubxxw.com authorization. Its --open web browser
-launch timed out; run status readback succeeded. Reuse request
-ed268276-57c5-4eee-9e0f-37c0e117b732 until the run's expiry. Its four-hour lifetime
-elapsed before a product upload occurred. Stop/expiry cleanup readback is still
-required before provisioning another bounded acceptance run. Private credentials
-remain in the private artifact/keyring only. During a backend transport failure,
-CLI refresh became uncertain; do not replay that credential. The user approved
-recovering exactly this staging grant on 2026-10-23. Standard logout confirmed
-remote revocation of grant 95150c8b-306a-4291-b478-c2bc05e202da and exact local
-removal. Normal browser re-login was submitted, but renewed API readiness
-timeouts prevented completion; no new grant or replacement test run is claimed.
-Live Memory behavior, direct VoiceOver/Chinese input checks,
-device latency and installed TestFlight fidelity still require proof. The
-primary native UI result uses synthetic data and does not prove these paths.
-Draft PR #405 is open:
-https://github.com/getyak/capir/pull/405. Latest-head required CI and real-provider
-acceptance remain pending; no merge, deployment or release is claimed.
+- At 27c95988, build 9, 110 focused tests, seven primary UI cases and two compact
+  layout/AX5 cases passed. Earlier infrastructure failures and their cancellation
+  are retained separately. Main inspected the actual synthetic native surfaces.
+- At 21dab6ec, all applicable CI/Security/package checks passed, including 754
+  unit tests (one skipped, no failures) and 14 quick UI cases. Build 10 passed.
+  These remain historical source-bound results, not the latest-head result.
+- The final silent-feed correction adds seven unit cases and a real natural-
+  expiry UI scenario. The component updates even without a new Store/network
+  event, including queued/running observations with no startedAt. Overdue
+  observations stop animating and offer the same-message status check.
+- The final canonical-readback correction adds a production Tracker transition
+  regression. A queue-completed row stays readback only while checking; after
+  an unsuccessful check it becomes recoverable unknown. Only the canonical
+  same-message reply removes pending state. Queue completion is not that reply.
+- Quick/smoke now include 15/16 explicit journeys and retain the natural-expiry
+  scenario. Both strict policy budgets and discovery/deduplication guards were
+  updated; 34 targeted script/policy checks and docs:check passed. Their first
+  missing-budget failure is preserved rather than waived.
+- Build 11 passed the first progress fix; build 12 passed both. The local expiry
+  attempt was cancelled before any test-case body or live upload when Simulator
+  cold boot raised swap to 19GiB and lowered free disk to 27GiB. Its owned device
+  was shut down and read back as Shutdown. This interrupted attempt is no pass.
 
-## Source review checkpoint
+The source-based cross-platform symptom map remains in the
+[dated audit](../docs/research/ios-conversation-ux-audit-2026-10-22.md).
+The private Chinese report now contains 31 prioritized recommendations. Its
+local-feedback timing target is proposed, not a measured P95. Direct VoiceOver,
+Chinese IME, physical-device/TestFlight, global avatars, next-message drafting,
+reading-position retention and broader unsent-draft continuity remain distinct
+follow-ups. The macOS primary workspace reuses Web; the screenshot's brand ring
+is an idle voice action, not proof of an active network request.
 
-All source slices are frozen for native verification. Independent review closed
-all confirmed P0/P1, including historical and canonical steering provenance,
-scoped relationship Ask snake-case proposal decoding and purpose isolation,
-protected exact intent replay, source revocation/expiry cleanup and incremental
-contact/item decisions. Source review is not runtime or release proof.
+## Runtime and live acceptance
 
-The new-contact layout is identity-first: name/context/source and Add contact
-precede a collapsed suggestion preview; pending Memory editors follow actual
-contact confirmation. Editorial and compact directions share the same behavior.
-Source inspection and suspension preserve edits while the same review store
-survives. Protected submitted operations can recover after store recreation;
-unsent name/context fields are not included in the server draft contract and
-are not preserved after store destruction or app termination. That broader
-draft-continuity behavior remains deferred, not an unmeasured completed feature.
-Seven deterministic UI cases and one opt-in real-provider image/contact journey
-are present. Build 6 and focused unit evidence are recorded above; the main agent
-owns build 9 and its passing primary UI rerun. Documentation/architecture and
-localization gates passed. Pending compact, provider and installed-build
-evidence cannot be replaced by source review or synthetic primary results.
+The existing ip-address advisory was patched narrowly to 10.7.4 with matching
+lockfile integrity and strict dependency expectations. There is no evidence
+that this advisory caused the observed runtime timeouts.
 
-The complete source-based symptom, cross-platform and prioritized improvement
-register is [the dated UX audit](../docs/research/ios-conversation-ux-audit-2026-10-22.md).
-Its proposed local-feedback timing target is not a measured result. The main
-agent inspected the same native content and selected editorial presentation:
-it keeps the identity fields and primary decision prominent while fitting the
-secondary actions on one row; compact insets added a vertical action stack.
-Eight selected synthetic screenshots and the inspected selection rationale are retained in
-the private task artifact. No installed-build quality score or real-provider
-success is inferred from synthetic tests.
+A separate clean runtime source, 1dbb74dcc6358d17277fa799b1d42824a3d50732,
+preserves the deployed unmerged Web/backend ancestry. It passed applicable
+CI/Security, 146 focused Web checks, lint/typecheck/build and Linux/macOS SDK
+execution. Main activated API, research sidecar, Web and browser executor through
+the supported gates. Live revision, immutable image identity and installed
+dependency readback passed; synthetic provider/ASR deployment probes passed.
+Default Docker context, Tailscale exposure and unrelated resident stacks were
+preserved. Do not redeploy the native branch over this different live ancestry.
 
-Historical CI at c1b10dab passed repository policy, security, Web, backend,
-CLI and control-plane checks; native smoke reproduced the receipt-text query
-failure. At fixed source 27c95988, all applicable checks except the still-running
-native smoke have passed. Final consistency review also found two Host failure
-actions with the old outer-frame touch-target pattern. Their labels now own the
-44pt frame and content shape, matching the card treatment already exercised.
-This narrow native delta requires new-head CI; the earlier local results remain
-bound to 27c95988. Renewed host pressure and the prior installation failure mean
-no additional local Simulator run is claimed. Only the latest applicable job
-result can close the CI gate.
-The audit is classified under docs/research; repository hygiene remains intact.
-The existing backend recovered without intervention: scoped health/readiness
-and HTTP revision were verified on 2026-10-23. Prior transport-failure cause is
-unknown; health does not establish model completion or the native save path.
+The user-approved uncertain staging grant was revoked and same-scope normal
+login recovered. The earlier expired test run was verified deleted. A fresh
+isolated daily run was provisioned under the approved test account. Main saw its
+real Web workspace and complete People directory. A canonical People/Memory
+baseline was captured before any native upload; that helper revoked only its
+own temporary session and verified HTTP401. Two earlier password-login timeouts
+remain recorded with unknown cause. Current scoped metadata did not prove a
+lock or sustained CPU saturation; a later login took238ms. No raw personal
+screenshot was uploaded.
 
-## Latest verification and security follow-through
+Real-provider native image -> review -> one contact confirmation -> destination
+and relaunch remains incomplete. On continuation use the private run journal,
+verify expiry and ownership, and start a fresh loopback inspection challenge.
+Never replay an uncertain one-use credential or silently resend an image. On
+handoff stop the isolated run and verify deleted/cleanup-error state; retain
+sanitized evidence and remove only its own generated credentials after cleanup.
 
-At ad037092, CI completed successfully: 754 unit tests with one skipped and no
-failures, plus all 14 quick UI cases. The compact retry reused build 9 at
-27c95988 and passed its two selected long-image/editing and AX5-dark cases;
-the first infrastructure failure remains recorded. These results do not prove
-provider, physical-device or TestFlight behavior.
+## Resource and delivery checkpoint
 
-The independent Security workflow then reported GHSA-rxp7-6hxx-x8q5 in the
-existing ip-address 10.7.1 override. The narrow patch moves that package to
-10.7.4 without any unrelated lockfile changes. Production audit and independent
-source/integrity review passed. Latest-head checks remain required after this
-commit. Because the package is in the existing backend/Agent runtime closure,
-the native-only deployment exemption no longer applies: prepare clean committed
-canonical API/research, browser-executor and Web releases, verify no active
-work before switching, and require the existing deployment/readback gates.
-Preserve unrelated legacy stacks and the shared database. Recheck host resource
-pressure before serial builds; no global VM restart or unrelated process kill.
+The global operations pause is preserved under the user's explicit task
+exception. Only main builds/runs Simulator. No safe cache/artifact candidates
+sufficient for five additional GiB were established; unknown worktrees,
+databases, active runtimes and unique screenshots remain protected. The
+browser VM is the existing profile restored with its original4GiB configuration.
+A reversible temporary2GiB plan awaits explicit approval required by the local
+operations policy; it has not been applied. Recheck live activity, daemon
+identity, context and actual storage before any approved adjustment or new
+Simulator attempt, then restore and verify the original configuration.
+
+Draft PR405 remains open and unmerged:
+https://github.com/getyak/capir/pull/405.
+Neither local source review, green historical CI nor deployed runtime probes
+establish the outstanding native provider journey.
+
+Private formal task evidence and current journal:
+`~/.codex/artifacts/ios-conversation-experience-20261022/`.
+Registered rebuildable output:
+`/private/tmp/ai-test-ios-conversation-experience-20261022.kmczFu`.
+Preserve build12 products, source and unique evidence while acceptance is open.
+Only precisely owned cleanup is authorized; do not infer task completion from
+age or ready_for_review. Pi media task20261022-220909-decb4775 was cancelled
+without source edits; its verified PIDs93921/93926 were stopped and ownership
+transferred. All later process/resource actions are recorded in resources.json.
