@@ -60,6 +60,7 @@ for (const asset of manifest.png) {
 }
 
 const runtimeSources = [
+  "apps/web/public/brand/symbol-ink.svg",
   "apps/web/components/brand-mark.tsx",
   "apps/web/app/icon.tsx",
   "apps/browser-extension/load-unpacked/sidepanel.html",
@@ -74,6 +75,12 @@ for (const file of runtimeSources) {
     `${file} drifted from the signal geometry`,
   );
 }
+
+assert.equal(
+  await readFile(path.join(repositoryRoot, "apps/web/public/brand/symbol-ink.svg"), "utf8"),
+  await readFile(path.join(brandRoot, "svg/talent-signal-symbol-ink.svg"), "utf8"),
+  "Workspace monochrome mark must match the approved ink asset",
+);
 
 const canonicalAppIcon = await readFile(
   path.join(brandRoot, "png/app-icon-1024.png"),

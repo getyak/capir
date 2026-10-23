@@ -20,12 +20,15 @@ export function ConversationProvenance({
 }: {
   sources?: ReadonlyArray<{ display_name: string }> | null;
 }) {
-  const names = (sources ?? [])
+  const names = [...new Set((sources ?? [])
     .map((source) => source.display_name.trim())
-    .filter((name) => name.length > 0);
+    .filter((name) => name.length > 0))];
+  // Absence of governed references does not earn a repeated footer under
+  // ordinary prose. Never synthesize a source or promote model links here.
+  if (!names.length) return null;
   return (
     <p className={styles.provenance}>
-      依据 · {names.length ? names.join(" · ") : "未附引用来源"}
+      依据 · {names.join(" · ")}
     </p>
   );
 }

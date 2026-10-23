@@ -4,8 +4,8 @@ import { useCallback, useRef, useState } from "react";
 import { avatarCropBounds, centeredAvatarCrop, drawAvatarCrop, encodeAvatarCrop, type AvatarCrop } from "@/lib/avatar-upload";
 import styles from "./avatar-editor.module.css";
 
-export function AvatarCropEditor({ bitmap, onApply, onCancel }: {
-  bitmap: ImageBitmap; onApply: (photo: string) => void; onCancel: () => void;
+export function AvatarCropEditor({ bitmap, shape = "circle", onApply, onCancel }: {
+  bitmap: ImageBitmap; shape?: "circle" | "squircle"; onApply: (photo: string) => void; onCancel: () => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const drag = useRef<{ x: number; y: number; crop: AvatarCrop } | null>(null);
@@ -18,7 +18,7 @@ export function AvatarCropEditor({ bitmap, onApply, onCancel }: {
   }, [bitmap, crop]);
   const bounds = avatarCropBounds(bitmap.width, bitmap.height, crop);
   return <section className={styles.crop} aria-label="调整头像图片">
-    <canvas ref={renderPreview} width={384} height={384} className={styles.cropPreview} role="img" aria-label="头像裁切预览"
+    <canvas ref={renderPreview} width={384} height={384} className={styles.cropPreview} data-shape={shape} role="img" aria-label="头像裁切预览"
       onPointerDown={event => {
         drag.current = { x: event.clientX, y: event.clientY, crop };
         event.currentTarget.setPointerCapture(event.pointerId);

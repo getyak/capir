@@ -21,7 +21,7 @@ const choices = [
 
 /** One on-demand editor owns the draft, decoded image and save attempt for the workspace. */
 export default function AvatarEditorDialog({ request, onClose }: { request: AvatarEditorRequest; onClose: () => void }) {
-  const { id, label, url, self = false } = request;
+  const { id, label, url, self = false, shape = "circle" } = request;
   const { store, defaultStyle } = useAvatarPreferences();
   const entity = self ? "self" : `person:${id}`;
   const seed = self ? store?.key ?? id : id;
@@ -143,10 +143,10 @@ export default function AvatarEditorDialog({ request, onClose }: { request: Avat
           <Dialog.Description className={styles.description}>选一张照片，或挑一个喜欢的图案。</Dialog.Description>
         </header>
         <div ref={body} className={styles.body} role="region" aria-label="头像预览与显示设置" tabIndex={0}>
-          {bitmap ? <AvatarCropEditor key={cropVersion} bitmap={bitmap}
+          {bitmap ? <AvatarCropEditor key={cropVersion} bitmap={bitmap} shape={shape}
             onApply={photo => { setDraft({ style: "auto", photo }); setBitmap(null); }} onCancel={() => setBitmap(null)} /> : <>
             <div className={styles.preview}>
-              <IdentityAvatar id={seed} label={label} url={url} size={88} defaultStyle={defaultStyle} preference={draft} />
+              <IdentityAvatar id={seed} label={label} url={url} size={88} shape={shape} defaultStyle={defaultStyle} preference={draft} />
               <strong>{label}</strong>
               <span>{draft.photo && draft.style === "auto" ? "自选图片" : draft.seed ? "选好后保存，头像就会保持不变" : draft.style === "auto" ? "优先照片，没有照片时使用默认风格" : "为这个头像单独设置"}</span>
               {self ? <button type="button" className={styles.shuffle} disabled={busy} onClick={shuffle}><Shuffle size={16} aria-hidden="true" />换一个</button> : null}
@@ -155,7 +155,7 @@ export default function AvatarEditorDialog({ request, onClose }: { request: Avat
               <legend>显示方式</legend>
               <div className={styles.options}>
                 {choices.map(choice => <button type="button" key={choice.value} aria-pressed={draft.style === choice.value} className={styles.option} onClick={() => selectStyle(choice.value)}>
-                  <IdentityAvatar id={seed} label={label} url={url} size={40} defaultStyle={defaultStyle} preference={{ ...draft, style: choice.value,
+                  <IdentityAvatar id={seed} label={label} url={url} size={40} shape={shape} defaultStyle={defaultStyle} preference={{ ...draft, style: choice.value,
                     seed: self && (choice.value === "shapes" || choice.value === "glass") ? variationSeed : undefined }} />
                   <span>{choice.label}</span>{draft.style === choice.value ? <Check className={styles.selected} aria-hidden="true" size={12} /> : null}
                 </button>)}

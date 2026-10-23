@@ -1851,7 +1851,6 @@
   :global(html[data-desktop-surface="workspace"]) :is(.searchDialog, .accountPopover, .sessionRowMenuPopover) { background: var(--surface); }
 }
 
-.brandMark { filter: grayscale(1); }
 
 .sessionRowSlide > a { flex: 1 1 auto; min-width: 0; }
 

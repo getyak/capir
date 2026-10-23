@@ -1591,5 +1591,14 @@
   "这个 Mac 登录请求无效、已过期或与当前浏览器不匹配。请回到 Mac，重新发起登录。": "這個 Mac 登入請求無效、已過期或與目前瀏覽器不符。請回到 Mac，重新發起登入。",
   "暂时无法连接登录服务。请稍后回到 Mac 重试；这不代表你已经退出登录。": "暫時無法連線至登入服務。請稍後回到 Mac 重試；這不代表你已登出。",
   "未读": "未讀",
-  "{title}（未读）": "{title}（未讀）"
+  "{title}（未读）": "{title}（未讀）",
+  "conversation.copy.user": "複製訊息",
+  "conversation.copy.answer": "複製回答",
+  "conversation.copy.retryUser": "重新複製訊息",
+  "conversation.copy.retryAnswer": "重新複製回答",
+  "conversation.copy.failed": "複製失敗，請再試一次",
+  "conversation.copy.success": "已複製",
+  "conversation.copy.busy": "正在複製",
+  "conversation.send.steer": "補充",
+  "conversation.send.queue": "排隊"
 }

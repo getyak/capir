@@ -4,12 +4,13 @@
 .response > :first-child { margin-top: 0; }
 .response > :last-child { margin-bottom: 0; }
 .response p { margin: 0 0 16px; white-space: pre-wrap; }
-.response ol { counter-reset: response-point; list-style: none; margin: 16px 0; padding: 0; }
-.response ol > li { color: var(--ink); counter-increment: response-point; font-size: var(--ts-type-body, 0.9375rem); font-weight: 600; line-height: var(--ts-leading-body, 1.667); margin: 16px 0; padding-left: 2em; position: relative; }
-.response ol > li::before { color: var(--ink); content: counter(response-point, decimal-leading-zero); font-variant-numeric: tabular-nums; font-weight: 600; left: 0; position: absolute; }
+.response ol { list-style: decimal; margin: 16px 0; padding-left: 1.75em; }
+.response ol > li { color: var(--ink); font-size: var(--ts-type-body, 0.9375rem); font-weight: 400; line-height: var(--ts-leading-body, 1.667); margin: 8px 0; padding-left: .25em; }
+.response ol > li::marker { color: var(--muted-strong); font-variant-numeric: tabular-nums; }
+.response li :is(ol, ul) { margin: 8px 0; }
 .response ol > li > p { margin: 0; }
 .response ol > li > p:first-child { margin-bottom: 5px; }
-.response ol > li > p + p { color: var(--muted); font-weight: 400; }
+.response ol > li > p + p { font-weight: 400; }
 .response ol > li strong { color: var(--ink); font-weight: 600; }
 .response :is(h3, h4, h5, h6) { color: var(--ink); font-size: var(--ts-type-body, 0.9375rem); font-weight: 600; line-height: var(--ts-leading-heading, 1.4); margin: 16px 0 8px; }
 .response ul { list-style: disc; margin: 16px 0; padding-left: 1.5em; }

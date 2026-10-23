@@ -278,6 +278,7 @@ describe("explicit New conversation focus handoff", () => {
     expect(composer.disabled).toBe(true);
     expect(document.activeElement).toBe(action);
     await flush();
+    expect(document.querySelector("#queued-conversation-composer")).toBe(composer);
     expect(composer.disabled).toBe(false);
     expect(document.activeElement).toBe(composer);
   });

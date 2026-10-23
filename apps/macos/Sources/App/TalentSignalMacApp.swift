@@ -41,6 +41,9 @@ struct TalentSignalMacApp: App {
                     }
                 }
                     .environmentObject(model)
+                    .focusedSceneValue(\.nativeToolsActive,
+                        isQuickPanelPreview || ProcessInfo.processInfo.arguments.contains("--native-tools-preview") ||
+                        ProcessInfo.processInfo.arguments.contains("--ui-testing"))
                     .environment(\.dynamicTypeSize, model.isAccessibilityZoomPreview ? .accessibility2 : .large)
                     .modifier(NativeAppearancePreview(enabled: model.isDarkAppearancePreview))
                     .task {
@@ -82,6 +85,7 @@ struct TalentSignalMacApp: App {
         Window("本机工具", id: "native-tools") {
             NativeInitializationBoundary { RelationshipWorkspaceView() }
                 .environmentObject(model)
+                .focusedSceneValue(\.nativeToolsActive, true)
                 .frame(minWidth: 900, minHeight: 640)
         }
         .defaultSize(width: 1180, height: 820)
@@ -90,6 +94,7 @@ struct TalentSignalMacApp: App {
             ApplicationZoomContainer(enabled: model.isAccessibilityZoomPreview) {
                 NativeInitializationBoundary { QuickPanelView() }
                     .environmentObject(model)
+                    .focusedSceneValue(\.nativeToolsActive, true)
                     .environment(\.dynamicTypeSize, model.isAccessibilityZoomPreview ? .accessibility2 : .large)
                     .modifier(NativeAppearancePreview(enabled: model.isDarkAppearancePreview))
             }
@@ -161,10 +166,12 @@ private struct ApplicationZoomContainer<Content: View>: View {
 
 private struct TalentSignalCommands: Commands {
     @Environment(\.openWindow) private var openWindow
+    @FocusedValue(\.nativeToolsActive) private var nativeToolsActive
     @ObservedObject var model: AppModel
 
     var body: some Commands {
-        CommandMenu("capri") {
+        if nativeToolsActive == true {
+        CommandMenu("本机工具") {
             Button("Open Quick Panel") {
                 openWindow(id: "quick-panel")
             }
@@ -307,6 +314,16 @@ private struct TalentSignalCommands: Commands {
             .keyboardShortcut("9", modifiers: [.command, .option])
             .disabled(!model.isSyntheticFixture)
         }
+        }
+    }
+}
+
+private struct NativeToolsActiveKey: FocusedValueKey { typealias Value = Bool }
+
+extension FocusedValues {
+    var nativeToolsActive: Bool? {
+        get { self[NativeToolsActiveKey.self] }
+        set { self[NativeToolsActiveKey.self] = newValue }
     }
 }
 

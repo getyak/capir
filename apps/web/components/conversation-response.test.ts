@@ -31,7 +31,15 @@ describe("conversation reading boundary", () => {
     const withSources = renderToStaticMarkup(createElement(ConversationProvenance, { sources: [{ display_name: "试点合作讨论" }, { display_name: "陈夏主页" }] }));
     expect(withSources).toContain("依据 · 试点合作讨论 · 陈夏主页");
     const withoutSources = renderToStaticMarkup(createElement(ConversationProvenance, null));
-    expect(withoutSources).toContain("依据 · 未附引用来源");
+    expect(withoutSources).toBe("");
+  });
+
+  it("preserves continued and nested ordered list semantics", () => {
+    const html = renderToStaticMarkup(createElement(ConversationResponse, null,
+      "4. 确认背景\n5. 准备问题\n   1. 先看来源\n   2. 记录不确定性"));
+    expect(html).toContain('<ol start="4">');
+    expect(html.match(/<ol\b/g)).toHaveLength(2);
+    expect(html).toContain("记录不确定性");
   });
 
   it("preserves literal user-visible code instead of interpreting it as markup", () => {

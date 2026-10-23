@@ -1591,5 +1591,14 @@
   "这个 Mac 登录请求无效、已过期或与当前浏览器不匹配。请回到 Mac，重新发起登录。": "이 Mac 로그인 요청이 유효하지 않거나 만료되었거나 현재 브라우저와 일치하지 않습니다. Mac으로 돌아가 로그인을 다시 시작하세요.",
   "暂时无法连接登录服务。请稍后回到 Mac 重试；这不代表你已经退出登录。": "현재 로그인 서비스에 연결할 수 없습니다. 잠시 후 Mac에서 다시 시도하세요. 로그아웃되었다는 뜻은 아닙니다.",
   "未读": "읽지 않음",
-  "{title}（未读）": "{title} (읽지 않음)"
+  "{title}（未读）": "{title} (읽지 않음)",
+  "conversation.copy.user": "메시지 복사",
+  "conversation.copy.answer": "답변 복사",
+  "conversation.copy.retryUser": "메시지 복사 재시도",
+  "conversation.copy.retryAnswer": "답변 복사 재시도",
+  "conversation.copy.failed": "복사하지 못했어요. 다시 시도해 주세요.",
+  "conversation.copy.success": "복사했어요",
+  "conversation.copy.busy": "복사 중",
+  "conversation.send.steer": "추가",
+  "conversation.send.queue": "대기열에 추가"
 }

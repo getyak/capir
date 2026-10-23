@@ -38,7 +38,7 @@ html:has(.quiet-workspace) body {
   --ts-rail-width: 72px;
   --workspace-agent-bubble: var(--ts-chrome-surface);
   --workspace-user-bubble: #eceae4;
-  --workspace-brand-image: url("/brand/symbol.svg");
+  --workspace-brand-image: url("/brand/symbol-ink.svg");
   --shadow-object: none;
   --shadow-accent: none;
   background: var(--background);

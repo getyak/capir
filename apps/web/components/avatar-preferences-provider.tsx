@@ -5,7 +5,7 @@ import { createAvatarStore, emptyAvatarPreferences, type AvatarStore } from "@/l
 import type { AvatarPreference, AvatarStyle } from "@/lib/avatar";
 
 const Context = createContext<AvatarStore | null>(null);
-export type AvatarEditorTarget = { id: string; label: string; url?: string | null; self?: boolean };
+export type AvatarEditorTarget = { id: string; label: string; url?: string | null; self?: boolean; shape?: "circle" | "squircle" };
 export type AvatarEditorRequest = AvatarEditorTarget & { trigger: HTMLButtonElement; expected: AvatarPreference | undefined };
 const EditorContext = createContext<((target: AvatarEditorTarget, trigger: HTMLButtonElement) => void) | null>(null);
 const AvatarEditorDialog = lazy(() => import("./avatar-editor-dialog"));

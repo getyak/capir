@@ -118,8 +118,7 @@ struct DesktopBrowserLoginSurface: View {
                     : "还不能确认这台 Mac 是否已完成登录。请重新开始登录。")
                 if canCheckResult {
                     Button("检查登录结果", action: onCheckResult)
-                        .buttonStyle(.borderedProminent)
-                        .tint(TSBrand.ink)
+                        .buttonStyle(TSPrimaryButtonStyle())
                         .controlSize(.large)
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("desktop.login.checkResult")
@@ -149,8 +148,7 @@ struct DesktopBrowserLoginSurface: View {
 
     private var primaryLoginButton: some View {
         loginButton
-            .buttonStyle(.borderedProminent)
-            .tint(TSBrand.ink)
+            .buttonStyle(TSPrimaryButtonStyle())
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
     }

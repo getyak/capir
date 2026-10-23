@@ -128,12 +128,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function renderConversation() {
+async function renderConversation(scope = SCOPE) {
   await act(async () => {
     root?.render(createElement(QueuedConversation, {
       chatBinding: "chat-binding",
       detailBinding: "detail-binding",
-      scope: SCOPE,
+      scope,
       initialDetail,
     }));
   });
@@ -143,6 +143,20 @@ async function renderConversation() {
 function stopMutations() {
   return fetcher.mock.calls.filter(([, init]) =>
     init?.method === "POST" && String(init?.body ?? "").includes('"stop"'));
+}
+
+async function editComposer(value: string) {
+  const composer = document.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer, value);
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => { composer.setSelectionRange(value.length, value.length); composer.focus(); });
+  return composer;
+}
+
+function sends() {
+  return fetcher.mock.calls.filter(([url, init]) => String(url).endsWith("/conversation-queue") && init?.method === "POST");
 }
 
 it("pauses the queue on Escape and keeps the composer usable while the run is live", async () => {
@@ -171,4 +185,76 @@ it("lets IME composition own Escape and never pauses the run mid-composition", a
   });
   await flush();
   expect(stopMutations()).toHaveLength(0);
+});
+
+it("closes the real suggestion menu on the first bubbling Escape and stops only on the next", async () => {
+  await renderConversation();
+  const composer = await editComposer("/");
+  expect(document.querySelector('[role="listbox"]')).not.toBeNull();
+  const dismiss = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  await act(async () => composer.dispatchEvent(dismiss));
+  expect(dismiss.defaultPrevented).toBe(true);
+  expect(document.querySelector('[role="listbox"]')).toBeNull();
+  expect(stopMutations()).toHaveLength(0);
+  await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  await flush();
+  expect(stopMutations()).toHaveLength(1);
+});
+
+it("honors an already handled Escape and preserves dialog ownership", async () => {
+  await renderConversation();
+  const composer = document.querySelector<HTMLTextAreaElement>("textarea")!;
+  composer.addEventListener("keydown", event => event.preventDefault(), { once: true });
+  await act(async () => composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  const dialog = document.createElement("div"); dialog.setAttribute("role", "dialog");
+  const button = document.createElement("button"); dialog.append(button);
+  document.querySelector("main")!.append(dialog);
+  await act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  dialog.remove();
+  expect(stopMutations()).toHaveLength(0);
+});
+
+it("keeps marked text provisional for mouse Send and sends once only after explicit commit", async () => {
+  await renderConversation();
+  const draft = "  候选文字\n第二行  ";
+  const composer = await editComposer(draft);
+  const send = document.querySelector<HTMLButtonElement>('[data-send-mode="queue"]')!;
+  expect(send.disabled).toBe(false);
+  // A click in the same event batch must see the ref before disabled paints.
+  await act(async () => {
+    composer.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    send.click();
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+  await flush();
+  expect(send.disabled).toBe(true);
+  expect(sends()).toHaveLength(0);
+  expect(stopMutations()).toHaveLength(0);
+  expect(composer.value).toBe(draft);
+  await act(async () => composer.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "候选文字" })));
+  expect(send.disabled).toBe(false);
+  expect(composer.value).toBe(draft);
+  expect(sends()).toHaveLength(0);
+  await act(async () => send.click());
+  await flush();
+  expect(sends()).toHaveLength(1);
+  expect(JSON.parse(String(sends()[0]![1]!.body)).objective).toBe(draft.trim());
+});
+
+it("does not let an old composer clear a newer scope's composition or strand a returning scope", async () => {
+  await renderConversation();
+  const old = await editComposer("first scope");
+  await act(async () => old.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+  await renderConversation("e".repeat(64));
+  const current = await editComposer("second scope");
+  await act(async () => {
+    current.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    old.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+  });
+  expect(document.querySelector<HTMLButtonElement>('[data-send-mode="queue"]')!.disabled).toBe(true);
+  expect(sends()).toHaveLength(0);
+  await renderConversation();
+  await editComposer("back to first scope");
+  expect(document.querySelector<HTMLButtonElement>('[data-send-mode="queue"]')!.disabled).toBe(false);
 });

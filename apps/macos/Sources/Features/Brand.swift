@@ -1,34 +1,36 @@
 import AppKit
 import SwiftUI
 
+/// Native roles mirror packages/workspace-ui/src/theme/tokens.css.
+/// Navigation material remains owned by AppKit; these are opaque content/control colors.
 enum TSBrand {
     static let canvas = adaptive(
-        light: NSColor(srgbRed: 0.992, green: 0.992, blue: 0.988, alpha: 1),
-        dark: NSColor(srgbRed: 0.075, green: 0.079, blue: 0.073, alpha: 1)
+        light: NSColor(srgbRed: 0.988235, green: 0.984314, blue: 0.968627, alpha: 1),
+        dark: NSColor(srgbRed: 0.090196, green: 0.094118, blue: 0.086275, alpha: 1)
     )
     static let sidebar = adaptive(
-        light: NSColor(srgbRed: 0.961, green: 0.961, blue: 0.953, alpha: 1),
-        dark: NSColor(srgbRed: 0.098, green: 0.104, blue: 0.096, alpha: 1)
+        light: NSColor(srgbRed: 0.956863, green: 0.952941, blue: 0.937255, alpha: 1),
+        dark: NSColor(srgbRed: 0.125490, green: 0.129412, blue: 0.117647, alpha: 1)
     )
     static let surface = adaptive(
-        light: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
-        dark: NSColor(srgbRed: 0.125, green: 0.132, blue: 0.122, alpha: 1)
+        light: NSColor(srgbRed: 1.000000, green: 1.000000, blue: 1.000000, alpha: 1),
+        dark: NSColor(srgbRed: 0.141176, green: 0.145098, blue: 0.121569, alpha: 1)
     )
     static let raisedSurface = adaptive(
         light: NSColor(srgbRed: 1, green: 0.997, blue: 0.987, alpha: 1),
         dark: NSColor(srgbRed: 0.151, green: 0.158, blue: 0.147, alpha: 1)
     )
     static let ink = adaptive(
-        light: NSColor(srgbRed: 0.161, green: 0.169, blue: 0.169, alpha: 1),
-        dark: NSColor(srgbRed: 0.946, green: 0.932, blue: 0.900, alpha: 1)
+        light: NSColor(srgbRed: 0.090196, green: 0.090196, blue: 0.082353, alpha: 1),
+        dark: NSColor(srgbRed: 0.949020, green: 0.941176, blue: 0.913725, alpha: 1)
     )
     static let secondaryInk = adaptive(
-        light: NSColor(srgbRed: 0.439, green: 0.459, blue: 0.443, alpha: 1),
-        dark: NSColor(srgbRed: 0.714, green: 0.695, blue: 0.654, alpha: 1)
+        light: NSColor(srgbRed: 0.415686, green: 0.403922, blue: 0.372549, alpha: 1),
+        dark: NSColor(srgbRed: 0.698039, green: 0.686275, blue: 0.647059, alpha: 1)
     )
     static let seam = adaptive(
-        light: NSColor(srgbRed: 0.735, green: 0.220, blue: 0.130, alpha: 1),
-        dark: NSColor(srgbRed: 0.922, green: 0.420, blue: 0.305, alpha: 1)
+        light: NSColor(srgbRed: 0.737255, green: 0.219608, blue: 0.152941, alpha: 1),
+        dark: NSColor(srgbRed: 0.945098, green: 0.560784, blue: 0.490196, alpha: 1)
     )
     static let seamTint = adaptive(
         light: NSColor(srgbRed: 0.968, green: 0.900, blue: 0.864, alpha: 1),
@@ -43,12 +45,12 @@ enum TSBrand {
         dark: NSColor(srgbRed: 0.104, green: 0.196, blue: 0.172, alpha: 1)
     )
     static let hairline = adaptive(
-        light: NSColor(srgbRed: 0.906, green: 0.910, blue: 0.898, alpha: 1),
-        dark: NSColor(srgbRed: 0.232, green: 0.244, blue: 0.226, alpha: 1)
+        light: NSColor(srgbRed: 0.886275, green: 0.878431, blue: 0.847059, alpha: 1),
+        dark: NSColor(srgbRed: 0.231373, green: 0.239216, blue: 0.207843, alpha: 1)
     )
     static let selection = adaptive(
-        light: NSColor(srgbRed: 0.925, green: 0.929, blue: 0.918, alpha: 1),
-        dark: NSColor(srgbRed: 0.170, green: 0.183, blue: 0.165, alpha: 1)
+        light: NSColor(srgbRed: 0.909804, green: 0.901961, blue: 0.874510, alpha: 1),
+        dark: NSColor(srgbRed: 0.203922, green: 0.211765, blue: 0.180392, alpha: 1)
     )
     static let fixtureTint = adaptive(
         light: NSColor(srgbRed: 0.965, green: 0.923, blue: 0.745, alpha: 1),
@@ -145,6 +147,7 @@ private struct HeldIntervalTransform {
 
 struct TSPrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -152,7 +155,7 @@ struct TSPrimaryButtonStyle: ButtonStyle {
             .padding(.horizontal, 15)
             .padding(.vertical, 9)
             .background(
-                isEnabled ? TSBrand.seam : TSBrand.selection,
+                isEnabled ? TSBrand.ink : TSBrand.selection,
                 in: RoundedRectangle(cornerRadius: 9, style: .continuous)
             )
             .overlay {
@@ -161,10 +164,10 @@ struct TSPrimaryButtonStyle: ButtonStyle {
                         .stroke(Color.white.opacity(0.12), lineWidth: 0.5)
                 }
             }
-            .foregroundStyle(isEnabled ? Color.white : TSBrand.secondaryInk)
-            .shadow(color: isEnabled ? TSBrand.seam.opacity(0.14) : .clear, radius: 5, y: 2)
+            .foregroundStyle(isEnabled ? TSBrand.surface : TSBrand.secondaryInk)
+            .shadow(color: isEnabled ? Color.black.opacity(0.08) : .clear, radius: 2, y: 1)
             .opacity(configuration.isPressed ? 0.78 : 1)
-            .scaleEffect(configuration.isPressed ? 0.985 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 }

@@ -1,0 +1,34 @@
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  color: var(--muted);
+}
+.actions[data-message-actions="user"] { justify-content: flex-end; }
+.copy {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.copy:hover { background: var(--surface-muted); color: var(--ink); }
+.copy:active { background: var(--line-soft); color: var(--ink); }
+.copy:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.failure { font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }
+@media (hover: hover) and (pointer: fine) {
+  .actions[data-state="idle"] > * { opacity: 0; }
+  :global([role="article"]):hover .actions > *,
+  .actions:focus-within > * { opacity: 1; }
+}
+@media (forced-colors: active) {
+  .copy { color: ButtonText; }
+  .copy:hover, .copy:active { background: Highlight; color: HighlightText; }
+  .copy:focus-visible { outline-color: Highlight; }
+}

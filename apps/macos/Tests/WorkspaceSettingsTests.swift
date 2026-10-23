@@ -4,6 +4,36 @@ import WebKit
 @testable import TalentSignalMac
 
 final class WorkspaceSettingsTests: XCTestCase {
+    func testContentZoomUsesOneBoundedScaleAndRecoversInvalidPreferences() {
+        XCTAssertEqual(WorkspaceContentZoom.step(1.25, direction: 1), 1.5)
+        XCTAssertEqual(WorkspaceContentZoom.step(1.25, direction: -1), 1.1)
+        XCTAssertEqual(WorkspaceContentZoom.step(1.4, direction: 1), 1.5)
+        XCTAssertEqual(WorkspaceContentZoom.step(2, direction: 1), 2)
+        XCTAssertEqual(WorkspaceContentZoom.step(0.9, direction: -1), 0.9)
+        XCTAssertEqual(WorkspaceContentZoom.clamp(.nan), 1)
+        XCTAssertEqual(WorkspaceContentZoom.clamp(.infinity), 1)
+    }
+
+    func testNewConversationFallbackNeverRestoresThePreviousDraft() throws {
+        let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example:10443"))
+        let id = try XCTUnwrap(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let url = WorkspaceNewConversation.url(in: origin, id: id)
+        XCTAssertTrue(origin.contains(url))
+        XCTAssertEqual(url.path, "/workspace")
+        let query = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(query.first { $0.name == "draft_session" }?.value, id.uuidString.lowercased())
+        XCTAssertEqual(query.first { $0.name == "intent" }?.value, "compose")
+        XCTAssertNotEqual(WorkspaceNewConversation.url(in: origin), WorkspaceNewConversation.url(in: origin))
+    }
+
+    func testSettingsKeyboardOrderFollowsTheVisibleGroupsAndStopsAtTheirEdges() {
+        XCTAssertEqual(WorkspaceSettingsSection.general.moved(by: -1), .general)
+        XCTAssertEqual(WorkspaceSettingsSection.permissions.moved(by: 1), .updates)
+        XCTAssertEqual(WorkspaceSettingsSection.updates.moved(by: 1), .connection)
+        XCTAssertEqual(WorkspaceSettingsSection.connection.moved(by: 1), .connection)
+        XCTAssertEqual(WorkspaceSettingsSection.connection.moved(by: -1), .updates)
+    }
+
     @MainActor
     func testOnlyFirstPartyExplicitLogoutDropsThePrivateReturnTarget() throws {
         let origin = try XCTUnwrap(WorkspaceOrigin("https://workspace.example"))
