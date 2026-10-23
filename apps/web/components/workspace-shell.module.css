@@ -369,11 +369,15 @@
   width: 24px;
 }
 
-/* Sessions without a person keep the brand mark instead of a fixture face. */
+/* A conversation symbol does not imply a person or an Agent running state. */
 .sessionMark {
-  background: var(--workspace-brand-image, none) center / contain no-repeat;
-  border-radius: 50%;
-  display: inline-block;
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  flex: 0 0 24px;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
 }
 
 .sessionRow:hover,
@@ -1895,8 +1899,10 @@
 .railCollapsedTop { display:flex; flex-direction:column; align-items:center; }
 .railCollapsedTop .iconButton { height:44px; width:44px; }
 .railSessionAvatar .avatar { flex:none; height:28px; width:28px; }
+.railSessionAvatar { position:relative; }
+.railSessionUnread { background:var(--accent-strong); border:2px solid var(--surface); border-radius:50%; height:8px; position:absolute; right:5px; top:5px; width:8px; }
 .railUtility { align-items:center; display:flex; flex:none; flex-direction:column; gap:8px; margin-top:auto; padding-top:16px; }
-.railUtility .iconButton,.railUtility .railControl { height:44px; width:44px; }
+.railUtility .iconButton,.railUtility .railControl,.railCollapsedTop .railControl { height:44px; width:44px; }
 .shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .connectPill { display:none; }
 .shell:has(.sidebarState[data-collapsed="true"]) .accountStrip .accountTrigger { width:44px; }
 @media(max-width:760px) {
