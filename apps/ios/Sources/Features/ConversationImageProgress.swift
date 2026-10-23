@@ -14,14 +14,19 @@ struct ConversationImageProgressState: Equatable {
     let elapsedSince: Date?
     let showsActivity: Bool
     let canCheck: Bool
+    let observationExpiresAt: Date?
+
+    private static let observationLifetime: TimeInterval = 65
+    private static let futureObservationTolerance: TimeInterval = 5
 
     static func derive(pending: PendingImageConversation, isSending: Bool, isChecking: Bool,
         entry: ConversationImageQueueEntry? = nil, paused: Bool = false, observedAt: Date? = nil,
         observedStage: ConversationImageRunStage? = nil, now: Date = Date()) -> Self {
         func state(_ phase: Phase, _ text: String, activity: Bool = false,
-            elapsed: Date? = nil, check: Bool = false) -> Self {
+            elapsed: Date? = nil, check: Bool = false, expiresAt: Date? = nil) -> Self {
             Self(messageID: pending.messageID, phase: phase, textKey: text,
-                elapsedSince: elapsed.flatMap { $0 <= now ? $0 : nil }, showsActivity: activity, canCheck: check)
+                elapsedSince: elapsed.flatMap { $0 <= now ? $0 : nil }, showsActivity: activity,
+                canCheck: check, observationExpiresAt: expiresAt)
         }
 
         // An unbound or old observation is never evidence that this message is
@@ -30,18 +35,21 @@ struct ConversationImageProgressState: Equatable {
             candidate.messageID == pending.messageID && candidate.images == pending.images
                 && (pending.queueEntryID == nil || pending.queueEntryID == candidate.queueEntryID)
         } ?? true
-        let fresh = observedAt.map { now.timeIntervalSince($0) >= -5 && now.timeIntervalSince($0) <= 65 } ?? false
+        let fresh = observedAt.map { now.timeIntervalSince($0) >= -Self.futureObservationTolerance
+            && now.timeIntervalSince($0) <= Self.observationLifetime } ?? false
+        let expiresAt = observedAt?.addingTimeInterval(Self.observationLifetime)
         if pending.state == .stopped, entry?.queueStatus.isTerminal != true {
             return state(.stopped, "Processing stopped", check: true)
         }
         if let entry, matches, fresh {
             switch entry.queueStatus {
             case .queued:
-                return paused ? state(.paused, "Processing is paused")
-                    : state(.queued, "Queued for processing", activity: true)
+                return paused ? state(.paused, "Processing is paused", expiresAt: expiresAt)
+                    : state(.queued, "Queued for processing", activity: true, expiresAt: expiresAt)
             case .running:
-                if entry.cancelRequested { return state(.stopping, "Stopping processing…", activity: true) }
-                return state(.running, stageText(observedStage ?? entry.progressStage), activity: true, elapsed: entry.startedAt)
+                if entry.cancelRequested { return state(.stopping, "Stopping processing…", activity: true, expiresAt: expiresAt) }
+                return state(.running, stageText(observedStage ?? entry.progressStage), activity: true,
+                    elapsed: entry.startedAt, expiresAt: expiresAt)
             case .completed:
                 return state(.readback, "Reading the saved reply…", activity: isChecking)
             case .failed, .interrupted:
@@ -68,6 +76,24 @@ struct ConversationImageProgressState: Equatable {
         case .stopped:
             return state(.stopped, "Processing stopped", check: true)
         }
+    }
+
+    /// Recheck a message-bound observation as time passes, even when no store
+    /// event follows a failed request. Local sends and terminal readback are
+    /// unaffected; this only retires the live processing claim.
+    func presentation(at date: Date) -> Self {
+        guard let observationExpiresAt else { return self }
+        let validFrom = observationExpiresAt.addingTimeInterval(
+            -Self.observationLifetime - Self.futureObservationTolerance)
+        guard date >= validFrom, date <= observationExpiresAt else {
+            return Self(messageID: messageID, phase: .unknown, textKey: "Reply status needs checking",
+                elapsedSince: nil, showsActivity: false, canCheck: true, observationExpiresAt: nil)
+        }
+        return self
+    }
+
+    var requiresTimeline: Bool {
+        observationExpiresAt != nil || (showsActivity && elapsedSince != nil)
     }
 
     private static func stageText(_ stage: ConversationImageRunStage?) -> String {
@@ -100,7 +126,7 @@ struct ConversationImageProgressView: View {
 
     var body: some View {
         Group {
-            if state.showsActivity, state.elapsedSince != nil {
+            if state.requiresTimeline {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     statusLine(at: context.date)
                 }
@@ -112,15 +138,16 @@ struct ConversationImageProgressView: View {
     }
 
     private func statusLine(at date: Date) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            if state.showsActivity {
+        let presentation = state.presentation(at: date)
+        return HStack(alignment: .center, spacing: 8) {
+            if presentation.showsActivity {
                 ProgressView().controlSize(.mini)
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 3) {
-                Text(language.text(state.textKey))
+                Text(language.text(presentation.textKey))
                     .fixedSize(horizontal: false, vertical: true)
-                if let elapsed = state.elapsedText(at: date) {
+                if let elapsed = presentation.elapsedText(at: date) {
                     Text(verbatim: language.text("Elapsed") + " " + elapsed)
                         .monospacedDigit()
                         .foregroundStyle(Color.tsMutedInk)
@@ -129,11 +156,14 @@ struct ConversationImageProgressView: View {
             .font(.footnote)
             .foregroundStyle(Color.tsMutedInk)
             .frame(maxWidth: .infinity, alignment: .leading)
-            if state.canCheck {
-                Button(language.text("Check status"), action: onCheck)
-                    .font(.footnote.weight(.medium))
-                    .frame(minWidth: 44, minHeight: 44)
-                    .accessibilityHint(language.text("Check the same message without sending it again"))
+            if presentation.canCheck {
+                Button(action: onCheck) {
+                    Text(language.text("Check status"))
+                        .font(.footnote.weight(.medium))
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityHint(language.text("Check the same message without sending it again"))
             }
         }
         .accessibilityElement(children: .contain)

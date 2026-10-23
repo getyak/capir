@@ -63,6 +63,24 @@ final class ConversationExperienceUITests: XCTestCase {
         capture("Unavailable contact review retains its source and explicit recovery")
     }
 
+    func testQueuedStatusNaturallyExpiresWithoutAnotherObservation() {
+        app.launchEnvironment["TS_IOS_CONVERSATION_EXPERIENCE"] = "processing"
+        app.launchEnvironment["TS_IOS_UI_TEST_PROGRESS_EXPIRY"] = "queued"
+        openFixture()
+        let progress = element("conversation-image-progress-a0000000-0000-4000-8000-000000000004")
+        reveal(progress)
+        XCTAssertTrue(progress.staticTexts["Queued for processing"].exists)
+        XCTAssertFalse(progress.buttons["Check status"].exists)
+        XCTAssertTrue(progress.staticTexts["Reply status needs checking"].waitForExistence(timeout: 30),
+                      "A silent feed must stop claiming that the message is still queued.")
+        let check = progress.buttons["Check status"]
+        XCTAssertTrue(check.isHittable)
+        XCTAssertGreaterThanOrEqual(check.frame.height, 44)
+        XCTAssertFalse(progress.staticTexts["Queued for processing"].exists)
+        XCTAssertFalse(element("conversation.memory.save").exists)
+        capture("Silent queue observation expires into the same-message recovery action")
+    }
+
     func testReviewAtAccessibilitySizeInDarkModeRemainsOperable() {
         app.launchArguments += [
             "--force-dark", "-UIAccessibilityReduceMotionEnabled", "YES",

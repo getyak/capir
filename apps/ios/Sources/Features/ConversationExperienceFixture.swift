@@ -11,6 +11,7 @@ struct ConversationExperienceFixtureView: View {
     let onSource: () -> Void
     private let source: AskMediaDraft
     @StateObject private var reviewStore: ConversationMemoryReviewStore
+    @State private var progressObservedAt = Date()
 
     init(language: AppLanguage, mode: String, compact: Bool, onSource: @escaping () -> Void) {
         self.language = language; self.mode = mode; self.compact = compact
@@ -55,6 +56,17 @@ struct ConversationExperienceFixtureView: View {
         let pending = PendingImageConversation(messageID: ConversationExperienceFixtureClient.messageID,
             idempotencyKey: "synthetic-preview-only", objective: "", images: manifest.map { [$0] } ?? [],
             createdAt: Date(), timeZone: "Asia/Shanghai", queueEntryID: nil, state: .admitted)
+        if ProcessInfo.processInfo.environment["TS_IOS_UI_TEST_PROGRESS_EXPIRY"] == "queued",
+           let images = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(pending.images)),
+           let data = try? JSONSerialization.data(withJSONObject: [
+               "queue_entry_id": ConversationExperienceFixtureClient.messageID.uuidString,
+               "message_id": pending.messageID.uuidString, "status": "queued", "images": images,
+           ]), let entry = try? JSONDecoder().decode(ConversationImageQueueEntry.self, from: data) {
+            // A fixed observation, with no tracker updates after this view is
+            // opened, exercises natural expiry in the production component.
+            return .derive(pending: pending, isSending: false, isChecking: false,
+                entry: entry, observedAt: progressObservedAt.addingTimeInterval(-45))
+        }
         return .derive(pending: pending, isSending: false, isChecking: true)
     }
 

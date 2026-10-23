@@ -63,6 +63,133 @@ final class ConversationImageProgressTests: XCTestCase {
         XCTAssertEqual(foreign.phase, .unknown); XCTAssertFalse(foreign.showsActivity)
     }
 
+    func testRunningPresentationExpiresWithoutAnotherStoreEvent() throws {
+        let pending = pending()
+        let row = try entry(messageID: pending.messageID, status: "running", extra: [
+            "stage": "answer", "started_at": ISO8601DateFormatter().string(from: now.addingTimeInterval(-30))
+        ])
+        let value = progress(pending, entry: row, observedAt: now)
+        XCTAssertEqual(value.phase, .running)
+        XCTAssertEqual(value.observationExpiresAt, now.addingTimeInterval(65))
+        XCTAssertTrue(value.requiresTimeline)
+        XCTAssertNotNil(value.presentation(at: now.addingTimeInterval(64)).elapsedText(at: now.addingTimeInterval(64)))
+
+        // Reuse this immutable value: no poll, SSE event or finishChecking
+        // publication occurs between these two presentation times.
+        let expired = value.presentation(at: now.addingTimeInterval(66))
+        XCTAssertEqual(expired.messageID, pending.messageID)
+        XCTAssertEqual(expired.phase, .unknown)
+        XCTAssertEqual(expired.textKey, "Reply status needs checking")
+        XCTAssertFalse(expired.showsActivity)
+        XCTAssertTrue(expired.canCheck)
+        XCTAssertNil(expired.elapsedSince)
+        XCTAssertNil(expired.elapsedText(at: now.addingTimeInterval(66)))
+        XCTAssertEqual(value.phase, .running)
+    }
+
+    func testQueuedAndPausedPresentationExpiresEvenWithoutElapsedTime() throws {
+        let pending = pending()
+        let row = try entry(messageID: pending.messageID, status: "queued")
+        for paused in [false, true] {
+            let value = progress(pending, entry: row, observedAt: now, paused: paused)
+            XCTAssertEqual(value.phase, paused ? .paused : .queued)
+            XCTAssertNil(value.elapsedSince)
+            XCTAssertTrue(value.requiresTimeline, "An observation must age even when there is no run-start timer.")
+            XCTAssertEqual(value.presentation(at: now.addingTimeInterval(64)), value)
+            let expired = value.presentation(at: now.addingTimeInterval(66))
+            XCTAssertEqual(expired.messageID, pending.messageID)
+            XCTAssertEqual(expired.phase, .unknown)
+            XCTAssertFalse(expired.showsActivity)
+            XCTAssertTrue(expired.canCheck)
+        }
+    }
+
+    func testObservationExpiryPreservesTheInclusiveFreshnessBoundary() throws {
+        let pending = pending()
+        let row = try entry(messageID: pending.messageID, status: "queued")
+        let value = progress(pending, entry: row, observedAt: now.addingTimeInterval(-65))
+        XCTAssertEqual(value.phase, .queued)
+        XCTAssertEqual(value.observationExpiresAt, now)
+        XCTAssertEqual(value.presentation(at: now), value)
+        XCTAssertEqual(value.presentation(at: now.addingTimeInterval(0.001)).phase, .unknown)
+        XCTAssertEqual(progress(pending, entry: row, observedAt: now.addingTimeInterval(-65.001)).phase, .unknown)
+    }
+
+    func testFreshObservationForSameMessageReplacesExpiredPresentation() throws {
+        let pending = pending()
+        let row = try entry(messageID: pending.messageID, status: "running")
+        let original = progress(pending, entry: row, observedAt: now)
+        let later = now.addingTimeInterval(66)
+        XCTAssertEqual(original.presentation(at: later).phase, .unknown)
+        let renewed = ConversationImageProgressState.derive(pending: pending, isSending: false,
+            isChecking: false, entry: row, observedAt: later, now: later)
+        XCTAssertEqual(renewed.messageID, original.messageID)
+        XCTAssertEqual(renewed.presentation(at: later).phase, .running)
+        XCTAssertEqual(renewed.observationExpiresAt, later.addingTimeInterval(65))
+
+        let completed = ConversationImageProgressState.derive(pending: pending, isSending: false,
+            isChecking: false, entry: try entry(messageID: pending.messageID, status: "completed"),
+            observedAt: later, now: later)
+        XCTAssertEqual(completed.presentation(at: later.addingTimeInterval(66)).phase, .readback)
+        XCTAssertFalse(completed.showsActivity)
+    }
+
+    func testFutureObservationAndClockRollbackFailClosedOutsideExistingTolerance() throws {
+        let pending = pending()
+        let row = try entry(messageID: pending.messageID, status: "running")
+        let future = progress(pending, entry: row, observedAt: now.addingTimeInterval(5))
+        XCTAssertEqual(future.phase, .running)
+        XCTAssertEqual(future.observationExpiresAt, now.addingTimeInterval(70))
+        XCTAssertEqual(future.presentation(at: now.addingTimeInterval(70)), future)
+        XCTAssertEqual(future.presentation(at: now.addingTimeInterval(70.001)).phase, .unknown)
+        XCTAssertEqual(future.presentation(at: now.addingTimeInterval(-0.001)).phase, .unknown)
+        let anomalous = progress(pending, entry: row, observedAt: now.addingTimeInterval(5.001))
+        XCTAssertEqual(anomalous.phase, .unknown)
+        XCTAssertNil(anomalous.observationExpiresAt)
+        XCTAssertFalse(anomalous.showsActivity)
+        XCTAssertTrue(anomalous.canCheck)
+    }
+
+    func testStoppingObservationExpiresButLocalSendAndTerminalStatesDoNot() throws {
+        var pending = pending()
+        let stopping = progress(pending, entry: try entry(messageID: pending.messageID,
+            status: "running", extra: ["cancel_requested": true]), observedAt: now)
+        XCTAssertEqual(stopping.phase, .stopping)
+        XCTAssertEqual(stopping.presentation(at: now.addingTimeInterval(66)).phase, .unknown)
+
+        let local = progress(pending, sending: true)
+        XCTAssertEqual(local.phase, .sending)
+        XCTAssertNil(local.observationExpiresAt)
+        XCTAssertFalse(local.requiresTimeline)
+        XCTAssertEqual(local.presentation(at: now.addingTimeInterval(300)), local)
+        pending.state = .admitted
+        let checkingAdmission = progress(pending, checking: true)
+        XCTAssertEqual(checkingAdmission.phase, .waiting)
+        XCTAssertNil(checkingAdmission.observationExpiresAt)
+        XCTAssertEqual(checkingAdmission.presentation(at: now.addingTimeInterval(300)), checkingAdmission)
+
+        for status in ["completed", "failed", "interrupted", "cancelled"] {
+            let terminal = progress(pending, entry: try entry(messageID: pending.messageID, status: status), observedAt: now)
+            XCTAssertNil(terminal.observationExpiresAt)
+            XCTAssertEqual(terminal.presentation(at: now.addingTimeInterval(300)), terminal)
+        }
+    }
+
+    func testExpiredPresentationCannotBorrowAnObservationForDifferentMessageOrAttachment() throws {
+        let pending = pending()
+        let foreignMessage = progress(pending, entry: try entry(status: "running"), observedAt: now)
+        let foreignImage = progress(pending, entry: try entry(messageID: pending.messageID, status: "queued", extra: [
+            "images": [["attachment_id": UUID().uuidString, "file_name": "synthetic.png", "media_type": "image/png",
+                        "byte_size": 1, "content_hash": String(repeating: "a", count: 64)]]
+        ]), observedAt: now)
+        for value in [foreignMessage, foreignImage] {
+            XCTAssertEqual(value.phase, .unknown)
+            XCTAssertNil(value.observationExpiresAt)
+            XCTAssertFalse(value.requiresTimeline)
+            XCTAssertEqual(value.presentation(at: now.addingTimeInterval(66)), value)
+        }
+    }
+
     func testUnknownAndStoppedRemainRecoverableWithoutNewSend() {
         var pending = pending(); pending.state = .unknown
         XCTAssertEqual(progress(pending).phase, .unknown)
