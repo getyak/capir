@@ -107,6 +107,8 @@
     "100_screenshot_usage_diagnostics",
     "101_capture_image_observation",
     "102_user_language_preferences",
-    "103_conversation_queue_session_expiry"
+    "103_capture_activity",
+    "104_capture_activity_retirement_fence",
+    "105_conversation_queue_session_expiry"
   ]
 }

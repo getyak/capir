@@ -33171,6 +33171,296 @@
         }
       }
     },
+    "Add once. Assign the Action Button. Then press and hold from a conversation.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加一次并绑定操作按钮，此后在对话中长按即可。"
+          }
+        }
+      }
+    },
+    "Screenshot sending": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "发送截图"
+          }
+        }
+      }
+    },
+    "Each intentional press sends that screenshot to your signed-in capri workspace for Agent processing. Results stay in one protected Session; facts and external actions still need their own review.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每次主动长按会把这张截图发送到当前登录的 capri 工作空间，由 Agent 处理。结果保留在同一个受保护会话中；事实确认和对外操作仍需分别审阅。"
+          }
+        }
+      }
+    },
+    "Add screenshot Shortcut": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加截图快捷指令"
+          }
+        }
+      }
+    },
+    "1. Add the ready-made Shortcut": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1. 添加现成快捷指令"
+          }
+        }
+      }
+    },
+    "The two actions and screenshot input are already connected. Choose Shortcuts in the system import options.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "两个操作及截图输入已连接。在系统导入选项中选择“快捷指令”。"
+          }
+        }
+      }
+    },
+    "Choose Shortcut, then select Send to capri.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择“快捷指令”，再选择“发给 capri”。"
+          }
+        }
+      }
+    },
+    "2. Assign the Action Button": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "2. 绑定操作按钮"
+          }
+        }
+      }
+    },
+    "Open a conversation you are authorized to use, then press and hold. Tap its Live Activity to return to the same Session.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开获准使用的对话并长按。轻点实时活动即可回到同一个会话。"
+          }
+        }
+      }
+    },
+    "3. Try one capture": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3. 长按试一次"
+          }
+        }
+      }
+    },
+    "A received screenshot proves the Shortcut handoff, not the current physical button assignment.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收到截图可验证快捷指令交接，但不能证明当前实体按钮的绑定。"
+          }
+        }
+      }
+    },
+    "Manual setup and recovery": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "手动设置与恢复"
+          }
+        }
+      }
+    },
+    "Process screenshot": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理截图"
+          }
+        }
+      }
+    },
+    "capri received a screenshot through Shortcuts. Check its original Session for sending, processing, and review status.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "capri 已通过快捷指令收到截图。请在原会话中查看发送、处理和待审阅状态。"
+          }
+        }
+      }
+    },
+    "Saved on this iPhone": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已保存在此 iPhone"
+          }
+        }
+      }
+    },
+    "Sending screenshot": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在发送截图"
+          }
+        }
+      }
+    },
+    "Waiting to process": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待处理"
+          }
+        }
+      }
+    },
+    "Processing": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理中"
+          }
+        }
+      }
+    },
+    "Ready to review": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可查看"
+          }
+        }
+      }
+    },
+    "Couldn't process": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "处理未完成"
+          }
+        }
+      }
+    },
+    "Open capri and sign in before sending a screenshot.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请打开 capri 并登录后再发送截图。"
+          }
+        }
+      }
+    },
+    "Open Action Button & Shortcuts in capri and enable screenshot sending first.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先打开 capri 的“操作按钮与快捷指令”设置并启用截图发送。"
+          }
+        }
+      }
+    },
+    "Open capri to check this capture and continue.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请打开 capri 检查本次截图并继续。"
+          }
+        }
+      }
+    },
+    "Screenshot sent. Processing continues in the same protected Session.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "截图已发送，将在同一个受保护会话中继续处理。"
+          }
+        }
+      }
+    },
+    "Screenshot saved on this iPhone. Sending will continue in the background; open capri if it needs attention.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "截图已保存在此 iPhone，将在后台继续发送；需要处理时请打开 capri。"
+          }
+        }
+      }
+    },
+    "Screenshot saved on this device. Sending will continue in the background; open capri if it needs attention.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "截图已保存在此设备，将在后台继续发送；需要处理时请打开 capri。"
+          }
+        }
+      }
+    },
+    "Enable screenshot sending": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启用截图发送"
+          }
+        }
+      }
+    },
+    "Screenshot saved on this device. Open capri and sign in to continue sending.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "截图已保存在此设备。请打开 capri 并登录以继续发送。"
+          }
+        }
+      }
+    },
+    "Screenshot saved on this device. Open its capri Session to check or retry sending.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "截图已保存在此设备。请打开其 capri 会话检查或重试发送。"
+          }
+        }
+      }
+    },
     "The image was received, but its reply status could not be checked. Check reply again.": {
       "localizations": {
         "en": {

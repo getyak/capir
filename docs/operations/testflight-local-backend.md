@@ -198,6 +198,43 @@ API contract remain compatible. Changing the origin requires a new archive.
 
 ## Resident Web and coordinated updates
 
+### Screenshot capture Live Activity push
+
+The iOS screenshot Intent uses the ordinary durable conversation queue. Its
+authenticated `POST /v1/agent-sessions/:id/capture-activity` registration accepts
+only an already admitted message belonging to the current account and user.
+Registrations are encrypted at rest, bound to the login and Activity instance,
+expire after eight hours, and are removed when their login, Session or source
+is no longer available. Push tokens and payloads must never appear in logs.
+
+Inject these server-only values from `staging:/backend` through the existing
+Compose environment; do not place them in iOS, Web or release secrets:
+
+- `TALENT_SIGNAL_APNS_KEY_ID`: the dedicated Apple APNs key identifier.
+- `TALENT_SIGNAL_APNS_TEAM_ID`: the owning Apple developer team identifier.
+- `TALENT_SIGNAL_APNS_PRIVATE_KEY`: the APNs P8 key as PEM.
+- `TALENT_SIGNAL_APNS_ENVIRONMENT`: `production` for TestFlight, `sandbox` for
+  development signing.
+- `TALENT_SIGNAL_APNS_BUNDLE_ID`: `com.talentsignal.app`.
+
+For locked capture continuation and the registration outbox, see the
+[iOS capture boundary](../../apps/ios/README.md#talent-signal-for-ios).
+
+Secret-name presence checks are not APNs delivery tests. Absence of all APNs credentials
+leaves screenshot processing available but returns an explicit unavailable
+registration response; incomplete configuration fails startup. Provision the
+main App ID Push Notifications capability and an App Store profile containing
+`aps-environment=production`. The Activity extension itself does not receive an
+additional push entitlement. Validate provider authentication separately, then
+prove a real device token, suspended-app update and exact Session deep link.
+The system can delay push and background transfer, and user force-quit differs
+from normal backgrounding. No simulator or provider rejection proves delivery.
+
+Key rotation invalidates the encryption of existing registration capabilities;
+the device must register again or start a new capture. Ordinary foreground
+recovery re-registers the current Activity token. Only opaque identity, phase,
+revision and time enter Activity payloads; no relationship or source content does.
+
 The resident Web uses a production build on `127.0.0.1:3000`, exposed through
 Tailscale Serve at `https://<Mac-MagicDNS-name>:10443`. This is a private
 tailnet endpoint, not a physical-LAN address or public Funnel. Browser requests

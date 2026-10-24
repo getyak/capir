@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 export const APP_GROUP = "group.com.talentsignal.app";
 export const PROFILE_SPECS = [
-  { bundleId: "com.talentsignal.app", signInWithApple: true },
+  { bundleId: "com.talentsignal.app", signInWithApple: true, pushNotifications: true },
   { bundleId: "com.talentsignal.app.share", signInWithApple: false },
   { bundleId: "com.talentsignal.app.live-activity", signInWithApple: false },
 ].map((spec) => ({ ...spec, name: `match AppStore ${spec.bundleId}` }));
@@ -49,6 +49,9 @@ export function validateProvisioningProfile(profile, spec) {
       throw new Error(`${spec.bundleId} lacks Sign in with Apple`);
     }
   }
+  if (spec.pushNotifications && entitlements["aps-environment"] !== "production") {
+    throw new Error(`${spec.bundleId} lacks production APNs entitlement`);
+  }
 }
 
 function decodeProfile(profileContent) {
@@ -60,7 +63,7 @@ function decodeProfile(profileContent) {
     "import json, plistlib, sys",
     "profile = plistlib.loads(sys.stdin.buffer.read())",
     "entitlements = profile.get('Entitlements', {})",
-    "keys = ['application-identifier', 'com.apple.security.application-groups', 'com.apple.developer.applesignin']",
+    "keys = ['application-identifier', 'com.apple.security.application-groups', 'com.apple.developer.applesignin', 'aps-environment']",
     "print(json.dumps({'Name': profile.get('Name'), 'Entitlements': {key: entitlements[key] for key in keys if key in entitlements}}))",
   ].join("\n");
   return JSON.parse(execFileSync("python3", ["-c", extraction], { encoding: "utf8", input: plist }));

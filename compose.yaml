@@ -94,6 +94,11 @@ services:
       args:
         PNPM_REGISTRY: ${TS_PNPM_REGISTRY:-https://registry.npmjs.org}
     environment:
+      TALENT_SIGNAL_APNS_KEY_ID: ${TALENT_SIGNAL_APNS_KEY_ID:-}
+      TALENT_SIGNAL_APNS_TEAM_ID: ${TALENT_SIGNAL_APNS_TEAM_ID:-}
+      TALENT_SIGNAL_APNS_PRIVATE_KEY: ${TALENT_SIGNAL_APNS_PRIVATE_KEY:-}
+      TALENT_SIGNAL_APNS_ENVIRONMENT: ${TALENT_SIGNAL_APNS_ENVIRONMENT:-production}
+      TALENT_SIGNAL_APNS_BUNDLE_ID: ${TALENT_SIGNAL_APNS_BUNDLE_ID:-com.talentsignal.app}
       TALENT_SIGNAL_MCP_ENCRYPTION_KEY: ${TALENT_SIGNAL_MCP_ENCRYPTION_KEY:-}
       # Optional Nango OAuth broker. Absent values make OAuth explicitly
       # unavailable; nothing fakes a connected state.

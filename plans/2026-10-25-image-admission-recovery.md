@@ -14,7 +14,7 @@ Remove the redundant queue-row thirty-day check that rejects new image messages 
 
 ## Milestones
 
-1. Complete: forward migration 103 removes only the redundant queue clock check; readiness requires it. Web and iOS feedback distinguish send/reconciliation/received states; both retry paths reconcile before same-ID admission.
+1. Complete: forward migration 105 removes only the redundant queue clock check; readiness requires it. Web and iOS feedback distinguish send/reconciliation/received states; both retry paths reconcile before same-ID admission.
 2. In progress: focused host verification passes; independent review passed. Real database skew regression and native test execution remain required; local VM pressure blocks them, so cloud CI will run these gates.
 3. Pending: current-head CI/merge and clean-source resident backend/Web activation.
 4. Pending: real image send, model answer and history reload; verify failure recovery; stop and read back test workspace cleanup.
@@ -35,3 +35,7 @@ Record real PostgreSQL skew/idempotency/expiry regression results; frontend and 
 - Native regressions cover sanitized HTTP failures, receipt preservation, lost-receipt queue readback through persistence/reload, canonical reply recovery, inactive owner, and readback persistence failure. Execution is still a pending gate.
 - Synthetic image fixture is purpose-built numeric/shape artwork; expected digits are absent from the question. No personal screenshot is replayed to a provider.
 - Retention learning is encoded in migration/schema/real PostgreSQL tests; retry ownership and revoked-access counterexamples live in focused client tests. No always-on instruction expansion is needed.
+
+## Concurrent integration
+
+Main advanced to `eec402a9` with background capture and migrations103/104. The queue expiry migration was not deployed and is renamed105 before release. Its DDL is unchanged. Preserve main's complete migration history, reviewed frozen digest and translations, then append105. Regenerate the combined Xcode project and rerun all gates against the resulting head. Earlier CI records refer only to their recorded heads.

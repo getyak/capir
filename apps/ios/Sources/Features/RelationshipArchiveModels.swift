@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Darwin
 import SwiftUI
 
 enum RelationshipArchivePage: String, CaseIterable, Identifiable {
@@ -390,6 +391,7 @@ struct AgentSession: Identifiable, Equatable {
     var createdAt: Date? = nil
     var retentionExpiresAt: Date? = nil
     var contextWasTrimmed: Bool = false
+    var backgroundCapturePendingAdmission: Bool = false
 
     var readOnlyScreenshotTaskIDs: Set<String> {
         Set(inheritedScreenshotTaskIDs ?? (originSessionID == nil ? [] : screenshotTaskIDs))
@@ -676,8 +678,12 @@ final class FileAgentSessionPersistence: AgentSessionPersisting {
     private let fileURL: URL
     private let deletionTombstoneURL: URL
     private let migrationError: Error?
+    private let captureScope: String
+    private let captureDenials: CaptureSessionDenyStore
+    private var deletionGeneration: Int?
 
     init(accountID: String, rootURL: URL? = nil, legacyAccountID: String? = nil) {
+        captureScope = accountID; captureDenials = CaptureSessionDenyStore(rootURL: rootURL)
         let digest = SHA256.hash(data: Data(accountID.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
@@ -706,30 +712,51 @@ final class FileAgentSessionPersistence: AgentSessionPersisting {
 
     func save(_ data: Data) throws {
         if let migrationError { throw migrationError }
+        let envelope = try JSONDecoder.agentSession.decode(PersistedAgentSessionEnvelope.self, from: data)
+        guard (1...8).contains(envelope.version) else { throw AppSessionEndingError.unreadable }
+        let keys = Array(envelope.syncTombstones?.keys ?? Dictionary<String, Int>().keys)
+        let ids = keys.compactMap { UUID(uuidString: $0) }
+        guard ids.count == keys.count else { throw AppSessionEndingError.unreadable }
+        try captureDenials.deny(scope: captureScope, sessionIDs: ids)
         try writeProtected(data, to: fileURL)
     }
 
     func deletionPending() throws -> Bool {
         if let migrationError { throw migrationError }
-        return FileManager.default.fileExists(atPath: deletionTombstoneURL.path)
+        return try captureDenials.pendingEpoch(scope: captureScope) != nil || FileManager.default.fileExists(atPath: deletionTombstoneURL.path)
     }
 
     func beginDeletion() throws {
         if let migrationError { throw migrationError }
-        try writeProtected(Data("pending".utf8), to: deletionTombstoneURL)
+        let epoch = try captureDenials.beginDeletion(scope: captureScope)
+        deletionGeneration = epoch
+        try writeProtected(JSONEncoder().encode(epoch), to: deletionTombstoneURL)
     }
 
     func completeDeletion() throws {
         if let migrationError { throw migrationError }
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            try FileManager.default.removeItem(at: fileURL)
+        let pending = try captureDenials.pendingEpoch(scope: captureScope)
+        let marker = FileManager.default.fileExists(atPath: deletionTombstoneURL.path)
+            ? try Data(contentsOf: deletionTombstoneURL) : nil
+        let markerEpoch = marker.flatMap { try? JSONDecoder().decode(Int.self, from: $0) }
+        var epoch = deletionGeneration ?? markerEpoch ?? pending
+        if epoch == nil {
+            // A pre-capture legacy deletion marker is adopted while unlocked.
+            guard marker == Data("pending".utf8) else { throw AgentSessionPersistenceError.deletionCouldNotBeVerified }
+            try beginDeletion(); epoch = deletionGeneration
         }
-        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
-            throw AgentSessionPersistenceError.deletionCouldNotBeVerified
+        guard let epoch else { throw AgentSessionPersistenceError.deletionCouldNotBeVerified }
+        try captureDenials.completeDeletion(scope: captureScope, epoch: epoch) {
+            if let markerEpoch, markerEpoch != epoch { throw AgentSessionPersistenceError.deletionCouldNotBeVerified }
+            if FileManager.default.fileExists(atPath: fileURL.path) { try FileManager.default.removeItem(at: fileURL) }
+            guard !FileManager.default.fileExists(atPath: fileURL.path) else { throw AgentSessionPersistenceError.deletionCouldNotBeVerified }
+            if FileManager.default.fileExists(atPath: deletionTombstoneURL.path) { try FileManager.default.removeItem(at: deletionTombstoneURL) }
+            let descriptor = open(fileURL.deletingLastPathComponent().path, O_RDONLY)
+            guard descriptor >= 0 else { throw AgentSessionPersistenceError.deletionCouldNotBeVerified }
+            let result = fsync(descriptor); close(descriptor)
+            guard result == 0 else { throw AgentSessionPersistenceError.deletionCouldNotBeVerified }
         }
-        if FileManager.default.fileExists(atPath: deletionTombstoneURL.path) {
-            try FileManager.default.removeItem(at: deletionTombstoneURL)
-        }
+        deletionGeneration = nil
     }
 
     private func writeProtected(_ data: Data, to destination: URL) throws {
@@ -816,6 +843,7 @@ struct PersistedAgentSession: Codable {
     var createdAt: Date? = nil
     var retentionExpiresAt: Date? = nil
     var contextWasTrimmed: Bool? = nil
+    var backgroundCapturePendingAdmission: Bool? = nil
     var pendingImageConversation: PendingImageConversation? = nil
 
     init(_ value: AgentSession) {
@@ -853,6 +881,7 @@ struct PersistedAgentSession: Codable {
         createdAt = value.originalCreatedAt
         retentionExpiresAt = value.retentionExpiresAt
         contextWasTrimmed = value.contextWasTrimmed ? true : nil
+        backgroundCapturePendingAdmission = value.backgroundCapturePendingAdmission ? true : nil
     }
 
     func value() throws -> AgentSession {
@@ -905,7 +934,8 @@ struct PersistedAgentSession: Codable {
             pendingScreenshotCapturedAt: pendingScreenshotCapturedAt,
             createdAt: createdAt ?? ([updatedAt] + turns.map(\.createdAt) + (contactReceipts ?? []).map(\.createdAt)).min(),
             retentionExpiresAt: retentionExpiresAt,
-            contextWasTrimmed: contextWasTrimmed ?? false
+            contextWasTrimmed: contextWasTrimmed ?? false,
+            backgroundCapturePendingAdmission: backgroundCapturePendingAdmission ?? false
         )
     }
 }
@@ -1228,6 +1258,17 @@ final class AgentSessionStore: ObservableObject {
         pruneExpired()
         guard let id else { return nil }
         return storedSessions.first { $0.id == id }
+    }
+
+    /// Import only a protected capture placeholder. A current in-memory or
+    /// canonical Session always wins over its initial capture snapshot.
+    func importBackgroundCapture(_ payload: PersistedAgentSession) {
+        guard !storedSessions.contains(where: { $0.id == payload.id }),
+              syncTombstones[payload.id.uuidString.lowercased()] == nil,
+              let session = try? payload.value(), session.retentionDeadline > now() else { return }
+        storedSessions.append(session)
+        sortSessions()
+        if !persist() { storedSessions.removeAll { $0.id == payload.id } }
     }
 
     @discardableResult
@@ -1674,6 +1715,7 @@ final class AgentSessionStore: ObservableObject {
             scheduleNextExpiration()
             return false
         }
+        Task { await BackgroundCaptureDelivery.shared.cancelSession(id) }
         return true
     }
 
@@ -2887,6 +2929,7 @@ extension AgentSessionStore {
         var payload = PersistedAgentSession(session)
         payload.retentionExpiresAt = nil
         payload.pendingImageConversation = nil // Device-local recovery is not a backend payload field.
+        payload.backgroundCapturePendingAdmission = nil
         if session.pendingImageConversation != nil { payload.pendingObjective = nil }
         if let proposal = storedContactProposals.first(where: { $0.sessionID == session.id }) {
             payload.contactProposal = AgentContactProposalDraft(
@@ -3143,6 +3186,9 @@ extension AgentSessionStore {
                 guard sessionSyncNotices[id] == nil,
                       let current = storedSessions.first(where: { $0.id == id }) else { continue }
                 let key = id.uuidString.lowercased()
+                // A protected capture placeholder is not an independent
+                // Session creator. Its OS admission owns expectedRevision=0.
+                if current.backgroundCapturePendingAdmission && syncRevisions[key] == nil { continue }
                 let payload = syncPayload(current)
                 if let limit = Self.syncLimitNotice(payload) {
                     sessionSyncNotices[id] = limit

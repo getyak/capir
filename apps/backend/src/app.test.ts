@@ -94,7 +94,7 @@ describe("readiness rate limiting", () => {
 
   it("keeps the image path unavailable until the queue clock migration is applied", async () => {
     const query = vi.fn().mockResolvedValue({
-      rows: REQUIRED_SYSTEM_MIGRATIONS.filter(version => version !== "103_conversation_queue_session_expiry").map(version => ({ version })),
+      rows: REQUIRED_SYSTEM_MIGRATIONS.filter(version => version !== "105_conversation_queue_session_expiry").map(version => ({ version })),
     });
     const app = await buildApp({ config, pool: { query } as unknown as Pool });
     apps.push(app);

@@ -164,10 +164,11 @@ struct OpenPursuitIntent: AppIntent {
     }
 }
 
-struct ImportConversationScreenshotIntent: AppIntent {
+@available(iOS 17.0, *)
+struct ImportConversationScreenshotIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Process screenshot"
     static let description = IntentDescription(
-        "Receive one screenshot, save it on this device, create a protected Agent Session, and ask only when processing needs a decision."
+        "Send one screenshot to your authorized workspace and continue processing in the background in the same protected Session."
     )
 
     @available(iOS 26.0, *)
@@ -191,16 +192,23 @@ struct ImportConversationScreenshotIntent: AppIntent {
         trace.mark("intent_received")
         let input = try loadInput()
         trace.mark("input_loaded")
-        _ = try await ConversationScreenshotImporter().stage(
-            input
-        )
+        let receipt = try await BackgroundCaptureDelivery.shared.capture(input)
         trace.mark("persisted")
         trace.mark("setup_receipt_recorded")
-        trace.mark("session_enqueued")
+        trace.mark(receipt.stage == .admitted ? "server_admitted" : "protected_delivery_saved")
         trace.mark("intent_returning")
-        return .result(
-            dialog: "Agent Session created. Processing will continue securely; capri will ask only if a decision is needed."
-        )
+        let dialog: IntentDialog
+        switch receipt.stage {
+        case .admitted:
+            dialog = "Screenshot sent. Processing continues in the same protected Session."
+        case .creatingSession, .transferring:
+            dialog = "Screenshot saved on this device. Sending will continue in the background; open capri if it needs attention."
+        case .needsSignIn:
+            dialog = "Screenshot saved on this device. Open capri and sign in to continue sending."
+        default:
+            dialog = "Screenshot saved on this device. Open its capri Session to check or retry sending."
+        }
+        return .result(dialog: dialog)
     }
 
     private func loadInput() throws -> ScreenshotInput {

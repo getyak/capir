@@ -4,6 +4,7 @@ import SwiftUI
 
 @main
 struct TalentSignalApp: App {
+    @UIApplicationDelegateAdaptor(CaptureUploadAppDelegate.self) private var captureUploadDelegate
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(AppLanguage.storageKey) private var storedLanguage =
         AppLanguage.system.rawValue
@@ -60,6 +61,8 @@ struct TalentSignalApp: App {
 #endif
         let session = AppSessionStore(baseURL: directory.selected?.endpoint, closeSessionSurfaces: {
             await CaptureHandoffStore.shared.changeRuntimeScope(nil)
+            await BackgroundCaptureDelivery.shared.pauseAll()
+            await CaptureActivityController.shared.endAll()
             await AgentAskActivityController.shared.endAllActivities()
             await AgentWorkActivityController.shared.endAllActivities()
             await ResearchActivityController.shared.endAllActivities()
