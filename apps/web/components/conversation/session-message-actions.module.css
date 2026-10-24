@@ -23,6 +23,11 @@
 .copy:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .failure { font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }
 @media (hover: hover) and (pointer: fine) {
+  /* Fine-pointer controls keep their full target in a dedicated side slot,
+     without reserving an invisible 44px row beneath every message. */
+  .actions { position:absolute; inset-block-start:0; inset-inline-end:0; }
+  .actions[data-message-actions="user"] { inset-block-start:auto; inset-block-end:0; inset-inline-end:calc(100% + 8px); }
+  .actions[data-state="failed"] { position:static; }
   .actions[data-state="idle"] > * { opacity: 0; }
   :global([role="article"]):hover .actions > *,
   .actions:focus-within > * { opacity: 1; }

@@ -62,7 +62,14 @@ describe("expanded and collapsed workspace navigation", () => {
     const shortcut = host.querySelector(`[data-collapsed-only="true"] a[href="/workspace/sessions/${id(1)}"]`)!;
     expect(shortcut.closest("div[aria-label]")?.getAttribute("aria-label")).toBe(shortcutsLabel);
     expect(shortcut.getAttribute("aria-label")).toBe(label);
-    expect(shortcut.getAttribute("title")).toBe(label);
+    // Full titles now live in the accessible anchor and owned disclosure,
+    // avoiding a second native tooltip over the portalled content.
+    expect(shortcut.hasAttribute("title")).toBe(false);
+    await act(async () => (shortcut as HTMLAnchorElement).focus());
+    const disclosure = document.querySelector('[data-session-shortcut-title]');
+    expect(disclosure).not.toBeNull();
+    expect(disclosure?.textContent).toBe(label);
+    expect(disclosure?.querySelector("a")?.getAttribute("href")).toBe(`/workspace/sessions/${id(1)}`);
     const expanded = host.querySelector(`section a[href="/workspace/sessions/${id(1)}"]`)!;
     expect(expanded.closest("section")?.getAttribute("aria-label")).toBe(recentLabel);
     expect(expanded.textContent).toContain("原始标题");
@@ -110,12 +117,12 @@ describe("expanded and collapsed workspace navigation", () => {
     const recent = host.querySelector('section[aria-label="最近对话"]')!;
     expect(recent.querySelector('a[title="Conversation 2"]')).toBeTruthy();
     const collapsed = host.querySelector('[data-collapsed-only="true"]')!;
-    const shortcuts = [...collapsed.querySelectorAll<HTMLAnchorElement>('a[title^="Conversation"]')];
+    const shortcuts = [...collapsed.querySelectorAll<HTMLAnchorElement>('a[aria-label^="Conversation"]')];
     expect(shortcuts.map(link => link.getAttribute("href"))).toEqual([10, 2, 3, 4, 5].map(n => `/workspace/sessions/${id(n)}`));
-    expect(shortcuts.some(link => link.title === "Conversation 1")).toBe(false);
+    expect(shortcuts.some(link => link.getAttribute("aria-label") === "Conversation 1")).toBe(false);
     expect(recent.querySelector('a[title="Conversation 10"]')).toBeTruthy();
     await render(OTHER_SCOPE);
-    expect([...collapsed.querySelectorAll<HTMLAnchorElement>('a[title^="Conversation"]')][0]!.title).toBe("Conversation 1");
+    expect([...collapsed.querySelectorAll<HTMLAnchorElement>('a[aria-label^="Conversation"]')][0]!.getAttribute("aria-label")).toBe("Conversation 1");
   });
 
   it("uses a neutral conversation symbol without inventing a person and preserves real avatars and unread meaning", async () => {
@@ -170,7 +177,7 @@ describe("expanded and collapsed workspace navigation", () => {
 
   it("updates the collapsed projection immediately after expanded archive, restore, and pin actions", async () => {
     await render();
-    const shortcuts = () => [...host.querySelectorAll<HTMLAnchorElement>('[data-collapsed-only="true"] a[title^="Conversation"]')].map(link => link.title);
+    const shortcuts = () => [...host.querySelectorAll<HTMLAnchorElement>('[data-collapsed-only="true"] a[aria-label^="Conversation"]')].map(link => link.getAttribute("aria-label"));
     await act(async () => button("归档：Conversation 1").click());
     expect(shortcuts()).not.toContain("Conversation 1");
     const archiveDisclosure = [...host.querySelectorAll("button")].find(item => item.textContent?.startsWith("已归档"))!;
@@ -197,7 +204,7 @@ describe("expanded and collapsed workspace navigation", () => {
     expect(document.activeElement).toBe(button("展开侧边栏"));
     await act(async () => button("展开侧边栏").click());
     await act(async () => button("归档：Conversation 1").click());
-    expect(host.querySelector('[data-collapsed-only="true"] a[title="Conversation 1"]')).toBeNull();
+    expect(host.querySelector('[data-collapsed-only="true"] a[aria-label="Conversation 1"]')).toBeNull();
     expect(host.textContent).toContain("归档与置顶仅在本页保留");
   });
 
@@ -228,14 +235,18 @@ describe("expanded and collapsed workspace navigation", () => {
     expect(String(state.push.mock.calls[0]?.[0])).toMatch(/^\/workspace\?draft_session=[0-9a-f-]{36}&intent=compose$/u);
   });
 
-  it("hides failed or incorrectly bound recent projections and keeps retry and whole-directory access", async () => {
+  it("retains the authorized projection on failed refresh but hides an incorrectly bound directory and keeps recovery access", async () => {
+    await render();
+    const shortcutHrefs = () => [...host.querySelectorAll<HTMLAnchorElement>('[data-collapsed-only="true"] a[aria-label^="Conversation"]')].map(link => link.getAttribute("href"));
+    const authorized = shortcutHrefs();
+    expect(authorized).toEqual([1, 2, 3, 4, 5].map(n => `/workspace/sessions/${id(n)}`));
     state.failed = true; await render();
-    expect(host.querySelector('[data-collapsed-only="true"] a[title^="Conversation"]')).toBeNull();
+    expect(shortcutHrefs()).toEqual(authorized);
     expect(host.textContent).toContain("暂时无法读取");
     await act(async () => [...host.querySelectorAll("button")].find(item => item.textContent === "重试")!.click());
     expect(state.retry).toHaveBeenCalledOnce();
     state.failed = false; state.binding = "other"; await render();
-    expect(host.querySelector('[data-collapsed-only="true"] a[title^="Conversation"]')).toBeNull();
+    expect(host.querySelector('[data-collapsed-only="true"] a[aria-label^="Conversation"]')).toBeNull();
     expect(host.querySelector('a[href="/workspace/sessions"]')).toBeTruthy();
   });
 });

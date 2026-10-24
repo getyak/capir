@@ -30,6 +30,7 @@ import type { AnswerSeamRegistry } from "./answer-seam";
 import { ConversationWorkRow } from "./conversation-feedback-row";
 import { SessionMessageActions } from "./session-message-actions";
 import type { ConversationWorkStatus } from "./conversation-feedback";
+import { useT, type TFunction } from "../locale-provider";
 import styles from "./queued-conversation.module.css";
 
 export type SessionDataPart = {
@@ -101,9 +102,9 @@ function executionData(data: Record<string, unknown>) {
  * run projects ephemeral milestone updates plus its collapsible execution
  * record; the final semantic response blocks appear only after persisted
  * history readback, so a preview can never become a result. Readback turns
- * keep one collapsed execution record above the standalone result — state and
+ * keep one collapsed execution record after the standalone result — state and
  * elapsed observed time only — while pending memory or calendar decisions
- * stay distinct blocks after it.
+ * remain explicit governed blocks alongside the answer.
  */
 export function sessionMessages(input: {
   turns: SessionDetail["turns"];
@@ -171,11 +172,11 @@ export function sessionMessages(input: {
     const awaiting = false; // Current decision state is read by the governed cards.
     const interrupted = conversationTurnInterrupted(turn.response, turn.id);
     const execution = canonicalExecution(turn.response);
-    // The folded execution record sits above the result and never wraps it:
+    // The folded execution receipt follows the result and never wraps it:
     // the final result is standalone and pending memory or calendar decisions
     // stay distinct blocks. Completed turns keep the record collapsed so the
     // state stays explicit without taking over the history.
-    content.unshift({
+    const executionPart: SessionDataPart = {
       type: "data", name: "talent-signal.execution",
       data: {
         phase: conversationExecutionPhase({ entry: null, readbackComplete: true, awaitingDecision: awaiting, interrupted }),
@@ -188,7 +189,11 @@ export function sessionMessages(input: {
         milestones: input.milestonesByMessage?.[turn.id] ?? [],
         decisionKeys: [turn.response.memoryProposal ? `memory:${turn.response.memoryProposal.proposal_id}` : null, turn.response.meetingDraft ? `calendar:${turn.response.meetingDraft.id}` : null].filter(Boolean),
       },
-    });
+    };
+    // Stopped partial output leads with its interruption; an ordinary completed
+    // answer and all governed decisions lead with their semantic content.
+    if (interrupted) content.unshift(executionPart);
+    else content.push(executionPart);
     messages.push({ id: `${turn.id}:assistant`, role: "assistant", content, createdAt: new Date(turn.response.createdAt) });
   }
   const active = input.active;
@@ -353,9 +358,10 @@ function dataRecord(value: unknown): Record<string, unknown> | null {
 type DecisionState = "pending" | "resolved" | "unknown";
 const DecisionContext = createContext<{ states: Record<string, DecisionState>; update: (key: string, state: DecisionState) => void }>({ states: {}, update: () => {} });
 function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
+  const t = useT();
   const decisions = useContext(DecisionContext);
   const execution = executionData(data);
-  if (!execution) return <span>这项执行记录暂时无法显示。</span>;
+  if (!execution) return <span>{t("这项执行记录暂时无法显示。")}</span>;
   const keys = Array.isArray(data.decisionKeys) ? data.decisionKeys.filter((key): key is string => typeof key === "string") : [];
   const unknown = keys.some(key => !decisions.states[key] || decisions.states[key] === "unknown");
   const pending = keys.some(key => decisions.states[key] === "pending");
@@ -363,9 +369,9 @@ function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
   return <SessionExecutionCard {...execution} phase={phase}/>;
 }
 
-function renderSessionData(name: string, raw: unknown, context: RenderContext) {
+function renderSessionData(name: string, raw: unknown, context: RenderContext, t: TFunction) {
   const data = dataRecord(raw);
-  if (!data) return <span>这项内容暂时无法显示。</span>;
+  if (!data) return <span>{t("这项内容暂时无法显示。")}</span>;
   if (name === "talent-signal.user-images" && Array.isArray(data.images) && typeof data.messageId === "string") {
     // A local outbox row reads its bytes from the local store; canonical rows
     // use the server-manifest path.
@@ -374,9 +380,9 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
   }
   if (name === "talent-signal.answer-block") {
     const block = dataRecord(data.block);
-    if (!block || typeof block.body !== "string") return <span>这段回复暂时无法显示。</span>;
+    if (!block || typeof block.body !== "string") return <span>{t("这段回复暂时无法显示。")}</span>;
     if (!block.body.trim()) return null; // Silence retains execution, without a fabricated dialogue bubble.
-    return <><AnswerBlockFrame block={{
+    return <div className={styles.answerBlockGroup}><AnswerBlockFrame block={{
       id: typeof block.id === "string" ? block.id : "",
       title: typeof block.title === "string" ? block.title : null,
       body: block.body,
@@ -384,7 +390,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
       kind: typeof block.kind === "string" ? block.kind : "",
       requires_user_decision: block.requires_user_decision !== false,
       public_source_refs: Array.isArray(block.public_source_refs) ? block.public_source_refs as never : undefined,
-    }} messageId={typeof data.messageId === "string" ? data.messageId : ""} sessionId={context.sessionId} attention={context.attention}/><SessionMessageActions afterBlockId={typeof block.id === "string" ? block.id : ""}/></>;
+    }} messageId={typeof data.messageId === "string" ? data.messageId : ""} sessionId={context.sessionId} attention={context.attention}/><SessionMessageActions afterBlockId={typeof block.id === "string" ? block.id : ""}/></div>;
   }
   if (name === "talent-signal.work-row" && typeof data.messageId === "string") {
     const work = context.workByMessageId?.[data.messageId];
@@ -394,7 +400,7 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
     // Streamed text that has not been read back keeps its own readable form;
     // otherwise one compact truthful work row carries the observed state.
     return preview
-      ? <div className={styles.forming}><ConversationResponse>{preview}</ConversationResponse>{work.animate && <span className={styles.cursor} aria-hidden="true"/>}<small className={styles.formingStatus} role="status">{work.text}</small>{actions}</div>
+      ? <div className={styles.forming}><ConversationResponse>{preview}</ConversationResponse>{work.animate && <span className={styles.cursor} aria-hidden="true"/>}<small className={styles.formingStatus} role="status">{t(work.text)}</small>{actions}</div>
       : <ConversationWorkRow status={work}>{actions}</ConversationWorkRow>;
   }
   if (name === "talent-signal.memory" && data.version === 1 && typeof data.proposalId === "string"
@@ -414,17 +420,17 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
     // Host-owned typed human result: rendered with its provenance as a result
     // part, never as a user-authored message.
     const result = dataRecord(data.result);
-    if (!result) return <span>这项结果暂时无法显示。</span>;
+    if (!result) return <span>{t("这项结果暂时无法显示。")}</span>;
     return (
       <div className={styles.semanticBubble}>
-        <h3>MCP 工具结果</h3>
+        <h3>{t("MCP 工具结果")}</h3>
         <ConversationResponse lead={false}>
-          {result.outcome === "submitted" ? "你的确认已记录。" : result.outcome === "rejected" ? "你已拒绝这次请求，Agent 将按此结果继续。" : "这次请求的结果已记录。"}
+          {t(result.outcome === "submitted" ? "你的确认已记录。" : result.outcome === "rejected" ? "你已拒绝这次请求，Agent 将按此结果继续。" : "这次请求的结果已记录。")}
         </ConversationResponse>
-        <details><summary>查看结果来源</summary>
+        <details><summary>{t("查看结果来源")}</summary>
           <p>request_id：{String(result.request_id)}</p>
           <p>call_id：{String(result.call_id)}</p>
-          <p>结果：{String(result.outcome)}</p>
+          <p>{t("execution.outcome", { outcome: String(result.outcome) })}</p>
         </details>
       </div>
     );
@@ -454,10 +460,11 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext) {
       : conversationMilestoneUpdates(typeof data.text === "string" ? data.text : "");
     return <SessionRunUpdate updates={updates} stage={typeof data.stage === "string" ? data.stage : null} status={context.status}/>;
   }
-  return <span>{typeof data.fallback === "string" ? data.fallback : "这项结果暂时无法显示。"}</span>;
+  return <span>{t(typeof data.fallback === "string" ? data.fallback : "这项结果暂时无法显示。")}</span>;
 }
 
 export function SessionUserMessage({ context }: { context: RenderContext }) {
+  const t = useT();
   // Sent images stand outside the text bubble: each text part keeps one
   // readable bubble and image parts render directly beneath it, so an
   // image-bearing message never grows a prominent outer text bubble frame.
@@ -468,7 +475,7 @@ export function SessionUserMessage({ context }: { context: RenderContext }) {
       <MessagePrimitive.Parts>{({ part }) => part.type === "text" && part.text
         ? <div className={styles.userMessage} data-user-message>{part.text}</div>
         : <></>}</MessagePrimitive.Parts>
-      <MessagePrimitive.Parts>{({ part }) => part.type === "data" ? renderSessionData(part.name, part.data, context)
+      <MessagePrimitive.Parts>{({ part }) => part.type === "data" ? renderSessionData(part.name, part.data, context, t)
         : part.type === "text" ? <></> : null}</MessagePrimitive.Parts>
       <SessionMessageActions/>
     </div></div>
@@ -476,6 +483,7 @@ export function SessionUserMessage({ context }: { context: RenderContext }) {
 }
 
 export function SessionAssistantMessage({ context }: { context: RenderContext }) {
+  const t = useT();
   const [states, setStates] = useState<Record<string, DecisionState>>({});
   const update = useCallback((key: string, state: DecisionState) => setStates(current => current[key] === state ? current : { ...current, [key]: state }), []);
   const renderContext = { ...context, onDecisionState: update };
@@ -485,7 +493,7 @@ export function SessionAssistantMessage({ context }: { context: RenderContext })
       <div className={styles.answerBody}>
         {/* Empty assistant content stays valid: silence needs no placeholder. */}
         <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? <ConversationResponse>{part.text}</ConversationResponse>
-          : part.type === "data" ? renderSessionData(part.name, part.data, renderContext) : null}</MessagePrimitive.Parts>
+          : part.type === "data" ? renderSessionData(part.name, part.data, renderContext, t) : null}</MessagePrimitive.Parts>
       </div>
     </div>
   </MessagePrimitive.Root></DecisionContext.Provider>;

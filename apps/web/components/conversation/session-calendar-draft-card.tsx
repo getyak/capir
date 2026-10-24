@@ -5,6 +5,7 @@ import type { MeetingDraftRecord } from "@talent-signal/contracts";
 import { meetingDraftCalendarValue } from "@/lib/meeting-calendar";
 import { CalendarDraftReview } from "../calendar-draft-review";
 import { workspaceSessionFetch } from "../workspace-session-request";
+import { useT } from "../locale-provider";
 import styles from "./session-calendar-draft-card.module.css";
 
 type PendingDismiss = { version: 1; operationKey: string; revision: number; expiresAt: string };
@@ -33,6 +34,7 @@ export function SessionCalendarDraftCard(props: CardProps) {
 }
 
 function SessionCalendarDraftCardContent({ draftId, binding, sessionId, onDecisionState }: CardProps) {
+  const t = useT();
   const [record, setRecord] = useState<MeetingDraftRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dismissPhase, setDismissPhase] = useState<"ready" | "sending" | "unknown" | "dismissed">("ready");
@@ -147,23 +149,23 @@ function SessionCalendarDraftCardContent({ draftId, binding, sessionId, onDecisi
     } catch { setDismissPhase("unknown"); }
   }
 
-  if (error && !record) return <section className="context-calendar-draft-handoff" role="alert">{error} <a href={`/workspace/meetings?draft=${encodeURIComponent(draftId)}`}>在时间页核对日历草稿</a></section>;
-  if (!record) return <section className="context-calendar-draft-handoff" role="status">正在读取日历草稿…</section>;
-  if (dismissPhase === "dismissed" || record.status === "dismissed") return <section className="context-calendar-draft-handoff" role="status">本次不安排 · {record.title ?? "日历草稿"}</section>;
+  if (error && !record) return <section className="context-calendar-draft-handoff" role="alert">{t(error)} <a href={`/workspace/meetings?draft=${encodeURIComponent(draftId)}`}>{t("在时间页核对日历草稿")}</a></section>;
+  if (!record) return <section className="context-calendar-draft-handoff" role="status">{t("正在读取日历草稿…")}</section>;
+  if (dismissPhase === "dismissed" || record.status === "dismissed") return <section className="context-calendar-draft-handoff" role="status">{t("本次不安排")} · {record.title ?? t("日历草稿")}</section>;
   if (dismissPhase === "sending" || dismissPhase === "unknown") return <section className="context-calendar-draft-handoff" role="status">
-    <strong>{record.title ?? "日历草稿"}</strong><p>{dismissPhase === "sending" ? "正在记录本次决定…" : "结果待核对"}</p>
-    {dismissPhase === "unknown" ? <button type="button" onClick={() => void checkDismiss()}>核对结果</button> : null}
-    {dismissPhase === "unknown" && canRetryDismiss ? <button type="button" onClick={() => void dismiss()}>重试原操作</button> : null}
-    {error ? <p role="alert">{error}</p> : null}
+    <strong>{record.title ?? t("日历草稿")}</strong><p>{t(dismissPhase === "sending" ? "正在记录本次决定…" : "结果待核对")}</p>
+    {dismissPhase === "unknown" ? <button type="button" onClick={() => void checkDismiss()}>{t("核对结果")}</button> : null}
+    {dismissPhase === "unknown" && canRetryDismiss ? <button type="button" onClick={() => void dismiss()}>{t("重试原操作")}</button> : null}
+    {error ? <p role="alert">{t(error)}</p> : null}
   </section>;
   const draft = meetingDraftCalendarValue(record);
-  if (!draft) return <section className="context-calendar-draft-handoff" role="alert">来源已失效，这份日历草稿不能导出。</section>;
-  return <div>{error ? <p role="alert">{error}</p> : null}<CalendarDraftReview draft={draft} persistence={{
+  if (!draft) return <section className="context-calendar-draft-handoff" role="alert">{t("来源已失效，这份日历草稿不能导出。")}</section>;
+  return <div>{error ? <p role="alert">{t(error)}</p> : null}<CalendarDraftReview draft={draft} persistence={{
     draftId: record.id,
     expiresAt: record.expires_at,
     revision: record.revision,
     sessionVersion: binding,
   }} variant="session" onDismiss={() => void dismiss()} onDraftSaved={setRecord}/>
-    <a className={styles.secondaryLink} href={`/workspace/meetings?draft=${encodeURIComponent(draftId)}`}>在时间页查看日历草稿</a>
+    <a className={styles.secondaryLink} href={`/workspace/meetings?draft=${encodeURIComponent(draftId)}`}>{t("在时间页查看日历草稿")}</a>
   </div>;
 }

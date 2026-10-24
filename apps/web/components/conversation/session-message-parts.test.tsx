@@ -38,14 +38,14 @@ describe("Session message projection", () => {
     const userParts = messages[0]!.content as Array<{ type: string; name?: string; data?: unknown }>;
     expect(userParts.some((part) => part.name === "talent-signal.user-images")).toBe(true);
     const parts = messages[1]!.content as Array<{ type: string; name?: string; data?: unknown }>;
-    // The execution record sits above the standalone result; pending memory
-    // and calendar decisions stay distinct blocks after it.
+    // The persisted answer leads; pending decisions stay explicit and the
+    // execution receipt is secondary to both.
     expect(parts.map((part) => part.name)).toEqual([
-      "talent-signal.execution", "talent-signal.answer-block", "talent-signal.memory", "talent-signal.calendar",
+      "talent-signal.answer-block", "talent-signal.memory", "talent-signal.calendar", "talent-signal.execution",
     ]);
-    const execution = parts[0]!.data as Record<string, unknown>;
+    const execution = parts[3]!.data as Record<string, unknown>;
     expect(execution).toMatchObject({ phase: "completed", startedAt: "2026-09-29T01:00:00.000Z", endedAt: "2026-09-29T01:00:01.000Z" });
-    const memory = parts[2]!.data as Record<string, unknown>;
+    const memory = parts[1]!.data as Record<string, unknown>;
     expect(memory).toMatchObject({ version: 1, messageId: MESSAGE, proposalId: PROPOSAL, revision: 3 });
     expect(JSON.stringify(memory)).not.toContain("source.png");
     expect(JSON.stringify(memory)).not.toContain("credential");
@@ -56,7 +56,7 @@ describe("Session message projection", () => {
     delete (clean.response as Record<string, unknown>).memoryProposal;
     delete (clean.response as Record<string, unknown>).meetingDraft;
     const messages = sessionMessages({ turns: [clean], active: null, preview: null });
-    expect(partsOf(messages[1]!)).toEqual(["talent-signal.execution", "talent-signal.answer-block"]);
+    expect(partsOf(messages[1]!)).toEqual(["talent-signal.answer-block", "talent-signal.execution"]);
     const execution = (messages[1]!.content as Array<{ name?: string; data?: unknown }>).find((part) => part.name === "talent-signal.execution")!.data as Record<string, unknown>;
     expect(execution.phase).toBe("completed");
     // The result body is a separate part: the record never wraps or restates it.
@@ -164,7 +164,7 @@ it("restores every steered original before one final result and uses actual run 
   expect(messages[1]?.content).toContainEqual({ type: "text", text: "补充交付边界" });
   expect(messages[1]?.createdAt.toISOString()).toBe("2026-09-29T01:00:05.000Z");
   expect(messages[1]?.content[1]).toMatchObject({ data: { messageId: duplicate.message_id, images: first.images } });
-  expect(messages[2]?.content[0]).toMatchObject({ data: { startedAt: "2026-09-29T01:00:03Z", endedAt: "2026-09-29T01:00:11Z", timingBasis: "run", completedTools: first.response.execution.tools } });
+  expect(messages[2]?.content.find(part => part.type === "data" && part.name === "talent-signal.execution")).toMatchObject({ data: { startedAt: "2026-09-29T01:00:03Z", endedAt: "2026-09-29T01:00:11Z", timingBasis: "run", completedTools: first.response.execution.tools } });
 });
 
 it("keeps sent image manifests in original order and identity for history, active and queued messages", () => {

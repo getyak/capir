@@ -4,6 +4,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 const {claims,settings,testCookie} = vi.hoisted(()=>({claims:vi.fn(),settings:vi.fn(),testCookie:{present:true}}));
+vi.mock("@/lib/server/marketing-locale",()=>({getMarketingLocale:async()=>"zh-CN"}));
 vi.mock("@/auth",()=>({auth:async()=>({user:{name:"Owner"}})}));
 vi.mock("next/headers",()=>({cookies:async()=>({has:()=>testCookie.present})}));
 vi.mock("@/app/login/actions",()=>({signOutOfWorkspace:vi.fn()}));

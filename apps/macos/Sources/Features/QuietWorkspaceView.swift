@@ -116,6 +116,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private var retired = false
     private var draftOwnerReadGeneration = UUID()
     private var documentGeneration = UUID()
+    private var titlebarHeight = 0.0
     private var storeObservation: AnyCancellable?
     private let accountBrowser: AccountSettingsBrowser
 
@@ -613,17 +614,38 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         failure = "页面已暂停，请重新载入。已保存的对话仍保留在工作区。"
     }
 
+    func updateTitlebarHeight(_ height: Double) {
+        guard height.isFinite, height >= 0, height <= 128, titlebarHeight != height else { return }
+        titlebarHeight = height
+        publishDesktopChrome(state: DesktopUpdater.shared.presentation)
+    }
+
     func publishDesktopChrome(state presentation: DesktopUpdatePresentation) {
-        let state = WorkspaceSurfacePolicy.desktopChromePayload(
+        var state = WorkspaceSurfacePolicy.desktopChromePayload(
             surface: "workspace",
             presentation: presentation,
             appVersion: DesktopUpdater.shared.appVersion)
+        state["titlebarHeight"] = titlebarHeight
         guard let bytes = try? JSONSerialization.data(withJSONObject: state),
               let json = String(data: bytes, encoding: .utf8),
               let originBytes = try? JSONSerialization.data(withJSONObject: origin.url.absoluteString, options: .fragmentsAllowed),
               let originJSON = String(data: originBytes, encoding: .utf8) else { return }
         // Main-frame display metadata only. The origin check also closes navigation races.
-        let script = "if (window.location.origin === \(originJSON)) { window.talentSignalDesktop = \(json); if (document.documentElement) document.documentElement.dataset.desktopSurface = \(json).surface; else document.addEventListener('DOMContentLoaded', () => { document.documentElement.dataset.desktopSurface = \(json).surface; }, { once: true }); window.dispatchEvent(new Event('talent-signal-desktop')); }"
+        let script = """
+        if (window.location.origin === \(originJSON)) {
+          window.talentSignalDesktop = \(json);
+          const applyChrome = () => {
+            const root = document.documentElement;
+            if (!root) return;
+            root.dataset.desktopSurface = \(json).surface;
+            root.dataset.desktopTitlebar = 'unified';
+            root.style.setProperty('--workspace-native-titlebar-height', '\(titlebarHeight)px');
+          };
+          if (document.documentElement) applyChrome();
+          else document.addEventListener('DOMContentLoaded', applyChrome, { once: true });
+          window.dispatchEvent(new Event('talent-signal-desktop'));
+        }
+        """
         let controller = webView.configuration.userContentController
         controller.removeAllUserScripts()
         for userScript in Self.workbenchUserScripts(chromeScript: script) {
@@ -683,11 +705,13 @@ struct WorkspaceWebSurface: NSViewRepresentable {
     let appearance: WorkspaceAppearance
     func makeNSView(context: Context) -> WorkspaceMaterialSurface {
         browser.webView.pageZoom = WorkspaceContentZoom.clamp(zoom)
-        return WorkspaceMaterialSurface(webView: browser.webView, preference: appearance)
+        return WorkspaceMaterialSurface(webView: browser.webView, preference: appearance,
+                                        onTitlebarLayout: { [weak browser] in browser?.updateTitlebarHeight($0) })
     }
     func updateNSView(_ nsView: WorkspaceMaterialSurface, context: Context) {
         nsView.webView.pageZoom = WorkspaceContentZoom.clamp(zoom)
         nsView.preference = appearance
+        nsView.needsLayout = true
     }
 }
 
@@ -735,6 +759,7 @@ private struct ConnectedQuietWorkspace: View {
             if !browser.signedOut && browser.failure == nil {
                 WorkspaceWebSurface(browser: browser, zoom: zoom,
                                     appearance: presentationAppearance ?? .system)
+                    .ignoresSafeArea(.container, edges: .top)
             }
             if browser.signedOut {
                 // Native signed-out surface only: the Web login page never

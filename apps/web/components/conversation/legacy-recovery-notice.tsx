@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   type LegacyConversationRecovery,
 } from "@/lib/conversation-legacy";
+import { useLocale, useT } from "../locale-provider";
 import styles from "./queued-conversation.module.css";
 
 /**
@@ -21,16 +22,18 @@ export function LegacyRecoveryNotice({
 }: {
   recovery: LegacyConversationRecovery;
 }) {
+  const t = useT();
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const submission =
     recovery.delivery === "attempted" ? "上次提交结果未确认" : "是否已提交未知";
   return (
-    <section aria-label="旧版未完成消息" className={styles.recovery}>
+    <section aria-label={t("旧版未完成消息")} className={styles.recovery}>
       <div className={styles.recoveryRow}>
         <p>
-          旧版消息{submission}，已保留原文，未自动重发。
+          {t("conversation.legacy.notice", { status: t(submission) })}
           <small>
-            保留至 {new Date(recovery.expiresAt).toLocaleDateString("zh-CN")}
+            {t("conversation.legacy.expires", { date: new Date(recovery.expiresAt).toLocaleDateString(locale) })}
           </small>
         </p>
         <span className={styles.recoveryActions}>
@@ -39,13 +42,13 @@ export function LegacyRecoveryNotice({
             onClick={() => setOpen((value) => !value)}
             type="button"
           >
-            {open ? "收起原文" : "查看原文"}
+            {t(open ? "收起原文" : "查看原文")}
           </button>
         </span>
       </div>
       {open ? (
         <pre
-          aria-label="旧版消息原文"
+          aria-label={t("旧版消息原文")}
           className={styles.recoveryContent}
           tabIndex={0}
         >

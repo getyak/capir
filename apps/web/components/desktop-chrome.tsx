@@ -2,6 +2,7 @@
 
 import { GearSix, Globe } from "@phosphor-icons/react";
 import { useSyncExternalStore } from "react";
+import { useT } from "./locale-provider";
 import styles from "./workspace-shell.module.css";
 
 // Presentation only: the native host owns trust, the offered version and installation.
@@ -70,19 +71,20 @@ export function installUpdateHref(state: DesktopChromeSnapshot): string {
  * executes anything.
  */
 export function DesktopUpdateBanner({ onNavigate }: { onNavigate?: () => void }) {
+  const t = useT();
   const state = useDesktopChrome();
   if (!state || state.phase !== "available" || !state.version) return null;
   const label = state.legacy
-    ? `查看 macOS ${state.version} 更新`
-    : `更新至 macOS ${state.version} 并重启`;
+    ? t("desktop.update.view", { version: state.version })
+    : t("desktop.update.install", { version: state.version });
   return (
     <div className={styles.updateBanner} role="status">
       <span className={styles.updateBannerText}>
         <strong>macOS {state.version}</strong>
         <small>
-          {state.legacy
+          {t(state.legacy
             ? "此主机在应用内查看更新。"
-            : "下载校验后重启应用。"}
+            : "下载校验后重启应用。") }
         </small>
       </span>
       <a
@@ -90,7 +92,7 @@ export function DesktopUpdateBanner({ onNavigate }: { onNavigate?: () => void })
         href={installUpdateHref(state)}
         onClick={onNavigate}
       >
-        {state.legacy ? "查看" : "安装"}
+        {t(state.legacy ? "查看" : "安装")}
       </a>
     </div>
   );
@@ -102,25 +104,27 @@ function settingsHrefFor(hosted: boolean, scheme: string, fallback: string) {
 
 /** Native account management opens the browser; Web stays in its workspace. */
 export function DesktopAccountLink({ onClick }: { onClick: () => void }) {
+  const t = useT();
   const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   return (
     <a
-      aria-label={state ? "账号与偏好（在默认浏览器中打开）" : "账号与偏好"}
+      aria-label={t(state ? "账号与偏好（在默认浏览器中打开）" : "账号与偏好")}
       href={settingsHrefFor(Boolean(state), "talentsignal-desktop://account-settings", "/workspace/settings")}
       onClick={onClick}
     >
       <Globe aria-hidden="true" size={16} />
-      <span>{state ? "账号与偏好 ↗" : "账号与偏好"}</span>
+      <span>{t("账号与偏好")}{state ? " ↗" : ""}</span>
     </a>
   );
 }
 
 export function DesktopAccountNotice() {
+  const t = useT();
   const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   if (!state) return null;
   return <span className={styles.accountMetaRow}>
-    <span aria-label="账号与偏好会在此账号的默认浏览器中打开；浏览器的登录状态可能与本应用不同。">
-      在此账号的默认浏览器中打开 · 浏览器登录状态可能与本应用不同
+    <span aria-label={t("账号与偏好会在此账号的默认浏览器中打开；浏览器的登录状态可能与本应用不同。")}>
+      {t("在此账号的默认浏览器中打开 · 浏览器登录状态可能与本应用不同")}
     </span>
   </span>;
 }
@@ -128,12 +132,13 @@ export function DesktopAccountNotice() {
 /** The native window owns device settings only, so it is offered only where a
  * native host exists. Browsers keep the ordinary Web settings route. */
 export function DesktopDeviceSettingsLink({ onClick }: { onClick: () => void }) {
+  const t = useT();
   const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   if (!state) return null;
   return (
     <a href="talentsignal-desktop://settings" onClick={onClick}>
       <GearSix aria-hidden="true" size={16} />
-      <span>此 Mac 设置…</span>
+      <span>{t("此 Mac 设置…")}</span>
       <kbd>⌘ ,</kbd>
     </a>
   );

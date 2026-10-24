@@ -1,3 +1,4 @@
+import { LocaleProvider } from "../locale-provider";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -140,4 +141,23 @@ it("animates only a live running processing label", () => {
     phase: "running", stage: "answer", startedAt: "2026-10-12T00:00:00Z", endedAt: "2026-10-12T00:00:03Z", milestones: [],
   }));
   expect(ended).not.toContain('data-processing-animated="true"');
+});
+
+
+it("uses the active English locale for execution, observed stages and times without translating draft or tool names", () => {
+  const html = renderToStaticMarkup(<LocaleProvider locale="en">{createElement(SessionExecutionCard, {
+    phase: "running", stage: "contact_read", startedAt: "2026-10-01T01:00:00Z", endedAt: "2026-10-01T01:00:08Z",
+    milestones: [{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-10-01T01:00:01Z" }],
+    completedTools: [{ name: "contact_read", completed_at: "2026-10-01T01:00:02Z" }],
+    draft: "保留原文",
+  })}</LocaleProvider>);
+  expect(html).toContain("Running");
+  expect(html).toContain("Recorded tool completions: 1");
+  expect(html).toContain("Looking up the people involved");
+  expect(html).toContain("Elapsed 8 sec");
+  expect(html).toContain("Reply draft, not complete");
+  expect(html).toContain("保留原文");
+  expect(html).toContain("contact_read");
+  expect(html).not.toContain("正在查找相关人物");
+  expect(html).not.toContain("工具完成记录");
 });

@@ -49,7 +49,10 @@ export function WorkspaceRecentSessions({
   const organized = projected
     ? organizeSessionRows(projected, snapshot.entries)
     : null;
-  const current = !loading && !failed && organized
+  // The directory owner preserves only this binding's authorized snapshot on
+  // transient refresh failure and clears it on expiry/401/scope changes. Keep
+  // that snapshot readable while showing recovery; never cache it here again.
+  const current = !loading && organized
     ? { rows: { visible: organized.visible.slice(0, 8), archived: organized.archived.slice(0, 8) }, state: "ready" as const }
     : failed ? { rows: { visible: [], archived: [] }, state: "error" as const } : null;
   const visibleRows = current?.state === "ready" ? current.rows.visible : [];
@@ -175,7 +178,7 @@ export function WorkspaceRecentSessions({
           </div>
         ) : null}
       </div>
-      {current?.state === "error" ? (
+      {failed ? (
         <p className={styles.historyRecovery}>{t("sessions.error")}<button onClick={retry} type="button">{t("sessions.retry")}</button></p>
       ) : null}
     </section>

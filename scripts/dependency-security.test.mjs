@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import "./dependency-cache.test.mjs";
+import "./dependency-security-inputs.test.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const workspace = readFileSync(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
@@ -425,7 +426,9 @@ test("resolved production repairs are recorded in the lockfile", () => {
   assert.deepEqual(resolvedVersions("@modelcontextprotocol/sdk"), ["1.32.0"]);
   assert.deepEqual(resolvedVersions("hono"), ["4.13.11"]);
   assert.deepEqual(resolvedVersions("ip-address"), ["10.7.4"]);
-  assert.deepEqual(resolvedVersions("fast-uri"), ["3.1.8", "4.1.5"]);
+  assert.deepEqual(resolvedVersions("fast-uri"), ["3.1.9", "4.2.3"]);
+  assert.deepEqual(resolvedVersions("body-parser"), ["2.4.0"]);
+  assert.deepEqual(resolvedVersions("undici"), ["6.29.1", "8.12.2"]);
   assert.deepEqual(resolvedVersions("source-map-js"), ["1.2.2"]);
   assert.ok(lock.includes("\n  mammoth@1.13.0:"));
 });

@@ -50,8 +50,31 @@ it("preserves stored titles and person initials while localizing row and surroun
   expect(html).toContain('aria-label="Start a new conversation"');
   expect(html).toContain('aria-label="More actions: 客户原话：下周再联系"');
   expect(html).toContain('aria-label="Pin: 客户原话：下周再联系"');
-  expect(html).toContain("Organized on this device");
+  // Portalled menu content renders only after opening; its locale is covered
+  // by the interaction test in workspace-session-row.test.tsx.
+  expect(html).not.toContain("Organized on this device");
   expect(html).toContain(">晓</span>");
   expect(html).not.toContain("更多操作");
   expect(html).not.toContain("新建对话");
+});
+
+it("keeps the authorized history visible alongside a failed refresh and discards it when the directory clears", () => {
+  directory.loading = false;
+  directory.data = { sessions: { session_version: "current", sessions: [{
+    session_id: "00000000-0000-4000-8000-000000000002",
+    state: "active", expires_at: "2030-01-01T00:00:00Z",
+    title: "Synthetic cached conversation", person_label: "", person_id: null, is_unread: false,
+  }] } };
+  expect(render("zh-CN")).toContain("Synthetic cached conversation");
+
+  directory.failed = true;
+  const failed = render("zh-CN");
+  expect(failed).toContain("Synthetic cached conversation");
+  expect(failed).toContain("暂时无法读取");
+  expect(failed).toMatch(/<button[^>]*>重试<\/button>/);
+
+  // The directory owner clears its data on expiry, 401 or a changed binding.
+  // Rendering a refresh failure must never resurrect that cleared projection.
+  directory.data = null;
+  expect(render("zh-CN")).not.toContain("Synthetic cached conversation");
 });

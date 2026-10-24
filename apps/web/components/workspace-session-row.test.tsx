@@ -11,6 +11,8 @@ import {
   WorkspaceSessionRow,
   type SessionRowOrganization,
 } from "./workspace-session-row";
+import Link from "next/link";
+import { LocaleProvider } from "./locale-provider";
 import { WorkspaceRecentSessions } from "./workspace-recent-sessions";
 
 const directory = vi.hoisted(() => ({
@@ -91,7 +93,7 @@ function mountRow(organization: Partial<SessionRowOrganization> = {}) {
           ...organization,
         },
       },
-      createElement("a", { href: "/workspace/sessions/x" }, "准备下周沟通"),
+      createElement("a", { href: "/workspace/sessions/x", title: "准备下周沟通" }, "准备下周沟通"),
     ),
   );
   const shell = host!.querySelector<HTMLElement>("[data-open]")!;
@@ -150,17 +152,43 @@ describe("swipe-to-organize session rows", () => {
 
   });
 
-  it("keeps the named menu so the gesture is optional", () => {
+  it("portals the named menu outside the scrolling row and returns focus on Escape", async () => {
     const { onToggle, shell } = mountRow({ pinned: true });
-    const summary = shell.querySelector<HTMLElement>("summary")!;
-    expect(summary.getAttribute("aria-label")).toBe("更多操作：准备下周沟通");
-    act(() => summary.click());
-    const items = [...shell.querySelectorAll<HTMLButtonElement>("details button")];
+    const trigger = shell.querySelector<HTMLButtonElement>('button[aria-label="更多操作：准备下周沟通"]');
+    expect(trigger).not.toBeNull();
+    act(() => { trigger!.focus(); trigger!.click(); });
+    const menu = await vi.waitFor(() => {
+      const value = document.querySelector<HTMLElement>('[data-slot="popover-content"]');
+      expect(value).not.toBeNull();
+      return value!;
+    });
+    expect(shell.contains(menu)).toBe(false);
+    const items = [...menu.querySelectorAll<HTMLButtonElement>("button")];
     expect(items.map((item) => item.textContent?.trim())).toEqual(["取消置顶", "归档"]);
-    act(() => items[1]!.click());
-    expect(onToggle).toHaveBeenCalledWith("archived", true);
     act(() => items[0]!.click());
     expect(onToggle).toHaveBeenLastCalledWith("pinned", false);
+    act(() => trigger!.click());
+    await vi.waitFor(() => expect(document.querySelector('[data-slot="popover-content"]')).not.toBeNull());
+    await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true})));
+    await vi.waitFor(() => expect(document.querySelector('[data-slot="popover-content"]')).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("opens an English menu with the full stored title and suppresses the duplicate browser tooltip", async () => {
+    const onToggle = vi.fn();
+    mount(<LocaleProvider locale="en"><WorkspaceSessionRow organization={{ archived:false, pinned:false, onToggle, rowLabel:"客户原话：下周再联系" }}>
+      <Link href="/workspace/sessions/x" title="客户原话：下周再联系">客户原话：下周再联系</Link>
+    </WorkspaceSessionRow></LocaleProvider>);
+    const trigger = host!.querySelector<HTMLButtonElement>('button[aria-label="More actions: 客户原话：下周再联系"]')!;
+    act(() => { trigger.focus(); trigger.click(); });
+    const menu = await vi.waitFor(() => { const value = document.querySelector('[data-slot="popover-content"]'); expect(value).not.toBeNull(); return value!; });
+    expect(menu.textContent).toContain("客户原话：下周再联系");
+    expect(menu.textContent).toContain("Organized on this device");
+    expect([...menu.querySelectorAll("button")].map(item => item.textContent)).toEqual(["Pin", "Archive"]);
+    expect(host!.querySelector("a")!.hasAttribute("title")).toBe(false);
+    await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key:"Escape", bubbles:true })));
+    await vi.waitFor(() => expect(host!.querySelector("a")!.title).toBe("客户原话：下周再联系"));
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("exposes the same named actions in the tray with honest state", () => {

@@ -30,8 +30,8 @@
 .userStack > .userMessage { max-width:100%; }
 .userMessage:has(> .images) { background:none; padding:0; }
 /* Leading Agent identity: the brand mark owns the 24px avatar column. */
-.answer { display:grid; grid-template-columns:20px minmax(0,1fr); column-gap:14px; min-width:0; padding:0; align-items:start; }
-.identity { display:flex; align-items:center; gap:8px; font-size:var(--ts-type-meta, 0.8125rem); font-weight:500; color:var(--muted); margin:2px 0 0; }
+.answer { display:grid; grid-template-columns:44px minmax(0,1fr); column-gap:18px; min-width:0; padding:0; align-items:start; }
+.identity { display:flex; justify-content:center; width:44px; align-items:center; gap:8px; font-size:var(--ts-type-meta, 0.8125rem); font-weight:500; color:var(--muted); margin:2px 0 0; }
 .mark { width:20px; height:20px; background:var(--workspace-brand-image) center / contain no-repeat; }
 .answerBody { min-width:0; }
 .answer h3 { font-size:var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-heading, 1.4); font-weight:500; margin:0 0 12px; }
@@ -242,3 +242,46 @@
 
 /* Editable text keeps the platform-safe size in a narrow viewport. */
 @media(max-width:640px) { .edit textarea, .composer > div[data-variant]:not([data-layout="inline"]) textarea { font-size:1rem; } }
+
+/* Native AppKit already contributes its measured titlebar height above this
+   document. Budget only that configured host; browser chrome stays unchanged. */
+:global(html[data-desktop-surface="workspace"][data-desktop-titlebar="unified"]) .header {
+  min-height: max(44px, calc(68px - var(--workspace-native-titlebar-height, 0px)));
+  padding-block: 0;
+}
+:global(html[data-desktop-surface="workspace"][data-desktop-titlebar="unified"]) .details {
+  top: max(0px, calc((68px - var(--workspace-native-titlebar-height, 0px) - 44px) / 2));
+}
+
+/* Keep completed run receipts on the same leading reading axis. Their details
+   remain a real 44px disclosure target, while successful chrome stays quiet. */
+.execution { max-width: none; margin: 4px 0 0; }
+.executionSummary { padding-inline: 0; flex-wrap: wrap; column-gap: 8px; row-gap: 0; }
+.execution[data-phase="completed"] .executionSummary { font-size:var(--ts-type-meta,0.8125rem); }
+.executionDetail { padding-inline: 0; }
+.executionElapsed { margin-left: 0; }
+.executionSummary::after { margin-left: auto; }
+.executionStage { min-width:0; overflow-wrap:anywhere; }
+.turn { margin-bottom: 28px; }
+.turn.userTurn { margin-bottom: 16px; }
+/* An empty adapter-generated part must not reserve a whole blank turn. */
+.turn:has(.answerBody:empty) { display:none; }
+@media(max-width:640px) { .turn { margin-bottom:24px; } }
+
+.answerBlockGroup { position:relative; min-width:0; }
+.userStack { position:relative; }
+@media(hover:hover) and (pointer:fine) {
+  .answerBlockGroup:has([data-message-actions]) { min-height:44px; padding-inline-end:52px; }
+}
+
+/* Symmetric side tracks keep the title on the content area's center axis.
+   Empty and active states reserve the same space; disclosure is portalled. */
+.header { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,50%) minmax(0,1fr); column-gap:8px; padding-inline:60px; box-sizing:border-box; }
+.headingText { grid-column:2; grid-row:1; min-width:0; width:100%; max-width:none; text-align:center; }
+.taskSlot { grid-column:3; grid-row:1; min-width:0; min-height:44px; width:100%; max-width:220px; justify-self:end; }
+.header .personContext { grid-column:1; grid-row:1; justify-self:start; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.canvas { container-type:inline-size; }
+@container (max-width:440px) {
+  .header { padding-inline:52px; column-gap:4px; }
+  .header .personContext { padding-inline:4px; }
+}

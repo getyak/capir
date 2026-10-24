@@ -16,6 +16,8 @@
 
 .shell {
   --workspace-sidebar-width: 248px;
+  --workspace-row-hover: color-mix(in srgb, var(--ink) 4%, transparent);
+  --workspace-row-selected: color-mix(in srgb, var(--ink) 9%, transparent);
   background: var(--background);
   color: var(--ink);
   display: grid;
@@ -197,7 +199,7 @@
 
 /* One shared selected surface that slides between rows with a real spring. */
 .selectionHighlight {
-  background: var(--surface-selected, var(--surface-muted));
+  background: var(--workspace-row-selected, var(--surface-selected));
   border-radius: 8px;
   pointer-events: none;
   inset: 0;
@@ -386,16 +388,24 @@
   width: 24px;
 }
 
-.sessionRow:hover,
-.sessionRow[aria-current="page"] {
-  background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent));
+.sessionRow:hover {
+  background: var(--workspace-row-hover);
   color: var(--ink);
 }
 
 .sessionRow[aria-current="page"] {
   /* Selection is the shared sliding highlight; no static current surface. */
   color: var(--ink);
+  font-weight: 500;
 }
+.sessionRow[aria-current="page"]:not(:has(.selectionHighlight)) { background: var(--workspace-row-selected); }
+.sessionRow .selectionHighlight { right: -34px; }
+.sessionRow:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.sessionRow:active { background: color-mix(in srgb, var(--ink) 13%, transparent); }
+.sessionRowShell:hover .sessionRowSlide { background: var(--workspace-row-hover); }
+.sessionRowShell:has(.sessionRow[aria-current="page"]):hover .sessionRowSlide { background:var(--session-row-surface, var(--ts-chrome-surface, var(--surface))); }
+.sessionRowShell .sessionRow:hover { background: transparent; }
+.sessionRowShell .sessionRow:active { background:color-mix(in srgb,var(--ink) 13%,transparent); }
 
 .sessionRow .sessionTitle {
   flex: 1;
@@ -1634,12 +1644,13 @@
 .sessionRowSlide {
   align-items: center;
   background: var(--session-row-surface, var(--ts-chrome-surface, var(--surface)));
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
   gap: 2px;
   min-width: 0;
   position: relative;
 }
-.sessionRowMenu { flex: 0 0 auto; position: relative; }
+.sessionRowMenu { min-width: 0; position: relative; z-index: 1; }
 .sessionRowMenu summary { cursor: pointer; list-style: none; }
 .sessionRowMenu summary::-webkit-details-marker { display: none; }
 .sessionRowMenuTrigger {
@@ -1659,7 +1670,7 @@
 }
 .sessionRowShell:hover .sessionRowMenuTrigger,
 .sessionRowShell:focus-within .sessionRowMenuTrigger,
-.sessionRowMenu[open] .sessionRowMenuTrigger { opacity: 1; }
+.sessionRowMenu[data-open="true"] .sessionRowMenuTrigger { opacity: 1; }
 .sessionRowMenuTrigger:hover { background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent)); color: var(--ink); }
 .sessionRowMenuTrigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .sessionRowMenuPopover {
@@ -1673,10 +1684,14 @@
   gap: 2px;
   min-width: 148px;
   padding: 5px;
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
   z-index: 60;
+  max-width: min(300px, calc(100vw - 32px));
+}
+.sessionRowMenuTitle { padding: 6px 10px; font-size: var(--workspace-meta-size, 0.8125rem); color: var(--ink); overflow-wrap: anywhere; }
+@media (hover: none), (pointer: coarse) {
+  .sessionRowSlide { grid-template-columns: minmax(0, 1fr) 44px; }
+  .sessionRow .selectionHighlight { right: -46px; }
+  .sessionRowMenuTrigger { opacity: 1; min-width: 44px; min-height: 44px; }
 }
 .sessionRowMenuPopover button {
   align-items: center;
@@ -1838,7 +1853,7 @@
 /* The native backing remains visible through opened popovers. The reading
    canvas is opaque normally; during a modal it recedes over the same AppKit
    material, rather than hiding that material behind an opaque CSS backdrop. */
-:global(html[data-desktop-surface="workspace"]) .shell:has(.searchDialog[open], .sessionRowMenu[open]) > .workspace {
+:global(html[data-desktop-surface="workspace"]) .shell:has(.searchDialog[open]) > .workspace {
   background: color-mix(in srgb, var(--background) 74%, transparent);
 }
 :global(html[data-desktop-surface="workspace"]) :is(.searchDialog, .accountPopover, .sessionRowMenuPopover) {
@@ -1847,7 +1862,7 @@
   -webkit-backdrop-filter: none;
 }
 @media (prefers-reduced-transparency: reduce) {
-  :global(html[data-desktop-surface="workspace"]) .shell:has(.searchDialog[open], .sessionRowMenu[open]) > .workspace { background: var(--background); }
+  :global(html[data-desktop-surface="workspace"]) .shell:has(.searchDialog[open]) > .workspace { background: var(--background); }
   :global(html[data-desktop-surface="workspace"]) :is(.searchDialog, .accountPopover, .sessionRowMenuPopover) { background: var(--surface); }
 }
 
@@ -1869,11 +1884,15 @@
 .brand { font-size:var(--workspace-section-size,1.125rem); line-height:20px; gap:8px; padding:6px 8px; }
 .brandMark { height:20px; width:20px; }
 .brandActions .iconButton { height:36px; width:36px; }
-.railRow { align-items:center; display:flex; gap:1.5px; }
+.railRow { align-items:center; display:flex; gap:2px; }
+.railPair { display:flex; flex:1 1 0; min-width:0; align-items:center; }
+.railPair .railControl { flex:1 1 0; min-width:32px; overflow:hidden; }
+.railPair .railControl[data-selected="true"] { flex:0 0 calc(100% - 32px); gap:4px; }
+.railRow > button { flex:0 0 32px; }
 .railControl { align-items:center; background:transparent; border:0; border-radius:18px; color:var(--muted-strong); cursor:pointer; display:inline-flex; flex:0 0 36px; font:inherit; font-size:var(--workspace-meta-size,0.8125rem); gap:6px; height:36px; justify-content:center; padding:0; text-decoration:none; transition:background var(--workspace-transition-duration,180ms) var(--ease-out),color var(--workspace-transition-duration,180ms) var(--ease-out); }
 .railControl:hover { background:var(--hover); color:var(--ink); }
-.railControl[data-selected="true"] { background:var(--surface-selected); color:var(--ink); flex-basis:74px; font-weight:500; }
-.railControlLabel { display:none; line-height:20px; }
+.railControl[data-selected="true"] { background:var(--surface-selected); color:var(--ink); font-weight:500; }
+.railControlLabel { display:none; line-height:20px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 .railControl[data-selected="true"] .railControlLabel { display:inline; }
 .railControl:focus-visible,.newConversation:focus-visible,.personChip:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .railCollapsed { display:none; }
@@ -1892,7 +1911,16 @@
 .railCollapsedTop { flex:none; }
 .railSessions { display:flex; flex:none; flex-direction:column; gap:8px; margin-top:20px; max-height:40dvh; overflow:auto; scrollbar-width:none; }
 .railSessionAvatar,.railIconLink { align-items:center; border-radius:12px; color:var(--muted-strong); display:flex; flex:none; height:44px; justify-content:center; text-decoration:none; transition:background-color var(--workspace-transition-duration,180ms) var(--ease-out),color var(--workspace-transition-duration,180ms) var(--ease-out); width:44px; }
-.railSessionAvatar[aria-current="page"],.railSessionAvatar:hover,.railIconLink[aria-current="page"],.railIconLink[aria-current="location"],.railIconLink:hover { background:var(--surface-selected); color:var(--ink); }
+.railSessionAvatar:hover,.railIconLink:hover { background:var(--workspace-row-hover); color:var(--ink); }
+.railSessionAvatar[aria-current="page"],.railIconLink[aria-current="page"],.railIconLink[aria-current="location"] { background:var(--workspace-row-selected); color:var(--ink); }
+.railSessionAvatar:active,.railIconLink:active,.railControl:active { background:color-mix(in srgb,var(--ink) 14%,transparent); }
+.railSessionAvatar:focus-visible,.railIconLink:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
+.railSessionTitle { width:max-content; max-width:min(320px,calc(100vw - 32px)); padding:8px 12px; font-size:var(--workspace-body-size,0.9375rem); line-height:1.5; overflow-wrap:anywhere; }
+.railSessionTitle a { display:block; color:var(--ink); text-decoration:none; min-height:28px; }
+.railSessionTitle a:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+.railRetry { display:grid; place-items:center; width:44px; min-height:44px; color:var(--muted); background:none; border:0; border-radius:12px; cursor:pointer; }
+.railRetry:hover { background:var(--workspace-row-hover); }
+.railRetry:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
 .railCollapsedTop { display:flex; flex-direction:column; align-items:center; }
 .railCollapsedTop .iconButton { height:44px; width:44px; }
 .railSessionAvatar .avatar { flex:none; height:28px; width:28px; }
@@ -1906,6 +1934,7 @@
   .shell:has(.sidebarState[data-collapsed="true"]) { grid-template-columns:minmax(0,1fr); }
   .shell:has(.sidebarState[data-collapsed="true"]) .sidebar { padding:7px; }
   .shell .sidebarState { display:block; }
+  .railPair { display:contents; }
   .shell .railRow,.shell:has(.sidebarState[data-collapsed="true"]) .railRow { display:grid; gap:5px; grid-template-columns:repeat(4,minmax(44px,1fr)); }
   .shell .railCollapsed,.shell:has(.sidebarState[data-collapsed="true"]) .railCollapsed { display:none; }
   .railRow > button { display:none; }
@@ -1963,4 +1992,16 @@
 @media (max-width: 760px) {
   .sidebarResizeHandle { display: none; }
   .shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: inline; }
+}
+
+@media (forced-colors: active) {
+  .railPair .railControl[data-selected="true"],
+  .railSessionAvatar[aria-current="page"],
+  .railIconLink[aria-current="page"],
+  .railIconLink[aria-current="location"] { background:Highlight; color:HighlightText; forced-color-adjust:none; }
+  .railControl:focus-visible, .railSessionAvatar:focus-visible, .railIconLink:focus-visible,
+  .railRetry:focus-visible, .railSessionTitle a:focus-visible { outline-color:Highlight; }
+  .sessionRowMenuPopover, .railSessionTitle,
+  :global(html[data-desktop-surface="workspace"]) .sessionRowMenuPopover { background:Canvas; color:CanvasText; border:1px solid CanvasText; backdrop-filter:none; -webkit-backdrop-filter:none; }
+  .sessionRowMenuPopover button:hover { background:Highlight; color:HighlightText; }
 }

@@ -17,6 +17,8 @@
  *   terminal states and errors commit immediately.
  */
 
+import { translate } from "@/lib/i18n";
+import type { LocaleTag } from "@talent-signal/contracts";
 import type { ConversationQueueEntry } from "@talent-signal/contracts";
 
 /** Labels for the stage events the runner can actually emit. */
@@ -37,9 +39,10 @@ export const CONVERSATION_STAGE_LABELS: Readonly<Record<string, string>> = {
  * A stage label for one observed stage string. Unknown or absent stages return
  * null so the surface can stay silent instead of inventing a meaning.
  */
-export function conversationStageLabel(stage: string | null | undefined): string | null {
+export function conversationStageLabel(stage: string | null | undefined, locale: LocaleTag = "zh-CN"): string | null {
   if (typeof stage !== "string") return null;
-  return CONVERSATION_STAGE_LABELS[stage] ?? null;
+  const key = CONVERSATION_STAGE_LABELS[stage];
+  return key ? translate(locale, key) : null;
 }
 
 export type ConversationExecutionPhase =
@@ -63,8 +66,8 @@ export const CONVERSATION_PHASE_LABELS: Readonly<Record<ConversationExecutionPha
   interrupted: "执行已中断",
 };
 
-export function conversationExecutionPhaseLabel(phase: ConversationExecutionPhase): string {
-  return CONVERSATION_PHASE_LABELS[phase];
+export function conversationExecutionPhaseLabel(phase: ConversationExecutionPhase, locale: LocaleTag = "zh-CN"): string {
+  return translate(locale, CONVERSATION_PHASE_LABELS[phase]);
 }
 
 /**
@@ -169,14 +172,14 @@ export function conversationElapsedMs(input: {
 }
 
 /** Human-readable elapsed label; only whole observed time is shown. */
-export function conversationElapsedLabel(ms: number): string {
+export function conversationElapsedLabel(ms: number, locale: LocaleTag = "zh-CN"): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const seconds = totalSeconds % 60;
   const minutes = Math.floor(totalSeconds / 60) % 60;
   const hours = Math.floor(totalSeconds / 3600);
-  if (hours > 0) return `${hours} 小时 ${String(minutes).padStart(2, "0")} 分`;
-  if (minutes > 0) return `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`;
-  return `${seconds} 秒`;
+  if (hours > 0) return translate(locale, "execution.duration.hours", { hours, minutes: String(minutes).padStart(2, "0") });
+  if (minutes > 0) return translate(locale, "execution.duration.minutes", { minutes, seconds: String(seconds).padStart(2, "0") });
+  return translate(locale, "execution.duration.seconds", { seconds });
 }
 
 /**

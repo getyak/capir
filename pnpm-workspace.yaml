@@ -20,8 +20,15 @@ overrides:
   "ip-address@^10": "10.7.4"
   # https://github.com/fastify/fast-uri/security/advisories/GHSA-hrr3-gc8f-f4qj
   # https://github.com/fastify/fast-uri/security/advisories/GHSA-jvvf-x445-j334
-  "fast-uri@^3": "3.1.8"
-  "fast-uri@^4": "4.1.5"
+  # https://github.com/advisories/GHSA-w74x-v6f9-j3xg
+  # https://github.com/advisories/GHSA-wjr9-j795-jxcr
+  "fast-uri@^3": "3.1.9"
+  "fast-uri@^4": "4.2.3"
+  # https://github.com/advisories/GHSA-27r3-jxmh-p828
+  "body-parser@2.3.0": "2.4.0"
+  # https://github.com/advisories/GHSA-4qv8-2p9j-2685
+  # https://github.com/advisories/GHSA-xjj6-f33q-929c
+  "undici@6.28.1": "6.29.1"
   # https://github.com/advisories/GHSA-68fv-2mgg-jv7q
   "source-map-js@^1": "1.2.2"
   # https://github.com/ljharb/qs/security/advisories/GHSA-4mjr-xmp4-gh2g

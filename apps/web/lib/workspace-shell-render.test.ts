@@ -8,7 +8,12 @@ const { auth, claims, route } = vi.hoisted(() => ({
   claims: vi.fn(),
 }));
 
-vi.mock("next/headers", () => ({ cookies: async () => ({ has: () => false }) }));
+// Keep the production active-locale resolver exercised with the same request
+// boundary Next supplies; no public locale cookie overrides this fixture.
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ has: () => false, get: () => undefined }),
+  headers: async () => new Headers({ "accept-language": "zh-CN,en;q=0.8" }),
+}));
 vi.mock("@/lib/server/accountBackend", () => ({ loadAccountSettings: async () => { throw new Error("offline"); } }));
 vi.mock("@/auth", () => ({ auth }));
 vi.mock("@/app/login/actions", () => ({ signOutOfWorkspace: vi.fn() }));

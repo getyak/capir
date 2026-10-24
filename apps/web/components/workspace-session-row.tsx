@@ -2,6 +2,9 @@
 
 import { Archive, DotsThreeVertical, PushPin, Tray } from "@phosphor-icons/react";
 import {
+  Children,
+  cloneElement,
+  isValidElement,
   useCallback,
   useEffect,
   useRef,
@@ -15,6 +18,7 @@ import { animate, motion, useMotionValue } from "motion/react";
 import { useReducedMotionPreference } from "@/lib/use-reduced-motion";
 import type { SessionOrganizationFlag } from "@/lib/workspace-session-organization";
 import { useT } from "./locale-provider";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import styles from "./workspace-shell.module.css";
 
 /**
@@ -90,46 +94,36 @@ export function SessionRowActionTray({
 /** Named, always-reachable alternative to the swipe gesture. */
 export function SessionRowMenu({
   organization,
+  onOpen,
+  onOpenChange,
 }: {
   organization: SessionRowOrganization;
+  onOpen?: () => void;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const t = useT();
-  const menu = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
   const { archived, pinned, onToggle, rowLabel } = organization;
-  useEffect(() => {
-    const outside = (event: PointerEvent) => {
-      if (menu.current?.open && event.target instanceof Node && !menu.current.contains(event.target)) menu.current.open = false;
-    };
-    document.addEventListener("pointerdown", outside);
-    return () => document.removeEventListener("pointerdown", outside);
-  }, []);
-  function close() {
-    if (menu.current) menu.current.open = false;
-  }
   return (
-    <details
-      className={styles.sessionRowMenu}
-      onKeyDown={(event: ReactKeyboardEvent<HTMLDetailsElement>) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          close();
-          menu.current?.querySelector<HTMLElement>("summary")?.focus();
-        }
-      }}
-      ref={menu}
-    >
-      <summary
-        aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}
-        className={styles.sessionRowMenuTrigger}
-        title={t("sessionRow.more")}
-      >
-        <DotsThreeVertical aria-hidden="true" size={15} />
-      </summary>
-      <div className={styles.sessionRowMenuPopover}>
+    <div className={styles.sessionRowMenu} data-open={open ? "true" : undefined}>
+      <Popover open={open} onOpenChange={value => { setOpen(value); onOpenChange?.(value); if (value) onOpen?.(); }}>
+        <PopoverTrigger asChild>
+          <button
+            aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}
+            className={styles.sessionRowMenuTrigger}
+            type="button"
+          >
+            <DotsThreeVertical aria-hidden="true" size={15} />
+          </button>
+        </PopoverTrigger>
+      <PopoverContent aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}
+        align="end" sideOffset={4} className={styles.sessionRowMenuPopover}>
+        <span className={styles.sessionRowMenuTitle}>{rowLabel}</span>
         <button
           onClick={() => {
             onToggle("pinned", !pinned);
-            close();
+            setOpen(false);
+            onOpenChange?.(false);
           }}
           type="button"
         >
@@ -139,7 +133,8 @@ export function SessionRowMenu({
         <button
           onClick={() => {
             onToggle("archived", !archived);
-            close();
+            setOpen(false);
+            onOpenChange?.(false);
           }}
           type="button"
         >
@@ -151,8 +146,9 @@ export function SessionRowMenu({
           <span>{t(archived ? "sessionRow.restore" : "sessionRow.archive")}</span>
         </button>
         <span className={styles.sessionRowMenuNote}>{t("sessionRow.localOrganization")}</span>
-      </div>
-    </details>
+      </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 
@@ -248,6 +244,7 @@ export function WorkspaceSessionRow({ organization, children }: {
 }) {
   const { open, dragging, close, surface, x, onClickCapture, onKeyDown, onPointerCancel, onPointerDown, onPointerMove, onPointerUp } = useSessionRowSwipe();
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
   return (
     <div className={styles.sessionRowShell} data-open={open ? "true" : "false"} data-dragging={dragging ? "true" : undefined} ref={surface}
@@ -262,7 +259,9 @@ export function WorkspaceSessionRow({ organization, children }: {
       onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
       <div inert={!open} aria-hidden={!open}><SessionRowActionTray organization={organization}/></div>
       <motion.div className={styles.sessionRowSlide} style={{ x }}>
-        {children}<SessionRowMenu organization={organization}/>
+        {Children.map(children, child => isValidElement<{ title?: string }>(child) && menuOpen
+          ? cloneElement(child, { title: undefined }) : child)}
+        <SessionRowMenu organization={organization} onOpen={close} onOpenChange={setMenuOpen}/>
       </motion.div>
     </div>
   );

@@ -785,6 +785,10 @@ struct WorkspaceWindowBehavior: NSViewRepresentable {
             // The Web sidebar owns branding; retain the window title for menus/AX.
             window?.titleVisibility = .hidden
             window?.titlebarAppearsTransparent = true
+            window?.styleMask.insert(.fullSizeContentView)
+            window?.titlebarSeparatorStyle = .none
+            window?.isOpaque = false
+            window?.backgroundColor = .clear
             window?.isMovableByWindowBackground = false
         }
     }

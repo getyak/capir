@@ -14,6 +14,7 @@ import {
   useDesktopChrome,
   type DesktopChromeSnapshot,
 } from "./desktop-chrome";
+import { useT, type TFunction } from "./locale-provider";
 import styles from "./workspace-shell.module.css";
 
 /**
@@ -26,53 +27,54 @@ import styles from "./workspace-shell.module.css";
  */
 
 export function ConnectAppsPill() {
+  const t = useT();
   return (
     <Link
-      aria-label="连接应用（打开扩展工作区；不会自动连接任何服务）"
+      aria-label={t("连接应用（打开扩展工作区；不会自动连接任何服务）")}
       className={styles.connectPill}
       href="/workspace/extensions"
     >
       <LinkSimple aria-hidden="true" size={16} />
-      <span className={styles.connectPillLabel}>连接应用</span>
+      <span className={styles.connectPillLabel}>{t("连接应用")}</span>
     </Link>
   );
 }
 
-function downloadTooltip(state: DesktopChromeSnapshot | null): {
+function downloadTooltip(state: DesktopChromeSnapshot | null, t: TFunction): {
   title: string;
   detail: string;
 } {
-  if (!state) return { title: "下载 capri", detail: "桌面与移动端安装与帮助" };
+  if (!state) return { title: t("下载 capri"), detail: t("桌面与移动端安装与帮助") };
   if (state.phase === "downloading") {
     return {
-      title: `正在下载更新${state.progress === null ? "" : ` ${state.progress}%`}`,
-      detail: "正在完成已授权的更新，校验后将安装并重启。",
+      title: t("desktop.update.downloading", { progress: state.progress === null ? "" : ` ${state.progress}%` }),
+      detail: t("正在完成已授权的更新，校验后将安装并重启。"),
     };
   }
   if (state.phase === "installing") {
-    return { title: "正在更新并重启", detail: "本次更新由主机安装，请稍候。" };
+    return { title: t("正在更新并重启"), detail: t("本次更新由主机安装，请稍候。") };
   }
   if (state.phase === "failed") {
     return {
-      title: "更新未完成",
-      detail: "当前版本仍可使用；点击重试检查更新。",
+      title: t("更新未完成"),
+      detail: t("当前版本仍可使用；点击重试检查更新。"),
     };
   }
   if (state.phase === "available" && state.version) {
     return state.legacy
       ? {
-          title: `macOS ${state.version} 可用`,
-          detail: "点击查看本次更新。",
+          title: t("desktop.update.available", { version: state.version }),
+          detail: t("点击查看本次更新。"),
         }
       : {
-          title: `macOS ${state.version} 可用`,
-          detail: "点击下载、校验并重启更新。",
+          title: t("desktop.update.available", { version: state.version }),
+          detail: t("点击下载、校验并重启更新。"),
         };
   }
-  return { title: "下载 capri", detail: "桌面与移动端安装与帮助" };
+  return { title: t("下载 capri"), detail: t("桌面与移动端安装与帮助") };
 }
 
-function entryLabel(state: DesktopChromeSnapshot | null): {
+function entryLabel(state: DesktopChromeSnapshot | null, t: TFunction): {
   icon: ReactNode;
   text: string;
   ariaLabel: string;
@@ -83,8 +85,8 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   if (!state) {
     return {
       icon,
-      text: "下载",
-      ariaLabel: "下载 capri",
+      text: t("下载"),
+      ariaLabel: t("下载 capri"),
       href: "/download",
       status: false,
     };
@@ -92,8 +94,8 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   if (state.phase === "downloading") {
     return {
       icon: <ArrowDown aria-hidden="true" size={16} />,
-      text: state.progress === null ? "下载中" : `${state.progress}%`,
-      ariaLabel: `正在下载更新${state.progress === null ? "" : ` ${state.progress}%`}`,
+      text: state.progress === null ? t("下载中") : `${state.progress}%`,
+      ariaLabel: t("desktop.update.downloading", { progress: state.progress === null ? "" : ` ${state.progress}%` }),
       href: null,
       status: true,
     };
@@ -101,8 +103,8 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   if (state.phase === "installing") {
     return {
       icon: <ArrowClockwise aria-hidden="true" size={16} />,
-      text: "更新中",
-      ariaLabel: "正在更新并重启",
+      text: t("更新中"),
+      ariaLabel: t("正在更新并重启"),
       href: null,
       status: true,
     };
@@ -110,8 +112,8 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   if (state.phase === "failed") {
     return {
       icon: <ArrowClockwise aria-hidden="true" size={16} />,
-      text: "重试",
-      ariaLabel: "更新未完成，重新检查更新",
+      text: t("重试"),
+      ariaLabel: t("更新未完成，重新检查更新"),
       href: "talentsignal-desktop://updates",
       status: false,
     };
@@ -119,10 +121,10 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   if (state.phase === "available" && state.version) {
     return {
       icon,
-      text: "更新",
+      text: t("更新"),
       ariaLabel: state.legacy
-        ? `查看 macOS ${state.version} 更新`
-        : `更新至 macOS ${state.version} 并重启`,
+        ? t("desktop.update.view", { version: state.version })
+        : t("desktop.update.install", { version: state.version }),
       href: installUpdateHref(state),
       status: false,
     };
@@ -130,8 +132,8 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
   // Idle: download and help stay reachable without inventing an available release.
   return {
     icon,
-    text: "下载",
-    ariaLabel: "下载 capri",
+    text: t("下载"),
+    ariaLabel: t("下载 capri"),
     href: "/download",
     status: false,
   };
@@ -143,6 +145,7 @@ function entryLabel(state: DesktopChromeSnapshot | null): {
  * duplicates it, and an idle host never shows an invented release.
  */
 export function WorkspaceDownloadEntry() {
+  const t = useT();
   const wrap = useRef<HTMLSpanElement>(null);
   const control = useRef<HTMLElement | null>(null);
   const restoreFocus = useRef(false);
@@ -164,8 +167,8 @@ export function WorkspaceDownloadEntry() {
   }, []);
   const state = useDesktopChrome();
   const tooltipId = useId();
-  const tooltip = downloadTooltip(state);
-  const entry = entryLabel(state);
+  const tooltip = downloadTooltip(state, t);
+  const entry = entryLabel(state, t);
   const inner = (
     <>
       {entry.icon}

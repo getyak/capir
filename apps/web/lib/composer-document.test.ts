@@ -186,3 +186,20 @@ describe("excerpt and draft budget", () => {
     expect(fitting.fits).toBe(true);
   });
 });
+
+it.each([
+  ["项目原文.pdf", "application/pdf", COMPOSER_PDF_MAX_BYTES, "6 MB"],
+  ["项目原文.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", COMPOSER_DOCX_MAX_BYTES, "3 MB"],
+  ["项目原文.txt", "text/plain", COMPOSER_TEXT_MAX_BYTES, "2 MB"],
+] as const)("localizes the exact oversized %s rejection while preserving the filename and intake boundary", (name, type, limit, label) => {
+  const candidate=file(name,type,limit+1);
+  expect(composerFileIntakePlan([candidate])).toEqual({ kind:"reject", message:`${name} 超过 ${label} 上限，未做任何处理。可先拆分文档后重试。` });
+  expect(composerFileIntakePlan([candidate],"zh-CN")).toEqual(composerFileIntakePlan([candidate]));
+  expect(composerFileIntakePlan([candidate],"en")).toEqual({ kind:"reject", message:`${name} exceeds the ${label} limit and was not processed. Split the document and try again.` });
+  const admitted=file(name,type,limit);
+  expect(composerFileIntakePlan([admitted],"en")).toMatchObject({ kind:"document", file:admitted });
+});
+it("localizes bounded decoding failures without translating valid original text", () => {
+  expect(decodeComposerTextDocument(new Uint8Array(COMPOSER_TEXT_MAX_BYTES+1),"en")).toEqual({ ok:false, message:"The text file exceeds the 2 MB limit and was not processed." });
+  expect(decodeComposerTextDocument(new TextEncoder().encode("保留原文"),"en")).toEqual({ ok:true,text:"保留原文" });
+});

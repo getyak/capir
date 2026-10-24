@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { subscribeWorkspaceRefresh, workspaceRefreshGeneration } from "@/lib/workspace-refresh";
 import type {
   ConversationImageManifest,
@@ -44,6 +44,15 @@ export type ConversationAttachment = {
 
 export function useConversation(options: Options) {
   const { id, scope, chatBinding, detailBinding, initial } = options;
+  // Display-only provenance: retained hook state is not a current observation
+  // after a protected Session/binding change, including an A -> B -> A return.
+  // Tags follow existing producers; they do not schedule work or own task state.
+  const taskOwner = useMemo(() => Symbol(JSON.stringify([id, scope, chatBinding, detailBinding])), [id, scope, chatBinding, detailBinding]);
+  const [taskSnapshotOwner, setTaskSnapshotOwner] = useState<symbol | null>(null);
+  const taskSnapshotOwnerRef = useRef<symbol | null>(null);
+  const [taskMessageOwner, setTaskMessageOwner] = useState<symbol | null>(null);
+  const [taskDetailOwner, setTaskDetailOwner] = useState(taskOwner);
+  const [taskHandoffOwners, setTaskHandoffOwners] = useState<Record<string, symbol>>({});
   const [entryCapability, setEntryCapability] = useState(options.entryCapability ?? null);
   const [renderedEntry, setRenderedEntry] = useState(options.entryCapability);
   if (options.entryCapability !== renderedEntry) {
@@ -87,7 +96,7 @@ export function useConversation(options: Options) {
   // reconciled with. A refresh may merge committed turns freely, but a CHANGED
   // remote draft triggers the conflict UI before any save can overwrite it.
   const remoteDraftBaseline = useRef(initial?.composer_draft ?? "");
-  const mutationBusy = useRef(false); const pendingHandoff = useRef<string | null>(null);
+  const mutationBusy = useRef<{ controller: AbortController } | null>(null); const pendingHandoff = useRef<string | null>(null);
   const writer = useRef(""); const draftStamp = useRef(""); const loaded = useRef(false);
   const submitLock = useRef(false); const preparingRef = useRef(false); const prepareGeneration = useRef(0);
   const pendingPreparations = useRef(0);
@@ -106,7 +115,7 @@ export function useConversation(options: Options) {
   const stillCurrent = useCallback((controller: AbortController | null) =>
     controller !== null && lifecycle.current === controller && !controller.signal.aborted, []);
 
-  const storeMessages = useCallback((next: LocalMessage[]) => { local.current = next; setMessages(next); }, []);
+  const storeMessages = useCallback((next: LocalMessage[]) => { local.current = next; setMessages(next); setTaskMessageOwner(taskOwner); }, [taskOwner]);
   // Canonical history is the only handoff that retires a local outbox row.
   // Until its turn exists — carrying the same ordered image manifests — the
   // exact message identity and its local attachment bytes are the durable
@@ -142,7 +151,7 @@ export function useConversation(options: Options) {
     if (remoteDraft !== remoteDraftBaseline.current && remoteDraft !== draftRef.current) {
       setDraftConflict(true);
     }
-    detailRef.current = next; setDetail(next); reconcile(snapshotRef.current, next);
+    detailRef.current = next; setDetail(next); setTaskDetailOwner(taskOwner); reconcile(snapshotRef.current, next);
     // Settled history owns each message; the handoff rows and their previews
     // retire with it, one message at a time.
     const settled = new Set(next.turns.map(turn => turn.id));
@@ -235,6 +244,8 @@ export function useConversation(options: Options) {
     const accepted = acceptConversationSnapshot(snapshotRef.current, next, id!);
     if (!accepted || accepted !== next) return;
     const previous = snapshotRef.current;
+    const previousTaskOwner = taskSnapshotOwnerRef.current;
+    taskSnapshotOwnerRef.current = taskOwner; setTaskSnapshotOwner(taskOwner);
     snapshotRef.current = next; setSnapshot(next);
     const entries = [next.active, ...(next.queued ?? [])].filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
     for (const entry of entries) {
@@ -253,6 +264,7 @@ export function useConversation(options: Options) {
     if (previousActive && !stillListed && !detailRef.current?.turns.some(turn => turn.id === previousActive)) {
       const outcome = previous?.active?.run_id && stopObserved.current.has(previous.active.run_id) ? "stopped" : "completed";
       setHandoffEntries(current => ({ ...current, [previousActive]: previous!.active! }));
+      if (previousTaskOwner === taskOwner) setTaskHandoffOwners(current => ({ ...current, [previousActive]: taskOwner }));
       const visible = previewRef.current;
       if (visible?.run_id === previous?.active?.run_id) setHandoffPreviews(current => ({ ...current, [previousActive]: visible! }));
       setRunOutcome(current => ({ ...current, [previousActive]: outcome }));
@@ -343,8 +355,12 @@ export function useConversation(options: Options) {
   useEffect(() => {
     if (!id) return;
     const controller = new AbortController(); lifecycle.current = controller; writer.current = crypto.randomUUID();
+    // A new protected lifecycle owns a fresh lock even while an old JSON body
+    // remains unresolved. Old operations retain their distinct lock identity.
+    mutationBusy.current = null;
     queueMicrotask(() => {
     if (controller.signal.aborted) return;
+    if (!mutationBusy.current) setMutating(false);
     const recoveredDraft = readConversationDraft(scope, id);
     draftStamp.current = recoveredDraft?.updatedAt ?? "";
     const value = recoveredDraft?.value ?? initial?.composer_draft ?? "";
@@ -545,11 +561,16 @@ export function useConversation(options: Options) {
   async function retryDelivery(message: LocalMessage) {
     // First reconcile a lost receipt with an owner-authorized queue read. Only
     // an explicit retry can repeat its stable admission — and never when the
-    // same-ID server row already owns the message.
+    // same-ID server row already owns the message. The exact mounted lifecycle
+    // owns the whole operation, including response bodies and failure recovery.
+    const controller = lifecycle.current;
+    if (!stillCurrent(controller)) return;
     let confirmed = false;
     try {
       const response = await request(queueUrl);
+      if (!stillCurrent(controller)) return;
       const next = await response.json() as ConversationQueueSnapshot;
+      if (!stillCurrent(controller)) return;
       commitSnapshot(next);
       const owns = (source: ConversationQueueSnapshot | null | undefined) => Boolean(
         source?.active?.message_id === message.id
@@ -559,10 +580,16 @@ export function useConversation(options: Options) {
         || Boolean((detailRef.current?.turns ?? []).some(turn => turn.id === message.id));
       if (confirmed) { setServerExists(true); pendingHandoff.current = id; handoffWhenSettled(); }
       await refreshDetail();
+      if (!stillCurrent(controller)) return;
       confirmed ||= Boolean(detailRef.current?.turns.some(turn => turn.id === message.id));
     }
-    catch (caught) { if (caught instanceof RequestError && caught.status !== 404) { refuse(caught); if ([401, 403, 410].includes(caught.status)) return; } }
-    if (confirmed) return;
+    catch (caught) {
+      // An aborted or delayed old owner must neither clear the new account's
+      // state via refuse() nor put its mutable outbox back into pending.
+      if (!stillCurrent(controller)) return;
+      if (caught instanceof RequestError && caught.status !== 404) { refuse(caught); if ([401, 403, 410].includes(caught.status)) return; }
+    }
+    if (!stillCurrent(controller) || confirmed) return;
     if (local.current.some(item => item.id === message.id)) updateMessage(message.id, { delivery: "pending", receiptUncertain: message.receiptUncertain ?? message.delivery === "unknown", error: undefined });
   }
   function discardRejectedDelivery(messageId: string) {
@@ -574,27 +601,51 @@ export function useConversation(options: Options) {
     storeMessages(local.current.filter(message => message.id !== messageId));
   }
   async function mutate(input: Omit<ConversationQueueMutationRequest, "expected_revision" | "idempotency_key"> & { objective?: string; queue_entry_id?: string; run_id?: string }) {
-    if (mutationBusy.current || !snapshotRef.current) return false;
-    mutationBusy.current = true; setMutating(true); setError("");
+    const controller = lifecycle.current;
+    if (!controller || !stillCurrent(controller) || mutationBusy.current || !snapshotRef.current) return false;
+    const lock = { controller };
+    mutationBusy.current = lock; setMutating(true); setError("");
+    const owned = () => stillCurrent(controller) && mutationBusy.current === lock;
     try {
       const operation = crypto.randomUUID();
       let response: Response;
-      try { response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: snapshotRef.current.revision, idempotency_key: operation }) }); }
+      try {
+        response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: snapshotRef.current.revision, idempotency_key: operation }) });
+        if (!owned()) return false;
+      }
       catch (caught) {
-        // A concurrent admission may advance the queue while Stop is in flight.
-        // Rebase only a rejected CAS and only while the same run still owns it.
+        // Rebase only this still-current Stop after a rejected CAS, preserving
+        // the exact run and operation key. Never read or retry for a new owner.
+        if (!owned()) return false;
         if (input.kind !== "stop" || !(caught instanceof RequestError) || caught.status !== 409) throw caught;
-        const latest = await (await request(queueUrl)).json() as ConversationQueueSnapshot;
+        const readback = await request(queueUrl);
+        if (!owned()) return false;
+        const latest = await readback.json() as ConversationQueueSnapshot;
+        if (!owned()) return false;
         commitSnapshot(latest);
         if (latest.active?.run_id !== input.run_id) return true;
         response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: latest.revision, idempotency_key: operation }) });
+        if (!owned()) return false;
       }
-      const body = await response.json(); commitSnapshot(body.snapshot); return true;
+      const body = await response.json();
+      if (!owned()) return false;
+      commitSnapshot(body.snapshot); return true;
     } catch (caught) {
+      if (!owned()) return false;
       refuse(caught); setError(caught instanceof RequestError && caught.status === 409 ? "队列刚刚有变化，已更新。请核对后再操作。" : "操作结果尚未确认，已保留内容。请核对队列后重试。");
-      try { const response = await request(queueUrl); const next = await response.json(); commitSnapshot(next); } catch { /* Keep the last known state. */ }
+      try {
+        const response = await request(queueUrl);
+        if (!owned()) return false;
+        const next = await response.json();
+        if (!owned()) return false;
+        commitSnapshot(next);
+      } catch { /* Keep the last known state; stale owners have no cleanup authority. */ }
       return false;
-    } finally { mutationBusy.current = false; if (!lifecycle.current?.signal.aborted) { setMutating(false); handoffWhenSettled(); } }
+    } finally {
+      // Only the exact lock holder can release its lifecycle's single flight.
+      // An old finally must not unlock or hand off a newer owner's operation.
+      if (owned()) { mutationBusy.current = null; setMutating(false); handoffWhenSettled(); }
+    }
   }
 
   async function saveDraft(force = false) {
@@ -631,5 +682,16 @@ export function useConversation(options: Options) {
     try { const response = await request(`/api/workspace-sessions/${id}`, { method: "DELETE", body: JSON.stringify({ expected_revision: detailRef.current.revision, idempotency_key: crypto.randomUUID() }) }, detailBinding); const body = await response.json(); applyDetail(body.detail); return true; }
     catch (caught) { setError(caught instanceof Error ? caught.message : "删除尚未确认，请重试。"); await refreshDetail().catch(() => {}); return false; }
   }
-  return { entryCapability, detail, draft, messages, attachments, preparing, submitting, snapshot, preview, connection, error, ready, unavailable, draftConflict, mutating, handoffEntries, handoffPreviews, runOutcome, readbackStalled, addFiles, removeAttachment, changeDraft, submit, retryDelivery, discardRejectedDelivery, mutate, keepDraft, remove, refreshDetail };
+  const taskObservation = {
+    owner: taskOwner,
+    sessionId: id,
+    snapshot: taskSnapshotOwner === taskOwner ? snapshot : null,
+    preview: taskSnapshotOwner === taskOwner && preview?.run_id === snapshot?.active?.run_id ? preview : null,
+    messages: taskMessageOwner === taskOwner ? messages : [],
+    detail: taskDetailOwner === taskOwner ? detail : null,
+    handoffEntries: Object.fromEntries(Object.entries(handoffEntries).filter(([messageId]) => taskHandoffOwners[messageId] === taskOwner)),
+    runOutcome: Object.fromEntries(Object.entries(runOutcome).filter(([messageId]) => taskHandoffOwners[messageId] === taskOwner)),
+    readbackStalled: readbackStalled.filter(messageId => taskHandoffOwners[messageId] === taskOwner),
+  };
+  return { taskObservation, entryCapability, detail, draft, messages, attachments, preparing, submitting, snapshot, preview, connection, error, ready, unavailable, draftConflict, mutating, handoffEntries, handoffPreviews, runOutcome, readbackStalled, addFiles, removeAttachment, changeDraft, submit, retryDelivery, discardRejectedDelivery, mutate, keepDraft, remove, refreshDetail };
 }
