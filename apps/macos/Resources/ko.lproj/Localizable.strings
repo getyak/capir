@@ -1,4 +1,4 @@
-/* Primary native command menus. App/device language; no account preference bridge. */
+/* Primary native command menus and workspace recovery. App/device language; no account preference bridge. */
 "New Chat" = "새 대화";
 "Back" = "뒤로";
 "Forward" = "앞으로";
@@ -18,3 +18,10 @@
 "System" = "시스템";
 "Light" = "라이트";
 "Dark" = "다크";
+
+/* Recovery text retains observed HTTP status and makes no task-state claims. */
+"Workspace Unavailable" = "워크스페이스를 열 수 없습니다";
+"Unable to open the workspace. Check the network, Tailscale, and workspace service, then retry." = "워크스페이스를 열 수 없습니다. 네트워크, Tailscale 및 워크스페이스 서비스를 확인한 후 다시 시도하세요.";
+"The workspace request failed (HTTP %lld). Reload later or check connection settings." = "워크스페이스 요청에 실패했습니다(HTTP %lld). 나중에 새로고침하거나 연결 설정을 확인하세요.";
+"The page paused. Reload it; saved conversations remain in the workspace." = "페이지가 일시 중지되었습니다. 새로고침하세요. 저장된 대화는 워크스페이스에 남아 있습니다.";
+"Appearance saving could not be confirmed. Reload and check it." = "화면 설정이 저장되었는지 확인할 수 없습니다. 새로고침한 후 확인하세요.";

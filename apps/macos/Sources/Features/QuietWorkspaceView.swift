@@ -4,6 +4,17 @@ import WebKit
 import UniformTypeIdentifiers
 import Combine
 
+/// Native recovery chrome follows the app/device language, like its menus.
+enum WorkspaceRecoveryText {
+    static var title: String { String(localized: "Workspace Unavailable", bundle: .main) }
+    static var unavailable: String { String(localized: "Unable to open the workspace. Check the network, Tailscale, and workspace service, then retry.", bundle: .main) }
+    static var paused: String { String(localized: "The page paused. Reload it; saved conversations remain in the workspace.", bundle: .main) }
+    static var appearanceUnconfirmed: String { String(localized: "Appearance saving could not be confirmed. Reload and check it.", bundle: .main) }
+    static func httpFailure(_ status: Int) -> String {
+        String(format: String(localized: "The workspace request failed (HTTP %lld). Reload later or check connection settings.", bundle: .main), Int64(status))
+    }
+}
+
 /// The page receives display-only chrome metadata and appearance synchronization,
 /// never native capability APIs.
 /// Update consent is captured in an isolated script world from a trusted click.
@@ -437,7 +448,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                 self.savingAppearance = false
                 guard !self.retired, self.webView.url == current else { return }
                 guard case .success(let saved) = result, saved as? Bool == true else {
-                    self.appearanceSaveNotice = "无法确认外观已保存，请重新载入后检查。"
+                    self.appearanceSaveNotice = WorkspaceRecoveryText.appearanceUnconfirmed
                     return
                 }
                 self.appearanceSaveNotice = nil
@@ -527,7 +538,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
         if response.isForMainFrame, let http = response.response as? HTTPURLResponse,
            http.statusCode >= 400, ![401, 403].contains(http.statusCode) {
             loading = false
-            failure = "工作区服务暂时无法完成请求（HTTP \(http.statusCode)）。请稍后重新载入，或检查连接设置。"
+            failure = WorkspaceRecoveryText.httpFailure(http.statusCode)
             decisionHandler(.cancel)
         } else { decisionHandler(.allow) }
     }
@@ -611,7 +622,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         loading = false
-        failure = "页面已暂停，请重新载入。已保存的对话仍保留在工作区。"
+        failure = WorkspaceRecoveryText.paused
     }
 
     func updateTitlebarHeight(_ height: Double) {
@@ -659,7 +670,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     private func recordFailure(_ error: Error) {
         guard (error as NSError).code != NSURLErrorCancelled else { return }
         loading = false
-        failure = "暂时无法打开工作区。请检查网络、Tailscale 和工作区服务，再重试。"
+        failure = WorkspaceRecoveryText.unavailable
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
@@ -823,9 +834,9 @@ private struct ConnectedQuietWorkspace: View {
             if let failure = browser.failure {
                 VStack(spacing: 18) {
                     Image(systemName: "network.slash").font(.title)
-                    Text("工作区暂不可用").font(.title2)
+                    Text(WorkspaceRecoveryText.title).font(.title2)
                     Text(failure).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("重新载入", action: browser.retry).buttonStyle(TSPrimaryButtonStyle())
+                    Button("Reload", action: browser.retry).buttonStyle(TSPrimaryButtonStyle())
                 }
                 .padding(40).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(TSBrand.canvas)

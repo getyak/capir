@@ -1,15 +1,61 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { TalentSignalHttpError } from "@talent-signal/contracts";
 import { BackendSessionExpiredError } from "../backend-session";
 const f=vi.hoisted(()=>({claims:vi.fn(),get:vi.fn(),save:vi.fn(),admit:vi.fn(),read:vi.fn(),mutate:vi.fn(),stream:vi.fn()}));
+const shutdown=vi.hoisted(()=>({source:null as EventEmitter|null,scope:{} as Record<symbol,AbortSignal|undefined>}));
+vi.mock("./readOnlyStreamShutdown",async importOriginal=>{
+  const actual=await importOriginal<typeof import("./readOnlyStreamShutdown")>();
+  return {...actual,readOnlyStreamShutdownSignal:()=>actual.readOnlyStreamShutdownSignal(shutdown.source!,shutdown.scope)};
+});
 vi.mock("./backendAuth",()=>({readBackendSessionClaims:f.claims,backendAuthBaseUrl:()=>"http://backend.invalid",authSecret:()=>"synthetic-test-only-secret"}));
 vi.mock("./contact-handoff-session",()=>({contactHandoffSessionVersion:()=>"bound-login"}));
 vi.mock("@talent-signal/contracts",async importOriginal=>{const actual=await importOriginal<typeof import("@talent-signal/contracts")>();return {...actual,TalentSignalClient:class{getAgentSession=f.get;saveAgentSession=f.save;admitConversationQueueEntry=f.admit;getConversationQueue=f.read;mutateConversationQueue=f.mutate;openConversationQueueStream=f.stream;}};});
 import { conversationQueueRoute } from "./conversationQueue";
+import { readOnlyStreamShutdownSignal } from "./readOnlyStreamShutdown";
 const sid="72ce7ff4-a5a8-40d0-b1d7-d84a13adcd30",mid="a072ed54-6d56-413d-af4b-3ebc01ba646a";
 function request(body?:unknown,binding="bound-login",origin="http://localhost:3019") {return new Request(`http://localhost:3019/api/workspace-sessions/${sid}/conversation-queue`,{method:body?"POST":"GET",headers:{"content-type":"application/json","x-workspace-session":binding,"origin":origin,"host":"localhost:3019"},...(body?{body:JSON.stringify(body)}:{})});}
 const input={session_id:sid,message_id:mid,idempotency_key:mid,objective:"synthetic"};
 beforeEach(()=>{Object.values(f).forEach(mock=>mock.mockReset());f.claims.mockResolvedValue({backendAccountId:"synthetic-account",backendUserId:"synthetic-user",backendExpiresAt:"2099-01-01T00:00:00Z",backendAccessToken:"synthetic"});f.get.mockResolvedValue({});f.admit.mockResolvedValue({message_id:mid});});
+beforeEach(()=>{shutdown.source=new EventEmitter();shutdown.scope={};});
+
+it("aborts an open read-only upstream subscription on process shutdown without cancelling a task",async()=>{
+  f.stream.mockResolvedValue(new Response(new ReadableStream()));
+  const response=await conversationQueueRoute(request(),sid,"stream");
+  expect(response.status).toBe(200);
+  const signal=f.stream.mock.calls[0][1] as AbortSignal;
+  expect(signal.aborted).toBe(false);
+  shutdown.source!.emit("SIGTERM");
+  expect(signal.aborted).toBe(true);
+  expect(f.mutate).not.toHaveBeenCalled();expect(f.admit).not.toHaveBeenCalled();
+  await response.body!.cancel();
+});
+
+it("does not open another subscription once shutdown has begun, while ordinary reads and mutations retain their own deadlines",async()=>{
+  readOnlyStreamShutdownSignal();
+  shutdown.source!.emit("SIGTERM");
+  f.stream.mockResolvedValue(new Response("synthetic"));
+  expect((await conversationQueueRoute(request(),sid,"stream")).status).toBe(503);
+  expect(f.stream).not.toHaveBeenCalled();
+  f.read.mockResolvedValue({session_id:sid,active:null,queued:[]});
+  f.mutate.mockResolvedValue({session_id:sid,revision:1});
+  expect((await conversationQueueRoute(request(),sid,"read")).status).toBe(200);
+  expect((await conversationQueueRoute(request({kind:"stop"}),sid,"mutate")).status).toBe(200);
+  expect((f.read.mock.calls[0][1] as AbortSignal).aborted).toBe(false);
+  expect((f.mutate.mock.calls[0][2] as AbortSignal).aborted).toBe(false);
+});
+
+it("registers a first subscription before awaiting auth, so shutdown during that await cannot open a new infinite stream",async()=>{
+  const claims=await f.claims();
+  let releaseClaims!:(value:unknown)=>void;
+  f.claims.mockImplementationOnce(()=>new Promise(resolve=>{releaseClaims=resolve;}));
+  f.stream.mockResolvedValue(new Response("synthetic"));
+  const pending=conversationQueueRoute(request(),sid,"stream");
+  shutdown.source!.emit("SIGTERM");
+  releaseClaims(claims);
+  expect((await pending).status).toBe(503);
+  expect(f.stream).not.toHaveBeenCalled();
+});
 it.each(["read","admit","mutate","stream"] as const)("rejects stale login before %s reaches the backend",async action=>{const response=await conversationQueueRoute(request(input,"old-login"),sid,action);expect(response.status).toBe(409);expect(f.get).not.toHaveBeenCalled();expect(f.admit).not.toHaveBeenCalled();expect(f.stream).not.toHaveBeenCalled();});
 it("maps expired account binding to recoverable authentication failure",async()=>{f.claims.mockRejectedValue(new BackendSessionExpiredError());expect((await conversationQueueRoute(request(),sid,"read")).status).toBe(401);});
 it("rejects cross-origin mutations and oversized messages",async()=>{expect((await conversationQueueRoute(request(input,"bound-login","https://other.invalid"),sid,"admit")).status).toBe(403);expect((await conversationQueueRoute(request({...input,objective:"x".repeat(1001)}),sid,"admit")).status).toBe(400);expect(f.admit).not.toHaveBeenCalled();});

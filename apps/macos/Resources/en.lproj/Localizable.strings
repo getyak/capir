@@ -1,4 +1,4 @@
-/* Primary native command menus. App/device language; no account preference bridge. */
+/* Primary native command menus and workspace recovery. App/device language; no account preference bridge. */
 "New Chat" = "New Chat";
 "Back" = "Back";
 "Forward" = "Forward";
@@ -18,3 +18,10 @@
 "System" = "System";
 "Light" = "Light";
 "Dark" = "Dark";
+
+/* Recovery text retains observed HTTP status and makes no task-state claims. */
+"Workspace Unavailable" = "Workspace Unavailable";
+"Unable to open the workspace. Check the network, Tailscale, and workspace service, then retry." = "Unable to open the workspace. Check the network, Tailscale, and workspace service, then retry.";
+"The workspace request failed (HTTP %lld). Reload later or check connection settings." = "The workspace request failed (HTTP %lld). Reload later or check connection settings.";
+"The page paused. Reload it; saved conversations remain in the workspace." = "The page paused. Reload it; saved conversations remain in the workspace.";
+"Appearance saving could not be confirmed. Reload and check it." = "Appearance saving could not be confirmed. Reload and check it.";
