@@ -1972,8 +1972,8 @@ suite("conversation message images", () => {
     try {
       // The Session uses an application timestamp slightly ahead of DB now().
       // Its own lifetime remains exactly thirty days, as in the real failure.
-      await pool!.query(`UPDATE agent_sessions SET created_at=now()+interval '5 seconds',
-        expires_at=now()+interval '30 days 5 seconds' WHERE account_id=$1 AND id=$2`, [seeded.accountId, seeded.sessionId]);
+      await pool!.query(`UPDATE agent_sessions SET created_at=date_trunc('milliseconds',now())+interval '5 seconds',
+        expires_at=date_trunc('milliseconds',now())+interval '30 days 5 seconds' WHERE account_id=$1 AND id=$2`, [seeded.accountId, seeded.sessionId]);
       const message = randomUUID(), upload = pngUpload(pngBytes(9));
       const request = { session_id: seeded.sessionId, message_id: message,
         idempotency_key: randomUUID(), objective: "", images: [upload] };
