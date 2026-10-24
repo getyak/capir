@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement, useLayoutEffect } from "react";
+import { act, createElement, useLayoutEffect, type ChangeEvent } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ConversationQueueEntry, ConversationQueueSnapshot } from "@talent-signal/contracts";
@@ -23,7 +23,7 @@ let state: ReturnType<typeof useConversation>;
 function Harness({ id, scope, binding }: { id: string; scope: string; binding: string }) {
   const conversation = useConversation({ id, scope, chatBinding: binding, detailBinding: "detail", initial: detail(id) });
   useLayoutEffect(() => { state = conversation; });
-  return createElement("textarea", { value: conversation.draft, onChange: event => conversation.changeDraft(event.target.value) });
+  return createElement("textarea", { value: conversation.draft, onChange: (event: ChangeEvent<HTMLTextAreaElement>) => conversation.changeDraft(event.target.value) });
 }
 let root: Root;
 let host: HTMLDivElement;
