@@ -30,11 +30,11 @@ struct AskUserMessageBubble: View {
 
     private func bubble(fixesWidth: Bool) -> some View {
         Text(message)
-            .font(.body)
+            .modifier(ConversationReadingStyle())
             .foregroundStyle(Color.tsInk)
             .fixedSize(horizontal: fixesWidth, vertical: true)
-            .padding(.horizontal, 15)
-            .padding(.vertical, 11)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(
                 Color.tsSurfaceMuted,
                 in: RoundedRectangle(cornerRadius: 17, style: .continuous)
@@ -136,11 +136,6 @@ struct AskPendingTurnView: View {
                 )
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color.tsInk)
-                Text(
-                    language.text("Matched by Agent from your contact workspace")
-                )
-                .font(.caption)
-                .foregroundStyle(Color.tsMutedInk)
                 if allowsChange {
                     Button(language.text("Change")) {
                         onChangeMatch()

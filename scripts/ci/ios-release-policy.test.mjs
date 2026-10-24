@@ -223,7 +223,7 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
 
   // Four contact handbook journeys retain attribution, accessible disclosure,
   // scoped unsent chat, and a source statement's temporal boundary.
-  const tierBudgets = { quick: 19, smoke: 20 };
+  const tierBudgets = { quick: 23, smoke: 20 };
   const conversationPrefix = "TalentSignalUITests/ConversationExperienceUITests/";
   const criticalConversationTests = [
     "testProcessingStatusBelongsToItsImageAndHasNoEmptyMessageBubble",
@@ -245,6 +245,18 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
   assert.match(contactEvidence[1], /xcresulttool export attachments/);
   for (const method of criticalContactTests) {
     assert.ok(contactEvidence[1].includes(`*-${method}.xcresult`), `CI must retain screenshots for ${method}`);
+  }
+  const chatJourneys = [
+    "CandidateSignalUITests/testGlobalAgentInputOpensRichNewSessionComposer",
+    "Get5SessionUITests/testContinuousSessionMarkdownControlsForkAndNativeBack",
+    "Get5SessionUITests/testMarkdownChineseDarkAX5ReducedMotionRemainsReachable",
+    "CandidateSignalUITests/testAskUsesOneColumnAtAX5WithoutLosingComposerOrCapture",
+  ];
+  const quickSelectors = readFileSync(join(repositoryRoot, "scripts/ios/ci-quick-tests.txt"), "utf8");
+  for (const journey of chatJourneys) {
+    assert.ok(quickSelectors.includes(`TalentSignalUITests/${journey}`), `PR checks must exercise ${journey}`);
+    const method = journey.split("/").at(-1);
+    assert.ok(contactEvidence[1].includes(`*-${method}.xcresult`), `CI must retain chat evidence for ${method}`);
   }
   const uiSources = new Map();
   for (const [scope, budget] of Object.entries(tierBudgets)) {
