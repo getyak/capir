@@ -253,13 +253,13 @@ final class CandidateSignalUITests: XCTestCase {
         actionButton.tap()
 
         XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 12))
-        XCTAssertTrue(app.staticTexts["创建两步快捷指令"].exists)
+        XCTAssertTrue(app.staticTexts["1. 添加现成快捷指令"].exists)
         scrollToVisible(element("shortcut-local-boundary"))
         let buildShortcut = element("build-screenshot-shortcut")
         scrollToVisible(buildShortcut)
         XCTAssertGreaterThanOrEqual(buildShortcut.frame.height, 44)
         XCTAssertTrue(buildShortcut.isHittable)
-        XCTAssertEqual(buildShortcut.label, "打开快捷指令编辑器")
+        XCTAssertEqual(buildShortcut.label, "添加截图快捷指令")
         preserveScreenshot("Action Button setup Chinese AX5")
     }
 
