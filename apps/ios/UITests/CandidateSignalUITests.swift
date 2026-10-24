@@ -3323,7 +3323,7 @@ final class CandidateSignalUITests: XCTestCase {
         app.buttons["open-agent-attachments"].tap()
         XCTAssertTrue(element("home-attachment-chooser").waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["先选择内容来源。"].exists)
-        XCTAssertTrue(app.staticTexts["在你选择之前，不会导入任何内容。"].exists)
+        XCTAssertFalse(app.staticTexts["在你选择之前，不会导入任何内容。"].exists)
         XCTAssertTrue(app.buttons["home-attachment-photos"].exists)
         XCTAssertTrue(app.buttons["home-attachment-files"].exists)
         XCTAssertTrue(app.buttons["home-attachment-relationship"].exists)
