@@ -161,7 +161,7 @@ export default async function LoginPage({ searchParams }: {
   return (
     <main id="main-content" className={styles.page} tabIndex={-1}>
       <div className={styles.topbar}>
-        <BrandMark />
+        <BrandMark label={t("返回首页")} />
         <div className={styles.utilities}>
           <Link href="/">{t("返回首页")}<ArrowUpRight size={14} aria-hidden="true" /></Link>
           <ThemeToggle />

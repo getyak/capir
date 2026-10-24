@@ -103,6 +103,8 @@ it.each([
   if (locale === "en") {
     expect(host.textContent).not.toMatch(/[\u3400-\u9fff]/);
     expect(host.querySelector("aside")?.getAttribute("aria-label")).toBe("Continue your work across devices");
+    expect(host.querySelector("a.brand")?.getAttribute("aria-label")).toBe("Back to home");
+    expect(host.querySelector("aside")?.textContent).toContain("context stay together");
   }
 });
 
