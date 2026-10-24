@@ -327,8 +327,31 @@ Space. Keep the real Tab/Space regression; pointer clicks cannot prove this path
 Export the XCTest summary even after a failed invocation, preserve its nonzero
 status, and reject missing, malformed, failed or skipped acceptance results.
 
+### Native window and fullscreen acceptance
+
+An application-only capture can show a background or inactive-Space window.
+Before an actual-screen capture, bind the installed process and exact workspace
+window, verify that capri is the foreground application, and read back the
+onscreen bounds. Reject the sample if that binding changes. A window Raise
+action, an accessibility tree, or nominal screenshot dimensions alone do not
+establish foreground fullscreen acceptance.
+
+ScreenCaptureKit integrates sharing controls into the system interface. AppKit
+may represent the sharing control and fullscreen titlebar as auxiliary windows
+owned by the captured application. Distinguish these windows from Web content;
+compare the revealed-system-controls state with a settled, unobscured native
+screen capture. Preserve the raw failed/confounded sample. Do not add guessed
+Web padding or suppress a privacy indicator to turn it into a visual pass.
+
+For titlebar dragging and content selection, record the same window identity
+and its before/after bounds. Verify that dragging the titlebar moves the window,
+while selecting content does not. If a UI driver also fails to move an ordinary
+native reference window, retain that as a harness limitation and use a separately
+authorized native-input check rather than inferring an application defect.
+
 Sources: [Apple Developer ID](https://developer.apple.com/developer-id/),
 [notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
+[ScreenCaptureKit system controls](https://developer.apple.com/videos/play/wwdc2023/10136/),
 [GitHub workflow events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows).
 
 ## Isolated update rehearsal

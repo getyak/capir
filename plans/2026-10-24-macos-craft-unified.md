@@ -45,14 +45,15 @@ has each defect.
    readback state, without remounting the composer. Final affected checks passed
    82 tests; independent review and full-branch follow-up closed all confirmed P1/P2. Existing decision cards and Latest result own
    review and unread-result semantics; no duplicate Reply ready claim is added.
-4. **Active:** full source review approved and fresh full Web passed2,873 tests
-   in334 files ataba97935. PR416 native, Web, backend and CLI CI passed.
-   Required security audit found newly published transitive vulnerabilities;
-   repair minimal compatible overrides and malicious-input regressions, review
-   independently, then require all gates on the new PR head.
-5. Merge, deploy affected resident services from clean committed source,
-   install the verified native build, inspect real behavior, and close owned
-   test accounts/resources/worktrees only after evidence is retained.
+4. Complete: independent source review, security repair and applicable exact-head
+   checks passed. PRs #416, #417, #418 and #420 are merged; overlapping test
+   checkpoints and earlier failures remain separate in the formal evidence.
+5. Resident delivery and native surface checks complete: clean Web `f4ecd485`,
+   five affected backend/Agent Host roles on unchanged source `7fa3ee3`, signed
+   native 0.2.29 (188). The N3 follow-up below supplies actual foreground
+   fullscreen and native-input evidence. Independent N3 adjudication and final
+   documentation CI/merge remain separate delivery gates before handoff.
+   Preserve unique evidence before closing owned resources and worktrees.
 
 ## Acceptance matrix: 25 findings
 
@@ -130,6 +131,7 @@ recovers. Other tasks and their Simulator are preserved.
 
 Durable partial evidence and a resumable patch:
 `/Users/cubxxw/ops/reports/macos-craft-unified-20261024/`.
+
 Registered task artifact:
 `/private/tmp/ai-test-macos-craft-unified-20261024.jTvKTj`.
 Keep this unfinished worktree and its dependencies/artifact; they are not
@@ -311,12 +313,54 @@ to `f4ecd485`; the revision is not embedded in Info.plist. Sparkle restarted
 to a new draft; the original Session was explicitly selected afterward and
 its two user turns read back. The formal installation receipt owns this state.
 
-The formal operations matrix currently records 24 covered checks and **N3
-fullscreen visual acceptance partial**. The fullscreen white band/blue indicator
-remains overlay-confounded with unknown cause; no guessed inset, application
-severity or visual pass is assigned. Normal-window controls, selection,
+The initial operations checkpoint recorded 24 covered checks and **N3
+fullscreen visual acceptance partial**. Its fullscreen white band/blue indicator
+was overlay-confounded with unknown cause; no guessed inset, application
+severity or visual pass was assigned. Normal-window controls, selection,
 minimize/restore, native zoom, resize and fullscreen entry/exit were exercised.
 macOS 27 hardware, a full VoiceOver workflow and physical keyboard hardware are
-not claimed. Preserve the source worktree and its recovery references while
-this acceptance remains open. The permanent report and raw evidence are in
+not claimed. The source worktree and recovery references were retained while
+this acceptance remained open; the follow-up below supersedes that N3 status.
+The permanent report and raw evidence are in
 `/Users/cubxxw/ops/reports/macos-craft-unified-20261024/`.
+
+
+## N3 fullscreen follow-up
+
+The user explicitly requested closure of N3. The fresh baseline is `d1914708`
+on `codex/macos-n3-fullscreen-20261024`; installed native remains signed 0.2.29
+(188). The existing serial-work exception continues; the global pause marker
+and unrelated processes remain protected. The user separately authorized native
+read-only diagnostics and scoped mouse input/restoration. No permission setting
+or shared capture session was changed.
+
+Diagnosis: AppKit's `NSToolbarFullScreenWindow` supplies the transient strip;
+`NSLocalWindowSharingWindow` supplies the system sharing control. Logs bind
+these classes to the observed auxiliary window IDs. The actual foreground
+screen protocol reproduced the strip with the real pointer at the top edge,
+then hid it by moving that pointer into the canvas. The same installed
+process/window stayed at 1920 by 1080 throughout three unedited native screen
+captures. An application-only capture and CUA's displayed pointer position had
+not established foreground Space or physical pointer state. The correction
+binds those states before capture instead of adding a guessed content inset.
+
+Native input moved both the standard Settings window and workspace by 60 by 50
+pixels and restored their original bounds. Content selection painted a
+selection without moving the workspace. Minimize/Window-menu restore, system
+zoom/restore and fullscreen exit preserved the same window and original two
+user messages. Final normal bounds are 1123 by 864 at the original position.
+Current 188 still matches all 147 published bundle entries; strict signing,
+stapled notarization and Gatekeeper verification passed again.
+
+No application layout defect was confirmed and no production code changed.
+The durable correction is the acceptance procedure, now owned by
+`docs/operations/macos-distribution.md`. Reuse the verified installed 188 and
+accepted resident releases; a documentation-only closure must not invent a new
+native release, installation or runtime deployment. Independent adjudication
+and final documentation gates retain separate receipts in the report.
+
+Original failed/confounded captures remain unchanged. New formal evidence is
+in `/Users/cubxxw/ops/reports/macos-n3-fullscreen-20261024/`. Completion evidence
+includes the owner-bound diagnosis and unobscured actual fullscreen acceptance,
+not merely a layout-box assertion. macOS 27 hardware, full VoiceOver and
+physical keyboard hardware remain outside the observed scope.
