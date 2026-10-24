@@ -13,8 +13,8 @@ vi.mock("./use-conversation", () => ({ useConversation: () => ({
   unavailable: false, preparing: false, submitting: false, mutating: false,
   handoffEntries: {}, handoffPreviews: {}, runOutcome: {}, readbackStalled: [],
   snapshot: { active: null, paused: true, queued: [{ queue_entry_id: "entry", message_id: "message",
-    objective: "", status: "failed", failure_code: state.code,
-    images: [{ attachment_id: "image", file_name: "synthetic.png", media_type: "image/png", byte_size: 12, content_hash: "a".repeat(64) }] }] },
+    objective: "", status: "failed", failure_code: state.code, run_id: "run",
+    images: [{ attachment_id: "image", file_name: "synthetic.png", media_type: "image/png", byte_size: 12, content_hash: "a".repeat(64) }] }, { queue_entry_id: "member", message_id: "member-message", objective: "保留的补充", status: "failed", failure_code: state.code, steers_run_id: "run", steer_delivered: true }] },
   submit: vi.fn(), mutate: vi.fn(), addFiles: vi.fn(), removeAttachment: vi.fn(), changeDraft: vi.fn(),
 }) }));
 vi.mock("./conversation-images", () => ({ ConversationImageStrip: () => createElement("img", { alt: "保留的图片" }) }));
@@ -36,6 +36,7 @@ it.each(["MODEL_RUN_TOKEN_BUDGET_EXHAUSTED", "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUS
     expect(mount.querySelector('img[alt="保留的图片"]')).not.toBeNull();
     expect([...mount.querySelectorAll("button")].some(button => button.textContent === "重试")).toBe(true);
     expect(mount.querySelector('[aria-label="移除第 1 条待处理消息"]')).not.toBeNull();
+    expect(mount.textContent).toContain("移除任务消息时，也会移除仍待处理的补充。");
   } finally {
     await act(async () => root.unmount());
     mount.remove();

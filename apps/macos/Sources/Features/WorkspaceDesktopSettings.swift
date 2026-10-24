@@ -25,29 +25,29 @@ struct WorkspaceDesktopCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("新对话") { browser?.startNewConversation() }
+            Button("New Chat") { browser?.startNewConversation() }
                 .keyboardShortcut("n")
                 .disabled(browser == nil || browser?.signedOut == true || browser?.loading == true)
         }
         CommandGroup(after: .toolbar) {
             Divider()
-            Button("返回") { browser?.webView.goBack() }
+            Button("Back") { browser?.webView.goBack() }
                 .keyboardShortcut("[").disabled(browser?.webView.canGoBack != true)
-            Button("前进") { browser?.webView.goForward() }
+            Button("Forward") { browser?.webView.goForward() }
                 .keyboardShortcut("]").disabled(browser?.webView.canGoForward != true)
-            Button("重新载入") { browser?.retry() }
+            Button("Reload") { browser?.retry() }
                 .keyboardShortcut("r").disabled(browser == nil)
             Divider()
-            Button("放大内容") { zoom = WorkspaceContentZoom.step(zoom, direction: 1) }
+            Button("Zoom In") { zoom = WorkspaceContentZoom.step(zoom, direction: 1) }
                 .keyboardShortcut("+", modifiers: [.command])
                 .disabled(browser == nil || WorkspaceContentZoom.clamp(zoom) >= 2)
-            Button("缩小内容") { zoom = WorkspaceContentZoom.step(zoom, direction: -1) }
+            Button("Zoom Out") { zoom = WorkspaceContentZoom.step(zoom, direction: -1) }
                 .keyboardShortcut("-", modifiers: [.command])
                 .disabled(browser == nil || WorkspaceContentZoom.clamp(zoom) <= 0.9)
-            Button("实际大小") { zoom = 1 }
+            Button("Actual Size") { zoom = 1 }
                 .keyboardShortcut("0", modifiers: [.command]).disabled(browser == nil)
-            Menu("工作区外观") {
-                Picker("工作区外观", selection: Binding(
+            Menu("Workspace Appearance") {
+                Picker("Workspace Appearance", selection: Binding(
                     get: { browser?.appearancePreference ?? .system },
                     set: { browser?.selectAppearance($0) }
                 )) {
@@ -60,12 +60,12 @@ struct WorkspaceDesktopCommands: Commands {
             .disabled(browser == nil || browser?.signedOut == true ||
                       browser?.loading == true || browser?.savingAppearance == true)
         }
-        CommandMenu("前往") {
-            Button("人物") { browser?.navigate(.people) }
+        CommandMenu("Go") {
+            Button("People") { browser?.navigate(.people) }
                 .keyboardShortcut("1").disabled(browser == nil)
-            Button("时间") { browser?.navigate(.calendar) }
+            Button("Time") { browser?.navigate(.calendar) }
                 .keyboardShortcut("2").disabled(browser == nil)
-            Button("此 Mac 设置…") { browser?.requestSettingsOpen() }
+            Button("This Mac Settings…") { browser?.requestSettingsOpen() }
                 .keyboardShortcut(",", modifiers: [.command, .shift]).disabled(browser == nil)
         }
     }

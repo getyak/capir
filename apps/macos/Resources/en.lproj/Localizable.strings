@@ -1,0 +1,20 @@
+/* Primary native command menus. App/device language; no account preference bridge. */
+"New Chat" = "New Chat";
+"Back" = "Back";
+"Forward" = "Forward";
+"Reload" = "Reload";
+"Zoom In" = "Zoom In";
+"Zoom Out" = "Zoom Out";
+"Actual Size" = "Actual Size";
+"Workspace Appearance" = "Workspace Appearance";
+"Go" = "Go";
+"People" = "People";
+"Time" = "Time";
+"This Mac Settings…" = "This Mac Settings…";
+"Companion" = "Companion";
+"Companion Settings…" = "Companion Settings…";
+"Update and Restart" = "Update and Restart";
+"Check for Updates" = "Check for Updates";
+"System" = "System";
+"Light" = "Light";
+"Dark" = "Dark";

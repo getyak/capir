@@ -1999,5 +1999,16 @@
   "连接暂时中断，请重试。": "連線暫時中斷，請重試。",
   "暂时无法连接回复。": "暫時無法連線取得回覆。",
   "没有可读取的回复连接。": "沒有可讀取的回覆連線。",
-  "这段对话已不可用，请重新打开。": "這段對話已無法使用，請重新開啟。"
+  "这段对话已不可用，请重新打开。": "這段對話已無法使用，請重新開啟。",
+  "workspace.loading.status": "正在開啟目前的工作區",
+  "workspace.loading.hint": "正在讀取內容，你仍可使用側欄切換頁面。",
+  "response.sources": "依據",
+  "response.body": "回答正文",
+  "response.preview": "閱讀預覽",
+  "response.expand": "展開全文",
+  "response.collapse": "收合",
+  "response.image": "[圖片]",
+  "response.imageWithAlt": "[圖片：{alt}]",
+  "response.table": "表格（可橫向捲動）",
+  "conversation.queue.withdrawGroupHint": "移除任務訊息時，也會移除仍待處理的補充。"
 }

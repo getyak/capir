@@ -1999,5 +1999,16 @@
   "连接暂时中断，请重试。": "接続が中断されました。再試行してください。",
   "暂时无法连接回复。": "返信への接続を一時的に利用できません。",
   "没有可读取的回复连接。": "読み取り可能な返信ストリームがありません。",
-  "这段对话已不可用，请重新打开。": "この会話は利用できません。開き直してください。"
+  "这段对话已不可用，请重新打开。": "この会話は利用できません。開き直してください。",
+  "workspace.loading.status": "ワークスペースを開いています",
+  "workspace.loading.hint": "コンテンツを読み込んでいます。サイドバーで別のページに移動できます。",
+  "response.sources": "参照元",
+  "response.body": "回答本文",
+  "response.preview": "プレビュー",
+  "response.expand": "全文を表示",
+  "response.collapse": "折りたたむ",
+  "response.image": "[画像]",
+  "response.imageWithAlt": "[画像：{alt}]",
+  "response.table": "表（横にスクロールできます）",
+  "conversation.queue.withdrawGroupHint": "タスクのメッセージを削除すると、未処理の補足も削除されます。"
 }

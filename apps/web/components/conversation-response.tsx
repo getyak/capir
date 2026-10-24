@@ -9,6 +9,7 @@ import {
   isLongAnswer,
 } from "@/lib/conversation-extractive-preview";
 import styles from "./conversation-response.module.css";
+import { useT } from "./locale-provider";
 
 /**
  * Provenance line for one response block: real, governed source names only.
@@ -20,6 +21,7 @@ export function ConversationProvenance({
 }: {
   sources?: ReadonlyArray<{ display_name: string }> | null;
 }) {
+  const t = useT();
   const names = [...new Set((sources ?? [])
     .map((source) => source.display_name.trim())
     .filter((name) => name.length > 0))];
@@ -28,7 +30,7 @@ export function ConversationProvenance({
   if (!names.length) return null;
   return (
     <p className={styles.provenance}>
-      依据 · {names.join(" · ")}
+      {t("response.sources")} · {names.join(" · ")}
     </p>
   );
 }
@@ -132,6 +134,7 @@ function FoldableResponse({
   children: string;
   lead: boolean;
 }) {
+  const t = useT();
   const surface = useRef<HTMLDivElement>(null);
   const fullTextId = useId();
   const [reading, setReading] = useState({ body: children, folded: false });
@@ -145,7 +148,7 @@ function FoldableResponse({
   const truncated = preview.length > 0 && preview.length < children.trim().length;
   return (
     <div
-      aria-label="回答正文"
+      aria-label={t("response.body")}
       className={styles.foldSurface}
       data-folded={folded ? "true" : "false"}
       ref={surface}
@@ -160,7 +163,7 @@ function FoldableResponse({
       ) : null}
       <div className={styles.foldFooter}>
         {folded && preview ? (
-          <span className={styles.foldBadge}>阅读预览</span>
+          <span className={styles.foldBadge}>{t("response.preview")}</span>
         ) : null}
         <button
           aria-controls={fullTextId}
@@ -169,7 +172,7 @@ function FoldableResponse({
           onClick={() => setFolded((value) => !value)}
           type="button"
         >
-          {folded ? "展开全文" : "收起"}
+          {t(folded ? "response.expand" : "response.collapse")}
         </button>
       </div>
     </div>
@@ -183,6 +186,7 @@ function ResponseBody({
   children: string;
   lead: boolean;
 }) {
+  const t = useT();
   return (
     <div className={styles.response} data-lead={lead ? "true" : "false"}>
       <Markdown
@@ -194,9 +198,9 @@ function ResponseBody({
           a: ({ children, href }) => (
             <span>{children}{href && children !== href ? <span className={styles.destination}> ({href})</span> : null}</span>
           ),
-          img: ({ alt }) => <span className={styles.destination}>[图片{alt ? `：${alt}` : ""}]</span>,
+          img: ({ alt }) => <span className={styles.destination}>{t(alt ? "response.imageWithAlt" : "response.image", { alt: alt ?? "" })}</span>,
           table: ({ children }) => (
-            <div aria-label="表格（可横向滚动）" className={styles.tableScroll} role="region" tabIndex={0}>
+            <div aria-label={t("response.table")} className={styles.tableScroll} role="region" tabIndex={0}>
               <table>{children}</table>
             </div>
           ),

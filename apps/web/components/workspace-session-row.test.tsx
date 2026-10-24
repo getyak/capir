@@ -188,7 +188,7 @@ describe("swipe-to-organize session rows", () => {
     expect(host!.querySelector("a")!.hasAttribute("title")).toBe(false);
     await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key:"Escape", bubbles:true })));
     await vi.waitFor(() => expect(host!.querySelector("a")!.title).toBe("客户原话：下周再联系"));
-    expect(document.activeElement).toBe(trigger);
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it("exposes the same named actions in the tray with honest state", () => {

@@ -406,3 +406,56 @@ it("retains streamed text when preview and completion arrive in one network chun
   await flush();
   expect(chat.handoffPreviews[mid]?.text).toBe(text);
 });
+
+it.each(["confirmed", "ambiguous", "wrong receipt"])("retires a withdrawn group only with its exact %s receipt", async mode => {
+  const member = "b072ed54-6d56-413d-af4b-3ebc01ba646a";
+  const image = { attachment_id: "c072ed54-6d56-413d-af4b-3ebc01ba646a", file_name: "retained.png", media_type: "image/png" as const, byte_size: 8, content_hash: "a".repeat(64) };
+  const rows = [entry(mid, { status: "failed", failure_code: "MODEL_TOKEN_BUDGET" }), entry(member, { queue_entry_id: member, status: "failed", sequence: 2, created_at: "2026-09-24T00:00:01.000Z", steers_run_id: entry(mid).run_id, steer_delivered: true })];
+  for (const row of rows) {
+    const message = { id: row.message_id, objective: row.objective, createdAt: row.created_at, delivery: "accepted" as const, receiptUncertain: false, expiresAt: Date.now() + 60_000, images: [image] };
+    writeConversationMessage("owner", sid, message);
+    writeConversationMessage("other-owner", sid, message);
+    for (const scope of ["owner", "other-owner"]) memory.map.set(conversationImageKey(scope, sid, row.message_id), [{ ...image, position: 0, blob: new Blob([new Uint8Array(8)]), expiresAt: message.expiresAt }]);
+  }
+  await act(async () => root.render(createElement(Probe, { initial: detail() })));
+  await flush();
+  await act(async () => emit?.(frame("snapshot", snapshot(5, null, rows, true))));
+  await flush();
+  await act(async () => chat.changeDraft("New unsent draft"));
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.endsWith("/mutations")) return mode === "ambiguous" ? Promise.reject(new Error("lost receipt")) : Promise.resolve(Response.json({ snapshot: snapshot(6, null, [], true), applied: { kind: "withdraw", queue_entry_id: mode === "wrong receipt" ? member : mid, run_id: null, status: null } }));
+    if (url.endsWith("/conversation-queue") && !init?.method) return Promise.resolve(Response.json(snapshot(6, null, [], true)));
+    return base(url, init);
+  });
+  await act(async () => { expect(await chat.mutate({ kind: "withdraw", queue_entry_id: mid })).toBe(mode === "confirmed"); });
+  await flush();
+  const expected = mode === "confirmed" ? [] : [mid, member];
+  expect(chat.messages.map(message => message.id)).toEqual(expected);
+  expect(readConversationMessages("owner", sid).map(message => message.id)).toEqual(expected);
+  for (const row of rows) expect(memory.map.has(conversationImageKey("owner", sid, row.message_id))).toBe(mode !== "confirmed");
+  expect(readConversationMessages("other-owner", sid)).toHaveLength(2);
+  for (const row of rows) expect(memory.map.has(conversationImageKey("other-owner", sid, row.message_id))).toBe(true);
+  expect(chat.draft).toBe("New unsent draft");
+  if (mode === "confirmed") {
+    expect(chat.taskObservation.messages).toEqual([]);
+    expect(chat.taskObservation.handoffEntries).toEqual({});
+    await act(async () => root.unmount()); root = createRoot(mount);
+    await act(async () => root.render(createElement(Probe, { initial: detail() })));
+    await flush();
+    expect(chat.messages).toEqual([]);
+  }
+});
+
+it("does not retire another queued intention when one withdrawal is confirmed", async () => {
+  const other = "b072ed54-6d56-413d-af4b-3ebc01ba646a";
+  const rows = [entry(mid, { status: "failed" }), entry(other, { queue_entry_id: other, status: "queued", sequence: 2, created_at: "2026-09-24T00:00:01.000Z" })];
+  for (const row of rows) writeConversationMessage("owner", sid, { id: row.message_id, objective: row.objective, createdAt: row.created_at, delivery: "accepted", receiptUncertain: false, expiresAt: Date.now() + 60_000 });
+  await act(async () => root.render(createElement(Probe, { initial: detail() }))); await flush();
+  await act(async () => emit?.(frame("snapshot", snapshot(5, null, rows, true)))); await flush();
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations") ? Promise.resolve(Response.json({ snapshot: snapshot(6, null, [rows[1]], true), applied: { kind: "withdraw", queue_entry_id: mid, run_id: null, status: null } })) : base(url, init));
+  await act(async () => { expect(await chat.mutate({ kind: "withdraw", queue_entry_id: mid })).toBe(true); }); await flush();
+  expect(chat.messages.map(message => message.id)).toEqual([other]);
+  expect(readConversationMessages("owner", sid).map(message => message.id)).toEqual([other]);
+});

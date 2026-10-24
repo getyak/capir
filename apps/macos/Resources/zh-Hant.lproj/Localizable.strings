@@ -1,0 +1,20 @@
+/* Primary native command menus. App/device language; no account preference bridge. */
+"New Chat" = "新對話";
+"Back" = "返回";
+"Forward" = "前進";
+"Reload" = "重新載入";
+"Zoom In" = "放大內容";
+"Zoom Out" = "縮小內容";
+"Actual Size" = "實際大小";
+"Workspace Appearance" = "工作區外觀";
+"Go" = "前往";
+"People" = "人物";
+"Time" = "時間";
+"This Mac Settings…" = "此 Mac 設定…";
+"Companion" = "桌面夥伴";
+"Companion Settings…" = "桌面夥伴設定…";
+"Update and Restart" = "更新並重新啟動";
+"Check for Updates" = "檢查更新";
+"System" = "跟隨系統";
+"Light" = "淺色";
+"Dark" = "深色";

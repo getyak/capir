@@ -71,9 +71,9 @@ struct TalentSignalMacApp: App {
             DesktopPetCommands()
             CommandGroup(after: .appInfo) {
                 if let offerID = updater.presentation.offerID {
-                    Button("更新并重启") { updater.installUpdate(offerID: offerID) }
+                    Button("Update and Restart") { updater.installUpdate(offerID: offerID) }
                 } else {
-                    Button("检查更新") { updater.checkForUpdates() }
+                    Button("Check for Updates") { updater.checkForUpdates() }
                         .disabled(!updater.isConfigured || !updater.canCheck || updater.presentation.busy)
                 }
             }
