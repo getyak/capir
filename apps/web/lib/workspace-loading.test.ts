@@ -8,7 +8,12 @@ const { auth, loadLabManifest } = vi.hoisted(() => ({
   auth: vi.fn(),
   loadLabManifest: vi.fn(),
 }));
-vi.mock("next/headers", () => ({cookies:async()=>({has:()=>false})}));
+// Keep the production active-locale resolver exercised with the same request
+// boundary Next supplies; no public locale cookie overrides this fixture.
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ has: () => false, get: () => undefined }),
+  headers: async () => new Headers({ "accept-language": "zh-CN,en;q=0.8" }),
+}));
 vi.mock("next/navigation", () => ({
   usePathname: () => "/workspace",
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
@@ -21,6 +26,9 @@ vi.mock("@/lib/server/backendAuth",()=>({
 }));
 vi.mock("@/lib/server/testWorkspaceSession",()=>({TEST_WORKSPACE_COOKIE:"test-cookie",testWorkspaceSession:async()=>null}));
 vi.mock("@/app/workspace/settings/testing/actions",()=>({leaveTestWorkspace:vi.fn()}));
+// Optional account settings are unavailable in this fixture, independently
+// of the intentionally pending Lab request. Never call a real backend here.
+vi.mock("@/lib/server/accountBackend", () => ({ loadAccountSettings: async () => { throw new Error("settings unavailable"); } }));
 vi.mock("@/auth", () => ({ auth }));
 vi.mock("@/app/login/actions", () => ({ signOutOfWorkspace: vi.fn() }));
 vi.mock("@/lib/server/labBackend", () => ({ loadLabManifest }));

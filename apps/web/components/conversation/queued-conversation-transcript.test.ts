@@ -162,14 +162,19 @@ it("composes the transcript: send time, user objective, observed status, executi
   expect(text).toContain("帮我整理林晓和周予的合作进展。");
   // Processing is observed status; genuine preview stays in execution details.
   expect(document.querySelectorAll("[data-run-update]")).toHaveLength(0);
-  expect(document.querySelector('[role="status"]')?.textContent).toBe("正在处理");
+  const transcript = document.querySelector('[role="region"][aria-label="对话记录"]');
+  expect(transcript).not.toBeNull();
+  expect(transcript?.querySelector('details[data-phase="running"] summary [role="status"]')?.textContent).toBe("正在处理");
+  // The independently projected header capsule reports the real current stage;
+  // it must not replace or satisfy the transcript's execution-status assertion.
+  expect(document.querySelector('header [data-session-task-capsule] [role="status"]')?.textContent).toBe("正在查找相关人物");
   expect(text).not.toContain("收到，我先理清这件事。");
   expect(document.querySelector('[aria-label="回复草稿，尚未完成"]')?.textContent).toContain("我先核对两人的沟通记录。");
   // The in-place execution record reports observed state and elapsed time.
-  const phases = [...document.querySelectorAll("[data-phase]")].map((node) => node.getAttribute("data-phase"));
+  const phases = [...transcript!.querySelectorAll("details[data-phase]")].map((node) => node.getAttribute("data-phase"));
   expect(phases).toContain("running");
   expect(phases).toContain("review-unknown"); // Unread references do not assert pending or resolved status.
-  const running = document.querySelector('[data-phase="running"]');
+  const running = transcript!.querySelector('details[data-phase="running"]');
   expect(running?.querySelector("[data-elapsed-ms]")).not.toBeNull();
   expect(text).not.toContain("%");
   // The final result is standalone and its pending decision is a distinct block.
