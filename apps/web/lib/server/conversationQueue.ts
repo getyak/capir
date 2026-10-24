@@ -5,6 +5,7 @@ import { contactHandoffSessionVersion } from "./contact-handoff-session";
 import { BackendSessionExpiredError, backendSessionIsExpired } from "../backend-session";
 import { isAllowedMutationOrigin } from "../request-origin";
 import { workspaceSessionTitle } from "./workspaceChat";
+import { readOnlyStreamShutdownSignal } from "./readOnlyStreamShutdown";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const headers = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" };
@@ -21,6 +22,9 @@ export async function conversationQueueRoute(request: Request, id: string, actio
       if (!isAllowedMutationOrigin(request.headers)) return json({ message: "跨站请求已拒绝。" }, 403);
       if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return json({ message: "请求格式无效。" }, 415);
     }
+    // Register before the first await: shutdown during auth must also fence a
+    // first subscription that has not opened its upstream transport yet.
+    const shutdownSignal = action === "stream" ? readOnlyStreamShutdownSignal() : request.signal;
     const claims = await readBackendSessionClaims();
     if (!claims || backendSessionIsExpired(claims.backendExpiresAt)) return json({ code: "backend_session_expired", message: "请重新登录。" }, 401);
     if (request.headers.get("x-workspace-session") !== contactHandoffSessionVersion(claims)) return json({ code: "session_stale", message: "登录已改变，请重新打开对话。" }, 409);
@@ -38,7 +42,9 @@ export async function conversationQueueRoute(request: Request, id: string, actio
       return response;
     }
     if (action === "stream") {
-      const upstream = await client.openConversationQueueStream(id, request.signal);
+      const signal = AbortSignal.any([request.signal, shutdownSignal]);
+      signal.throwIfAborted();
+      const upstream = await client.openConversationQueueStream(id, signal);
       if (!upstream.ok) return json({ code: "queue_unavailable", message: "暂时无法连接回复。" }, upstream.status);
       return new Response(upstream.body, { headers: { ...headers, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" } });
     }

@@ -1,4 +1,4 @@
-/* Primary native command menus. App/device language; no account preference bridge. */
+/* Primary native command menus and workspace recovery. App/device language; no account preference bridge. */
 "New Chat" = "新對話";
 "Back" = "返回";
 "Forward" = "前進";
@@ -18,3 +18,10 @@
 "System" = "跟隨系統";
 "Light" = "淺色";
 "Dark" = "深色";
+
+/* Recovery text retains observed HTTP status and makes no task-state claims. */
+"Workspace Unavailable" = "工作區暫時無法使用";
+"Unable to open the workspace. Check the network, Tailscale, and workspace service, then retry." = "暫時無法開啟工作區。請檢查網路、Tailscale 和工作區服務，再重試。";
+"The workspace request failed (HTTP %lld). Reload later or check connection settings." = "工作區服務暫時無法完成請求（HTTP %lld）。請稍後重新載入，或檢查連線設定。";
+"The page paused. Reload it; saved conversations remain in the workspace." = "頁面已暫停，請重新載入。已儲存的對話仍保留在工作區。";
+"Appearance saving could not be confirmed. Reload and check it." = "無法確認外觀已儲存，請重新載入後檢查。";

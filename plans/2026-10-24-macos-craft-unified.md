@@ -254,3 +254,34 @@ Traditional-Chinese/Korean catalog wording; this is not a product change.
 Independent review, exact-head CI and clean committed Web deployment remain
 required before this follow-up closes. Formal raw evidence is under the
 operations report directory recorded above.
+
+## Open-stream restart acceptance correction
+
+The final `630d703` Web deployment is active and PR #418's current-head checks
+passed. Its actual SIGTERM recovery test failed: after 45 readiness probes,
+the prior process still held an authenticated subscription and stopped
+accepting new connections. Infisical was awaiting its still-running Next child.
+Refreshing this task's native window closed that old stream; the old process
+then exited and launchd restored service. Thus the prior `7fa3ee3` recovery is
+narrower evidence and cannot substitute for recovery with a live subscription.
+
+The installed Next 16.4.2 source awaits `server.close()` before cleanup. The
+conversation queue's read-only Web SSE proxy has no process-shutdown abort.
+Add a process-scoped termination signal only to that subscription transport;
+retain ordinary request/transaction deadlines and all canonical task state.
+Do not terminate or cancel an Agent task, install another poller, force-exit
+Node, disable Next's own graceful handler, or add periodic connection churn.
+Required proof: a live native subscription remains open while SIGTERM causes
+launchd recovery without a manual refresh; persisted turns remain unchanged.
+
+The repair registers the shutdown signal before the first auth await, fences
+late admission of a stream after termination, and aborts only the upstream
+read-only subscription. A reviewer found and closed the first-auth-wait race;
+the held-claims regression uses the real signal helper with an isolated event
+emitter. Web regressions: 22 passed in two files. Native recovery title, body,
+HTTP-status copy and Reload now follow the same five app/device language tables
+as menus (24 keys per table); compiled-app regressions: 4 passed, no skips.
+The native red resource test failed before these keys were added. No native
+connection policy, login, persistence, task mutation or settings action changed.
+All applicable current-head CI, signed publication/installation, clean committed
+Web activation and the open-subscription restart re-test remain required.

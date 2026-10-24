@@ -7,7 +7,11 @@ final class NativeCommandLocalizationTests: XCTestCase {
         "New Chat", "Back", "Forward", "Reload", "Zoom In", "Zoom Out", "Actual Size",
         "Workspace Appearance", "Go", "People", "Time", "This Mac Settings…",
         "Companion", "Companion Settings…", "Update and Restart", "Check for Updates",
-        "System", "Light", "Dark"
+        "System", "Light", "Dark", "Workspace Unavailable",
+        "Unable to open the workspace. Check the network, Tailscale, and workspace service, then retry.",
+        "The workspace request failed (HTTP %lld). Reload later or check connection settings.",
+        "The page paused. Reload it; saved conversations remain in the workspace.",
+        "Appearance saving could not be confirmed. Reload and check it."
     ]
     private let languages = ["en", "zh-Hans", "zh-Hant", "ja", "ko"]
 
@@ -70,5 +74,20 @@ final class NativeCommandLocalizationTests: XCTestCase {
         ]
         let language = try XCTUnwrap(app.preferredLocalizations.first)
         XCTAssertEqual(WorkspaceAppearance.allCases.map(\.title), try XCTUnwrap(expected[language]))
+    }
+
+    func testComputedRecoveryTextUsesTheBuiltAppLanguageAndPreservesHTTPStatus() throws {
+        let app = try applicationBundle()
+        let titles = ["en": "Workspace Unavailable", "zh-Hans": "工作区暂不可用", "zh-Hant": "工作區暫時無法使用", "ja": "ワークスペースを開けません", "ko": "워크스페이스를 열 수 없습니다"]
+        let language = try XCTUnwrap(app.preferredLocalizations.first)
+        XCTAssertEqual(WorkspaceRecoveryText.title, try XCTUnwrap(titles[language]))
+        for text in [WorkspaceRecoveryText.unavailable, WorkspaceRecoveryText.paused, WorkspaceRecoveryText.appearanceUnconfirmed] {
+            XCTAssertFalse(text.isEmpty)
+            if language == "en" {
+                XCTAssertFalse(text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) })
+            }
+        }
+        XCTAssertTrue(WorkspaceRecoveryText.httpFailure(503).contains("503"))
+        XCTAssertFalse(WorkspaceRecoveryText.httpFailure(503).contains("%lld"))
     }
 }
