@@ -15,12 +15,9 @@ import { useAccountLanguage, useLocale, useT } from "./locale-provider";
 
 import {
   accountDisplayName,
-  accountMenuLabel,
-  accountWorkspaceLabel,
   type AccountIdentity,
 } from "@/lib/workspace-account";
 import {
-  WEEKLY_ALLOWANCE_LABEL,
   WEEKLY_USAGE_LABEL,
   createWeeklyUsageStore,
   fetchWeeklyUsage,
@@ -43,12 +40,12 @@ import styles from "./workspace-shell.module.css";
 const noopSubscribe = () => () => {};
 const loadingView: WeeklyUsageView = { status: "loading" };
 
-function formatUsageWindow(start: string, end: string): string {
+function formatUsageWindow(start: string, end: string, locale: string): string {
   const day = (value: string) => {
     const date = new Date(value);
     return Number.isNaN(date.getTime())
       ? value
-      : new Intl.DateTimeFormat("zh-CN", {
+      : new Intl.DateTimeFormat(locale, {
           month: "long",
           day: "numeric",
           timeZone: "Asia/Shanghai",
@@ -57,11 +54,11 @@ function formatUsageWindow(start: string, end: string): string {
   return `${day(start)} – ${day(end)}`;
 }
 
-function formatUsageTime(value: string): string {
+function formatUsageTime(value: string, locale: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? value
-    : new Intl.DateTimeFormat("zh-CN", {
+    : new Intl.DateTimeFormat(locale, {
         month: "short",
         day: "numeric",
         hour: "2-digit",
@@ -71,6 +68,8 @@ function formatUsageTime(value: string): string {
 
 /** Read-only weekly usage row with a disclosure; never fabricates a count. */
 export function WeeklyUsageRow({ store }: { store: WeeklyUsageStore | null }) {
+  const t = useT();
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const disclosure = useRef<HTMLButtonElement>(null);
   const view = useSyncExternalStore(
@@ -95,13 +94,13 @@ export function WeeklyUsageRow({ store }: { store: WeeklyUsageStore | null }) {
             size={12}
             style={open ? { transform: "rotate(90deg)" } : undefined}
           />
-          <span>{WEEKLY_USAGE_LABEL}</span>
+          <span>{t(WEEKLY_USAGE_LABEL)}</span>
         </button>
         <strong data-usage-state={view.status}>
           {view.status === "loading"
-            ? "读取中…"
+            ? t("读取中…")
             : view.status === "error"
-              ? "暂时无法读取"
+              ? t("暂时无法读取")
               : view.usage.count}
         </strong>
         {view.status === "error" && store ? (
@@ -114,7 +113,7 @@ export function WeeklyUsageRow({ store }: { store: WeeklyUsageStore | null }) {
             }}
             type="button"
           >
-            重试
+            {t("重试")}
           </button>
         ) : null}
       </span>
@@ -123,20 +122,20 @@ export function WeeklyUsageRow({ store }: { store: WeeklyUsageStore | null }) {
           {usage ? (
             <>
               <span>
-                {formatUsageWindow(usage.window.start, usage.window.end)} · 北京时间，每周一重置。
+                {t("{window} · 北京时间，每周一重置。", { window: formatUsageWindow(usage.window.start, usage.window.end, locale) })}
               </span>
               <span>
-                {WEEKLY_ALLOWANCE_LABEL} {usage.allowance}，不限制使用，也不是付费余额。
+                {t("每周参考额度 {allowance}，不限制使用，也不是付费余额。", { allowance: usage.allowance })}
               </span>
               <span>
-                仅计保留的运行记录；重试不重复计数，非计费账单。
+                {t("仅计保留的运行记录；重试不重复计数，非计费账单。")}
               </span>
-              <span>读取于 {formatUsageTime(usage.computed_at)}</span>
+              <span>{t("读取于 {time}", { time: formatUsageTime(usage.computed_at, locale) })}</span>
             </>
           ) : view.status === "error" ? (
-            <span>没有可用的用量数据。重试前不会显示数字。</span>
+            <span>{t("没有可用的用量数据。重试前不会显示数字。")}</span>
           ) : (
-            <span>正在读取本周用量…</span>
+            <span>{t("正在读取本周用量…")}</span>
           )}
         </span>
       ) : null}
@@ -180,8 +179,8 @@ export function WorkspaceAccountMenu({
     store: WeeklyUsageStore;
   } | null>(null);
   const identity: AccountIdentity = { accountName, workspaceName, avatarUrl };
-  const displayName = accountDisplayName(identity);
-  const workspaceLabel = accountWorkspaceLabel(identity);
+  const displayName = accountName.trim() ? accountDisplayName(identity) : t("账号");
+  const workspaceLabel = workspaceName?.trim() || t("个人工作区");
   // A scope change drops the previous account's result before any new read.
   const usageStore =
     injectedUsage ?? (usageScope?.key === scopeKey ? usageScope.store : null);
@@ -243,7 +242,7 @@ export function WorkspaceAccountMenu({
             <button
               type="button"
               data-slot="account-trigger"
-              aria-label={accountMenuLabel(identity)}
+              aria-label={`${displayName} · ${workspaceLabel}`}
               className={styles.accountTrigger}
             >
               <PersonDirectoryAvatar id="self" self label={accountName} url={avatarUrl} className={styles.avatar} dataSize="account" />
@@ -255,7 +254,7 @@ export function WorkspaceAccountMenu({
             </button>
           </PopoverTrigger>
           <PopoverContent
-            aria-label="账号与空间操作"
+            aria-label={t("账号与空间操作")}
             className={styles.accountPopover}
             side="top"
             ref={popover}
@@ -297,25 +296,25 @@ export function WorkspaceAccountMenu({
             <DesktopUpdateBanner onNavigate={() => close()} />
             <hr />
             <WeeklyUsageRow store={usageStore} />
-            <a aria-label="在手机上使用 capri" href="/download" onClick={() => close()}>
+            <a aria-label={t("在手机上使用 capri")} href="/download" onClick={() => close()}>
               <DeviceMobile aria-hidden="true" size={16} />
-              <span>移动端 capri</span>
+              <span>{t("移动端 capri")}</span>
             </a>
             <details className={styles.accountSubmenu}>
-              <summary aria-label="帮助与支持">
+              <summary aria-label={t("帮助与支持")}>
                 <Lifebuoy aria-hidden="true" size={16} />
-                <span>帮助与支持</span>
+                <span>{t("帮助与支持")}</span>
                 <CaretRight aria-hidden="true" className={styles.submenuCaret} size={12} />
               </summary>
               <div className={styles.submenuPanel}>
                 <a href={hosted ? "talentsignal-desktop://settings" : "/workspace/settings/diagnostics"} onClick={() => close()}>
-                  <span>{hosted ? "此 Mac 设置与检测" : "系统检测"}</span>
+                  <span>{t(hosted ? "此 Mac 设置与检测" : "系统检测")}</span>
                 </a>
                 <a href="/workspace/settings" onClick={() => close()}>
-                  <span>工作区设置</span>
+                  <span>{t("工作区设置")}</span>
                 </a>
-                <SupportEmailEntry subject="capri 支持" onNavigate={() => close()}>
-                  <span>邮件联系支持 ↗</span>
+                <SupportEmailEntry subject={t("capri 支持")} onNavigate={() => close()}>
+                  <span>{t("邮件联系支持 ↗")}</span>
                 </SupportEmailEntry>
               </div>
             </details>
@@ -332,15 +331,15 @@ export function WorkspaceAccountMenu({
             <hr />
             {fixtureWorkspace ? (
               <span className={styles.accountMetaRow}>
-                <span>工作区</span>
-                <strong>合成测试空间</strong>
+                <span>{t("工作区")}</span>
+                <strong>{t("合成测试空间")}</strong>
               </span>
             ) : null}
             <form action={signOutAction} onSubmit={clearPendingLocalIntents}>
               <input type="hidden" name="desktopHost" value={String(hosted)} />
               <button type="submit">
                 <SignOut aria-hidden="true" size={16} />
-                <span>退出登录</span>
+                <span>{t("退出登录")}</span>
               </button>
             </form>
           </PopoverContent>

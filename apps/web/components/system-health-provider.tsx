@@ -18,7 +18,6 @@ import {
 import {
   parseSystemHealth,
   systemHealthIsStale,
-  unavailableSystemHealth,
 } from "@/lib/system-health";
 import {
   reduceSystemHealth,
@@ -27,6 +26,7 @@ import {
 import { withSystemHealthTimeout } from "@/lib/system-health-timeout";
 
 import { workspaceSessionFetch } from "./workspace-session-request";
+import { useT } from "./locale-provider";
 import styles from "./system-health.module.css";
 
 type SystemHealthContextValue = {
@@ -41,6 +41,7 @@ const SystemHealthContext = createContext<SystemHealthContextValue | null>(null)
 
 export function HealthNotice({ value }: { value: SystemHealthContextValue }) {
   const pathname = usePathname();
+  const t = useT();
   if (
     pathname === "/workspace/settings/diagnostics" ||
     value.phase === "loading" ||
@@ -65,8 +66,8 @@ export function HealthNotice({ value }: { value: SystemHealthContextValue }) {
   return (
     <aside className={styles.notice} data-tone={unavailable ? "error" : "warning"} role="status">
       <span aria-hidden="true" className={styles.noticeMark} />
-      <p>{message}</p>
-      <Link href="/workspace/settings/diagnostics">查看系统检测</Link>
+      <p>{t(message)}</p>
+      <Link href="/workspace/settings/diagnostics">{t("查看系统检测")}</Link>
     </aside>
   );
 }
@@ -113,11 +114,9 @@ export function SystemHealthProvider({ children }: { children: ReactNode }) {
         activeRequest.current === controller &&
         (error as { name?: string }).name !== "AbortError"
       ) {
-        dispatch({
-          type: "observation_received",
-          observation: unavailableSystemHealth(),
-        });
-        setClock(Date.now());
+        // Browser transport failure cannot identify an unavailable dependency.
+        // Clear the old observation and expose an unconfirmed read instead.
+        dispatch({ type: "request_failed" });
       }
     } finally {
       if (activeRequest.current === controller) {

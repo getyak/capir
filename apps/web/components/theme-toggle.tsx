@@ -4,6 +4,7 @@ import { Moon, Palette, Sun } from "@phosphor-icons/react";
 import { useSyncExternalStore } from "react";
 
 import { applyTheme, subscribeTheme, themeSnapshot } from "@/lib/theme-preference";
+import { useT } from "./locale-provider";
 
 /**
  * One theme control with two honest presentations: a circular icon action for
@@ -18,6 +19,8 @@ export function ThemeToggle({
   showValue?: boolean;
   variant?: "icon" | "row";
 }) {
+  const t = useT();
+  const localizedLabel = t(label);
   const theme = useSyncExternalStore(subscribeTheme, themeSnapshot, () => "light");
 
   function toggleTheme() {
@@ -27,16 +30,16 @@ export function ThemeToggle({
   if (variant === "row") {
     return (
       <button
-        aria-label={label}
+        aria-label={localizedLabel}
         className="theme-toggle theme-toggle--row"
         onClick={toggleTheme}
-        title={label}
+        title={localizedLabel}
         type="button"
       >
         <Palette aria-hidden="true" size={16} />
-        <span>外观</span>
+        <span>{t("外观")}</span>
         <span className="theme-toggle__value">
-          {showValue ? (theme === "dark" ? "深色" : "浅色") : null}
+          {showValue ? t(theme === "dark" ? "深色" : "浅色") : null}
         </span>
       </button>
     );
@@ -47,8 +50,8 @@ export function ThemeToggle({
       className="icon-button theme-toggle"
       type="button"
       onClick={toggleTheme}
-      aria-label={label}
-      title={label}
+      aria-label={localizedLabel}
+      title={localizedLabel}
     >
       <span className="theme-toggle__dark" aria-hidden="true">
         <Moon aria-hidden="true" size={18} weight="regular" />

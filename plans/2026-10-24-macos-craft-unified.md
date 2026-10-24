@@ -228,3 +228,29 @@ macOS controls on an en-SG device. Nineteen owned command/appearance keys now
 use five compiled bundle localizations. Three focused XCTest cases passed against
 the built app; signed publication/install and actual menu readback remain open.
 No dynamic account-locale authority or wholesale native Settings rewrite was added.
+
+## Final installed acceptance follow-up: shell locale and health uncertainty
+
+PRs #416 and #417 are merged. Web is on `066ffa5`; all five affected
+backend roles use the prior merge's identical backend tree/image `7fa3ee3`.
+macOS 0.2.28 (186) is signed, notarized, published and passed the release's
+published-app tests; local signed Sparkle installation is in progress.
+
+Actual isolated-run acceptance confirmed Stop -> Paused, queue editing,
+explicit Resume -> persisted answer, and successful Withdraw clearing local
+outbox entries while preserving another queue item and an unsent draft,
+including after reload. Browser-only Offline preserved authorized recent
+sessions plus Retry. It also exposed two remaining R1/R3 defects: account
+popover labels bypassed the catalog, and browser transport failure fabricated
+a backend-unavailable observation. This bounded Web follow-up localizes the
+ordinary account/usage/appearance chrome and changes only that client failure
+to an unconfirmed read. Server-provided dependency failures remain visible.
+No backend, native, credentials, account scopes or effect actions change.
+
+New red evidence: seven focused tests initially had six failures (all four
+non-Simplified-Chinese account popovers plus health label/transport assertions).
+The first green pass also corrected two test expectations to existing
+Traditional-Chinese/Korean catalog wording; this is not a product change.
+Independent review, exact-head CI and clean committed Web deployment remain
+required before this follow-up closes. Formal raw evidence is under the
+operations report directory recorded above.

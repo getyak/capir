@@ -88,7 +88,8 @@ describe("persistent workspace shell", () => {
     expect(accountMenu).toContain("clearAllPendingSessionDrafts()");
     expect(accountMenu).toContain("退出登录");
     expect(accountMenu).toContain("<ThemeToggle");
-    expect(accountMenu).toContain("accountMenuLabel(identity)");
+    // Actual identity and localized fallback labels are checked on the rendered
+    // trigger in workspace-chrome-locales.test.tsx, independent of helper names.
     expect(accountMenu).toContain("<CaretDown");
     expect(standaloneWorkspace).toContain(
       "onSubmit={clearPendingLocalIntents}",
