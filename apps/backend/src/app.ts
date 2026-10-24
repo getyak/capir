@@ -7,6 +7,8 @@ import type { MailDelivery } from "./lib/mail.js";
 import { registerAccountOnboarding } from "./modules/accountOnboardingRoutes.js";
 import { registerAgentSessionRoutes } from "./modules/agentSessionRoutes.js";
 import { registerConversationQueueRoutes } from "./modules/conversationQueueRoutes.js";
+import { registerCaptureActivityRoutes } from "./modules/captureActivityService.js";
+import { registerCaptureAdmissionRoutes } from "./modules/captureAdmission.js";
 import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.js";
 import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.js";
 import { registerDesktopCaptureResult } from "./modules/desktopCaptureResult.js";
@@ -754,6 +756,8 @@ export async function buildApp(
     createMemoryRegenerationImageLoader(pool),
   );
   registerConversationQueueRoutes(app, pool, authenticate);
+  const captureActivityService = registerCaptureActivityRoutes(app, pool, authenticate);
+  registerCaptureAdmissionRoutes(app, pool, authenticate, captureActivityService);
   registerDesktopCaptureReceipt(app, pool, authenticate);
   registerDesktopCaptureResult(app, pool, authenticate);
   registerDesktopBrowserLogin(app, pool, config, authenticate);

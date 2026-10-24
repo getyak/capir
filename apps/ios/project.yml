@@ -34,6 +34,7 @@ targets:
           - Default
         com.apple.security.application-groups:
           - group.com.talentsignal.app
+        aps-environment: "$(APS_ENVIRONMENT)"
     sources:
       - path: Sources
       - path: Shared
@@ -44,6 +45,7 @@ targets:
           - Info.plist
     settings:
       base:
+        APS_ENVIRONMENT: production
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
@@ -54,6 +56,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
       configs:
         Debug:
+          APS_ENVIRONMENT: development
           CODE_SIGN_STYLE: Automatic
         Release:
           CODE_SIGN_IDENTITY: "iPhone Distribution: Xiong Xinwei (6RG2F8YY59)"
@@ -95,6 +98,7 @@ targets:
       - path: Shared/SignalRecordingActivity.swift
       - path: Shared/AgentWorkActivity.swift
       - path: Shared/AgentAskActivity.swift
+      - path: Shared/CaptureActivity.swift
       - path: Shared/ResearchActivity.swift
       - path: Shared/LivingConnectionMark.swift
       - path: Sources/App/AgentWorkDeepLink.swift

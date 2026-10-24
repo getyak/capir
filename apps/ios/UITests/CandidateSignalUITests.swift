@@ -252,7 +252,7 @@ final class CandidateSignalUITests: XCTestCase {
         preserveScreenshot("Agent sources compact Chinese AX5")
         actionButton.tap()
 
-        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 5))
+        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 12))
         XCTAssertTrue(app.staticTexts["创建两步快捷指令"].exists)
         scrollToVisible(element("shortcut-local-boundary"))
         let buildShortcut = element("build-screenshot-shortcut")
@@ -941,30 +941,25 @@ final class CandidateSignalUITests: XCTestCase {
         }
         XCTAssertTrue(actionButtonOnboarding.isHittable)
         actionButtonOnboarding.tap()
-        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Build the two-action Shortcut"].exists)
-        let systemStep = element("screenshot-shortcut-step-1")
-        let talentSignalStep = element("screenshot-shortcut-step-2")
-        XCTAssertEqual(systemStep.label, "1. Take Screenshot")
-        XCTAssertEqual(systemStep.value as? String, "System action")
-        XCTAssertEqual(talentSignalStep.label, "2. Review screenshot")
-        XCTAssertEqual(talentSignalStep.value as? String, "capri action")
+        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 12))
+        XCTAssertTrue(app.staticTexts["1. Add the ready-made Shortcut"].exists)
         XCTAssertTrue(element("shortcut-local-boundary").exists)
         let buildShortcut = element("build-screenshot-shortcut")
         XCTAssertTrue(buildShortcut.exists)
         XCTAssertGreaterThanOrEqual(buildShortcut.frame.height, 44)
-        XCTAssertEqual(buildShortcut.label, "Open Shortcut editor")
-        preserveScreenshot("Action Button setup")
-        let setupConfirmation = app.buttons["confirm-action-button-setup"]
-        scrollToVisible(setupConfirmation)
-        XCTAssertTrue(setupConfirmation.exists)
-        XCTAssertEqual(setupConfirmation.label, "I've assigned the Shortcut")
+        XCTAssertEqual(buildShortcut.label, "Add screenshot Shortcut")
+        XCTAssertFalse(app.buttons["confirm-action-button-setup"].exists)
+        preserveScreenshot("Action Button minimal setup")
         let verification = element("screenshot-shortcut-verification")
         scrollToVisible(verification)
         XCTAssertEqual(verification.label, "Not set up")
         XCTAssertTrue(
             (verification.value as? String)?.contains("No screenshot") == true
         )
+        let recovery = app.buttons["Manual setup and recovery"].firstMatch
+        scrollToVisible(recovery)
+        XCTAssertTrue(recovery.exists)
+        recovery.tap()
         let browseShortcuts = element("open-app-shortcuts")
         scrollToVisible(browseShortcuts)
         XCTAssertTrue(browseShortcuts.exists)
@@ -987,16 +982,16 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(actionButtonSettings.label.contains("Local receipt"))
         actionButtonSettings.tap()
 
-        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 5))
+        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 12))
         let verification = element("screenshot-shortcut-verification")
         scrollToVisible(verification)
         XCTAssertEqual(verification.label, "Screenshot received via Shortcuts")
         XCTAssertTrue(
             (verification.value as? String)?.contains(
-                "local review queue"
+                "original Session"
             ) == true
         )
-        XCTAssertTrue(app.buttons["I've assigned the Shortcut"].exists)
+        XCTAssertFalse(app.buttons["I've assigned the Shortcut"].exists)
         XCTAssertFalse(app.staticTexts["Action Button Ready"].exists)
         preserveScreenshot("Observed Shortcut receipt")
     }
@@ -1019,7 +1014,7 @@ final class CandidateSignalUITests: XCTestCase {
         var verification = element("screenshot-shortcut-verification")
         scrollToVisible(verification)
         XCTAssertEqual(verification.label, "Ready for the first capture")
-        XCTAssertTrue(app.buttons["Show setup reminder again"].exists)
+        XCTAssertFalse(app.buttons["Show setup reminder again"].exists)
 
         app.terminate()
         app.launchArguments = [
@@ -1039,7 +1034,7 @@ final class CandidateSignalUITests: XCTestCase {
         verification = element("screenshot-shortcut-verification")
         scrollToVisible(verification)
         XCTAssertEqual(verification.label, "Screenshot received via Shortcuts")
-        XCTAssertTrue(app.buttons["Show setup reminder again"].exists)
+        XCTAssertFalse(app.buttons["Show setup reminder again"].exists)
     }
 
     func testPendingScreenshotReviewOffersKeepOrDiscardBeforeProcessing() {

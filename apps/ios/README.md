@@ -21,20 +21,42 @@ success before the UI can say `Recording now`. Completed audio stays protected
 on-device with a checksum and deletion path; this slice has no upload,
 transcription, Proposal, confirmed-state, or external-write authority.
 
-Intentional screenshot import still provides on-device text review, temporal
-identity comparison, explicit relationship attachment, and a compiled-Wiki
-receipt. Photos selection and the `Review screenshot` Shortcuts action enter
-the same resumable review. For one-press capture, the user creates a personal
-Shortcut with `Take Screenshot` followed by `Review screenshot`, then assigns
-that personal Shortcut to the Action Button in system Settings. Talent Signal
-cannot capture another app's screen or inspect or change that assignment. The
-app action runs quietly in the background: it atomically adds the received
-image to the local FIFO review queue only after content decoding plus byte and
-pixel bounds succeed, then returns without network work, an app launch, or a
-Live Activity. An exact retry reuses the still-pending queue item,
-while a later import after completion starts a new purpose-scoped review. The
-original image stays on-device in this slice; the local backend receives
-recruiter-reviewed text and governed source metadata.
+Action Button setup offers a signed, generic two-action Shortcut: system
+`Take Screenshot` followed by capri `Process screenshot`. Native file import
+replaces manual action editing; system assignment remains user-owned. Enabling
+the Shortcut discloses that each intentional capture sends the selected image
+to the currently signed-in workspace for Agent processing. This authorization
+is bound to the endpoint, account and user, rather than a global upload toggle.
+
+The background Intent protects the capture, Session, message and operation
+identities before network admission. One frozen `POST /v1/capture-admissions/:id` creates or reconciles the
+governed Session and admits its image through the existing conversation queue.
+The file can include an already available Activity token; it never waits for one.
+A bounded immediate attempt and file-backed OS replay recover unavailable connections without
+changing those identities. The server worker continues independently of app
+visibility. A user-initiated Live Activity projects sending and canonical
+processing state; authenticated APNs registration allows updates after the app
+is suspended. Late tokens use their own immutable generation file and background
+OS registration request, with bounded retries and receipt fencing. Normal
+capture authorization still requires the WhenUnlocked Keychain and full logout
+journal. A versioned, endpoint-scoped deny mirror contains only credential
+fingerprints; its monotonic durable write precedes every Keychain logout-journal
+write. Only a previously authorized capture may use its exact frozen OS
+credential while locked, after checking that mirror, consent, endpoint and local
+Session deletion state. Missing, corrupt, unsupported or busy mirror state fails
+closed. A separate scope deletion epoch and hashed Session denies are written
+before local deletion; locked continuation checks only this minimal metadata,
+without opening the private Session history. Stale reset completion cannot clear
+a newer deletion epoch. This does not authorize a new screenshot while credentials
+are locked.
+Opening it restores the same protected Session, including a cold
+launch. Activity permission or push failure never blocks queue execution.
+Facts, identity decisions and external actions still require their own review.
+
+Photos selection and the legacy explicit screenshot-review surface retain their
+existing resumable text/identity-review behavior. Simulator tests, a signed
+Shortcut, and a published TestFlight build are separate from real Action Button
+and APNs acceptance on a physical phone.
 
 The app also retains the synthetic candidate-momentum fixture loop for bounded
 review and action testing. The eight-case evaluation corpus itself is not

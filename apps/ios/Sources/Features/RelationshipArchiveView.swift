@@ -387,6 +387,8 @@ struct RelationshipArchiveView: View {
                 return
             }
             Task {
+                await BackgroundCaptureDelivery.shared.restoreLocalSessions(into: sessionStore, scope: runtimeScope)
+                await BackgroundCaptureDelivery.shared.resume()
                 sessionStore.pruneExpired()
                 reloadRelationshipCalendarActivities()
                 await revalidateSessionEvidence()
@@ -466,19 +468,21 @@ struct RelationshipArchiveView: View {
         }
         .onReceive(askDeepLinkRouter.$link) { link in
             guard let link,
-                  link.identity.workspaceID == workspaceStore.snapshot?.workspaceID,
                   let sessionID = UUID(uuidString: link.identity.sessionID) else { return }
-            clearTransientRetrievalIntent()
-            selectedPage = .sessions
-            askPresentation = .init(
-                sessionID: sessionID,
-                seed: nil,
-                preferredPersonID: nil,
-                preferredPersonLabel: nil,
-                entryMode: .text
-            )
-            askDeepLinkRouter.consume(link.identity)
             Task {
+                // A cold-launch Activity link can arrive before the workspace
+                // and server-created Session have restored. Resolve that same
+                // identity before opening; never create a replacement Session.
+                await workspaceStore.load()
+                guard readScopeIsCurrent(), link.identity.workspaceID == (legacyAccountID ?? workspaceStore.snapshot?.workspaceID) else { return }
+                await BackgroundCaptureDelivery.shared.restoreLocalSessions(into: sessionStore, scope: runtimeScope)
+                _ = await synchronizeAgentSessions(sessionID)
+                guard readScopeIsCurrent(), sessionStore.session(id: sessionID) != nil else { return }
+                clearTransientRetrievalIntent()
+                selectedPage = .sessions
+                askPresentation = .init(sessionID: sessionID, seed: nil, preferredPersonID: nil,
+                    preferredPersonLabel: nil, entryMode: .text)
+                askDeepLinkRouter.consume(link.identity)
                 await AgentAskActivityController.shared.endActivities(
                     sessionID: link.identity.sessionID
                 )
@@ -494,6 +498,8 @@ struct RelationshipArchiveView: View {
             }
         }
         .task {
+            await BackgroundCaptureDelivery.shared.restoreLocalSessions(into: sessionStore, scope: runtimeScope)
+            await BackgroundCaptureDelivery.shared.resume()
             await workspaceStore.load()
             reloadRelationshipCalendarActivities()
             await revalidateSessionEvidence()

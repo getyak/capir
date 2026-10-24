@@ -106,6 +106,7 @@
     "099_person_source_sync",
     "100_screenshot_usage_diagnostics",
     "101_capture_image_observation",
-    "102_user_language_preferences"
+    "102_user_language_preferences",
+    "103_capture_activity"
   ]
 }
