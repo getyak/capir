@@ -294,6 +294,14 @@ A provider probe is only the activation gate; protected login/workspace and nati
 recovery still require their own acceptance. The existing45-probe, ownership,
 clean-receipt and rollback gates remain mandatory.
 
+Run restart recovery with an authenticated conversation subscription still open.
+Record the replacement launchd PID, same committed release, authentication
+readiness and unchanged Session turns before any manual client refresh. The
+read-only Web subscription follows the process termination signal so Next can
+drain; closing that transport does not cancel an Agent task or settle a write
+outcome. If a client refresh is needed to let the old process exit, retain that
+attempt as a recovery failure and investigate the open-stream lifecycle.
+
 The Mac must be awake and the owning user logged in; clients must
 join the authorized tailnet. Physical Wi-Fi/LAN address changes do not change
 `AUTH_URL`. Never automatically replace it with a `192.168.x.x` address.
