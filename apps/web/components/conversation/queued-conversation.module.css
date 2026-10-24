@@ -273,3 +273,15 @@
 @media(hover:hover) and (pointer:fine) {
   .answerBlockGroup:has([data-message-actions]) { min-height:44px; padding-inline-end:52px; }
 }
+
+/* Symmetric side tracks keep the title on the content area's center axis.
+   Empty and active states reserve the same space; disclosure is portalled. */
+.header { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,50%) minmax(0,1fr); column-gap:8px; padding-inline:60px; box-sizing:border-box; }
+.headingText { grid-column:2; grid-row:1; min-width:0; width:100%; max-width:none; text-align:center; }
+.taskSlot { grid-column:3; grid-row:1; min-width:0; min-height:44px; width:100%; max-width:220px; justify-self:end; }
+.header .personContext { grid-column:1; grid-row:1; justify-self:start; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.canvas { container-type:inline-size; }
+@container (max-width:440px) {
+  .header { padding-inline:52px; column-gap:4px; }
+  .header .personContext { padding-inline:4px; }
+}

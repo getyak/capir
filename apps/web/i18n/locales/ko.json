@@ -1969,5 +1969,20 @@
   "composer.document.fileTooLarge": "{name} 파일이 {limit} 제한을 초과하여 처리하지 않았습니다. 문서를 나눈 후 다시 시도하세요.",
   "composer.document.textTooLarge": "텍스트 파일이 {limit} 제한을 초과하여 처리하지 않았습니다.",
   "没有收到文件。": "수신한 파일이 없습니다.",
-  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "지원하지 않는 파일 형식입니다. PNG, JPEG, WebP 이미지 또는 PDF, DOCX, TXT, MD, CSV, JSON, 코드 텍스트 문서를 추가할 수 있습니다."
+  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "지원하지 않는 파일 형식입니다. PNG, JPEG, WebP 이미지 또는 PDF, DOCX, TXT, MD, CSV, JSON, 코드 텍스트 문서를 추가할 수 있습니다.",
+  "conversation.task.details": "작업 세부 정보: {status}",
+  "conversation.task.record": "관찰된 작업",
+  "conversation.task.elapsed": "기록된 시간",
+  "conversation.task.boundary": "답변, 확인 대기 중인 결정 및 외부 작업 결과는 대화의 카드에서 확인하세요.",
+  "conversation.task.running": "처리 중",
+  "conversation.task.unknown": "전달 미확인",
+  "conversation.task.sending": "전송 중",
+  "conversation.task.waiting": "상태 대기 중",
+  "conversation.task.queued": "대기열에 있음",
+  "conversation.task.paused": "일시 중지됨",
+  "conversation.task.stopping": "중지 중",
+  "conversation.task.stopped": "중지됨",
+  "conversation.task.readback": "답변 읽는 중",
+  "conversation.task.reconnecting": "다시 연결 중",
+  "conversation.task.failed": "완료되지 않음"
 }

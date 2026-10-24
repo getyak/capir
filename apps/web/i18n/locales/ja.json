@@ -1969,5 +1969,20 @@
   "composer.document.fileTooLarge": "{name}は{limit}の上限を超えたため処理していません。文書を分割して再試行してください。",
   "composer.document.textTooLarge": "テキストファイルが{limit}の上限を超えたため処理していません。",
   "没有收到文件。": "ファイルを受信していません。",
-  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "この形式には対応していません。PNG・JPEG・WebP画像、またはPDF・DOCX・TXT・MD・CSV・JSON・コードのテキスト文書を追加できます。"
+  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "この形式には対応していません。PNG・JPEG・WebP画像、またはPDF・DOCX・TXT・MD・CSV・JSON・コードのテキスト文書を追加できます。",
+  "conversation.task.details": "タスクの詳細：{status}",
+  "conversation.task.record": "確認されたタスク",
+  "conversation.task.elapsed": "記録された時間",
+  "conversation.task.boundary": "返信、確認待ちの判断、外部操作の結果は会話内のカードで確認してください。",
+  "conversation.task.running": "処理中",
+  "conversation.task.unknown": "配信未確認",
+  "conversation.task.sending": "送信中",
+  "conversation.task.waiting": "状態を待機中",
+  "conversation.task.queued": "待機中",
+  "conversation.task.paused": "一時停止中",
+  "conversation.task.stopping": "停止処理中",
+  "conversation.task.stopped": "停止済み",
+  "conversation.task.readback": "返信を読み込み中",
+  "conversation.task.reconnecting": "再接続中",
+  "conversation.task.failed": "未完了"
 }

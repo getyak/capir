@@ -38,11 +38,14 @@ has each defect.
 
 1. Complete: fresh baseline, source owners, matrix and task-scoped resource
    authorization established.
-2. **Active:** implement unified native titlebar, stable sidebar/menu states, transcript
-   hierarchy and locale completeness; verify this slice before the capsule.
-3. Add the bounded task capsule using existing queue and persisted readback
-   state; preserve stop, pending-decision and unknown-result semantics.
-4. Independent review; repair confirmed P0/P1; run focused checks and all
+2. Complete at the source gate: unified native titlebar, stable sidebar/menu
+   states, transcript hierarchy and locale completeness; independent spec and
+   quality review approved `8db3332e` with no confirmed findings.
+3. Implemented: bounded task capsule using existing queue and persisted
+   readback state, without remounting the composer. Final affected checks passed
+   82 tests; review is pending. Existing decision cards and Latest result own
+   review and unread-result semantics; no duplicate Reply ready claim is added.
+4. **Active:** independent review; repair confirmed P0/P1; run focused checks and all
    applicable repository/CI gates on the final PR head.
 5. Merge, deploy affected resident services from clean committed source,
    install the verified native build, inspect real behavior, and close owned
@@ -111,11 +114,16 @@ task-owned APFS clones of dependencies/prebuilt shared packages avoid redundant
 installation. The user approved serial task execution while retaining the global
 pause marker. MiMo Pro failed authentication on its first request without code
 changes; one Codex implementer completed the Web slice without a provider retry.
-The native titlebar slice passed 48 focused tests; an additional production
-SwiftUI-host geometry test is running. Web stage one passed 229 focused tests
+The native titlebar slice passed 49 focused tests, including production
+SwiftUI-host geometry. Web stage one passed 229 focused tests
 and a later 75-test document/locale supplement (overlapping, not additive).
-Independent review, the task capsule, current-head CI, deployment and installed
-acceptance are still required.
+Stage-one independent review approved the source gate. The capsule's final
+affected group passed 82 tests after its priority and centered-header fixes;
+an earlier interrupted timeout round remains recorded, with no definite cause
+claimed. Capsule and whole-branch review, current-head CI, deployment and
+installed acceptance are still required. A concurrent resource spike reduced
+free space below 30 GiB; no production build may start until the storage gate
+recovers. Other tasks and their Simulator are preserved.
 
 Durable partial evidence and a resumable patch:
 `/Users/cubxxw/ops/reports/macos-craft-unified-20261024/`.

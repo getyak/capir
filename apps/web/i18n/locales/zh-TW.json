@@ -1969,5 +1969,20 @@
   "composer.document.fileTooLarge": "{name} 超過 {limit} 上限，未進行處理。請拆分文件後重試。",
   "composer.document.textTooLarge": "文字檔超過 {limit} 上限，未進行處理。",
   "没有收到文件。": "未收到檔案。",
-  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "暫不支援此檔案類型。可加入 PNG、JPEG 或 WebP 圖片，或 PDF、DOCX、TXT、MD、CSV、JSON 與程式碼文字文件。"
+  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "暫不支援此檔案類型。可加入 PNG、JPEG 或 WebP 圖片，或 PDF、DOCX、TXT、MD、CSV、JSON 與程式碼文字文件。",
+  "conversation.task.details": "任務詳情：{status}",
+  "conversation.task.record": "已觀察到的任務",
+  "conversation.task.elapsed": "記錄用時",
+  "conversation.task.boundary": "回覆、待確認決策和外部操作的結果以對話內卡片為準。",
+  "conversation.task.running": "正在處理",
+  "conversation.task.unknown": "送達未確認",
+  "conversation.task.sending": "正在送達",
+  "conversation.task.waiting": "等待狀態",
+  "conversation.task.queued": "已排隊",
+  "conversation.task.paused": "已暫停",
+  "conversation.task.stopping": "正在停止",
+  "conversation.task.stopped": "已停止",
+  "conversation.task.readback": "正在讀取回覆",
+  "conversation.task.reconnecting": "連線恢復中",
+  "conversation.task.failed": "未完成"
 }

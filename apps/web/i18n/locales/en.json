@@ -1969,5 +1969,20 @@
   "composer.document.fileTooLarge": "{name} exceeds the {limit} limit and was not processed. Split the document and try again.",
   "composer.document.textTooLarge": "The text file exceeds the {limit} limit and was not processed.",
   "没有收到文件。": "No files received.",
-  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "This file type is not supported. Add PNG, JPEG or WebP images, or PDF, DOCX, TXT, MD, CSV, JSON or code text documents."
+  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "This file type is not supported. Add PNG, JPEG or WebP images, or PDF, DOCX, TXT, MD, CSV, JSON or code text documents.",
+  "conversation.task.details": "Task details: {status}",
+  "conversation.task.record": "Observed task",
+  "conversation.task.elapsed": "Observed time",
+  "conversation.task.boundary": "Replies, decisions and external actions are verified in their conversation cards.",
+  "conversation.task.running": "Working",
+  "conversation.task.unknown": "Delivery unconfirmed",
+  "conversation.task.sending": "Sending",
+  "conversation.task.waiting": "Waiting for status",
+  "conversation.task.queued": "Queued",
+  "conversation.task.paused": "Paused",
+  "conversation.task.stopping": "Stopping",
+  "conversation.task.stopped": "Stopped",
+  "conversation.task.readback": "Reading reply",
+  "conversation.task.reconnecting": "Reconnecting",
+  "conversation.task.failed": "Not completed"
 }

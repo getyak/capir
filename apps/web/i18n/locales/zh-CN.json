@@ -409,5 +409,20 @@
   "composer.document.fileTooLarge": "{name} 超过 {limit} 上限，未做任何处理。可先拆分文档后重试。",
   "composer.document.textTooLarge": "文本文件超过 {limit} 上限，未做任何处理。",
   "没有收到文件。": "没有收到文件。",
-  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。"
+  "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。": "暂不支持这类文件。可以添加PNG、JPEG 或 WebP 图片，或 PDF、DOCX、TXT、MD、CSV、JSON 与代码文本文档。",
+  "conversation.task.details": "任务详情：{status}",
+  "conversation.task.record": "已观察到的任务",
+  "conversation.task.elapsed": "记录用时",
+  "conversation.task.boundary": "回复、待确认决策和外部操作的结果以对话内卡片为准。",
+  "conversation.task.running": "正在处理",
+  "conversation.task.unknown": "送达未确认",
+  "conversation.task.sending": "正在送达",
+  "conversation.task.waiting": "等待状态",
+  "conversation.task.queued": "已排队",
+  "conversation.task.paused": "已暂停",
+  "conversation.task.stopping": "正在停止",
+  "conversation.task.stopped": "已停止",
+  "conversation.task.readback": "正在读取回复",
+  "conversation.task.reconnecting": "连接恢复中",
+  "conversation.task.failed": "未完成"
 }
