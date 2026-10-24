@@ -2351,7 +2351,15 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
 
         typeTextReliably("x", into: composer)
-        app.keys["delete"].tap()
+        composer.typeText(XCUIKeyboardKey.delete.rawValue)
+        let emptyComposer = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                guard let value = composer.value as? String else { return false }
+                return value.isEmpty || value == composer.placeholderValue
+            },
+            object: composer
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [emptyComposer], timeout: 2), .completed)
         XCTAssertTrue(app.buttons["ask-voice"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["ask-send"].exists)
         preserveScreenshot("New Session focused empty and voice ready")
