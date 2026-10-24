@@ -43,6 +43,8 @@ vi.mock("@/components/talent-signal-lab/lab-shell", () => ({
 }));
 
 import WorkspaceLayout from "@/app/workspace/layout";
+import WorkspaceLoading from "@/app/workspace/loading";
+import { LocaleProvider } from "@/components/locale-provider";
 
 describe("workspace critical loading path", () => {
   afterEach(() => vi.resetAllMocks());
@@ -70,13 +72,23 @@ describe("workspace critical loading path", () => {
 });
 
 describe("workspace loading surface", () => {
+  it.each([
+    ["en", "Opening this workspace", "You can still use the sidebar"],
+    ["zh-CN", "正在打开当前工作台", "你仍可使用侧栏切换页面"],
+    ["zh-TW", "正在開啟目前的工作區", "仍可使用側欄切換頁面"],
+    ["ja", "ワークスペースを開いています", "サイドバーで別のページに移動できます"],
+    ["ko", "워크스페이스를 여는 중", "사이드바에서 다른 페이지로 이동할 수 있습니다"],
+  ] as const)("uses the active %s locale while a destination is loading", (locale, status, hint) => {
+    const html = renderToStaticMarkup(<LocaleProvider locale={locale}><WorkspaceLoading /></LocaleProvider>);
+    expect(html).toContain(status);
+    expect(html).toContain(hint);
+    if (locale === "en") expect(html).not.toContain("正在");
+  });
   it("keeps the route loading boundary quiet and route-neutral", () => {
     const source = readFileSync(
       new URL("../app/workspace/loading.tsx", import.meta.url),
       "utf8",
     );
-    expect(source).toContain("正在打开当前工作台");
-    expect(source).toContain("你仍可使用侧栏切换页面");
     // The status stays in the accessibility tree; it must not be a repeat hero.
     expect(source).not.toMatch(/<h1/);
     expect(source).toContain('role="status"');

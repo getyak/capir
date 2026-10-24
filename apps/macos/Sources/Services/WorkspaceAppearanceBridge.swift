@@ -8,9 +8,9 @@ enum WorkspaceAppearance: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .system: "跟随系统"
-        case .light: "浅色"
-        case .dark: "深色"
+        case .system: String(localized: "System", bundle: .main)
+        case .light: String(localized: "Light", bundle: .main)
+        case .dark: String(localized: "Dark", bundle: .main)
         }
     }
 

@@ -127,8 +127,7 @@ describe("persistent workspace shell", () => {
   it("uses a route-neutral local loading state inside the persistent shell", () => {
     const loading = read("app/workspace/loading.tsx");
 
-    expect(loading).toContain("正在打开当前工作台");
-    expect(loading).toContain("你仍可使用侧栏切换页面");
+    expect(loading).toContain('role="status"');
     expect(loading).not.toContain("正在打开依据审阅");
     expect(loading).not.toContain("review-loading__rail");
   });

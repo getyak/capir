@@ -177,3 +177,54 @@ was a pre-repair baseline, not a claim about the repaired graph.
 Fresh current-PR-head CI, merge, clean-source resident Web/Backend/Agent Host
 releases, signed native installation and actual25-point acceptance remain open.
 The global pause remains intact under the user's task-scoped serial exception.
+
+## Installed acceptance follow-up
+
+PR416 merged at7fa3ee31 with exact-merge CI/Security/macOS checks green. Signed
+macOS0.2.27(185) was installed through the actual Sparkle offer; codesign,
+stapler, Gatekeeper and all137 published bundle entries match. Web and all five
+affected API/Agent Host roles now use the approved source/image. Existing model
+providers, volumes and network boundaries were retained. Canonical primary
+provider/voice/observation/auth probes passed; Infisical image/revision pair and
+backend/current agree, keeper registration restored. Web KeepAlive recovery
+passed after one owned-wrapper SIGTERM. Private legacy backup and normal099–102
+migrations passed, with every migration checksum matching source.
+
+Actual native acceptance exposed row-menu text bleeding through the62% native
+material override after portaling above live rows. The follow-up keeps this
+specific reading panel opaque; source/CI cannot stand in for deployed visual
+readback. Navigation also exposed Chinese loading announcements in an English
+workspace; the same active-locale provider now owns both loading strings across
+all five catalogs. Four non-Chinese rendering regressions were reproduced before
+the change. Native custom macOS command menus retain their preexisting device
+language behavior; this follow-up changes Web-owned workspace strings only.
+
+All25 acceptance rows remain open until the final deployed Web follow-up and
+real signed-native/owned synthetic workflows have been adjudicated. Permanent
+proof: /Users/cubxxw/ops/reports/macos-craft-unified-20261024/.
+
+The installed long-reply path also exposed Chinese fold/provenance/Markdown
+accessibility labels in an English workspace. They now use the same five
+catalogs while preserving answer text, governed source names and image alt
+text. Four non-Chinese fold-control failures were reproduced before the fix.
+The sidebar's initial first-message title was observed to settle to the exact
+canonical generated title on the shared directory refresh; no automatic rename
+or new title authority was introduced.
+
+Further installed acceptance exposed a confirmed-withdrawal gap: after a failed
+task and its supplements were removed server-side, accepted local outbox rows
+remained and projected a permanent waiting state. The fix binds cleanup to the
+exact Withdraw receipt, Session and frozen CAS snapshot; mere absence, failed
+transport and mismatched/stale receipts never authorize local deletion. Confirmed
+removed message identities retire only their scoped outbox/image/handoff data;
+other queued intentions, other accounts and new drafts remain. A visible group
+note explains that withdrawing a task also removes its pending supplements.
+Tests cover group withdrawal/reload, ambiguous and wrong receipts, other scope/
+queued identities and old receipt ABA. The raw UI failure and metadata-only
+owned test database readback are retained; no private conversation data was read.
+
+Native custom menus were also confirmed to mix hardcoded Chinese with English
+macOS controls on an en-SG device. Nineteen owned command/appearance keys now
+use five compiled bundle localizations. Three focused XCTest cases passed against
+the built app; signed publication/install and actual menu readback remain open.
+No dynamic account-locale authority or wholesale native Settings rewrite was added.

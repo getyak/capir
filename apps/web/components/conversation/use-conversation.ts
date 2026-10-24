@@ -116,7 +116,8 @@ export function useConversation(options: Options) {
     controller !== null && lifecycle.current === controller && !controller.signal.aborted, []);
 
   const storeMessages = useCallback((next: LocalMessage[]) => { local.current = next; setMessages(next); setTaskMessageOwner(taskOwner); }, [taskOwner]);
-  // Canonical history is the only handoff that retires a local outbox row.
+  // Canonical history retires a local outbox row. An exact confirmed Withdraw
+  // receipt also retires its pending intention, including removed supplements.
   // Until its turn exists — carrying the same ordered image manifests — the
   // exact message identity and its local attachment bytes are the durable
   // evidence of what was sent. A server active/queued row only represents the
@@ -602,15 +603,17 @@ export function useConversation(options: Options) {
   }
   async function mutate(input: Omit<ConversationQueueMutationRequest, "expected_revision" | "idempotency_key"> & { objective?: string; queue_entry_id?: string; run_id?: string }) {
     const controller = lifecycle.current;
-    if (!controller || !stillCurrent(controller) || mutationBusy.current || !snapshotRef.current) return false;
+    if (!controller || !stillCurrent(controller) || mutationBusy.current || !snapshotRef.current ||
+        taskSnapshotOwnerRef.current !== taskOwner || snapshotRef.current.session_id !== id) return false;
     const lock = { controller };
+    const before = snapshotRef.current;
     mutationBusy.current = lock; setMutating(true); setError("");
     const owned = () => stillCurrent(controller) && mutationBusy.current === lock;
     try {
       const operation = crypto.randomUUID();
       let response: Response;
       try {
-        response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: snapshotRef.current.revision, idempotency_key: operation }) });
+        response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: before.revision, idempotency_key: operation }) });
         if (!owned()) return false;
       }
       catch (caught) {
@@ -629,6 +632,30 @@ export function useConversation(options: Options) {
       }
       const body = await response.json();
       if (!owned()) return false;
+      if (input.kind === "withdraw") {
+        const target = before.queued.find(entry => entry.queue_entry_id === input.queue_entry_id);
+        // Queue absence alone never erases evidence. Bind the explicit receipt
+        // to this operation, Session and CAS snapshot before retiring anything.
+        if (!target || body.applied?.kind !== "withdraw" || body.applied.queue_entry_id !== input.queue_entry_id ||
+            body.applied.status !== null || body.snapshot?.session_id !== id || body.snapshot.revision <= before.revision) {
+          throw new Error("WITHDRAW_RECEIPT_UNCONFIRMED");
+        }
+        const retained = new Set([body.snapshot.active, ...body.snapshot.queued].filter(Boolean).map((entry: ConversationQueueEntry) => entry.message_id));
+        const withdrawn = new Set(before.queued.filter(entry => !retained.has(entry.message_id)).map(entry => entry.message_id));
+        if (!withdrawn.has(target.message_id)) throw new Error("WITHDRAW_RECEIPT_UNCONFIRMED");
+        commitSnapshot(body.snapshot);
+        for (const messageId of withdrawn) {
+          removeConversationMessage(scope, id!, messageId);
+          void removeConversationImages(scope, id!, messageId);
+        }
+        storeMessages(local.current.filter(message => !withdrawn.has(message.id)));
+        setHandoffEntries(current => Object.fromEntries(Object.entries(current).filter(([key]) => !withdrawn.has(key))));
+        setHandoffPreviews(current => Object.fromEntries(Object.entries(current).filter(([key]) => !withdrawn.has(key))));
+        setRunOutcome(current => Object.fromEntries(Object.entries(current).filter(([key]) => !withdrawn.has(key))));
+        setTaskHandoffOwners(current => Object.fromEntries(Object.entries(current).filter(([key]) => !withdrawn.has(key))));
+        setReadbackStalled(current => current.filter(key => !withdrawn.has(key)));
+        return true;
+      }
       commitSnapshot(body.snapshot); return true;
     } catch (caught) {
       if (!owned()) return false;

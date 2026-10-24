@@ -1999,5 +1999,16 @@
   "连接暂时中断，请重试。": "The connection was interrupted. Please retry.",
   "暂时无法连接回复。": "The reply connection is temporarily unavailable.",
   "没有可读取的回复连接。": "No readable reply stream is available.",
-  "这段对话已不可用，请重新打开。": "This conversation is unavailable. Reopen it to check."
+  "这段对话已不可用，请重新打开。": "This conversation is unavailable. Reopen it to check.",
+  "workspace.loading.status": "Opening this workspace",
+  "workspace.loading.hint": "Reading content. You can still use the sidebar to switch pages.",
+  "response.sources": "Sources",
+  "response.body": "Answer text",
+  "response.preview": "Reading preview",
+  "response.expand": "Read full answer",
+  "response.collapse": "Collapse",
+  "response.image": "[Image]",
+  "response.imageWithAlt": "[Image: {alt}]",
+  "response.table": "Table (scroll horizontally)",
+  "conversation.queue.withdrawGroupHint": "Removing a task message also removes its pending supplements."
 }

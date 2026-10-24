@@ -243,8 +243,8 @@ struct DesktopPetCommands: Commands {
     @Environment(\.openSettings) private var openSettings
 
     var body: some Commands {
-        CommandMenu("桌面伙伴") {
-            Button("桌面伙伴设置…") {
+        CommandMenu("Companion") {
+            Button("Companion Settings…") {
                 WorkspaceSettingsNavigation.shared.selection = .companion
                 openSettings()
             }

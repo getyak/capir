@@ -1,3 +1,6 @@
+"use client";
+
+import { useT } from "@/components/locale-provider";
 import styles from "./workspace-loading.module.css";
 
 /**
@@ -10,13 +13,14 @@ import styles from "./workspace-loading.module.css";
  * screen on every navigation.
  */
 export default function WorkspaceLoading() {
+  const t = useT();
   return (
     <main id="main-content" className={styles.loading} tabIndex={-1}>
       <p className={styles.status} role="status" aria-live="polite">
-        正在打开当前工作台
+        {t("workspace.loading.status")}
       </p>
       <p className={styles.assistive}>
-        正在读取内容，你仍可使用侧栏切换页面。
+        {t("workspace.loading.hint")}
       </p>
       <div aria-hidden="true" className={styles.skeleton}>
         <i className={styles.skeletonTitle} />

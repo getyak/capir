@@ -3,7 +3,8 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ConversationResponse } from "./conversation-response";
+import { ConversationProvenance, ConversationResponse } from "./conversation-response";
+import { LocaleProvider } from "./locale-provider";
 
 const LONG_ANSWER = [
   "## 试点合作进展",
@@ -70,6 +71,35 @@ function wheel(target: EventTarget, init: { deltaY: number; ctrlKey?: boolean })
 }
 
 describe("long-answer pinch fold", () => {
+  it("localizes reading chrome while preserving source names, alt text and table content", () => {
+    mount(<LocaleProvider locale="en"><ConversationProvenance sources={[{ display_name: "原始依据名称" }]} /><ConversationResponse>{"![原图说明](https://example.test/image.png)\n\n| 项目 | 内容 |\n| --- | --- |\n| 原文 | 保留文字 |"}</ConversationResponse></LocaleProvider>);
+    expect(host!.textContent).toContain("Sources · 原始依据名称");
+    expect(host!.textContent).toContain("[Image: 原图说明]");
+    expect(host!.querySelector('div[role="region"]')?.getAttribute("aria-label")).toBe("Table (scroll horizontally)");
+    expect(host!.textContent).toContain("保留文字");
+    expect(host!.querySelector("img")).toBeNull();
+  });
+  it.each([
+    ["en", "Answer text", "Collapse", "Reading preview", "Read full answer"],
+    ["zh-CN", "回答正文", "收起", "阅读预览", "展开全文"],
+    ["zh-TW", "回答正文", "收合", "閱讀預覽", "展開全文"],
+    ["ja", "回答本文", "折りたたむ", "プレビュー", "全文を表示"],
+    ["ko", "답변 본문", "접기", "읽기 미리보기", "전체 답변 보기"],
+  ] as const)("localizes %s fold controls without translating the answer", (locale, label, collapse, preview, expand) => {
+    mount(<LocaleProvider locale={locale}><ConversationResponse foldable>{LONG_ANSWER}</ConversationResponse></LocaleProvider>);
+    const fold = surface();
+    expect(fold.getAttribute("aria-label")).toBe(label);
+    const toggle = fold.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    expect(toggle.textContent).toBe(collapse);
+    expect(fold.textContent).toContain("陈宇负责设计协作。");
+    act(() => toggle.click());
+    expect(toggle.textContent).toBe(expand);
+    expect(fold.textContent).toContain(preview);
+    expect(fold.textContent).toContain("陈宇负责设计协作。");
+    act(() => toggle.click());
+    expect(toggle.textContent).toBe(collapse);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
   it("keeps long code-only responses visible without an empty fold", () => {
     mount(createElement(ConversationResponse, { foldable: true }, "```text\n" + "code\n\n".repeat(80) + "```"));
     expect(host!.querySelector("[data-folded]")).toBeNull();

@@ -439,5 +439,16 @@
   "连接暂时中断，请重试。": "连接暂时中断，请重试。",
   "暂时无法连接回复。": "暂时无法连接回复。",
   "没有可读取的回复连接。": "没有可读取的回复连接。",
-  "这段对话已不可用，请重新打开。": "这段对话已不可用，请重新打开。"
+  "这段对话已不可用，请重新打开。": "这段对话已不可用，请重新打开。",
+  "workspace.loading.status": "正在打开当前工作台",
+  "workspace.loading.hint": "正在读取内容，你仍可使用侧栏切换页面。",
+  "response.sources": "依据",
+  "response.body": "回答正文",
+  "response.preview": "阅读预览",
+  "response.expand": "展开全文",
+  "response.collapse": "收起",
+  "response.image": "[图片]",
+  "response.imageWithAlt": "[图片：{alt}]",
+  "response.table": "表格（可横向滚动）",
+  "conversation.queue.withdrawGroupHint": "移除任务消息时，也会移除仍待处理的补充。"
 }

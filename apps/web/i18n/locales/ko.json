@@ -1999,5 +1999,16 @@
   "连接暂时中断，请重试。": "연결이 일시적으로 끊어졌습니다. 다시 시도하세요.",
   "暂时无法连接回复。": "일시적으로 답변에 연결할 수 없습니다.",
   "没有可读取的回复连接。": "읽을 수 있는 답변 스트림이 없습니다.",
-  "这段对话已不可用，请重新打开。": "이 대화를 사용할 수 없습니다. 다시 열어 확인하세요."
+  "这段对话已不可用，请重新打开。": "이 대화를 사용할 수 없습니다. 다시 열어 확인하세요.",
+  "workspace.loading.status": "워크스페이스를 여는 중",
+  "workspace.loading.hint": "콘텐츠를 읽는 중입니다. 사이드바에서 다른 페이지로 이동할 수 있습니다.",
+  "response.sources": "근거",
+  "response.body": "답변 본문",
+  "response.preview": "읽기 미리보기",
+  "response.expand": "전체 답변 보기",
+  "response.collapse": "접기",
+  "response.image": "[이미지]",
+  "response.imageWithAlt": "[이미지: {alt}]",
+  "response.table": "표(가로로 스크롤 가능)",
+  "conversation.queue.withdrawGroupHint": "작업 메시지를 제거하면 대기 중인 보충 내용도 제거됩니다."
 }

@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ConversationQueueEntry, ConversationQueueSnapshot } from "@talent-signal/contracts";
 import { useConversation } from "./use-conversation";
-import { writeConversationMessage } from "@/lib/conversation-local";
+import { readConversationMessages, writeConversationMessage } from "@/lib/conversation-local";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 const fetcher = vi.hoisted(() => vi.fn());
 vi.mock("@/components/workspace-session-request", () => ({ WORKSPACE_SESSION_EXPIRED_EVENT: "expired", workspaceSessionFetch: fetcher }));
@@ -266,4 +266,30 @@ it.each(["same run", "replacement run"])("preserves current-owner Stop CAS and i
     expect(bodies[0].expected_revision).toBe(1);
   }
   expect(state.mutating).toBe(false);
+});
+
+it.each(["binding ABA", "same-ID scope switch"] as const)("does not retire a same-ID outbox after an old withdrawal crosses %s", async change => {
+  unknown(); await render();
+  await act(async () => streams.at(-1)!.emit({ ...emptyQueue(1), paused: true, queued: [{ ...entry, status: "failed" }] }));
+  await flush();
+  const held = heldJson(); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations") ? Promise.resolve(held.response) : base(url, init));
+  const old = await beginMutation({ kind: "withdraw", queue_entry_id: entry.queue_entry_id });
+  await newMutationOwner(change);
+  await act(async () => { held.resolve({ snapshot: emptyQueue(2), applied: { kind: "withdraw", queue_entry_id: entry.queue_entry_id, run_id: null, status: null } }); expect(await old.result).toBe(false); });
+  await flush();
+  expect(readConversationMessages(SCOPE, A).map(message => message.id)).toEqual([MESSAGE]);
+  expect(state.messages.map(message => message.id)).toEqual([MESSAGE]);
+  expect(state.draft).toBe("New mutation owner draft");
+  expect(state.attachments).toHaveLength(1);
+});
+
+it("does not submit a withdrawal using the departed scope's queue revision before a fresh observation", async () => {
+  unknown(); await render();
+  await act(async () => streams.at(-1)!.emit({ ...emptyQueue(1), paused: true, queued: [{ ...entry, status: "failed" }] })); await flush();
+  const other = "e".repeat(64); unknown(other); await render(A, other);
+  expect(state.taskObservation.snapshot).toBeNull();
+  await act(async () => { expect(await state.mutate({ kind: "withdraw", queue_entry_id: entry.queue_entry_id })).toBe(false); });
+  expect(mutationPosts()).toHaveLength(0);
+  expect(readConversationMessages(other, A)).toHaveLength(1);
 });
