@@ -10,6 +10,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { AccountAccessForm } from "@/components/account-access-form";
 import { BrandMark } from "@/components/brand-mark";
+import { siteConfig } from "@/lib/site";
 import { EmailSignInForm } from "@/components/email-sign-in-form";
 import { VerificationConfirmForm } from "@/components/verification-confirm-form";
 import {
@@ -161,7 +162,7 @@ export default async function LoginPage({ searchParams }: {
   return (
     <main id="main-content" className={styles.page} tabIndex={-1}>
       <div className={styles.topbar}>
-        <BrandMark label={t("返回首页")} />
+        <BrandMark label={`${siteConfig.name} · ${t("返回首页")}`} />
         <div className={styles.utilities}>
           <Link href="/">{t("返回首页")}<ArrowUpRight size={14} aria-hidden="true" /></Link>
           <ThemeToggle />
