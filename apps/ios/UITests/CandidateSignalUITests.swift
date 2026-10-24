@@ -2351,6 +2351,9 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
 
         typeTextReliably("x", into: composer)
+        // Each native typing event requires its target field to have keyboard focus.
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         composer.typeText(XCUIKeyboardKey.delete.rawValue)
         let emptyComposer = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
