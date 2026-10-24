@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
 import { captureActivityPayload, captureActivityPhase, decryptActivityToken, encryptActivityToken, readCaptureAPNsConfig } from "./captureActivity.js";
 
 describe("capture Activity privacy and state contract", () => {
@@ -6,6 +7,13 @@ describe("capture Activity privacy and state contract", () => {
     expect(readCaptureAPNsConfig({})).toBeNull();
     expect(() => readCaptureAPNsConfig({ TALENT_SIGNAL_APNS_KEY_ID: "KEY" })).toThrow();
     expect(() => readCaptureAPNsConfig({ TALENT_SIGNAL_APNS_KEY_ID: "ABCDEFGHIJ", TALENT_SIGNAL_APNS_TEAM_ID: "ABCDEFGHIJ", TALENT_SIGNAL_APNS_PRIVATE_KEY: "private", TALENT_SIGNAL_APNS_ENVIRONMENT: "elsewhere" })).toThrow();
+  });
+  it("validates actual key material and refuses a non-P256 private key", () => {
+    const env = { TALENT_SIGNAL_APNS_KEY_ID: "ABCDEFGHIJ", TALENT_SIGNAL_APNS_TEAM_ID: "ABCDEFGHIJ" };
+    const wrong = generateKeyPairSync("ec", { namedCurve: "secp384r1" }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    expect(() => readCaptureAPNsConfig({ ...env, TALENT_SIGNAL_APNS_PRIVATE_KEY: wrong })).toThrow();
+    const valid = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    expect(readCaptureAPNsConfig({ ...env, TALENT_SIGNAL_APNS_PRIVATE_KEY: valid })?.privateKey).toBe(valid);
   });
   it("maps only canonical queue status and never guesses completion", () => {
     expect(captureActivityPhase("queued", false)).toBe("queued");

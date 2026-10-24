@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createPrivateKey, randomBytes } from "node:crypto";
 import { connect, type ClientHttp2Session } from "node:http2";
 import { importPKCS8, SignJWT } from "jose";
 
@@ -15,12 +15,19 @@ export function readCaptureAPNsConfig(env: Record<string, string | undefined> = 
   const privateKey = (env.TALENT_SIGNAL_APNS_PRIVATE_KEY ?? "").replace(/\\n/g, "\n");
   const environment = env.TALENT_SIGNAL_APNS_ENVIRONMENT ?? "production";
   const bundleID = env.TALENT_SIGNAL_APNS_BUNDLE_ID ?? "com.talentsignal.app";
+  let normalizedPrivateKey: string | undefined;
+  try {
+    const key = createPrivateKey(privateKey);
+    if (key.asymmetricKeyType === "ec" && key.asymmetricKeyDetails?.namedCurve === "prime256v1") {
+      normalizedPrivateKey = key.export({ type: "pkcs8", format: "pem" }).toString();
+    }
+  } catch { /* Key-parser diagnostics may contain sensitive input; discard them. */ }
   if (!/^[A-Z0-9]{10}$/.test(keyID) || !/^[A-Z0-9]{10}$/.test(teamID)
-      || !privateKey.startsWith("-----BEGIN PRIVATE KEY-----")
+      || !normalizedPrivateKey
       || !["production", "sandbox"].includes(environment) || bundleID !== "com.talentsignal.app") {
     throw new Error("Incomplete or invalid capture APNs configuration; no credentials were logged.");
   }
-  return { keyID, teamID, privateKey, environment: environment as CaptureAPNsConfig["environment"], bundleID };
+  return { keyID, teamID, privateKey: normalizedPrivateKey, environment: environment as CaptureAPNsConfig["environment"], bundleID };
 }
 
 export function captureActivityPhase(status: string, paused: boolean): CaptureActivityPhase {
