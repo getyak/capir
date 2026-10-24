@@ -2538,8 +2538,14 @@ final class CandidateSignalUITests: XCTestCase {
         app.buttons["ask-send"].tap()
 
         XCTAssertTrue(
-            app.staticTexts["本机工作区索引"].waitForExistence(timeout: 5)
+            app.staticTexts["当前工作区"].waitForExistence(timeout: 5)
         )
+        XCTAssertFalse(app.staticTexts["本机工作区索引"].exists)
+        let countReply = app.staticTexts.matching(NSPredicate(
+            format: "label MATCHES %@",
+            "当前已同步的工作区中有 [0-9]+ 位联系人，覆盖 [0-9]+ 段关系。.*"
+        )).firstMatch
+        XCTAssertTrue(countReply.waitForExistence(timeout: 5))
         XCTAssertTrue(
             app.staticTexts.matching(
                 NSPredicate(
