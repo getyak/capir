@@ -64,24 +64,7 @@ describe("readiness rate limiting", () => {
 
   it("bounds repeated public database readiness probes", async () => {
     const query = vi.fn().mockResolvedValue({
-      rows: [
-        {
-          version: "065_screenshot_directory_authority",
-        },
-        { version: "058_account_management" },
-        { version: "069_account_access_event_details" },
-        { version: "070_meeting_drafts" },
-        { version: "071_agent_session_list_snapshots" },
-        { version: "072_mcp_extensions" },
-        { version: "073_conversation_queue" },
-        { version: "073_account_onboarding" },
-        { version: "074_time_workspace" },
-        { version: "075_conversation_message_images" },
-        { version: "076_memory_review" },
-        { version: "077_memory_review_corrections" },
-        { version: "078_memory_review_hardening" },
-        { version: "079_memory_source_authority" },
-      ],
+      rows: REQUIRED_SYSTEM_MIGRATIONS.map((version) => ({ version })),
     });
     const app = await buildApp({
       config,
@@ -109,27 +92,20 @@ describe("readiness rate limiting", () => {
     ]);
   }, 10_000);
 
+  it("keeps the image path unavailable until the queue clock migration is applied", async () => {
+    const query = vi.fn().mockResolvedValue({
+      rows: REQUIRED_SYSTEM_MIGRATIONS.filter(version => version !== "103_conversation_queue_session_expiry").map(version => ({ version })),
+    });
+    const app = await buildApp({ config, pool: { query } as unknown as Pool });
+    apps.push(app);
+    expect((await app.inject({ method: "GET", url: "/health/ready" })).statusCode).toBe(503);
+  });
+
   it.each(REQUIRED_SYSTEM_MIGRATIONS)(
     "stays unavailable when required migration %s is missing",
     async missing => {
       const query = vi.fn().mockResolvedValue({
-        rows: [
-          "065_screenshot_directory_authority",
-          "058_account_management",
-          "069_account_access_event_details",
-          "070_meeting_drafts",
-          "071_agent_session_list_snapshots",
-          "072_mcp_extensions",
-          "073_conversation_queue",
-          "073_account_onboarding",
-          "074_time_workspace",
-          "075_conversation_message_images",
-          "076_memory_review",
-          "077_memory_review_corrections",
-          "078_memory_review_hardening",
-          "079_memory_source_authority",
-        ]
-          .filter(version => version !== missing).map(version => ({ version })),
+        rows: REQUIRED_SYSTEM_MIGRATIONS.filter(version => version !== missing).map(version => ({ version })),
       });
       const app = await buildApp({ config, pool: { query } as unknown as Pool });
       apps.push(app);
