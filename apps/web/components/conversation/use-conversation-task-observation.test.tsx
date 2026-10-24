@@ -75,3 +75,84 @@ it("does not attach an old completed outcome to an accepted same-ID local row in
   expect(state.taskObservation.runOutcome).toEqual({});
   expect(state.taskObservation.handoffEntries).toEqual({});
 });
+
+function unknown(scope = SCOPE) {
+  writeConversationMessage(scope, A, { id: MESSAGE, objective: "Retained unknown delivery", createdAt: entry.created_at,
+    delivery: "unknown", receiptUncertain: true, expiresAt: Date.now() + 60_000 });
+}
+function posts() { return fetcher.mock.calls.filter(([, init]) => init?.method === "POST"); }
+function emptyQueue(revision = 1): ConversationQueueSnapshot {
+  return { contract_version: "2026-08-24.10", session_id: A, revision, paused: false, active: null, queued: [], preview: null };
+}
+
+it.each(["binding ABA", "same-ID scope switch"])("does not resend or suppress current observations when old retry check aborts after %s", async change => {
+  unknown(); await render();
+  const composer = host.querySelector("textarea");
+  let reject!: (error: Error) => void;
+  const pending = new Promise<Response>((_, no) => { reject = no; });
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/conversation-queue") && !init?.method ? pending : base(url, init));
+  let retry!: Promise<void>;
+  await act(async () => { retry = state.retryDelivery(state.messages[0]); await Promise.resolve(); });
+  const scope = change === "binding ABA" ? SCOPE : "e".repeat(64);
+  if (change === "binding ABA") { await render(A, SCOPE, "b"); await render(); }
+  else { unknown(scope); await render(A, scope); }
+  await act(async () => state.changeDraft("New lifecycle unfinished draft"));
+  await snapshot(5, null);
+  const owner = state.taskObservation.owner;
+  expect(state.messages[0].delivery).toBe("unknown");
+  await act(async () => { reject(new DOMException("Closed", "AbortError")); await retry; }); await flush();
+  expect(state.messages.map(message => ({ id: message.id, delivery: message.delivery }))).toEqual([{ id: MESSAGE, delivery: "unknown" }]);
+  expect(posts()).toHaveLength(0);
+  expect(state.taskObservation.owner).toBe(owner);
+  expect(state.taskObservation.messages.map(message => message.id)).toEqual([MESSAGE]);
+  expect(state.taskObservation.snapshot?.revision).toBe(5);
+  expect(state.draft).toBe("New lifecycle unfinished draft");
+  expect(host.querySelector("textarea")).toBe(composer);
+});
+
+it("drops an old retry's delayed queue JSON before snapshot commit or current-owner readback", async () => {
+  unknown(); await render(); const composer = host.querySelector("textarea");
+  let resolve!: (value: ConversationQueueSnapshot) => void;
+  const pending = new Promise<ConversationQueueSnapshot>(yes => { resolve = yes; });
+  const response = Response.json({});
+  vi.spyOn(response, "json").mockImplementation(() => pending);
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/conversation-queue") && !init?.method ? Promise.resolve(response) : base(url, init));
+  let retry!: Promise<void>;
+  await act(async () => { retry = state.retryDelivery(state.messages[0]); await Promise.resolve(); await Promise.resolve(); });
+  await render(A, SCOPE, "b"); await render();
+  await act(async () => state.changeDraft("Keep the new draft")); await snapshot(5, null);
+  const beforeReads = fetcher.mock.calls.filter(([url]) => url === `/api/workspace-sessions/${A}`).length;
+  await act(async () => { resolve(emptyQueue(10)); await retry; }); await flush();
+  expect(state.messages[0].delivery).toBe("unknown");
+  expect(posts()).toHaveLength(0);
+  expect(state.taskObservation.snapshot?.revision).toBe(5);
+  expect(state.taskObservation.messages.map(message => message.id)).toEqual([MESSAGE]);
+  expect(fetcher.mock.calls.filter(([url]) => url === `/api/workspace-sessions/${A}`)).toHaveLength(beforeReads);
+  expect(state.draft).toBe("Keep the new draft"); expect(host.querySelector("textarea")).toBe(composer);
+});
+
+it("ignores an old retry after its history JSON finishes in the new binding", async () => {
+  unknown(); await render(); const composer = host.querySelector("textarea");
+  let resolve!: (value: { detail: SessionDetail }) => void;
+  const pending = new Promise<{ detail: SessionDetail }>(yes => { resolve = yes; });
+  const response = Response.json({}); vi.spyOn(response, "json").mockImplementation(() => pending);
+  const base = fetcher.getMockImplementation()!;
+  let heldHistory = false;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.endsWith("/conversation-queue") && !init?.method) return Promise.resolve(Response.json(emptyQueue()));
+    if (url === `/api/workspace-sessions/${A}` && !heldHistory) { heldHistory = true; return Promise.resolve(response); }
+    return base(url, init);
+  });
+  let retry!: Promise<void>;
+  await act(async () => { retry = state.retryDelivery(state.messages[0]); }); await flush();
+  expect(heldHistory).toBe(true);
+  await render(A, SCOPE, "b"); await render(); await snapshot(5, null);
+  await act(async () => state.changeDraft("Preserve draft after readback"));
+  await act(async () => { resolve({ detail: detail(A) }); await retry; }); await flush();
+  expect(posts()).toHaveLength(0); expect(state.messages[0].delivery).toBe("unknown");
+  expect(state.taskObservation.snapshot?.revision).toBe(5);
+  expect(state.taskObservation.messages.map(message => message.id)).toEqual([MESSAGE]);
+  expect(state.draft).toBe("Preserve draft after readback"); expect(host.querySelector("textarea")).toBe(composer);
+});

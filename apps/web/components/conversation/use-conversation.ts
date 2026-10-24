@@ -557,11 +557,16 @@ export function useConversation(options: Options) {
   async function retryDelivery(message: LocalMessage) {
     // First reconcile a lost receipt with an owner-authorized queue read. Only
     // an explicit retry can repeat its stable admission — and never when the
-    // same-ID server row already owns the message.
+    // same-ID server row already owns the message. The exact mounted lifecycle
+    // owns the whole operation, including response bodies and failure recovery.
+    const controller = lifecycle.current;
+    if (!stillCurrent(controller)) return;
     let confirmed = false;
     try {
       const response = await request(queueUrl);
+      if (!stillCurrent(controller)) return;
       const next = await response.json() as ConversationQueueSnapshot;
+      if (!stillCurrent(controller)) return;
       commitSnapshot(next);
       const owns = (source: ConversationQueueSnapshot | null | undefined) => Boolean(
         source?.active?.message_id === message.id
@@ -571,10 +576,16 @@ export function useConversation(options: Options) {
         || Boolean((detailRef.current?.turns ?? []).some(turn => turn.id === message.id));
       if (confirmed) { setServerExists(true); pendingHandoff.current = id; handoffWhenSettled(); }
       await refreshDetail();
+      if (!stillCurrent(controller)) return;
       confirmed ||= Boolean(detailRef.current?.turns.some(turn => turn.id === message.id));
     }
-    catch (caught) { if (caught instanceof RequestError && caught.status !== 404) { refuse(caught); if ([401, 403, 410].includes(caught.status)) return; } }
-    if (confirmed) return;
+    catch (caught) {
+      // An aborted or delayed old owner must neither clear the new account's
+      // state via refuse() nor put its mutable outbox back into pending.
+      if (!stillCurrent(controller)) return;
+      if (caught instanceof RequestError && caught.status !== 404) { refuse(caught); if ([401, 403, 410].includes(caught.status)) return; }
+    }
+    if (!stillCurrent(controller) || confirmed) return;
     if (local.current.some(item => item.id === message.id)) updateMessage(message.id, { delivery: "pending", receiptUncertain: message.receiptUncertain ?? message.delivery === "unknown", error: undefined });
   }
   function discardRejectedDelivery(messageId: string) {
