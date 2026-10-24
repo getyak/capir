@@ -221,7 +221,9 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
   assert.match(iosCheck, /Audit failed to complete in time/);
   assert.doesNotMatch(iosCheck, /rg --files-with-matches/);
 
-  const tierBudgets = { quick: 15, smoke: 16 };
+  // Four contact handbook journeys retain attribution, accessible disclosure,
+  // scoped unsent chat, and a source statement's temporal boundary.
+  const tierBudgets = { quick: 19, smoke: 20 };
   const conversationPrefix = "TalentSignalUITests/ConversationExperienceUITests/";
   const criticalConversationTests = [
     "testProcessingStatusBelongsToItsImageAndHasNoEmptyMessageBubble",
@@ -230,6 +232,20 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
     "testAddingContactKeepsDetailsPendingAndSavingOneKeepsTheOtherPending",
     "testNameCorrectionRequiresFreshReviewAndASecondConfirm",
   ];
+  const contactPrefix = "TalentSignalUITests/CandidateSignalUITests/";
+  const criticalContactTests = [
+    "testPersonDetailLeadsWithContextAndRetainsProfileProvenance",
+    "testPersonDetailKeepsIdentityAndProvenanceReachableInChineseDarkAX5",
+    "testContactContinueOpensAnUnsentScopedConversation",
+    "testContactMemoryKeepsFutureStatementAndSourceReachable",
+  ];
+  const contactEvidence = ciWorkflow.match(/      - name: Export native navigation and contact evidence\n([\s\S]*?)(?=\n      - name:)/);
+  assert.ok(contactEvidence, "Contact screenshots must survive successful CI runs");
+  assert.match(contactEvidence[1], /if: always\(\)/);
+  assert.match(contactEvidence[1], /xcresulttool export attachments/);
+  for (const method of criticalContactTests) {
+    assert.ok(contactEvidence[1].includes(`*-${method}.xcresult`), `CI must retain screenshots for ${method}`);
+  }
   const uiSources = new Map();
   for (const [scope, budget] of Object.entries(tierBudgets)) {
     const smokeTests = readFileSync(
@@ -243,6 +259,9 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
     assert.equal(new Set(smokeTests).size, smokeTests.length, `${scope} must not duplicate journeys`);
     for (const method of criticalConversationTests) {
       assert.ok(smokeTests.includes(conversationPrefix + method), `${scope} must retain ${method}`);
+    }
+    for (const method of criticalContactTests) {
+      assert.ok(smokeTests.includes(contactPrefix + method), `${scope} must retain ${method}`);
     }
     if (scope === "smoke") {
       assert.ok(smokeTests.includes(conversationPrefix + "testReviewAtAccessibilitySizeInDarkModeRemainsOperable"));

@@ -545,10 +545,15 @@ jobs:
           RESULT_BUNDLE_PATH: ${{ github.workspace }}/build/ios/TestResults.xcresult
         run: ./scripts/ios/check.sh
 
-      - name: Export Agent settings navigation evidence
+      - name: Export native navigation and contact evidence
         if: always()
         run: |
-          for bundle in build/ios/TestResults.parts/*-testAgentAndWorkspaceSettings*.xcresult; do
+          for bundle in \
+            build/ios/TestResults.parts/*-testAgentAndWorkspaceSettings*.xcresult \
+            build/ios/TestResults.parts/*-testPersonDetailLeadsWithContextAndRetainsProfileProvenance.xcresult \
+            build/ios/TestResults.parts/*-testPersonDetailKeepsIdentityAndProvenanceReachableInChineseDarkAX5.xcresult \
+            build/ios/TestResults.parts/*-testContactContinueOpensAnUnsentScopedConversation.xcresult \
+            build/ios/TestResults.parts/*-testContactMemoryKeepsFutureStatementAndSourceReachable.xcresult; do
             [ -d "$bundle" ] || continue
             label="$(basename "$bundle" .xcresult)"
             xcrun xcresulttool export attachments \
@@ -556,7 +561,7 @@ jobs:
               --output-path "build/ios/navigation-evidence/$label"
           done
 
-      - name: Preserve Agent settings navigation evidence
+      - name: Preserve native navigation and contact evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

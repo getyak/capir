@@ -1839,6 +1839,7 @@ final class CandidateSignalUITests: XCTestCase {
         for language in ["en", "zh-Hans"] {
             let chinese = language == "zh-Hans"
             app.launchArguments = [
+                "--fixture-contact-memory",
                 "-AppleLanguages", chinese ? "(zh-Hans)" : "(en)",
                 "-AppleLocale", chinese ? "zh_CN" : "en_US",
                 "-talent-signal.interface-language", language,
@@ -1849,26 +1850,24 @@ final class CandidateSignalUITests: XCTestCase {
             XCTAssertTrue(person.waitForExistence(timeout: 5))
             person.tap()
             XCTAssertTrue(element("workspace-person-detail").waitForExistence(timeout: 5))
+            preserveScreenshot("Minimal contact overview \(language)")
+            XCTAssertEqual(element("person-detail-name").label, "Leila Hartmann")
+            XCTAssertTrue(element("person-detail-memory").isHittable)
+            XCTAssertTrue(element("person-detail-information").isHittable)
+            XCTAssertTrue(element("person-detail-continue").isHittable, app.debugDescription)
+            XCTAssertTrue(element("person-detail-excerpt").isHittable)
+            XCTAssertFalse(element("person-detail-profile-provenance").exists)
 
-            let role = app.descendants(matching: .any).matching(
-                NSPredicate(format: "identifier BEGINSWITH %@", "person-detail-role-title-")
-            ).firstMatch
-            let about = element("person-detail-about")
-            preserveScreenshot("Person context initial viewport \(language)")
-            XCTAssertTrue(role.waitForExistence(timeout: 5))
-            XCTAssertEqual(role.label, "Chief Product Officer search")
-            XCTAssertTrue(app.windows.firstMatch.frame.contains(role.frame))
-            XCTAssertGreaterThan(role.frame.height, 0)
-            XCTAssertTrue(about.exists)
-            XCTAssertLessThan(role.frame.minY, about.frame.minY)
-            XCTAssertTrue(app.staticTexts["1 reviewed evidence reference"].exists)
-            XCTAssertTrue(element("person-detail-profile-provenance").label.contains(
-                chinese ? "由工作区所有者撰写" : "Written by the workspace owner"
-            ))
-            preserveScreenshot("Person context before authored biography \(language)")
-
-            app.buttons[chinese ? "关闭" : "Close"].tap()
-            XCTAssertTrue(element("workspace-person-detail").waitForNonExistence(timeout: 5))
+            element("person-detail-information").tap()
+            XCTAssertTrue(element("person-information").waitForExistence(timeout: 5))
+            let provenance = element("person-detail-profile-provenance")
+            XCTAssertTrue(provenance.waitForExistence(timeout: 5))
+            XCTAssertTrue(provenance.label.contains(chinese ? "由工作区所有者撰写" : "Written by the workspace owner"))
+            preserveScreenshot("Contact disclosed profile provenance \(language)")
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(element("person-detail-continue").waitForExistence(timeout: 5))
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(person.waitForExistence(timeout: 5))
             XCTAssertTrue(person.isHittable)
             XCTAssertTrue(app.buttons["archive-tab-people"].isSelected)
             app.terminate()
@@ -1877,12 +1876,10 @@ final class CandidateSignalUITests: XCTestCase {
 
     func testPersonDetailKeepsIdentityAndProvenanceReachableInChineseDarkAX5() {
         app.launchArguments = [
-            "--force-dark",
-            "-AppleLanguages", "(zh-Hans)",
-            "-AppleLocale", "zh_CN",
+            "--fixture-contact-memory",
+            "--force-dark", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
             "-talent-signal.interface-language", "zh-Hans",
-            "-UIPreferredContentSizeCategoryName",
-            UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
+            "-UIPreferredContentSizeCategoryName", UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue,
             "-UIAccessibilityReduceMotionEnabled", "YES",
         ]
         app.launchEnvironment["TS_IOS_UI_TEST_DISPLAY_PROBE"] = "true"
@@ -1891,34 +1888,58 @@ final class CandidateSignalUITests: XCTestCase {
         hittableButton("archive-tab-people", timeout: 8).tap()
         app.buttons["workspace-person-20000000-0000-4000-8000-000000000001"].tap()
         XCTAssertTrue(element("workspace-person-detail").waitForExistence(timeout: 5))
-
-        let name = element("person-detail-name")
-        let role = app.descendants(matching: .any).matching(
-            NSPredicate(format: "identifier BEGINSWITH %@", "person-detail-role-title-")
-        ).firstMatch
-        preserveScreenshot("Person initial Chinese dark AX5")
-        XCTAssertTrue(name.waitForExistence(timeout: 5))
-        XCTAssertEqual(name.label, "Leila Hartmann")
-        XCTAssertTrue(app.windows.firstMatch.frame.contains(name.frame))
-        XCTAssertGreaterThan(name.frame.height, 0)
-        XCTAssertEqual(name.frame.minX, role.frame.minX, accuracy: 2)
-        preserveScreenshot("Person identity Chinese dark AX5")
-        scrollToReadablePersonText(role)
-        XCTAssertTrue(app.staticTexts["候选人 · 进行中 · 已确认"].exists)
+        XCTAssertEqual(element("person-detail-name").label, "Leila Hartmann")
+        let details = element("person-detail-information")
+        for _ in 0..<8 where !details.isHittable { app.swipeUp() }
+        XCTAssertTrue(details.isHittable)
+        preserveScreenshot("Minimal contact Chinese dark AX5")
+        details.tap()
         let provenance = element("person-detail-profile-provenance")
-        scrollToReadablePersonText(provenance)
+        for _ in 0..<8 where !provenance.isHittable { app.swipeUp() }
+        XCTAssertTrue(provenance.isHittable)
         XCTAssertTrue(provenance.label.contains("由工作区所有者撰写"))
-        preserveScreenshot("Person authored provenance Chinese dark AX5")
+        preserveScreenshot("Contact details Chinese dark AX5")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(element("person-detail-continue").waitForExistence(timeout: 5))
+    }
 
-        let close = app.buttons["关闭"]
-        XCTAssertTrue(close.isHittable)
-        // Retain the platform navigation control; the separate 44pt edge
-        // discovery probe remains unmet and is not counted as acceptance here.
-        XCTAssertGreaterThanOrEqual(close.frame.width, 43.5)
-        XCTAssertGreaterThanOrEqual(close.frame.height, 35.5)
-        close.tap()
-        XCTAssertTrue(element("workspace-person-detail").waitForNonExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["archive-tab-people"].isSelected)
+    func testContactMemoryKeepsFutureStatementAndSourceReachable() {
+        app.launchArguments += ["--fixture-contact-memory"]
+        app.launch()
+        hittableButton("archive-tab-people", timeout: 8).tap()
+        app.buttons["workspace-person-20000000-0000-4000-8000-000000000001"].tap()
+        let excerpt = element("person-detail-excerpt")
+        XCTAssertTrue(excerpt.waitForExistence(timeout: 5))
+        XCTAssertTrue(excerpt.label.contains("Future statement"))
+        XCTAssertTrue(excerpt.label.contains("Leila Hartmann"))
+        excerpt.tap()
+        XCTAssertTrue(element("person-memory-detail").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Synthetic UI fixture: 下周二前确认试点范围。"].exists)
+        preserveScreenshot("Contact Memory source and future boundary")
+        app.navigationBars.buttons.firstMatch.tap()
+        element("person-detail-memory").tap()
+        XCTAssertTrue(element("person-memory-list").waitForExistence(timeout: 5))
+        XCTAssertTrue(element("person-memory-22000000-0000-4000-8000-000000000001").label.contains("Future statement"))
+    }
+
+    func testContactContinueOpensAnUnsentScopedConversation() {
+        app.launchArguments = ["--fixture-record-ask-request-count"]
+        app.launch()
+        hittableButton("archive-tab-people", timeout: 8).tap()
+        app.buttons["workspace-person-20000000-0000-4000-8000-000000000001"].tap()
+        let entry = element("person-detail-continue")
+        XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        entry.tap()
+        XCTAssertTrue(element("relationship-ask-screen").waitForExistence(timeout: 8))
+        let scope = element("ask-scope-selector")
+        XCTAssertTrue(scope.waitForExistence(timeout: 5))
+        XCTAssertTrue(accessibleScopeContent(scope).contains("Leila Hartmann"))
+        let count = element("ask-fixture-request-count")
+        XCTAssertTrue(count.waitForExistence(timeout: 5))
+        XCTAssertEqual(count.value as? String, "0")
+        XCTAssertFalse(element("ask-pending-turn").exists)
+        XCTAssertTrue(app.textFields["ask-composer"].exists)
+        preserveScreenshot("Contact opens a scoped unsent conversation")
     }
 
     private func scrollToReadablePersonText(_ text: XCUIElement) {
@@ -2149,7 +2170,7 @@ final class CandidateSignalUITests: XCTestCase {
 
         target.tap()
         XCTAssertTrue(element("workspace-person-detail").waitForExistence(timeout: 5))
-        app.buttons["Close"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(
             element("workspace-person-detail").waitForNonExistence(timeout: 5)
         )
@@ -3479,7 +3500,7 @@ final class CandidateSignalUITests: XCTestCase {
         preserveScreenshot("Canonical workspace offline retry")
     }
 
-    func testCanonicalPersonDetailKeepsGovernedIdentityRowsDistinct() async throws {
+    func testCanonicalPersonDetailMovesRecordMetadataBehindDisclosure() async throws {
         guard let fixture = try await preparePursuitProposalFixtureIfAvailable() else {
             throw XCTSkip("The canonical Pursuit workspace fixture was not configured.")
         }
@@ -3501,30 +3522,12 @@ final class CandidateSignalUITests: XCTestCase {
             element("workspace-person-detail").waitForExistence(timeout: 8)
         )
 
-        let sourceLabel = element("definition-governed-identity-row-0-label")
-        let sourceValue = element("definition-governed-identity-row-0-value")
-        let clueLabel = element("definition-governed-identity-row-1-label")
-        let clueValue = element("definition-governed-identity-row-1-value")
-        let contextLabel = element("definition-governed-identity-row-2-label")
-        let contextValue = element("definition-governed-identity-row-2-value")
-        XCTAssertEqual(sourceLabel.label, "Sources")
-        XCTAssertEqual(sourceValue.label, "1")
-        XCTAssertEqual(clueLabel.label, "Identity clues")
-        XCTAssertEqual(clueValue.label, "1")
-        XCTAssertEqual(contextLabel.label, "Contexts")
-        XCTAssertEqual(contextValue.label, "1")
-        for pair in [
-            (sourceLabel, sourceValue),
-            (clueLabel, clueValue),
-            (contextLabel, contextValue),
-        ] {
-            XCTAssertGreaterThan(
-                pair.1.frame.minX,
-                pair.0.frame.maxX + 8,
-                "Definition labels and values must remain visually distinct."
-            )
-        }
-        preserveScreenshot("Canonical Person governed identity layout")
+        XCTAssertFalse(element("definition-governed-identity-row-0-label").exists)
+        let details = element("person-detail-information")
+        XCTAssertTrue(details.isHittable)
+        details.tap()
+        XCTAssertTrue(element("person-information").waitForExistence(timeout: 5))
+        preserveScreenshot("Canonical contact details are disclosed")
     }
 
     func testCanonicalWorkspaceAX5DarkReducedMotionKeepsNavigationReachable() async throws {
