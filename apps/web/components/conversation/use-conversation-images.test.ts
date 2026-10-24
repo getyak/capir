@@ -296,3 +296,27 @@ it("keeps an unknown receipt recoverable when reconciliation fails and local byt
   expect(chat.messages[0]!.delivery).toBe("unknown");
   expect(queuePosts()).toHaveLength(1);
 });
+
+it("explains an image admission server error without claiming processing", async () => {
+  await act(async () => { await chat.addFiles([imageFile("server-error.png")]); });
+  fetcher.mockResolvedValueOnce(Response.json({ message: "Internal server error" }, { status: 500 }));
+  await act(async () => { await chat.submit(); });
+  await flush();
+  expect(chat.messages[0]!.delivery).toBe("unknown");
+  expect(chat.messages[0]!.error).toBe("图片发送遇到服务器错误，尚未确认送达。原图已保留，请核对并重试。");
+  expect(memory.map.size).toBe(1);
+});
+
+it("does not resend retained image bytes when checking delivery fails", async () => {
+  await act(async () => { await chat.addFiles([imageFile("retained.png")]); });
+  fetcher.mockRejectedValueOnce(new Error("lost admission response"));
+  await act(async () => { await chat.submit(); });
+  await flush();
+  fetcher.mockResolvedValue(Response.json({}, { status: 503 }));
+  await act(async () => { await chat.retryDelivery(chat.messages[0]!); });
+  await flush();
+  expect(queuePosts()).toHaveLength(1);
+  expect(chat.messages[0]!.delivery).toBe("unknown");
+  expect(chat.messages[0]!.error).toBe("核对送达状态失败，消息和图片已保留。恢复连接后再重试。");
+  expect(memory.map.size).toBe(1);
+});

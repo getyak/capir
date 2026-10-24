@@ -10,7 +10,7 @@ vi.mock("../workspace-session-request",()=>({workspaceSessionFetch:fetcher}));
 const sid="72ce7ff4-a5a8-40d0-b1d7-d84a13adcd30";
 let chat: ReturnType<typeof useConversation>; let root: Root; let mount: HTMLDivElement;
 const onAdmitted = vi.fn();
-function Probe({entryCapability}:{entryCapability?:string}){const current=useConversation({entryCapability,id:sid,scope:"owner",chatBinding:"chat",detailBinding:"detail",bootstrap:"bootstrap",onAdmitted});useLayoutEffect(()=>{chat=current;});return null;}
+function Probe({entryCapability,binding="chat"}:{entryCapability?:string;binding?:string}){const current=useConversation({entryCapability,id:sid,scope:"owner",chatBinding:binding,detailBinding:"detail",bootstrap:"bootstrap",onAdmitted});useLayoutEffect(()=>{chat=current;});return null;}
 async function flush(){await act(async()=>{await Promise.resolve();await Promise.resolve();});}
 beforeEach(async()=>{vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT",true);localStorage.clear();fetcher.mockReset();onAdmitted.mockReset();mount=document.createElement("div");document.body.append(mount);root=createRoot(mount);await act(async()=>{root.render(createElement(Probe,{}));});await flush();});
 afterEach(async()=>{await act(async()=>root.unmount());mount.remove();vi.unstubAllGlobals();});
@@ -23,7 +23,31 @@ it("shows an immutable outgoing message before admission, releases composer, and
 });
 it("never auto-retries an unknown delivery and reuses its identity only on explicit retry",async()=>{
  fetcher.mockRejectedValue(new Error("offline"));await act(async()=>{chat.changeDraft("first");});await act(async()=>{await chat.submit();});const body=JSON.parse(fetcher.mock.calls[0][1].body);await flush();expect(fetcher).toHaveBeenCalledTimes(1);
+ await act(async()=>{await chat.retryDelivery(chat.messages[0]);});await flush();expect(fetcher.mock.calls.filter(call=>call[1]?.method==="POST")).toHaveLength(1);
+ fetcher.mockImplementation((_url,init)=>Promise.resolve(init?.method==="POST"?Response.json({},{status:202}):Response.json({message:"Session absent"},{status:404})));
  await act(async()=>{await chat.retryDelivery(chat.messages[0]);});await flush();const sends=fetcher.mock.calls.filter(call=>call[1]?.method==="POST");expect(sends).toHaveLength(2);expect(JSON.parse(sends[1][1].body).message_id).toBe(body.message_id);expect(JSON.parse(sends[1][1].body).idempotency_key).toBe(body.idempotency_key);
+});
+
+it("releases retry feedback across a binding ABA without letting an old check own the new binding", async () => {
+  fetcher.mockRejectedValue(new Error("lost admission response"));
+  await act(async () => { chat.changeDraft("same protected message"); });
+  await act(async () => { await chat.submit(); });
+  const message = chat.messages[0];
+  let release!: (response: Response) => void;
+  fetcher.mockImplementation(() => new Promise<Response>(resolve => { release = resolve; }));
+  let oldCheck!: Promise<void>;
+  await act(async () => { oldCheck = chat.retryDelivery(message); });
+  expect(chat.checkingDeliveries).toEqual([message.id]);
+  await act(async () => { root.render(createElement(Probe, { binding: "other-login" })); });
+  await act(async () => { root.render(createElement(Probe, { binding: "chat" })); });
+  expect(chat.checkingDeliveries).toEqual([]);
+  fetcher.mockImplementation((_url, init) => Promise.resolve(init?.method === "POST"
+    ? Response.json({}, { status: 202 }) : Response.json({ message: "Session absent" }, { status: 404 })));
+  await act(async () => { await chat.retryDelivery(chat.messages[0]); });
+  await act(async () => { release(Response.json({}, { status: 503 })); await oldCheck; });
+  expect(chat.checkingDeliveries).toEqual([]);
+  expect(chat.messages[0].delivery).toBe("accepted");
+  expect(fetcher.mock.calls.filter(call => call[1]?.method === "POST")).toHaveLength(2);
 });
 it("recovers a lost admission after remount without resending or duplicating canonical history", async () => {
   // Controlled transport/lifecycle evidence only; no browser or backend claim.

@@ -432,7 +432,7 @@ export function QueuedConversation(props: Props) {
     recoveryActions: (messageId: string) => {
       const work = workByMessageId[messageId];
       const message = chat.messages.find(item => item.id === messageId);
-      if (work?.recover === "check" && message) return <><button onClick={() => { if (refreshScope.current === readbackOwner) void chat.retryDelivery(message); }}>{t("conversation.recovery.check")}</button>{message.delivery === "rejected" ? <button onClick={() => { if (refreshScope.current === readbackOwner) chat.discardRejectedDelivery(message.id); }}>{t("conversation.recovery.discard")}</button> : null}</>;
+      if (work?.recover === "check" && message) return <><button disabled={chat.checkingDeliveries?.includes(messageId)} onClick={() => { if (refreshScope.current === readbackOwner) void chat.retryDelivery(message); }}>{t(chat.checkingDeliveries?.includes(messageId) ? "conversation.recovery.checking" : "conversation.recovery.check")}</button>{message.delivery === "rejected" ? <button onClick={() => { if (refreshScope.current === readbackOwner) chat.discardRejectedDelivery(message.id); }}>{t("conversation.recovery.discard")}</button> : null}</>;
       if (work?.recover === "refresh") {
         const phase = refreshFeedback.owner === readbackOwner ? refreshFeedback.messages[messageId]?.phase ?? "idle" : "idle";
         return <><button disabled={phase === "loading"} onClick={() => refreshReadback(messageId)}>{phase === "loading" ? t("conversation.recovery.refreshing") : phase === "failed" ? t("conversation.recovery.refreshRetry") : t("conversation.recovery.refresh")}</button>{phase === "failed" ? <small role="status">{t("conversation.recovery.refreshFailed")}</small> : null}</>;

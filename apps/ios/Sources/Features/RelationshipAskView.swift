@@ -3644,6 +3644,7 @@ struct RelationshipAskView: View {
             let incoming = try media.map { try ConversationImageUpload(id: $0.id, data: $0.data,
                 fileName: $0.fileName, mediaType: $0.mediaType) }
             try ConversationImageUpload.validateQuestion(objective: objective, images: incoming)
+            let isRetry = pendingImageConversation != nil
             if let prior = pendingImageConversation, !prior.matches(objective: objective, images: incoming.map(\.manifest)) {
                 throw ImageConversationError.changedIntent
             }
@@ -3669,6 +3670,18 @@ struct RelationshipAskView: View {
                         try Task.checkCancellation()
                         guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID),
                               sessionStore.session(id: ownerID)?.pendingImageConversation?.messageID == pending.messageID else { return }
+                        if isRetry {
+                            let recovered = try await ConversationImageRetry.reconcile(pending: pending,
+                                sessionID: ownerID, store: sessionStore, progress: imageProgress,
+                                read: { try await workspaceStore.readConversationImageState(sessionID: ownerID, messageID: pending.messageID) },
+                                isCurrent: { activeSessionID == ownerID && operationState.isCurrentOperation(operationID) })
+                            if recovered != .unknown {
+                                mediaDrafts = []; mediaNotice = nil
+                                errorMessage = recovered == .stopped ? appLanguage.text(ImageConversationError.stopped.errorDescription ?? "") : nil
+                                if recovered == .waiting { try await observeImageConversation(ownerID: ownerID, pending: pending, operationID: operationID) }
+                                return
+                            }
+                        }
                         admissionAttempted = true
                         let receipt = try await workspaceStore.admitConversationImages(sessionID: ownerID,
                             messageID: pending.messageID, idempotencyKey: pending.idempotencyKey,
@@ -3705,7 +3718,7 @@ struct RelationshipAskView: View {
                 do { try await observeImageConversation(ownerID: ownerID, pending: pending, operationID: operationID) }
                 catch {
                     guard activeSessionID == ownerID, operationState.isCurrentOperation(operationID), !Task.isCancelled else { return }
-                    errorMessage = appLanguage.text(ImageConversationError.recoveryMessage(for: error, admissionAttempted: true))
+                    errorMessage = appLanguage.text(sessionStore.recordImageConversationFailure(sessionID: ownerID, messageID: pending.messageID, error: error, admissionAttempted: true))
                 }
             }
         }

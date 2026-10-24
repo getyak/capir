@@ -69,6 +69,7 @@ struct ConversationImageProgressState: Equatable {
         if entry != nil && !fresh { return state(.unknown, "Reply status needs checking", check: true) }
         switch pending.state {
         case .prepared:
+            if isChecking { return state(.checking, "Checking the original message…", activity: true) }
             return isSending ? state(.sending, "Sending your message…", activity: true)
                 : state(.prepared, "Message is ready to send", check: true)
         case .admitted:
@@ -76,6 +77,7 @@ struct ConversationImageProgressState: Equatable {
                 : state(.unknown, "Message received. Check the reply status.", check: true)
         case .unknown:
             return isChecking ? state(.checking, "Checking the original message…", activity: true)
+                : isSending ? state(.sending, "Sending your message…", activity: true)
                 : state(.unknown, "Delivery is unconfirmed. Check before sending again.", check: true)
         case .stopped:
             return state(.stopped, "Processing stopped", check: true)

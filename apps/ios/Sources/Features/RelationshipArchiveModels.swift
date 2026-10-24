@@ -3819,19 +3819,21 @@ extension AgentSessionStore {
               var pending = storedSessions[index].pendingImageConversation,
               pending.messageID == messageID else { return false }
         let before = storedSessions[index]
-        pending.state = .unknown; storedSessions[index].pendingImageConversation = pending
+        if pending.state != .stopped { pending.state = pending.queueEntryID == nil ? .unknown : .admitted }
+        storedSessions[index].pendingImageConversation = pending
         guard persist() else { storedSessions[index] = before; return false }
         return true
     }
 
     func recordImageConversationFailure(sessionID: UUID, messageID: UUID, error: Error,
         admissionAttempted: Bool) -> String {
+        let confirmed = session(id: sessionID)?.pendingImageConversation?.queueEntryID != nil
         let inputRejected = (error as? ImageConversationError) == .invalidInput
             || (error as? ImageConversationError) == .changedIntent
         if admissionAttempted, !inputRejected {
             markImageObservationUnknown(sessionID: sessionID, messageID: messageID)
         }
-        return ImageConversationError.recoveryMessage(for: error, admissionAttempted: admissionAttempted)
+        return ImageConversationError.recoveryMessage(for: error, admissionAttempted: admissionAttempted, admissionConfirmed: confirmed)
     }
 
     func observeImageConversation(sessionID: UUID, messageID: UUID,
@@ -3848,8 +3850,17 @@ extension AgentSessionStore {
             guard entry.messageID == messageID,
                   pending.queueEntryID == nil || entry.queueEntryID == pending.queueEntryID,
                   entry.images == pending.images else { throw ImageConversationError.invalidReadback }
+            // A lost POST receipt can be recovered from this exact authenticated
+            // queue row without inventing a receipt or submitting another task.
+            if pending.queueEntryID == nil || pending.state == .unknown || pending.state == .prepared {
+                let before = storedSessions[index]
+                var received = pending
+                received.queueEntryID = entry.queueEntryID; received.state = .admitted
+                storedSessions[index].pendingImageConversation = received
+                guard persist() else { storedSessions[index] = before; throw ImageConversationError.persistence }
+            }
             if ["failed", "interrupted", "cancelled"].contains(entry.status) {
-                var stopped = pending; stopped.state = .stopped
+                var stopped = storedSessions[index].pendingImageConversation ?? pending; stopped.state = .stopped
                 storedSessions[index].pendingImageConversation = stopped
                 guard persist() else { throw ImageConversationError.persistence }
                 return .stopped

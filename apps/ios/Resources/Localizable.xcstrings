@@ -33460,6 +33460,102 @@
           }
         }
       }
+    },
+    "The image was received, but its reply status could not be checked. Check reply again.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The image was received, but its reply status could not be checked. Check reply again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片已送达，但暂时无法核对回复状态。请再次查看回复。"
+          }
+        }
+      }
+    },
+    "Retry image send": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry image send"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重试发送图片"
+          }
+        }
+      }
+    },
+    "Check delivery first, then retry the same image message without duplicating it": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Check delivery first, then retry the same image message without duplicating it"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "先核对送达状态，再重试同一条图片消息，避免重复发送"
+          }
+        }
+      }
+    },
+    "Image delivery is unconfirmed. The original message is kept. Check and retry; reattach the same images if needed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image delivery is unconfirmed. The original message is kept. Check and retry; reattach the same images if needed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片尚未确认送达，原消息已保留。请核对后重试；如有需要，请重新附上相同图片。"
+          }
+        }
+      }
+    },
+    "Image sending encountered a server error. Delivery is unconfirmed. Check and retry the original message.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Image sending encountered a server error. Delivery is unconfirmed. Check and retry the original message."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "图片发送遇到服务器错误，尚未确认送达。请核对并重试原消息。"
+          }
+        }
+      }
+    },
+    "The server refused this image request. Check the original message and images, then retry.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server refused this image request. Check the original message and images, then retry."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "服务器拒绝了这次图片请求。请检查原消息和图片后重试。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

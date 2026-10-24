@@ -158,6 +158,7 @@
 		71C2191A8B9F500124E59F7D /* TalentSignalApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77C6AFD36C53DCE168525B5F /* TalentSignalApp.swift */; };
 		7230D7E787C6A595BE24845E /* AppSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC6D8F6894923DD54E359F8E /* AppSession.swift */; };
 		72B340A984815C3C9D0858BB /* CandidateSignalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2D9B7F6140163816B8B25C2 /* CandidateSignalView.swift */; };
+		72BFB3D265E02AF59E1A926C /* ConversationImageRetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E424C8B181BD95F7AFC7EE6 /* ConversationImageRetry.swift */; };
 		73C829D4D73DEE5B45E69EF5 /* AppSessionEndingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B9A9E650EDCD2F91EC6076C /* AppSessionEndingTests.swift */; };
 		740B05CF8F6F47928D7053CE /* AgentAskActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3328EB6E9CD5E04046B93CBB /* AgentAskActivity.swift */; };
 		74230B00F95395AE5436FA30 /* TalentSignalLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 3F004990C36E6DDFE34C78F1 /* TalentSignalLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -473,6 +474,7 @@
 		5C21BBC1A95DEE1F11BCC0F4 /* RuntimeScopedPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeScopedPersistence.swift; sourceTree = "<group>"; };
 		5D83A94ED7244B4325B8537F /* LabRuntimeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabRuntimeUITests.swift; sourceTree = "<group>"; };
 		5DBD7EB9582B085CB7D1063C /* TextSignalCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSignalCaptureTests.swift; sourceTree = "<group>"; };
+		5E424C8B181BD95F7AFC7EE6 /* ConversationImageRetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationImageRetry.swift; sourceTree = "<group>"; };
 		5E9E39D69232B7E4E068B600 /* StandaloneVoiceCaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneVoiceCaptureService.swift; sourceTree = "<group>"; };
 		5ECAED44BAF6B1F33AF1C56B /* Get5AskInputPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Get5AskInputPolicyTests.swift; sourceTree = "<group>"; };
 		5EF4110EBF1C86CED7EFCED7 /* AgentWorkActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWorkActivity.swift; sourceTree = "<group>"; };
@@ -996,6 +998,7 @@
 				F10FD276FFB8EF6FACA650B7 /* ConversationImageConversation.swift */,
 				62BBA4BEA9AE9ACD2E62996B /* ConversationImagePendingMessage.swift */,
 				B7F8A835F88E1877891BFFAF /* ConversationImageProgress.swift */,
+				5E424C8B181BD95F7AFC7EE6 /* ConversationImageRetry.swift */,
 				E7A9782F27F1B7A7D7945FB0 /* ConversationMemoryReviewCard.swift */,
 				25C0C7001D6DEAB5262DA51D /* ConversationMemoryReviewHost.swift */,
 				9BD825901E05623CAF5F728B /* ConversationMemoryReviewStore.swift */,
@@ -1504,6 +1507,7 @@
 				A371CD2202040DF1A80F0F88 /* ConversationImageConversation.swift in Sources */,
 				94678A7153180B66A12408E8 /* ConversationImagePendingMessage.swift in Sources */,
 				201F1FD27F63768E8F01A256 /* ConversationImageProgress.swift in Sources */,
+				72BFB3D265E02AF59E1A926C /* ConversationImageRetry.swift in Sources */,
 				0CCCF99FB088A35177D773FB /* ConversationMemoryOperationPersistence.swift in Sources */,
 				AEF7578BD456AF4A346818C8 /* ConversationMemoryReview.swift in Sources */,
 				0BF2CBB573256ECBCDF313D1 /* ConversationMemoryReviewCard.swift in Sources */,

@@ -3,6 +3,14 @@ import XCTest
 @testable import TalentSignal
 
 final class ConversationImageProgressTests: XCTestCase {
+    func testRetryDistinguishesCheckingFromResendingTheSameUnknownMessage() {
+        var message = pending()
+        message.state = .unknown
+        XCTAssertEqual(progress(message, sending: true, checking: true).phase, .checking)
+        XCTAssertEqual(progress(message, sending: true).phase, .sending)
+        XCTAssertEqual(progress(message).phase, .unknown)
+        XCTAssertFalse(progress(message).showsActivity)
+    }
     private let now = Date(timeIntervalSince1970: 1_792_663_200)
 
     func testLegacyEntryDecodesWithoutInventingStageOrTiming() throws {

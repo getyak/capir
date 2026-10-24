@@ -349,6 +349,21 @@ it("never re-admits a server-confirmed message when history readback fails", asy
   expect(fetcher.mock.calls.filter(call => call[1]?.method === "POST")).toHaveLength(0);
 });
 
+it.each([401, 403, 410, 409])("honors revoked history access after a queue receipt (%s)", async status => {
+  writeConversationMessage("owner", sid, { id: mid, objective: "protected image question", createdAt: "2026-09-24T00:00:00.000Z", delivery: "unknown", receiptUncertain: true, expiresAt: Date.now() + 60_000 });
+  await act(async () => root.render(createElement(Probe, { initial: detail() })));
+  await flush();
+  fetcher.mockImplementation((url: string) => Promise.resolve(String(url).endsWith("/conversation-queue")
+    ? Response.json(snapshot(5, entry(mid)))
+    : Response.json({ message: "Access no longer available", ...(status === 409 ? { code: "session_stale" } : {}) }, { status })));
+  await act(async () => { await chat.retryDelivery(chat.messages[0]!); });
+  await flush();
+  expect(chat.unavailable).toBe(true);
+  expect(chat.messages).toEqual([]);
+  expect(readConversationMessages("owner", sid)).toEqual([]);
+  expect(fetcher.mock.calls.filter(call => call[1]?.method === "POST")).toHaveLength(0);
+});
+
 it("does not treat a rejected Stop request as an observed stop", async () => {
   await act(async () => root.render(createElement(Probe, { initial: detail() })));
   await flush();

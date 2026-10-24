@@ -1967,6 +1967,36 @@ suite("queue contact review projection", () => {
 });
 
 suite("conversation message images", () => {
+  it("admits images across clock skew once and preserves Session expiry on retry and withdrawal", async () => {
+    const seeded = await seedSession();
+    try {
+      // The Session uses an application timestamp slightly ahead of DB now().
+      // Its own lifetime remains exactly thirty days, as in the real failure.
+      await pool!.query(`UPDATE agent_sessions SET created_at=date_trunc('milliseconds',now())+interval '5 seconds',
+        expires_at=date_trunc('milliseconds',now())+interval '30 days 5 seconds' WHERE account_id=$1 AND id=$2`, [seeded.accountId, seeded.sessionId]);
+      const message = randomUUID(), upload = pngUpload(pngBytes(9));
+      const request = { session_id: seeded.sessionId, message_id: message,
+        idempotency_key: randomUUID(), objective: "", images: [upload] };
+      const first = await admitConversationQueueEntry(pool!, seeded.auth, request);
+      const retry = await admitConversationQueueEntry(pool!, seeded.auth, request);
+      expect(retry.replayed).toBe(true);
+      expect(retry.response.queue_entry_id).toBe(first.response.queue_entry_id);
+      const retained = await pool!.query<{ same_expiry: boolean; within_session: boolean; count: string }>(
+        `SELECT q.expires_at=s.expires_at AS same_expiry, q.expires_at<=s.expires_at AS within_session,
+          (SELECT count(*) FROM conversation_message_images WHERE account_id=$1 AND message_id=$3)::text AS count
+         FROM conversation_queue_entries q JOIN agent_sessions s ON s.account_id=q.account_id AND s.id=q.session_id
+         WHERE q.account_id=$1 AND q.session_id=$2`, [seeded.accountId, seeded.sessionId, message]);
+      expect(retained.rows).toEqual([{ same_expiry: true, within_session: true, count: "1" }]);
+      const bytes = await readConversationMessageImage(pool!, seeded.auth, seeded.sessionId, message, 0);
+      expect(bytes?.content.equals(pngBytes(9))).toBe(true);
+      const snapshot = await readConversationQueueSnapshot(pool!, seeded.auth, seeded.sessionId);
+      await mutateConversationQueueEntry(pool!, seeded.auth, seeded.sessionId, {
+        kind: "withdraw", queue_entry_id: first.response.queue_entry_id,
+        expected_revision: snapshot.revision, idempotency_key: randomUUID(),
+      });
+      expect(await readConversationMessageImage(pool!, seeded.auth, seeded.sessionId, message, 0)).toBeNull();
+    } finally { await removeProofAccount(seeded.accountId); }
+  });
   it("keeps supplementary image inspection unavailable without source-bound consent through the real queue", async () => {
     const seeded = await seedSession(), other = await seedSession();
     const provider = new ScriptedConversationProvider();
