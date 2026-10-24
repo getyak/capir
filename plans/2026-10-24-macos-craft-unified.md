@@ -285,3 +285,38 @@ The native red resource test failed before these keys were added. No native
 connection policy, login, persistence, task mutation or settings action changed.
 All applicable current-head CI, signed publication/installation, clean committed
 Web activation and the open-subscription restart re-test remain required.
+
+## Delivery readback and remaining visual acceptance
+
+PRs #416, #417, #418 and #420 are merged with their applicable current-head
+checks and independent reviews complete. Resident Web is the clean `f4ecd485`
+release. All five affected backend/Agent Host roles remain on image/source
+`7fa3ee3`; their backend tree is unchanged by later Web/native-only follow-ups.
+
+The open-native-subscription SIGTERM re-test passed in 5.421 seconds, wrapper
+24394 -> 24677, without a client action. The exact original Session and its two
+user messages remained visible after recovery. The prior 45-probe failure is
+retained separately. The final OS Pinyin test converted n/i/Space to a Chinese
+candidate and Enter ended the next active composition without submitting; its
+draft, input source and expiring test workspace were then cleaned and deletion
+read back. No primary-account message was sent.
+
+The signed macOS 0.2.29 (188) distribution at `f4ecd485` passed packaging,
+notarization, actual published-app tests and signed appcast publication.
+Local Sparkle installation completed and relaunched build 188. Its 147 bundle
+entries (file bytes, directory modes and symbolic links) match the published
+ZIP; strict code signing, stapled notarization and Gatekeeper all passed.
+The release's target commit and exact bundle identity bind this installation
+to `f4ecd485`; the revision is not embedded in Info.plist. Sparkle restarted
+to a new draft; the original Session was explicitly selected afterward and
+its two user turns read back. The formal installation receipt owns this state.
+
+The formal operations matrix currently records 24 covered checks and **N3
+fullscreen visual acceptance partial**. The fullscreen white band/blue indicator
+remains overlay-confounded with unknown cause; no guessed inset, application
+severity or visual pass is assigned. Normal-window controls, selection,
+minimize/restore, native zoom, resize and fullscreen entry/exit were exercised.
+macOS 27 hardware, a full VoiceOver workflow and physical keyboard hardware are
+not claimed. Preserve the source worktree and its recovery references while
+this acceptance remains open. The permanent report and raw evidence are in
+`/Users/cubxxw/ops/reports/macos-craft-unified-20261024/`.
