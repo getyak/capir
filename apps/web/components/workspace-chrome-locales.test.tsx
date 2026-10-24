@@ -31,6 +31,7 @@ describe("ordinary workspace locale and observation boundary", () => {
   ] as const)("localizes the %s account popover without translating identity", async (locale, label, usage, help, appearance, signOut) => {
     const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
     await act(async () => root!.render(<LocaleProvider locale={locale}><WorkspaceAccountMenu accountName="王小明" workspaceName="原始空间" signOutAction={() => {}} usage={store} /></LocaleProvider>));
+    expect(host.querySelector("[data-slot='account-trigger']")?.getAttribute("aria-label")).toBe("王小明 · 原始空间");
     await act(async () => host.querySelector<HTMLButtonElement>("[data-slot='account-trigger']")!.click());
     const menu = document.querySelector<HTMLElement>("[data-slot='popover-content']")!;
     expect(menu.getAttribute("aria-label")).toBe(label);
