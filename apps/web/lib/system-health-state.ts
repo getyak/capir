@@ -15,6 +15,7 @@ export type SystemHealthEvent =
   | { type: "request_started" }
   | { type: "observation_received"; observation: SystemHealthResponse }
   | { type: "invalid_response" }
+  | { type: "request_failed" }
   | { type: "session_expired" };
 
 export function reduceSystemHealth(
