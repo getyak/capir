@@ -7,6 +7,7 @@ struct TalentSignalLiveActivityBundle: WidgetBundle {
     var body: some Widget {
         SignalRecordingLiveActivity()
         AgentAskLiveActivity()
+        CaptureLiveActivity()
         AgentWorkLiveActivity()
         ResearchLiveActivity()
     }

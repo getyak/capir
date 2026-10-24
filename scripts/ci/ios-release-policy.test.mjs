@@ -682,7 +682,8 @@ test("App Intent metadata avoids Apple's rejected device-name wording", () => {
   );
 
   assert.doesNotMatch(appIntents, /\b(?:iPhone|iPad)\b/i);
-  assert.match(appIntents, /save it on this device/);
+  assert.match(appIntents, /Send one screenshot to your authorized workspace/);
+  assert.match(appIntents, /background in the same protected Session/);
 });
 
 test("all shipped targets pin their App Store profiles in Release", () => {
@@ -808,7 +809,12 @@ test("profile verification requires the shared App Group and main-app Apple sign
       "com.apple.security.application-groups": [APP_GROUP],
     };
     if (spec.signInWithApple) entitlements["com.apple.developer.applesignin"] = ["Default"];
+    if (spec.pushNotifications) entitlements["aps-environment"] = "production";
     validateProvisioningProfile({ Name: spec.name, Entitlements: entitlements }, spec);
+    if (spec.pushNotifications) assert.throws(
+      () => validateProvisioningProfile({ Name: spec.name, Entitlements: { ...entitlements, "aps-environment": "development" } }, spec),
+      /lacks production APNs entitlement/,
+    );
     assert.throws(
       () => validateProvisioningProfile({ Name: spec.name, Entitlements: { ...entitlements, "com.apple.security.application-groups": [] } }, spec),
       /lacks group\.com\.talentsignal\.app/,
