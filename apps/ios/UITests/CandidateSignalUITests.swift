@@ -2780,7 +2780,9 @@ final class CandidateSignalUITests: XCTestCase {
 
         let response = element("ask-response-turn")
         XCTAssertTrue(response.waitForExistence(timeout: 30))
-        XCTAssertTrue(element("ask-agent-answer").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "ask-response-block-answer-")
+        ).firstMatch.waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Agent 回答"].exists)
         XCTAssertFalse(element("ask-recall-unresolved").exists)
         XCTAssertFalse(
@@ -2958,7 +2960,7 @@ final class CandidateSignalUITests: XCTestCase {
         ) == "true"
         let responseTurn = element("ask-response-turn")
         let remoteAnswer = responseTurn.descendants(matching: .any)
-            .matching(identifier: "ask-agent-answer").firstMatch
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "ask-response-block-answer-")).firstMatch
         XCTAssertFalse(responseTurn.staticTexts["Agent answer"].exists)
         if expectsRemoteAI {
             XCTAssertTrue(
@@ -3085,7 +3087,7 @@ final class CandidateSignalUITests: XCTestCase {
 
         let responseTurn = element("ask-response-turn")
         let remoteAnswer = responseTurn.descendants(matching: .any)
-            .matching(identifier: "ask-agent-answer").firstMatch
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "ask-response-block-answer-")).firstMatch
         XCTAssertFalse(responseTurn.staticTexts["Agent 回答"].exists)
         let expectsRemoteAI = testConfiguration(
             "TS_IOS_EXPECT_REMOTE_CHAT",

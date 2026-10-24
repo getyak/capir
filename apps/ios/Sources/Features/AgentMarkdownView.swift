@@ -107,11 +107,9 @@ enum AgentMarkdownParser {
 
 struct AgentMarkdownView: View {
     private let blocks: [AgentMarkdownBlock]
-    private let accessibilityIdentifier: String
 
-    init(markdown: String, accessibilityIdentifier: String = "agent-markdown") {
+    init(markdown: String) {
         blocks = AgentMarkdownParser.parse(markdown)
-        self.accessibilityIdentifier = accessibilityIdentifier
     }
 
     var body: some View {
@@ -122,7 +120,7 @@ struct AgentMarkdownView: View {
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
-            .accessibilityIdentifier(accessibilityIdentifier)
+            .accessibilityIdentifier("agent-markdown")
     }
 }
 

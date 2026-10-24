@@ -7780,11 +7780,7 @@ private struct AskTurnView: View {
                             onOpenPursuit: onOpenPursuit
                         )
                     } else {
-                        AgentMarkdownView(
-                            markdown: block.body,
-                            accessibilityIdentifier: isGenericAnswer(block)
-                                ? "ask-agent-answer" : "agent-markdown"
-                        )
+                        AgentMarkdownView(markdown: block.body)
                     }
                     if let draft = block.calendarDraft,
                        draft.sourceRequestID == turn.response.taskID,
@@ -7874,7 +7870,7 @@ private struct AskTurnView: View {
                 }
                 .padding(.vertical, 6)
                 .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("ask-response-block-\(turn.response.taskID)-\(block.id)")
+                .accessibilityIdentifier(responseBlockIdentifier(for: block))
                 .id("ask-response-block-\(block.id)")
             }
 
@@ -7982,6 +7978,13 @@ private struct AskTurnView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityIdentifier(identifier)
+    }
+
+    private func responseBlockIdentifier(for block: RelationshipAskResponse.Block) -> String {
+        // A titleless block can reuse its Markdown child's accessibility element.
+        // Keep the answer role on this owning container with its unique identity.
+        let prefix = isGenericAnswer(block) ? "ask-response-block-answer" : "ask-response-block"
+        return "\(prefix)-\(turn.response.taskID)-\(block.id)"
     }
 
     private func isGenericAnswer(_ block: RelationshipAskResponse.Block) -> Bool {

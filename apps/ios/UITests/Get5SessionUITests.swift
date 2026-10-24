@@ -24,7 +24,7 @@ final class Get5SessionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["ask-close"].exists)
         send("Create a review plan from this synthetic note.")
         let firstBlockID = waitForNewResponseBlock(excluding: [])
-        XCTAssertTrue(element("ask-agent-answer").exists)
+        XCTAssertTrue(answerBody.exists)
         XCTAssertFalse(app.staticTexts["Agent answer"].exists)
         XCTAssertFalse(app.buttons["ask-close"].exists)
         XCTAssertTrue(app.navigationBars.buttons.firstMatch.exists)
@@ -229,7 +229,7 @@ final class Get5SessionUITests: XCTestCase {
         openNewComposer()
         send("Review this synthetic note.")
         XCTAssertTrue(element("ask-response-turn").waitForExistence(timeout: 8))
-        XCTAssertTrue(element("ask-agent-answer").exists)
+        XCTAssertTrue(answerBody.exists)
         XCTAssertFalse(app.staticTexts["Agent 回答"].exists)
         capture("GET-5 Chinese dark AX5 Markdown heading")
         for identifier in ["agent-markdown-table", "agent-markdown-code"] {
@@ -317,6 +317,12 @@ final class Get5SessionUITests: XCTestCase {
     private func lastButton(_ identifier: String) -> XCUIElement {
         let matches = app.buttons.matching(identifier: identifier)
         return matches.element(boundBy: max(0, matches.count - 1))
+    }
+
+    private var answerBody: XCUIElement {
+        app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "ask-response-block-answer-")
+        ).firstMatch
     }
 
     private func element(_ identifier: String) -> XCUIElement {
