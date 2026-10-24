@@ -24,6 +24,8 @@ final class Get5SessionUITests: XCTestCase {
         XCTAssertTrue(app.buttons["ask-close"].exists)
         send("Create a review plan from this synthetic note.")
         let firstBlockID = waitForNewResponseBlock(excluding: [])
+        XCTAssertTrue(element("ask-agent-answer").exists)
+        XCTAssertFalse(app.staticTexts["Agent answer"].exists)
         XCTAssertFalse(app.buttons["ask-close"].exists)
         XCTAssertTrue(app.navigationBars.buttons.firstMatch.exists)
         XCTAssertTrue(app.buttons["ask-session-menu"].exists)
@@ -131,6 +133,7 @@ final class Get5SessionUITests: XCTestCase {
         openNewComposer()
         let composer = app.textFields["ask-composer"]
         composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(composer.exists)
         XCTAssertFalse(element("ask-active-voice-ribbon").exists)
         composer.typeText("An ordinary tap opens text input.")
@@ -226,6 +229,8 @@ final class Get5SessionUITests: XCTestCase {
         openNewComposer()
         send("Review this synthetic note.")
         XCTAssertTrue(element("ask-response-turn").waitForExistence(timeout: 8))
+        XCTAssertTrue(element("ask-agent-answer").exists)
+        XCTAssertFalse(app.staticTexts["Agent 回答"].exists)
         capture("GET-5 Chinese dark AX5 Markdown heading")
         for identifier in ["agent-markdown-table", "agent-markdown-code"] {
             let target = element(identifier)

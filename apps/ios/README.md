@@ -524,7 +524,7 @@ pnpm ios:e2e:remote-chat
 
 This focused test injects the development secret at process start, enables
 remote Chat processing only for its isolated backend, and fails unless the
-UI exposes the provider-neutral `Agent answer` provenance label. The regular
+UI renders the validated answer body identified by `ask-agent-answer`. The regular
 `ios:check` remains deterministic and does not require or invoke a remote
 model. Treat the test
 result and its screenshot attachment as proof: reopening the installed test app

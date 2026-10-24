@@ -553,7 +553,11 @@ jobs:
             build/ios/TestResults.parts/*-testPersonDetailLeadsWithContextAndRetainsProfileProvenance.xcresult \
             build/ios/TestResults.parts/*-testPersonDetailKeepsIdentityAndProvenanceReachableInChineseDarkAX5.xcresult \
             build/ios/TestResults.parts/*-testContactContinueOpensAnUnsentScopedConversation.xcresult \
-            build/ios/TestResults.parts/*-testContactMemoryKeepsFutureStatementAndSourceReachable.xcresult; do
+            build/ios/TestResults.parts/*-testContactMemoryKeepsFutureStatementAndSourceReachable.xcresult \
+            build/ios/TestResults.parts/*-testGlobalAgentInputOpensRichNewSessionComposer.xcresult \
+            build/ios/TestResults.parts/*-testContinuousSessionMarkdownControlsForkAndNativeBack.xcresult \
+            build/ios/TestResults.parts/*-testMarkdownChineseDarkAX5ReducedMotionRemainsReachable.xcresult \
+            build/ios/TestResults.parts/*-testAskUsesOneColumnAtAX5WithoutLosingComposerOrCapture.xcresult; do
             [ -d "$bundle" ] || continue
             label="$(basename "$bundle" .xcresult)"
             xcrun xcresulttool export attachments \
