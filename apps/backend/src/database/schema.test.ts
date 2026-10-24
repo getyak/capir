@@ -3,6 +3,13 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("authority schema", () => {
+  it("removes only the redundant queue clock check and keeps Session expiry authoritative", async () => {
+    const sql = await readFile(new URL("./103_conversation_queue_session_expiry.sql", import.meta.url), "utf8");
+    expect(sql).toContain("DROP CONSTRAINT conversation_queue_entries_check");
+    expect(sql).not.toMatch(/ALTER TABLE agent_sessions|DROP TABLE|UPDATE /u);
+    const manifest = JSON.parse(await readFile(new URL("./migration-manifest.json", import.meta.url), "utf8"));
+    expect(manifest.migrations).toContain("103_conversation_queue_session_expiry");
+  });
   it("snapshots Session list identity and immutable ordering without duplicating content", async () => {
     const sql = await readFile(
       new URL("./071_agent_session_list_snapshots.sql", import.meta.url),

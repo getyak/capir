@@ -67,6 +67,8 @@ export function useConversation(options: Options) {
   const [attachments, setAttachments] = useState<ConversationAttachment[]>([]);
   const [preparing, setPreparing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [checkingDeliveries, setCheckingDeliveries] = useState<string[]>([]);
+  const deliveryChecks = useRef(new Map<string, AbortController>());
   const [snapshot, setSnapshot] = useState<ConversationQueueSnapshot | null>(null);
   const [preview, setPreview] = useState<ConversationQueuePreview | null>(null);
   const [connection, setConnection] = useState<"connecting" | "live" | "reconnecting">("connecting");
@@ -318,7 +320,12 @@ export function useConversation(options: Options) {
           // No response is not a rejected message. Its immutable identity stays in the outbox.
           if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
           const definitive = message.receiptUncertain === false && caught instanceof RequestError && caught.status >= 400 && caught.status < 500 && caught.status !== 408;
-          updateMessage(message.id, { delivery: definitive ? "rejected" : "unknown", receiptUncertain: !definitive, error: definitive ? caught.message : "送达结果尚未确认，可核对并重试。" });
+          const failure = message.images?.length
+            ? caught instanceof RequestError && caught.status >= 500
+              ? "图片发送遇到服务器错误，尚未确认送达。原图已保留，请核对并重试。"
+              : "图片发送连接中断，尚未确认送达。原图已保留，请核对并重试。"
+            : "送达结果尚未确认，可核对并重试。";
+          updateMessage(message.id, { delivery: definitive ? "rejected" : "unknown", receiptUncertain: !definitive, error: definitive ? caught.message : failure });
           if (!controller || controller.signal.aborted) break;
           refuse(caught);
           break;
@@ -359,8 +366,10 @@ export function useConversation(options: Options) {
     // A new protected lifecycle owns a fresh lock even while an old JSON body
     // remains unresolved. Old operations retain their distinct lock identity.
     mutationBusy.current = null;
+    deliveryChecks.current.clear();
     queueMicrotask(() => {
     if (controller.signal.aborted) return;
+    setCheckingDeliveries([]);
     if (!mutationBusy.current) setMutating(false);
     const recoveredDraft = readConversationDraft(scope, id);
     draftStamp.current = recoveredDraft?.updatedAt ?? "";
@@ -560,6 +569,18 @@ export function useConversation(options: Options) {
   }
 
   async function retryDelivery(message: LocalMessage) {
+    const controller = lifecycle.current;
+    if (!stillCurrent(controller) || !controller || deliveryChecks.current.has(message.id)) return;
+    deliveryChecks.current.set(message.id, controller);
+    setCheckingDeliveries([...deliveryChecks.current.keys()]);
+    try { await reconcileDelivery(message); }
+    finally {
+      if (deliveryChecks.current.get(message.id) === controller) deliveryChecks.current.delete(message.id);
+      if (stillCurrent(controller)) setCheckingDeliveries([...deliveryChecks.current.keys()]);
+    }
+  }
+
+  async function reconcileDelivery(message: LocalMessage) {
     // First reconcile a lost receipt with an owner-authorized queue read. Only
     // an explicit retry can repeat its stable admission — and never when the
     // same-ID server row already owns the message. The exact mounted lifecycle
@@ -588,7 +609,16 @@ export function useConversation(options: Options) {
       // An aborted or delayed old owner must neither clear the new account's
       // state via refuse() nor put its mutable outbox back into pending.
       if (!stillCurrent(controller)) return;
-      if (caught instanceof RequestError && caught.status !== 404) { refuse(caught); if ([401, 403, 410].includes(caught.status)) return; }
+      if (!(caught instanceof RequestError && caught.status === 404)) {
+        refuse(caught);
+        if (caught instanceof RequestError && ([401, 403, 410].includes(caught.status) || caught.code === "session_stale")) return;
+        if (confirmed) return;
+        // Failed reconciliation is not evidence of absence. Preserve the exact
+        // outbox and require another explicit check instead of resending.
+        updateMessage(message.id, { delivery: "unknown", receiptUncertain: true,
+          error: "核对送达状态失败，消息和图片已保留。恢复连接后再重试。" });
+        return;
+      }
     }
     if (!stillCurrent(controller) || confirmed) return;
     if (local.current.some(item => item.id === message.id)) updateMessage(message.id, { delivery: "pending", receiptUncertain: message.receiptUncertain ?? message.delivery === "unknown", error: undefined });
@@ -720,5 +750,5 @@ export function useConversation(options: Options) {
     runOutcome: Object.fromEntries(Object.entries(runOutcome).filter(([messageId]) => taskHandoffOwners[messageId] === taskOwner)),
     readbackStalled: readbackStalled.filter(messageId => taskHandoffOwners[messageId] === taskOwner),
   };
-  return { taskObservation, entryCapability, detail, draft, messages, attachments, preparing, submitting, snapshot, preview, connection, error, ready, unavailable, draftConflict, mutating, handoffEntries, handoffPreviews, runOutcome, readbackStalled, addFiles, removeAttachment, changeDraft, submit, retryDelivery, discardRejectedDelivery, mutate, keepDraft, remove, refreshDetail };
+  return { taskObservation, entryCapability, detail, draft, messages, attachments, preparing, submitting, checkingDeliveries, snapshot, preview, connection, error, ready, unavailable, draftConflict, mutating, handoffEntries, handoffPreviews, runOutcome, readbackStalled, addFiles, removeAttachment, changeDraft, submit, retryDelivery, discardRejectedDelivery, mutate, keepDraft, remove, refreshDetail };
 }

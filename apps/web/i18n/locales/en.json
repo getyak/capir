@@ -2036,5 +2036,9 @@
   "服务暂时不可用，发送或处理消息可能受影响。": "A service is unavailable. Sending or processing messages may be affected.",
   "部分服务存在异常，处理消息可能受影响。": "Some services have a confirmed issue. Message processing may be affected.",
   "部分服务状态尚未确认。": "Some service states have not been confirmed.",
-  "个人工作区": "Personal workspace"
+  "个人工作区": "Personal workspace",
+  "conversation.recovery.checking": "Checking delivery…",
+  "图片发送遇到服务器错误，尚未确认送达。原图已保留，请核对并重试。": "The server could not complete the image send. Delivery is unconfirmed. Your images are kept; check and retry.",
+  "图片发送连接中断，尚未确认送达。原图已保留，请核对并重试。": "The image connection was interrupted. Delivery is unconfirmed. Your images are kept; check and retry.",
+  "核对送达状态失败，消息和图片已保留。恢复连接后再重试。": "Could not check delivery. Your message and images are kept. Restore the connection, then retry."
 }
