@@ -157,3 +157,13 @@ specific incomplete acceptance item, never a passing simulation.
   confirms Shutdown. Preserve that teardown warning rather than claiming a
   completely clean wrapper exit. Metadata-only copy is covered by release
   policy/localization and will be recompiled in latest-head CI.
+
+- PR423 was created after65/65 native and3/3 UI verification. CI found a PEM
+  format marker false positive; actual P-256 parsing now replaces header
+  matching, with rejection/acceptance regression and independent review.
+- Full backend CI exposed missing retirement fencing on the new capability
+  table. Append-only migration104 adds the existing account retirement trigger
+  without changing103. Retirement cleanup precedes batch claims;54 actual
+  PostgreSQL/HTTP and account-identity regressions pass on108 migrations.
+  Both the unfenced late write and poisoned delivery batch had red counterexamples
+  before repair. Independent review passed; latest-head CI must rerun.

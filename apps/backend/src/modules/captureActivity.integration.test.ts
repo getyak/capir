@@ -170,6 +170,29 @@ suite("single-request background capture admission", () => {
 });
 
 suite("capture Activity real database fencing", () => {
+  it("removes retired capabilities before claiming work so they cannot block an active account", async () => {
+    const retired = await seed(), active = await seed(), sent: string[] = [];
+    const service = new CaptureActivityService(pool!, config, { send: async token => {
+      sent.push(token); return { accepted: true, invalidToken: false };
+    } });
+    await service.register(retired.auth, retired.session, retired.input(1, "a".repeat(64)));
+    await service.register(active.auth, active.session, active.input(1, "b".repeat(64)));
+    await pool!.query("UPDATE accounts SET retired_at=now() WHERE id=$1", [retired.account]);
+    await service.pump();
+    expect(sent).toEqual(["b".repeat(64)]);
+    expect(await retired.row()).toBeUndefined();
+    expect(await active.row()).toBeDefined();
+  });
+
+  it("rejects an admitted late registration write after its account retires", async () => {
+    const s = await seed();
+    const service = new CaptureActivityService(pool!, config, { send: async () => ({ accepted: true, invalidToken: false }) });
+    await service.register(s.auth, s.session, s.input(1));
+    await pool!.query("UPDATE accounts SET retired_at=now() WHERE id=$1", [s.account]);
+    await expect(pool!.query("UPDATE capture_activity_registrations SET next_attempt_at=now() WHERE account_id=$1", [s.account]))
+      .rejects.toMatchObject({ code: "P0001", message: "ACCOUNT_RETIRED" });
+  });
+
   it("refreshes unchanged active work after the liveness interval", async () => {
     const s = await seed();
     const revisions: number[] = [];

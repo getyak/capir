@@ -64,7 +64,10 @@ export class CaptureActivityService {
   }
   private async remove(row: Registration) { await this.pool.query(`DELETE FROM capture_activity_registrations WHERE ${WHERE}`, selector(row)); }
   private async deliver(): Promise<void> {
-    await this.pool.query("DELETE FROM capture_activity_registrations WHERE expires_at<=now()");
+    // Remove revoked ownership before the fenced batch claim. One retired
+    // account must not poison delivery for unrelated active accounts.
+    await this.pool.query(`DELETE FROM capture_activity_registrations WHERE expires_at<=now()
+      OR account_id IN (SELECT id FROM accounts WHERE retired_at IS NOT NULL)`);
     const claimed = await this.pool.query<Registration>(`UPDATE capture_activity_registrations SET next_attempt_at=now()+interval '30 seconds'
       WHERE (account_id,user_id,session_id,activity_instance_id) IN (
         SELECT account_id,user_id,session_id,activity_instance_id FROM capture_activity_registrations
