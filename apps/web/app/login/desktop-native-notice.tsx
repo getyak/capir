@@ -1,3 +1,5 @@
+import type { LocaleTag } from "@talent-signal/contracts";
+import { translate } from "@/lib/i18n";
 /**
  * Display-only native defense (ADR 0022): when the native application marks
  * its request agent, the Web login page shows this inert notice instead of any
@@ -9,14 +11,12 @@ export function isNativeLoginUserAgent(userAgent: string | null): boolean {
   return Boolean(userAgent && userAgent.includes("TalentSignalMac"));
 }
 
-export function DesktopNativeLoginNotice() {
+export function DesktopNativeLoginNotice({ locale = "zh-CN" }: { locale?: LocaleTag } = {}) {
+  const t = (key: string) => translate(locale, key);
   return (
     <main>
-      <h1>请在 capri 应用中登录</h1>
-      <p>
-        此页面不提供密码、注册或第三方登录表单。请回到 Mac 应用，点击“在浏览器中登录”，
-        在系统浏览器中完成登录。
-      </p>
+      <h1>{t("请在 capri 应用中登录")}</h1>
+      <p>{t("此页面不提供密码、注册或第三方登录表单。请回到 Mac 应用，点击“在浏览器中登录”， 在系统浏览器中完成登录。")}</p>
     </main>
   );
 }

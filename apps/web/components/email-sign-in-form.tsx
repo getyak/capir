@@ -1,5 +1,7 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
+
 import { ArrowRight } from "@phosphor-icons/react";
 import { useActionState, useId, useState } from "react";
 import { useFormStatus } from "react-dom";
@@ -10,6 +12,7 @@ import styles from "@/app/login/login.module.css";
 const initialState: SignInState = { error: "" };
 
 function SubmitButton({ enabled }: { enabled: boolean }) {
+  const t = useT();
   const { pending } = useFormStatus();
 
   return (
@@ -19,7 +22,7 @@ function SubmitButton({ enabled }: { enabled: boolean }) {
       disabled={pending || !enabled}
       aria-busy={pending}
     >
-      {pending ? "正在登录…" : "使用邮箱继续"}
+      {pending ? t("正在登录…") : t("使用邮箱继续")}
       <ArrowRight aria-hidden="true" size={17} />
     </button>
   );
@@ -32,20 +35,19 @@ function FormError({
   describedBy?: string;
   state: SignInState;
 }) {
+  const t = useT();
   const { pending } = useFormStatus();
   if (!state.error) return null;
   return (
     <div className="auth-error" role="alert" id={describedBy}>
-      <p>{state.error}</p>
+      <p>{t(state.error)}</p>
       {state.retryable ? (
         <button
           type="submit"
           className={styles.retry}
           disabled={pending}
           aria-busy={pending}
-        >
-          重试
-        </button>
+        >{t("重试")}</button>
       ) : null}
     </div>
   );
@@ -58,6 +60,7 @@ export function EmailSignInForm({
   callbackUrl: string;
   enabled: boolean;
 }) {
+  const t = useT();
   const [state, formAction, pending] = useActionState(
     signInWithEmail,
     initialState,
@@ -76,7 +79,7 @@ export function EmailSignInForm({
     >
       <input type="hidden" name="redirectTo" value={callbackUrl} />
       <div className="auth-field">
-        <label htmlFor="sign-in-email">邮箱</label>
+        <label htmlFor="sign-in-email">{t("邮箱")}</label>
         <input
           id="sign-in-email"
           name="email"
@@ -93,11 +96,11 @@ export function EmailSignInForm({
       <PasswordField
         id="sign-in-password"
         name="password"
-        label="密码"
+        label={t("密码")}
         value={password}
         onChange={setPassword}
         autoComplete="current-password"
-        placeholder="输入密码"
+        placeholder={t("输入密码")}
         minLength={8}
         maxLength={128}
         required
@@ -108,9 +111,7 @@ export function EmailSignInForm({
       <FormError state={state} describedBy={errorId} />
       <SubmitButton enabled={enabled} />
       {!enabled && (
-        <p className="auth-configuration-note">
-          配置默认账号和密码哈希后，即可使用邮箱登录。
-        </p>
+        <p className="auth-configuration-note">{t("配置默认账号和密码哈希后，即可使用邮箱登录。")}</p>
       )}
     </form>
   );

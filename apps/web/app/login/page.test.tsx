@@ -41,6 +41,7 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers({ host: "web.test" }),
 }));
 vi.mock("next/navigation", () => ({ redirect }));
+vi.mock("@/lib/server/marketing-locale", () => ({ getMarketingLocale: async () => "zh-CN" }));
 
 vi.mock("@/lib/server/backendAuth", () => ({
   AUTH_SESSION_COOKIE: "talent-signal.session-v2",
