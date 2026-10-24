@@ -7780,9 +7780,11 @@ private struct AskTurnView: View {
                             onOpenPursuit: onOpenPursuit
                         )
                     } else {
-                        AgentMarkdownView(markdown: block.body)
-                            .accessibilityIdentifier(isGenericAnswer(block)
-                                ? "ask-agent-answer" : "agent-markdown")
+                        AgentMarkdownView(
+                            markdown: block.body,
+                            accessibilityIdentifier: isGenericAnswer(block)
+                                ? "ask-agent-answer" : "agent-markdown"
+                        )
                     }
                     if let draft = block.calendarDraft,
                        draft.sourceRequestID == turn.response.taskID,
