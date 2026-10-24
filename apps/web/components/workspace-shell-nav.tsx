@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowsClockwise,
   CalendarBlank,
   ChatCircleDots,
   ClockCounterClockwise,
@@ -14,7 +15,7 @@ import {
 import type { Icon } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useContext, useLayoutEffect, useRef, useSyncExternalStore, type MouseEvent } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
 
 import {
   WORKSPACE_COMPOSE_HREF,
@@ -28,10 +29,11 @@ import {
   workspaceRailRoute,
   workspaceRailSelection,
 } from "@/lib/workspace-navigation";
-import { recentSessionRows } from "@/lib/workspace-recent-sessions";
+import { recentSessionRows, type RecentSession } from "@/lib/workspace-recent-sessions";
 import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-session-organization";
 import { useWorkspaceSidebarLayout, WorkspaceSidebarPresentation } from "@/lib/workspace-sidebar-layout";
 
+import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { WorkspaceSessionAvatar } from "./workspace-session-avatar";
 import { useT } from "./locale-provider";
 import { useWorkspaceNavigationHref } from "./workspace-navigation-continuity";
@@ -44,7 +46,7 @@ import styles from "./workspace-shell.module.css";
  *
  * The expanded rail is one horizontal row of five controls — today,
  * conversation, people, meetings, scoped global search. The selected control
- * is a 74x36 pill with its label; the others stay 36x36 icons. Route identity
+ * borrows label space within one fixed pair; distant destinations stay put. Route identity
  * and hrefs live in `@/lib/workspace-navigation`; this file owns only
  * presentation. Generic icons use existing Phosphor components — the earlier
  * component map's `app/icon.tsx` match for "icon" is a false positive
@@ -92,12 +94,14 @@ function RailControl({
   const rememberedHref = !mobile && browse ? browse.href(route.href) : rememberedRouteHref;
   const isNew = !compact && mobile && control === "conversation";
   const label = t(isNew ? "conversation.new" : RAIL_LABEL_KEYS[control]);
+  const visibleLabel = !isNew && control === "conversation" ? t("nav.rail.chat") : label;
+  const accessibleLabel = visibleLabel === label || compact ? label : `${visibleLabel} (${label})`;
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
     <Link
       aria-current={current ? !mobile && browse?.enabled ? "location" : "page" : undefined}
       aria-controls={!mobile && browse?.enabled ? "workspace-sidebar-browser" : undefined}
-      aria-label={label}
+      aria-label={accessibleLabel}
       className={compact ? styles.railIconLink : styles.railControl}
       data-mobile={route.mobile ? "true" : "false"}
       data-selected={current ? "true" : undefined}
@@ -126,7 +130,7 @@ function RailControl({
         size={18}
         weight={current ? "fill" : "regular"}
       />
-      {!compact && <span className={styles.railControlLabel}>{label}</span>}
+      {!compact && <span className={styles.railControlLabel}>{visibleLabel}</span>}
     </Link>
   );
 }
@@ -136,29 +140,66 @@ function RailControl({
  * account-scoped directory projection in server order — exact Session ids,
  * never an implicit personal ranking.
  */
+function RailSessionShortcut({ row, current }: { row: RecentSession; current: boolean }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLAnchorElement>(null);
+  const touch = useRef(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const titleId = useId();
+  const href = `/workspace/sessions/${row.id}`;
+  const label = row.unread ? t("{title}（未读）", { title: row.title }) : row.title;
+  function stay() { if (closeTimer.current) clearTimeout(closeTimer.current); }
+  function leave() { stay(); closeTimer.current = setTimeout(() => setOpen(false), 180); }
+  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverAnchor asChild>
+      <Link aria-current={current ? "page" : undefined} aria-label={label}
+        aria-describedby={open ? titleId : undefined} className={styles.railSessionAvatar} href={href} ref={anchor}
+        onFocus={() => { stay(); setOpen(true); }}
+        onBlur={event => { if (!(event.relatedTarget instanceof Node) || !document.getElementById(titleId)?.contains(event.relatedTarget)) leave(); }}
+        onPointerDown={event => { touch.current = event.pointerType === "touch" && !open; }}
+        onPointerEnter={event => { if (event.pointerType === "mouse") { stay(); setOpen(true); } }}
+        onPointerLeave={event => { if (event.pointerType === "mouse") leave(); }}
+        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); stay(); setOpen(false); } }}
+        onClick={event => {
+          // The first touch exposes the exact Session title and a named link.
+          // Mouse and keyboard retain ordinary link navigation.
+          if (touch.current) { event.preventDefault(); stay(); setOpen(true); }
+          touch.current = false;
+        }}>
+        <WorkspaceSessionAvatar personId={row.personId} label={row.personLabel || row.title} />
+        {row.unread && <span aria-hidden="true" className={styles.railSessionUnread} />}
+      </Link>
+    </PopoverAnchor>
+    <PopoverContent id={titleId} aria-label={t("nav.sessions.shortcut")} data-session-shortcut-title
+      className={styles.railSessionTitle} side="right" align="center" sideOffset={8}
+      onOpenAutoFocus={event => event.preventDefault()}
+      onCloseAutoFocus={event => event.preventDefault()}
+      onPointerEnter={stay} onPointerLeave={event => { if (event.pointerType === "mouse") leave(); }}
+      onFocusCapture={stay} onBlur={leave}
+      onEscapeKeyDown={() => { stay(); anchor.current?.focus({ preventScroll: true }); }}>
+      <Link href={href}>{label}</Link>
+    </PopoverContent>
+  </Popover>;
+}
+
 function RailSessionShortcuts({ binding, storageScope }: { binding: string | null; storageScope: string | null }) {
   const t = useT();
   const pathname = usePathname();
-  const { data, loading, failed } = useWorkspaceDirectory(binding, true);
+  const { data, loading, failed, retry } = useWorkspaceDirectory(binding, true);
   const { snapshot } = useSessionOrganization(storageScope);
   const projected = binding && data ? recentSessionRows(data.sessions, binding, undefined, 200) : null;
   const rows = projected ? organizeSessionRows(projected, snapshot.entries).visible : null;
-  if (!binding || !rows || loading || failed || !rows.length) return null;
+  // The directory remains the sole cache owner and fences binding/401/expiry.
+  if (!binding || loading || (!rows?.length && !failed)) return null;
   return (
     <div aria-label={t("nav.sessions.shortcut")} className={styles.railSessions}>
-      {rows.slice(0, 5).map((row) => (
-        <Link
-          aria-current={pathname === `/workspace/sessions/${row.id}` ? "page" : undefined}
-          aria-label={row.unread ? t("{title}（未读）", { title: row.title }) : row.title}
-          className={styles.railSessionAvatar}
-          href={`/workspace/sessions/${row.id}`}
-          key={row.id}
-          title={row.unread ? t("{title}（未读）", { title: row.title }) : row.title}
-        >
-          <WorkspaceSessionAvatar personId={row.personId} label={row.personLabel || row.title} />
-          {row.unread && <span aria-hidden="true" className={styles.railSessionUnread} />}
-        </Link>
-      ))}
+      {rows?.slice(0, 5).map(row => <RailSessionShortcut key={row.id} row={row} current={pathname === `/workspace/sessions/${row.id}`} />)}
+      {failed && <button className={styles.railRetry} type="button" onClick={retry}
+        aria-label={`${t("sessions.error")} ${t("sessions.retry")}`} title={`${t("sessions.error")} ${t("sessions.retry")}`}>
+        <ArrowsClockwise aria-hidden="true" size={17} /><span className="sr-only">{t("sessions.retry")}</span>
+      </button>}
     </div>
   );
 }
@@ -233,23 +274,13 @@ export function WorkspaceShellNav({
       </div>
 
       <nav aria-label={t("nav.label")} className={styles.railRow} ref={primaryNav}>
-        {WORKSPACE_RAIL_CONTROLS.map((control) =>
-          control === "search" ? (
-            <WorkspaceGlobalSearchDialog
-              binding={binding}
-              key="search"
-              label={t(RAIL_SEARCH_KEY)}
-              presentation="rail"
-            />
-          ) : (
-            <RailControl
-              control={control}
-              current={selection === control}
-              key={control}
-              route={workspaceRailRoute(control)!}
-            />
-          ),
-        )}
+        {([ ["today", "conversation"], ["people", "meetings"] ] as const).map(pair => (
+          <div className={styles.railPair} key={pair[0]}>
+            {pair.map(control => <RailControl control={control} current={selection === control}
+              key={control} route={workspaceRailRoute(control)!} />)}
+          </div>
+        ))}
+        <WorkspaceGlobalSearchDialog binding={binding} label={t(RAIL_SEARCH_KEY)} presentation="rail" />
       </nav>
 
       {/* Both presentations share the primary destination order. Compose and

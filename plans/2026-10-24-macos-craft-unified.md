@@ -107,18 +107,28 @@ before the fix. A serial, single-worker run passed 10 tests in two files
 partial slice, not acceptance of all R2 states or the complete task.
 
 Frozen manifests match the existing clean deployed `d49e67ca` dependency source;
-task-owned APFS clones of dependencies/prebuilt shared packages avoid reinstall
-or build. No native build, coding delegation, independent review, full Web
-checks, deployment or installation has started while the resource exception is
-pending. The global pause marker remains unchanged.
+task-owned APFS clones of dependencies/prebuilt shared packages avoid redundant
+installation. The user approved serial task execution while retaining the global
+pause marker. MiMo Pro failed authentication on its first request without code
+changes; one Codex implementer completed the Web slice without a provider retry.
+The native titlebar slice passed 48 focused tests; an additional production
+SwiftUI-host geometry test is running. Web stage one passed 229 focused tests
+and a later 75-test document/locale supplement (overlapping, not additive).
+Independent review, the task capsule, current-head CI, deployment and installed
+acceptance are still required.
 
 Durable partial evidence and a resumable patch:
 `/Users/cubxxw/ops/reports/macos-craft-unified-20261024/`.
 Registered task artifact:
 `/private/tmp/ai-test-macos-craft-unified-20261024.jTvKTj`.
 Keep this unfinished worktree and its dependencies/artifact; they are not
-eligible for completed-task cleanup. No manually terminated PID or reclaimed
-bytes are attributed to this task.
+eligible for completed-task cleanup. The owned blocked Sparkle-resolution build
+PID 95531 was gracefully terminated before reuse of the exact pinned package
+cache. Retired, unreferenced dependencies and reproducible build/failed-test
+caches were removed with exact registered artifact cleanup after formal failure
+evidence was saved. Browser-executor dependencies still referenced by a resident
+service were retained. Cleanup receipts distinguish allocated bytes from unknown
+physical APFS reclamation; free-space changes are not attributed to this task.
 
 Record scoped resource ownership, commands, revisions, results and cleanup in a
 task-owned durable evidence directory. Keep secrets and raw business content

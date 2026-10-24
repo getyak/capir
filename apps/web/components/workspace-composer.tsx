@@ -21,6 +21,8 @@ import {
 } from "@/components/contact-agent/capture-intake";
 import {
   COMPOSER_DISCOVERY_HINT,
+  COMPOSER_DRAFT_LIMIT,
+  WORKSPACE_SLASH_COMMANDS,
   COMPOSER_SEND_LIMIT,
   composerDescribedBy,
   composerLengthState,
@@ -56,6 +58,7 @@ import { useWorkspaceDirectory } from "./workspace-search";
 import { reconcileComposerMentions, type ComposerMention } from "@/lib/composer-mentions";
 import { ComposerPersonReference } from "./composer-person-reference";
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
+import { useLocale, useT } from "./locale-provider";
 import styles from "./workspace-composer.module.css";
 
 type MenuItem = {
@@ -136,6 +139,8 @@ export function WorkspaceComposer({
   footerStart,
   footerEnd,
 }: WorkspaceComposerProps) {
+  const t = useT();
+  const locale = useLocale();
   const base = useId();
   const menuId = `${base}-menu`;
   const hintId = `${base}-hint`;
@@ -196,7 +201,10 @@ export function WorkspaceComposer({
   const visibleMentions = selectedMentions.filter(mention => referencePeople.some(person => person.id === mention.person.id));
 
   const commands =
-    trigger?.kind === "slash" ? filterSlashCommands(trigger.query) : [];
+    trigger?.kind === "slash" ? filterSlashCommands(trigger.query, { commands: WORKSPACE_SLASH_COMMANDS.map(command => ({
+      ...command, title: t(command.title), description: t(command.description),
+      insert: command.insert ? t(command.insert) : undefined,
+    })) }) : [];
   const people =
     trigger?.kind === "mention" && directory.data
       ? searchSidebarPeople(directory.data.people, trigger.query, 8)
@@ -475,9 +483,9 @@ export function WorkspaceComposer({
     // One atomic decision for picker, drop and paste: images stay the real
     // attachment path, documents open an explicit text preview, everything
     // else is rejected locally before any upload.
-    const plan = composerFileIntakePlan(files);
+    const plan = composerFileIntakePlan(files, locale);
     if (plan.kind === "reject") {
-      setFileError(plan.message);
+      setFileError(t(plan.message));
       return;
     }
     if (plan.kind === "document") {
@@ -487,7 +495,7 @@ export function WorkspaceComposer({
     }
     const result = validateAttachmentBatch([], plan.files);
     if (!result.ok) {
-      setFileError(result.error);
+      setFileError(t(result.error));
       return;
     }
     setFileError(null);
@@ -512,6 +520,7 @@ export function WorkspaceComposer({
       file,
       documentType,
       binding,
+      locale,
       signal: controller.signal,
     })
       .then((result) => {
@@ -527,7 +536,7 @@ export function WorkspaceComposer({
         if (documentRun.current?.key !== key) return;
         setDocumentReview((current) =>
           current && current.key === key
-            ? { ...current, error: "文档预览未能完成；现有草稿未被修改。" }
+            ? { ...current, error: t("文档预览未能完成；现有草稿未被修改。") }
             : current,
         );
       });
@@ -597,7 +606,7 @@ export function WorkspaceComposer({
     if (documentRun.current && documentRun.current.binding !== binding) return;
     const separator = value.length > 0 ? COMPOSER_DOCUMENT_SEPARATOR : "";
     const insert = separator + excerpt;
-    const overflowMessage = `加入后会超过 ${stageBound} 字上限，草稿未被修改。`;
+    const overflowMessage = t("composer.addOverflow", { limit: stageBound });
     if (value.length + insert.length > stageBound) {
       // The draft changed under the preview. Keep the preview and the draft
       // intact; the count line explains the bound.
@@ -619,7 +628,7 @@ export function WorkspaceComposer({
       if (!pending || !textarea.current || disabled || readOnly || pending.binding !== binding || pending.value !== value) return;
       const insert = (value.length > 0 ? COMPOSER_DOCUMENT_SEPARATOR : "") + pending.excerpt;
       if (value.length + insert.length > stageBound) return;
-      applyStagedText(insert, value.length, value.length, `加入后会超过 ${stageBound} 字上限，草稿未被修改。`);
+      applyStagedText(insert, value.length, value.length, t("composer.addOverflow", { limit: stageBound }));
     };
   });
 
@@ -661,7 +670,7 @@ export function WorkspaceComposer({
       if (
         dataTransferHasFileEntries(Array.from(event.dataTransfer?.items ?? []))
       ) {
-        setFileError("暂不支持文件夹。请拖入 PNG、JPEG 或 WebP 图片，或一个 PDF、DOCX、TXT、MD、CSV、JSON 或代码文本文件。");
+        setFileError(t("暂不支持文件夹。请拖入 PNG、JPEG 或 WebP 图片，或一个 PDF、DOCX、TXT、MD、CSV、JSON 或代码文本文件。"));
       }
       return;
     }
@@ -693,9 +702,9 @@ export function WorkspaceComposer({
           <small>{item.detail}</small>
         </span>
         {item.kind === "mention" ? (
-          <span className={styles.tag}>引用</span>
+          <span className={styles.tag}>{t("引用")}</span>
         ) : item.kind === "starter" ? (
-          <span className={styles.tag}>草稿</span>
+          <span className={styles.tag}>{t("草稿")}</span>
         ) : (
           <ArrowRight aria-hidden="true" size={14} />
         )}
@@ -723,7 +732,7 @@ export function WorkspaceComposer({
         picker.current?.click();
       }}
       onInsertText={(insert) =>
-        stageText(insert, `插入后会超过 ${maxLength} 字上限，草稿未被修改。`)
+        stageText(insert, t("composer.insertOverflow", { limit: maxLength }))
       }
       onNavigate={onNavigate}
     />
@@ -742,13 +751,13 @@ export function WorkspaceComposer({
     >
       {dragging && fileIntake ? (
         <div className={styles.dropHint} role="status">
-          松开后添加图片或文档；图片随消息发送，文档先预览文本
+          {t("松开后添加图片或文档；图片随消息发送，文档先预览文本")}
         </div>
       ) : null}
       {menuOpen && trigger ? (
         <div className={styles.menu} ref={menu}>
           <div
-            aria-label={composerMenuA11y(trigger.kind).listboxLabel}
+            aria-label={t(composerMenuA11y(trigger.kind).listboxLabel)}
             className={styles.list}
             id={menuId}
             role={items.length && !directory.loading && !directory.failed || trigger.kind === "slash" ? "listbox" : undefined}
@@ -757,36 +766,36 @@ export function WorkspaceComposer({
               items.map((item, index) => renderItem(item, index))
             ) : directory.loading ? (
               <p className={styles.state} role="status">
-                正在读取账号目录…
+                {t("正在读取账号目录…")}
               </p>
             ) : directory.failed ? (
               <div className={styles.state} role="status">
-                <p>暂时无法读取人物目录。请重新载入。</p>
+                <p>{t("暂时无法读取人物目录。请重新载入。")}</p>
                 <button
                   className={styles.retry}
                   onPointerDown={(event) => event.preventDefault()}
                   onClick={directory.retry}
                   type="button"
                 >
-                  重试
+                  {t("重试")}
                 </button>
               </div>
             ) : items.length ? (
               items.map((item, index) => renderItem(item, index))
             ) : (
               <p className={styles.state} role="status">
-                {trigger.query ? "没有匹配的人物" : "还没有人物"}
+                {t(trigger.query ? "没有匹配的人物" : "还没有人物")}
               </p>
             )}
           </div>
           {composerMenuA11y(trigger.kind).disclosure ? (
             <p className={styles.disclosure} id={mentionNoteId}>
-              {composerMenuA11y(trigger.kind).disclosure}
+              {t(composerMenuA11y(trigger.kind).disclosure!)}
             </p>
           ) : null}
           {overflowNotice ? (
             <p className={styles.overflow} role="status">
-              插入后会超过 {maxLength} 字上限，草稿未被修改。
+              {t("composer.insertOverflow", { limit: maxLength })}
             </p>
           ) : null}
         </div>
@@ -846,7 +855,7 @@ export function WorkspaceComposer({
           const text = event.clipboardData.getData("text/plain");
           if (value.length - (element.selectionEnd - element.selectionStart) + text.length > maxLength) {
             event.preventDefault();
-            setPasteError(`这段内容会超过 ${maxLength} 字上限，未粘贴。请分段输入，当前草稿已保留。`);
+            setPasteError(t("composer.pasteOverflow", { limit: maxLength }));
           }
         }}
         onCompositionStart={() => {
@@ -874,7 +883,7 @@ export function WorkspaceComposer({
       />
       </div>
       {layout === "inline" ? <div className={styles.inlineTrailing}>{footerEnd}</div> : null}
-      {visibleMentions.length > 0 ? <div className={styles.selectedReferences} role="group" aria-label="已选择的文字引用">
+      {visibleMentions.length > 0 ? <div className={styles.selectedReferences} role="group" aria-label={t("已选择的文字引用")}>
         {[...new Map(visibleMentions.map(mention => [mention.person.id, mention])).values()].map(mention => {
           const person = referencePeople.find(person => person.id === mention.person.id)!;
           return <ComposerPersonReference key={person.id} person={person} disabled={disabled || readOnly} />;
@@ -892,7 +901,7 @@ export function WorkspaceComposer({
             </>
           ) : null}
           <span className={layout === "inline" ? "sr-only" : styles.hint} id={hintId}>
-            {COMPOSER_DISCOVERY_HINT}
+            {t(COMPOSER_DISCOVERY_HINT)}
           </span>
           {lengthState.message ? (
             <span
@@ -901,11 +910,13 @@ export function WorkspaceComposer({
               id={meterId}
               role="status"
             >
-              {lengthState.message}
+              {t(lengthState.level === "near" ? "composer.length.near" : lengthState.level === "over-send" ? "composer.length.over" : "composer.length.draftLimit", {
+                remaining: lengthState.remainingToSend, sendLimit, draftLimit: COMPOSER_DRAFT_LIMIT,
+              })}
             </span>
           ) : (
             <span className="sr-only" id={meterId}>
-              还可输入 {lengthState.remainingToSend} 字
+              {t("composer.length.remaining", { remaining: lengthState.remainingToSend })}
             </span>
           )}
         </div>

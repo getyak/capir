@@ -1,3 +1,4 @@
+import { LocaleProvider } from "./locale-provider";
 /**
  * Canonical capir test banner: rendered only from the live canonical
  * operator-owned run readback (state ready + exact live account/user), never
@@ -79,4 +80,16 @@ describe("capir test banner", () => {
   it("renders nothing without a verified canonical run", () => {
     expect(renderToStaticMarkup(<CapirTestBanner banner={null} />)).toBe("");
   });
+});
+
+
+it("localizes the human summary while retaining the exact verified run and UTC expiry", () => {
+  const html=renderToStaticMarkup(<LocaleProvider locale="en"><CapirTestBanner banner={banner}/></LocaleProvider>);
+  expect(html).toContain("Test workspace");
+  expect(html).toContain("Synthetic data ready");
+  expect(html).toContain("People 12");
+  expect(html).toContain('data-capir-demo-expiry="2099-01-01T00:00:00Z"');
+  expect(html).toContain('data-capir-run-id="11111111-1111-4111-8111-111111111111"');
+  expect(html).not.toContain("测试空间");
+  expect(html).not.toContain("年");
 });

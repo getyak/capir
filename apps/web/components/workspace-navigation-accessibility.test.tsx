@@ -81,7 +81,7 @@ describe("workspace navigation accessibility and reachability", () => {
       <WorkspaceShellNav binding={null} />
       <WorkspaceMobileSourcesLink />
     </LocaleProvider>);
-    for (const label of ["Workspace navigation", "Today", "Conversation", "People", "Time", "Search people or conversations", "Open the conversation log", "Open extensions"]) {
+    for (const label of ["Workspace navigation", "Today", "Chat (Conversation)", "People", "Time", "Search people or conversations", "Open the conversation log", "Open extensions"]) {
       expect(html).toContain(`aria-label="${label}"`);
     }
     for (const href of ["/workspace/today", "/workspace", "/workspace/people", "/workspace/meetings", "/workspace/sessions", "/workspace/extensions"]) {

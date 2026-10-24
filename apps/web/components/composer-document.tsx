@@ -7,12 +7,13 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   COMPOSER_DOCUMENT_DISCLOSURE,
   COMPOSER_DOCUMENT_SEPARATOR,
-  composerDocumentExcerptNotice,
   composerDocumentStageState,
   decodeComposerTextDocument,
   type ComposerDocumentType,
 } from "@/lib/composer-document";
 import { workspaceSessionFetch } from "./workspace-session-request";
+import type { LocaleTag } from "@talent-signal/contracts";
+import { useT } from "./locale-provider";
 import styles from "./composer-document.module.css";
 
 /**
@@ -65,11 +66,12 @@ export async function extractComposerDocumentText(input: {
   documentType: ComposerDocumentType;
   binding: string | null;
   signal: AbortSignal;
+  locale?: LocaleTag;
   request?: typeof workspaceSessionFetch;
 }): Promise<ComposerDocumentExtraction> {
   if (input.documentType === "text") {
     const decoded = decodeComposerTextDocument(
-      new Uint8Array(await input.file.arrayBuffer()),
+      new Uint8Array(await input.file.arrayBuffer()), input.locale,
     );
     return decoded.ok
       ? { ok: true, text: decoded.text, warnings: [] }
@@ -153,6 +155,7 @@ export function ComposerDocumentPreview({
   /** Typing focus target; the opener control may already be gone. */
   restoreFocus?: () => void;
 }) {
+  const t = useT();
   const base = useId();
   const excerptId = `${base}-excerpt`;
   const textId = `${base}-full-text`;
@@ -223,21 +226,21 @@ export function ComposerDocumentPreview({
             <FileText aria-hidden="true" size={17} weight="duotone" />
             <span className={styles.fileName}>{record.name}</span>
           </Dialog.Title>
-          <Dialog.Close aria-label="关闭文档预览" className={styles.close}>
+          <Dialog.Close aria-label={t("关闭文档预览")} className={styles.close}>
             <X aria-hidden="true" size={17} weight="bold" />
           </Dialog.Close>
           <Dialog.Description className={styles.description}>
-            {COMPOSER_DOCUMENT_DISCLOSURE}
+            {t(COMPOSER_DOCUMENT_DISCLOSURE)}
           </Dialog.Description>
 
           {record.error ? (
             <p className={styles.error} role="alert">
-              {record.error}
+              {t(record.error)}
             </p>
           ) : null}
           {!record.error && text === null ? (
             <p className={styles.loading} role="status">
-              正在提取文档文本…
+              {t("正在提取文档文本…")}
             </p>
           ) : null}
 
@@ -245,20 +248,17 @@ export function ComposerDocumentPreview({
             <>
               {!fitsWhole ? (
                 <p className={styles.notice} role="status">
-                  {composerDocumentExcerptNotice(
-                    stage.budget,
-                    text.length + draftLength + separatorLength,
-                  )}
+                  {t("composer.document.excerptNotice", { budget: stage.budget, total: text.length + draftLength + separatorLength })}
                 </p>
               ) : null}
               <section aria-labelledby={textId} className={styles.textSection}>
                 <h3 className={styles.sectionLabel} id={textId}>
-                  完整文本
+                  {t("完整文本")}
                 </h3>
                 <pre className={styles.fullText}>{text}</pre>
               </section>
               <label className={styles.sectionLabel} htmlFor={excerptId}>
-                要加入草稿的片段
+                {t("要加入草稿的片段")}
               </label>
               {!fitsWhole && excerpt.length === 0 && stage.budget > draftLength + separatorLength ? (
                 <button
@@ -274,7 +274,7 @@ export function ComposerDocumentPreview({
                   }}
                   type="button"
                 >
-                  填入开头可加入的片段
+                  {t("填入开头可加入的片段")}
                 </button>
               ) : null}
               <textarea
@@ -287,7 +287,7 @@ export function ComposerDocumentPreview({
                   // conversation message.
                   event.stopPropagation();
                 }}
-                placeholder="选择或编辑要加入输入框的文本…"
+                placeholder={t("选择或编辑要加入输入框的文本…")}
                 ref={excerptField}
                 rows={5}
                 value={excerpt}
@@ -297,16 +297,16 @@ export function ComposerDocumentPreview({
                 data-composer-document-count
                 role="status"
               >
-                片段 {excerpt.length} 字{separatorLength ? " · 分隔空行 2 字" : ""} · 现有草稿 {draftLength} 字 · 合计 {stage.total} / {stage.budget} 字
+                {t("composer.document.count", { excerpt: excerpt.length, separator: separatorLength ? t("composer.document.separator") : "", draft: draftLength, total: stage.total, budget: stage.budget })}
               </p>
               {!stage.fits ? (
                 <p className={styles.error} role="status">
-                  合计超过 {stage.budget} 字，无法加入。请缩短片段；现有草稿未被修改。
+                  {t("composer.document.overBudget", { budget: stage.budget })}
                 </p>
               ) : null}
               {record.warnings.length ? (
                 <p className={styles.warning}>
-                  提取提示：{record.warnings.slice(0, 3).join("；")}
+                  {t("composer.document.warnings", { warnings: record.warnings.slice(0, 3).map(warning => t(warning)).join("; ") })}
                 </p>
               ) : null}
             </>
@@ -315,7 +315,7 @@ export function ComposerDocumentPreview({
           <div className={styles.actions}>
             <Dialog.Close asChild>
               <button className={styles.secondary} type="button">
-                取消
+                {t("取消")}
               </button>
             </Dialog.Close>
             <button
@@ -325,7 +325,7 @@ export function ComposerDocumentPreview({
               onClick={() => onAdd(excerpt)}
               type="button"
             >
-              加入草稿
+              {t("加入草稿")}
             </button>
           </div>
         </Dialog.Content>

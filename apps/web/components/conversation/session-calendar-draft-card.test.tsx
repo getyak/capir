@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { LocaleProvider } from "../locale-provider";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -234,4 +235,30 @@ describe("Session calendar draft card", () => {
     expect(mount.textContent).toContain("来源已失效");
     expect(button("下载日历草稿")).toBeUndefined();
   });
+});
+
+
+it("localizes the pending calendar decision and editable controls without changing source, title, zone or effects", async () => {
+  await act(async () => root.render(<LocaleProvider locale="en"><SessionCalendarDraftCard draftId={ID} binding="binding-1" sessionId={available.origin_session_id}/></LocaleProvider>));
+  await flush();
+  expect(mount.textContent).toContain("Calendar · To arrange");
+  expect(mount.textContent).toContain("与林岚回访");
+  expect(mount.textContent).toContain("下周二下午两点我们再聊。");
+  expect(mount.textContent).toContain("14:00–14:30");
+  expect(mount.textContent).toContain("Asia/Singapore");
+  expect(button("Download calendar draft")).toBeTruthy();
+  expect(button("Not now")).toBeTruthy();
+  await act(async () => button("Change time")!.click());
+  expect(mount.textContent).toContain("Start time");
+  expect(mount.textContent).toContain("End time");
+  expect(mount.textContent).not.toContain("开始时间");
+  expect(fetcher.mock.calls.every(([,init]) => !init?.method || init.method === "GET")).toBe(true);
+});
+it("localizes calendar readback failure and recovery without hiding unknown decision state", async () => {
+  fetcher.mockRejectedValue(new Error("Synthetic transport failure"));
+  await act(async () => root.render(<LocaleProvider locale="en"><SessionCalendarDraftCard draftId={ID} binding="binding-1" sessionId={available.origin_session_id}/></LocaleProvider>));
+  await flush();
+  expect(mount.textContent).toContain("The meeting draft cannot be read right now. Check again later.");
+  expect(mount.querySelector('a')?.textContent).toBe("Check the calendar draft in Time");
+  expect(mount.querySelector('a')?.getAttribute("href")).toBe(`/workspace/meetings?draft=${ID}`);
 });

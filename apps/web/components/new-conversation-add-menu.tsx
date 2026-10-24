@@ -31,6 +31,7 @@ import {
 import { WORKSPACE_SLASH_COMMANDS } from "@/lib/workspace-composer";
 import { useWorkspaceDirectory } from "./workspace-search";
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
+import { useT } from "./locale-provider";
 import styles from "./new-conversation-add-menu.module.css";
 
 /**
@@ -278,6 +279,7 @@ export function ComposerAddMenu({
     people: `${base}-group-people-label`,
   };
   const searchId = `${base}-people-search`;
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<MenuView>("root");
   const [query, setQuery] = useState("");
@@ -328,7 +330,7 @@ export function ComposerAddMenu({
               tag: "起稿提示",
               run: {
                 kind: "starter",
-                insert: command.insert ?? "",
+                insert: command.insert ? t(command.insert) : "",
               } satisfies MenuRun,
             }),
           )
@@ -397,7 +399,7 @@ export function ComposerAddMenu({
       },
     );
     return rows;
-  }, [matches, onAttachFiles, onAttachImages, onCapture, onInsertText, view]);
+  }, [matches, onAttachFiles, onAttachImages, onCapture, onInsertText, view, t]);
 
   /** Row selection happens in event handlers only: nothing submits here. */
   function runRow(row: MenuRow) {
@@ -668,7 +670,7 @@ export function ComposerAddMenu({
         aria-controls={panelId}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label="添加文件、工具与提示，或查找人物"
+        aria-label={t("添加文件、工具与提示，或查找人物")}
         className={styles.trigger}
         data-add-trigger
         disabled={disabled}
@@ -681,7 +683,7 @@ export function ComposerAddMenu({
       {open && typeof document !== "undefined"
         ? createPortal(
             <div
-              aria-label="添加内容与查找人物"
+              aria-label={t("添加内容与查找人物")}
               className={styles.panel}
               data-add-panel
               id={panelId}
@@ -698,7 +700,7 @@ export function ComposerAddMenu({
                   role="group"
                 >
                   <span className="sr-only" id={groupLabelIds.root}>
-                    添加内容
+                    {t("添加内容") }
                   </span>
                   {rows.map((row) => (
                     <MenuButton key={row.id} row={row} onSelect={runRow} />
@@ -713,7 +715,7 @@ export function ComposerAddMenu({
                 >
                   <div className={styles.viewHeader}>
                     <button
-                      aria-label="返回上一级"
+                      aria-label={t("返回上一级")}
                       className={styles.back}
                       data-add-focus
                       onClick={() => {
@@ -726,18 +728,18 @@ export function ComposerAddMenu({
                       <ArrowLeft aria-hidden="true" size={15} weight="bold" />
                     </button>
                     <span className={styles.viewTitle} id={groupLabelIds[view]}>
-                      {view === "tools" ? "工具与技能" : "查找人物"}
+                      {t(view === "tools" ? "工具与技能" : "查找人物")}
                     </span>
                   </div>
                   {view === "people" ? (
                     <div className={styles.search}>
                       <MagnifyingGlass aria-hidden="true" size={15} />
                       <input
-                        aria-label="查找人物"
+                        aria-label={t("查找人物")}
                         autoComplete="off"
                         id={searchId}
                         onChange={(event) => setQuery(event.target.value)}
-                        placeholder="查找人物"
+                        placeholder={t("查找人物")}
                         ref={search}
                         type="search"
                         value={query}
@@ -746,11 +748,11 @@ export function ComposerAddMenu({
                   ) : null}
                   {view === "people" && directory.loading ? (
                     <p className={styles.state} role="status">
-                      正在读取账号目录…
+                      {t("正在读取账号目录…") }
                     </p>
                   ) : view === "people" && directory.failed ? (
                     <div className={styles.state} role="status">
-                      <p>人物目录暂时无法读取；这里不会用缓存或示例补齐。</p>
+                      <p>{t("人物目录暂时无法读取；这里不会用缓存或示例补齐。") }</p>
                       <button
                         className={styles.retry}
                         data-add-focus
@@ -758,12 +760,12 @@ export function ComposerAddMenu({
                         onClick={directory.retry}
                         type="button"
                       >
-                        重试
+                        {t("重试") }
                       </button>
                     </div>
                   ) : view === "people" && rows.length === 0 ? (
                     <p className={styles.state} role="status">
-                      {query ? "没有匹配的人物" : "还没有人物"}
+                      {t(query ? "没有匹配的人物" : "还没有人物")}
                     </p>
                   ) : (
                     rows.map((row) => (
@@ -783,8 +785,8 @@ export function ComposerAddMenu({
                     >
                       <User aria-hidden="true" className={styles.rowIcon} size={17} weight="duotone" />
                       <span className={styles.rowText}>
-                        <strong>查看全部人物</strong>
-                        <small>打开人物目录页</small>
+                        <strong>{t("查看全部人物") }</strong>
+                        <small>{t("打开人物目录页") }</small>
                       </span>
                       <ArrowRight aria-hidden="true" className={styles.rowArrow} size={14} />
                     </button>
@@ -793,11 +795,11 @@ export function ComposerAddMenu({
               )}
               {view === "root" ? null : (
                 <p className={styles.note}>
-                  {view === "tools"
+                  {t(view === "tools"
                     ? onInsertText
                       ? "起稿提示只把文字插入草稿，发送由你决定。"
                       : "工具在扩展管理页查看与管理。"
-                    : "打开人物页不会发送这条消息；未发送内容留在本机。"}
+                    : "打开人物页不会发送这条消息；未发送内容留在本机。") }
                 </p>
               )}
             </div>,
@@ -816,6 +818,7 @@ function MenuButton({
   onSelect: (row: MenuRow) => void;
 }) {
   const Icon = row.icon;
+  const t = useT();
   return (
     <button
       className={styles.row}
@@ -836,11 +839,11 @@ function MenuButton({
         <Icon aria-hidden="true" className={styles.rowIcon} size={17} weight="duotone" />
       )}
       <span className={styles.rowText}>
-        <strong>{row.title}</strong>
-        <small>{row.detail}</small>
+        <strong>{row.person ? row.title : t(row.title)}</strong>
+        <small>{row.person ? row.detail : t(row.detail)}</small>
       </span>
       {row.tag ? (
-        <span className={styles.rowTag}>{row.tag}</span>
+        <span className={styles.rowTag}>{t(row.tag)}</span>
       ) : (
         <ArrowRight aria-hidden="true" className={styles.rowArrow} size={14} />
       )}

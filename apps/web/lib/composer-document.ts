@@ -9,6 +9,9 @@
  * excerpt-versus-draft budget. It never touches React, the network or a draft.
  */
 
+import type { LocaleTag } from "@talent-signal/contracts";
+import { translate } from "@/lib/i18n";
+
 export type ComposerFileKind = "image" | "document" | "unsupported";
 
 export type ComposerDocumentType = "pdf" | "docx" | "text";
@@ -136,33 +139,34 @@ const REJECT_MANY_DOCUMENTS =
  */
 export function composerFileIntakePlan(
   files: readonly File[],
+  locale: LocaleTag = "zh-CN",
 ): ComposerIntakePlan {
   if (files.length === 0) {
-    return { kind: "reject", message: "没有收到文件。" };
+    return { kind: "reject", message: translate(locale, "没有收到文件。") };
   }
   const kinds = files.map((file) => composerFileKind(file));
   if (kinds.some((kind) => kind === "unsupported")) {
-    return { kind: "reject", message: REJECT_UNSUPPORTED };
+    return { kind: "reject", message: translate(locale, REJECT_UNSUPPORTED) };
   }
   const images = files.filter((_, index) => kinds[index] === "image");
   const documents = files.filter((_, index) => kinds[index] === "document");
   if (images.length > 0 && documents.length > 0) {
-    return { kind: "reject", message: REJECT_MIXED };
+    return { kind: "reject", message: translate(locale, REJECT_MIXED) };
   }
   if (documents.length > 1) {
-    return { kind: "reject", message: REJECT_MANY_DOCUMENTS };
+    return { kind: "reject", message: translate(locale, REJECT_MANY_DOCUMENTS) };
   }
   if (documents.length === 1) {
     const file = documents[0]!;
     const documentType = composerDocumentType(file)!;
     if (file.size === 0) {
-      return { kind: "reject", message: "这个文件是空的，没有可预览的文本。" };
+      return { kind: "reject", message: translate(locale, "这个文件是空的，没有可预览的文本。") };
     }
     const limit = composerDocumentByteLimit(documentType);
     if (file.size > limit) {
       return {
         kind: "reject",
-        message: `${file.name} 超过 ${composerDocumentByteLimitLabel(documentType)} 上限，未做任何处理。可先拆分文档后重试。`,
+        message: translate(locale, "composer.document.fileTooLarge", { name: file.name, limit: composerDocumentByteLimitLabel(documentType) }),
       };
     }
     return { kind: "document", file, documentType };
@@ -180,14 +184,15 @@ export type ComposerTextDecode =
  */
 export function decodeComposerTextDocument(
   bytes: Uint8Array,
+  locale: LocaleTag = "zh-CN",
 ): ComposerTextDecode {
   if (bytes.byteLength === 0) {
-    return { ok: false, message: "这个文件是空的，没有可预览的文本。" };
+    return { ok: false, message: translate(locale, "这个文件是空的，没有可预览的文本。") };
   }
   if (bytes.byteLength > COMPOSER_TEXT_MAX_BYTES) {
     return {
       ok: false,
-      message: `文本文件超过 ${composerDocumentByteLimitLabel("text")} 上限，未做任何处理。`,
+      message: translate(locale, "composer.document.textTooLarge", { limit: composerDocumentByteLimitLabel("text") }),
     };
   }
   let text: string;
@@ -196,14 +201,14 @@ export function decodeComposerTextDocument(
   } catch {
     return {
       ok: false,
-      message: "这不是有效的 UTF-8 文本文件。二进制文件无法预览文本。",
+      message: translate(locale, "这不是有效的 UTF-8 文本文件。二进制文件无法预览文本。"),
     };
   }
   if (text.includes("\u0000")) {
-    return { ok: false, message: "这不是可读取的 UTF-8 文本。请将文件导出为 UTF-8 文本后重试。" };
+    return { ok: false, message: translate(locale, "这不是可读取的 UTF-8 文本。请将文件导出为 UTF-8 文本后重试。") };
   }
   if (!text.trim()) {
-    return { ok: false, message: "这个文件没有可加入草稿的文本。" };
+    return { ok: false, message: translate(locale, "这个文件没有可加入草稿的文本。") };
   }
   return { ok: true, text };
 }

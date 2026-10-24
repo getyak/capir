@@ -6,6 +6,8 @@ import type { ReactNode } from "react";
 import { ArrowRight } from "@phosphor-icons/react/dist/ssr";
 
 import { auth } from "@/auth";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
+import { translate, type TranslateVars } from "@/lib/i18n";
 import { loadAccountSettings } from "@/lib/server/accountBackend";
 import { signOutOfWorkspace } from "@/app/login/actions";
 import { TalentSignalLabShell } from "@/components/talent-signal-lab/lab-shell";
@@ -90,12 +92,14 @@ export default async function WorkspaceLayout({
     );
   }
 
+  const locale = await getMarketingLocale();
+  const t = (key: string, vars?: TranslateVars) => translate(locale, key, vars);
   let testName: string | null = null;
   try {
     const primary = await readPrimaryBackendSessionClaims();
     if (primary) testName = (await testWorkspaceSession(primary))?.name ?? null;
   } catch {
-    testName = "测试会话已过期";
+    testName = t("测试会话已过期");
   }
   // The rendered scope must come from the effective backend session, never from
   // account settings: a settings outage must not unbind the rendered workspace.
@@ -146,16 +150,16 @@ export default async function WorkspaceLayout({
         <WorkspaceAccessRecovery>
           {hasTestWorkspace ? (
             <form action={leaveTestWorkspace}>
-              <button type="submit">返回我的空间<ArrowRight size={16} aria-hidden="true" /></button>
+              <button type="submit">{t("返回我的空间")}<ArrowRight size={16} aria-hidden="true" /></button>
             </form>
           ) : (
-            <WorkspaceReauthenticationLink>重新登录<ArrowRight size={16} aria-hidden="true" /></WorkspaceReauthenticationLink>
+            <WorkspaceReauthenticationLink>{t("重新登录")}<ArrowRight size={16} aria-hidden="true" /></WorkspaceReauthenticationLink>
           )}
         </WorkspaceAccessRecovery>
       </>
     );
   }
-  const accountName = currentDisplayName ?? session.user.name ?? session.user.email ?? "工作区成员";
+  const accountName = currentDisplayName ?? session.user.name ?? session.user.email ?? t("工作区成员");
   const fixtureFallback =
     !backendAccount && process.env.TALENT_SIGNAL_INTEGRATION_MODE === "true";
   const fixtureWorkspace =
@@ -189,7 +193,7 @@ export default async function WorkspaceLayout({
           </div>
           <div className={styles.account}>
             {fixtureWorkspace ? (
-              <span className={styles.environmentBadge} title="合成测试工作台——仅含评测数据，不是真实招聘记录">合成测试空间</span>
+              <span className={styles.environmentBadge} title={t("合成测试工作台——仅含评测数据，不是真实招聘记录")}>{t("合成测试空间")}</span>
             ) : null}
             <AccountControls
               accountName={accountName}
@@ -208,7 +212,7 @@ export default async function WorkspaceLayout({
         <div className={styles.workspace}>
           <header className={styles.mobileHeader}>
             <Link
-              aria-label="capri 工作台"
+              aria-label={t("capri 工作台")}
               className={styles.brand}
               href="/workspace"
             >
@@ -240,9 +244,9 @@ export default async function WorkspaceLayout({
                 <CapirTestBanner banner={capirBanner} />
                 {testName && (
                   <div className={accountStyles.banner} role="status">
-                    <span>测试空间 · {testName}</span>
+                    <span>{t("测试空间")} · {testName}</span>
                     <form action={leaveTestWorkspace}>
-                      <button type="submit">返回我的空间</button>
+                      <button type="submit">{t("返回我的空间")}</button>
                     </form>
                   </div>
                 )}

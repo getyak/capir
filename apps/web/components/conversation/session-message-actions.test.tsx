@@ -103,7 +103,7 @@ it("renders real runtime controls beneath user text and final prose before propo
   expect(userActions.previousElementSibling?.hasAttribute("data-images")).toBe(true);
   expect(userActions.previousElementSibling?.previousElementSibling?.hasAttribute("data-user-message")).toBe(true);
   expect(userActions.nextElementSibling).toBeNull();
-  expect(host.querySelector('[data-message-actions="assistant"]')?.nextElementSibling?.hasAttribute("data-proposal")).toBe(true);
+  expect(host.querySelector('[data-message-actions="assistant"]')?.parentElement?.nextElementSibling?.hasAttribute("data-proposal")).toBe(true);
   expect(host.querySelector('[data-presentation="prose"]')).not.toBeNull();
   await act(async () => action("复制消息").click());
   expect(writeText).toHaveBeenLastCalledWith("  用户\n文字  ");

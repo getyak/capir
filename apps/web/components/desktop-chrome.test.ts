@@ -1,10 +1,11 @@
+import { LocaleProvider } from "./locale-provider";
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { DesktopAccountLink, DesktopDeviceSettingsLink, desktopVersion } from "./desktop-chrome";
 import { WorkspaceAccountMenu, WeeklyUsageRow } from "./workspace-account-menu";
-import { WorkspaceDownloadEntry, WorkspaceFooterStrip } from "./workspace-footer";
+import { ConnectAppsPill, WorkspaceDownloadEntry, WorkspaceFooterStrip } from "./workspace-footer";
 import type { WeeklyUsageStore, WeeklyUsageView } from "@/lib/weekly-usage";
 import type { WeeklyUsageResponse } from "@talent-signal/contracts";
 
@@ -422,4 +423,17 @@ describe("account popover keyboard", () => {
     await act(async () => content.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(document.activeElement?.textContent).toContain("退出登录");
   });
+});
+
+
+it("uses the active English locale for connection and native account handoff chrome", async () => {
+  const english = { locale:"en" as const, children:createElement("div", null,
+    createElement(ConnectAppsPill), createElement(DesktopAccountLink,{ onClick() {} }), createElement(DesktopDeviceSettingsLink,{ onClick() {} })) };
+  const host=await render(createElement(LocaleProvider, english));
+  expect(host.textContent).toContain("Connect apps");
+  expect(host.textContent).toContain("Account and preferences");
+  await showDesktop({ protocolVersion:1, availableVersion:null });
+  expect(host.querySelector('a[href="talentsignal-desktop://account-settings"]')?.getAttribute("aria-label")).toContain("default browser");
+  expect(host.textContent).toContain("This Mac settings");
+  expect(host.textContent).not.toContain("账号与偏好");
 });

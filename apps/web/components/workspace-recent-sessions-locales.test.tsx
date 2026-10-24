@@ -50,7 +50,9 @@ it("preserves stored titles and person initials while localizing row and surroun
   expect(html).toContain('aria-label="Start a new conversation"');
   expect(html).toContain('aria-label="More actions: 客户原话：下周再联系"');
   expect(html).toContain('aria-label="Pin: 客户原话：下周再联系"');
-  expect(html).toContain("Organized on this device");
+  // Portalled menu content renders only after opening; its locale is covered
+  // by the interaction test in workspace-session-row.test.tsx.
+  expect(html).not.toContain("Organized on this device");
   expect(html).toContain(">晓</span>");
   expect(html).not.toContain("更多操作");
   expect(html).not.toContain("新建对话");

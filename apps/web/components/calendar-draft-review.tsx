@@ -1,6 +1,6 @@
 "use client";
 
-import type { CalendarDraft, MeetingDraftRecord } from "@talent-signal/contracts";
+import type { LocaleTag, CalendarDraft, MeetingDraftRecord } from "@talent-signal/contracts";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -18,6 +18,7 @@ import {
 } from "@/lib/meeting-draft-pending";
 import { workspaceSessionFetch } from "./workspace-session-request";
 
+import { useLocale, useT } from "./locale-provider";
 import styles from "./agent-review-form.module.css";
 
 export type CalendarDraftPersistence = {
@@ -68,12 +69,12 @@ function values(draft: CalendarDraft): ReviewValues {
   };
 }
 
-function sessionLocalInterval(start: string, end: string): string {
+function sessionLocalInterval(start: string, end: string, locale: LocaleTag): string {
   const day = (value: string): string | null => {
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u.test(value)) return null;
     const date = new Date(`${value.slice(0, 10)}T12:00:00Z`);
     if (!Number.isFinite(date.getTime())) return null;
-    return new Intl.DateTimeFormat("zh-CN", {
+    return new Intl.DateTimeFormat(locale, {
       year: "numeric", month: "numeric", day: "numeric", weekday: "short", timeZone: "UTC",
     }).format(date);
   };
@@ -119,6 +120,8 @@ export function CalendarDraftReview({
   onDismiss?: () => void;
   onDraftSaved?: (draft: MeetingDraftRecord) => void;
 }) {
+  const t = useT();
+  const locale = useLocale();
   const router = useRouter();
   const [generated, setGenerated] = useState(false);
   const [sessionEditing, setSessionEditing] = useState(false);
@@ -648,13 +651,13 @@ export function CalendarDraftReview({
 
   const busy = saveState === "saving";
   if (variant === "session") {
-    return <section className={`${styles.review} ${styles.sessionCard}`} aria-label="日历草稿" data-testid="session-calendar-draft-card">
-      <div className={styles.sessionCardHead}><span>日历 · 待安排</span><span>日历文件</span></div>
+    return <section className={`${styles.review} ${styles.sessionCard}`} aria-label={t("日历草稿")} data-testid="session-calendar-draft-card">
+      <div className={styles.sessionCardHead}><span>{t("日历 · 待安排")}</span><span>{t("日历文件")}</span></div>
       <h3>{title}</h3>
-      <p className={styles.sessionCardTime}>{sessionLocalInterval(start, end)} · {draft.time_zone}</p>
+      <p className={styles.sessionCardTime}>{t(sessionLocalInterval(start, end, locale))} · {draft.time_zone}</p>
       <blockquote>{draft.source_excerpt}</blockquote>
       {sessionEditing ? <div className={styles.sessionCardFields}>
-        <label className={styles.field}>标题<input value={title} maxLength={200} disabled={busy}
+        <label className={styles.field}>{t("标题")}<input value={title} maxLength={200} disabled={busy}
           onBlur={() => void flushCurrent()}
           onChange={(event) => {
             if ((event.nativeEvent as InputEvent).isComposing || composing.current) {
@@ -666,27 +669,27 @@ export function CalendarDraftReview({
           }}
           onCompositionStart={() => { composing.current = true; setIsComposing(true); }}
           onCompositionEnd={(event) => { composing.current = false; setIsComposing(false); changed(setTitle, event.currentTarget.value); }}/></label>
-        <label className={styles.field}>开始时间<input type="datetime-local" value={start} disabled={busy} onChange={(event) => changed(setStart, event.target.value)} onBlur={() => void flushCurrent()}/></label>
-        <label className={styles.field}>结束时间<input type="datetime-local" value={end} disabled={busy} onChange={(event) => changed(setEnd, event.target.value)} onBlur={() => void flushCurrent()}/></label>
-        <button className={styles.secondary} type="button" onClick={() => { void flushCurrent(); setSessionEditing(false); }}>完成修改</button>
+        <label className={styles.field}>{t("开始时间")}<input type="datetime-local" value={start} disabled={busy} onChange={(event) => changed(setStart, event.target.value)} onBlur={() => void flushCurrent()}/></label>
+        <label className={styles.field}>{t("结束时间")}<input type="datetime-local" value={end} disabled={busy} onChange={(event) => changed(setEnd, event.target.value)} onBlur={() => void flushCurrent()}/></label>
+        <button className={styles.secondary} type="button" onClick={() => { void flushCurrent(); setSessionEditing(false); }}>{t("完成修改")}</button>
       </div> : null}
-      {conflict ? <section className={styles.conflict} role="alert"><strong>这份草稿已在别处修改</strong><p>你的输入仍保留。请选择一个版本。</p>
-        <div className={styles.actions}><button className={styles.secondary} type="button" onClick={useServerVersion}>使用服务器版本</button><button className={styles.secondary} type="button" onClick={reapplyLocalVersion}>重新应用我的编辑</button></div>
+      {conflict ? <section className={styles.conflict} role="alert"><strong>{t("这份草稿已在别处修改")}</strong><p>{t("你的输入仍保留。请选择一个版本。")}</p>
+        <div className={styles.actions}><button className={styles.secondary} type="button" onClick={useServerVersion}>{t("使用服务器版本")}</button><button className={styles.secondary} type="button" onClick={reapplyLocalVersion}>{t("重新应用我的编辑")}</button></div>
       </section> : null}
       <div className={styles.sessionCardActions}>
-        <button className={styles.primary} type="button" disabled={busy || Boolean(conflict)} onClick={() => void exportDraft()}>下载日历草稿</button>
-        <button className={styles.secondary} type="button" disabled={busy} onClick={() => setSessionEditing(!sessionEditing)}>{sessionEditing ? "收起编辑" : "改时间"}</button>
-        <button className={styles.secondary} type="button" disabled={busy} onClick={onDismiss}>暂不安排</button>
+        <button className={styles.primary} type="button" disabled={busy || Boolean(conflict)} onClick={() => void exportDraft()}>{t("下载日历草稿")}</button>
+        <button className={styles.secondary} type="button" disabled={busy} onClick={() => setSessionEditing(!sessionEditing)}>{t(sessionEditing ? "收起编辑" : "改时间")}</button>
+        <button className={styles.secondary} type="button" disabled={busy} onClick={onDismiss}>{t("暂不安排")}</button>
       </div>
-      {error ? <p role="alert">{error}</p> : null}
-      <p role="status">{generated ? "已生成日历草稿，请在日历应用中确认导入" : saveState === "saving" ? "正在保存修改…" : saveState === "error" ? "更改尚未保存" : "导入由日历应用确认"}</p>
+      {error ? <p role="alert">{t(error)}</p> : null}
+      <p role="status">{t(generated ? "已生成日历草稿，请在日历应用中确认导入" : saveState === "saving" ? "正在保存修改…" : saveState === "error" ? "更改尚未保存" : "导入由日历应用确认")}</p>
     </section>;
   }
   return (
-    <section className={styles.review} aria-label="日历草稿" data-testid="calendar-draft-review">
-      <h3>核对日历草稿</h3>
+    <section className={styles.review} aria-label={t("日历草稿")} data-testid="calendar-draft-review">
+      <h3>{t("核对日历草稿")}</h3>
       <label className={styles.field}>
-        标题
+        {t("标题")}
         <input
           disabled={busy}
           maxLength={200}
@@ -712,7 +715,7 @@ export function CalendarDraftReview({
         />
       </label>
       <label className={styles.field}>
-        开始时间
+        {t("开始时间")}
         <input
           disabled={busy}
           onBlur={() => void flushCurrent()}
@@ -722,7 +725,7 @@ export function CalendarDraftReview({
         />
       </label>
       <label className={styles.field}>
-        结束时间
+        {t("结束时间")}
         <input
           disabled={busy}
           onBlur={() => void flushCurrent()}
@@ -731,10 +734,10 @@ export function CalendarDraftReview({
           value={end}
         />
       </label>
-      <p>{draft.time_zone} · 待确认，尚未创建日历事件</p>
+      <p>{draft.time_zone} · {t("待确认，尚未创建日历事件")}</p>
       {persistence ? (
         <p aria-live="polite" role="status">
-          {saveState === "saving"
+          {t(saveState === "saving"
             ? "正在保存核对内容…"
             : saveState === "dirty"
               ? "更改尚未保存"
@@ -742,36 +745,30 @@ export function CalendarDraftReview({
                 ? "更改未保存"
                 : saveState === "saved"
                   ? "核对内容已保存"
-                  : "编辑后会自动保存到这份草稿"}
+                  : "编辑后会自动保存到这份草稿")}
         </p>
       ) : null}
       <details>
-        <summary>查看原文</summary>
+        <summary>{t("查看原文")}</summary>
         <blockquote>{draft.source_excerpt}</blockquote>
       </details>
       {conflict ? (
-        <section aria-label="草稿版本冲突" className={styles.conflict} role="alert">
-          <strong>这份草稿已在别处修改</strong>
+        <section aria-label={t("草稿版本冲突")} className={styles.conflict} role="alert">
+          <strong>{t("这份草稿已在别处修改")}</strong>
           <p>
-            服务器版本：{conflict.draft.title} ·
+            {t("服务器版本：")}{conflict.draft.title} ·
             {calendarLocalTime(conflict.draft.starts_at, conflict.draft.time_zone)}–
             {calendarLocalTime(conflict.draft.ends_at, conflict.draft.time_zone)}
           </p>
-          <p>你的编辑仍保留在上方输入框中。请选择一个版本后再导出。</p>
+          <p>{t("你的编辑仍保留在上方输入框中。请选择一个版本后再导出。")}</p>
           <div className={styles.actions}>
-            <button className={styles.secondary} onClick={useServerVersion} type="button">
-              使用服务器版本
-            </button>
-            <button className={styles.primary} onClick={reapplyLocalVersion} type="button">
-              重新应用我的编辑
-            </button>
+            <button className={styles.secondary} onClick={useServerVersion} type="button">{t("使用服务器版本")}</button>
+            <button className={styles.primary} onClick={reapplyLocalVersion} type="button">{t("重新应用我的编辑")}</button>
           </div>
         </section>
       ) : null}
       {saveState === "error" && !conflict ? (
-        <button className={styles.secondary} onClick={retrySave} type="button">
-          重试保存
-        </button>
+        <button className={styles.secondary} onClick={retrySave} type="button">{t("重试保存")}</button>
       ) : null}
       <button
         className={styles.primary}
@@ -779,13 +776,13 @@ export function CalendarDraftReview({
         onClick={() => void exportDraft()}
         type="button"
       >
-        {busy ? "正在保存…" : conflict ? "先处理版本冲突" : "下载日历草稿"}
+        {t(busy ? "正在保存…" : conflict ? "先处理版本冲突" : "下载日历草稿")}
       </button>
-      {error ? <p role="alert">{error}</p> : null}
+      {error ? <p role="alert">{t(error)}</p> : null}
       <p role="status">
-        {generated
+        {t(generated
           ? "已生成日历文件，请在日历应用中核对并确认导入。"
-          : "只导出标题和时间，导入由你的日历应用确认。"}
+          : "只导出标题和时间，导入由你的日历应用确认。")}
       </p>
     </section>
   );

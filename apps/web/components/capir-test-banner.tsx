@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Canonical capir test-space banner.
  *
@@ -8,20 +10,25 @@
  * ready. Visible text is the quiet human summary.
  */
 import type { CapirTestBannerData } from "@/lib/server/capir-test-entry";
+import { useLocale, useT } from "./locale-provider";
+import type { LocaleTag } from "@talent-signal/contracts";
 import styles from "./capir-test-banner.module.css";
 
 export type { CapirTestBannerData };
 
-/** Concise deterministic deadline rendering (UTC, zh-CN product copy). */
-export function formatDeadline(expiresAt: string): string {
+/** Deterministic UTC deadline; locale affects presentation, never expiry. */
+export function formatDeadline(expiresAt: string, locale: LocaleTag = "zh-CN"): string {
   const at = new Date(expiresAt);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${at.getUTCFullYear()}年${at.getUTCMonth() + 1}月${at.getUTCDate()}日 ${pad(at.getUTCHours())}:${pad(at.getUTCMinutes())} (UTC)`;
+  const date = new Intl.DateTimeFormat(locale, { timeZone: "UTC", year: "numeric", month: "long", day: "numeric" }).format(at);
+  const time = new Intl.DateTimeFormat(locale, { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hourCycle:"h23" }).format(at);
+  return `${date} ${time} (UTC)`;
 }
 
 export function CapirTestBanner({ banner }: { banner: CapirTestBannerData | null }) {
+  const t = useT();
+  const locale = useLocale();
   if (!banner) return null;
-  const datasetLabel = banner.datasetState === "ready" ? "合成数据已就绪" : "合成数据校验未通过";
+  const datasetLabel = t(banner.datasetState === "ready" ? "合成数据已就绪" : "合成数据校验未通过");
   return (
     <aside
       className={styles.badge}
@@ -39,11 +46,11 @@ export function CapirTestBanner({ banner }: { banner: CapirTestBannerData | null
       data-capir-user-id={banner.run.user_id}
       data-capir-username={banner.run.username}
     >
-      <span className={styles.label}>测试空间</span>
+      <span className={styles.label}>{t("测试空间")}</span>
       <span className={styles.detail}>{banner.run.username}</span>
-      <span className={styles.detail}>有效期至 {formatDeadline(banner.expiresAt)}</span>
+      <span className={styles.detail}>{t("test.banner.expires", { date: formatDeadline(banner.expiresAt, locale) })}</span>
       <span className={`${styles.detail} ${styles.muted}`}>
-        {datasetLabel}（人物 {banner.counts.contacts} · 观察 {banner.counts.observations} · 任务 {banner.counts.tasks}）
+        {t("test.banner.dataset", { state: datasetLabel, people: banner.counts.contacts, observations: banner.counts.observations, tasks: banner.counts.tasks })}
       </span>
     </aside>
   );

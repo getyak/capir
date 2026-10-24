@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { siteConfig } from "@/lib/site";
 import type { ConversationWorkStatus } from "./conversation-feedback";
+import { useT } from "../locale-provider";
 import styles from "./queued-conversation.module.css";
 
 /**
@@ -14,12 +15,13 @@ import styles from "./queued-conversation.module.css";
  * paused and failed turns never animate.
  */
 export function ConversationWorkRow({ status, children }: { status: ConversationWorkStatus; children?: ReactNode }) {
+  const t = useT();
   return (
     <div className={styles.workRow} data-conversation-work data-phase={status.phase} data-animate={status.animate ? "true" : "false"}>
       <span className={styles.workLabel}>
         {siteConfig.name}
       </span>
-      <span className={styles.workStatus} role="status">{status.text}</span>
+      <span className={styles.workStatus} role="status">{t(status.text)}</span>
       {children}
     </div>
   );
