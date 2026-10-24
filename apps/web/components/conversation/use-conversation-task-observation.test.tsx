@@ -156,3 +156,114 @@ it("ignores an old retry after its history JSON finishes in the new binding", as
   expect(state.taskObservation.messages.map(message => message.id)).toEqual([MESSAGE]);
   expect(state.draft).toBe("Preserve draft after readback"); expect(host.querySelector("textarea")).toBe(composer);
 });
+
+function heldJson(status = 200) {
+  let resolve!: (value: unknown) => void;
+  const body = new Promise<unknown>(yes => { resolve = yes; });
+  const response = Response.json({}, { status });
+  vi.spyOn(response, "json").mockImplementation(() => body);
+  return { response, resolve };
+}
+async function beginMutation(input: Parameters<typeof state.mutate>[0]) {
+  let result!: Promise<boolean>;
+  await act(async () => { result = state.mutate(input); }); await flush();
+  return { result };
+}
+function mutationPosts() { return fetcher.mock.calls.filter(([url, init]) => url.endsWith("/mutations") && init?.method === "POST"); }
+async function newMutationOwner(change: "binding ABA" | "same-ID scope switch") {
+  if (change === "binding ABA") { await render(A, SCOPE, "b"); await render(); }
+  else { unknown("e".repeat(64)); await render(A, "e".repeat(64)); }
+  await snapshot(5, null);
+  await act(async () => { state.changeDraft("New mutation owner draft"); await state.addFiles([new File([new Uint8Array([137, 80, 78, 71, 1, 2, 3, 4])], "new-owner.png", { type: "image/png" })]); });
+  expect(state.attachments).toHaveLength(1);
+}
+it.each([
+  [200, "binding ABA"], [200, "same-ID scope switch"],
+  [401, "binding ABA"], [403, "same-ID scope switch"],
+] as const)("drops old mutation %s JSON across %s without reconciling or refusing the current owner", async (status, change) => {
+  unknown(); await render(); await snapshot(1, null);
+  const held = heldJson(status); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations") ? Promise.resolve(held.response) : base(url, init));
+  const old = await beginMutation({ kind: "retry", queue_entry_id: MESSAGE });
+  const composer = host.querySelector("textarea");
+  await newMutationOwner(change);
+  const owner = state.taskObservation.owner; const attachments = state.attachments;
+  const reads = fetcher.mock.calls.filter(([url]) => url.endsWith("/conversation-queue")).length;
+  await act(async () => { held.resolve(status === 200 ? { snapshot: { ...emptyQueue(10), active: entry } } : { message: "Departed authority denied" }); await old.result; }); await flush();
+  expect(state.messages.map(message => message.delivery)).toEqual(["unknown"]);
+  expect(state.taskObservation.messages.map(message => message.id)).toEqual([MESSAGE]);
+  expect(state.taskObservation.snapshot?.revision).toBe(5); expect(state.taskObservation.owner).toBe(owner);
+  expect(state.draft).toBe("New mutation owner draft"); expect(state.attachments).toEqual(attachments);
+  expect(state.unavailable).toBe(false); expect(host.querySelector("textarea")).toBe(composer);
+  expect(fetcher.mock.calls.filter(([url]) => url.endsWith("/conversation-queue"))).toHaveLength(reads);
+  expect(posts().filter(([url]) => url.endsWith("/conversation-queue"))).toHaveLength(0);
+});
+it.each(["conflict body", "CAS readback body", "rebase body"])("does not rebase an old Stop after its held %s crosses binding ABA", async boundary => {
+  await render(); await snapshot(1, entry);
+  const held = heldJson(boundary === "conflict body" ? 409 : 200); const base = fetcher.getMockImplementation()!;
+  let stopPosts = 0;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.endsWith("/mutations")) return Promise.resolve(boundary === "conflict body" || (boundary === "rebase body" && ++stopPosts === 2) ? held.response : Response.json({ message: "CAS" }, { status: 409 }));
+    if (url.endsWith("/conversation-queue")) return Promise.resolve(boundary === "CAS readback body" ? held.response : Response.json({ ...emptyQueue(2), active: entry }));
+    return base(url, init);
+  });
+  const old = await beginMutation({ kind: "stop", run_id: entry.run_id! });
+  await render(A, SCOPE, "b"); await render(); await snapshot(5, null);
+  const reads = fetcher.mock.calls.filter(([url]) => url.endsWith("/conversation-queue")).length;
+  await act(async () => { held.resolve(boundary === "conflict body" ? { message: "CAS" } : boundary === "rebase body" ? { snapshot: { ...emptyQueue(10), active: entry } } : { ...emptyQueue(10), active: entry }); await old.result; }); await flush();
+  expect(mutationPosts()).toHaveLength(boundary === "rebase body" ? 2 : 1);
+  expect(fetcher.mock.calls.filter(([url]) => url.endsWith("/conversation-queue"))).toHaveLength(reads);
+  expect(state.taskObservation.snapshot?.revision).toBe(5); expect(state.error).toBe("");
+});
+it("does not commit an old outer-catch recovery body in the current lifecycle", async () => {
+  unknown(); await render(); await snapshot(1, null);
+  const held = heldJson(); const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.endsWith("/mutations")) return Promise.resolve(Response.json({ message: "Failure" }, { status: 500 }));
+    if (url.endsWith("/conversation-queue")) return Promise.resolve(held.response);
+    return base(url, init);
+  });
+  const old = await beginMutation({ kind: "retry", queue_entry_id: MESSAGE });
+  await newMutationOwner("same-ID scope switch"); const attachments = state.attachments;
+  await act(async () => { held.resolve({ ...emptyQueue(10), active: entry }); await old.result; }); await flush();
+  expect(state.taskObservation.snapshot?.revision).toBe(5); expect(state.messages[0].delivery).toBe("unknown");
+  expect(state.taskObservation.messages.map(message => message.id)).toEqual([MESSAGE]);
+  expect(state.draft).toBe("New mutation owner draft"); expect(state.attachments).toEqual(attachments);
+  expect(posts().filter(([url]) => url.endsWith("/conversation-queue"))).toHaveLength(0);
+});
+it("gives the new lifecycle its own single-flight lock and rejects cleanup from an old operation", async () => {
+  await render(); await snapshot(1, null);
+  const oldBody = heldJson(); const newBody = heldJson(); const base = fetcher.getMockImplementation()!;
+  let count = 0;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/mutations")
+    ? Promise.resolve(++count === 1 ? oldBody.response : count === 2 ? newBody.response : Response.json({ snapshot: emptyQueue(7) })) : base(url, init));
+  const old = await beginMutation({ kind: "continue" }); expect(state.mutating).toBe(true);
+  await render(A, SCOPE, "b"); await render(); await snapshot(5, null);
+  expect(state.mutating).toBe(false);
+  const current = await beginMutation({ kind: "continue" }); expect(state.mutating).toBe(true); expect(mutationPosts()).toHaveLength(2);
+  await act(async () => { expect(await state.mutate({ kind: "continue" })).toBe(false); });
+  await act(async () => { oldBody.resolve({ snapshot: emptyQueue(10) }); expect(await old.result).toBe(false); }); await flush();
+  expect(state.mutating).toBe(true); expect(state.taskObservation.snapshot?.revision).toBe(5);
+  await act(async () => { expect(await state.mutate({ kind: "continue" })).toBe(false); }); expect(mutationPosts()).toHaveLength(2);
+  await act(async () => { newBody.resolve({ snapshot: emptyQueue(6) }); expect(await current.result).toBe(true); }); await flush();
+  expect(state.mutating).toBe(false); expect(state.taskObservation.snapshot?.revision).toBe(6);
+  await act(async () => { expect(await state.mutate({ kind: "continue" })).toBe(true); }); expect(mutationPosts()).toHaveLength(3);
+});
+it.each(["same run", "replacement run"])("preserves current-owner Stop CAS and idempotency for %s", async target => {
+  await render(); await snapshot(1, entry);
+  const latest = { ...emptyQueue(2), active: target === "same run" ? entry : { ...entry, run_id: "55555555-5555-4555-8555-555555555555" } };
+  const base = fetcher.getMockImplementation()!; let count = 0;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.endsWith("/mutations")) return Promise.resolve(++count === 1 ? Response.json({ message: "CAS" }, { status: 409 }) : Response.json({ snapshot: { ...latest, revision: 3, active: { ...entry, cancel_requested: true } } }));
+    if (url.endsWith("/conversation-queue")) return Promise.resolve(Response.json(latest));
+    return base(url, init);
+  });
+  await act(async () => { expect(await state.mutate({ kind: "stop", run_id: entry.run_id! })).toBe(true); }); await flush();
+  const bodies = mutationPosts().map(([, init]) => JSON.parse(init.body));
+  expect(bodies).toHaveLength(target === "same run" ? 2 : 1);
+  if (target === "same run") {
+    expect(bodies[1]).toMatchObject({ kind: "stop", run_id: entry.run_id, expected_revision: 2, idempotency_key: bodies[0].idempotency_key });
+    expect(bodies[0].expected_revision).toBe(1);
+  }
+  expect(state.mutating).toBe(false);
+});

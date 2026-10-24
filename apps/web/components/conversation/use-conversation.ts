@@ -96,7 +96,7 @@ export function useConversation(options: Options) {
   // reconciled with. A refresh may merge committed turns freely, but a CHANGED
   // remote draft triggers the conflict UI before any save can overwrite it.
   const remoteDraftBaseline = useRef(initial?.composer_draft ?? "");
-  const mutationBusy = useRef(false); const pendingHandoff = useRef<string | null>(null);
+  const mutationBusy = useRef<{ controller: AbortController } | null>(null); const pendingHandoff = useRef<string | null>(null);
   const writer = useRef(""); const draftStamp = useRef(""); const loaded = useRef(false);
   const submitLock = useRef(false); const preparingRef = useRef(false); const prepareGeneration = useRef(0);
   const pendingPreparations = useRef(0);
@@ -355,8 +355,12 @@ export function useConversation(options: Options) {
   useEffect(() => {
     if (!id) return;
     const controller = new AbortController(); lifecycle.current = controller; writer.current = crypto.randomUUID();
+    // A new protected lifecycle owns a fresh lock even while an old JSON body
+    // remains unresolved. Old operations retain their distinct lock identity.
+    mutationBusy.current = null;
     queueMicrotask(() => {
     if (controller.signal.aborted) return;
+    if (!mutationBusy.current) setMutating(false);
     const recoveredDraft = readConversationDraft(scope, id);
     draftStamp.current = recoveredDraft?.updatedAt ?? "";
     const value = recoveredDraft?.value ?? initial?.composer_draft ?? "";
@@ -597,27 +601,51 @@ export function useConversation(options: Options) {
     storeMessages(local.current.filter(message => message.id !== messageId));
   }
   async function mutate(input: Omit<ConversationQueueMutationRequest, "expected_revision" | "idempotency_key"> & { objective?: string; queue_entry_id?: string; run_id?: string }) {
-    if (mutationBusy.current || !snapshotRef.current) return false;
-    mutationBusy.current = true; setMutating(true); setError("");
+    const controller = lifecycle.current;
+    if (!controller || !stillCurrent(controller) || mutationBusy.current || !snapshotRef.current) return false;
+    const lock = { controller };
+    mutationBusy.current = lock; setMutating(true); setError("");
+    const owned = () => stillCurrent(controller) && mutationBusy.current === lock;
     try {
       const operation = crypto.randomUUID();
       let response: Response;
-      try { response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: snapshotRef.current.revision, idempotency_key: operation }) }); }
+      try {
+        response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: snapshotRef.current.revision, idempotency_key: operation }) });
+        if (!owned()) return false;
+      }
       catch (caught) {
-        // A concurrent admission may advance the queue while Stop is in flight.
-        // Rebase only a rejected CAS and only while the same run still owns it.
+        // Rebase only this still-current Stop after a rejected CAS, preserving
+        // the exact run and operation key. Never read or retry for a new owner.
+        if (!owned()) return false;
         if (input.kind !== "stop" || !(caught instanceof RequestError) || caught.status !== 409) throw caught;
-        const latest = await (await request(queueUrl)).json() as ConversationQueueSnapshot;
+        const readback = await request(queueUrl);
+        if (!owned()) return false;
+        const latest = await readback.json() as ConversationQueueSnapshot;
+        if (!owned()) return false;
         commitSnapshot(latest);
         if (latest.active?.run_id !== input.run_id) return true;
         response = await request(`${queueUrl}/mutations`, { method: "POST", body: JSON.stringify({ ...input, expected_revision: latest.revision, idempotency_key: operation }) });
+        if (!owned()) return false;
       }
-      const body = await response.json(); commitSnapshot(body.snapshot); return true;
+      const body = await response.json();
+      if (!owned()) return false;
+      commitSnapshot(body.snapshot); return true;
     } catch (caught) {
+      if (!owned()) return false;
       refuse(caught); setError(caught instanceof RequestError && caught.status === 409 ? "队列刚刚有变化，已更新。请核对后再操作。" : "操作结果尚未确认，已保留内容。请核对队列后重试。");
-      try { const response = await request(queueUrl); const next = await response.json(); commitSnapshot(next); } catch { /* Keep the last known state. */ }
+      try {
+        const response = await request(queueUrl);
+        if (!owned()) return false;
+        const next = await response.json();
+        if (!owned()) return false;
+        commitSnapshot(next);
+      } catch { /* Keep the last known state; stale owners have no cleanup authority. */ }
       return false;
-    } finally { mutationBusy.current = false; if (!lifecycle.current?.signal.aborted) { setMutating(false); handoffWhenSettled(); } }
+    } finally {
+      // Only the exact lock holder can release its lifecycle's single flight.
+      // An old finally must not unlock or hand off a newer owner's operation.
+      if (owned()) { mutationBusy.current = null; setMutating(false); handoffWhenSettled(); }
+    }
   }
 
   async function saveDraft(force = false) {

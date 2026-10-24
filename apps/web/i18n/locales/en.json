@@ -1984,5 +1984,20 @@
   "conversation.task.stopped": "Stopped",
   "conversation.task.readback": "Reading reply",
   "conversation.task.reconnecting": "Reconnecting",
-  "conversation.task.failed": "Not completed"
+  "conversation.task.failed": "Not completed",
+  "对话入口已过期。请刷新页面后重试，未送达的文字和图片已保留。": "This conversation entry expired. Refresh the page and retry. Unsent text and images are retained.",
+  "本机图片暂时无法读取，送达结果仍未确认。恢复连接后请核对。": "The local images cannot be read right now. Delivery is still unconfirmed. Check after reconnecting.",
+  "本机图片数据已丢失，无法重发。请移除这条消息后重新选择图片。": "The local image data is missing and cannot be resent. Remove this message, then select the images again.",
+  "送达结果尚未确认，可核对并重试。": "Delivery is unconfirmed. Check the status, then retry.",
+  "本机草稿存储不可用，请保留此页。发送前需要恢复存储。": "Local draft storage is unavailable. Keep this page open and restore storage before sending.",
+  "图片无法读取，未添加。请重试或换一张图片。": "The image could not be read and was not added. Retry or choose another image.",
+  "图片无法安全保存在本机，草稿和图片仍在输入框中。请恢复存储后重试。": "The images could not be stored safely on this device. Your draft and images remain in the composer. Restore storage, then retry.",
+  "无法保存发送状态，内容仍在输入框中。请恢复浏览器存储后重试。": "Could not save the send status. Your content is still in the composer. Restore browser storage, then try again.",
+  "队列刚刚有变化，已更新。请核对后再操作。": "The queue changed and has been refreshed. Check it before acting again.",
+  "操作结果尚未确认，已保留内容。请核对队列后重试。": "The operation is unconfirmed. Your content is retained. Check the queue before retrying.",
+  "删除尚未确认，请重试。": "Deletion is unconfirmed. Please retry.",
+  "连接暂时中断，请重试。": "The connection was interrupted. Please retry.",
+  "暂时无法连接回复。": "The reply connection is temporarily unavailable.",
+  "没有可读取的回复连接。": "No readable reply stream is available.",
+  "这段对话已不可用，请重新打开。": "This conversation is unavailable. Reopen it to check."
 }

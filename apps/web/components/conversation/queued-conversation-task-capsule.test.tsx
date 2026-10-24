@@ -48,8 +48,8 @@ let host: HTMLDivElement;
 let detail: SessionDetail;
 let emitters: Array<(value: ConversationQueueSnapshot) => void>;
 async function flush() { await act(async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); await new Promise(resolve => setTimeout(resolve, 1)); } }); }
-async function render(binding = "chat-a", scope = SCOPE, initialDetail = initial) {
-  await act(async () => root.render(<LocaleProvider locale="en"><QueuedConversation chatBinding={binding} detailBinding="detail" scope={scope} initialDetail={initialDetail}/></LocaleProvider>));
+async function render(binding = "chat-a", scope = SCOPE, initialDetail = initial, locale: "en" | "zh-CN" = "en") {
+  await act(async () => root.render(<LocaleProvider locale={locale}><QueuedConversation chatBinding={binding} detailBinding="detail" scope={scope} initialDetail={initialDetail}/></LocaleProvider>));
   await flush();
 }
 async function emit(value: ConversationQueueSnapshot, emitter = emitters.at(-1)!) { await act(async () => emitter(value)); await flush(); }
@@ -186,4 +186,68 @@ it("measures live elapsed time from its actual started timestamp only inside dis
     expect(document.querySelector("[data-slot='popover-content']")?.textContent).toContain("Observed time 10 sec");
     expect(document.querySelector("[data-slot='popover-content']")?.textContent).not.toContain("%");
   } finally { vi.useRealTimers(); }
+});
+
+it.each([
+  [409, "en", "The queue changed and has been refreshed. Check it before acting again."],
+  [503, "en", "The operation is unconfirmed. Your content is retained. Check the queue before retrying."],
+  [409, "zh-CN", "队列刚刚有变化，已更新。请核对后再操作。"],
+  [503, "zh-CN", "操作结果尚未确认，已保留内容。请核对队列后重试。"],
+] as const)("renders real mutation %s recovery in %s without admission or continue", async (status, locale, expected) => {
+  await render("chat-a", SCOPE, initial, locale);
+  const failed = entry({ status: "failed" }); await emit(snapshot(2, null, [failed]));
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => {
+    if (url.endsWith("/mutations")) return Promise.resolve(Response.json({ message: "Raw mutation provider detail" }, { status }));
+    if (url.endsWith("/conversation-queue")) return Promise.resolve(Response.json(snapshot(3, null, [failed])));
+    return base(url, init);
+  });
+  const retry = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === (locale === "en" ? "Retry" : "重试"))!;
+  await act(async () => retry.click()); await flush();
+  expect(host.textContent).toContain(expected); expect(host.textContent).not.toContain("Raw mutation provider detail");
+  expect(actions().map(action => action.kind)).toEqual(["retry"]);
+  expect(host.textContent).toContain("Synthetic task");
+});
+it.each([
+  ["en", "Could not save the send status. Your content is still in the composer. Restore browser storage, then try again."],
+  ["zh-CN", "无法保存发送状态，内容仍在输入框中。请恢复浏览器存储后重试。"],
+] as const)("renders a real local persistence failure in %s and retains the original draft", async (locale, expected) => {
+  const draft = "用户原文 · retained source";
+  await render("chat-a", SCOPE, { ...initial, composer_draft: draft }, locale);
+  const storage = window.localStorage;
+  // happy-dom binds Storage methods on a proxy; replacing its window getter
+  // keeps this transport failure scoped and reliably restorable between cases.
+  vi.spyOn(window, "localStorage", "get").mockReturnValue(new Proxy(storage, {
+    get(target, key) { if (key === "setItem") return () => { throw new Error("Storage denied"); }; return Reflect.get(target, key); },
+  }));
+  const send = host.querySelector<HTMLButtonElement>(locale === "en" ? '[aria-label="Send message"]' : '[aria-label="发送消息"]')!;
+  expect(send).not.toBeNull(); await act(async () => send.click()); await flush();
+  expect(host.textContent).toContain(expected);
+  expect(host.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")?.value).toBe(draft);
+  expect(actions()).toEqual([]);
+});
+it.each([
+  ["en", "Delivery is unconfirmed. Check the status, then retry."],
+  ["zh-CN", "送达结果尚未确认，可核对并重试。"],
+] as const)("renders the real unknown-delivery explanation in %s without auto resend", async (locale, expected) => {
+  await render("chat-a", SCOPE, { ...initial, composer_draft: "用户原文 · lost receipt" }, locale);
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/conversation-queue") && init?.method === "POST"
+    ? Promise.reject(new Error("transport disconnected")) : base(url, init));
+  const send = host.querySelector<HTMLButtonElement>(locale === "en" ? '[aria-label="Send message"]' : '[aria-label="发送消息"]')!;
+  await act(async () => send.click()); await flush();
+  expect(host.textContent).toContain(expected); expect(host.textContent).toContain("用户原文 · lost receipt");
+  expect(host.querySelector("[data-conversation-work][data-phase='unknown']")).not.toBeNull();
+  await flush(); expect(actions()).toHaveLength(1);
+});
+it("preserves uncataloged provider and user wording in an English rejected-delivery surface", async () => {
+  const provider = "服务商原文 · original provider explanation";
+  const user = "用户原文 · keep wording";
+  await render("chat-a", SCOPE, { ...initial, composer_draft: user });
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((url: string, init?: RequestInit) => url.endsWith("/conversation-queue") && init?.method === "POST"
+    ? Promise.resolve(Response.json({ message: provider }, { status: 422 })) : base(url, init));
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click()); await flush();
+  expect(host.textContent).toContain(provider); expect(host.textContent).toContain(user);
+  expect(host.querySelector("[data-conversation-work][data-phase='rejected']")).not.toBeNull(); expect(actions()).toHaveLength(1);
 });
