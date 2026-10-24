@@ -249,7 +249,10 @@ before starting the production build. A newer global shim may activate that
 version by fetching package-manager metadata and installing its missing CLI;
 this can fail before Next starts. Preserve that failure and the existing live
 release, then verify normal pinned-version activation before retrying the
-complete build. A successful version probe is not a build receipt. Keep service
+complete build. A successful version probe is not a build receipt. When manifests,
+lock or installed dependencies differ, `pnpm exec` can start an implicit install.
+For read-only path discovery, inspect the existing shim/entry directly; complete
+an explicit frozen installation before executing workspace tools. Keep service
 recovery on the launcher's direct Node entry, independent of this bootstrap.
 
 Keep a clean, detached backend/Opik deployment checkout in a directory shared with Colima,

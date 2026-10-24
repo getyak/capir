@@ -43,10 +43,13 @@ has each defect.
    quality review approved `8db3332e` with no confirmed findings.
 3. Implemented: bounded task capsule using existing queue and persisted
    readback state, without remounting the composer. Final affected checks passed
-   82 tests; review is pending. Existing decision cards and Latest result own
+   82 tests; independent review and full-branch follow-up closed all confirmed P1/P2. Existing decision cards and Latest result own
    review and unread-result semantics; no duplicate Reply ready claim is added.
-4. **Active:** independent review; repair confirmed P0/P1; run focused checks and all
-   applicable repository/CI gates on the final PR head.
+4. **Active:** full source review approved and fresh full Web passed2,873 tests
+   in334 files ataba97935. PR416 native, Web, backend and CLI CI passed.
+   Required security audit found newly published transitive vulnerabilities;
+   repair minimal compatible overrides and malicious-input regressions, review
+   independently, then require all gates on the new PR head.
 5. Merge, deploy affected resident services from clean committed source,
    install the verified native build, inspect real behavior, and close owned
    test accounts/resources/worktrees only after evidence is retained.
@@ -141,3 +144,36 @@ physical APFS reclamation; free-space changes are not attributed to this task.
 Record scoped resource ownership, commands, revisions, results and cleanup in a
 task-owned durable evidence directory. Keep secrets and raw business content
 out of plans, contracts, PRs and receipts.
+
+## Integration update — 2026-10-24
+
+PR416: https://github.com/getyak/capir/pull/416. Production reviews approved
+through059b3cb4, test fixture repair approved ataba97935. Full Web2873/2873
+and native49/49 passed. Required production dependency audit failed with11
+findings; no audit ignores or lowered thresholds are permitted. Publisher
+verified patches affect Backend and Agent Host as well as Web, expanding the
+required resident deployment scope. Global pause remains; task execution is
+serial under the explicit user exception. Actual deployment/installation and
+rendered acceptance are still open.
+
+## Dependency verification checkpoint
+
+The compatible security patch and authentic generated lock passed independent
+full review with no confirmed P0/P1/P2. Temporary helper source
+`a61cd8aa1635b403bc201c46ccb9b35b24a4b8c4`, run40072712586, passed normal and
+frozen pnpm11.18 installation,32 Linux security regressions with zero skips,
+and a complete production audit with zero findings. The helper workflow is
+absent from this task branch. The earlier failed run remains failure evidence.
+
+The genuine source-bound verification receipt was preserved byte-for-byte;
+normal local pnpm still validated the actual parsed lock hash, full policy and
+store integrity. Local frozen installation passed; security regressions passed
+25 with7 Linux-only skips (all7 ran remotely). Eight focused importer files
+passed130 tests. Web typecheck, documentation checks and local production audit
+passed. Dependency versions/integrities and importer/patch preservation are
+recorded in the formal ops report. The original d49e67ca dependency-cache match
+was a pre-repair baseline, not a claim about the repaired graph.
+
+Fresh current-PR-head CI, merge, clean-source resident Web/Backend/Agent Host
+releases, signed native installation and actual25-point acceptance remain open.
+The global pause remains intact under the user's task-scoped serial exception.
