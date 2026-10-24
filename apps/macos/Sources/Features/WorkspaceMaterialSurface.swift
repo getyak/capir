@@ -8,13 +8,17 @@ import WebKit
 final class WorkspaceMaterialSurface: NSView {
     let material = NSVisualEffectView()
     let webView: WKWebView
+    private let onTitlebarLayout: ((Double) -> Void)?
+    private var previousTitlebarHeight: Double?
     var preference: WorkspaceAppearance {
         didSet { applyAppearance() }
     }
     private(set) var reducesTransparency = false
 
-    init(webView: WKWebView, preference: WorkspaceAppearance = .system) {
+    init(webView: WKWebView, preference: WorkspaceAppearance = .system,
+         onTitlebarLayout: ((Double) -> Void)? = nil) {
         self.webView = webView
+        self.onTitlebarLayout = onTitlebarLayout
         self.preference = preference
         super.init(frame: .zero)
         material.material = .sidebar
@@ -79,7 +83,17 @@ final class WorkspaceMaterialSurface: NSView {
     override func layout() {
         super.layout()
         material.frame = bounds
-        webView.frame = bounds
+        // Only the material extends beneath AppKit's standard titlebar. The
+        // WebView's complete hit region stays inside the system layout guide,
+        // including full-screen transitions and content zoom.
+        let content = window.map { bounds.intersection(convert($0.contentLayoutRect, from: nil)) } ?? bounds
+        webView.frame = content.isNull ? .zero : content
+        let zoom = webView.pageZoom.isFinite && webView.pageZoom > 0 ? webView.pageZoom : 1
+        let height = min(128, max(0, Double(bounds.maxY - webView.frame.maxY) / zoom))
+        if previousTitlebarHeight != height {
+            previousTitlebarHeight = height
+            onTitlebarLayout?(height)
+        }
     }
 
     /// WebKit has no public document-backing transparency setter on macOS.

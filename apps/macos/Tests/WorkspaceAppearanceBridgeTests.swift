@@ -225,8 +225,8 @@ final class WorkspaceAppearanceBridgeTests: XCTestCase {
         for button: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
             XCTAssertNotNil(window.standardWindowButton(button))
         }
-        XCTAssertFalse(window.styleMask.contains(.fullSizeContentView),
-                       "Web controls must stay below the native drag region")
+        XCTAssertTrue(window.styleMask.contains(.fullSizeContentView),
+                      "Only the material extends; WorkspaceTitlebarTests verifies the Web hit region")
         window.contentView = nil
     }
 }
