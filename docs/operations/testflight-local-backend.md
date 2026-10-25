@@ -189,7 +189,14 @@ A second exact label, `backend-import-probe`, on the same-repository PR opts
 into a separate disposable import job after that build succeeds. Manual dispatch
 and `backend-image` alone remain build-only. The new job downloads the immutable
 artifact ID from its own run, reinspects source/hash/config/platform, and streams
-it into the pinned Docker 29.5.2 / containerd 2.2.4 ARM64 nested engine. Fresh
+it into the pinned Docker 29.5.2 / containerd 2.2.4 ARM64 nested engine. The
+Docker image bundles containerd 2.2.3, so the CI probe overlays only containerd,
+its runc shim and ctr as exact read-only files from the SHA256-pinned official
+2.2.4 static ARM64 release. Archive/binary hashes, static ELF architecture,
+actual binds and the running executable are checked; engine version and commit
+must match the required resident pair. Actual sanitized metadata is retained
+before acceptance checks, including on failure. These immutable bootstrap
+files remain outside the measured import filesystem and are disclosed. Fresh
 4 KiB ext4 storage has a fixed experimental 2 GiB cap for verified Docker,
 containerd content/ingest/snapshot/metadata, state and temporary paths. It fails
 closed on insufficient space, incomplete unpack, errors or failed version-only

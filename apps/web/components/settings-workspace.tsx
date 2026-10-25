@@ -223,7 +223,7 @@ function SettingsSearch({ labEnabled, onChoose }: { labEnabled: boolean; onChoos
             ))
           ) : (
             <div className={styles.searchEmpty} role="status" data-settings-search-empty>
-              <p>没有找到“{query.trim()}”对应的设置。</p>
+              <p>{t("没有找到“{query}”对应的设置。", { query: query.trim() })}</p>
               <p>{t("可以试试账号、外观、连接、工作空间或截图与文档。关系资料不会出现在设置搜索中。")}</p>
             </div>
           )}
@@ -477,7 +477,7 @@ function AppearancePane({ sessionVersion, account, accountAvailable = true }: {
       return;
     }
     setSaved(false);
-    setError("偏好未能保存到本机浏览器，请检查存储设置后重试。预览会保留，关闭页面后不会生效。");
+    setError(t("偏好未能保存到本机浏览器，请检查存储设置后重试。预览会保留，关闭页面后不会生效。"));
   }
 
   return (
@@ -619,13 +619,13 @@ function ConnectionsPane({ workspaceName }: { workspaceName: string | null }) {
           href="/workspace/captures"
           title={t("手动导入的资料")}
           description={t("导入截图与文档，并核对来源与归属。")}
-          badge={workspaceName ? `当前空间 · ${workspaceName}` : "当前空间"}
+          badge={workspaceName ? t("当前空间 · {name}", { name: workspaceName }) : t("当前空间")}
         />
         <Destination
           href="/workspace/extensions"
           title={t("浏览器收集与外部服务")}
           description={t("查看可用扩展与真实连接状态；未连接不会在这里被假定。")}
-          badge={workspaceName ? `当前空间 · ${workspaceName}` : "当前空间"}
+          badge={workspaceName ? t("当前空间 · {name}", { name: workspaceName }) : t("当前空间")}
         />
         <p className={styles.destinationNote}>{t("来源详情、授权与删除后果以连接服务页面返回的状态为准，这里不显示未经 API 核验的来源计数。")}</p>
       </Group>
@@ -764,18 +764,18 @@ function SettingsWorkspaceSession({
   // macOS Settings scene can say "this Mac" without granting any capability.
   const scopes =
     section === "appearance"
-      ? { web: "仅此浏览器 · 本机保存", desktop: "仅此 Mac · 本机保存" }
+      ? { web: t("仅此浏览器 · 本机保存"), desktop: t("仅此 Mac · 本机保存") }
       : section === "overview"
-        ? { web: "账号 · 本机头像", desktop: "账号 · 本机头像" }
+        ? { web: t("账号 · 本机头像"), desktop: t("账号 · 本机头像") }
         : section === "connections" && workspaceName
-          ? { web: `当前空间 · ${workspaceName}`, desktop: `当前空间 · ${workspaceName}` }
+          ? { web: t("当前空间 · {name}", { name: workspaceName }), desktop: t("当前空间 · {name}", { name: workspaceName }) }
           : section === "versions"
-            ? { web: "各组件分别显示", desktop: "各组件分别显示" }
+            ? { web: t("各组件分别显示"), desktop: t("各组件分别显示") }
             : section === "testing"
-              ? { web: "测试空间", desktop: "测试空间" }
+              ? { web: t("测试空间"), desktop: t("测试空间") }
               : section === "account"
-                ? { web: "账号", desktop: "账号" }
-                : { web: "当前空间", desktop: "当前空间" };
+                ? { web: t("账号"), desktop: t("账号") }
+                : { web: t("当前空间"), desktop: t("当前空间") };
 
   return (
     <main className={styles.page} id="main-content" tabIndex={-1} data-settings-workspace data-desktop-settings-surface="1">

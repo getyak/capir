@@ -59,6 +59,7 @@ it("localizes editor labels and unknown-write recovery without changing the sour
   mock.read.mockResolvedValue(record); mock.request.mockRejectedValue(new TypeError("network lost"));
   await act(async () => root.render(<LocaleProvider locale="en"><TimeScheduleEditor record={record} day="2026-09-21" zone="UTC" personId="" people={[]} binding="locale" onSaved={noop} onClose={noop} onDirtyChange={noop} /></LocaleProvider>));
   expect(host.querySelector('section[aria-label="Edit schedule"]')).toBeTruthy();
+  expect([...host.querySelectorAll("label")].map(label => label.firstChild?.textContent)).toEqual(expect.arrayContaining(["Start time", "End time"]));
   expect(host.querySelector<HTMLInputElement>('input[maxlength="200"]')?.value).toBe(record.title);
   expect(host.querySelector("textarea")?.value).toBe(record.note);
   await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
@@ -107,4 +108,11 @@ it("keeps Chinese review questions, generated output and sources verbatim while 
   expect(host.textContent).toContain(translate("en", "旧整理 · 未核实"));
   expect(host.textContent).toContain("模型原始正文");
   expect(host.textContent).not.toContain("这段整理基于较早的读取生成");
+});
+it("retains the all-day exclusive end-date label and input values", async () => {
+  const record = { ...timeFixtureSchedule, all_day: true, starts_at: "2026-09-21T00:00:00Z", ends_at: "2026-09-22T00:00:00Z", time_zone: "UTC" };
+  await act(async () => root.render(<LocaleProvider locale="en"><TimeScheduleEditor record={record} day="2026-09-21" zone="UTC" personId="" people={[]} binding="locale" onSaved={noop} onClose={noop} onDirtyChange={noop} /></LocaleProvider>));
+  const dates = [...host.querySelectorAll<HTMLInputElement>('input[type="date"]')];
+  expect(dates.map(input => input.value)).toEqual(["2026-09-21", "2026-09-22"]);
+  expect(dates[1]?.closest("label")?.textContent).toBe(translate("en", "结束日期（不包含此日）"));
 });

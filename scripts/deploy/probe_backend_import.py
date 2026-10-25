@@ -7,6 +7,11 @@ Only sanitized, allowlisted evidence is retained; command output is not publishe
 """
 import argparse
 import json
+import hashlib
+import struct
+import tarfile
+import urllib.request
+import urllib.parse
 import os
 from pathlib import Path
 import platform
@@ -19,13 +24,22 @@ import tempfile
 import threading
 import time
 
-from inspect_backend_oci import inspect_archive
+from inspect_backend_oci import inspect_archive, bounded_tar_info
 
 CAP = 2 * 1024**3
 OUTPUT_LIMIT = 4 * 1024**2
 CGROUP2_SUPER_MAGIC = 0x63677270  # Linux include/uapi/linux/magic.h, statfs.f_type.
 DIND = 'docker.io/library/docker@sha256:5256d1242c894ee092a567c4385fe682071c05c2056c1e90953717cec0aa3fbe'
 OWNER_LABEL = 'capir.import-probe.owner'
+RUNTIME_REVISION = '193637f7ee8ae5f5aa5248f49e7baa3e6164966e'
+RUNTIME_URL = 'https://github.com/containerd/containerd/releases/download/v2.2.4/containerd-static-2.2.4-linux-arm64.tar.gz'
+RUNTIME_ARCHIVE_BYTES = 30546406
+RUNTIME_ARCHIVE_SHA256 = '5f01ac0ad46caf685afee7614e36e406c48e73c1d84a71378dd4afe5d63a11d2'
+RUNTIME_BINARIES = {
+    'containerd': {'bytes': 41166848, 'sha256': 'd27435c74f56df34b002bfad7b0bdc87a86815044e989b25b29a3356d60a2e09'},
+    'containerd-shim-runc-v2': {'bytes': 7995576, 'sha256': 'ec775d80dbdb767418827c6597a86e709cb794ca41edb0debf01dbbee64bb47a'},
+    'ctr': {'bytes': 20840632, 'sha256': 'dba23ecfa03867ccd3a7ae442f5cef7f0d37564f8c96639500997b5bef5e03d8'},
+}
 
 
 class ProbeError(ValueError):
@@ -35,6 +49,107 @@ class ProbeError(ValueError):
 def require(condition, message):
     if not condition:
         raise ProbeError(message)
+
+
+def prepare_runtime_tools(root):
+    """Stage only hash-pinned official tools; no execution and no general extraction."""
+    folder = root / 'runtime-tools'
+    folder.mkdir()  # Exclusive task-owned directory; never overwrite or reuse.
+    archive = folder / 'package.tar.gz'
+    digest, count, started = hashlib.sha256(), 0, time.monotonic()
+    with urllib.request.urlopen(RUNTIME_URL, timeout=30) as response, archive.open('xb') as target:
+        origin = urllib.parse.urlsplit(response.geturl())
+        require(origin.scheme == 'https' and origin.hostname in
+                ('github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com') and
+                not origin.username and not origin.password, 'unexpected runtime download origin')
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            count += len(chunk)
+            require(count <= RUNTIME_ARCHIVE_BYTES and time.monotonic() - started < 180,
+                    'runtime download exceeds bounds')
+            digest.update(chunk)
+            target.write(chunk)  # Not subject to command-output RLIMIT_FSIZE.
+    require(count == RUNTIME_ARCHIVE_BYTES and digest.hexdigest() == RUNTIME_ARCHIVE_SHA256,
+            'runtime archive integrity mismatch')
+    found, seen, total = set(), set(), 0
+    with tarfile.open(archive, 'r:gz', tarinfo=bounded_tar_info()) as package:
+        for index, member in enumerate(package):
+            require(index < 16, 'runtime archive member count exceeded')
+            name = member.name
+            while name.startswith('./'):
+                name = name[2:]
+            name = name.rstrip('/')
+            require(name not in seen and (member.isdir() or member.isfile()) and not member.issparse(),
+                    'duplicate or linked runtime archive member')
+            seen.add(name)
+            if member.isdir():
+                require(name in ('', 'bin'), 'unexpected runtime archive directory')
+                continue
+            total += member.size
+            require(0 <= member.size <= 64 * 1024**2 and total <= 128 * 1024**2,
+                    'runtime archive payload exceeds bounds')
+            # Some official packages include the stress utility; never stage/run it.
+            if name == 'bin/containerd-stress':
+                require(member.size <= 32 * 1024**2, 'unexpected auxiliary runtime size')
+                continue
+            binary = name.removeprefix('bin/')
+            require(name == 'bin/' + binary and binary in RUNTIME_BINARIES,
+                    'unexpected runtime archive filename')
+            spec = RUNTIME_BINARIES[binary]
+            require(member.size == spec['bytes'], 'runtime binary size mismatch')
+            path, actual, written = folder / binary, hashlib.sha256(), 0
+            with package.extractfile(member) as source, path.open('xb') as target:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    require(written <= spec['bytes'], 'runtime binary exceeds bound')
+                    actual.update(chunk)
+                    target.write(chunk)
+            require(written == spec['bytes'] and actual.hexdigest() == spec['sha256'],
+                    'runtime binary digest mismatch')
+            with path.open('rb') as source:
+                header = source.read(64)
+                require(len(header) == 64 and header[:7] == b'\x7fELF\x02\x01\x01' and
+                        struct.unpack_from('<HH', header, 16) == (2, 183), 'runtime binary is not ARM64 ELF')
+                offset = struct.unpack_from('<Q', header, 32)[0]
+                entry_size, entries = struct.unpack_from('<HH', header, 54)
+                require(entry_size == 56 and 0 < entries <= 256 and
+                        offset + entry_size * entries <= written, 'invalid runtime ELF program headers')
+                source.seek(offset)
+                program_headers = source.read(entry_size * entries)
+                require(all(struct.unpack_from('<I', program_headers, i * entry_size)[0] not in (2, 3)
+                            for i in range(entries)), 'runtime binary requires dynamic linking')
+            path.chmod(0o555)
+            found.add(binary)
+    require(found == set(RUNTIME_BINARIES), 'missing required runtime binary')
+    archive.unlink()
+    return {'url': RUNTIME_URL, 'archive_sha256': RUNTIME_ARCHIVE_SHA256,
+            'archive_bytes': count, 'binary_bytes': sum(spec['bytes'] for spec in RUNTIME_BINARIES.values()),
+            'binaries': RUNTIME_BINARIES, 'outside_import_cap': True}
+
+
+def engine_observation(version, info=None):
+    def safe(value, pattern=r'[A-Za-z0-9][A-Za-z0-9._+-]{0,63}'):
+        return value if isinstance(value, str) and re.fullmatch(pattern, value) else None
+    components = version.get('Components', [])
+    containerd = [x for x in components if isinstance(x, dict) and x.get('Name') == 'containerd'] if isinstance(components, list) else []
+    component = containerd[0] if len(containerd) == 1 else {}
+    details = component.get('Details', {})
+    result = {'docker': safe(version.get('Version')), 'docker_commit': safe(version.get('GitCommit'), r'[0-9a-f]{7,40}'),
+              'os': safe(version.get('Os')), 'architecture': safe(version.get('Arch')),
+              'containerd': safe(component.get('Version')),
+              'containerd_commit': safe(details.get('GitCommit'), r'[0-9a-f]{40}') if isinstance(details, dict) else None,
+              'validated': False}
+    if info is not None:
+        result.update({'driver': safe(info.get('Driver')),
+                       'docker_root': safe(info.get('DockerRootDir'), r'/[A-Za-z0-9_./-]{1,255}'),
+                       'driver_types': [safe(row[1]) for row in info.get('DriverStatus', [])
+                                        if isinstance(row, list) and len(row) == 2 and row[0] == 'driver-type']})
+    return result
 
 
 def validate_environment(env, opt_in, system, machine):
@@ -61,10 +176,13 @@ def validate_worker(worker, filesystem):
     expected = {dest: filesystem + suffix for suffix, dest in
                 [('', '/proof'), ('/run', '/run'), ('/tmp', '/tmp'),
                  ('/unused-docker', '/var/lib/docker'), ('/unused-containerd', '/var/lib/containerd')]}
+    expected = {dest: (source, True) for dest, source in expected.items()}
+    tools = Path(filesystem).parent / 'runtime-tools'
+    expected.update({'/usr/local/bin/' + name: (str(tools / name), False) for name in RUNTIME_BINARIES})
     mounts = worker.get('Mounts', [])
     require(len(mounts) == len(expected) and all(
-        mount.get('Type') == 'bind' and mount.get('RW') is True and
-        expected.get(mount.get('Destination')) == mount.get('Source') for mount in mounts),
+        mount.get('Type') == 'bind' and
+        expected.get(mount.get('Destination')) == (mount.get('Source'), mount.get('RW')) for mount in mounts),
         'unexpected worker mount or host socket')
     require(len({mount.get('Destination') for mount in mounts}) == len(expected), 'duplicate worker mount')
     host = worker.get('HostConfig', {})
@@ -80,9 +198,9 @@ def validate_worker(worker, filesystem):
 def validate_engine(version, info):
     require(version.get('Version') == '29.5.2' and version.get('Os') == 'linux' and
             version.get('Arch') == 'arm64', 'wrong Docker engine or platform')
-    components = version.get('Components', [])
-    require(any(x.get('Name') == 'containerd' and x.get('Version', '').removeprefix('v') == '2.2.4'
-                for x in components), 'wrong containerd version')
+    observed = engine_observation(version)
+    require(observed['containerd'] in ('v2.2.4', '2.2.4') and
+            observed['containerd_commit'] == RUNTIME_REVISION, 'wrong containerd version or commit')
     require(info.get('OSType') == 'linux' and info.get('Architecture') in ('aarch64', 'arm64') and
             info.get('Driver') == 'overlayfs' and
             ['driver-type', 'io.containerd.snapshotter.v1'] in info.get('DriverStatus', []) and
@@ -202,7 +320,9 @@ class Probe:
         self.report = {'schema': 1, 'status': 'failed', 'deployment_approved': False,
                        'resident_capacity_approved': False, 'allocation_cap_bytes': CAP,
                        'observed_high_water_is_upper_bound': False,
-                       'failure_cleanup_guarantee': False, 'samples': []}
+                       'failure_cleanup_guarantee': False, 'samples': [],
+                       'engine_requirements': {'docker': '29.5.2', 'containerd': '2.2.4',
+                           'containerd_commit': RUNTIME_REVISION, 'driver': 'overlayfs'}}
         self.root = self.fs = self.runner = None
         self.loop = self.cid = None
         self.mounted = False
@@ -295,11 +415,38 @@ class Probe:
             '--mount', 'type=bind,src=' + str(self.fs / 'unused-docker') + ',dst=/var/lib/docker',
             '--mount', 'type=bind,src=' + str(self.fs / 'unused-containerd') + ',dst=/var/lib/containerd',
             '--env', 'DOCKER_TMPDIR=/proof/tmp', '--env', 'TMPDIR=/proof/tmp',
+            *[argument for name in RUNTIME_BINARIES for argument in
+              ('--mount', 'type=bind,src=' + str(self.fs.parent / 'runtime-tools' / name) +
+               ',dst=/usr/local/bin/' + name + ',readonly')],
             '--entrypoint=sh', DIND, '-c', 'exec /usr/local/bin/dind dockerd "$@" > /proof/daemon.log 2>&1',
             'dockerd', '--config-file=/proof/daemon.json',
             '--host=unix:///proof/docker.sock', '--data-root=/proof/docker',
             '--exec-root=/proof/run/docker', '--pidfile=/proof/run/docker.pid',
             '--iptables=false', '--ip6tables=false', '--bridge=none', '--ip-forward=false', '--ip-masq=false']
+
+    def check_engine(self, version, info):
+        self.report['engine'] = engine_observation(version, info)
+        validate_engine(version, info)
+        self.report['engine']['validated'] = True
+
+    def check_runtime_tools(self):
+        observed = self.report.setdefault('runtime_tool_hashes', {})
+        for name, spec in RUNTIME_BINARIES.items():
+            path = '/usr/local/bin/' + name
+            output = self.runner.run(self.outer + ['exec', self.cid, 'sha256sum', path]).strip()
+            match = re.fullmatch(r'([0-9a-f]{64})  ' + re.escape(path), output)
+            observed[name] = match[1] if match else None
+            require(observed[name] == spec['sha256'], 'bound runtime binary digest mismatch')
+        # Verify the executable of the running managed process, not only a path.
+        output = self.runner.run(self.outer + ['exec', self.cid, 'sh', '-c',
+            'for f in /proc/[0-9]*/comm; do '
+            'if [ "$(cat "$f" 2>/dev/null)" = containerd ]; then '
+            'sha256sum "${f%comm}exe"; fi; done']).strip()
+        match = re.fullmatch(r'([0-9a-f]{64})  /proc/[0-9]+/exe', output)
+        observed['running_containerd'] = match[1] if match else None
+        require(observed['running_containerd'] == RUNTIME_BINARIES['containerd']['sha256'],
+                'running containerd binary digest mismatch')
+        self.report['runtime_tools_verified'] = True
 
     def check_delegation(self):
         def read(path):
@@ -350,8 +497,10 @@ class Probe:
         (config / 'config.json').write_text('{}\n')
         self.runner = Runner(self.root)
         self.outer = ['docker', '--config', str(config), '--host=unix:///var/run/docker.sock']
-        self.report['phase'] = 'capped-filesystem-creation'
         self.backing = self.root / 'disk.img'
+        self.report['phase'] = 'runtime-bootstrap-verification'
+        self.report['runtime_tools'] = prepare_runtime_tools(self.root)
+        self.report['phase'] = 'capped-filesystem-creation'
         # Allocate in this process: the command-output RLIMIT must not truncate
         # the separately bounded 2 GiB backing file. This is never grown later.
         with self.backing.open('xb') as disk:
@@ -398,7 +547,9 @@ class Probe:
             'pids_limit': 512, 'outer_container_log_bytes': 0, 'daemon_log_on_capped_filesystem': True,
             'command_output_max_bytes_each': OUTPUT_LIMIT, 'command_count_limit': 512,
             'outer_worker_container_limit': 1, 'host_control_bytes_upper_bound': None,
-            'outside_cap': 'archive, pinned read-only worker image, host Docker control metadata, '
+            'runtime_binary_bytes': self.report['runtime_tools']['binary_bytes'],
+            'runtime_download_peak_bytes': RUNTIME_ARCHIVE_BYTES + self.report['runtime_tools']['binary_bytes'],
+            'outside_cap': 'archive, pinned read-only worker image and runtime binaries, host Docker control metadata, '
                            'host daemon logging and bounded command capture; not resident import allocations'}
         self.uncertain_resource = True
         self.cid = self.runner.run(self.worker_command()).strip()
@@ -408,6 +559,7 @@ class Probe:
         for attempt in range(30):
             try:
                 version = json.loads(self.inner('version', '--format', '{{json .Server}}'))
+                self.report['engine'] = engine_observation(version)
                 break
             except ProbeError:
                 if attempt == 29:
@@ -415,12 +567,10 @@ class Probe:
                 time.sleep(1)
         worker = json.loads(self.runner.run(self.outer + ['container', 'inspect', self.cid]))[0]
         validate_worker(worker, str(self.fs))
+        self.check_runtime_tools()
         self.check_delegation()
         info = json.loads(self.inner('info', '--format', '{{json .}}'))
-        validate_engine(version, info)
-        self.report['engine'] = {'docker': version['Version'], 'containerd': '2.2.4',
-                                 'platform': 'linux/arm64', 'driver': info['Driver'],
-                                 'driver_status': [['driver-type', 'io.containerd.snapshotter.v1']]}
+        self.check_engine(version, info)
         self.check_paths()
         require(not self.inner('image', 'ls', '--quiet', '--all').strip() and
                 not self.ctr('images', 'ls', '--quiet').strip() and
@@ -479,6 +629,7 @@ class Probe:
         validate_logs(self.runner.run(self.outer + ['exec', self.cid, 'cat', '/proof/daemon.log']))
         self.check_paths()
         require(not self.sample_error, 'allocation sampling failed')
+        self.check_runtime_tools()
         self.report['idle_stabilized'] = True
         self.report['no_import_errors_observed'] = True
         self.report['status'] = 'passed'
@@ -521,6 +672,15 @@ class Probe:
                 self.runner.run(self.outer + ['image', 'rm', DIND])
             if self.root and self.backing.exists():
                 self.backing.unlink()
+            if self.root:
+                tools = self.root / 'runtime-tools'
+                if tools.exists():
+                    for name in (*RUNTIME_BINARIES, 'package.tar.gz'):
+                        path = tools / name
+                        if path.exists():
+                            require(path.is_file() and not path.is_symlink(), 'runtime cleanup ownership mismatch')
+                            path.unlink()
+                    tools.rmdir()
             self.report['cleanup'] = 'passed'
         except Exception:
             self.report['cleanup'] = 'failed; unknown resources left for ephemeral runner teardown'

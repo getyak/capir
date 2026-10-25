@@ -1,5 +1,10 @@
 """Synthetic safety boundaries only: never invoke Docker, sudo, or mounts."""
 import copy
+import hashlib
+import io
+import struct
+import tarfile
+from contextlib import ExitStack
 import importlib.util
 import json
 from pathlib import Path
@@ -22,6 +27,83 @@ class ProbeTests(unittest.TestCase):
         self.env = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
                     'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'ARM64',
                     'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1'}
+
+    def test_official_runtime_staging_checks_archive_before_extracting(self):
+        raw, specs = runtime_fixture()
+        with tempfile.TemporaryDirectory() as tmp, runtime_inputs(raw, specs):
+            result = probe.prepare_runtime_tools(Path(tmp))
+            folder = Path(tmp) / 'runtime-tools'
+            self.assertEqual(sorted(x.name for x in folder.iterdir()), ['containerd', 'containerd-shim-runc-v2', 'ctr'])
+            self.assertEqual(result['binary_bytes'], sum(item['bytes'] for item in specs.values()))
+            self.assertEqual((folder / 'containerd').stat().st_mode & 0o777, 0o555)
+        for body in (raw + b'x', raw[:-1], bytes([raw[0] ^ 1]) + raw[1:]):
+            with self.subTest(length=len(body)), tempfile.TemporaryDirectory() as tmp, runtime_inputs(raw, specs, body=body):
+                with self.assertRaises(probe.ProbeError):
+                    probe.prepare_runtime_tools(Path(tmp))
+                self.assertFalse((Path(tmp) / 'runtime-tools/containerd').exists())
+
+    def test_runtime_package_rejects_unexpected_members_links_and_wrong_elf(self):
+        for change in ('unexpected-name', 'link', 'hardlink', 'duplicate', 'missing', 'wrong-arch', 'dynamic'):
+            raw, specs = runtime_fixture(change)
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp, runtime_inputs(raw, specs):
+                with self.assertRaises(probe.ProbeError):
+                    probe.prepare_runtime_tools(Path(tmp))
+        raw, specs = runtime_fixture()
+        bad_specs = copy.deepcopy(specs)
+        bad_specs['ctr']['sha256'] = '0' * 64
+        with tempfile.TemporaryDirectory() as tmp, runtime_inputs(raw, bad_specs):
+            with self.assertRaises(probe.ProbeError):
+                probe.prepare_runtime_tools(Path(tmp))
+
+    def test_runtime_package_rejects_untrusted_redirect_and_preexisting_output(self):
+        raw, specs = runtime_fixture()
+        with tempfile.TemporaryDirectory() as tmp, runtime_inputs(raw, specs, final_url='https://untrusted.invalid/package'):
+            with self.assertRaises(probe.ProbeError):
+                probe.prepare_runtime_tools(Path(tmp))
+        with tempfile.TemporaryDirectory() as tmp, runtime_inputs(raw, specs):
+            (Path(tmp) / 'runtime-tools').mkdir()
+            (Path(tmp) / 'runtime-tools/containerd').write_text('preserve existing')
+            with self.assertRaises((probe.ProbeError, FileExistsError)):
+                probe.prepare_runtime_tools(Path(tmp))
+            self.assertEqual((Path(tmp) / 'runtime-tools/containerd').read_text(), 'preserve existing')
+
+    def test_actual_engine_failure_retains_observed_versions_without_private_details(self):
+        item = probe.Probe(Path('/archive'), 'a' * 40, Path('/output'))
+        version = {'Version': '29.5.2', 'GitCommit': '568f755', 'Os': 'linux', 'Arch': 'arm64',
+                   'Components': [{'Name': 'containerd', 'Version': 'v2.2.3',
+                    'Details': {'GitCommit': '77c84241c7cbdd9b4eca2591793e3d4f4317c590', 'Secret': 'DO_NOT_RETAIN'}}]}
+        info = {'OSType': 'linux', 'Architecture': 'aarch64', 'Driver': 'overlayfs',
+                'DriverStatus': [['driver-type', 'io.containerd.snapshotter.v1']], 'DockerRootDir': '/proof/docker'}
+        with self.assertRaises(probe.ProbeError):
+            item.check_engine(version, info)
+        self.assertEqual(item.report['engine']['containerd'], 'v2.2.3')
+        self.assertEqual(item.report['engine']['containerd_commit'], '77c84241c7cbdd9b4eca2591793e3d4f4317c590')
+        self.assertEqual(item.report['engine']['driver'], 'overlayfs')
+        self.assertFalse(item.report['engine']['validated'])
+        self.assertNotIn('DO_NOT_RETAIN', json.dumps(item.report))
+        version['Components'][0]['Version'] = 'v2.2.4'
+        with self.assertRaises(probe.ProbeError):
+            item.check_engine(version, info)
+        version['Components'][0]['Details']['GitCommit'] = '193637f7ee8ae5f5aa5248f49e7baa3e6164966e'
+        item.check_engine(version, info)
+        self.assertTrue(item.report['engine']['validated'])
+        version['Version'] = '29.5.2\nDO_NOT_RETAIN'
+        with self.assertRaises(probe.ProbeError):
+            item.check_engine(version, info)
+        self.assertIsNone(item.report['engine']['docker'])
+        self.assertNotIn('DO_NOT_RETAIN', json.dumps(item.report))
+
+    def test_actual_runtime_hash_check_rejects_wrong_bound_file_or_running_process(self):
+        for corrupt in ('file', 'process', None):
+            item = probe.Probe(Path('/archive'), 'a' * 40, Path('/output'))
+            item.outer, item.cid = ['docker'], 'a' * 64
+            item.runner = RuntimeHashRunner(corrupt)
+            if corrupt:
+                with self.subTest(corrupt=corrupt), self.assertRaises(probe.ProbeError):
+                    item.check_runtime_tools()
+            else:
+                item.check_runtime_tools()
+                self.assertTrue(item.report['runtime_tools_verified'])
 
     def test_workflow_exact_double_label_gate_and_same_repository(self):
         workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/build-backend-image.yml').read_text()
@@ -87,17 +169,24 @@ class ProbeTests(unittest.TestCase):
         mounts = [{'Type': 'bind', 'Source': '/owned/fs' + suffix, 'Destination': dest, 'RW': True}
                   for suffix, dest in [('', '/proof'), ('/run', '/run'), ('/tmp', '/tmp'),
                                        ('/unused-docker', '/var/lib/docker'), ('/unused-containerd', '/var/lib/containerd')]]
+        mounts += [{'Type': 'bind', 'Source': '/owned/runtime-tools/' + name,
+                    'Destination': '/usr/local/bin/' + name, 'RW': False}
+                   for name in ('containerd', 'containerd-shim-runc-v2', 'ctr')]
         worker = {'Mounts': mounts, 'HostConfig': {'ReadonlyRootfs': True, 'NetworkMode': 'none',
                   'PortBindings': {}, 'LogConfig': {'Type': 'none'}, 'CgroupnsMode': 'private'},
                   'Config': {'Env': ['DOCKER_TMPDIR=/proof/tmp', 'TMPDIR=/proof/tmp']}}
         probe.validate_worker(worker, '/owned/fs')
-        for mutation in ('socket', 'network', 'writable-root', 'cgroup', 'temp'):
+        for mutation in ('socket', 'network', 'writable-root', 'cgroup', 'runtime-write', 'runtime-source', 'temp'):
             bad = copy.deepcopy(worker)
             if mutation == 'socket':
                 bad['Mounts'].append({'Type': 'bind', 'Source': '/var/run/docker.sock',
                                      'Destination': '/var/run/docker.sock', 'RW': True})
             elif mutation == 'network':
                 bad['HostConfig']['NetworkMode'] = 'host'
+            elif mutation == 'runtime-write':
+                bad['Mounts'][-1]['RW'] = True
+            elif mutation == 'runtime-source':
+                bad['Mounts'][-1]['Source'] = '/other/ctr'
             elif mutation == 'cgroup':
                 bad['HostConfig']['CgroupnsMode'] = 'host'
             elif mutation == 'writable-root':
@@ -118,7 +207,8 @@ class ProbeTests(unittest.TestCase):
 
     def test_wrong_engine_or_snapshotter_rejected(self):
         version = {'Os': 'linux', 'Arch': 'arm64', 'Version': '29.5.2',
-                   'Components': [{'Name': 'containerd', 'Version': 'v2.2.4'}]}
+                   'Components': [{'Name': 'containerd', 'Version': 'v2.2.4',
+                                   'Details': {'GitCommit': '193637f7ee8ae5f5aa5248f49e7baa3e6164966e'}}]}
         info = {'OSType': 'linux', 'Architecture': 'aarch64', 'Driver': 'overlayfs',
                 'DriverStatus': [['driver-type', 'io.containerd.snapshotter.v1']],
                 'DockerRootDir': '/proof/docker'}
@@ -190,6 +280,11 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual([x for x in command if x.startswith('--host=')],
                          ['--host=unix:///proof/docker.sock'])
         self.assertIn('--network=none', command)
+        runtime_mounts = [value for value in command if ',dst=/usr/local/bin/' in value]
+        self.assertEqual(set(runtime_mounts), {
+            'type=bind,src=/owned/runtime-tools/containerd,dst=/usr/local/bin/containerd,readonly',
+            'type=bind,src=/owned/runtime-tools/containerd-shim-runc-v2,dst=/usr/local/bin/containerd-shim-runc-v2,readonly',
+            'type=bind,src=/owned/runtime-tools/ctr,dst=/usr/local/bin/ctr,readonly'})
 
     def test_actual_delegation_accepts_busybox_unknown_only_with_cgroup2_magic(self):
         item = probe.Probe(Path('/archive'), 'a' * 40, Path('/output'))
@@ -275,6 +370,85 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError):
             probe.validate_loop({'loopdevices': [{'name': '/dev/loop7', 'back-file': '/tmp/other.img'}]}, '/dev/loop7', '/tmp/owned/disk.img')
         probe.validate_loop({'loopdevices': [{'name': '/dev/loop7', 'back-file': '/tmp/owned/disk.img'}]}, '/dev/loop7', '/tmp/owned/disk.img')
+
+
+def runtime_fixture(change=None):
+    files = {}
+    for name in ('containerd', 'containerd-shim-runc-v2', 'ctr'):
+        data = bytearray(128)
+        data[:7] = b'\x7fELF\x02\x01\x01'
+        struct.pack_into('<HH', data, 16, 2, 183)
+        struct.pack_into('<Q', data, 32, 64)
+        struct.pack_into('<HHH', data, 52, 64, 56, 1)
+        struct.pack_into('<I', data, 64, 1)
+        if name == 'ctr' and change == 'wrong-arch':
+            struct.pack_into('<H', data, 18, 62)
+        if name == 'ctr' and change == 'dynamic':
+            struct.pack_into('<I', data, 64, 3)
+        files[name] = bytes(data) + name.encode()
+    specs = {name: {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()} for name, data in files.items()}
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode='w:gz', format=tarfile.USTAR_FORMAT) as archive:
+        directory = tarfile.TarInfo('bin')
+        directory.type = tarfile.DIRTYPE
+        archive.addfile(directory)
+        auxiliary = tarfile.TarInfo('bin/containerd-stress')
+        auxiliary.size = 3
+        archive.addfile(auxiliary, io.BytesIO(b'aux'))
+        for name, data in files.items():
+            if name == 'ctr' and change == 'missing':
+                continue
+            member = tarfile.TarInfo('bin/' + name)
+            member.size = len(data)
+            if name == 'ctr' and change in ('link', 'hardlink'):
+                member.type = tarfile.SYMTYPE if change == 'link' else tarfile.LNKTYPE
+                member.linkname, member.size = '/outside', 0
+                archive.addfile(member)
+            else:
+                archive.addfile(member, io.BytesIO(data))
+        if change == 'duplicate':
+            duplicate = tarfile.TarInfo('bin/ctr')
+            duplicate.size = len(files['ctr'])
+            archive.addfile(duplicate, io.BytesIO(files['ctr']))
+        if change == 'unexpected-name':
+            archive.addfile(tarfile.TarInfo('bin/unexpected'))
+    return raw.getvalue(), specs
+
+
+class RuntimeResponse(io.BytesIO):
+    def __init__(self, body, final_url):
+        super().__init__(body)
+        self.final_url = final_url
+
+    def geturl(self):
+        return self.final_url
+
+
+def runtime_inputs(raw, specs, *, body=None, final_url='https://release-assets.githubusercontent.com/asset'):
+    stack = ExitStack()
+    stack.enter_context(patch.dict(probe.RUNTIME_BINARIES, specs, clear=True))
+    stack.enter_context(patch.object(probe, 'RUNTIME_ARCHIVE_BYTES', len(raw)))
+    stack.enter_context(patch.object(probe, 'RUNTIME_ARCHIVE_SHA256', hashlib.sha256(raw).hexdigest()))
+    response = RuntimeResponse(raw if body is None else body, final_url)
+    stack.enter_context(patch.object(probe.urllib.request, 'urlopen', return_value=response))
+    return stack
+
+
+class RuntimeHashRunner:
+    def __init__(self, corrupt):
+        self.corrupt = corrupt
+
+    def run(self, argv, **kwargs):
+        prefix = ['docker', 'exec', 'a' * 64]
+        for name, spec in probe.RUNTIME_BINARIES.items():
+            path = '/usr/local/bin/' + name
+            if argv == prefix + ['sha256sum', path]:
+                digest = '0' * 64 if self.corrupt == 'file' else spec['sha256']
+                return digest + '  ' + path + '\n'
+        if argv[:5] == prefix + ['sh', '-c']:
+            digest = '0' * 64 if self.corrupt == 'process' else probe.RUNTIME_BINARIES['containerd']['sha256']
+            return digest + '  /proc/42/exe\n'
+        raise AssertionError('unexpected command: ' + str(argv))
 
 
 class DelegationRunner:
