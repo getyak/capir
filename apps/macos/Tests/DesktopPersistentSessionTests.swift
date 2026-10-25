@@ -5,6 +5,16 @@ import WebKit
 
 @MainActor
 final class DesktopPersistentSessionTests: XCTestCase {
+    func testHTTPFixturePublishesEmptyLedgerBeforeAnyRequest() async throws {
+        let h = PersistentHarness()
+        let fixture = try PersistentHTTPFixture(receipt: h.receipt)
+        defer { fixture.stop() }
+        _ = try await fixture.start()
+        let metadata = try Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))
+        let records = try XCTUnwrap(JSONSerialization.jsonObject(with: metadata) as? [[String: Any]])
+        XCTAssertTrue(records.isEmpty, "A ready fixture must expose a valid empty ledger before the first HTTP request")
+    }
+
     func testHealthyCookieEnrolsPersistedCredentialBeforeDispatch() async throws {
         let h = PersistentHarness()
         h.transport.live = h.receipt
@@ -472,6 +482,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
      'source_retention_days':30,'available':True}})
   if 'capri-persistent-proof=1' not in self.headers.get('Cookie',''):return self.answer(401,{'status':'signed_out'})
   self.answer(200,response)
+(root/'requests.json').write_text(json.dumps(records))
 server=http.server.HTTPServer(('127.0.0.1',0),Handler)
 (root/'ready.json').write_text(json.dumps({'port':server.server_port}))
 server.serve_forever()
@@ -495,7 +506,9 @@ server.serve_forever()
         // Cloud failures must retain the observed native navigation/fetch
         // sequence before this owned fixture directory is removed. The ledger
         // deliberately contains metadata only, never request bodies or secrets.
-        if let metadata = try? Data(contentsOf: directory.appendingPathComponent("requests.json")), metadata.count <= 65_536,
+        let ledgerURL = directory.appendingPathComponent("requests.json")
+        if FileManager.default.fileExists(atPath: ledgerURL.path),
+           let metadata = try? Data(contentsOf: ledgerURL), metadata.count <= 65_536,
            let records = (try? JSONSerialization.jsonObject(with: metadata)) as? [[String: Any]] {
             let permitted: Set<String> = ["method", "path", "status", "action", "origin", "cookie_present"]
             let bounded = records.prefix(32).map { record in
