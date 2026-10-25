@@ -91,3 +91,12 @@ unavailability permits no business GET. Controlled recovery counterexamples
 separate that state invariant from transport timing. Exact failed-test IDs also
 retain all bounded fixture metadata in both check and release workflows;
 assertion-only attachment filtering had omitted successful fixture activities.
+
+Merged e70 has the same tree as the approved PR428 head, but its native run
+failed two real-WK cases after POST and before independent GET. Fixture startup
+completed in109ms; a200ledger entry preceded body write and could not establish
+delivery. The next diagnostic slice records bounded DEBUG navigation/readback
+events, error categories before test cleanup, and post-flush response completion.
+It does not change Release authentication, timeouts, retries or admission gates.
+Local focused execution passed50/50; the cloud cause remains unproven until an
+observed run provides the missing phase evidence. Final activation remains held.
