@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "capri Capture",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Review visible evidence before a user-approved local capri handoff.",
   "minimum_chrome_version": "116",
   "incognito": "not_allowed",

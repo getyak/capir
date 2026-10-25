@@ -26,19 +26,32 @@ function cohort(version,salt) {
   return { version,tag:`capir-v${version}`,commit,nodeVersion,archivesDir:dir,manifestDir:dir,installer,publicKeyFile:keyFile };
 }
 function mockGitHub() {
-  const releases=new Map(), calls=[], refs=new Map(); let failUpload=null, moveAfterUpload=false, failBeforeUpload=null;
+  const releases=new Map(), calls=[], refs=new Map(); let failUpload=null, moveAfterUpload=false, failBeforeUpload=null, nextReleaseId=1000;
   const response=(status,body)=>({code:status===200?0:1,stdout:`HTTP/2.0 ${status}\nContent-Type: application/json\n\n${JSON.stringify(body)}`});
+  const metadata=(tag,release)=>({id:release.id,tag_name:tag,draft:release.draft,body:release.body,assets:[...release.assets.keys()].map(name=>({name}))});
   const gh=args=>{
     calls.push([...args]);
     if(args[0]==='api') {
       if(args[1]==='--include') {
-        const tag=args[2].split('/').at(-1), release=releases.get(tag);
-        return release?response(200,{draft:release.draft,body:release.body,assets:[...release.assets.keys()].map(name=>({name}))}):response(404,{message:'Not Found'});
+        const path=args[2];
+        if(path.includes('/releases/tags/')) {
+          const tag=path.split('/').at(-1),release=releases.get(tag);
+          // GitHub's tag endpoint returns published releases only. Drafts
+          // remain visible to the publisher through list and ID endpoints.
+          return release&&!release.draft?response(200,metadata(tag,release)):response(404,{message:'Not Found'});
+        }
+        const id=Number(path.split('/').at(-1));
+        const found=[...releases].find(([,release])=>release.id===id);
+        return found?response(200,metadata(...found)):response(404,{message:'Not Found'});
+      }
+      if(args[1]==='--paginate') {
+        assert.deepEqual(args,['api','--paginate','repos/getyak/capir/releases?per_page=100','--jq','if type != "array" then error("invalid release listing") else .[] | [.id,.tag_name,.draft] | @json end']);
+        return {code:0,stdout:[...releases].map(([tag,release])=>JSON.stringify([release.id,tag,release.draft])).join('\n')};
       }
       const tag=args[1].split('/').at(-1);return {code:0,stdout:JSON.stringify({object:{type:'commit',sha:refs.get(tag)??commit}})};
     }
     const command=args[1],tag=args[2];let release=releases.get(tag);
-    if(command==='create') { assert.ok(!release); releases.set(tag,{draft:args.includes('--draft'),body:args.includes('--notes-file')?readFileSync(args[args.indexOf('--notes-file')+1],'utf8'):'',assets:new Map()}); }
+    if(command==='create') { assert.ok(!release); releases.set(tag,{id:nextReleaseId++,draft:args.includes('--draft'),body:args.includes('--notes-file')?readFileSync(args[args.indexOf('--notes-file')+1],'utf8'):'',assets:new Map()}); }
     else if(command==='upload') {
       assert.ok(release); assert.ok(tag==='capir-stable'||release.draft,'published version writes are forbidden');
       const files=args.slice(args.indexOf('--repo')+2).filter(arg=>!arg.startsWith('--'));
@@ -72,6 +85,17 @@ test('release versions reject malformed values before any shell or publication o
   assert.equal(strictVersion('0.2.1'),'0.2.1');
   for(const value of ['1.2','01.2.3','1.2.3\n','1.2.3; echo value','1.2.3$(id)','9007199254740992.1.1'])assert.throws(()=>strictVersion(value));
 });
+test('GitHub draft tag404 with visible list and ID metadata completes a first publication',async()=>{
+  const mock=mockGitHub(),a=cohort('0.2.3','real-draft-contract');
+  const result=await publishRelease(a,mock);
+  assert.equal(result.stable,a.version);assert.equal(mock.releases.get(a.tag).draft,false);
+  assert.equal(mock.releases.get(a.tag).assets.size,7);
+  const listRead=mock.calls.findIndex(args=>args[0]==='api'&&args[1]==='--paginate');
+  const idRead=mock.calls.findIndex(args=>args[0]==='api'&&args[1]==='--include'&&args[2]==='repos/getyak/capir/releases/'+mock.releases.get(a.tag).id);
+  const versionPublished=mock.calls.findIndex(args=>args[0]==='release'&&args[1]==='edit'&&args[2]===a.tag&&args.includes('--draft=false'));
+  const stableCreated=mock.calls.findIndex(args=>args[0]==='release'&&args[1]==='create'&&args[2]==='capir-stable');
+  assert.ok(listRead>=0&&idRead>listRead);assert.ok(stableCreated>versionPublished);
+});
 test('a partial draft upload can be rebuilt and published as one fully verified cohort',async()=>{
   const mock=mockGitHub(),first=cohort('1.0.0','partial-a');mock.fail(first.tag,2);
   await assert.rejects(publishRelease(first,mock),/GitHub operation failed/);
@@ -85,7 +109,10 @@ test('a full rerun reuses published bytes despite rebuilding different archive b
   const mock=mockGitHub(),first=cohort('1.1.0','original');await publishRelease(first,mock);
   const before=new Map(mock.releases.get(first.tag).assets),rebuilt=cohort('1.1.0','rebuilt');
   assert.notDeepEqual(readFileSync(join(first.manifestDir,'manifest.json')),readFileSync(join(rebuilt.manifestDir,'manifest.json')));
+  const earlierCalls=mock.calls.length;
   await publishRelease(rebuilt,mock);assert.deepEqual(mock.releases.get(first.tag).assets,before);
+  assert.ok(!mock.calls.slice(earlierCalls).some(args=>args[0]==='release'&&args[1]==='upload'&&args[2]===first.tag));
+  assert.ok(!mock.calls.slice(earlierCalls).some(args=>args[0]==='api'&&args[1]==='--paginate'),'published metadata uses the tag endpoint without listing drafts');
 });
 test('replaying an older published release cannot downgrade the stable channel',async()=>{
   const mock=mockGitHub(),a=cohort('1.2.0','older'),b=cohort('1.2.1','newer');await publishRelease(a,mock);await publishRelease(b,mock);
@@ -106,6 +133,47 @@ test('a transient metadata error is not mistaken for a missing release',async()=
   const mock=mockGitHub(),a=cohort('1.5.0','metadata');
   const gh=args=>args[0]==='api'&&args[1]==='--include'?{code:1,stdout:'HTTP/2.0 503\n\n{}'}:mock.gh(args);
   await assert.rejects(publishRelease(a,{gh,fetchImpl:mock.fetchImpl}),/HTTP 503/);assert.equal(mock.releases.size,0);
+});
+
+for (const mode of ['duplicate','unsafe-id','missing-draft','not-draft','malformed','partial-failure']) test(`draft listing ${mode} fails closed before asset writes`,async()=>{
+  const mock=mockGitHub(),a=cohort('3.0.'+['duplicate','unsafe-id','missing-draft','not-draft','malformed','partial-failure'].indexOf(mode),'listing-'+mode);
+  const gh=args=>{
+    const result=mock.gh(args);
+    if(args[0]!=='api'||args[1]!=='--paginate'||!mock.releases.has(a.tag))return result;
+    const release=mock.releases.get(a.tag),row=[release.id,a.tag,true];
+    if(mode==='duplicate')return {code:0,stdout:JSON.stringify(row)+'\n'+JSON.stringify(row)};
+    if(mode==='unsafe-id')row[0]=Number.MAX_SAFE_INTEGER+1;
+    if(mode==='missing-draft')row.pop();
+    if(mode==='not-draft')row[2]=false;
+    if(mode==='malformed')return {code:0,stdout:'not-json'};
+    return {code:mode==='partial-failure'?1:0,stdout:JSON.stringify(row)};
+  };
+  await assert.rejects(publishRelease(a,{gh,fetchImpl:mock.fetchImpl}),/draft listing|published release metadata is inconsistent/);
+  assert.equal(mock.releases.get(a.tag).assets.size,0);assert.equal(mock.releases.has('capir-stable'),false);
+});
+for (const mode of ['wrong-id','wrong-tag','published-during-read','missing-assets','malformed','denied','missing']) test(`independent draft ID readback ${mode} cannot authorize publication`,async()=>{
+  const mock=mockGitHub(),a=cohort('3.1.'+['wrong-id','wrong-tag','published-during-read','missing-assets','malformed','denied','missing'].indexOf(mode),'detail-'+mode);
+  const gh=args=>{
+    const result=mock.gh(args);
+    if(args[0]!=='api'||args[1]!=='--include'||!/^repos\/getyak\/capir\/releases\/\d+$/.test(args[2]))return result;
+    if(mode==='denied')return {code:1,stdout:'HTTP/2.0 403\n\n{}'};
+    if(mode==='missing')return {code:1,stdout:'HTTP/2.0 404\n\n{}'};
+    if(mode==='malformed')return {code:0,stdout:'HTTP/2.0 200\n\nnot-json'};
+    const split=result.stdout.indexOf('\n\n'),body=JSON.parse(result.stdout.slice(split+2));
+    if(mode==='wrong-id')body.id++;
+    if(mode==='wrong-tag')body.tag_name='capir-v9.9.9';
+    if(mode==='published-during-read')body.draft=false;
+    if(mode==='missing-assets')delete body.assets;
+    return {code:0,stdout:result.stdout.slice(0,split+2)+JSON.stringify(body)};
+  };
+  await assert.rejects(publishRelease(a,{gh,fetchImpl:mock.fetchImpl}),/metadata/);
+  assert.equal(mock.releases.get(a.tag).assets.size,0);assert.equal(mock.releases.has('capir-stable'),false);
+});
+test('a failure listing any page is not mistaken for an absent release',async()=>{
+  const mock=mockGitHub(),a=cohort('3.2.0','list-page-denied');
+  const gh=args=>args[0]==='api'&&args[1]==='--paginate'?{code:1,stdout:JSON.stringify([1001,'unrelated-tag',true])}:mock.gh(args);
+  await assert.rejects(publishRelease(a,{gh,fetchImpl:mock.fetchImpl}),/draft listing failed/);
+  assert.equal(mock.releases.size,0);
 });
 test('signed cohort verification rejects a corrupt archive and a wrong source commit',()=>{
   const a=cohort('1.6.0','tamper'),expected={version:a.version,commit,nodeVersion,publicKey,installer};
