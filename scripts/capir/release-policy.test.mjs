@@ -37,9 +37,20 @@ describe("release workflow: triggers and scope", () => {
     assert.match(prWorkflow, /permissions:\n  contents: read/);
     assert.ok(!prWorkflow.includes("environment:") && !prWorkflow.includes("id-token:") && !prWorkflow.includes("Infisical/"));
     assert.match(workflow, /push:\n    tags:\n      - "capir-v\*"/);
-    assert.ok(!workflow.includes("  pull_request:") && !workflow.includes("  workflow_dispatch:"));
+    assert.ok(!workflow.includes("  pull_request:"));
+    assert.ok(workflow.includes("workflow_dispatch:") && workflow.includes("default: contract-only"));
     assert.match(workflow, /if: needs\.validate\.outputs\.publish == 'true' && github\.event_name == 'push'/);
     assert.ok(!prWorkflow.includes("pull_request_target"));
+  });
+
+  it("keeps the real provider contract main-only, unpublished and free of secrets or OIDC", () => {
+    const contract=workflow.slice(workflow.indexOf("\n  publication-contract:\n"),workflow.indexOf("\n  validate:\n"));
+    assert.ok(contract.includes("github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'contract-only'"));
+    assert.ok(contract.includes("contents: write"));
+    for(const forbidden of ["id-token:","Infisical/","CAPIR_RELEASE_SIGNING_KEY","environment:","manifest.mjs sign","pnpm install"]) assert.ok(!contract.includes(forbidden));
+    assert.ok(contract.includes("publication-contract.mjs run --receipt-dir"));
+    assert.ok(contract.includes("GH_TOKEN: ${{ github.token }}") && contract.includes("if: always()"));
+    assert.ok(workflow.includes("name: Validate release reference\n    if: github.event_name == 'push'"));
   });
 
   it("uses only valid hosted runner labels mapped to every platform", () => {
@@ -114,13 +125,13 @@ describe("release workflow: publication wiring", () => {
   it("serializes all release versions and freezes the validated source SHA", () => {
     assert.ok(workflow.includes("group: capir-release-stable"));
     assert.ok(workflow.includes('echo "ref=$(git rev-parse HEAD)"'));
-    assert.equal((workflow.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []).length, 2);
+    assert.equal((workflow.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []).length, 3);
     assert.ok(workflow.includes('node scripts/capir/publication.mjs publish'));
     assert.ok(workflow.includes('RELEASE_COMMIT: ${{ needs.validate.outputs.ref }}'));
   });
   it("binds event SHA to validated tag and requests only the signing key", () => {
     assert.ok(workflow.includes('--revision "$GITHUB_SHA"'));
-    assert.ok(!workflow.includes("inputs.version") && !workflow.includes("workflow_dispatch:"));
+    assert.ok(!workflow.includes("inputs.version"));
     assert.ok(workflow.includes('secret-name: CAPIR_RELEASE_SIGNING_KEY'));
     assert.ok(workflow.includes('include-imports: false'));
     assert.ok(workflow.includes('CAPIR_IDENTITY_ID: ${{ vars.INFISICAL_CAPIR_IDENTITY_ID }}'));
@@ -209,6 +220,8 @@ describe("packaging and installer policy", () => {
     const cliJob = end === -1 ? rest : rest.slice(0, end);
     assert.ok(cliJob.includes("scripts/capir/manifest.test.mjs"));
     assert.ok(cliJob.includes("scripts/capir/publication.test.mjs"));
+    assert.ok(cliJob.includes("scripts/capir/github-release-provider.test.mjs"));
+    assert.ok(cliJob.includes("scripts/capir/publication-contract.test.mjs"));
     assert.ok(cliJob.includes("scripts/capir/package-portable.test.mjs"));
     assert.ok(cliJob.includes("scripts/capir/release-policy.test.mjs"));
     assert.ok(cliJob.includes("scripts/capir/install.test.mjs"));
