@@ -917,9 +917,14 @@ private final class PersistentHTTPFixture {
         let script = #"""
 import sys,time
 time.sleep(float(sys.argv[3]))
-import http.server,json,pathlib
+import http.server,json,pathlib,threading
 from datetime import datetime,timezone,timedelta
 root=pathlib.Path(sys.argv[1]); configuration=json.loads(sys.argv[2]); response=configuration['receipt']; records=[]; enrolled_secret=None
+request_lock=threading.RLock()
+def serialized(operation):
+ def run(self):
+  with request_lock:return operation(self)
+ return run
 def persist():
  (root/'requests.tmp').write_text(json.dumps(records));(root/'requests.tmp').replace(root/'requests.json')
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -937,6 +942,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
    'native_header':self.headers.get('x-capri-desktop-session'),'content_type':self.headers.get('Content-Type'),
    'cookie_present':'capri-persistent-proof=1' in self.headers.get('Cookie','')})
   persist()
+ @serialized
  def do_POST(self):
   global enrolled_secret
   self.record(); data=json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))))
@@ -949,6 +955,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
    enrolled_secret=data['device_secret']
   elif data.get('action')!='renew' or data.get('device_secret')!=(enrolled_secret or 'p'*43):return self.answer(401,{'status':'revoked'})
   self.answer(200,response,True)
+ @serialized
  def do_GET(self):
   self.record()
   if self.path=='/api/desktop-capture/host':
@@ -967,7 +974,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
    context.update(configuration['primary_proof']);return self.answer(200,context)
   if 'capri-persistent-proof=1' not in self.headers.get('Cookie',''):return self.answer(401,{'status':'signed_out'})
   self.answer(200,response)
-server=http.server.HTTPServer(('127.0.0.1',0),Handler)
+server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
 (root/'ready.tmp').write_text(json.dumps({'port':server.server_port}))
 (root/'ready.tmp').replace(root/'ready.json')
 server.serve_forever()
