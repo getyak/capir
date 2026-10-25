@@ -96,6 +96,8 @@ export async function confirmBackendRegistration(
 
 
 export type BackendSessionClaims = {
+  /** Server-owned canonical ID, set only by persistent Mac authorization. */
+  backendSessionId?: string;
   backendAccessToken: string;
   backendAccountId: string;
   backendAccountName: string;
@@ -147,6 +149,9 @@ export const readPrimaryBackendSessionClaims = cache(async (): Promise<BackendSe
   }
   return {
     backendAccessToken: token.backendAccessToken,
+    ...(typeof token.backendSessionId === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token.backendSessionId)
+      ? { backendSessionId: token.backendSessionId } : {}),
     backendAccountId: token.backendAccountId,
     backendAccountName: token.backendAccountName,
     backendAccountSlug: token.backendAccountSlug,

@@ -41,12 +41,22 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     private var loadTimeout: Task<Void, Never>?
     private var activeNavigation: WKNavigation?
     private let storeSelection: LoginStoreSelection?
+    private let registry: LoginStoreRegistry
+    private let persistentSession: DesktopPersistentSessionCoordinator
+    private let originProvider: () -> WorkspaceOrigin?
+    private var initialSessionRestore: Task<DesktopPersistentSessionOutcome, Never>?
     private var retired = false
     private let contextFence = CaptureContextReadFence()
 
-    init(origin: WorkspaceOrigin) {
+    init(origin: WorkspaceOrigin, registry: LoginStoreRegistry? = nil,
+         persistentSession: DesktopPersistentSessionCoordinator? = nil,
+         originProvider: (() -> WorkspaceOrigin?)? = nil) {
         self.origin = origin
-        self.storeSelection = try? LoginStoreRegistry.shared.selection(for: origin.url.absoluteString)
+        let owner = registry ?? .shared
+        self.registry = owner
+        self.persistentSession = persistentSession ?? (registry == nil ? .shared : DesktopPersistentSessionCoordinator(registry: owner))
+        self.originProvider = originProvider ?? { WorkspaceConnection.shared.origin }
+        self.storeSelection = try? owner.selection(for: origin.url.absoluteString)
         hostURL = origin.url.appendingPathComponent("api/desktop-capture/host")
         let configuration = WKWebViewConfiguration()
         if let store = storeSelection?.storeIdentifier {
@@ -56,17 +66,25 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         webView.navigationDelegate = self
+        // A menu-bar-only launch may never construct WorkspaceBrowser. Enroll
+        // its healthy old cookie before the short session expires, and share
+        // the same coalesced restore with any workspace starting concurrently.
+        initialSessionRestore = Task { [weak self] in
+            guard let self, (try? self.assertOrigin()) != nil else { return .cancelled }
+            return await self.persistentSession.restore(in: self.origin)
+        }
     }
 
     func retire() {
+        initialSessionRestore?.cancel(); initialSessionRestore = nil
         retired = true; loaded = false; webView.stopLoading(); webView.navigationDelegate = nil
         finishLoading(.failure(CaptureTransportError.staleOrigin))
     }
 
     private func assertOrigin() throws {
-        guard !retired, let storeSelection, LoginStoreRegistry.shared.isCurrent(storeSelection),
-              !LoginStoreRegistry.shared.hasUnresolvedLogin(for: origin.url.absoluteString),
-              WorkspaceConnection.shared.origin == origin else { throw CaptureTransportError.staleOrigin }
+        guard !retired, let storeSelection, registry.isCurrent(storeSelection),
+              !registry.hasUnresolvedLogin(for: origin.url.absoluteString),
+              originProvider() == origin else { throw CaptureTransportError.staleOrigin }
         if let current = webView.url, !origin.contains(current) { throw CaptureTransportError.untrustedHost }
     }
 
@@ -153,8 +171,48 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     func context() async throws -> CaptureContext {
         let sequence = contextFence.begin()
         do {
-            let data = try await fetch(path: "/api/desktop-capture/context", method: "GET")
+            var initialOutcome: DesktopPersistentSessionOutcome?
+            if let initialSessionRestore {
+                initialOutcome = await initialSessionRestore.value
+                self.initialSessionRestore = nil
+                try assertOrigin()
+                // The host can have been constructed during primary login's
+                // unresolved store epoch. Once that exact epoch is resolved,
+                // join enrollment before reading the first business context.
+                if case .cancelled? = initialOutcome {
+                    initialOutcome = await persistentSession.restore(in: origin)
+                    try assertOrigin()
+                }
+                if case .unavailable? = initialOutcome { throw CaptureTransportError.unavailable }
+                if case .cancelled? = initialOutcome { throw CaptureTransportError.staleOrigin }
+            }
+            let data: Data
+            var recoveredAccount: String?
+            if case .authenticated(let live)? = initialOutcome { recoveredAccount = live.account_id }
+            do {
+                data = try await fetch(path: "/api/desktop-capture/context", method: "GET")
+            } catch CaptureTransportError.server(401, let code) {
+                // Only this read-only context discovery is retried. Uploads,
+                // admissions, result actions and other writes are never replayed.
+                let outcome: DesktopPersistentSessionOutcome
+                switch initialOutcome {
+                case .unavailable?: outcome = .unavailable
+                case .needsLogin?: outcome = .needsLogin
+                case .cancelled?: outcome = .cancelled
+                default: outcome = await persistentSession.restore(in: origin)
+                }
+                try assertOrigin()
+                switch outcome {
+                case .authenticated(let live):
+                    recoveredAccount = live.account_id
+                    data = try await fetch(path: "/api/desktop-capture/context", method: "GET")
+                case .needsLogin: throw CaptureTransportError.server(401, code)
+                case .unavailable: throw CaptureTransportError.unavailable
+                case .cancelled: throw CaptureTransportError.staleOrigin
+                }
+            }
             let context = try CaptureContext.decode(data, origin: origin.url.absoluteString)
+            if let recoveredAccount, context.workspaceAccountID != recoveredAccount { throw CaptureTransportError.staleOrigin }
             try contextFence.accept(context, sequence: sequence)
             return context
         } catch CaptureTransportError.server(401, let code) {

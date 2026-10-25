@@ -85,6 +85,16 @@ afterEach(async () => {
 });
 
 describe("account settings sessions", () => {
+  it("describes a dormant renewable Mac as persistent and keeps its revoke action", async () => {
+    const data = account();
+    data.sessions[1] = { ...data.sessions[1], client_label: "Dormant Mac", persistent: true,
+      expires_at: "2020-01-01T00:00:00.000Z" };
+    await mount(<AccountSettingsPanel initial={data} section="account" embedded />);
+    const disclosure = host.querySelector<HTMLDetailsElement>("[data-other-sessions]")!;
+    expect(disclosure.textContent).toContain("保持登录，直到退出或撤销");
+    expect(disclosure.textContent).not.toContain("2020");
+    expect(disclosure.textContent).toContain("退出此会话");
+  });
   it("keeps the current session visible and discloses other sessions by count", async () => {
     await mount(<AccountSettingsPanel initial={account()} section="account" embedded />);
 

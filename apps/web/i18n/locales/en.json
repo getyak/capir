@@ -372,6 +372,8 @@
   "此身份通过受限的测试会话访问。": "This identity accesses through a restricted test session.",
   "登录会话": "Sign-in sessions",
   "设备名称由客户端提供；时间按北京时间显示。退出会话后，该设备需要重新登录。": "Device names come from the client; times display in Beijing time. Ending a session requires that device to sign in again.",
+  "保持登录，直到退出或撤销": "Stay signed in until sign-out or revocation",
+  "到期": "Expires",
   "当前会话": "Current session",
   "退出此会话": "End this session",
   "空间设置由所有者或管理员维护。": "Workspace settings are maintained by the owner or an admin.",

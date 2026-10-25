@@ -13,6 +13,7 @@ import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.j
 import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.js";
 import { registerDesktopCaptureResult } from "./modules/desktopCaptureResult.js";
 import { registerDesktopBrowserLogin } from "./routes/desktopBrowserLogin.js";
+import { registerDesktopPersistentSession } from "./routes/desktopPersistentSession.js";
 import { postgresDesktopBrowserLoginDb, sweepDesktopBrowserLoginAttempts } from "./modules/desktopBrowserLogin.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
 import { startMcpOAuthCleanupPump } from "./modules/mcpOauthCleanup.js";
@@ -761,6 +762,7 @@ export async function buildApp(
   registerDesktopCaptureReceipt(app, pool, authenticate);
   registerDesktopCaptureResult(app, pool, authenticate);
   registerDesktopBrowserLogin(app, pool, config, authenticate);
+  registerDesktopPersistentSession(app, pool, config, authenticate, deploymentExposure?.workspaceIds);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);
   registerPersonSourceSyncRoutes(app, pool, authenticate);

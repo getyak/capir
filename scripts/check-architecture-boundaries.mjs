@@ -17,9 +17,9 @@ const MIGRATION_MANIFEST =
 const MIGRATION_DIRECTORY = "apps/backend/src/database";
 const WORKSPACE_CONFIGURATION = "pnpm-workspace.yaml";
 const WORKSPACE_PATTERNS = ["apps/*", "packages/*"];
-const FROZEN_MIGRATION_COUNT = 109;
+const FROZEN_MIGRATION_COUNT = 110;
 const FROZEN_MIGRATION_DIGEST =
-  "2ee8ae89d61e9a5fbb50233d2f9dad6b1997b2ce5f7b365ba2a3b90be1a7d50c";
+  "e5b0082f87a51812a1eb93141355b2311f3490d7e1478d225dd8f850ef8609a6";
 
 const LEGACY_MIGRATION_PREFIX_COLLISIONS = new Map([
   // Onboarding was deployed before the queue migration merged into main.

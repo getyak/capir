@@ -3,6 +3,10 @@ import NextAuth, { AuthError, CredentialsSignin } from "next-auth";
 import type { NextAuthConfig } from "next-auth";
 import Apple from "next-auth/providers/apple";
 import Credentials from "next-auth/providers/credentials";
+import {
+  authorizeDesktopPersistentSession,
+  DesktopPersistentSessionError,
+} from "@/lib/server/desktop-persistent-session";
 import Google from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers";
 import { cookies, headers } from "next/headers";
@@ -328,6 +332,27 @@ function buildProviders(appleCredentials: AppleCredentials): Provider[] {
   // the ordinary backend session claims; nothing invents a token format.
   providers.push(
     Credentials({
+      id: "desktop-persistent",
+      name: "Mac device session",
+      credentials: {
+        action: { type: "text" },
+        device_secret: { type: "password" },
+        account_id: { type: "text" },
+        user_id: { type: "text" },
+        backend_access_token: { type: "password" },
+      },
+      async authorize(credentials) {
+        try {
+          return await authorizeDesktopPersistentSession(credentials ?? {});
+        } catch (error) {
+          if (!(error instanceof DesktopPersistentSessionError) || error.status >= 500) {
+            throw new AccountServiceCredentialsError();
+          }
+          return null;
+        }
+      },
+    }),
+    Credentials({
       id: "desktop-browser",
       name: "Mac 浏览器登录",
       credentials: {
@@ -480,11 +505,13 @@ export function buildAuthConfig(): NextAuthConfig {
           }
         }
         if (account?.provider === "google") {
+          delete token.backendSessionId;
           if (!account.id_token) throw new Error("Google did not return an identity token.");
           const backend = await exchangeProviderSession("google", () => finishGoogleSignIn(account.id_token!));
           return applyBackendSessionToToken(token, backend);
         }
         if (account?.provider === "apple") {
+          delete token.backendSessionId;
           if (!account.id_token) throw new Error("Apple did not return an identity token.");
           const backend = await exchangeProviderSession("apple", () => finishAppleSignIn({
             identityToken: account.id_token!,
@@ -502,6 +529,7 @@ export function buildAuthConfig(): NextAuthConfig {
             backendRole?: "admin" | "member";
             backendUserId?: string;
             backendUsername?: string | null;
+            backendSessionId?: string;
           };
           token.backendAccessToken = backendUser.backendAccessToken;
           token.backendAccountId = backendUser.backendAccountId;
@@ -511,6 +539,10 @@ export function buildAuthConfig(): NextAuthConfig {
           token.backendRole = backendUser.backendRole;
           token.backendUserId = backendUser.backendUserId;
           token.backendUsername = backendUser.backendUsername;
+          // Only the verified persistent-Mac provider can assert the canonical
+          // session binding. Ordinary primary logins retain exact-access scope.
+          token.backendSessionId = account?.provider === "desktop-persistent"
+            ? backendUser.backendSessionId : undefined;
         }
         return token;
       },

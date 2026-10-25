@@ -109,6 +109,7 @@
     "102_user_language_preferences",
     "103_capture_activity",
     "104_capture_activity_retirement_fence",
-    "105_conversation_queue_session_expiry"
+    "105_conversation_queue_session_expiry",
+    "106_desktop_persistent_sessions"
   ]
 }

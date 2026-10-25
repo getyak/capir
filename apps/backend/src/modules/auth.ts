@@ -921,10 +921,12 @@ export function createAuthGuard(pool: Pool, deploymentWorkspaceIds?: readonly st
        JOIN users
          ON users.account_id = sessions.account_id
         AND users.id = sessions.user_id
-       WHERE sessions.token_hash = $1
+       WHERE (sessions.token_hash = $1 OR
+         (sessions.previous_token_hash = $1 AND sessions.previous_token_expires_at > now()))
          AND sessions.revoked_at IS NULL
          AND sessions.expires_at > now()
          AND users.status = 'active'
+         AND accounts.retired_at IS NULL
          AND ${labWorkspaceSessionActiveSQL}
          AND ${operatorLabDeploymentActiveSQL}`,
       [sha256(accessToken), deployment.enabled, deployment.webOrigin, deployment.backendOrigin, deployment.userAuthEnabled === true],

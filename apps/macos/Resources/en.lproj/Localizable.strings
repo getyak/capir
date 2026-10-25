@@ -25,3 +25,7 @@
 "The workspace request failed (HTTP %lld). Reload later or check connection settings." = "The workspace request failed (HTTP %lld). Reload later or check connection settings.";
 "The page paused. Reload it; saved conversations remain in the workspace." = "The page paused. Reload it; saved conversations remain in the workspace.";
 "Appearance saving could not be confirmed. Reload and check it." = "Appearance saving could not be confirmed. Reload and check it.";
+
+/* Persistent Mac sign-in recovery. */
+"Unable to restore sign-in. Unlock your login keychain, check the network, or retry later. Your sign-in credential and drafts are preserved." = "Unable to restore sign-in. Unlock your login keychain, check the network, or retry later. Your sign-in credential and drafts are preserved.";
+"Unable to save sign-out state. Check local storage and retry." = "Unable to save sign-out state. Check local storage and retry.";

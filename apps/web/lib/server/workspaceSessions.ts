@@ -112,9 +112,9 @@ export function isWorkspaceSessionTimestamp(value: unknown): value is string {
 }
 
 /**
- * Opaque, non-authoritative binding to the exact credential reviewed in this
- * browser. Separated from the contact-handoff binding so a Session cookie
- * rotation cannot be replayed across surfaces.
+ * Opaque non-authorizing exact-login binding, domain-separated from handoff.
+ * Mac access renewal preserves its canonical session; new primary login does
+ * not. Ordinary browser logins retain their exact credential/expiry boundary.
  */
 export function workspaceSessionsBinding(claims: BackendSessionClaims): string {
   return createHmac("sha256", authSecret())
@@ -123,8 +123,9 @@ export function workspaceSessionsBinding(claims: BackendSessionClaims): string {
         "workspace-sessions.v1",
         claims.backendAccountId,
         claims.backendUserId,
-        claims.backendAccessToken,
-        claims.backendExpiresAt,
+        ...(claims.backendSessionId
+          ? ["persistent-macos.v1", claims.backendSessionId]
+          : [claims.backendAccessToken, claims.backendExpiresAt]),
       ]),
     )
     .digest("hex");

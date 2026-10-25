@@ -25,3 +25,7 @@
 "The workspace request failed (HTTP %lld). Reload later or check connection settings." = "ワークスペースのリクエストに失敗しました（HTTP %lld）。後で再読み込みするか、接続設定を確認してください。";
 "The page paused. Reload it; saved conversations remain in the workspace." = "ページが停止しました。再読み込みしてください。保存済みの会話はワークスペースに残っています。";
 "Appearance saving could not be confirmed. Reload and check it." = "外観の保存を確認できませんでした。再読み込みして確認してください。";
+
+/* Persistent Mac sign-in recovery. */
+"Unable to restore sign-in. Unlock your login keychain, check the network, or retry later. Your sign-in credential and drafts are preserved." = "サインインを復元できません。ログインキーチェーンのロックを解除し、ネットワークを確認するか、後で再試行してください。認証情報と下書きは保持されています。";
+"Unable to save sign-out state. Check local storage and retry." = "サインアウトの状態を保存できません。ローカルストレージを確認して再試行してください。";

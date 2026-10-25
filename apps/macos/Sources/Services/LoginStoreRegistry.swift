@@ -167,6 +167,20 @@ final class LoginStoreRegistry {
         try commit(next, publish: nil)
     }
 
+    /// An explicit sign-out permanently selects a new empty store. Late
+    /// renewal cookies remain isolated in the retired store, including after
+    /// process restart; no cookie or draft is copied or deleted.
+    @discardableResult
+    func endSession(for origin: String) throws -> LoginStoreSelection {
+        let current = try selection(for: origin)
+        guard current.epoch != UInt64.max else { throw LoginStoreRegistryError.corruptedRegistry }
+        let empty = LoginStoreSelection(origin: origin, storeIdentifier: UUID(),
+            epoch: current.epoch + 1, unresolved: false, updatedAt: Date())
+        var next = cached; next[origin] = empty
+        try commit(next, publish: empty)
+        return empty
+    }
+
     /// The caller supplies only an identity verified by the first-party live
     /// readback in this exact store. This metadata carries no access authority.
     func recordVerifiedDraftOwner(_ owner: DesktopDraftOwner, selection: LoginStoreSelection) throws {
