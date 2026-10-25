@@ -66,8 +66,8 @@ Official references: [Auth.js renewal](https://authjs.dev/guides/refresh-token-r
 
 1. Complete: production-path audits and frozen interfaces; Pi task `20261025-153159-a4b4ccf8` failed with 401 before code/tokens, so scoped Codex workers implemented without paid provider fallback.
 2. Complete: implement backend, iOS, Web, macOS and CLI; exercise expiry, retries, concurrent use, scope, logout and revocation. Independent review findings about logout/renewal races, stream/prefix dispatch, protocol downgrade and pending-enrollment revocation have been repaired and re-reviewed.
-3. **Active:** integrate current main and already-deployed Web improvements, rebind independent review and complete applicable checks on the final revision.
-4. Merge, deploy affected resident services and distribute native/CLI updates; verify exact live revisions and behavior.
+3. Core merged in [PR 433](https://github.com/getyak/capir/pull/433) as `b9280b5795b48dbf81a469be8e321dfa6c5ff8b5`, after all applicable checks passed at `fcc816bb5c7657673834e588fa4ae0fd02463dcb`. **Active:** a focused backend follow-up preserves ended Lab operation IDs across renewable canonical-session inactivity. It must pass independent review and its applicable checks before the combined runtime rollout.
+4. Deploy affected resident services and distribute native/CLI updates; verify exact live revisions and behavior. The CLI signing key matches the committed public key, but the reviewed dedicated OIDC attachment returned 403 for organization Identity EditAuth. An eligible human principal is required; do not widen workload roles or substitute a human CI token.
 5. Save sanitized evidence, classify acceptance limits and reclaim only task-owned rebuildable resources.
 
 ## Verification and delivery evidence
@@ -90,6 +90,14 @@ the exact official Sparkle 2.10.0 commit was verified against Package.resolved.
 The app used an isolated acceptance bundle identity, preserving the installed
 signed app and its session. Web merge reconciliation adds 75 passing cases,
 with TypeScript and scoped ESLint checks passing.
+The final full Web suite passed 355 files / 3114 tests; full CLI passed
+296 tests with one Linux filesystem-conditional skip; SDK host tests passed
+14 cases; the final host/real-PostgreSQL backend proof passed 107 cases with
+no skips. The final core PR's iOS smoke, macOS native/Hybrid, Web, backend,
+CLI, four-platform package, documentation and security workflows passed.
+CodeQL 116 was repaired in a test expectation; 117/118 were independently
+verified as random-bearer capability/opaque-selector derivation and individually
+dismissed as false positives with API readback. No scanning rule was excluded.
 Documentation, Wiki and architecture checks pass with 112 migrations; all 110
 previous migration names, order and SQL bytes match the verified baseline.
 
@@ -130,3 +138,23 @@ recent unused cache IDs. Their parent/child references prevented reclamation
 proposal retains mutable/shared/in-use records and requires explicit approval
 under the local 168-hour retention policy. Evidence and exact IDs live in the
 permanent task directory; no images, containers, volumes or source are cache.
+Dependency inputs matched the existing deployed image byte-for-byte, so a
+guarded candidate build reused all dependency layers without reaching its
+1.5-GiB VM free-space floor. Extra cache reclamation is no longer a release
+prerequisite; no unapproved descendant cache was deleted.
+
+## Lab idempotency follow-up
+
+A final lifetime audit found an existing cleanup assumption: trial and feature
+override tombstones were deleted once the originating short access deadline
+was more than seven days old. A renewable canonical session can return later
+with the same identity; replaying an ended operation ID must still return its
+ended record, rather than insert an active configuration again. Preserve only
+these idempotency records while their canonical first-party authority remains
+renewable. Keep trial/override/entry expiries, authorization guards, ordinary
+expired-session cleanup and observation retention unchanged. Ordinary MCP
+grants already use their own expiry rather than an old login-access deadline.
+
+This nonblocking P2 was documented before the core merge. The follow-up is
+isolated on `codex/renewable-login-lab-tombstones` from fresh main `b9280b57`;
+native, Web and CLI source content remains identical to the verified core.

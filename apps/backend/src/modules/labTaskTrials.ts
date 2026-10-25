@@ -5,6 +5,7 @@ import type { Pool } from "pg";
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
+import { retainsRenewableSessionReplaySQL } from "./sessionReplayRetention.js";
 import { type RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
 import { taskModelCatalog, taskPromptRevision, trialProvider, type LabTaskKind, type TrialRunMeasurement } from "./labTaskConfiguration.js";
 
@@ -196,7 +197,8 @@ export class LabTaskTrialService {
     await this.pool.query("DELETE FROM lab_trial_observations WHERE created_at < now()-interval '7 days'");
     // Retain configuration ID tombstones while their authenticated session can still replay them.
     await this.pool.query(`DELETE FROM lab_task_trials t USING sessions s
-      WHERE t.auth_session_id=s.id AND COALESCE(s.revoked_at,s.expires_at) < now()-interval '7 days'`);
+      WHERE t.auth_session_id=s.id AND COALESCE(s.revoked_at,s.expires_at) < now()-interval '7 days'
+        AND NOT ${retainsRenewableSessionReplaySQL}`);
   }
 
   private summary(trial: LabTaskTrial, observations: LabTrialObservation[]): LabTrialSummary {
