@@ -9,6 +9,7 @@ import subprocess
 import sys
 import textwrap
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.find_spec('probe_backend_import')
 if SPEC:
@@ -190,6 +191,40 @@ class ProbeTests(unittest.TestCase):
                          ['--host=unix:///proof/docker.sock'])
         self.assertIn('--network=none', command)
 
+    def test_actual_delegation_accepts_busybox_unknown_only_with_cgroup2_magic(self):
+        item = probe.Probe(Path('/archive'), 'a' * 40, Path('/output'))
+        item.outer, item.cid = ['docker'], 'a' * 64
+        item.runner = DelegationRunner('63677270', 'UNKNOWN')
+        with patch.object(probe.os, 'readlink', return_value='cgroup:[100]'):
+            item.check_delegation()
+        self.assertEqual(item.report['cgroup_filesystem']['statfs_type_hex'], '0x63677270')
+        self.assertEqual(item.report['cgroup_filesystem']['statfs_type_label'], 'UNKNOWN')
+        self.assertTrue(item.report['cgroup_delegation']['private_namespace_verified'])
+        self.assertEqual(item.report['cgroup_delegation']['controllers_enabled'], ['cpu', 'memory', 'pids'])
+
+    def test_actual_delegation_rejects_wrong_numeric_type_and_retains_observation(self):
+        for magic, human, recorded in [('27e0eb', 'UNKNOWN', '0x27e0eb'),
+                                       ('ef53', 'cgroup2fs', '0xef53'),
+                                       ('UNKNOWN', 'UNKNOWN', None)]:
+            with self.subTest(magic=magic):
+                item = probe.Probe(Path('/archive'), 'a' * 40, Path('/output'))
+                item.outer, item.cid = ['docker'], 'a' * 64
+                item.runner = DelegationRunner(magic, human)
+                with patch.object(probe.os, 'readlink', return_value='cgroup:[100]'), self.assertRaises(probe.ProbeError):
+                    item.check_delegation()
+                self.assertEqual(item.report['cgroup_filesystem']['statfs_type_hex'], recorded)
+                self.assertNotIn('cgroup_delegation', item.report)
+                self.assertEqual(item.runner.control_reads, [])
+
+    def test_actual_delegation_still_rejects_shared_namespace_with_valid_magic(self):
+        item = probe.Probe(Path('/archive'), 'a' * 40, Path('/output'))
+        item.outer, item.cid = ['docker'], 'a' * 64
+        item.runner = DelegationRunner('63677270', 'UNKNOWN')
+        with patch.object(probe.os, 'readlink', return_value='cgroup:[200]'), self.assertRaises(probe.ProbeError):
+            item.check_delegation()
+        self.assertEqual(item.report['cgroup_filesystem']['statfs_type_hex'], '0x63677270')
+        self.assertNotIn('cgroup_delegation', item.report)
+
     def test_cgroup_delegation_requires_private_namespace_and_all_runtime_controllers(self):
         probe.validate_delegation('cgroup:[100]', 'cgroup:[200]', 'cpu cpuset io memory pids',
                                   'cpu cpuset io memory pids', '0::/init\n')
@@ -240,6 +275,30 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError):
             probe.validate_loop({'loopdevices': [{'name': '/dev/loop7', 'back-file': '/tmp/other.img'}]}, '/dev/loop7', '/tmp/owned/disk.img')
         probe.validate_loop({'loopdevices': [{'name': '/dev/loop7', 'back-file': '/tmp/owned/disk.img'}]}, '/dev/loop7', '/tmp/owned/disk.img')
+
+
+class DelegationRunner:
+    """Only fixed read-only observations; no subprocess execution is possible."""
+    def __init__(self, magic, human):
+        self.magic, self.human = magic, human
+        self.control_reads = []
+
+    def run(self, argv, **kwargs):
+        prefix = ['docker', 'exec', 'a' * 64]
+        if argv == prefix + ['readlink', '/proc/1/ns/cgroup']:
+            return 'cgroup:[200]\n'
+        if argv == prefix + ['stat', '-f', '-c', '%T', '/sys/fs/cgroup']:
+            return self.human + '\n'
+        if argv == prefix + ['stat', '-f', '-c', '%t', '/sys/fs/cgroup']:
+            return self.magic + '\n'
+        reads = {'/sys/fs/cgroup/cgroup.controllers': 'cpu memory pids\n',
+                 '/sys/fs/cgroup/cgroup.subtree_control': 'cpu memory pids\n',
+                 '/proc/1/cgroup': '0::/init\n'}
+        for path, value in reads.items():
+            if argv == prefix + ['cat', path]:
+                self.control_reads.append(path)
+                return value
+        raise AssertionError('unexpected command: ' + str(argv))
 
 
 class FakeRunner:

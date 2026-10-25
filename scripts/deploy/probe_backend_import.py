@@ -23,6 +23,7 @@ from inspect_backend_oci import inspect_archive
 
 CAP = 2 * 1024**3
 OUTPUT_LIMIT = 4 * 1024**2
+CGROUP2_SUPER_MAGIC = 0x63677270  # Linux include/uapi/linux/magic.h, statfs.f_type.
 DIND = 'docker.io/library/docker@sha256:5256d1242c894ee092a567c4385fe682071c05c2056c1e90953717cec0aa3fbe'
 OWNER_LABEL = 'capir.import-probe.owner'
 
@@ -303,12 +304,22 @@ class Probe:
     def check_delegation(self):
         def read(path):
             return self.runner.run(self.outer + ['exec', self.cid, 'cat', path]).strip()
+        # %T is a utility-specific display name (BusyBox may say UNKNOWN).
+        # %t exposes the kernel statfs.f_type; only the cgroup-v2 magic passes.
+        magic = self.runner.run(self.outer + ['exec', self.cid, 'stat', '-f', '-c', '%t',
+                                            '/sys/fs/cgroup']).strip()
+        parsed_magic = int(magic, 16) if re.fullmatch(r'(?:0[xX])?[0-9a-fA-F]{1,16}', magic) else None
+        observation = {'statfs_type_hex': hex(parsed_magic) if parsed_magic is not None else None,
+                       'numeric_observation_valid': parsed_magic is not None}
+        # Retain sanitized numeric evidence even when a later read or gate fails.
+        self.report['cgroup_filesystem'] = observation
+        label = self.runner.run(self.outer + ['exec', self.cid, 'stat', '-f', '-c', '%T',
+                                            '/sys/fs/cgroup']).strip()
+        observation['statfs_type_label'] = label if re.fullmatch(r'[A-Za-z0-9_ ()-]{1,64}', label) else 'unrecognized'
+        require(parsed_magic == CGROUP2_SUPER_MAGIC, 'nested cgroup filesystem is not v2')
         host_namespace = os.readlink('/proc/self/ns/cgroup')
         worker_namespace = self.runner.run(self.outer + ['exec', self.cid, 'readlink',
                                                        '/proc/1/ns/cgroup']).strip()
-        filesystem = self.runner.run(self.outer + ['exec', self.cid, 'stat', '-f', '-c', '%T',
-                                                 '/sys/fs/cgroup']).strip()
-        require(filesystem == 'cgroup2fs', 'nested cgroup filesystem is not v2')
         available = read('/sys/fs/cgroup/cgroup.controllers')
         enabled = read('/sys/fs/cgroup/cgroup.subtree_control')
         membership = read('/proc/1/cgroup')
