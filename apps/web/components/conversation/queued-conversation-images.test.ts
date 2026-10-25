@@ -112,3 +112,34 @@ it("previews a dropped image in the composer without any processing dialog", asy
   expect(document.querySelector("[role='dialog']")).toBeNull();
   expect(document.querySelector<HTMLTextAreaElement>("#queued-conversation-composer")?.value).toBe("保留的对话草稿");
 });
+
+it("keeps denied-storage image input when leaving is declined and allows retry without sending", async () => {
+  setConversationImageStoreForTest({ async put() { return false; }, async get() { return []; }, async delete() {}, async deletePrefix() {}, async inventory() { return []; } });
+  mount = document.createElement("div"); document.body.append(mount); root = createRoot(mount);
+  await act(async () => { root!.render(createElement(QueuedConversation, { chatBinding: "chat", detailBinding: "detail", scope: SCOPE })); });
+  await flush();
+  const composer = mount.querySelector("textarea")!;
+  await act(async () => { composer.dispatchEvent(dropEvent(new File([new Uint8Array([137,80,78,71])], "keep.png", { type: "image/png" }))); });
+  await flush();
+  vi.stubGlobal("confirm", vi.fn(() => false));
+  const anchor = document.createElement("a"); anchor.href = "/workspace/people"; document.body.append(anchor);
+  try {
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
+    await act(async () => { anchor.dispatchEvent(click); });
+    expect(click.defaultPrevented).toBe(true);
+    expect(mount.querySelector('img[alt="keep.png"]')).not.toBeNull();
+    const unload = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+    const route = window.location.href;
+    window.history.pushState({}, "", "/workspace/people");
+    await act(async () => { window.dispatchEvent(new PopStateEvent("popstate")); });
+    expect(window.location.href).toBe(route);
+    expect(mount.querySelector('img[alt="keep.png"]')).not.toBeNull();
+    setConversationImageStoreForTest({ async put() { return true; }, async get() { return []; }, async delete() {}, async deletePrefix() {}, async inventory() { return []; } });
+    const retry = [...mount.querySelectorAll("button")].find(button => button.textContent === "重试保存图片")!;
+    await act(async () => { retry.click(); }); await flush();
+    const savedUnload = new Event("beforeunload", { cancelable: true }); window.dispatchEvent(savedUnload);
+    expect(savedUnload.defaultPrevented).toBe(false);
+    expect(fetcher.mock.calls.filter(call => (call[1] as RequestInit)?.method === "POST")).toHaveLength(0);
+  } finally { anchor.remove(); }
+});

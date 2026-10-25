@@ -2479,5 +2479,9 @@
   "本次仅回顾该范围内前 {count} 条活动；受记录数量或上下文长度限制，范围不完整。": "Only the first {count} activities in this range were reviewed. Coverage is incomplete due to record count or context length limits.",
   "未经确认的日程草稿": "Unconfirmed schedule draft",
   "定时公开来源读取产生新的拟议依据，等待你审阅。": "A scheduled public-source read produced new proposed evidence for your review.",
-  "{count} 条当日会话记录": "{count} conversation records that day"
+  "{count} 条当日会话记录": "{count} conversation records that day",
+  "图片尚未保存在本机，离开可能丢失。仍要离开吗？": "Images have not been saved on this device. Leaving may lose them. Leave anyway?",
+  "重试保存图片": "Retry saving images",
+  "本机图片草稿无法读取，请保留此页并重试。": "The image draft on this device could not be read. Keep this page open and retry.",
+  "图片草稿仍在读取，所选图片尚未添加。请稍后重新选择。": "The image draft is still loading. Your selected images have not been added. Please select them again after it finishes."
 }

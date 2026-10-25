@@ -156,6 +156,38 @@ export function QueuedConversation(props: Props) {
       window.history.replaceState(null, "", `/workspace/sessions/${sessionId}${anchor}`);
     }
   } });
+  useEffect(() => {
+    if (!chat.attachmentDraftUnsafe || chat.unavailable) return;
+    const route = window.location.href;
+    const historyState = window.history.state;
+    const warning = t("图片尚未保存在本机，离开可能丢失。仍要离开吗？");
+    const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const link = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (!anchor || anchor.hasAttribute("download") || (anchor.target && anchor.target !== "_self")) return;
+      const target = new URL(anchor.href, route);
+      const current = new URL(route);
+      if (target.origin === current.origin && target.pathname === current.pathname && target.search === current.search) return;
+      if (!window.confirm(warning)) { event.preventDefault(); event.stopImmediatePropagation(); }
+    };
+    const back = (event: PopStateEvent) => {
+      if (window.location.href === route) return;
+      if (!window.confirm(warning)) {
+        event.stopImmediatePropagation();
+        window.history.pushState(historyState, "", route);
+      }
+    };
+    window.addEventListener("beforeunload", unload);
+    // Capture before Next's delegated Link and history listeners unmount input.
+    window.addEventListener("click", link, true);
+    window.addEventListener("popstate", back, true);
+    return () => {
+      window.removeEventListener("beforeunload", unload);
+      window.removeEventListener("click", link, true);
+      window.removeEventListener("popstate", back, true);
+    };
+  }, [chat.attachmentDraftUnsafe, chat.unavailable, t]);
   const [editing, setEditing] = useState<Pick<QueueEditOperation, "entry" | "owner" | "sessionId" | "token"> | null>(null);
   const [editValue, setEditValue] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -465,7 +497,10 @@ export function QueuedConversation(props: Props) {
   }, [chat.ready, chat.unavailable, props.initialDetail]);
   function latest() { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
   async function send() { if (composingRef.current.owner === composerOwner && composingRef.current.value) return; if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
-  function navigate(href: string) { navigating.current = true; router.push(href); }
+  function navigate(href: string) {
+    if (chat.attachmentDraftUnsafe && !window.confirm(t("图片尚未保存在本机，离开可能丢失。仍要离开吗？"))) return;
+    navigating.current = true; router.push(href);
+  }
   async function remove() {
     if (await chat.remove()) {
       reading.forget();
@@ -559,6 +594,7 @@ export function QueuedConversation(props: Props) {
         </span>)}
       </div>}
       {imageCount >= 10 && <p className={styles.composerImageHint} role="status">{t("conversation.images.limit")}</p>}
+      {chat.attachmentDraftUnsafe && !chat.preparing && !chat.unavailable && <button type="button" onClick={() => void chat.retryAttachmentDraft()}>{t("重试保存图片")}</button>}
       {chat.preparing && <p className={styles.composerImageHint} role="status">{t("conversation.images.preparing")}</p>}
       {chat.submitting && <p className={styles.composerImageHint} role="status">{t("conversation.images.sending")}</p>}
       <div className={styles.composer}>
