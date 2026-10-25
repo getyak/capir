@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import migrationManifest from "../database/migration-manifest.json" with { type: "json" };
 
 import {
   observeSystemHealth,
@@ -11,6 +12,21 @@ import {
 const observedAt = new Date("2026-09-14T09:00:00.000Z");
 
 describe("system health observation", () => {
+  it.each(["107_persistent_user_sessions", "108_capir_persistent_login"])(
+    "reports degraded migrations when %s is missing even though PostgreSQL responds", async missing => {
+      const applied = new Set(migrationManifest.migrations.filter(version => version !== missing));
+      const query = vi.fn().mockResolvedValueOnce({ rows: [{ system_health_ready: 1 }] })
+        .mockImplementation(async (_sql: string, [requested]: [readonly string[]]) => ({
+          rows: requested.filter(version => applied.has(version)).map(version => ({ version })),
+        }));
+      const result = await observeSystemHealth({ query } as unknown as Pick<Pool, "query">, () => observedAt);
+      expect(result.status).toBe("degraded");
+      expect(result.components).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "database", status: "healthy" }),
+        expect.objectContaining({ id: "migrations", status: "degraded", detail_code: "required_migrations_missing" }),
+      ]));
+    });
+
   it("separates the request handler, database query, and migration state", async () => {
     const query = vi
       .fn()

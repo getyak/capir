@@ -60,6 +60,13 @@ identity preserves drafts, selected-workspace bindings and short-lived
 confirmation forms through access rotation. A new login cannot inherit those
 bindings from an earlier primary session.
 
+Session-bound Lab configuration IDs retain their replay tombstones while the
+canonical login can renew; short access expiry cannot prove a request is no
+longer replayable. This retains configuration metadata, not experiment activity:
+stopped or expired trials and feature overrides keep their original deadlines,
+and measurement observations still expire after seven days. Ordinary ended or
+revoked sessions keep the existing cleanup grace period.
+
 ## Platform and migration limits
 
 Browser cookies have platform-enforced retention limits. Web renews its

@@ -4,7 +4,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { SessionResponse, PersistentSessionProof, PersistentSessionResponse } from "@talent-signal/contracts";
+import type { LabTaskTrial, SessionResponse, PersistentSessionProof, PersistentSessionResponse } from "@talent-signal/contracts";
 import { buildApp } from "../app.js";
 import type { BackendConfig } from "../config.js";
 import { sha256 } from "../lib/hash.js";
@@ -14,6 +14,10 @@ import { enrollPersistentSession } from "./persistentSession.js";
 import { approveDesktopBrowserLogin, consumeDesktopBrowserLogin, pkceS256,
   postgresDesktopBrowserLoginDb, prepareDesktopBrowserLogin } from "./desktopBrowserLogin.js";
 import type { AuthContext } from "./auth.js";
+import { LabTaskTrialService } from "./labTaskTrials.js";
+import { LabFeatureOverrideService } from "./labFeatureOverrides.js";
+import type { RemoteChatAnswerProviding } from "./chatAnswerProvider.js";
+import { createMcpClientGrant, resolveMcpGrant } from "./mcpGrants.js";
 
 const database = process.env.PERSISTENT_SESSION_TEST_DATABASE_URL;
 const artifacts = process.env.PERSISTENT_SESSION_TEST_ARTIFACT_DIR;
@@ -159,6 +163,105 @@ async function fixture() {
 }
 const readback = (accessToken: string) => app.inject({ url: "/v1/auth/session", headers: bearer(accessToken) });
 
+
+const replayProvider: RemoteChatAnswerProviding = {
+  providerId: "zhipu-chat-completions", model: "synthetic-replay-model", imageModel: null,
+  supportsImageInput: false, supportsPromptPresets: false,
+  async answer() { throw new Error("Replay-retention proof must not execute a model."); },
+};
+const replayProviders = new Map([[replayProvider.model, replayProvider]]);
+type ReplayLogin = "ordinary" | "web" | "ios" | "macos";
+
+async function labReplayContext(kind: ReplayLogin) {
+  const f = await fixture();
+  const server = await buildApp({ pool: pool!, config: { ...config, internalLabEnabled: true },
+    chatMediaStorage: new LocalChatMediaStorage(media), remoteChatProvider: null,
+    personResearchProvider: null, privateConversationProvider: null, labProviders: replayProviders,
+    labJobWorkerEnabled: false, conversationQueueWorkerEnabled: false, labCIVerifier: null,
+    screenshotContact: null });
+  try {
+    let session = f.session;
+    let renew = () => server.inject({ url: "/v1/auth/session", headers: bearer(session.access_token) });
+    let revoke = () => server.inject({ method: "POST", url: "/v1/auth/logout", headers: bearer(session.access_token) });
+    if (kind === "macos") {
+      const db = postgresDesktopBrowserLoginDb(pool!), verifier = secret(), state = secret();
+      const prepared = await prepareDesktopBrowserLogin(db, config, { protocol_version: 1,
+        purpose: "macos-primary-login", web_origin: "https://web.test", state,
+        challenge: pkceS256(verifier), cancel_secret: secret() });
+      const approved = await approveDesktopBrowserLogin(db, config, prepared.attempt_id, f.auth,
+        { state, web_origin: "https://web.test" });
+      const mac = await consumeDesktopBrowserLogin(db, config, { attempt_id: prepared.attempt_id,
+        code: approved.code!, verifier, state, web_origin: "https://web.test" });
+      const proof = { device_secret: secret(), web_origin: "https://web.test",
+        account_id: f.accountId, user_id: f.userId };
+      const enrolled = await server.inject({ method: "POST", url: "/v1/desktop-persistent-session/enroll",
+        headers: bearer(mac.access_token), payload: proof });
+      expect(enrolled.statusCode).toBe(200); session = enrolled.json();
+      renew = () => server.inject({ method: "POST", url: "/v1/desktop-persistent-session/renew", payload: proof });
+      revoke = () => server.inject({ method: "POST", url: "/v1/desktop-persistent-session/revoke", payload: proof });
+    } else if (kind !== "ordinary") {
+      const enrolled = await f.enroll(kind, f.session.access_token, server);
+      expect(enrolled.statusCode).toBe(200); session = enrolled.json();
+      renew = () => server.inject({ method: "POST", url: "/v1/auth/persistent/renew", payload: f.proof });
+      revoke = () => server.inject({ method: "POST", url: "/v1/auth/persistent/revoke", payload: f.proof });
+    }
+    expect(session.session_id).toBeDefined();
+    const auth = { ...f.auth, sessionId: session.session_id! };
+    const revision = process.env.TALENT_SIGNAL_BACKEND_REVISION?.trim() || null;
+    const trials = new LabTaskTrialService(pool!, replayProviders, null, revision);
+    const features = new LabFeatureOverrideService(pool!, revision);
+    return { f, server, session, auth, renew, revoke, trials, features };
+  } catch (error) { await server.close(); throw error; }
+}
+
+function labReplayOperations() {
+  return [
+    { url: "/v1/lab/task-trials", table: "lab_task_trials", key: "trial", conflict: "LAB_TRIAL_ID_CONFLICT",
+      request: { id: randomUUID(), task: "relationship_text", model: replayProvider.model,
+        prompt_preset: "baseline", duration_minutes: 5, replaces_trial_id: null } },
+    { url: "/v1/lab/feature-overrides", table: "lab_feature_overrides", key: "override", conflict: "LAB_FEATURE_OVERRIDE_ID_CONFLICT",
+      request: { id: randomUUID(), feature_id: "relationship_evidence_preview", value: "inline_excerpt",
+        duration_minutes: 5, replaces_override_id: null } },
+  ] as const;
+}
+
+async function createLabReplayRecords(c: Awaited<ReturnType<typeof labReplayContext>>,
+  operations: ReturnType<typeof labReplayOperations>, end: "stopped" | "expired") {
+  let trial!: LabTaskTrial;
+  for (const operation of operations) {
+    const created = await c.server.inject({ method: "POST", url: operation.url,
+      headers: bearer(c.session.access_token), payload: operation.request });
+    expect(created.statusCode).toBe(200);
+    if (operation.key === "trial") trial = created.json().trial;
+    if (end === "stopped") {
+      const stopped = await c.server.inject({ method: "POST", url: `${operation.url}/${operation.request.id}/stop`,
+        headers: bearer(c.session.access_token) });
+      expect(stopped.statusCode).toBe(200); expect(stopped.json()[operation.key].status).toBe("stopped");
+    }
+  }
+  return trial;
+}
+
+async function ageLabReplayRecords(c: Awaited<ReturnType<typeof labReplayContext>>) {
+  const created = new Date(Date.now() - 9 * 86_400_000).toISOString();
+  const expires = new Date(Date.parse(created) + 5 * 60_000).toISOString();
+  // These table names are fixed fixture definitions, never request data.
+  for (const table of ["lab_task_trials", "lab_feature_overrides"]) {
+    await pool!.query(`UPDATE ${table} SET created_at=$4::text::timestamptz,expires_at=$5::text::timestamptz,
+      record=jsonb_set(jsonb_set(record,'{created_at}',to_jsonb($4::text)),'{expires_at}',to_jsonb($5::text))
+      WHERE account_id=$1 AND user_id=$2 AND auth_session_id=$3`,
+    [c.auth.accountId, c.auth.userId, c.auth.sessionId, created, expires]);
+  }
+  await pool!.query(`UPDATE sessions SET expires_at=$2::timestamptz,
+    previous_token_expires_at=CASE WHEN previous_token_hash IS NULL THEN NULL ELSE $2::timestamptz END WHERE id=$1`,
+  [c.auth.sessionId, created]);
+  return { created, expires };
+}
+
+async function sweepLabReplayRecords(c: Awaited<ReturnType<typeof labReplayContext>>) {
+  await c.trials.scrubExpired(); await c.features.scrubExpired();
+}
+
 describe.skipIf(!pool)("first-party persistent login (disposable PostgreSQL)", () => {
   beforeAll(async () => {
     app = await makeApp();
@@ -166,6 +269,10 @@ describe.skipIf(!pool)("first-party persistent login (disposable PostgreSQL)", (
   afterEach(async () => {
     for (const { accountId, email } of accounts.splice(0)) {
       await pool!.query("UPDATE accounts SET retired_at=NULL WHERE id=$1", [accountId]);
+      await pool!.query("DELETE FROM lab_task_trials WHERE account_id=$1", [accountId]);
+      await pool!.query("DELETE FROM lab_feature_overrides WHERE account_id=$1", [accountId]);
+      await pool!.query("DELETE FROM mcp_client_grants WHERE account_id=$1", [accountId]);
+      await pool!.query("DELETE FROM audit_events WHERE account_id=$1", [accountId]);
       await pool!.query("DELETE FROM desktop_browser_login_attempts WHERE account_id=$1", [accountId]);
       await pool!.query("DELETE FROM capir_auth_refresh_tokens WHERE account_id=$1", [accountId]);
       await pool!.query("DELETE FROM capir_auth_codes WHERE account_id=$1", [accountId]);
@@ -510,5 +617,127 @@ describe.skipIf(!pool)("first-party persistent login (disposable PostgreSQL)", (
       { renewal_secret: f.proof.renewal_secret, client_kind: "ios" }, [randomUUID()]))
       .rejects.toMatchObject({ code: "DEPLOYMENT_WORKSPACE_NOT_ADMITTED" });
     expect((await f.renew()).statusCode).toBe(200);
+  });
+
+
+  describe("Lab IDs remain ended when the same login family resumes after the access deadline", () => {
+    it.each((["web", "ios", "macos"] as const).flatMap(kind =>
+      (["stopped", "expired"] as const).map(end => ({ kind, end }))))
+    ("retains $end configuration IDs for a dormant $kind login without extending their leases", async ({ kind, end }) => {
+      const c = await labReplayContext(kind), operations = labReplayOperations();
+      try {
+        const trial = await createLabReplayRecords(c, operations, end);
+        if (kind === "web" && end === "stopped") {
+          expect(await c.trials.recordMeasurements(c.auth, randomUUID(), [{ trial, measurement: {
+            execution: "local_only", remote_requests_started: 0, requested_model: replayProvider.model,
+            resolved_model: replayProvider.model, actual_model: null, prompt_revision: trial.prompt_revision,
+            actual_prompt_revision: null, duration_ms: 1, input_tokens: 0, output_tokens: 0,
+            provider_request_id: null, status: "completed", error_code: null,
+          } }], "unverified")).toBe(true);
+          await pool!.query("UPDATE lab_trial_observations SET created_at=now()-interval '9 days' WHERE account_id=$1 AND trial_id=$2",
+            [c.auth.accountId, trial.id]);
+        }
+        const aged = await ageLabReplayRecords(c);
+        await sweepLabReplayRecords(c);
+        const renewed = await c.renew(); expect(renewed.statusCode).toBe(200);
+        expect(renewed.json().session_id).toBe(c.auth.sessionId);
+        const token = renewed.json().access_token as string;
+        expect((await c.server.inject({ url: "/v1/auth/session", headers: bearer(token) })).statusCode).toBe(200);
+        for (const operation of operations) {
+          const replay = await c.server.inject({ method: "POST", url: operation.url,
+            headers: bearer(token), payload: operation.request });
+          expect(replay.statusCode).toBe(200);
+          expect(replay.json()[operation.key]).toMatchObject({ id: operation.request.id,
+            status: end, created_at: aged.created, expires_at: aged.expires });
+          const changed = await c.server.inject({ method: "POST", url: operation.url,
+            headers: bearer(token), payload: { ...operation.request, duration_minutes: 15 } });
+          expect(changed.statusCode).toBe(409); expect(changed.json().error.code).toBe(operation.conflict);
+        }
+        // Retaining a replay record must not select any expired experiment for
+        // a new product task or retain old observation payloads.
+        expect(await c.trials.resolveProvider(pool!, c.auth, "relationship_text", () => {})).toBeNull();
+        expect(await c.features.adoptionReceipt(pool!, c.auth)).toBeNull();
+        expect((await pool!.query("SELECT count(*)::int AS count FROM lab_trial_observations WHERE account_id=$1",
+          [c.auth.accountId])).rows[0].count).toBe(0);
+      } finally { await c.server.close(); }
+    });
+
+    it("still cleans ordinary expired sessions that have no continuation capability", async () => {
+      const c = await labReplayContext("ordinary"), operations = labReplayOperations();
+      try {
+        await createLabReplayRecords(c, operations, "stopped"); await ageLabReplayRecords(c);
+        await sweepLabReplayRecords(c);
+        for (const operation of operations) {
+          expect((await pool!.query(`SELECT 1 FROM ${operation.table} WHERE account_id=$1 AND id=$2`,
+            [c.auth.accountId, operation.request.id])).rowCount).toBe(0);
+        }
+        expect((await c.renew()).statusCode).toBe(401);
+      } finally { await c.server.close(); }
+    });
+
+    it.each((["web", "macos"] as const).flatMap(kind =>
+      (["revoked", "retired"] as const).map(ended => ({ kind, ended }))))
+    ("still cleans a $kind family after it is $ended and cannot resume", async ({ kind, ended }) => {
+      const c = await labReplayContext(kind), operations = labReplayOperations();
+      try {
+        await createLabReplayRecords(c, operations, "stopped"); await ageLabReplayRecords(c);
+        if (ended === "revoked") {
+          expect((await c.revoke()).statusCode).toBe(200);
+          await pool!.query("UPDATE sessions SET revoked_at=now()-interval '9 days' WHERE id=$1", [c.auth.sessionId]);
+        } else await pool!.query("UPDATE accounts SET retired_at=now() WHERE id=$1", [c.auth.accountId]);
+        await sweepLabReplayRecords(c);
+        for (const operation of operations) {
+          expect((await pool!.query(`SELECT 1 FROM ${operation.table} WHERE account_id=$1 AND id=$2`,
+            [c.auth.accountId, operation.request.id])).rowCount).toBe(0);
+        }
+        expect((await c.renew()).statusCode).toBe(401);
+      } finally { await c.server.close(); }
+    });
+
+    it("does not make an ordinary MCP grant renewable or admit it to human Lab routes", async () => {
+      const c = await labReplayContext("web"), operations = labReplayOperations();
+      try {
+        const issued = await createMcpClientGrant(pool!, c.auth, { expires_in_days: 30,
+          idempotency_key: randomUUID(), name: "Synthetic independent grant", scopes: ["workspace_metadata_read"] }, "https://web.test");
+        const deadline = issued.grant.expires_at;
+        await ageLabReplayRecords(c); await sweepLabReplayRecords(c);
+        expect(await resolveMcpGrant(pool!, `Bearer ${issued.token}`)).not.toBeNull();
+        for (const operation of operations) {
+          const denied = await c.server.inject({ method: "POST", url: operation.url,
+            headers: bearer(issued.token), payload: operation.request });
+          expect(denied.statusCode).toBe(401);
+        }
+        const renewed = await c.renew(); expect(renewed.statusCode).toBe(200);
+        expect((await pool!.query("SELECT expires_at FROM mcp_client_grants WHERE account_id=$1 AND id=$2",
+          [c.auth.accountId, issued.grant.id])).rows[0].expires_at.toISOString()).toBe(deadline);
+        await pool!.query("UPDATE mcp_client_grants SET created_at=now()-interval '2 days',expires_at=now()-interval '1 day' WHERE account_id=$1 AND id=$2",
+          [c.auth.accountId, issued.grant.id]);
+        expect(await resolveMcpGrant(pool!, `Bearer ${issued.token}`)).toBeNull();
+        expect((await c.server.inject({ url: "/v1/auth/session", headers: bearer(renewed.json().access_token) })).statusCode).toBe(200);
+      } finally { await c.server.close(); }
+    });
+
+    it("does not admit a valid CLI v3 grant as a normal authenticated Lab session", async () => {
+      const c = await labReplayContext("ordinary"), operations = labReplayOperations();
+      try {
+        const verifier = secret(), state = secret(), redirect_uri = "http://127.0.0.1:49381/capir/callback";
+        const code = await c.server.inject({ method: "POST", url: "/v1/capir/auth/authorize",
+          headers: bearer(c.session.access_token), payload: { schema_version: "capir-auth.v3", redirect_uri, state,
+            code_challenge: createHash("sha256").update(verifier, "ascii").digest("base64url"),
+            code_challenge_method: "S256", web_origin: "https://web.test", backend_origin: "https://api.test",
+            scopes: ["grants.read", "grants.revoke"], consent: true, client_label: "Synthetic Lab admission boundary" } });
+        expect(code.statusCode).toBe(200);
+        const exchange = await c.server.inject({ method: "POST", url: "/v1/capir/auth/exchange", payload: {
+          schema_version: "capir-auth.v3", code: code.json().code, code_verifier: verifier, state, redirect_uri,
+          web_origin: "https://web.test", backend_origin: "https://api.test" } });
+        expect(exchange.statusCode).toBe(200); const token = exchange.json().access_token as string;
+        expect((await c.server.inject({ url: "/v1/capir/auth/status", headers: bearer(token) })).statusCode).toBe(200);
+        for (const operation of operations) {
+          const denied = await c.server.inject({ method: "POST", url: operation.url,
+            headers: bearer(token), payload: operation.request });
+          expect(denied.statusCode).toBe(401);
+        }
+      } finally { await c.server.close(); }
+    });
   });
 });
