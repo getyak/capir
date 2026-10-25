@@ -39,6 +39,11 @@ function claims(account: string, expiresAt: string) {
 }
 
 describe("request-only identity memoization", () => {
+  it("retains the verified canonical Mac session ID through primary JWT readback", async () => {
+    const binding = "11111111-1111-4111-8111-111111111111";
+    getToken.mockResolvedValue({ ...claims("mac", new Date(Date.now() + 60000).toISOString()), backendSessionId: binding });
+    expect((await readBackendSessionClaims())?.backendSessionId).toBe(binding);
+  });
   afterEach(() => { vi.resetAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); expected.value = ""; });
 
   it("does not reuse identity outside a React server render", async () => {
