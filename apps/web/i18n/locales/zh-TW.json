@@ -1731,6 +1731,7 @@
   "sessionRow.actionForTitle": "{action}：{title}",
   "sessionRow.moreForTitle": "更多操作：{title}",
   "nav.rail.chat": "對話",
+  "nav.rail.new": "新對話",
   "execution.duration.seconds": "{seconds} 秒",
   "execution.duration.minutes": "{minutes} 分 {seconds} 秒",
   "execution.duration.hours": "{hours} 小時 {minutes} 分",

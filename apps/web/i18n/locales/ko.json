@@ -1731,6 +1731,7 @@
   "sessionRow.actionForTitle": "{title}: {action}",
   "sessionRow.moreForTitle": "{title} 추가 작업",
   "nav.rail.chat": "채팅",
+  "nav.rail.new": "새 대화",
   "execution.duration.seconds": "{seconds}초",
   "execution.duration.minutes": "{minutes}분 {seconds}초",
   "execution.duration.hours": "{hours}시간 {minutes}분",

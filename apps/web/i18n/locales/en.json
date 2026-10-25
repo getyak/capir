@@ -1731,6 +1731,7 @@
   "sessionRow.actionForTitle": "{action}: {title}",
   "sessionRow.moreForTitle": "More actions: {title}",
   "nav.rail.chat": "Chat",
+  "nav.rail.new": "New",
   "execution.duration.seconds": "{seconds} sec",
   "execution.duration.minutes": "{minutes} min {seconds} sec",
   "execution.duration.hours": "{hours} hr {minutes} min",

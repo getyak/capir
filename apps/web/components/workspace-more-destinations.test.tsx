@@ -247,6 +247,21 @@ describe("expanded and collapsed workspace navigation", () => {
     finally { window.removeEventListener(WORKSPACE_NEW_CONVERSATION_EVENT, handled); }
   });
 
+  it.each([
+    ["en", "New", "New conversation"],
+    ["zh-CN", "新对话", "新对话"],
+    ["zh-TW", "新對話", "新對話"],
+    ["ja", "新規", "新しい会話"],
+    ["ko", "새 대화", "새 대화"],
+  ] as const)("keeps the mobile compose label concise and fully named in %s", async (locale, visible, accessible) => {
+    state.mobile = true; await render(SCOPE, locale);
+    const action = host.querySelector<HTMLAnchorElement>('nav:not([data-collapsed-only]) a[data-browse-section="conversation"]')!;
+    expect(action.textContent).toBe(visible);
+    expect(action.getAttribute("aria-label")).toBe(accessible);
+    expect(action.getAttribute("title")).toBe(accessible);
+    expect(action.getAttribute("href")).toBe("/workspace");
+  });
+
   it("keeps mobile New conversation click modifiers as ordinary links", async () => {
     state.mobile = true; await render();
     const action = host.querySelector<HTMLAnchorElement>('nav[aria-label="工作台导航"] a[aria-label="新对话"]')!;

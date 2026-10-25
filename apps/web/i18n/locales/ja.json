@@ -1731,6 +1731,7 @@
   "sessionRow.actionForTitle": "{title}：{action}",
   "sessionRow.moreForTitle": "{title}のその他の操作",
   "nav.rail.chat": "チャット",
+  "nav.rail.new": "新規",
   "execution.duration.seconds": "{seconds}秒",
   "execution.duration.minutes": "{minutes}分{seconds}秒",
   "execution.duration.hours": "{hours}時間{minutes}分",
