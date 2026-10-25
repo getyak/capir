@@ -259,18 +259,59 @@ final class DesktopPersistentSessionTests: XCTestCase {
             accountID: h.receipt.account_id!, userID: h.receipt.user_id!, sessionID: h.receipt.session_id!,
             secret: String(repeating: "p", count: 43), enrolled: true)
         let transport = DesktopPersistentSessionWKTransport(origin: origin, registry: registry)
+        let diagnostics = PersistentWKProofDiagnostics()
+        diagnostics.observe(transport)
         defer { transport.cancel() }
-        let posted = try await transport.submit("renew", credential: credential, selection: selection)
-        XCTAssertEqual(posted, h.receipt)
-        let live = try await transport.status(selection: selection)
-        XCTAssertEqual(live, h.receipt, "Independent GET requires the synthetic HttpOnly cookie installed by POST")
+        var stage = PersistentWKProofDiagnostics.Stage.submit
+        do {
+            let posted = try await transport.submit("renew", credential: credential, selection: selection)
+            XCTAssertEqual(posted, h.receipt)
+            stage = .status
+            let live = try await transport.status(selection: selection)
+            XCTAssertEqual(live, h.receipt, "Independent GET requires the synthetic HttpOnly cookie installed by POST")
+        } catch {
+            add(diagnostics.attachment(stage: stage, error: error))
+            XCTFail("Persistent WK proof failed at \(stage.rawValue): \(diagnostics.category(error))")
+            return
+        }
+        add(diagnostics.attachment(stage: .complete))
         let evidence = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))) as! [[String: Any]]
         XCTAssertEqual(evidence.count, 2)
         XCTAssertEqual(evidence[0]["origin"] as? String, origin.url.absoluteString)
         XCTAssertEqual(evidence[0]["native_header"] as? String, "1")
         XCTAssertEqual(evidence[0]["content_type"] as? String, "application/json")
         XCTAssertEqual(evidence[1]["cookie_present"] as? Bool, true)
+#if DEBUG
+        XCTAssertEqual(diagnostics.phases.filter { $0 == .request }.count, 2)
+        XCTAssertEqual(diagnostics.phases.filter { $0 == .readbackDone }.count, 2)
+        for phase in [DesktopPersistentSessionWKDiagnosticEvent.Phase.loadStarted, .actionPolicy, .responsePolicy, .commit, .finish, .readbackStart] {
+            XCTAssertTrue(diagnostics.phases.contains(phase), "Actual WK proof must observe \(phase.rawValue)")
+        }
+#endif
     }
+
+#if DEBUG
+    func testWKDiagnosticObserverIsBoundedAndDoesNotExposeUntrustedErrors() throws {
+        let h = PersistentHarness()
+        let transport = DesktopPersistentSessionWKTransport(origin: h.origin, registry: h.registry)
+        var events: [DesktopPersistentSessionWKDiagnosticEvent] = []
+        transport.diagnosticObserver = { events.append($0) }
+        for _ in 0..<80 { transport.cancel() }
+        XCTAssertEqual(events.count, 64)
+        XCTAssertTrue(events.allSatisfy { $0.phase == .fail && $0.errorDomain == .cancellation && $0.errorCode == nil })
+        let secret = "synthetic-private-body-cookie-token"
+        let unsafe = NSError(domain: secret, code: 725, userInfo: [NSLocalizedDescriptionKey: secret])
+        let metadata = DesktopPersistentSessionWKDiagnosticEvent.errorMetadata(unsafe)
+        XCTAssertEqual(metadata.domain, .other)
+        XCTAssertNil(metadata.code)
+        let timedOut = DesktopPersistentSessionWKDiagnosticEvent.errorMetadata(URLError(.timedOut))
+        XCTAssertEqual(timedOut.domain, .url)
+        XCTAssertEqual(timedOut.code, URLError.timedOut.rawValue)
+        let diagnostics = PersistentWKProofDiagnostics()
+        let attachmentData = diagnostics.snapshot(stage: .submit, error: unsafe)
+        XCTAssertFalse(String(decoding: attachmentData, as: UTF8.self).contains(secret))
+    }
+#endif
 
     func testMenuBarCaptureContextRenewsAndRetriesOnlyTheRead() async throws {
         let h = PersistentHarness()
@@ -459,14 +500,26 @@ final class DesktopPersistentSessionTests: XCTestCase {
             let seeded: [HTTPCookie] = await withCheckedContinuation { continuation in store.getAllCookies { continuation.resume(returning: $0) } }
             XCTAssertTrue(seeded.contains { $0.name == "capri-persistent-proof" }, "The synthetic healthy-cookie precondition must be read back before product execution")
             let vault = MemoryCredentialVault()
-            let persistent = DesktopPersistentSessionCoordinator(registry: registry, vault: vault)
+            let diagnostics = PersistentWKProofDiagnostics()
+            let persistent = DesktopPersistentSessionCoordinator(registry: registry, vault: vault, transportFactory: { origin in
+                let transport = DesktopPersistentSessionWKTransport(origin: origin, registry: registry)
+                diagnostics.observe(transport)
+                return transport
+            })
             let capture = CaptureWebSession(origin: origin, registry: registry, persistentSession: persistent, originProvider: { origin })
             defer { capture.retire() }
             if unresolvedDuringConstruction {
                 for _ in 0..<20 { await Task.yield() }
                 try registry.resolveLogin(for: selection.origin, epoch: selection.epoch)
             }
-            let context = try await capture.context()
+            let context: CaptureContext
+            do { context = try await capture.context() }
+            catch {
+                add(diagnostics.attachment(stage: .captureContext, error: error))
+                XCTFail("Persistent WK proof failed at capture_context: \(diagnostics.category(error))")
+                return
+            }
+            add(diagnostics.attachment(stage: .complete))
             XCTAssertEqual(context.workspaceAccountID, h.receipt.account_id)
             XCTAssertTrue(vault.value!.enrolled)
             let ledger = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))) as! [[String: Any]]
@@ -576,6 +629,60 @@ private final class FakePersistentTransport: DesktopPersistentSessionTransportin
     func cancel() {}
 }
 
+@MainActor
+private final class PersistentWKProofDiagnostics {
+    enum Stage: String { case submit, status, captureContext = "capture_context", complete }
+#if DEBUG
+    private var events: [DesktopPersistentSessionWKDiagnosticEvent] = []
+    var phases: [DesktopPersistentSessionWKDiagnosticEvent.Phase] { events.map(\.phase) }
+#endif
+    func observe(_ transport: DesktopPersistentSessionWKTransport) {
+#if DEBUG
+        transport.diagnosticObserver = { [weak self] event in
+            guard let self, self.events.count < 64 else { return }
+            self.events.append(event)
+        }
+#endif
+    }
+    func category(_ error: Error) -> String {
+        if let value = error as? CaptureTransportError {
+            switch value {
+            case .unavailable: return "capture_unavailable"
+            case .staleOrigin: return "capture_stale_origin"
+            case .malformedResponse: return "capture_malformed_response"
+            case .untrustedHost: return "capture_untrusted_host"
+            case .server: return "capture_server"
+            }
+        }
+#if DEBUG
+        return DesktopPersistentSessionWKDiagnosticEvent.errorMetadata(error).domain.rawValue
+#else
+        return "other"
+#endif
+    }
+    func snapshot(stage: Stage, error: Error? = nil) -> Data {
+        var metadata: [String: Any] = ["stage": stage.rawValue]
+        if let error {
+            metadata["error_category"] = category(error)
+#if DEBUG
+            let safe = DesktopPersistentSessionWKDiagnosticEvent.errorMetadata(error)
+            metadata["error_domain"] = safe.domain.rawValue
+            if let code = safe.code { metadata["error_code"] = code }
+#endif
+        }
+#if DEBUG
+        metadata["events"] = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(events))) ?? []
+#endif
+        return try! JSONSerialization.data(withJSONObject: metadata)
+    }
+    func attachment(stage: Stage, error: Error? = nil) -> XCTAttachment {
+        let attachment = XCTAttachment(data: snapshot(stage: stage, error: error), uniformTypeIdentifier: "public.json")
+        attachment.name = "persistent-wk-pre-cleanup-metadata"
+        attachment.lifetime = .keepAlways
+        return attachment
+    }
+}
+
 /// An owned loopback fixture exercises actual WK POST navigation, its Origin
 /// header, JSON-document readback and shared persistent-cookie installation.
 /// Its retained ledger contains metadata only, never the submitted secret.
@@ -624,24 +731,27 @@ time.sleep(float(sys.argv[3]))
 import http.server,json,pathlib
 from datetime import datetime,timezone,timedelta
 root=pathlib.Path(sys.argv[1]); configuration=json.loads(sys.argv[2]); response=configuration['receipt']; records=[]; enrolled_secret=None
+def persist():
+ (root/'requests.tmp').write_text(json.dumps(records));(root/'requests.tmp').replace(root/'requests.json')
 class Handler(http.server.BaseHTTPRequestHandler):
  def log_message(self,*args): pass
  def answer(self,status,payload,cookie=False):
-  records[-1]['status']=status;(root/'requests.json').write_text(json.dumps(records))
+  records[-1]['status']=status;records[-1]['response_written']=False;persist()
   data=json.dumps(payload).encode(); self.send_response(status)
   self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)))
   self.send_header('Cache-Control','no-store')
   if cookie:self.send_header('Set-Cookie','capri-persistent-proof=1; HttpOnly; SameSite=Lax; Path=/')
-  self.end_headers();self.wfile.write(data)
+  self.end_headers();self.wfile.write(data);self.wfile.flush()
+  records[-1]['response_written']=True;persist()
  def record(self):
   records.append({'method':self.command,'path':self.path,'origin':self.headers.get('Origin'),
    'native_header':self.headers.get('x-capri-desktop-session'),'content_type':self.headers.get('Content-Type'),
    'cookie_present':'capri-persistent-proof=1' in self.headers.get('Cookie','')})
-  (root/'requests.json').write_text(json.dumps(records))
+  persist()
  def do_POST(self):
   global enrolled_secret
   self.record(); data=json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))))
-  records[-1]['action']=data.get('action');(root/'requests.json').write_text(json.dumps(records))
+  records[-1]['action']=data.get('action');persist()
   expected='http://127.0.0.1:'+str(self.server.server_port)
   if self.headers.get('Origin')!=expected or self.headers.get('x-capri-desktop-session')!='1' or self.headers.get('Content-Type')!='application/json':
    return self.answer(403,{'status':'ineligible'})
@@ -653,11 +763,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   self.record()
   if self.path=='/api/desktop-capture/host':
-   records[-1]['status']=200;(root/'requests.json').write_text(json.dumps(records))
+   records[-1]['status']=200;records[-1]['response_written']=False;persist()
    data=b'<!doctype html><html><body></body></html>';self.send_response(200)
    self.send_header('Content-Type','text/html');self.send_header('Content-Length',str(len(data)))
    self.send_header('Content-Security-Policy',"default-src 'none'; connect-src 'self'")
-   self.end_headers();self.wfile.write(data);return
+   self.end_headers();self.wfile.write(data);self.wfile.flush()
+   records[-1]['response_written']=True;persist();return
   if self.path=='/api/desktop-capture/context':
    if 'capri-persistent-proof=1' not in self.headers.get('Cookie',''):return self.answer(401,{'code':'backend_session_expired'})
    context={'protocol_version':1,'owner_scope':'synthetic-owner','workspace_account_id':configuration['workspace_account_id'],
@@ -724,7 +835,7 @@ server.serve_forever()
         if FileManager.default.fileExists(atPath: ledgerURL.path),
            let metadata = try? Data(contentsOf: ledgerURL), metadata.count <= 65_536,
            let records = (try? JSONSerialization.jsonObject(with: metadata)) as? [[String: Any]] {
-            let permitted: Set<String> = ["method", "path", "status", "action", "origin", "cookie_present"]
+            let permitted: Set<String> = ["method", "path", "status", "action", "origin", "cookie_present", "response_written"]
             let bounded = records.prefix(32).map { record in
                 record.filter { permitted.contains($0.key) }
             }
