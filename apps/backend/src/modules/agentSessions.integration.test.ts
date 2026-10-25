@@ -2810,6 +2810,8 @@ describe.skipIf(!pool)("Agent Session PostgreSQL authority", () => {
       await app.close();
     }
   });
+  // These rate-limit tests verify authority across 31 serial PostgreSQL-backed
+  // requests, not a five-second performance budget on shared CI runners.
   it("rate limits repeated first-page snapshot materialization by authenticated owner", async () => {
     const app = Fastify();
     await app.register(rateLimit, { global: false });
@@ -2843,9 +2845,7 @@ describe.skipIf(!pool)("Agent Session PostgreSQL authority", () => {
     } finally {
       await app.close();
     }
-  });
-  // This verifies rate-limit authority across 31 serial PostgreSQL-backed
-  // requests, not a five-second performance budget on shared CI runners.
+  }, 15_000);
   it("does not charge cursor continuations against the first-page materialization limit", async () => {
     const records = Array.from({ length: 35 }, () => payload());
     await pool!.query(

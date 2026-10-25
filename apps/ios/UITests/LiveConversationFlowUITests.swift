@@ -74,7 +74,22 @@ final class LiveConversationFlowUITests: XCTestCase {
             .contains(Substring(email)))
         if requirePersistentReadback {
             let persistent = app.staticTexts["sign-in-method-current-device-persistent"]
-            XCTAssertTrue(persistent.waitForExistence(timeout: 30), "The server must report this current native session as persistent")
+            let deadline = ProcessInfo.processInfo.systemUptime + 30
+            XCTAssertTrue(app.navigationBars["Account"].exists)
+            let accountList = app.collectionViews.firstMatch.exists
+                ? app.collectionViews.firstMatch : app.tables.firstMatch
+            // Device rows can start below the Account screen's visible viewport.
+            // Scroll only this list; the server marker remains the hard proof.
+            for _ in 0..<8 {
+                if persistent.exists || ProcessInfo.processInfo.systemUptime >= deadline { break }
+                XCTAssertTrue(accountList.exists, "The Account screen must expose its list")
+                if ProcessInfo.processInfo.systemUptime >= deadline { break }
+                accountList.swipeUp()
+                let remaining = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+                _ = persistent.waitForExistence(timeout: min(2, remaining))
+            }
+            let remaining = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+            XCTAssertTrue(persistent.waitForExistence(timeout: remaining), "The server must report this current native session as persistent")
         }
         app.navigationBars["Account"].buttons["Workspace"].tap()
         let workspaceBack = app.navigationBars["Workspace"].buttons["Agent"]

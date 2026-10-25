@@ -1,0 +1,160 @@
+name: Build backend OCI artifact
+
+# Opt-in cold build only. This creates an inspectable archive, never a deployment.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-image-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eligibility:
+    name: Check exact opt-in
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'backend-image'))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      opted-in: ${{ steps.gate.outputs.opted-in }}
+      revision: ${{ steps.gate.outputs.revision }}
+    steps:
+      - name: Require the exact label on a same-repository PR
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as source:
+              event = json.load(source)
+          pr = event.get("pull_request", {})
+          same_repo = pr.get("head", {}).get("repo", {}).get("full_name") == os.environ["GITHUB_REPOSITORY"]
+          # GitHub contains() ignores case; Python equality enforces exact opt-in.
+          exact_label = any(label.get("name") == "backend-image" for label in pr.get("labels", []))
+          manual = os.environ["EVENT_NAME"] == "workflow_dispatch"
+          revision = os.environ["EVENT_SOURCE_REVISION"] if manual else pr.get("head", {}).get("sha", "")
+          valid_revision = isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{40}", revision) is not None
+          eligible = valid_revision and (manual or (same_repo and exact_label))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("opted-in=" + str(eligible).lower() + "\n")
+              if eligible:
+                  output.write("revision=" + revision + "\n")
+          PY
+
+  image:
+    name: Cold-build and inspect linux/arm64
+    needs: eligibility
+    if: needs.eligibility.outputs.opted-in == 'true'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXPECTED_SOURCE_REVISION: ${{ needs.eligibility.outputs.revision }}
+      PYTHONDONTWRITEBYTECODE: "1"
+      BUILDX_METADATA_PROVENANCE: disabled
+    steps:
+      - name: Check out the actual source revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.eligibility.outputs.revision }}
+          persist-credentials: false
+
+      - name: Bind clean source and check available runner space
+        id: source
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          test "$revision" = "$EXPECTED_SOURCE_REVISION"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          BACKEND_IMAGE_DIR="$RUNNER_TEMP/backend-image-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir "$BACKEND_IMAGE_DIR"
+          printf 'BACKEND_IMAGE_DIR=%s\n' "$BACKEND_IMAGE_DIR" >> "$GITHUB_ENV"
+          printf '%s\n' "$revision" > "$BACKEND_IMAGE_DIR/source-revision.txt"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          docker_root="$(docker info --format '{{.DockerRootDir}}')"
+          python3 - "$GITHUB_WORKSPACE" "$RUNNER_TEMP" "$docker_root" <<'PY'
+          import shutil
+          import sys
+          # Preventive floor for this disposable runner, not a measured build peak
+          # or permission to change the resident VM's independent capacity STOP.
+          minimum = 12 * 1024**3
+          for location in sys.argv[1:]:
+              free = shutil.disk_usage(location).free
+              print(f"Runner free bytes: {free}; required floor: {minimum}")
+              if free < minimum:
+                  raise SystemExit("Insufficient runner space; no cleanup attempted")
+          PY
+
+      - name: Check the inspector with synthetic archives
+        run: python3 -m unittest discover -s scripts/deploy -p test_inspect_backend_oci.py -v
+
+      - name: Create a fresh disposable builder
+        id: builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          name: backend-image-${{ github.run_id }}-${{ github.run_attempt }}
+          driver: docker-container
+          # Explicit flags omit the action's default insecure/host entitlements.
+          buildkitd-flags: --oci-worker-gc=true
+          cache-binary: false
+          keep-state: false
+          cleanup: true
+
+      - name: Build the unmodified canonical backend Dockerfile without cache
+        env:
+          BACKEND_BUILDER: ${{ steps.builder.outputs.name }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_REVISION"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          # No build-arg overrides, dependency cache, registry login, push, or load.
+          # All frozen-install, supply-chain, and native runtime RUN gates execute.
+          docker buildx build \
+            --builder "$BACKEND_BUILDER" \
+            --platform linux/arm64 \
+            --file apps/backend/Dockerfile \
+            --no-cache --pull \
+            --provenance=false --sbom=false \
+            --label "org.opencontainers.image.revision=$EXPECTED_SOURCE_REVISION" \
+            --metadata-file "$BACKEND_IMAGE_DIR/build-metadata.json" \
+            --output "type=oci,dest=$BACKEND_IMAGE_DIR/backend.oci.tar,compression=gzip,force-compression=true,oci-mediatypes=true" \
+            --progress plain . 2>&1 | tee "$BACKEND_IMAGE_DIR/build.log"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_REVISION"
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Verify source, platform, compressed blobs and uncompressed diff IDs
+        run: |
+          set -euo pipefail
+          python3 scripts/deploy/inspect_backend_oci.py \
+            "$BACKEND_IMAGE_DIR/backend.oci.tar" \
+            --revision "$EXPECTED_SOURCE_REVISION" \
+            --output "$BACKEND_IMAGE_DIR/inspection.json"
+          (cd "$BACKEND_IMAGE_DIR" && sha256sum backend.oci.tar > SHA256SUMS)
+          printf '%s\n' \
+            "Verified source-bound OCI archive; this is not a signature or deployment approval." \
+            "Byte counts are not Docker import peak, runtime disk capacity, or WAL budget." \
+            "No resident service or product behavior was exercised." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the verified source-bound archive and metadata
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: backend-linux-arm64-${{ steps.source.outputs.revision }}
+          path: ${{ env.BACKEND_IMAGE_DIR }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

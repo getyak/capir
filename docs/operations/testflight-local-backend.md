@@ -176,6 +176,25 @@ invalid cached content fails the builder. Keep this cache selection out
 of resident runtime configuration and retain its provenance in deployment proof.
 Content-address verification does not authenticate package-to-index mappings;
 trusted, immutable cache provenance remains necessary.
+When the resident data disk cannot safely hold build temporaries, a same-repository
+PR may opt into `.github/workflows/build-backend-image.yml` with the exact
+`backend-image` label. The disposable Linux/arm64 runner checks out the recorded
+head, cold-builds the unchanged canonical Dockerfile through the complete frozen
+install and native execution gates, and retains a source-bound OCI archive plus
+checksums and measurements. It neither uses production secrets nor pushes to a
+registry, imports an image, or changes a resident service. The CI-only preventive
+space floor does not replace the resident host's independent storage policy.
+
+Use `scripts/deploy/inspect_backend_oci.py` to verify a downloaded archive's
+expected revision label, platform, blob sizes/digests and expanded layer diff IDs.
+The narrow producer disables provenance/SBOM; unsupported extra or nested
+manifests fail closed. These checks bind recorded source and byte integrity,
+not a signature, import peak, runtime capacity or deployment permission. Before
+any import, verify the actual Docker context/Engine ID, data-filesystem capacity
+and required temporary/snapshot/database-WAL reserve independently. Never turn
+compressed image size or a passing small archive fixture into that capacity
+proof. Retain the trusted CI run/source/hash and actual native-gate log evidence.
+
 After the complete image passes, select and verify the approved image/revision
 pair, then use the verified-image restart command above with
 `TS_TESTFLIGHT_REBUILD=false`.
