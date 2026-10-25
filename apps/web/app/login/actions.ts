@@ -1,8 +1,11 @@
 "use server";
 
 import { TalentSignalClient, TalentSignalHttpError } from "@talent-signal/contracts";
-import { clearTestWorkspaceSession } from "@/lib/server/testWorkspaceSession";
-import { readPrimaryBackendSessionClaims, backendAuthBaseUrl, registerBackendAccount } from "@/lib/server/backendAuth";
+import { cookies } from "next/headers";
+import { workspaceSessionsBinding } from "@/lib/server/workspaceSessions";
+import { workspaceSignOutDestination, type WorkspaceSignOutResult } from "@/lib/workspace-signout";
+import { clearTestWorkspaceSession, TEST_WORKSPACE_COOKIE } from "@/lib/server/testWorkspaceSession";
+import { AUTH_SESSION_COOKIE, readBackendSessionClaims, readPrimaryBackendSessionClaims, backendAuthBaseUrl, registerBackendAccount } from "@/lib/server/backendAuth";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { prepareGoogleSignIn, bindGoogleNonce } from "@/lib/server/google-session";
@@ -264,7 +267,7 @@ export async function signInWithDefaultAccount(formData: FormData) {
   });
 }
 
-export async function signOutOfWorkspace(formData?: FormData) {
+async function logoutWorkspaceBackendSessions() {
   try {
     const backend = await authenticatedBackendClient();
     if (backend) {
@@ -279,10 +282,37 @@ export async function signOutOfWorkspace(formData?: FormData) {
     if (primary) await logoutBackendWithinDeadline(() => new TalentSignalClient(backendAuthBaseUrl(), primary.backendAccessToken).logout());
   } catch { /* Local sign-out remains available during an outage. */ }
   await clearTestWorkspaceSession();
+}
+
+export async function signOutOfWorkspace(formData?: FormData) {
+  await logoutWorkspaceBackendSessions();
   // Presentation hint only: both destinations are fixed first-party paths.
   // A real /login navigation lets the native host own its signed-out surface.
   await signOut({ redirectTo: formData?.get("desktopHost") === "true"
     ? "/login?callbackUrl=%2Fworkspace&intent=sign-out" : "/" });
+}
+
+
+/** Account menu completion confirms local cookie clearing, not remote revocation. */
+export async function signOutFromAccountMenu(formData: FormData): Promise<WorkspaceSignOutResult> {
+  const binding = formString(formData, "workspaceBinding");
+  if (!/^[a-f0-9]{64}$/.test(binding)) return { status: "scope_changed" };
+  try {
+    const claims = await readBackendSessionClaims();
+    if (!claims || workspaceSessionsBinding(claims) !== binding) return { status: "scope_changed" };
+  } catch { return { status: "scope_changed" }; }
+
+  await logoutWorkspaceBackendSessions();
+  const redirectTo = workspaceSignOutDestination(formData.get("desktopHost") === "true");
+  // Auth.js applies its actual session-cookie patches before returning when
+  // redirect is false. A redirect rejection cannot serve as a completion receipt.
+  await signOut({ redirect: false, redirectTo });
+  const jar = await cookies();
+  const retained = jar.getAll().some(({ name, value }) => value && (
+    name === AUTH_SESSION_COOKIE || name.startsWith(`${AUTH_SESSION_COOKIE}.`) || name === TEST_WORKSPACE_COOKIE
+  ));
+  if (retained) throw new Error("Local sign-out could not be confirmed.");
+  return { status: "signed_out", binding, redirectTo };
 }
 
 /** Intentional completion of the emailed verification link/code. */

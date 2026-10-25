@@ -11,6 +11,7 @@ vi.mock("@/lib/server/contact-handoff-session", () => ({ contactHandoffSessionVe
 vi.mock("@/lib/server/memoryEntryCapability", () => ({ mintMemoryEntryCapability: mocks.mint }));
 vi.mock("@/components/memory-review/memory-review-card", () => ({ MemoryReviewCard: () => null }));
 vi.mock("@/components/people-directory-app", () => ({ PeopleDirectoryApp: () => null }));
+vi.mock("@/lib/server/marketing-locale", () => ({ getMarketingLocale: async () => "zh-CN" }));
 import PersonMemoryPage from "./[id]/page";
 
 beforeEach(() => {

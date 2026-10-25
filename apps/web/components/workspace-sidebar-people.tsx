@@ -83,10 +83,10 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
   const bounded = (data?.people.people?.length ?? 0) >= DIRECTORY_LIMIT;
 
   return (
-    <section aria-label="人物目录" className={styles.directory}>
+    <section aria-label={t("人物目录")} className={styles.directory}>
       <header className={styles.headingRow}>
-        <h2 className={styles.heading}>人物目录</h2>
-        {binding ? <Link className={styles.allPeople} href={peopleDirectoryHref(search.committedDraft, returnSessionId)} onClick={() => rememberDirectory()} prefetch={false} scroll={false}>查看全部人物</Link> : null}
+        <h2 className={styles.heading}>{t("人物目录")}</h2>
+        {binding ? <Link className={styles.allPeople} href={peopleDirectoryHref(search.committedDraft, returnSessionId)} onClick={() => rememberDirectory()} prefetch={false} scroll={false}>{t("查看全部人物")}</Link> : null}
       </header>
       {binding ? (
         <Form
@@ -115,7 +115,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
         >
           <MagnifyingGlass aria-hidden="true" size={16} />
           <input
-            aria-label="搜索侧栏人物"
+            aria-label={t("搜索侧栏人物")}
             autoComplete="off"
             maxLength={160}
             name="query"
@@ -136,7 +136,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
               commitDraft(event.currentTarget.value);
               setComposing(false);
             }}
-            placeholder="搜索人物…"
+            placeholder={t("搜索人物…")}
             ref={input}
             type="search"
             value={draft}
@@ -144,7 +144,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
           {returnSessionId ? <input name="session" type="hidden" value={returnSessionId} /> : null}
           {draft ? (
             <Link
-              aria-label="清除侧栏人物搜索"
+              aria-label={t("清除侧栏人物搜索")}
               className={styles.searchControl}
               href={peopleDirectoryHref("", returnSessionId)}
               onClick={event => {
@@ -161,7 +161,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
             </Link>
           ) : null}
           <button
-            aria-label={browseHref === undefined ? "在人物目录中搜索" : t("筛选侧栏人物")}
+            aria-label={browseHref === undefined ? t("在人物目录中搜索") : t("筛选侧栏人物")}
             className={styles.searchControl}
             disabled={composing}
             type="submit"
@@ -172,20 +172,20 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
       ) : null}
 
       {binding && !loading && !failed && bounded ? (
-        <p className={styles.scope}>侧栏仅显示目录前 200 位人物。</p>
+        <p className={styles.scope}>{t("侧栏仅显示目录前 200 位人物。")}</p>
       ) : null}
 
       {!binding ? (
-        <p className={styles.state} role="alert">请重新登录以读取人物目录。</p>
+        <p className={styles.state} role="alert">{t("请重新登录以读取人物目录。")}</p>
       ) : loading ? (
-        <p className={styles.state} role="status">正在读取人物目录…</p>
+        <p className={styles.state} role="status">{t("正在读取人物目录…")}</p>
       ) : failed ? (
         <div className={styles.state} role="alert">
-          <p>人物目录暂时无法读取。</p>
-          <button className={styles.retry} onClick={retry} type="button">重新载入</button>
+          <p>{t("人物目录暂时无法读取。")}</p>
+          <button className={styles.retry} onClick={retry} type="button">{t("重新载入")}</button>
         </div>
       ) : matches.length ? (
-        <nav aria-label="侧栏人物">
+        <nav aria-label={t("侧栏人物")}>
           <ul className={styles.list}>
             {matches.map(person => (
               <li key={person.id}>
@@ -200,7 +200,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
                   <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} size={28} />
                   <span className={styles.identity}>
                     <strong>{person.label}</strong>
-                    <small>{person.detail}</small>
+                    <small>{person.contexts[0]?.label ?? t("联系人")}</small>
                   </span>
                 </Link>
               </li>
@@ -209,12 +209,12 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
         </nav>
       ) : (
         <p className={styles.state} role="status">
-          {normalizedDraft ? "侧栏目录中没有匹配人物。" : "还没有人物。"}
+          {normalizedDraft ? t("侧栏目录中没有匹配人物。") : t("还没有人物。")}
         </p>
       )}
 
       {binding && !loading && !failed && normalizedDraft && !matches.length ? (
-        <p className={styles.scope}>{browseHref === undefined ? "按 Enter 在人物目录中搜索姓名或已确认联系方式。" : t("查看全部人物以搜索姓名或已确认联系方式。")}</p>
+        <p className={styles.scope}>{browseHref === undefined ? t("按 Enter 在人物目录中搜索姓名或已确认联系方式。") : t("查看全部人物以搜索姓名或已确认联系方式。")}</p>
       ) : null}
     </section>
   );

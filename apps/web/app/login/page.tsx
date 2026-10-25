@@ -1,4 +1,6 @@
 import { AppleLogo, ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
+import { translate, type TranslateVars } from "@/lib/i18n";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
@@ -8,6 +10,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { AccountAccessForm } from "@/components/account-access-form";
 import { BrandMark } from "@/components/brand-mark";
+import { siteConfig } from "@/lib/site";
 import { EmailSignInForm } from "@/components/email-sign-in-form";
 import { VerificationConfirmForm } from "@/components/verification-confirm-form";
 import {
@@ -30,30 +33,35 @@ import { AccountContinuity } from "./account-continuity";
 import { LoginConnectContinuity } from "./login-connect-continuity";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = {
-  title: "登录与注册",
-  description: "从你开始，建立自己的 capri 关系工作台。",
-  robots: { follow: false, index: false },
-};
-const oauthErrors: Record<string, string> = {
-  AccessDenied: "登录已取消。准备好后，可以再试一次。",
-  Configuration: "这次连接没有完成。已有账号请使用原登录方式，或稍后重试。",
-  OAuthCallbackError: "这次登录没有完成，请重新连接。",
-  // `OAuthAccountNotLinked` deliberately has no entry: an account-collision
-  // message is shown only with the server-sealed collision hint. A forged
-  // error query alone never claims that an account exists.
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMarketingLocale();
+  const t = (key: string) => translate(locale, key);
+  return {
+    title: t("登录与注册"),
+    description: t("从你开始，建立自己的 capri 关系工作台。"),
+    robots: { follow: false, index: false },
+  };
+}
 
 export default async function LoginPage({ searchParams }: {
   searchParams: Promise<{ callbackUrl?: string; error?: string; reason?: string; mode?: string; verification?: string; connect?: string }>;
 }) {
-  const [session, parameters] = await Promise.all([auth(), searchParams]);
+  const [session, parameters, locale] = await Promise.all([auth(), searchParams, getMarketingLocale()]);
+  const t = (key: string, vars?: TranslateVars) => translate(locale, key, vars);
+  const oauthErrors: Record<string, string> = {
+    AccessDenied: t("登录已取消。准备好后，可以再试一次。"),
+    Configuration: t("这次连接没有完成。已有账号请使用原登录方式，或稍后重试。"),
+    OAuthCallbackError: t("这次登录没有完成，请重新连接。"),
+    // `OAuthAccountNotLinked` deliberately has no entry: an account-collision
+    // message is shown only with the server-sealed collision hint. A forged
+    // error query alone never claims that an account exists.
+  };
   const requestHeaders = await headers();
   // Display-only native defense (ADR 0022): the Mac app owns its signed-out
   // browser-login surface and intercepts /login itself; a direct native load
   // of this page must never show a password, registration or provider form.
   if (isNativeLoginUserAgent(requestHeaders.get("user-agent"))) {
-    return <DesktopNativeLoginNotice />;
+    return <DesktopNativeLoginNotice locale={locale} />;
   }
   const requestOrigin = `${requestHeaders.get("x-forwarded-proto") === "https" ? "https" : "http"}://${requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host") ?? "localhost:3000"}`;
   const canonical = canonicalLoginTarget(requestOrigin, process.env.AUTH_URL, parameters, process.env.NODE_ENV === "production");
@@ -131,22 +139,22 @@ export default async function LoginPage({ searchParams }: {
   }
   const verificationSecret = parameters.verification?.trim() ?? "";
   const availability = getAuthAvailability(process.env, { google: Boolean(getGoogleOAuthCredentials()) });
-  const error = sessionExpired ? "登录已过期。重新登录后，可以继续刚才的工作。"
+  const error = sessionExpired ? t("登录已过期。重新登录后，可以继续刚才的工作。")
     : collisionHint ? ""
-    : parameters.error ? (oauthErrors[parameters.error] ?? "登录未完成，请重试或换一种方式。") : "";
+    : parameters.error ? (oauthErrors[parameters.error] ?? t("登录未完成，请重试或换一种方式。")) : "";
   const providers = (
     <div className={styles.providers}>
       <form action={signInWithGoogle} data-oauth-form="true">
         <input type="hidden" name="redirectTo" value={destination} />
         <OAuthSubmit disabled={!availability.google} className={styles.provider}>
           <Image src="/images/google-sign-in.png" width={20} height={20} alt="" unoptimized />
-          <span>使用 Google 继续</span>
-          {!availability.google && <small>暂不可用</small>}
+          <span>{t("使用 Google 继续")}</span>
+          {!availability.google && <small>{t("暂不可用")}</small>}
         </OAuthSubmit>
         <OAuthSubmit formAction={signInWithApple} disabled={!availability.apple} className={`${styles.provider} ${styles.apple}`}>
           <AppleLogo aria-hidden="true" size={21} weight="fill" />
-          <span>使用 Apple 继续</span>
-          {!availability.apple && <small>暂不可用</small>}
+          <span>{t("使用 Apple 继续")}</span>
+          {!availability.apple && <small>{t("暂不可用")}</small>}
         </OAuthSubmit>
       </form>
     </div>
@@ -154,22 +162,22 @@ export default async function LoginPage({ searchParams }: {
   return (
     <main id="main-content" className={styles.page} tabIndex={-1}>
       <div className={styles.topbar}>
-        <BrandMark />
+        <BrandMark label={`${siteConfig.name} · ${t("返回首页")}`} />
         <div className={styles.utilities}>
-          <Link href="/">返回首页 <ArrowUpRight size={14} aria-hidden="true" /></Link>
+          <Link href="/">{t("返回首页")}<ArrowUpRight size={14} aria-hidden="true" /></Link>
           <ThemeToggle />
         </div>
       </div>
       <div className={styles.stage}>
-        <AccountContinuity />
+        <AccountContinuity locale={locale} />
         <div className={styles.content}>
           {collisionHint ? (
-            <LoginConnectContinuity provider={collisionHint.provider} callbackUrl={callbackUrl} />
+            <LoginConnectContinuity locale={locale} provider={collisionHint.provider} callbackUrl={callbackUrl} />
           ) : (
           <>
           {!parameters.error && connectHint && (
             <p className={styles.connectHint} role="status" data-connect-continuity-hint>
-              {`登录后会带你继续连接 ${connectHint === "google" ? "Google" : "Apple"}。`}
+              {t("登录后会带你继续连接 {provider}。", { provider: connectHint === "google" ? "Google" : "Apple" })}
             </p>
           )}
           {verificationSecret ? (
@@ -181,25 +189,25 @@ export default async function LoginPage({ searchParams }: {
             </AccountAccessForm>
           ) : (
             <section aria-labelledby="sign-in-title">
-              <header className={styles.heading}><h1 id="sign-in-title">从你开始。</h1><p>一个安静的地方，留住重要的人与对话。</p></header>
+              <header className={styles.heading}><h1 id="sign-in-title">{t("从你开始。")}</h1><p>{t("一个安静的地方，留住重要的人与对话。")}</p></header>
               {error && <p className={styles.error} role="alert">{error}</p>}
               {providers}
               {availability.email && <EmailSignInForm callbackUrl={destination} enabled />}
-              {!availability.google && !availability.apple && !availability.email && <p className={styles.caption}>这个工作台暂未开放登录，请稍后再试。</p>}
+              {!availability.google && !availability.apple && !availability.email && <p className={styles.caption}>{t("这个工作台暂未开放登录，请稍后再试。")}</p>}
             </section>
           )}
           {availability.defaultAccount && (
             <form action={signInWithDefaultAccount} className={styles.fixture}>
               <input type="hidden" name="redirectTo" value={destination} />
-              <button type="submit">使用开发测试账号 · {availability.defaultAccountName}</button>
+              <button type="submit">{t("使用开发测试账号 ·")}{availability.defaultAccountName}</button>
             </form>
           )}
           </>
           )}
-          <p className={styles.privacy}>同一账号，联系人与会话自动同步。</p>
+          <p className={styles.privacy}>{t("同一账号，联系人与会话自动同步。")}</p>
         </div>
       </div>
-      <footer className={styles.footer}>只带入你选择分享的内容。</footer>
+      <footer className={styles.footer}>{t("只带入你选择分享的内容。")}</footer>
     </main>
   );
 }

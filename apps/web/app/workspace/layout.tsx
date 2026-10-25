@@ -9,7 +9,7 @@ import { auth } from "@/auth";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
 import { translate, type TranslateVars } from "@/lib/i18n";
 import { loadAccountSettings } from "@/lib/server/accountBackend";
-import { signOutOfWorkspace } from "@/app/login/actions";
+import { signOutFromAccountMenu } from "@/app/login/actions";
 import { TalentSignalLabShell } from "@/components/talent-signal-lab/lab-shell";
 import {
   WorkspaceMobileSourcesLink,
@@ -68,7 +68,7 @@ function AccountControls({
       key={usageBinding}
       usageBinding={usageBinding}
       fixtureWorkspace={fixtureWorkspace}
-      signOutAction={signOutOfWorkspace}
+      signOutAction={signOutFromAccountMenu}
       workspaceName={workspaceName}
     />
   );
@@ -83,12 +83,12 @@ export default async function WorkspaceLayout({
   // Rendering no product chrome here lets their redirect remain authoritative.
   if (!session?.user) {
     return (
-      <>
+      <WorkspaceSessionBoundary binding={null}>
         <MeetingDraftSessionBoundary sessionVersion={null} />
         <SessionDraftSessionBoundary storageScope={null} />
         <WorkspaceDirectoryScope binding={null} />
         {children}
-      </>
+      </WorkspaceSessionBoundary>
     );
   }
 
@@ -143,7 +143,7 @@ export default async function WorkspaceLayout({
   const hasTestWorkspace = (await cookies()).has(TEST_WORKSPACE_COOKIE);
   if (!scope) {
     return (
-      <>
+      <WorkspaceSessionBoundary binding={null}>
         <MeetingDraftSessionBoundary sessionVersion={null} />
         <SessionDraftSessionBoundary storageScope={null} />
         <WorkspaceDirectoryScope binding={null} />
@@ -156,7 +156,7 @@ export default async function WorkspaceLayout({
             <WorkspaceReauthenticationLink>{t("重新登录")}<ArrowRight size={16} aria-hidden="true" /></WorkspaceReauthenticationLink>
           )}
         </WorkspaceAccessRecovery>
-      </>
+      </WorkspaceSessionBoundary>
     );
   }
   const accountName = currentDisplayName ?? session.user.name ?? session.user.email ?? t("工作区成员");
@@ -181,9 +181,9 @@ export default async function WorkspaceLayout({
 
 
   return (
-    <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
+    <WorkspaceSessionBoundary binding={pendingBinding}><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
-      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope}>
+      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope} binding={pendingBinding}>
       <WorkspaceBrowseProvider key={pendingSessionDraftScope} scope={pendingSessionDraftScope} binding={pendingBinding}>
       <PersonContextPanelProvider binding={pendingBinding}>
       <WorkspaceShellFrame sidebar={<>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLocale, useT } from "./locale-provider";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { TimeActivity } from "@talent-signal/contracts";
@@ -119,34 +120,36 @@ export function useTodayContext(binding: string, expiresAt: string | null = null
 }
 
 export function TodayContext({ binding, expiresAt = null }: { binding: string; expiresAt?: string | null }) {
+  const t = useT();
+  const locale = useLocale();
   const today = useTodayContext(binding, expiresAt);
   const schedule = today.schedule.item, unread = today.unread.item;
   const scheduleHref = schedule ? timeHref(new URLSearchParams(), { day: dateInZone(schedule.occurred_at, schedule.time_zone),
     view: "timeline", range: "day", tz: schedule.time_zone, item: `schedule:${schedule.source_id}` }) : null;
-  return <section className={styles.context} aria-label="今日概览">
+  return <section className={styles.context} aria-label={t("今日概览")}>
     <header className={styles.header}><h1 className={styles.date}>{today.day ? <time dateTime={today.day}>
-      <span>{formatDay(today.day, { month: "long", day: "numeric" })}</span>
-      <small>{formatDay(today.day, { year: "numeric", weekday: "long" })}</small>
-    </time> : "今日"}</h1></header>
+      <span>{formatDay(today.day, { month: "long", day: "numeric" }, locale)}</span>
+      <small>{formatDay(today.day, { year: "numeric", weekday: "long" }, locale)}</small>
+    </time> : t("今日")}</h1></header>
     <div className={styles.cards}>
       <article className={styles.card} aria-labelledby="today-arrangement-heading">
-        <h2 id="today-arrangement-heading">{today.schedule.coverage === "partial" ? "已读取的安排" : "接下来的安排"}</h2>
+        <h2 id="today-arrangement-heading">{today.schedule.coverage === "partial" ? t("已读取的安排") : t("接下来的安排")}</h2>
         {schedule && scheduleHref ? <>
           <Link className={styles.title} href={scheduleHref}>{schedule.title}</Link>
-          <p>{formatTodayArrangement(schedule)}</p>
-          <p className={styles.note}>由你记录 · {schedule.time_zone}</p>
-        </> : <p>{today.schedule.coverage === "loading" ? "正在读取安排…" : today.schedule.coverage === "complete" ? "未来七天暂时没有待进行的安排。" : today.schedule.coverage === "partial" ? "尚未读完此范围，暂未找到待进行的安排。" : "安排暂时无法读取。"}</p>}
-        {today.schedule.coverage === "partial" ? <p className={styles.note}>仅检查已读取的部分；打开时间查看完整范围。</p> : null}
-        <Link className={styles.more} href="/workspace/meetings">查看时间</Link>
+          <p>{formatTodayArrangement(schedule, locale)}</p>
+          <p className={styles.note}>{t("由你记录")} · {schedule.time_zone}</p>
+        </> : <p>{today.schedule.coverage === "loading" ? t("正在读取安排…") : today.schedule.coverage === "complete" ? t("未来七天暂时没有待进行的安排。") : today.schedule.coverage === "partial" ? t("尚未读完此范围，暂未找到待进行的安排。") : t("安排暂时无法读取。")}</p>}
+        {today.schedule.coverage === "partial" ? <p className={styles.note}>{t("仅检查已读取的部分；打开时间查看完整范围。")}</p> : null}
+        <Link className={styles.more} href="/workspace/meetings">{t("查看时间")}</Link>
       </article>
       <article className={styles.card} aria-labelledby="today-unread-heading">
-        <h2 id="today-unread-heading">继续一段对话</h2>
-        {unread ? <><Link className={styles.title} href={`/workspace/sessions/${encodeURIComponent(unread.id)}`}>{unread.title}</Link><p className={styles.note}>未读 · 对话中的解释仍需核对</p></> :
-          <p>{today.unread.coverage === "loading" ? "正在读取未读对话…" : today.unread.coverage === "complete" ? "当前没有未读对话。" : today.unread.coverage === "partial" ? "已读取的部分没有未读对话。" : "未读对话暂时无法读取。"}</p>}
-        {today.unread.coverage === "partial" ? <p className={styles.note}>仅显示本次已读取的部分。</p> : null}
-        <Link className={styles.more} href="/workspace/sessions">查看对话</Link>
+        <h2 id="today-unread-heading">{t("继续一段对话")}</h2>
+        {unread ? <><Link className={styles.title} href={`/workspace/sessions/${encodeURIComponent(unread.id)}`}>{unread.title}</Link><p className={styles.note}>{t("未读 · 对话中的解释仍需核对")}</p></> :
+          <p>{today.unread.coverage === "loading" ? t("正在读取未读对话…") : today.unread.coverage === "complete" ? t("当前没有未读对话。") : today.unread.coverage === "partial" ? t("已读取的部分没有未读对话。") : t("未读对话暂时无法读取。")}</p>}
+        {today.unread.coverage === "partial" ? <p className={styles.note}>{t("仅显示本次已读取的部分。")}</p> : null}
+        <Link className={styles.more} href="/workspace/sessions">{t("查看对话")}</Link>
       </article>
     </div>
-    {[today.schedule.coverage, today.unread.coverage].some(coverage => coverage === "unavailable" || coverage === "partial") ? <button className={styles.retry} type="button" onClick={today.retry}>重试读取</button> : null}
+    {[today.schedule.coverage, today.unread.coverage].some(coverage => coverage === "unavailable" || coverage === "partial") ? <button className={styles.retry} type="button" onClick={today.retry}>{t("重试读取")}</button> : null}
   </section>;
 }

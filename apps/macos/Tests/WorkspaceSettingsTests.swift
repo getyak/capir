@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 import WebKit
 @testable import TalentSignalMac
@@ -93,6 +94,110 @@ final class WorkspaceSettingsTests: XCTestCase {
                      "The existing WebView must keep its URL and unsent draft.")
     }
 
+    /// Exercise the SwiftUI virtual child, not the hosting view's AppKit press
+    /// override or a direct controller call. This fixture has no workspace,
+    /// account, credentials, or production preference domain.
+    @MainActor
+    func testDesktopPetVirtualButtonDefaultPressOpensExistingWorkspaceOnce() async throws {
+        let suite = "com.getyak.acceptance.pet-press.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: "desktopPet.motion")
+        let preferencesBefore = defaults.persistentDomain(forName: suite)
+        let controller = DesktopPetController(defaults: defaults)
+        var opens = 0
+        controller.openWorkspaceWindow = { opens += 1 }
+        let priorDestination = WorkspaceNavigation.shared.pending
+        let priorURL = WorkspaceNavigation.shared.pendingURL
+        let host = NSHostingView(rootView: DesktopPetArtworkView(controller: controller))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        var virtualButton: NSObject?
+        for _ in 0..<20 {
+            virtualButton = findAccessibilityElement(host, identifier: "desktopPet.openWorkspace")
+            if virtualButton != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+            host.layoutSubtreeIfNeeded()
+        }
+        let button = try XCTUnwrap(virtualButton, "The actual SwiftUI accessibility child must exist")
+        XCTAssertFalse(button === host, "Pressing the parent would miss the missing-child-action regression")
+        let press = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(button.responds(to: press))
+        guard button.responds(to: press) else { return }
+        typealias Press = @convention(c) (AnyObject, Selector) -> Bool
+        let performPress = unsafeBitCast(button.method(for: press), to: Press.self)
+        XCTAssertTrue(performPress(button, press))
+        XCTAssertEqual(opens, 1)
+        XCTAssertEqual(WorkspaceNavigation.shared.pending, priorDestination)
+        XCTAssertEqual(WorkspaceNavigation.shared.pendingURL, priorURL)
+        XCTAssertEqual(defaults.persistentDomain(forName: suite) as NSDictionary?, preferencesBefore as NSDictionary?)
+    }
+
+    @MainActor
+    func testBrowserLoginSurfaceLocalizesOwnedPhasesAndKeepsReturnedTextVerbatim() async throws {
+        let rawError = "原始返回错误：do not translate %@"
+        let cases: [(DesktopBrowserLoginPhase, Bool, String, String)] = [
+            (.idle, false, "desktop.login.message", String(localized: "Choose an account in the browser. Your workspace opens after sign-in.", bundle: .main)),
+            (.preparing, false, "desktop.login.progress", String(localized: "Preparing sign-in…", bundle: .main)),
+            (.waiting, false, "desktop.login.progress", String(localized: "Waiting for browser confirmation…", bundle: .main)),
+            (.exchanging, false, "desktop.login.progress", String(localized: "Verifying sign-in on this Mac…", bundle: .main)),
+            (.completed(accountID: "fixture-account", userID: "fixture-user"), false, "desktop.login.progress", String(localized: "Opening your workspace…", bundle: .main)),
+            (.cancelled, false, "desktop.login.message", String(localized: "Sign-in was cancelled. You can start again at any time.", bundle: .main)),
+            (.unresolved, true, "desktop.login.message", String(localized: "We cannot confirm whether this Mac finished signing in. Check the result or start again.", bundle: .main)),
+            (.unresolved, false, "desktop.login.message", String(localized: "We cannot confirm whether this Mac finished signing in. Start sign-in again.", bundle: .main)),
+            (.failed(rawError), false, "desktop.login.message", rawError)
+        ]
+        for (phase, canCheck, identifier, expected) in cases {
+            let surface = DesktopBrowserLoginSurface(phase: phase, matchingHint: "AbC-42",
+                                                    canCheckResult: canCheck,
+                                                    onStart: {}, onCancel: {}, onCheckResult: {})
+            let host = NSHostingView(rootView: surface)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 600),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            var message: NSObject?
+            for _ in 0..<20 {
+                host.layoutSubtreeIfNeeded()
+                message = findAccessibilityElement(host, identifier: identifier)
+                if message != nil { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let node = try XCTUnwrap(message, "The actual login phase must be readable without a coordinator")
+            let label = NSSelectorFromString("accessibilityLabel")
+            let value = NSSelectorFromString("accessibilityValue")
+            let labelText = node.responds(to: label) ? node.perform(label)?.takeUnretainedValue() as? String : nil
+            let valueText = node.responds(to: value) ? node.perform(value)?.takeUnretainedValue() as? String : nil
+            XCTAssertTrue(labelText == expected || valueText == expected,
+                          "Expected localized phase copy, got label=\(String(describing: labelText)), value=\(String(describing: valueText))")
+            if phase == .waiting {
+                let hint = try XCTUnwrap(findAccessibilityElement(host, identifier: "desktop.login.matchingHint"))
+                let hintText = hint.responds(to: value) ? hint.perform(value)?.takeUnretainedValue() as? String : nil
+                let hintLabel = hint.responds(to: label) ? hint.perform(label)?.takeUnretainedValue() as? String : nil
+                XCTAssertTrue(hintText == "AbC-42" || hintLabel == "AbC-42")
+            }
+        }
+    }
+
+    @MainActor
+    private func findAccessibilityElement(_ node: NSObject, identifier: String, depth: Int = 0) -> NSObject? {
+        guard depth < 16 else { return nil }
+        let id = NSSelectorFromString("accessibilityIdentifier")
+        if node.responds(to: id), node.perform(id)?.takeUnretainedValue() as? String == identifier { return node }
+        let children = NSSelectorFromString("accessibilityChildren")
+        guard node.responds(to: children),
+              let descendants = node.perform(children)?.takeUnretainedValue() as? [NSObject] else { return nil }
+        for child in descendants {
+            if let found = findAccessibilityElement(child, identifier: identifier, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
     /// Every row in the native window is a device control that needs no Web
     /// origin, which is what makes Settings usable offline.
     func testEverySectionIsANativeDeviceControlAndStaysOffline() {
@@ -114,7 +219,7 @@ final class WorkspaceSettingsTests: XCTestCase {
         for removed in ["profile", "account", "appearance", "connections", "workspace", "versions", "advanced", "testing"] {
             XCTAssertFalse(rawValues.contains(removed), "\(removed) must not be a native settings row")
         }
-        XCTAssertEqual(WorkspaceSettingsSection.groups.map(\.title), ["此 Mac", "支持"])
+        XCTAssertEqual(WorkspaceSettingsSection.groups.map(\.title), [String(localized: "This Mac", bundle: .main), String(localized: "Support", bundle: .main)])
         XCTAssertEqual(WorkspaceSettingsSection.groups.first?.sections, [.general, .companion, .permissions, .updates])
         XCTAssertEqual(WorkspaceSettingsSection.groups.last?.sections, [.connection])
     }
@@ -126,7 +231,7 @@ final class WorkspaceSettingsTests: XCTestCase {
             XCTAssertEqual(pane.title, section.title)
         }
         // The local updater keeps a distinct title from any Web version pane.
-        XCTAssertEqual(WorkspaceSettingsSection.updates.title, "软件更新")
+        XCTAssertEqual(WorkspaceSettingsSection.updates.title, String(localized: "Software Updates", bundle: .main))
     }
 
     func testDesktopChromePayloadCarriesAppVersionAndUpdateState() {
@@ -546,14 +651,13 @@ final class WorkspaceSettingsTests: XCTestCase {
             return XCTFail("expected a load fallback when there is no back item")
         }
         XCTAssertEqual(url, workbench)
-        XCTAssertTrue(notice.contains("未保存的输入可能未保留"))
+        XCTAssertEqual(notice, String(localized: "Account settings opened in the default browser.", bundle: .main) + " " + String(localized: "Back history was unavailable. The last workspace address was reloaded; unsaved input may not have been retained.", bundle: .main))
         guard case .load(_, let refusedNotice) = WorkspaceSurfacePolicy.workbenchRestorePlan(
             for: transition, canGoBack: false, backItemURL: nil,
             entryURL: origin.entryURL, browserOpened: false) else {
             return XCTFail("expected a load fallback after browser launch refusal")
         }
-        XCTAssertTrue(refusedNotice.contains("未能在默认浏览器中打开"))
-        XCTAssertFalse(refusedNotice.contains("已在默认浏览器中打开"))
+        XCTAssertEqual(refusedNotice, String(localized: "Account settings could not be opened in the default browser.", bundle: .main) + " " + String(localized: "Back history was unavailable. The last workspace address was reloaded; unsaved input may not have been retained.", bundle: .main))
         guard case .load(let mismatched, _) = WorkspaceSurfacePolicy.workbenchRestorePlan(
             for: transition, canGoBack: true,
             backItemURL: origin.url.appending(path: "/workspace/people/1"), entryURL: origin.entryURL) else {
@@ -568,8 +672,7 @@ final class WorkspaceSettingsTests: XCTestCase {
             return XCTFail("expected the entry-URL fallback with no prior state")
         }
         XCTAssertEqual(entry, origin.entryURL)
-        XCTAssertTrue(entryNotice.contains("无法确认先前的对话位置"))
-        XCTAssertTrue(entryNotice.contains("未保存的输入可能未保留"))
+        XCTAssertEqual(entryNotice, String(localized: "Account settings opened in the default browser.", bundle: .main) + " " + String(localized: "The previous conversation location could not be confirmed. The main window returned to the workspace home; unsaved input may not have been retained.", bundle: .main))
     }
 
     @MainActor
