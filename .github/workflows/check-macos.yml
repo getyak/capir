@@ -97,6 +97,13 @@ jobs:
                       continue
                   if receipt.returncode == 0:
                       (output / (result.stem + "-" + kind + ".json")).write_bytes(receipt.stdout)
+              try:
+                  subprocess.run(
+                      ["xcrun", "xcresulttool", "export", "attachments", "--only-failures",
+                       "--path", str(result), "--output-path", str(output / (result.stem + "-failures"))],
+                      capture_output=True, timeout=60, check=False)
+              except subprocess.TimeoutExpired:
+                  pass
           PY
       - name: Retain native first-run evidence
         if: always()

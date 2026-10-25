@@ -433,6 +433,7 @@ root=pathlib.Path(sys.argv[1]); response=json.loads(sys.argv[2]); records=[]; en
 class Handler(http.server.BaseHTTPRequestHandler):
  def log_message(self,*args): pass
  def answer(self,status,payload,cookie=False):
+  records[-1]['status']=status;(root/'requests.json').write_text(json.dumps(records))
   data=json.dumps(payload).encode(); self.send_response(status)
   self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(data)))
   self.send_header('Cache-Control','no-store')
@@ -458,6 +459,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   self.record()
   if self.path=='/api/desktop-capture/host':
+   records[-1]['status']=200;(root/'requests.json').write_text(json.dumps(records))
    data=b'<!doctype html><html><body></body></html>';self.send_response(200)
    self.send_header('Content-Type','text/html');self.send_header('Content-Length',str(len(data)))
    self.send_header('Content-Security-Policy',"default-src 'none'; connect-src 'self'")
@@ -490,6 +492,20 @@ server.serve_forever()
     }
     func stop() {
         if process.isRunning { process.terminate(); process.waitUntilExit() }
+        // Cloud failures must retain the observed native navigation/fetch
+        // sequence before this owned fixture directory is removed. The ledger
+        // deliberately contains metadata only, never request bodies or secrets.
+        if let metadata = try? Data(contentsOf: directory.appendingPathComponent("requests.json")), metadata.count <= 65_536,
+           let records = (try? JSONSerialization.jsonObject(with: metadata)) as? [[String: Any]] {
+            let permitted: Set<String> = ["method", "path", "status", "action", "origin", "cookie_present"]
+            let bounded = records.prefix(32).map { record in
+                record.filter { permitted.contains($0.key) }
+            }
+            let attachment = XCTAttachment(data: try! JSONSerialization.data(withJSONObject: bounded), uniformTypeIdentifier: "public.json")
+            attachment.name = "persistent-http-sanitized-request-metadata"
+            attachment.lifetime = .keepAlways
+            XCTContext.runActivity(named: "Persistent HTTP transport metadata") { $0.add(attachment) }
+        }
         if ProcessInfo.processInfo.environment["MACOS_PERSISTENT_PROOF_ARTIFACTS"] == nil { try? FileManager.default.removeItem(at: directory) }
     }
 }
