@@ -36,17 +36,29 @@ enum ImageConversationError: LocalizedError, Equatable {
         case .replyPersistence: return "The image reply could not be saved. Check its original message before continuing."
         case .changedIntent: return "Check the original image question before sending another message."
         case .invalidReadback: return "The image reply could not be matched to its original message."
-        case .unknown: return "The image question may still be processing. Check its reply without sending it again."
+        case .unknown: return "Image delivery is unconfirmed. The original message is kept. Check and retry; reattach the same images if needed."
         case .stopped: return "Image processing stopped. Its original message has not been sent again."
         }
     }
 
-    static func recoveryMessage(for error: Error, admissionAttempted: Bool) -> String {
+    static func recoveryMessage(for error: Error, admissionAttempted: Bool, admissionConfirmed: Bool = false) -> String {
+        if admissionConfirmed, (error as? ImageConversationError) == .unknown {
+            return "The image was received, but its reply status could not be checked. Check reply again."
+        }
         if let imageError = error as? ImageConversationError {
             if imageError == .persistence, admissionAttempted {
                 return ImageConversationError.replyPersistence.errorDescription!
             }
             return imageError.errorDescription!
+        }
+        if admissionConfirmed {
+            return "The image was received, but its reply status could not be checked. Check reply again."
+        }
+        if let requestError = error as? ConversationImageRequestError, case let .http(status) = requestError {
+            if status >= 500 {
+                return "Image sending encountered a server error. Delivery is unconfirmed. Check and retry the original message."
+            }
+            return "The server refused this image request. Check the original message and images, then retry."
         }
         return admissionAttempted ? ImageConversationError.unknown.errorDescription!
             : "The Session could not be synced. Try again."

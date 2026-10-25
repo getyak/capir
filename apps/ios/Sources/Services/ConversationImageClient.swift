@@ -1,6 +1,11 @@
 import CryptoKit
 import Foundation
 
+/// Status only: never retain a server body, database detail or provider prose.
+enum ConversationImageRequestError: Error, Equatable {
+    case http(Int)
+}
+
 struct ConversationImageManifest: Codable, Equatable {
     let attachmentID: UUID
     let fileName: String
@@ -357,9 +362,10 @@ struct ConversationImageTransport {
     }
     private func decoded<Response: Decodable>(_ request: URLRequest) async throws -> Response {
         let (data, response) = try await TalentSignalNetworking.data(for: request, using: session)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else {
             throw PursuitWorkspaceClientError.invalidResponse
         }
+        guard (200...299).contains(http.statusCode) else { throw ConversationImageRequestError.http(http.statusCode) }
         return try JSONDecoder.agentSession.decode(Response.self, from: data)
     }
 

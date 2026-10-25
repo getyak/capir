@@ -4,6 +4,90 @@ import XCTest
 
 @MainActor
 final class ConversationImageRecoveryTests: XCTestCase {
+    func testRecoveredQueueReceiptSurvivesReloadAndStillForbidsResendWhenHistoryIsAbsent() async throws {
+        let persistence = ImageRecoveryPersistence()
+        let store = AgentSessionStore(persistence: persistence)
+        let sid = try XCTUnwrap(store.beginUnscopedSession(objective: ""))
+        let manifest = try image(), queueID = UUID()
+        let pending = try XCTUnwrap(store.beginImageConversation(sessionID: sid, objective: "", images: [manifest]))
+        let raw: [String: Any] = ["queue_entry_id": queueID.uuidString, "message_id": pending.messageID.uuidString,
+            "status": "running", "images": [try JSONSerialization.jsonObject(with: JSONEncoder().encode(manifest))]]
+        let entry = try JSONDecoder().decode(ConversationImageQueueEntry.self, from: JSONSerialization.data(withJSONObject: raw))
+        let empty = try record(store: store, sessionID: sid, turn: nil)
+        let result = try await ConversationImageRetry.reconcile(pending: pending, sessionID: sid, store: store,
+            progress: ConversationImageProgressTracker(), read: { ConversationImageObservation(record: empty, entry: entry) }, isCurrent: { true })
+        XCTAssertEqual(result, .waiting)
+        let restored = AgentSessionStore(persistence: persistence)
+        let received = try XCTUnwrap(restored.session(id: sid)?.pendingImageConversation)
+        XCTAssertEqual(received.state, .admitted)
+        XCTAssertEqual(received.queueEntryID, queueID)
+        do {
+            _ = try await ConversationImageRetry.reconcile(pending: received, sessionID: sid, store: restored,
+                progress: ConversationImageProgressTracker(), read: { ConversationImageObservation(record: empty, entry: nil) }, isCurrent: { true })
+            XCTFail("A persisted receipt cannot become permission to send again")
+        } catch ImageConversationError.unknown { }
+    }
+
+    func testRetryPersistenceFailureNeverSaysNothingWasSentAndInactiveOwnerDoesNotRead() async throws {
+        let persistence = ImageRecoveryPersistence()
+        let store = AgentSessionStore(persistence: persistence)
+        let sid = try XCTUnwrap(store.beginUnscopedSession(objective: ""))
+        let manifest = try image()
+        let pending = try XCTUnwrap(store.beginImageConversation(sessionID: sid, objective: "Read the blue panel", images: [manifest]))
+        let canonical = try record(store: store, sessionID: sid, turn: turn(messageID: pending.messageID, manifest: manifest))
+        let tracker = ConversationImageProgressTracker()
+        var reads = 0
+        do {
+            _ = try await ConversationImageRetry.reconcile(pending: pending, sessionID: sid, store: store,
+                progress: tracker, read: { reads += 1; return ConversationImageObservation(record: canonical, entry: nil) }, isCurrent: { false })
+            XCTFail("An old account or operation cannot read or authorize a retry")
+        } catch is CancellationError { }
+        XCTAssertEqual(reads, 0)
+        persistence.fail = true
+        do {
+            _ = try await ConversationImageRetry.reconcile(pending: pending, sessionID: sid, store: store,
+                progress: tracker, read: { ConversationImageObservation(record: canonical, entry: nil) }, isCurrent: { true })
+            XCTFail("Canonical readback must be durably saved")
+        } catch ImageConversationError.replyPersistence {
+            let copy = ImageConversationError.recoveryMessage(for: ImageConversationError.replyPersistence, admissionAttempted: false)
+            XCTAssertFalse(copy.contains("Nothing was sent"))
+        }
+        XCTAssertEqual(store.session(id: sid)?.pendingImageConversation?.messageID, pending.messageID)
+    }
+    func testRetryReconcilesSavedReplyAndReadFailureCannotAuthorizeResend() async throws {
+        let store = AgentSessionStore()
+        let sid = try XCTUnwrap(store.beginUnscopedSession(objective: ""))
+        let manifest = try image()
+        let pending = try XCTUnwrap(store.beginImageConversation(sessionID: sid, objective: "Read the blue panel", images: [manifest]))
+        let tracker = ConversationImageProgressTracker()
+        do {
+            _ = try await ConversationImageRetry.reconcile(pending: pending, sessionID: sid,
+                store: store, progress: tracker, read: { throw ConversationImageRequestError.http(503) }, isCurrent: { true })
+            XCTFail("Failed reconciliation must never authorize a resend")
+        } catch ConversationImageRequestError.http(503) { }
+        XCTAssertEqual(store.session(id: sid)?.pendingImageConversation?.messageID, pending.messageID)
+        let canonical = try record(store: store, sessionID: sid, turn: turn(messageID: pending.messageID, manifest: manifest))
+        let result = try await ConversationImageRetry.reconcile(pending: pending, sessionID: sid,
+            store: store, progress: tracker,
+            read: { ConversationImageObservation(record: canonical, entry: nil) }, isCurrent: { true })
+        XCTAssertEqual(result, .completed)
+        XCTAssertNil(store.session(id: sid)?.pendingImageConversation)
+        XCTAssertEqual(store.session(id: sid)?.turns.count, 1)
+    }
+    func testConfirmedAdmissionFailureKeepsReceiptAndDoesNotClaimDeliveryUnknown() throws {
+        let store = AgentSessionStore()
+        let sid = try XCTUnwrap(store.beginUnscopedSession(objective: ""))
+        let pending = try XCTUnwrap(store.beginImageConversation(sessionID: sid, objective: "", images: [try image()]))
+        let receipt = ConversationImageAdmission(contractVersion: TalentSignalAPIContract.version,
+            sessionID: sid, messageID: pending.messageID, queueEntryID: UUID(), runID: nil,
+            status: "queued", sequence: 1, revision: 1, acceptedAt: "2026-10-25T00:00:00Z")
+        XCTAssertTrue(store.recordImageAdmission(sessionID: sid, messageID: pending.messageID, receipt: receipt))
+        let copy = store.recordImageConversationFailure(sessionID: sid, messageID: pending.messageID,
+            error: ConversationImageRequestError.http(500), admissionAttempted: true)
+        XCTAssertEqual(store.session(id: sid)?.pendingImageConversation?.state, .admitted)
+        XCTAssertEqual(store.session(id: sid)?.pendingImageConversation?.queueEntryID, receipt.queueEntryID)
+        XCTAssertEqual(copy, "The image was received, but its reply status could not be checked. Check reply again.")
+    }
     private let bytes = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3f8AAAAASUVORK5CYII=")!
 
     private func image(id: UUID = UUID()) throws -> ConversationImageManifest {

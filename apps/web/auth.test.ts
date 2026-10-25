@@ -186,6 +186,20 @@ afterEach(() => {
 });
 
 describe("lazy Apple auth configuration", () => {
+  it("keeps a canonical session binding only for server-authorized persistent Mac sign-in", async () => {
+    const jwt = resolveConfig().callbacks!.jwt!;
+    const user = { id: "fixture-user", backendAccessToken: "bounded-access", backendAccountId: "fixture-account",
+      backendAccountName: "Account", backendAccountSlug: "account", backendExpiresAt: "2099-01-01T00:00:00.000Z",
+      backendRole: "member", backendUserId: "fixture-user", backendUsername: null,
+      backendSessionId: "11111111-1111-4111-8111-111111111111" };
+    const mac = await jwt({ token: {}, user, account: { provider: "desktop-persistent", type: "credentials", providerAccountId: user.id },
+      trigger: "signIn", session: undefined });
+    expect(mac?.backendSessionId).toBe(user.backendSessionId);
+    const ordinary = await jwt({ token: { backendSessionId: user.backendSessionId }, user,
+      account: { provider: "password-account", type: "credentials", providerAccountId: user.id },
+      trigger: "signIn", session: undefined });
+    expect(ordinary?.backendSessionId).toBeUndefined();
+  });
   it("configures NextAuth lazily so provider resolution runs per invocation", () => {
     expect(typeof captured.config).toBe("function");
     expect(providerIds(resolveConfig())).toContain("apple");

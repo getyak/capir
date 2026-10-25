@@ -136,11 +136,13 @@ struct ConversationImagePendingMessage: View {
                     Text(errorMessage).font(.footnote).foregroundStyle(Color.tsMutedInk)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if pending.state != .stopped, pending.queueEntryID == nil, canCheckOriginalSend {
+                    Button(language.text("Retry image send"), action: onCheckOriginalSend)
+                        .accessibilityHint(language.text("Check delivery first, then retry the same image message without duplicating it"))
+                }
                 Menu {
                     if pending.state != .stopped {
-                        if canCheckOriginalSend {
-                            Button(language.text("Check original send"), action: onCheckOriginalSend)
-                        } else {
+                        if !canCheckOriginalSend {
                             Button(language.text("Photos"), action: onChoosePhotos)
                             Button(language.text("Files"), action: onChooseFiles)
                         }

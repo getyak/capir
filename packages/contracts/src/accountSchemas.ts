@@ -27,7 +27,7 @@ export const AccountSettingsSchema = Type.Object({
     owner_user_id: Type.Union([ID, Type.Null()]), role: Role, is_owner: Type.Boolean(),
     can_manage: Type.Boolean(), is_test: Type.Boolean() }),
   sessions: Type.Array(Type.Object({ id: ID, client_label: Type.String(), created_at: Time,
-    expires_at: Time, is_current: Type.Boolean() })),
+    expires_at: Time, is_current: Type.Boolean(), persistent: Type.Optional(Type.Boolean()) })),
   members: Type.Array(Type.Object({ id: ID, display_name: Type.String(), email: Type.String(),
     role: Role, status: Status, is_owner: Type.Boolean() })),
   activity: Type.Array(Type.Object({ id: ID, kind: Type.String(), actor_name: Type.String(), created_at: Time })),

@@ -7,10 +7,13 @@ import type { MailDelivery } from "./lib/mail.js";
 import { registerAccountOnboarding } from "./modules/accountOnboardingRoutes.js";
 import { registerAgentSessionRoutes } from "./modules/agentSessionRoutes.js";
 import { registerConversationQueueRoutes } from "./modules/conversationQueueRoutes.js";
+import { registerCaptureActivityRoutes } from "./modules/captureActivityService.js";
+import { registerCaptureAdmissionRoutes } from "./modules/captureAdmission.js";
 import { registerDesktopCaptureContext } from "./modules/desktopCaptureContext.js";
 import { registerDesktopCaptureReceipt } from "./modules/desktopCaptureReceipt.js";
 import { registerDesktopCaptureResult } from "./modules/desktopCaptureResult.js";
 import { registerDesktopBrowserLogin } from "./routes/desktopBrowserLogin.js";
+import { registerDesktopPersistentSession } from "./routes/desktopPersistentSession.js";
 import { postgresDesktopBrowserLoginDb, sweepDesktopBrowserLoginAttempts } from "./modules/desktopBrowserLogin.js";
 import { ConversationQueueRunner, type ConversationQueueProviderSelector } from "./modules/conversationQueueRunner.js";
 import { startMcpOAuthCleanupPump } from "./modules/mcpOauthCleanup.js";
@@ -754,9 +757,12 @@ export async function buildApp(
     createMemoryRegenerationImageLoader(pool),
   );
   registerConversationQueueRoutes(app, pool, authenticate);
+  const captureActivityService = registerCaptureActivityRoutes(app, pool, authenticate);
+  registerCaptureAdmissionRoutes(app, pool, authenticate, captureActivityService);
   registerDesktopCaptureReceipt(app, pool, authenticate);
   registerDesktopCaptureResult(app, pool, authenticate);
   registerDesktopBrowserLogin(app, pool, config, authenticate);
+  registerDesktopPersistentSession(app, pool, config, authenticate, deploymentExposure?.workspaceIds);
   registerMeetingDraftRoutes(app, pool, authenticate);
   registerTimeWorkspaceRoutes(app, pool, authenticate, remoteChatProvider);
   registerPersonSourceSyncRoutes(app, pool, authenticate);

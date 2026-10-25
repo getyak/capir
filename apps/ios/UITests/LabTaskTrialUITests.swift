@@ -79,7 +79,10 @@ final class LabTaskTrialUITests: XCTestCase {
         let ended = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: loading)
         await fulfillment(of: [ended], timeout: 10)
         XCTAssertTrue(app.descendants(matching: .any)["ask-response-turn"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Agent 回答"].firstMatch.exists)
+        XCTAssertTrue(app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "ask-response-block-answer-")
+        ).firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["Agent 回答"].exists)
         XCTAssertFalse(app.staticTexts["Local reply"].exists)
         capture("task-trial-native-product-answer")
         app.buttons["ask-close"].tap()

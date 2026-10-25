@@ -4,6 +4,26 @@ import XCTest
 @testable import TalentSignal
 
 final class ConversationImageClientTests: XCTestCase {
+    func testAdmissionHTTPFailureRetainsSanitizedStatusAndClearRecovery() async throws {
+        let (client, network) = makeClient()
+        defer { network.invalidateAndCancel(); ImageWireURLProtocol.handler = nil; ImageWireURLProtocol.responseStatus = 200 }
+        let upload = try ConversationImageUpload(id: UUID(), data: Data([1]), fileName: "synthetic.png", mediaType: "image/png")
+        ImageWireURLProtocol.handler = { _ in (Data("PRIVATE_DATABASE_DETAIL".utf8), "text/plain") }
+        for status in [500, 422] {
+            ImageWireURLProtocol.responseStatus = status
+            do {
+                _ = try await client.admitConversationImages(sessionID: UUID(), messageID: UUID(),
+                    idempotencyKey: "same-protected-message", objective: "", images: [upload])
+                XCTFail("An HTTP failure is never an admission receipt")
+            } catch let error as ConversationImageRequestError {
+                XCTAssertEqual(error, .http(status))
+                let copy = ImageConversationError.recoveryMessage(for: error, admissionAttempted: true)
+                XCTAssertFalse(copy.contains("PRIVATE_DATABASE_DETAIL"))
+                XCTAssertFalse(copy.contains("may still be processing"))
+                XCTAssertTrue(copy.contains("retry"))
+            }
+        }
+    }
     func testOrderedFlatUploadUsesStableLowercaseIdentityAndOriginalBytes() async throws {
         let (client, network) = makeClient(); defer { network.invalidateAndCancel(); ImageWireURLProtocol.handler = nil }
         let sid = UUID(), mid = UUID(), queue = UUID()
@@ -216,6 +236,7 @@ final class ConversationImageClientTests: XCTestCase {
 }
 
 private final class ImageWireURLProtocol: URLProtocol {
+    static var responseStatus = 200
     static var handler: ((URLRequest)throws -> (Data,String))?
     static var holdOpen = false
     static var onStop: (() -> Void)?
@@ -224,7 +245,7 @@ private final class ImageWireURLProtocol: URLProtocol {
     override func startLoading() {
         do {
             let (data,type)=try Self.handler!(request)
-            let response=HTTPURLResponse(url:request.url!,statusCode:200,httpVersion:nil,headerFields:["Content-Type":type])!
+            let response=HTTPURLResponse(url:request.url!,statusCode:Self.responseStatus,httpVersion:nil,headerFields:["Content-Type":type])!
             client?.urlProtocol(self,didReceive:response,cacheStoragePolicy:.notAllowed)
             client?.urlProtocol(self,didLoad:data)
             if !Self.holdOpen { client?.urlProtocolDidFinishLoading(self) }

@@ -15,8 +15,11 @@ Calendar effects remain visible to the user and platform.
 
 An iOS Shortcuts action may accept one user-selected image, validate its actual
 decodable content plus byte and pixel bounds, and stage a device-owned capture
-with a stable Agent Session identifier. The app resumes processing from that
-protected queue and opens only when a concrete decision is blocked. One-press screenshot capture requires a user-owned
+with stable Agent Session and message identifiers. After endpoint- and owner-bound
+upload authorization, the background Intent sends the image through the existing
+conversation queue, with protected file-backed recovery and idempotent admission.
+Server execution continues independently of the app; Live Activities project
+observed state and open the original protected Session. One-press screenshot capture requires a user-owned
 personal Shortcut that chains the system `Take Screenshot` action into that
 image action; a required-image App Shortcut alone would still ask the user for
 input. Only the user can assign the personal Shortcut to the Action Button in

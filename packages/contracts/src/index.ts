@@ -20,6 +20,7 @@ export * from "./agentSessionSchemas.js";
 export * from "./conversationQueueSchemas.js";
 export * from "./desktopCaptureSchemas.js";
 export * from "./desktopBrowserLoginSchemas.js";
+export * from "./desktopPersistentSessionSchemas.js";
 export * from "./feedbackSchemas.js";
 export * from "./agentPreferenceSchemas.js";
 export * from "./i18nSchemas.js";

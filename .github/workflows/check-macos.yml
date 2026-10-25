@@ -74,12 +74,44 @@ jobs:
           cp docs/operations/macos-install.txt "$stage/Install.txt"
           MACOS_OUTPUT_DIR="$fixture" scripts/macos/create-installer.sh "$stage" "$fixture/installer.dmg"
           MACOS_INSTALLER_DMG="$fixture/installer.dmg" scripts/macos/installer-drag-acceptance.sh
+      - name: Export native unit-test diagnostics
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import subprocess
+
+          temporary = pathlib.Path(os.environ["RUNNER_TEMP"])
+          results = temporary / "talent-signal-macos-check" / "Logs" / "Test"
+          output = temporary / "macos-native-test-diagnostics"
+          output.mkdir(exist_ok=True)
+          # Keep bounded diagnostics even when the verify step fails before
+          # first-run/Finder acceptance. This never changes a test conclusion.
+          for result in sorted(results.glob("*.xcresult"))[-3:]:
+              for kind in ("summary", "tests"):
+                  command = ["xcrun", "xcresulttool", "get", "test-results", kind, "--path", str(result)]
+                  try:
+                      receipt = subprocess.run(command, capture_output=True, timeout=60, check=False)
+                  except subprocess.TimeoutExpired:
+                      continue
+                  if receipt.returncode == 0:
+                      (output / (result.stem + "-" + kind + ".json")).write_bytes(receipt.stdout)
+              try:
+                  subprocess.run(
+                      ["xcrun", "xcresulttool", "export", "attachments", "--only-failures",
+                       "--path", str(result), "--output-path", str(output / (result.stem + "-failures"))],
+                      capture_output=True, timeout=60, check=False)
+              except subprocess.TimeoutExpired:
+                  pass
+          PY
       - name: Retain native first-run evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-first-run-pr-${{ github.sha }}
           path: |
+            ${{ runner.temp }}/macos-native-test-diagnostics
             ${{ runner.temp }}/macos-first-run-pr.xcresult
             ${{ runner.temp }}/macos-first-run-pr-summary.json
             ${{ runner.temp }}/macos-installer-drag-pr.xcresult

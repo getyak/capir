@@ -47,8 +47,18 @@ async function read(client: PoolClient, auth: AuthContext, labEnabled: boolean):
       : (provider === 'password' && !user.email_verified_at) ? 'legacy_unverified' : 'connected';
     return { provider, state, hint, can_unlink: connected && connectedCount > 1 };
   });
-  const sessions = (await client.query<{id: string; client_label: string; created_at: Date; expires_at: Date}>(`SELECT id,client_label,created_at,expires_at FROM sessions
-    WHERE account_id=$1 AND user_id=$2 AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 100`, [auth.accountId, auth.userId])).rows;
+  // Every revocable persistent device must remain reachable, even after a long
+  // idle period or many newer logins. Only ordinary short sessions are capped.
+  const sessions = (await client.query<{id: string; client_label: string; created_at: Date; expires_at: Date; persistent: boolean}>(`WITH owned_sessions AS (
+    SELECT id,client_label,created_at,expires_at,
+      EXISTS (SELECT 1 FROM desktop_persistent_session_credentials d WHERE d.session_id=sessions.id) AS persistent
+    FROM sessions WHERE account_id=$1 AND user_id=$2 AND revoked_at IS NULL
+  )
+  SELECT * FROM owned_sessions WHERE persistent OR id IN (
+    SELECT id FROM owned_sessions WHERE NOT persistent AND expires_at>now()
+    ORDER BY created_at DESC,id DESC LIMIT 100
+  )
+  ORDER BY created_at DESC,id DESC`, [auth.accountId, auth.userId])).rows;
   const members = canManage ? (await client.query<UserRow>('SELECT * FROM users WHERE account_id=$1 ORDER BY created_at,id', [auth.accountId])).rows : [];
   const activity = canManage ? (await client.query<{id:string;kind:string;actor_name:string;created_at:Date}>(`SELECT e.id,e.kind,u.display_name AS actor_name,e.created_at
     FROM account_access_events e JOIN users u ON u.account_id=e.account_id AND u.id=e.actor_user_id

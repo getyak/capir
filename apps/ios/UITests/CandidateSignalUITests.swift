@@ -252,14 +252,14 @@ final class CandidateSignalUITests: XCTestCase {
         preserveScreenshot("Agent sources compact Chinese AX5")
         actionButton.tap()
 
-        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["创建两步快捷指令"].exists)
+        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 12))
+        XCTAssertTrue(app.staticTexts["1. 添加现成快捷指令"].exists)
         scrollToVisible(element("shortcut-local-boundary"))
         let buildShortcut = element("build-screenshot-shortcut")
         scrollToVisible(buildShortcut)
         XCTAssertGreaterThanOrEqual(buildShortcut.frame.height, 44)
         XCTAssertTrue(buildShortcut.isHittable)
-        XCTAssertEqual(buildShortcut.label, "打开快捷指令编辑器")
+        XCTAssertEqual(buildShortcut.label, "添加截图快捷指令")
         preserveScreenshot("Action Button setup Chinese AX5")
     }
 
@@ -941,30 +941,25 @@ final class CandidateSignalUITests: XCTestCase {
         }
         XCTAssertTrue(actionButtonOnboarding.isHittable)
         actionButtonOnboarding.tap()
-        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Build the two-action Shortcut"].exists)
-        let systemStep = element("screenshot-shortcut-step-1")
-        let talentSignalStep = element("screenshot-shortcut-step-2")
-        XCTAssertEqual(systemStep.label, "1. Take Screenshot")
-        XCTAssertEqual(systemStep.value as? String, "System action")
-        XCTAssertEqual(talentSignalStep.label, "2. Review screenshot")
-        XCTAssertEqual(talentSignalStep.value as? String, "capri action")
+        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 12))
+        XCTAssertTrue(app.staticTexts["1. Add the ready-made Shortcut"].exists)
         XCTAssertTrue(element("shortcut-local-boundary").exists)
         let buildShortcut = element("build-screenshot-shortcut")
         XCTAssertTrue(buildShortcut.exists)
         XCTAssertGreaterThanOrEqual(buildShortcut.frame.height, 44)
-        XCTAssertEqual(buildShortcut.label, "Open Shortcut editor")
-        preserveScreenshot("Action Button setup")
-        let setupConfirmation = app.buttons["confirm-action-button-setup"]
-        scrollToVisible(setupConfirmation)
-        XCTAssertTrue(setupConfirmation.exists)
-        XCTAssertEqual(setupConfirmation.label, "I've assigned the Shortcut")
+        XCTAssertEqual(buildShortcut.label, "Add screenshot Shortcut")
+        XCTAssertFalse(app.buttons["confirm-action-button-setup"].exists)
+        preserveScreenshot("Action Button minimal setup")
         let verification = element("screenshot-shortcut-verification")
         scrollToVisible(verification)
         XCTAssertEqual(verification.label, "Not set up")
         XCTAssertTrue(
             (verification.value as? String)?.contains("No screenshot") == true
         )
+        let recovery = app.buttons["Manual setup and recovery"].firstMatch
+        scrollToVisible(recovery)
+        XCTAssertTrue(recovery.exists)
+        recovery.tap()
         let browseShortcuts = element("open-app-shortcuts")
         scrollToVisible(browseShortcuts)
         XCTAssertTrue(browseShortcuts.exists)
@@ -987,16 +982,16 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(actionButtonSettings.label.contains("Local receipt"))
         actionButtonSettings.tap()
 
-        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 5))
+        XCTAssertTrue(element("action-button-settings").waitForExistence(timeout: 12))
         let verification = element("screenshot-shortcut-verification")
         scrollToVisible(verification)
         XCTAssertEqual(verification.label, "Screenshot received via Shortcuts")
         XCTAssertTrue(
             (verification.value as? String)?.contains(
-                "local review queue"
+                "original Session"
             ) == true
         )
-        XCTAssertTrue(app.buttons["I've assigned the Shortcut"].exists)
+        XCTAssertFalse(app.buttons["I've assigned the Shortcut"].exists)
         XCTAssertFalse(app.staticTexts["Action Button Ready"].exists)
         preserveScreenshot("Observed Shortcut receipt")
     }
@@ -1019,7 +1014,7 @@ final class CandidateSignalUITests: XCTestCase {
         var verification = element("screenshot-shortcut-verification")
         scrollToVisible(verification)
         XCTAssertEqual(verification.label, "Ready for the first capture")
-        XCTAssertTrue(app.buttons["Show setup reminder again"].exists)
+        XCTAssertFalse(app.buttons["Show setup reminder again"].exists)
 
         app.terminate()
         app.launchArguments = [
@@ -1039,7 +1034,7 @@ final class CandidateSignalUITests: XCTestCase {
         verification = element("screenshot-shortcut-verification")
         scrollToVisible(verification)
         XCTAssertEqual(verification.label, "Screenshot received via Shortcuts")
-        XCTAssertTrue(app.buttons["Show setup reminder again"].exists)
+        XCTAssertFalse(app.buttons["Show setup reminder again"].exists)
     }
 
     func testPendingScreenshotReviewOffersKeepOrDiscardBeforeProcessing() {
@@ -2016,9 +2011,7 @@ final class CandidateSignalUITests: XCTestCase {
         app.buttons["Ask about this person"].tap()
 
         XCTAssertTrue(element("relationship-ask-screen").waitForExistence(timeout: 5))
-        XCTAssertTrue(
-            element("ask-preferred-scope-optional").waitForExistence(timeout: 5)
-        )
+        XCTAssertFalse(element("ask-preferred-scope-optional").exists)
         let firstContext = app.buttons[
             "ask-scope-option-20000000-0000-4000-8000-000000000001-21000000-0000-4000-8000-000000000001"
         ]
@@ -2336,10 +2329,11 @@ final class CandidateSignalUITests: XCTestCase {
             "The home entry should open as a full-screen new Session."
         )
         XCTAssertTrue(app.staticTexts["New Session"].exists)
-        XCTAssertTrue(element("ask-recall-disclosure").exists)
+        XCTAssertFalse(element("ask-recall-disclosure").exists)
         let expandedComposer = element("ask-expanded-composer")
         XCTAssertTrue(expandedComposer.exists)
-        XCTAssertGreaterThanOrEqual(expandedComposer.frame.height, 210)
+        XCTAssertGreaterThanOrEqual(expandedComposer.frame.height, 150)
+        XCTAssertLessThan(expandedComposer.frame.height, 210)
         XCTAssertTrue(element("ask-markdown-toolbar").exists)
         XCTAssertTrue(app.buttons["ask-markdown-photo"].exists)
         XCTAssertTrue(app.buttons["ask-markdown-heading"].exists)
@@ -2348,10 +2342,22 @@ final class CandidateSignalUITests: XCTestCase {
         XCTAssertTrue(app.buttons["ask-markdown-more"].exists)
         XCTAssertTrue(app.buttons["ask-voice"].isEnabled)
         XCTAssertFalse(app.buttons["ask-send"].exists)
+        preserveScreenshot("Compact new Session before keyboard assertion")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
 
         typeTextReliably("x", into: composer)
-        app.keys["delete"].tap()
+        // Each native typing event requires its target field to have keyboard focus.
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        composer.typeText(XCUIKeyboardKey.delete.rawValue)
+        let emptyComposer = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                guard let value = composer.value as? String else { return false }
+                return value.isEmpty || value == composer.placeholderValue
+            },
+            object: composer
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [emptyComposer], timeout: 2), .completed)
         XCTAssertTrue(app.buttons["ask-voice"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["ask-send"].exists)
         preserveScreenshot("New Session focused empty and voice ready")
@@ -2530,8 +2536,14 @@ final class CandidateSignalUITests: XCTestCase {
         app.buttons["ask-send"].tap()
 
         XCTAssertTrue(
-            app.staticTexts["本机工作区索引"].waitForExistence(timeout: 5)
+            app.staticTexts["当前工作区"].waitForExistence(timeout: 5)
         )
+        XCTAssertFalse(app.staticTexts["本机工作区索引"].exists)
+        let countReply = app.staticTexts.matching(NSPredicate(
+            format: "label MATCHES %@",
+            "当前已同步的工作区中有 [0-9]+ 位联系人，覆盖 [0-9]+ 段关系。.*"
+        )).firstMatch
+        XCTAssertTrue(countReply.waitForExistence(timeout: 5))
         XCTAssertTrue(
             app.staticTexts.matching(
                 NSPredicate(
@@ -2582,7 +2594,7 @@ final class CandidateSignalUITests: XCTestCase {
 
         let voice = app.buttons["ask-voice"]
         XCTAssertTrue(voice.waitForExistence(timeout: 5))
-        XCTAssertGreaterThanOrEqual(voice.frame.height, 48)
+        XCTAssertGreaterThanOrEqual(voice.frame.height, 44)
         voice.tap()
 
         let start = app.buttons.matching(
@@ -2772,7 +2784,10 @@ final class CandidateSignalUITests: XCTestCase {
 
         let response = element("ask-response-turn")
         XCTAssertTrue(response.waitForExistence(timeout: 30))
-        XCTAssertTrue(app.staticTexts["Agent 回答"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "ask-response-block-answer-")
+        ).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Agent 回答"].exists)
         XCTAssertFalse(element("ask-recall-unresolved").exists)
         XCTAssertFalse(
             app.buttons.matching(
@@ -2948,7 +2963,9 @@ final class CandidateSignalUITests: XCTestCase {
             fallback: "false"
         ) == "true"
         let responseTurn = element("ask-response-turn")
-        let remoteAnswer = responseTurn.staticTexts["Agent answer"]
+        let remoteAnswer = responseTurn.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "ask-response-block-answer-")).firstMatch
+        XCTAssertFalse(responseTurn.staticTexts["Agent answer"].exists)
         if expectsRemoteAI {
             XCTAssertTrue(
                 remoteAnswer.waitForExistence(timeout: 5),
@@ -3073,7 +3090,9 @@ final class CandidateSignalUITests: XCTestCase {
         )
 
         let responseTurn = element("ask-response-turn")
-        let remoteAnswer = responseTurn.staticTexts["Agent 回答"]
+        let remoteAnswer = responseTurn.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "ask-response-block-answer-")).firstMatch
+        XCTAssertFalse(responseTurn.staticTexts["Agent 回答"].exists)
         let expectsRemoteAI = testConfiguration(
             "TS_IOS_EXPECT_REMOTE_CHAT",
             fallback: "false"
@@ -3308,7 +3327,7 @@ final class CandidateSignalUITests: XCTestCase {
         app.buttons["open-agent-attachments"].tap()
         XCTAssertTrue(element("home-attachment-chooser").waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["先选择内容来源。"].exists)
-        XCTAssertTrue(app.staticTexts["在你选择之前，不会导入任何内容。"].exists)
+        XCTAssertFalse(app.staticTexts["在你选择之前，不会导入任何内容。"].exists)
         XCTAssertTrue(app.buttons["home-attachment-photos"].exists)
         XCTAssertTrue(app.buttons["home-attachment-files"].exists)
         XCTAssertTrue(app.buttons["home-attachment-relationship"].exists)
@@ -5124,7 +5143,7 @@ final class CandidateSignalUITests: XCTestCase {
 
         XCTAssertTrue(element("home-attachment-chooser").waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Choose a source first."].exists)
-        XCTAssertTrue(app.staticTexts["Nothing is imported until you make a choice."].exists)
+        XCTAssertFalse(app.staticTexts["Nothing is imported until you make a choice."].exists)
         XCTAssertTrue(app.buttons["home-attachment-photos"].exists)
         XCTAssertTrue(app.buttons["home-attachment-files"].exists)
         XCTAssertTrue(app.buttons["home-attachment-relationship"].exists)

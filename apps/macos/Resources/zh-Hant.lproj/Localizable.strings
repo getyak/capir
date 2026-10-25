@@ -25,3 +25,7 @@
 "The workspace request failed (HTTP %lld). Reload later or check connection settings." = "工作區服務暫時無法完成請求（HTTP %lld）。請稍後重新載入，或檢查連線設定。";
 "The page paused. Reload it; saved conversations remain in the workspace." = "頁面已暫停，請重新載入。已儲存的對話仍保留在工作區。";
 "Appearance saving could not be confirmed. Reload and check it." = "無法確認外觀已儲存，請重新載入後檢查。";
+
+/* Persistent Mac sign-in recovery. */
+"Unable to restore sign-in. Unlock your login keychain, check the network, or retry later. Your sign-in credential and drafts are preserved." = "暫時無法恢復登入。請解鎖登入鑰匙圈、檢查網路或稍後重試；登入憑證與草稿仍然保留。";
+"Unable to save sign-out state. Check local storage and retry." = "未能儲存登出狀態。請檢查本機儲存空間後重試。";

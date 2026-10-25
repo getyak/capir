@@ -11,14 +11,24 @@ final class NativeCommandLocalizationTests: XCTestCase {
         "Unable to open the workspace. Check the network, Tailscale, and workspace service, then retry.",
         "The workspace request failed (HTTP %lld). Reload later or check connection settings.",
         "The page paused. Reload it; saved conversations remain in the workspace.",
-        "Appearance saving could not be confirmed. Reload and check it."
+        "Appearance saving could not be confirmed. Reload and check it.",
+        "Unable to restore sign-in. Unlock your login keychain, check the network, or retry later. Your sign-in credential and drafts are preserved.",
+        "Unable to save sign-out state. Check local storage and retry."
     ]
     private let languages = ["en", "zh-Hans", "zh-Hant", "ja", "ko"]
 
     private func applicationBundle() throws -> Bundle {
         let bundle = Bundle(for: WorkspaceAppearanceBridge.self)
         XCTAssertEqual(bundle.bundleURL.pathExtension, "app", "Read the built application, not the test/source directory")
-        XCTAssertEqual(bundle.bundleIdentifier, "com.talentsignal.macos")
+        // macos-distribution.md requires a distinct local test identity while
+        // the signed client owns its registry. CI/release keep the production
+        // identity guard unless an explicit acceptance identity is supplied.
+        if let acceptanceID = ProcessInfo.processInfo.environment["MACOS_TEST_APPLICATION_BUNDLE_ID"] {
+            XCTAssertTrue(acceptanceID.hasPrefix("com.getyak.acceptance."))
+            XCTAssertEqual(bundle.bundleIdentifier, acceptanceID)
+        } else {
+            XCTAssertEqual(bundle.bundleIdentifier, "com.talentsignal.macos")
+        }
         return bundle
     }
 

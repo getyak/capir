@@ -1,5 +1,6 @@
 import AppIntents
 import SwiftUI
+import UIKit
 
 enum TalentSignalSetupPreference {
     static let actionButtonCompleteKey =
@@ -402,192 +403,74 @@ private struct DisplayPreferencePreview: View {
 }
 
 struct ActionButtonSetupView: View {
-    @AppStorage(TalentSignalSetupPreference.actionButtonCompleteKey)
-    private var isSetupComplete = false
+    @AppStorage(TalentSignalSetupPreference.actionButtonCompleteKey) private var legacyAssignmentConfirmed = false
     @AppStorage(TalentSignalSetupPreference.screenshotShortcutReceivedAtKey)
     private var screenshotShortcutReceivedAt = 0.0
     @Environment(\.appLanguage) private var appLanguage
-
-    private var hasReceivedScreenshotShortcut: Bool {
-        screenshotShortcutReceivedAt > 0
-    }
+    @State private var showsShortcutImport = false
+    @State private var setupError: String?
 
     var body: some View {
         List {
             Section {
-                HStack(alignment: .top, spacing: 14) {
-                    Image(systemName: "button.programmable")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(Color.tsInk)
-                        .frame(width: 44, height: 44)
-                        .background(Color.tsCanvas, in: Circle())
-                        .accessibilityHidden(true)
-
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(appLanguage.text("Make the Next Capture Instant"))
-                            .font(.headline)
-                            .foregroundStyle(Color.tsInk)
-                        Text(
-                            appLanguage.text(
-                                "Build it once. Then press and hold without leaving the conversation."
-                            )
-                        )
-                        .font(.subheadline)
-                        .foregroundStyle(Color.tsMutedInk)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
+                Text(appLanguage.text("Make the Next Capture Instant")).font(.headline)
+                Text(appLanguage.text("Add once. Assign the Action Button. Then press and hold from a conversation."))
+                    .font(.subheadline).foregroundStyle(Color.tsMutedInk)
+                SettingsExplanationRow(systemImage: "lock.shield", title: appLanguage.text("Screenshot sending"),
+                    detail: appLanguage.text("Each intentional press sends that screenshot to your signed-in capri workspace for Agent processing. Results stay in one protected Session; facts and external actions still need their own review."))
+                    .accessibilityIdentifier("shortcut-local-boundary")
+                if let session = try? BackgroundCaptureAuthorization.currentSession() {
+                    LabeledContent(appLanguage.text("Workspace"), value: session.account.name)
                 }
-                .padding(.vertical, 6)
-            }
-
-            Section {
-                ScreenshotShortcutRecipeRow(
-                    number: 1,
-                    systemImage: "camera.viewfinder",
-                    title: appLanguage.text("Take Screenshot"),
-                    owner: appLanguage.text("System action")
-                )
-                ScreenshotShortcutRecipeRow(
-                    number: 2,
-                    systemImage: "text.viewfinder",
-                    title: appLanguage.text("Review screenshot"),
-                    owner: appLanguage.text("capri action")
-                )
-
-                SettingsExplanationRow(
-                    systemImage: "lock.shield",
-                    title: appLanguage.text("Local before you decide"),
-                    detail: appLanguage.text(
-                        "Capture only a conversation you are authorized to use. The screenshot stays local until you review it. Reviewed text is sent only after you tap Save and check identity."
-                    )
-                )
-                .accessibilityIdentifier("shortcut-local-boundary")
-
-                Link(destination: TalentSignalSetupPreference.shortcutEditorURL) {
-                    Label(
-                        appLanguage.text("Open Shortcut editor"),
-                        systemImage: "plus"
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 44)
+                Button {
+                    do {
+                        let session = try BackgroundCaptureAuthorization.currentSession()
+                        guard Bundle.main.url(forResource: "CaptureToCapri", withExtension: "shortcut") != nil else {
+                            throw BackgroundCaptureError.unavailable
+                        }
+                        BackgroundCaptureAuthorization.enable(session)
+                        setupError = nil; showsShortcutImport = true
+                    } catch { setupError = error.localizedDescription }
+                } label: {
+                    Label(appLanguage.text("Add screenshot Shortcut"), systemImage: "plus")
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(TSPrimaryButtonStyle())
                 .accessibilityIdentifier("build-screenshot-shortcut")
-                .accessibilityLabel(
-                    appLanguage.text("Open Shortcut editor")
-                )
-            } header: {
-                Text(appLanguage.text("Build the two-action Shortcut"))
-            } footer: {
-                Text(
-                    appLanguage.text(
-                        "Opens an empty Shortcut editor. Add the two actions above in order, then give it a short name."
-                    )
-                )
-            }
+                if let setupError { Text(appLanguage.text(setupError)).foregroundStyle(Color.tsMutedInk) }
+            } header: { Text(appLanguage.text("1. Add the ready-made Shortcut")) }
+              footer: { Text(appLanguage.text("The two actions and screenshot input are already connected. Choose Shortcuts in the system import options.")) }
 
             Section {
-                SettingsStepRow(
-                    number: 1,
-                    text: appLanguage.text(
-                        "Open Settings and choose Action Button."
-                    )
-                )
-                SettingsStepRow(
-                    number: 2,
-                    text: appLanguage.text(
-                        "Swipe to Shortcut, then choose the personal Shortcut you just named."
-                    )
-                )
+                SettingsStepRow(number: 1, text: appLanguage.text("Open Settings and choose Action Button."))
+                SettingsStepRow(number: 2, text: appLanguage.text("Choose Shortcut, then select Send to capri."))
+            } header: { Text(appLanguage.text("2. Assign the Action Button")) }
+              footer: { Text(appLanguage.text("Only you can assign it in Settings. capri cannot read or change the Action Button binding.")) }
 
-                Button {
-                    isSetupComplete.toggle()
-                } label: {
-                    Label(
-                        appLanguage.text(
-                            isSetupComplete
-                                ? "Show setup reminder again"
-                                : "I've assigned the Shortcut"
-                        ),
-                        systemImage: isSetupComplete
-                            ? "checkmark.circle.fill"
-                            : "circle"
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 44)
+            Section {
+                ScreenshotShortcutVerificationRow(isVerified: screenshotShortcutReceivedAt > 0,
+                    isAssignmentConfirmed: legacyAssignmentConfirmed, appLanguage: appLanguage)
+                Text(appLanguage.text("Open a conversation you are authorized to use, then press and hold. Tap its Live Activity to return to the same Session."))
+                    .font(.subheadline).foregroundStyle(Color.tsMutedInk)
+            } header: { Text(appLanguage.text("3. Try one capture")) }
+              footer: { Text(appLanguage.text("A received screenshot proves the Shortcut handoff, not the current physical button assignment.")) }
+
+            Section {
+                DisclosureGroup(appLanguage.text("Manual setup and recovery")) {
+                    Button(appLanguage.text("Enable screenshot sending")) {
+                        do {
+                            BackgroundCaptureAuthorization.enable(try BackgroundCaptureAuthorization.currentSession())
+                            setupError = nil
+                        } catch { setupError = error.localizedDescription }
+                    }
+                    ScreenshotShortcutRecipeRow(number: 1, systemImage: "camera.viewfinder",
+                        title: appLanguage.text("Take Screenshot"), owner: appLanguage.text("System action"))
+                    ScreenshotShortcutRecipeRow(number: 2, systemImage: "text.viewfinder",
+                        title: appLanguage.text("Process screenshot"), owner: appLanguage.text("capri action"))
+                    Link(appLanguage.text("Open Shortcut editor"), destination: TalentSignalSetupPreference.shortcutEditorURL)
+                    ShortcutsLink().shortcutsLinkStyle(.automaticOutline)
+                        .accessibilityIdentifier("open-app-shortcuts")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.tsInk)
-                .accessibilityIdentifier("confirm-action-button-setup")
-            } header: {
-                Text(appLanguage.text("Assign the Shortcut"))
-            } footer: {
-                Text(
-                    appLanguage.text(
-                        "Only you can assign it in Settings. capri cannot read or change the Action Button binding."
-                    )
-                )
-            }
-
-            Section {
-                ScreenshotShortcutVerificationRow(
-                    isVerified: hasReceivedScreenshotShortcut,
-                    isAssignmentConfirmed: isSetupComplete,
-                    appLanguage: appLanguage
-                )
-            } header: {
-                Text(appLanguage.text("First capture"))
-            } footer: {
-                Text(
-                    appLanguage.text(
-                        "A screenshot received through this Shortcut confirms only the local handoff. It does not prove the current Action Button assignment."
-                    )
-                )
-            }
-
-            Section {
-                SettingsExplanationRow(
-                    systemImage: "waveform.badge.plus",
-                    title: appLanguage.text("Capture Signal"),
-                    detail: appLanguage.text(
-                        "Choose text, photo, or foreground voice in the app."
-                    )
-                )
-                SettingsExplanationRow(
-                    systemImage: "mic",
-                    title: appLanguage.text("Record Signal"),
-                    detail: appLanguage.text(
-                        "Open foreground recording; the microphone does not start automatically."
-                    )
-                )
-                SettingsExplanationRow(
-                    systemImage: "text.viewfinder",
-                    title: appLanguage.text("Review screenshot"),
-                    detail: appLanguage.text(
-                        "Save one image on this iPhone for later text and identity review."
-                    )
-                )
-
-                ShortcutsLink()
-                    .shortcutsLinkStyle(.automaticOutline)
-                    .frame(maxWidth: .infinity, minHeight: 52)
-                    .accessibilityIdentifier("open-app-shortcuts")
-            } header: {
-                Text(appLanguage.text("Other shortcuts"))
-            } footer: {
-                Text(
-                    appLanguage.text(
-                        "Shortcuts opens your existing shortcuts and capri app actions."
-                    )
-                )
-            }
-
-            Section {
-                SettingsExplanationRow(
-                    systemImage: "lock.shield",
-                    title: appLanguage.text("Safety boundary"),
-                    detail: appLanguage.text(
-                        "The button saves locally. Reviewed text is sent only after you tap Save and check identity; no person fact or external action is confirmed automatically."
-                    )
-                )
             }
         }
         .listStyle(.insetGrouped)
@@ -596,7 +479,20 @@ struct ActionButtonSetupView: View {
         .navigationTitle(appLanguage.text("Action Button & Shortcuts"))
         .navigationBarTitleDisplayMode(.inline)
         .accessibilityIdentifier("action-button-settings")
+        .sheet(isPresented: $showsShortcutImport) {
+            if let url = Bundle.main.url(forResource: "CaptureToCapri", withExtension: "shortcut") {
+                CaptureShortcutImportSheet(url: url)
+            }
+        }
     }
+}
+
+private struct CaptureShortcutImportSheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 private struct ScreenshotShortcutRecipeRow: View {
@@ -654,7 +550,7 @@ private struct ScreenshotShortcutVerificationRow: View {
     private var detail: String {
         if isVerified {
             return appLanguage.text(
-                "capri received a screenshot through Shortcuts. It stays in the local review queue until you review or delete it."
+                "capri received a screenshot through Shortcuts. Check its original Session for sending, processing, and review status."
             )
         }
         if isAssignmentConfirmed {

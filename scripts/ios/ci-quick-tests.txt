@@ -1,5 +1,10 @@
 # PR feedback: launch, contact intent, no implicit writes, onboarding, deletion.
 # Release smoke retains navigation, Calendar, and both accessibility audits.
+# Chat density: compact composer, semantic answers, keyboard and Chinese AX5.
+TalentSignalUITests/CandidateSignalUITests/testGlobalAgentInputOpensRichNewSessionComposer
+TalentSignalUITests/Get5SessionUITests/testContinuousSessionMarkdownControlsForkAndNativeBack
+TalentSignalUITests/Get5SessionUITests/testMarkdownChineseDarkAX5ReducedMotionRemainsReachable
+TalentSignalUITests/CandidateSignalUITests/testAskUsesOneColumnAtAX5WithoutLosingComposerOrCapture
 TalentSignalUITests/CandidateSignalUITests/testDefaultLaunchShowsEditorialToday
 # Contact handbook: disclosed provenance, accessible layout, scoped unsent chat.
 TalentSignalUITests/CandidateSignalUITests/testPersonDetailLeadsWithContextAndRetainsProfileProvenance

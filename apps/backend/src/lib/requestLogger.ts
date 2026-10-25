@@ -229,6 +229,15 @@ export function requestLoggerOptions(level = process.env.LOG_LEVEL ?? "info") {
     redact: {
       paths: [
         "req.headers.authorization",
+        "req.body.token",
+        "req.body.message",
+        "body.message",
+        "req.body.capture_activity",
+        "body.capture_activity",
+        "req.body.initial_session",
+        "body.initial_session",
+        "body.token",
+        "token_ciphertext",
         "req.body.payload",
         "body.payload",
         "req.body.messages",

@@ -109,6 +109,17 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     /// owns the signed-out browser-login surface and Web never paints its
     /// password, registration or provider forms inside this window.
     @Published var signedOut = false
+    @Published private(set) var restoringSession = false
+    private var persistentSessionUnavailable = false
+    private var persistentWorkbenchRecoveryPending = false
+    private var signOutPersistenceFailed = false
+    private let loginRegistry: LoginStoreRegistry
+    private let persistentSession: DesktopPersistentSessionCoordinator
+    private var sessionRestoreTask: Task<Void, Never>?
+    private var sessionRenewalTimer: Task<Void, Never>?
+    private var activationObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
+    private var unlockObserver: NSObjectProtocol?
     private(set) var explicitlySignedOut = false
     var onExplicitSignOut: (() -> Void)?
     var openSettings: (() -> Void)? {
@@ -134,8 +145,8 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     /// The exact configuration every workbench web view is built from. Kept as a
     /// factory so the settings paint guard and the per-origin data store cannot
     /// drift from what the app actually runs.
-    static func configuration(for origin: WorkspaceOrigin) -> WKWebViewConfiguration? {
-        guard let store = origin.dataStoreIdentifier else { return nil }
+    static func configuration(for origin: WorkspaceOrigin, registry: LoginStoreRegistry? = nil) -> WKWebViewConfiguration? {
+        guard let store = (registry ?? .shared).storeIdentifierIfHealthy(for: origin.url.absoluteString) else { return nil }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: store)
         configuration.userContentController = WKUserContentController()
@@ -158,16 +169,20 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     }
 
     init(origin: WorkspaceOrigin, initialURL: URL? = nil,
-         accountBrowser: AccountSettingsBrowser? = nil) {
+         accountBrowser: AccountSettingsBrowser? = nil, registry: LoginStoreRegistry? = nil,
+         persistentSession: DesktopPersistentSessionCoordinator? = nil) {
         self.origin = origin
-        self.storeSelection = try? LoginStoreRegistry.shared.selection(for: origin.url.absoluteString)
+        let owner = registry ?? .shared
+        self.loginRegistry = owner
+        self.persistentSession = persistentSession ?? (registry == nil ? .shared : DesktopPersistentSessionCoordinator(registry: owner))
+        self.storeSelection = try? owner.selection(for: origin.url.absoluteString)
         // Optional default keeps the main-actor singleton out of the default
         // argument expression, which is evaluated in a nonisolated context.
         self.accountBrowser = accountBrowser ?? .shared
-        let configuration = Self.configuration(for: origin) ?? WKWebViewConfiguration()
+        let configuration = Self.configuration(for: origin, registry: owner) ?? WKWebViewConfiguration()
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
-        guard origin.dataStoreIdentifier != nil else {
+        guard storeSelection != nil else {
             // Corrupted store registry or failed persistence write: refuse the
             // surface truthfully instead of loading into an unowned store.
             loading = false
@@ -175,7 +190,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             return
         }
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 TalentSignalMac/1"
-        storeObservation = LoginStoreRegistry.shared.changes.sink { [weak self] selection in
+        storeObservation = owner.changes.sink { [weak self] selection in
             guard let self, selection.origin == self.origin.url.absoluteString,
                   selection.storeIdentifier != self.storeSelection?.storeIdentifier else { return }
             self.retire()
@@ -233,13 +248,80 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
             return
         }
         #endif
-        if !signedOut { webView.load(entry) }
+        if !signedOut {
+            installSessionLifecycleObservers()
+            refreshPersistentSession(resumeWorkbench: true)
+        }
     }
 
     func retire() {
+        sessionRestoreTask?.cancel(); sessionRestoreTask = nil
+        sessionRenewalTimer?.cancel(); sessionRenewalTimer = nil
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        if let unlockObserver { NSWorkspace.shared.notificationCenter.removeObserver(unlockObserver) }
+        activationObserver = nil; wakeObserver = nil; unlockObserver = nil
+        if let storeSelection { persistentSession.cancel(selection: storeSelection) }
         retired = true; webView.stopLoading(); webView.navigationDelegate = nil
         webView.uiDelegate = nil; navigationObservation = nil; locationObservation = nil
         updateObservation = nil; webView.configuration.userContentController.removeAllScriptMessageHandlers()
+    }
+
+    private func installSessionLifecycleObservers() {
+        activationObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshPersistentSession(resumeWorkbench: self?.signedOut == true) }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshPersistentSession(resumeWorkbench: self?.signedOut == true) }
+        }
+        unlockObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.sessionDidBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refreshPersistentSession(resumeWorkbench: self?.signedOut == true || self?.persistentSessionUnavailable == true) }
+        }
+        sessionRenewalTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3 * 60 * 60))
+                guard !Task.isCancelled, let self, !self.retired else { return }
+                self.refreshPersistentSession(resumeWorkbench: self.signedOut)
+            }
+        }
+    }
+
+    /// Startup and expiry recovery share the production constructor path;
+    /// routine renewals leave the current document and its drafts in place.
+    func refreshPersistentSession(resumeWorkbench: Bool = false) {
+        guard !retired, !explicitlySignedOut,
+              let selection = storeSelection, loginRegistry.isCurrent(selection), !loginRegistry.hasUnresolvedLogin(for: selection.origin) else { return }
+        // An expiry redirect can arrive during a background renewal. Promote
+        // that existing attempt to workbench recovery instead of losing the
+        // navigation intent, and retain the intent through transient outages.
+        if resumeWorkbench { persistentWorkbenchRecoveryPending = true }
+        restoringSession = persistentWorkbenchRecoveryPending
+        if restoringSession { loading = true }
+        guard sessionRestoreTask == nil else { return }
+        sessionRestoreTask = Task { [weak self] in
+            guard let self else { return }
+            let outcome = await persistentSession.restore(in: origin)
+            guard !Task.isCancelled, !retired, loginRegistry.isCurrent(selection), !explicitlySignedOut else { return }
+            sessionRestoreTask = nil; restoringSession = false
+            switch outcome {
+            case .authenticated:
+                persistentSessionUnavailable = false
+                if persistentWorkbenchRecoveryPending {
+                    persistentWorkbenchRecoveryPending = false
+                    signedOut = false; failure = nil; loading = true
+                    webView.load(URLRequest(url: lastWorkbenchURL ?? origin.entryURL))
+                }
+            case .needsLogin:
+                persistentWorkbenchRecoveryPending = false
+                persistentSessionUnavailable = false; failure = nil; signedOut = true; loading = false
+            case .unavailable:
+                persistentSessionUnavailable = true; loading = false
+                if persistentWorkbenchRecoveryPending {
+                    failure = String(localized: "Unable to restore sign-in. Unlock your login keychain, check the network, or retry later. Your sign-in credential and drafts are preserved.", bundle: .main)
+                }
+            case .cancelled: loading = false
+            }
+        }
     }
 
     /// Window closure does not revoke ownership or destroy the live host. A
@@ -247,7 +329,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     /// replacement still retires the old host permanently.
     func retireIfOwnershipChanged(to configuredOrigin: WorkspaceOrigin?) {
         guard configuredOrigin == origin, let storeSelection,
-              LoginStoreRegistry.shared.isCurrent(storeSelection) else {
+              loginRegistry.isCurrent(storeSelection) else {
             retire(); return
         }
     }
@@ -255,21 +337,28 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     var loginReturnTarget: URL? { lastWorkbenchURL }
     @discardableResult
     func enterSignedOut(at url: URL) -> Bool {
-        guard origin.contains(url), url.path == "/login" else { return false }
+        guard !retired, let storeSelection, loginRegistry.isCurrent(storeSelection),
+              origin.contains(url), url.path == "/login" else { return false }
         let intents = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.filter { $0.name == "intent" } ?? []
         explicitlySignedOut = intents.count == 1 && intents[0].value == "sign-out"
         if explicitlySignedOut {
             lastWorkbenchURL = nil; workbenchNotice = nil
+            do { try persistentSession.signOut(in: origin) }
+            catch {
+                signOutPersistenceFailed = true
+                failure = String(localized: "Unable to save sign-out state. Check local storage and retry.", bundle: .main)
+            }
             // Intent can arrive after expiry already set signedOut=true.
             // Deliver it synchronously rather than relying on a Bool change.
             onExplicitSignOut?()
         }
         signedOut = true; loading = false
+        if !explicitlySignedOut { refreshPersistentSession(resumeWorkbench: true) }
         return true
     }
     func verifiedCurrentDraftOwner() async -> DesktopDraftOwner? {
         guard !retired, !signedOut, let selection = storeSelection,
-              LoginStoreRegistry.shared.isCurrent(selection),
+              loginRegistry.isCurrent(selection),
               webView.url.map(origin.contains) == true else { return nil }
         let readGeneration = UUID(); draftOwnerReadGeneration = readGeneration
         let result = await DesktopDraftScriptRead.read(timeout: .seconds(6)) { completion in
@@ -279,7 +368,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                     completion((try? result.get()) as? String)
                 }
         }
-            guard !retired, !signedOut, draftOwnerReadGeneration == readGeneration, LoginStoreRegistry.shared.isCurrent(selection),
+            guard !retired, !signedOut, draftOwnerReadGeneration == readGeneration, loginRegistry.isCurrent(selection),
                   webView.url.map(origin.contains) == true, let text = result,
                   let owner = DesktopDraftRecovery.readOwner(text) else { return nil }
             return owner
@@ -287,14 +376,14 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     private func recordDraftOwnerIfNeeded() async {
         guard let selection = storeSelection,
-              (try? LoginStoreRegistry.shared.selection(for: selection.origin).verifiedDraftOwner) == nil,
+              (try? loginRegistry.selection(for: selection.origin).verifiedDraftOwner) == nil,
               let owner = await verifiedCurrentDraftOwner() else { return }
-        try? LoginStoreRegistry.shared.recordVerifiedDraftOwner(owner, selection: selection)
+        try? loginRegistry.recordVerifiedDraftOwner(owner, selection: selection)
     }
 
     func captureDraftRecovery() async -> DesktopDraftRecovery? {
-        guard !retired, let selection = storeSelection, LoginStoreRegistry.shared.isCurrent(selection),
-              let owner = try? LoginStoreRegistry.shared.selection(for: selection.origin).verifiedDraftOwner,
+        guard !retired, let selection = storeSelection, loginRegistry.isCurrent(selection),
+              let owner = try? loginRegistry.selection(for: selection.origin).verifiedDraftOwner,
               owner.valid, let target = lastWorkbenchURL, origin.contains(target),
               WorkspaceSurfacePolicy.isOrdinaryWorkspaceDestination(target),
               target.absoluteString.count <= 4096, webView.url.map(origin.contains) == true else { return nil }
@@ -308,7 +397,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
                             completion((try? result.get()) as? String)
                         }
                 }
-                guard !retired, LoginStoreRegistry.shared.isCurrent(selection),
+                guard !retired, loginRegistry.isCurrent(selection),
                       webView.url.map(origin.contains) == true, let text = result else { return nil }
                 draft = DesktopDraftRecovery.readDraft(text)
         }
@@ -316,12 +405,16 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     }
 
     func completeBrowserLogin(returnTarget: URL?, recoveryNotice: String? = nil) {
-        guard !retired, let storeSelection, LoginStoreRegistry.shared.isCurrent(storeSelection),
-              !LoginStoreRegistry.shared.hasUnresolvedLogin(for: origin.url.absoluteString) else { return }
+        guard !retired, let storeSelection, loginRegistry.isCurrent(storeSelection),
+              !loginRegistry.hasUnresolvedLogin(for: origin.url.absoluteString) else { return }
         signedOut = false; failure = nil; loading = true
         explicitlySignedOut = false
         if let recoveryNotice { workbenchNotice = recoveryNotice }
-        webView.load(URLRequest(url: returnTarget ?? origin.entryURL))
+        // Enrollment installs the stable persistent-session binding before
+        // any workspace document is admitted. Normal renewals never reload it.
+        lastWorkbenchURL = returnTarget ?? origin.entryURL
+        if activationObserver == nil { installSessionLifecycleObservers() }
+        refreshPersistentSession(resumeWorkbench: true)
     }
 
     func navigate(_ destination: WorkspaceDestination) {
@@ -336,13 +429,13 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
     func startNewConversation() {
         guard !retired, !signedOut, !loading, let current = webView.url,
               origin.contains(current), let selection = storeSelection,
-              LoginStoreRegistry.shared.isCurrent(selection) else { return }
+              loginRegistry.isCurrent(selection) else { return }
         let generation = documentGeneration
         webView.callAsyncJavaScript(WorkspaceNewConversation.script, arguments: [:],
                                    in: nil, in: .page) { [weak self] result in
             guard let self, !self.retired, !self.signedOut, self.webView.url == current,
                   !self.loading, self.documentGeneration == generation,
-                  LoginStoreRegistry.shared.isCurrent(selection) else { return }
+                  loginRegistry.isCurrent(selection) else { return }
             // Failure can mean a handler ran before script evaluation failed.
             // Preserve the document instead of issuing a second navigation.
             guard case .success(let value) = result, let handled = value as? Bool else { return }
@@ -421,6 +514,15 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     func retry() {
         failure = nil
+        if signOutPersistenceFailed {
+            do { try persistentSession.signOut(in: origin); signOutPersistenceFailed = false }
+            catch { failure = String(localized: "Unable to save sign-out state. Check local storage and retry.", bundle: .main) }
+            return
+        }
+        if persistentSessionUnavailable {
+            refreshPersistentSession(resumeWorkbench: true)
+            return
+        }
         // A refused browser handoff stays on screen until it succeeds or the
         // reader dismisses it; a plain workbench retry does not retry it.
         if let current = webView.url,
@@ -458,7 +560,7 @@ final class WorkspaceBrowser: NSObject, ObservableObject, WKNavigationDelegate, 
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard !retired, let selection = storeSelection, LoginStoreRegistry.shared.isCurrent(selection),
+        guard !retired, let selection = storeSelection, loginRegistry.isCurrent(selection),
               let url = action.request.url else { decisionHandler(.cancel); return }
         if WorkspaceSupportHandoff.allows(url,
             sourceIsTrusted: action.sourceFrame.request.url.map(origin.contains) == true,
@@ -767,12 +869,12 @@ private struct ConnectedQuietWorkspace: View {
             // A covering view leaves WebKit controls reachable by accessibility
             // and keyboard. Detach only its presentation; browser retains the
             // same WebView and navigation/session ownership for recovery.
-            if !browser.signedOut && browser.failure == nil {
+            if !browser.signedOut && browser.failure == nil && !browser.restoringSession {
                 WorkspaceWebSurface(browser: browser, zoom: zoom,
                                     appearance: presentationAppearance ?? .system)
                     .ignoresSafeArea(.container, edges: .top)
             }
-            if browser.signedOut {
+            if browser.signedOut && !browser.restoringSession && browser.failure == nil {
                 // Native signed-out surface only: the Web login page never
                 // paints inside the workspace window.
                 DesktopBrowserLoginView(origin: browser.origin, returnTarget: browser.loginReturnTarget,

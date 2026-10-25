@@ -223,7 +223,7 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
 
   // Four contact handbook journeys retain attribution, accessible disclosure,
   // scoped unsent chat, and a source statement's temporal boundary.
-  const tierBudgets = { quick: 19, smoke: 20 };
+  const tierBudgets = { quick: 23, smoke: 20 };
   const conversationPrefix = "TalentSignalUITests/ConversationExperienceUITests/";
   const criticalConversationTests = [
     "testProcessingStatusBelongsToItsImageAndHasNoEmptyMessageBubble",
@@ -245,6 +245,18 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
   assert.match(contactEvidence[1], /xcresulttool export attachments/);
   for (const method of criticalContactTests) {
     assert.ok(contactEvidence[1].includes(`*-${method}.xcresult`), `CI must retain screenshots for ${method}`);
+  }
+  const chatJourneys = [
+    "CandidateSignalUITests/testGlobalAgentInputOpensRichNewSessionComposer",
+    "Get5SessionUITests/testContinuousSessionMarkdownControlsForkAndNativeBack",
+    "Get5SessionUITests/testMarkdownChineseDarkAX5ReducedMotionRemainsReachable",
+    "CandidateSignalUITests/testAskUsesOneColumnAtAX5WithoutLosingComposerOrCapture",
+  ];
+  const quickSelectors = readFileSync(join(repositoryRoot, "scripts/ios/ci-quick-tests.txt"), "utf8");
+  for (const journey of chatJourneys) {
+    assert.ok(quickSelectors.includes(`TalentSignalUITests/${journey}`), `PR checks must exercise ${journey}`);
+    const method = journey.split("/").at(-1);
+    assert.ok(contactEvidence[1].includes(`*-${method}.xcresult`), `CI must retain chat evidence for ${method}`);
   }
   const uiSources = new Map();
   for (const [scope, budget] of Object.entries(tierBudgets)) {
@@ -682,7 +694,8 @@ test("App Intent metadata avoids Apple's rejected device-name wording", () => {
   );
 
   assert.doesNotMatch(appIntents, /\b(?:iPhone|iPad)\b/i);
-  assert.match(appIntents, /save it on this device/);
+  assert.match(appIntents, /Send one screenshot to your authorized workspace/);
+  assert.match(appIntents, /background in the same protected Session/);
 });
 
 test("all shipped targets pin their App Store profiles in Release", () => {
@@ -808,7 +821,12 @@ test("profile verification requires the shared App Group and main-app Apple sign
       "com.apple.security.application-groups": [APP_GROUP],
     };
     if (spec.signInWithApple) entitlements["com.apple.developer.applesignin"] = ["Default"];
+    if (spec.pushNotifications) entitlements["aps-environment"] = "production";
     validateProvisioningProfile({ Name: spec.name, Entitlements: entitlements }, spec);
+    if (spec.pushNotifications) assert.throws(
+      () => validateProvisioningProfile({ Name: spec.name, Entitlements: { ...entitlements, "aps-environment": "development" } }, spec),
+      /lacks production APNs entitlement/,
+    );
     assert.throws(
       () => validateProvisioningProfile({ Name: spec.name, Entitlements: { ...entitlements, "com.apple.security.application-groups": [] } }, spec),
       /lacks group\.com\.talentsignal\.app/,
