@@ -27,7 +27,7 @@ import {
 import { clearAllSessionOrganization } from "@/lib/workspace-session-organization";
 import { subscribeTheme } from "@/lib/theme-preference";
 import { SupportEmailEntry } from "./support-email-entry";
-import { DesktopAccountLink, DesktopAccountNotice, DesktopDeviceSettingsLink, DesktopUpdateBanner, useDesktopChrome } from "./desktop-chrome";
+import { DesktopAccountLink, DesktopDeviceSettingsLink, DesktopUpdateBanner, useDesktopChrome } from "./desktop-chrome";
 import { WorkspaceFooterStrip } from "./workspace-footer";
 import { ThemeToggle } from "./theme-toggle";
 import { clearAllPendingSessionDrafts } from "./session-workbench/session-draft-pending";
@@ -320,7 +320,6 @@ export function WorkspaceAccountMenu({
             </details>
             <hr />
             <DesktopAccountLink onClick={() => close()} />
-            <DesktopAccountNotice />
             <DesktopDeviceSettingsLink onClick={() => close()} />
             <span className={styles.accountMetaRow} role="group" aria-label={t("language.display.label")}>
               <Globe aria-hidden="true" size={16} />
