@@ -39,6 +39,21 @@ test('cleanup denial preserves the bound ID and fails the whole contract',async(
  const mock=githubFixture(sha),o=options(mock);o.gh=(args,init)=>requestInfo(args)?.method==='DELETE'&&!requestInfo(args)?.path.includes('/assets/')?mock.response(403,{}):mock.gh(args,init);
  const result=await runContract(o);assert.equal(result.result,'failed');assert.equal(result.cleanup,'unconfirmed');assert.equal(typeof result.release_id,'number');assert.equal(mock.releases.size,1);
 });
+test('an observed untagged draft alias fails closed without guessing a cleanup tag',async()=>{
+ const mock=githubFixture(sha),o=options(mock);
+ o.gh=(args,init)=>{
+  if(requestInfo(args)?.method==='PATCH'){
+   const body=JSON.parse(init.input);delete body.tag_name;
+   return mock.gh(args,{...init,input:JSON.stringify(body)});
+  }
+  return mock.gh(args,init);
+ };
+ const result=await runContract(o);
+ assert.equal(result.result,'failed');assert.equal(result.failure_stage,'edit-draft-by-id');assert.equal(result.cleanup,'unconfirmed');
+ const [[tag,release]]=[...mock.releases];assert.equal(tag,`untagged-synthetic-${result.release_id}`);assert.equal(release.id,result.release_id);assert.equal(release.target_commitish,sha);assert.equal(release.draft,true);
+ assert.ok(!mock.calls.some(args=>requestInfo(args)?.method==='DELETE'));
+ assert.equal(JSON.parse(readFileSync(join(o.receiptDir,`created-${result.release_id}.json`))).release_id,result.release_id);
+});
 test('receipt failure after create prevents even cleanup mutations and reports the bound ID',async()=>{
  const mock=githubFixture(sha),o=options(mock);o.saveReceipt=()=>{throw new Error('disk-full');};const result=await runContract(o);
  assert.equal(result.result,'failed');assert.equal(result.cleanup,'blocked-by-receipt-write-failure');assert.equal(typeof result.release_id,'number');assert.equal(mock.releases.size,1);

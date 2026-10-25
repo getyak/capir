@@ -25,7 +25,7 @@ export function githubFixture(commit='c'.repeat(40)){
   const {method,path}=info,body=options.input?JSON.parse(options.input):undefined;
   if(path==='repos/getyak/capir/git/ref/heads/main')return response(200,{object:{type:'commit',sha:commit}});
   if(path.startsWith('repos/getyak/capir/git/ref/tags/')){
-   const tag=path.split('/').at(-1),sha=refs.get(tag)??(tag.startsWith('capir-contract-')?undefined:commit);
+   const tag=path.split('/').at(-1),sha=refs.get(tag)??(tag.startsWith('capir-v')?commit:undefined);
    return sha?response(200,{object:{type:'commit',sha}}):response(404,{});
   }
   if(path.startsWith('repos/getyak/capir/releases/tags/')){
@@ -46,9 +46,14 @@ export function githubFixture(commit='c'.repeat(40)){
    if(method==='PATCH'){
     assert.equal(body.make_latest,'false');assert.ok(r.draft||tag==='capir-stable','published version writes are forbidden');
     assert.ok(!tag.startsWith('capir-contract-')||body.draft!==false,'a probe must never publish');
-    for(const key of ['draft','body','name'])if(Object.hasOwn(body,key))r[key]=body[key];
-    if(!r.draft)refs.set(tag,r.target_commitish);
-    return response(200,metadata(tag,r));
+    // Actual CI run 40236765053 returned an untagged alias after a draft edit
+    // omitted tag_name. This models that observed response class, not an API
+    // promise that every omitted tag retags a draft. The source stayed fixed.
+    const nextTag=Object.hasOwn(body,'tag_name')?body.tag_name:r.draft&&!refs.has(tag)&&!tag.startsWith('capir-v')?`untagged-synthetic-${r.id}`:tag;
+    for(const key of ['draft','body','name','target_commitish'])if(Object.hasOwn(body,key))r[key]=body[key];
+    if(nextTag!==tag){releases.delete(tag);releases.set(nextTag,r);}
+    if(!r.draft)refs.set(nextTag,r.target_commitish);
+    return response(200,metadata(nextTag,r));
    }
    if(method==='DELETE'){assert.ok(tag.startsWith('capir-contract-'),'production releases must never be deleted');releases.delete(tag);return response(204);}
   }
