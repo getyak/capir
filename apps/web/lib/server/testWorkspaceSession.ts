@@ -9,7 +9,7 @@ export const TEST_WORKSPACE_COOKIE='talent-signal.test-workspace';
 export type TestWorkspaceSession={workspaceId:string;entryId:string;name:string;parentHash:string;endpoint:string;claims:BackendSessionClaims};
 const digest=(token:string)=>createHash('sha256').update(token).digest('hex');
 function parentHash(primary: BackendSessionClaims): string {
-  return primary.backendSessionId
+  return primary.backendLegacyAccessToken ? digest(primary.backendLegacyAccessToken) : primary.backendSessionId
     ? digest(JSON.stringify(["test-workspace-parent.macos.v1", primary.backendAccountId, primary.backendUserId, primary.backendSessionId]))
     : digest(primary.backendAccessToken);
 }

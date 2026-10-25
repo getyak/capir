@@ -11,7 +11,8 @@ final class AppSessionTests: XCTestCase {
             baseURL: .fixtureBackend,
             persistence: persistence,
             client: authentication,
-            endings: MemoryAppSessionEndings()
+            endings: MemoryAppSessionEndings(),
+            coordinator: .init()
         )
 
         await store.restore()
@@ -35,7 +36,8 @@ final class AppSessionTests: XCTestCase {
             baseURL: .fixtureBackend,
             persistence: persistence,
             client: authentication,
-            endings: MemoryAppSessionEndings()
+            endings: MemoryAppSessionEndings(),
+            coordinator: .init()
         )
 
         await store.restore()
@@ -54,7 +56,8 @@ final class AppSessionTests: XCTestCase {
             baseURL: .fixtureBackend,
             persistence: persistence,
             client: authentication,
-            endings: MemoryAppSessionEndings()
+            endings: MemoryAppSessionEndings(),
+            coordinator: .init()
         )
 
         await store.restore()
@@ -72,7 +75,8 @@ final class AppSessionTests: XCTestCase {
             baseURL: .fixtureBackend,
             persistence: persistence,
             client: StubAuthentication(),
-            endings: MemoryAppSessionEndings()
+            endings: MemoryAppSessionEndings(),
+            coordinator: .init()
         )
 
         await store.restore()
@@ -101,7 +105,8 @@ final class AppSessionTests: XCTestCase {
             baseURL: .fixtureBackend,
             persistence: persistence,
             client: authentication,
-            endings: MemoryAppSessionEndings()
+            endings: MemoryAppSessionEndings(),
+            coordinator: .init()
         )
 
         await store.restore()
@@ -123,10 +128,9 @@ final class AppSessionTests: XCTestCase {
             "No challenge should be prepared when the saved sign-in is kept")
     }
 
-    func testValidateFailureWithOfflineDisabledStillClearsKeychain() async {
-        // The Debug-only strict path still requires a successful validate or
-        // an explicit re-authentication; this guards against a regression in
-        // the override hook.
+    func testUnknownRejectionWithOfflineDisabledRetainsCredentialForRetry() async {
+        // Strict restoration withholds account content while an unknown
+        // rejection is unresolved; it does not destroy protected authority.
         let persistence = MemorySessionStore(session: .fixture)
         let authentication = StubAuthentication(
             validateFailure: AppSessionError.backend(
@@ -139,14 +143,15 @@ final class AppSessionTests: XCTestCase {
             baseURL: .fixtureBackend,
             persistence: persistence,
             client: authentication,
-            endings: MemoryAppSessionEndings()
+            endings: MemoryAppSessionEndings(),
+            coordinator: .init()
         )
 
         await store.restore(allowOfflineWorkspace: false)
 
-        XCTAssertNil(persistence.session,
-            "Strict mode must still clear the Keychain credential on 401")
-        XCTAssertEqual(store.phase, .signedOut)
+        XCTAssertNotNil(persistence.session,
+            "An unknown 401 does not establish revocation, even during strict restoration")
+        XCTAssertEqual(store.phase, .restoring)
     }
 }
 

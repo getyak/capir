@@ -128,6 +128,7 @@
 		59E28E697E4445909FE7C620 /* TodayScheduleClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E994477BBC188464A03A4878 /* TodayScheduleClientTests.swift */; };
 		5AB53512D99F0073F3911B6E /* CandidateSignalUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59ABD7E7EC7EB412FF62B6B2 /* CandidateSignalUITests.swift */; };
 		5AB6B6339FC04C894DCD1E6D /* StandaloneRecordingActivityCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39D83870AC6BF272A562706B /* StandaloneRecordingActivityCoordinator.swift */; };
+		5B6E7D9AB00F5AB92DC212D2 /* IOSPersistentSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19391E9E90CF44070705C8BF /* IOSPersistentSessionTests.swift */; };
 		5BE94986368D550DCFBEF16D /* RuntimeWorkRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = E81E698FE234DABDA4A1DE8A /* RuntimeWorkRegistry.swift */; };
 		5DA957CEE37AF61DFF8F2076 /* AudioSignalCaptureStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86268F86835A658E3431C11B /* AudioSignalCaptureStore.swift */; };
 		5DC32E9DAC5533A161806413 /* LabDemoResetUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1929D001893C3FA445C73B /* LabDemoResetUITests.swift */; };
@@ -256,6 +257,7 @@
 		BA7B7A4D4B5BAF7BC72510C2 /* RelationshipArchiveRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = F38A04F2F24A2E14520AA214 /* RelationshipArchiveRows.swift */; };
 		BAC906FBE44C3289C00AD239 /* RelationshipAgentStudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0AB9B7264527674C941D66E /* RelationshipAgentStudioView.swift */; };
 		BB3580A3464A58431968556E /* TextSignalCaptureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CA3B1B8042B74DA1B5D1670 /* TextSignalCaptureView.swift */; };
+		BCFF69E55B784C9AA86AA4F0 /* IOSPersistentSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87EDD09CEF7A5A8C30DDADC2 /* IOSPersistentSession.swift */; };
 		BDF4779B9E1909474BF99AFF /* LabSessionEndingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06ADD1619E8386FC4116FD31 /* LabSessionEndingsView.swift */; };
 		BE1192A4538E648C5C0DF9D6 /* ProductLabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32026C689AEC61DA656EF0CC /* ProductLabUITests.swift */; };
 		BE6880476712412EEA3C9D83 /* ProductRunFeedbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9BB7D5308619F3CD55EC33E /* ProductRunFeedbackTests.swift */; };
@@ -403,6 +405,7 @@
 		13493D4C91671F5A941A168C /* ActiveRefreshCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveRefreshCoordinatorTests.swift; sourceTree = "<group>"; };
 		15F23E2CFBF13B49E7A215D9 /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThirdPartyNotices.txt; sourceTree = "<group>"; };
 		18DB19A9B630FFFC327395CB /* StandaloneOnboardingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StandaloneOnboardingTests.swift; sourceTree = "<group>"; };
+		19391E9E90CF44070705C8BF /* IOSPersistentSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSPersistentSessionTests.swift; sourceTree = "<group>"; };
 		1A23BD2192A87045AA609DC9 /* AgentWorkActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWorkActivityController.swift; sourceTree = "<group>"; };
 		1AF219D0DA726748789090C4 /* ConversationMemoryOperationPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMemoryOperationPersistence.swift; sourceTree = "<group>"; };
 		1C1B45C64EB571D6FF9CE73A /* AgentWorkLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWorkLiveActivity.swift; sourceTree = "<group>"; };
@@ -526,6 +529,7 @@
 		86338401A7207EA598662416 /* ConversationImageClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationImageClient.swift; sourceTree = "<group>"; };
 		86BA51472BCE0B5236D63183 /* LabTaskTrialView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabTaskTrialView.swift; sourceTree = "<group>"; };
 		8740830A52A1650A3FF8B41A /* RelationshipArchiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelationshipArchiveView.swift; sourceTree = "<group>"; };
+		87EDD09CEF7A5A8C30DDADC2 /* IOSPersistentSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSPersistentSession.swift; sourceTree = "<group>"; };
 		8806D300F51296BE8C1CECE3 /* CandidateMomentumLoop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandidateMomentumLoop.swift; sourceTree = "<group>"; };
 		8811C7D2D18B4CD8F3BF47FC /* RuntimeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeEnvironment.swift; sourceTree = "<group>"; };
 		8D7B3BF5F96A2A0EEBEC80E3 /* LabDisplayUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabDisplayUITests.swift; sourceTree = "<group>"; };
@@ -747,6 +751,7 @@
 				5ECAED44BAF6B1F33AF1C56B /* Get5AskInputPolicyTests.swift */,
 				BEE5D2E6B4A895E655F0B421 /* GoogleSignInFlowTests.swift */,
 				744427491C9864B09CAF13DD /* HeroLoopTests.swift */,
+				19391E9E90CF44070705C8BF /* IOSPersistentSessionTests.swift */,
 				208291EBFF8C8FF4721330B4 /* LabCITests.swift */,
 				CF393781C8A216BBD40FCB08 /* LabClientSpanTests.swift */,
 				9FA7EC0A3FC290E576894D5E /* LabDemoResetTests.swift */,
@@ -920,6 +925,7 @@
 				63953A0F31800DC886749C51 /* ConversationTextRecognizer.swift */,
 				F0A0ED203FAD1B4BD2A974CE /* FixtureSyncClient.swift */,
 				6215CA433BAEDC5DB807D7D3 /* GoogleSignInFlow.swift */,
+				87EDD09CEF7A5A8C30DDADC2 /* IOSPersistentSession.swift */,
 				A32DF7502592C73D42007EAB /* LabClientDiagnostics.swift */,
 				963F1DB2940F190D82DC7BE0 /* LabDemoReset.swift */,
 				C67F020BFF4B5D36459852B5 /* LabDiagnosticFiles.swift */,
@@ -1363,6 +1369,7 @@
 				CA016479024A005D90F926CC /* Get5AskInputPolicyTests.swift in Sources */,
 				DB14818DB152AA692A267A31 /* GoogleSignInFlowTests.swift in Sources */,
 				344B5467E2BD111985A44EA1 /* HeroLoopTests.swift in Sources */,
+				5B6E7D9AB00F5AB92DC212D2 /* IOSPersistentSessionTests.swift in Sources */,
 				16CB4CD0617CB6263D9EC665 /* LabCITests.swift in Sources */,
 				D83900926F4FA1004644DC62 /* LabClientSpanTests.swift in Sources */,
 				9689FF78762ECB5CAF4F9246 /* LabDemoResetTests.swift in Sources */,
@@ -1526,6 +1533,7 @@
 				978B6B4ADCF708381B6BD4C4 /* DeviceLabStore.swift in Sources */,
 				855BD6D5CC0D965D2DB61D81 /* FixtureSyncClient.swift in Sources */,
 				D232A19CB53AF4F95547908A /* GoogleSignInFlow.swift in Sources */,
+				BCFF69E55B784C9AA86AA4F0 /* IOSPersistentSession.swift in Sources */,
 				7E5C6DFC8ED9BB98FE04A67F /* LabAppearanceView.swift in Sources */,
 				7A6F3BBFF6AB703CF545D11E /* LabCI.swift in Sources */,
 				10D0DE5381A557414500AF84 /* LabCIStore.swift in Sources */,

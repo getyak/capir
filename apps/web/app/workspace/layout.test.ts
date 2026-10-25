@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 import { beforeEach, expect, it, vi } from "vitest";
-import { act, createElement } from "react";
+import { act, cloneElement, createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-const {claims,settings,testCookie} = vi.hoisted(()=>({claims:vi.fn(),settings:vi.fn(),testCookie:{present:true}}));
+const {claims,settings,testCookie,auth} = vi.hoisted(()=>({claims:vi.fn(),settings:vi.fn(),testCookie:{present:true},auth:vi.fn()}));
 vi.mock("@/lib/server/marketing-locale",()=>({getMarketingLocale:async()=>"zh-CN"}));
-vi.mock("@/auth",()=>({auth:async()=>({user:{name:"Owner"}})}));
+vi.mock("@/auth",()=>({auth}));
+vi.mock("next/navigation",()=>({useRouter:()=>({refresh:vi.fn()})}));
 vi.mock("next/headers",()=>({cookies:async()=>({has:()=>testCookie.present})}));
 vi.mock("@/app/login/actions",()=>({signOutOfWorkspace:vi.fn()}));
 vi.mock("@/app/workspace/settings/testing/actions",()=>({leaveTestWorkspace:vi.fn()}));
@@ -16,10 +17,31 @@ vi.mock("@/components/talent-signal-lab/lab-shell",()=>({TalentSignalLabShell:()
 vi.mock("@/components/workspace-shell-nav",()=>({WorkspaceCaptureLink:()=>null,WorkspaceMobileSourcesLink:()=>null,WorkspaceShellNav:()=>null}));
 vi.mock("@/components/theme-toggle",()=>({ThemeToggle:()=>null}));
 import WorkspaceLayout from "./layout";
+import { WorkspaceAccessRecovery } from "@/components/workspace-access-recovery";
+import { WorkspaceNavigationContinuityProvider } from "@/components/workspace-navigation-continuity";
+import { workspaceSessionsBinding, workspaceSessionDraftStorageScope } from "@/lib/server/workspaceSessions";
+
+// Next resolves async Server Components before these client-hydration tests.
+// Resolve this real server boundary without asking React DOM to run it as a
+// Client Component; the returned UI and supplied recovery action stay real.
+async function resolveRecovery(node: ReactNode): Promise<ReactNode> {
+  if (Array.isArray(node)) return Promise.all(node.map(resolveRecovery));
+  if (!isValidElement(node)) return node;
+  if (node.type === WorkspaceAccessRecovery) return WorkspaceAccessRecovery(node.props as Parameters<typeof WorkspaceAccessRecovery>[0]);
+  const element = node as ReactElement<{children?: ReactNode}>;
+  return element.props.children === undefined ? element : cloneElement(element, {}, await resolveRecovery(element.props.children));
+}
+function findNavigation(node: ReactNode): ReactElement<{scope: string; binding: string}> | null {
+  if (Array.isArray(node)) return node.map(findNavigation).find(Boolean) ?? null;
+  if (!isValidElement(node)) return null;
+  if (node.type === WorkspaceNavigationContinuityProvider) return node as ReactElement<{scope: string; binding: string}>;
+  return findNavigation((node as ReactElement<{children?: ReactNode}>).props.children);
+}
+
 function snapshot(value: unknown): string {
  return JSON.stringify(value, (key,item) => key === "type" || key.startsWith("_") ? undefined : item);
 }
-beforeEach(()=>{vi.clearAllMocks();testCookie.present=true;settings.mockRejectedValue(new Error("Settings unavailable"));});
+beforeEach(()=>{vi.clearAllMocks();auth.mockResolvedValue({user:{name:"Owner"}});testCookie.present=true;settings.mockRejectedValue(new Error("Settings unavailable"));});
 it("retains effective workspace scope when optional settings fail",async()=>{
  claims.mockResolvedValue({backendAccessToken:"synthetic-owned-session",backendRole:"member",backendUsername:"owner",backendAccountId:"rendered-test",backendUserId:"user-1",backendAccountName:"Test",backendAccountSlug:"lab-test",backendExpiresAt:new Date(Date.now()+60000).toISOString()});
  const rendered=snapshot(await WorkspaceLayout({children:"operational-child"}));
@@ -56,7 +78,7 @@ it("keeps reauthentication and all scope-clearing boundaries when no test cookie
   testCookie.present = false;
   const layout = await WorkspaceLayout({ children: "private-operational-child" });
   const rendered = snapshot(layout);
-  expect(renderToStaticMarkup(layout)).toContain("/login?reason=backend_session_expired");
+  expect(renderToStaticMarkup(await resolveRecovery(layout))).toContain("/login?reason=backend_session_expired");
   expect(rendered).not.toContain("返回我的空间");
   expect(rendered).not.toContain("private-operational-child");
   expect(rendered).toContain('"sessionVersion":null');
@@ -80,7 +102,7 @@ it.each([
   const root = createRoot(mount);
   try {
     const layout = await WorkspaceLayout({ children: createElement("p", null, "private child") });
-    await act(async () => root.render(layout));
+    await act(async () => root.render(await resolveRecovery(layout)));
     const anchor = [...mount.querySelectorAll("a")].find(link => link.textContent?.includes("重新登录"));
     const destination = new URL(anchor!.getAttribute("href")!, "https://workspace.invalid");
     expect(destination.pathname).toBe("/login");
@@ -93,4 +115,26 @@ it.each([
     await act(async () => root.unmount()); mount.remove();
     window.history.replaceState(null, "", "/"); vi.unstubAllGlobals();
   }
+});
+
+it("passes the same verified identity and credential binding to composer continuity", async () => {
+  const live = {backendAccessToken:"synthetic-owned-session",backendRole:"member" as const,backendUsername:"owner",backendAccountId:"rendered-test",backendUserId:"user-1",backendAccountName:"Test",backendAccountSlug:"lab-test",backendExpiresAt:new Date(Date.now()+60000).toISOString()};
+  claims.mockResolvedValue(live);
+  const navigation = findNavigation(await WorkspaceLayout({children:"operational-child"}));
+  expect(navigation?.props.binding).toBe(workspaceSessionsBinding(live));
+  expect(navigation?.props.scope).toBe(workspaceSessionDraftStorageScope(live));
+});
+
+it.each(["public-session", "backend-claims"])("keeps %s transient failure retryable without clearing draft scopes or forcing login", async source => {
+  if (source === "public-session") auth.mockResolvedValue({user:{name:"Owner"},renewalStatus:"unavailable"});
+  else claims.mockRejectedValue(Object.assign(new Error("temporary auth service failure"), {code:"session_temporarily_unavailable"}));
+  const layout = await WorkspaceLayout({children:"private-operational-child"});
+  const rendered = snapshot(layout);
+  expect(rendered).toContain('"unavailable":true');
+  expect(rendered).not.toContain('"sessionVersion":null');
+  expect(rendered).not.toContain('"storageScope":null');
+  expect(rendered).not.toContain("private-operational-child");
+  const html = renderToStaticMarkup(await resolveRecovery(layout));
+  expect(html).toContain("重试连接"); expect(html).toContain("无需重新登录");
+  expect(html).not.toContain("/login?");
 });

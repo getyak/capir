@@ -26,14 +26,16 @@ visible and revocable in Account and security.
 Renewal locks the account/session and derives generation-specific short access.
 Rotation occurs within a renewal window; concurrent calls and lost responses
 recover the current generation. Previous access is never extended past its
-original expiry. Ordinary Web/iOS session duration remains unchanged.
+original expiry. [ADR 0027](0027-renewable-first-party-login.md) subsequently
+extends renewable login to ordinary Web/iOS without changing this Mac proof.
 
 The server-authorized persistent provider alone puts the canonical device
 session ID in the encrypted JWT. Conversation, capture and selected-workspace
 bindings use that exact ID with account/user and separate domain tags, so an
 access rotation does not invalidate a mounted conversation or lose a selected
-test workspace. A new primary session changes the binding; ordinary Web keeps
-its exact-access binding. Live short-access authorization and purpose-specific
+test workspace. A new primary session changes the binding. ADR 0027 extends
+stable family bindings to ordinary Web while preserving verified legacy aliases.
+Live short-access authorization and purpose-specific
 capability deadlines still apply. Initial healthy legacy enrollment may rebind
 an already verified selected test workspace, preserving its original encrypted
 cookie expiry; a new canonical primary login cannot inherit that selection.
@@ -60,10 +62,19 @@ guards. Account equality between these two roles is not authorization proof.
 Until that primary proof is verified, every read must rejoin recovery. Failed
 attempts grant no later admission through an existing business cookie.
 
-Explicit sign-out synchronously disables renewal, persists a fresh empty store
-epoch and discards only the former scope's capability. Late writes stay in the
-retired store. Server revocation and renewal share canonical session locking;
-renewal cannot revive revoked state or change account ownership.
+Explicit sign-out synchronously disables renewal and persists a fresh empty
+store epoch. A durable non-secret revocation index retains the former scope;
+its Keychain capability is removed only after remote revocation is confirmed.
+Locked storage and network failures preserve this revocation-only recovery.
+Late writes stay in the retired store and cannot authorize the selected store.
+
+Live status may return a purpose-bound encrypted revocation envelope containing
+the original canonical access proof. The native client persists this opaque
+envelope in Keychain before initial enrollment; no raw access enters the page
+or native preferences. It is accepted only for destructive revocation. Session
+locking orders enrollment and revocation even when the enrollment response or
+commit is delayed beyond the original access deadline. It never authorizes
+enrollment, renewal or business requests. Browser grant proof remains required.
 
 A global TTL extension affects other clients and still expires. A cookie alone
 is constrained by browser retention. A permanent access bearer removes bounded

@@ -8,6 +8,8 @@ struct TalentSignalSession: Codable, Equatable {
     let expiresAt: Date
     let account: Account
     let user: User
+    var sessionID: String? = nil
+    var persistent: IOSPersistentSessionCredential? = nil
 
     struct Account: Codable, Equatable {
         let id: String
@@ -50,8 +52,8 @@ extension TalentSignalSessionPersisting {
         try removeEndingCredential(AppSessionEnding(session: expected))
     }
     func removeEndingCredential(_ ending: AppSessionEnding) throws -> Bool {
-        if let saved = try load(), AppSessionEnding.fingerprint(saved) == ending.credentialFingerprint { try delete() }
-        return try load().map { AppSessionEnding.fingerprint($0) != ending.credentialFingerprint } ?? true
+        if let saved = try load(), ending.blocks(saved) { try delete() }
+        return try load().map { !ending.blocks($0) } ?? true
     }
 }
 
@@ -80,13 +82,14 @@ final class KeychainTalentSignalSessionStore: TalentSignalSessionPersisting {
         guard let key = try? JSONDecoder().decode(String.self, from: pointer),
               key.hasPrefix(prefix + ".identity."), let data = try data(for: key),
               let session = try? JSONDecoder.appSession.decode(TalentSignalSession.self, from: data),
-              RuntimeEndpoint.same(session.baseURL, baseURL), key == identityKey(session) else {
+              RuntimeEndpoint.same(session.baseURL, baseURL), key == identityKey(session), validCapability(session) else {
             throw AppSessionError.invalidStoredSession
         }
         return session
     }
 
     func save(_ session: TalentSignalSession) throws {
+        guard validCapability(session) else { throw AppSessionError.invalidStoredSession }
         guard let baseURL else {
             try upsert(try JSONEncoder.appSession.encode(session), key: "current")
             return
@@ -114,16 +117,16 @@ final class KeychainTalentSignalSessionStore: TalentSignalSessionPersisting {
 
     func removeEndingCredential(_ ending: AppSessionEnding) throws -> Bool {
         guard let baseURL else {
-            if let current = try readLegacy(), AppSessionEnding.fingerprint(current) == ending.credentialFingerprint { try remove("current") }
-            return try readLegacy().map { AppSessionEnding.fingerprint($0) != ending.credentialFingerprint } ?? true
+            if let current = try readLegacy(), ending.blocks(current) { try remove("current") }
+            return try readLegacy().map { !ending.blocks($0) } ?? true
         }
         guard ending.endpointScope == RuntimeEndpoint.scope(baseURL),
               ending.identityFingerprint.count == 64 else { throw AppSessionError.scopeMismatch }
-        let key = prefix + ".identity." + ending.identityFingerprint, fingerprint = ending.credentialFingerprint
+        let key = prefix + ".identity." + ending.identityFingerprint
         func matches(_ key: String) throws -> Bool {
             guard let data = try data(for: key) else { return false }
             let value = try JSONDecoder.appSession.decode(TalentSignalSession.self, from: data)
-            return AppSessionEnding.fingerprint(value) == fingerprint
+            return ending.blocks(value)
         }
         if try matches(key) {
             try remove(key)
@@ -139,9 +142,15 @@ final class KeychainTalentSignalSessionStore: TalentSignalSessionPersisting {
     private func identityKey(_ session: TalentSignalSession) -> String {
         prefix + ".identity." + SHA256.hex(session.account.id + "|" + session.user.id)
     }
+    private func validCapability(_ session: TalentSignalSession) -> Bool {
+        guard let value = session.persistent else { return true }
+        return session.isRealUserSession && value.sessionID == session.sessionID && UUID(uuidString: value.sessionID) != nil
+            && value.secret.utf8.count == 43 && value.secret.utf8.allSatisfy { (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95 }
+            && value.accessFingerprints.count <= 64 && value.accessFingerprints.allSatisfy { $0.utf8.count == 64 && $0.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } }
+    }
     private func readLegacy() throws -> TalentSignalSession? {
         guard let data = try data(for: "current") else { return nil }
-        guard let value = try? JSONDecoder.appSession.decode(TalentSignalSession.self, from: data) else {
+        guard let value = try? JSONDecoder.appSession.decode(TalentSignalSession.self, from: data), validCapability(value) else {
             throw AppSessionError.invalidStoredSession
         }
         return value
@@ -176,6 +185,7 @@ final class KeychainTalentSignalSessionStore: TalentSignalSessionPersisting {
 }
 
 protocol AppAuthenticationServing {
+    var supportsPersistentSessions: Bool { get }
     func googleChallenge() async throws -> AppleLoginChallenge
     func signInGoogle(identityToken: String, challengeID: String) async throws -> TalentSignalSession
     func signInEmail(email: String, password: String, registering: Bool) async throws -> TalentSignalSession
@@ -193,9 +203,12 @@ protocol AppAuthenticationServing {
     ) async throws -> TalentSignalSession
     func validate(_ stored: TalentSignalSession) async throws -> TalentSignalSession
     func logout(_ stored: TalentSignalSession) async throws
+    func enroll(_ pending: TalentSignalSession) async throws -> TalentSignalSession
 }
 
 extension AppAuthenticationServing {
+    var supportsPersistentSessions: Bool { false }
+    func enroll(_ pending: TalentSignalSession) async throws -> TalentSignalSession { throw AppSessionError.invalidResponse }
     func googleChallenge() async throws -> AppleLoginChallenge { throw GoogleSignInError.unavailable }
     func signInGoogle(identityToken: String, challengeID: String) async throws -> TalentSignalSession { throw GoogleSignInError.unavailable }
     func signInEmail(email: String, password: String, registering: Bool) async throws -> TalentSignalSession { throw GoogleSignInError.unavailable }
@@ -204,6 +217,7 @@ extension AppAuthenticationServing {
 }
 
 actor AppAuthenticationClient: AppAuthenticationServing {
+    nonisolated var supportsPersistentSessions: Bool { true }
     private let baseURL: URL
     private let session: URLSession
 
@@ -274,7 +288,8 @@ actor AppAuthenticationClient: AppAuthenticationServing {
         guard response.contractVersion == TalentSignalAPIContract.version else { throw AppSessionError.contractMismatch }
         return TalentSignalSession(baseURL: baseURL, accessToken: response.accessToken, expiresAt: response.expiresAt,
             account: .init(id: response.account.id, slug: response.account.slug, name: response.account.name),
-            user: .init(id: response.user.id, email: response.user.email, displayName: response.user.displayName, kind: response.user.kind))
+            user: .init(id: response.user.id, email: response.user.email, displayName: response.user.displayName, kind: response.user.kind),
+            sessionID: response.sessionID)
     }
 
     func challenge() async throws -> AppleLoginChallenge {
@@ -304,29 +319,31 @@ actor AppAuthenticationClient: AppAuthenticationServing {
                 familyName: familyName
             )
         )
-        guard response.contractVersion == TalentSignalAPIContract.version else {
-            throw AppSessionError.contractMismatch
-        }
-        return TalentSignalSession(
-            baseURL: baseURL,
-            accessToken: response.accessToken,
-            expiresAt: response.expiresAt,
-            account: .init(
-                id: response.account.id,
-                slug: response.account.slug,
-                name: response.account.name
-            ),
-            user: .init(
-                id: response.user.id,
-                email: response.user.email,
-                displayName: response.user.displayName,
-                kind: response.user.kind
-            )
-        )
+        return try session(from: response)
     }
 
     func validate(_ stored: TalentSignalSession) async throws -> TalentSignalSession {
         guard RuntimeEndpoint.same(stored.baseURL, baseURL) else { throw AppSessionError.scopeMismatch }
+        if let capability = stored.persistent {
+            do {
+                let response: AppSessionEnvelope = try await request(path: "v1/auth/persistent/renew", method: "POST", token: nil,
+                    body: PersistentSessionProof(stored: stored, capability: capability))
+                return try verifiedPersistentResponse(response, stored: stored)
+            } catch {
+                // Only a pending enrollment may use its original, still-live
+                // access. The server locks and rechecks that same canonical row.
+                guard !capability.enrolled, stored.expiresAt > Date(),
+                      case let AppSessionError.backend(status, code, _) = error,
+                      (status == 401 && code == "PERSISTENT_SESSION_REVOKED") else { throw error }
+                let live = try await validateAccess(stored)
+                guard live.sessionID == capability.sessionID else { throw AppSessionError.scopeMismatch }
+                return try await enroll(stored)
+            }
+        }
+        return try await validateAccess(stored)
+    }
+
+    private func validateAccess(_ stored: TalentSignalSession) async throws -> TalentSignalSession {
         let response: CurrentSessionEnvelope = try await request(
             path: "v1/auth/session",
             method: "GET",
@@ -352,12 +369,38 @@ actor AppAuthenticationClient: AppAuthenticationServing {
                 email: response.user.email,
                 displayName: response.user.displayName,
                 kind: response.user.kind
-            )
+            ), sessionID: response.sessionID ?? stored.sessionID, persistent: stored.persistent
         )
+    }
+
+    func enroll(_ pending: TalentSignalSession) async throws -> TalentSignalSession {
+        guard RuntimeEndpoint.same(pending.baseURL, baseURL), let capability = pending.persistent,
+              !capability.enrolled, pending.sessionID == capability.sessionID else { throw AppSessionError.scopeMismatch }
+        let response: AppSessionEnvelope = try await request(path: "v1/auth/persistent/enroll", method: "POST", token: pending.accessToken,
+            body: ["renewal_secret": capability.secret, "client_kind": "ios"])
+        return try verifiedPersistentResponse(response, stored: pending)
+    }
+
+    private func verifiedPersistentResponse(_ response: AppSessionEnvelope, stored: TalentSignalSession) throws -> TalentSignalSession {
+        var next = try session(from: response)
+        guard var capability = stored.persistent, next.sessionID == capability.sessionID,
+              next.account.id == stored.account.id, next.user.id == stored.user.id,
+              next.expiresAt > Date() else { throw AppSessionError.scopeMismatch }
+        capability.enrolled = true
+        capability.remember(token: stored.accessToken, endpoint: baseURL)
+        capability.remember(token: next.accessToken, endpoint: baseURL)
+        next.persistent = capability
+        return next
     }
 
     func logout(_ stored: TalentSignalSession) async throws {
         guard RuntimeEndpoint.same(stored.baseURL, baseURL) else { throw AppSessionError.scopeMismatch }
+        if let capability = stored.persistent {
+            let response: PersistentRevocationEnvelope = try await request(path: "v1/auth/persistent/revoke", method: "POST", token: nil,
+                body: PersistentSessionProof(stored: stored, capability: capability, revoking: true))
+            guard response.revoked else { throw AppSessionError.invalidResponse }
+            return
+        }
         let response: LogoutEnvelope = try await request(
             path: "v1/auth/logout",
             method: "POST",
@@ -438,9 +481,24 @@ enum AppSessionError: LocalizedError {
 
     var invalidatesSession: Bool {
         guard case let .backend(status, code, _) = self else { return false }
-        return status == 401 || ["SESSION_INVALID", "AUTHENTICATION_REQUIRED"].contains(code)
+        return (status == 401 && code == "PERSISTENT_SESSION_REVOKED")
+            || (status == 403 && code == "PERSISTENT_SESSION_INELIGIBLE")
     }
 }
+
+private struct PersistentSessionProof: Encodable {
+    let renewal_secret: String
+    let account_id: String
+    let user_id: String
+    let session_id: String
+    let original_access_token: String?
+    init(stored: TalentSignalSession, capability: IOSPersistentSessionCredential, revoking: Bool = false) {
+        renewal_secret = capability.secret; account_id = stored.account.id
+        user_id = stored.user.id; session_id = capability.sessionID
+        original_access_token = revoking && !capability.enrolled ? stored.accessToken : nil
+    }
+}
+private struct PersistentRevocationEnvelope: Decodable { let revoked: Bool }
 
 extension SHA256 {
     static func hex(_ value: String) -> String {
@@ -495,6 +553,7 @@ private struct AppSessionEnvelope: Decodable {
     let expiresAt: Date
     let account: Account
     let user: User
+    let sessionID: String?
 
     struct Account: Decodable { let id: String; let slug: String; let name: String }
     struct User: Decodable {
@@ -512,6 +571,7 @@ private struct AppSessionEnvelope: Decodable {
         case contractVersion = "contract_version"
         case accessToken = "access_token"
         case expiresAt = "expires_at"
+        case sessionID = "session_id"
         case account, user
     }
 }
@@ -521,10 +581,12 @@ private struct CurrentSessionEnvelope: Decodable {
     let expiresAt: Date
     let account: AppSessionEnvelope.Account
     let user: AppSessionEnvelope.User
+    let sessionID: String?
 
     enum CodingKeys: String, CodingKey {
         case contractVersion = "contract_version"
         case expiresAt = "expires_at"
+        case sessionID = "session_id"
         case account, user
     }
 }

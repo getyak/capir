@@ -14,12 +14,16 @@ it("redacts ephemeral conversation content and credentials while keeping diagnos
   app.log.info({ code: "PRIVATE_CONVERSATION_TIMEOUT", body: {
     messages: [{ role: "user", content: "private-content-canary" }],
     password: "password-canary", access_token: "token-canary",
+    refresh_token: "refresh-canary", device_secret: "device-canary", renewal_secret: "renewal-canary",
+    original_access_token: "pending-revoke-canary",
+    revocation_proof: "opaque-revocation-canary",
     code: "desktop-code-canary", verifier: "desktop-verifier-canary",
     state: "desktop-state-canary", cancel_secret: "desktop-cancel-canary",
   }, headers: { authorization: "authorization-canary" } });
   await app.close();
   expect(output).toContain("PRIVATE_CONVERSATION_TIMEOUT");
   for (const canary of ["private-content-canary", "password-canary", "token-canary", "authorization-canary",
+    "refresh-canary", "device-canary", "renewal-canary", "pending-revoke-canary", "opaque-revocation-canary",
     "desktop-code-canary", "desktop-verifier-canary", "desktop-state-canary", "desktop-cancel-canary"]) expect(output).not.toContain(canary);
 });
 

@@ -17,20 +17,26 @@ import {
   searchPeopleDirectory,
 } from "@/lib/server/localBackend";
 
+import { translate } from "@/lib/i18n";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
+
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  description:
-    "账号专属的人物、关系情境与受治理来源目录。",
-  robots: { follow: false, index: false },
-  title: "人物",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMarketingLocale();
+  return {
+    description: translate(locale, "账号专属的人物、关系情境与受治理来源目录。"),
+    robots: { follow: false, index: false },
+    title: translate(locale, "人物"),
+  };
+}
 
 export default async function PeoplePage({
   searchParams,
 }: {
   searchParams: Promise<{ query?: string; session?: string }>;
 }) {
+  const locale = await getMarketingLocale();
   const parameters = await searchParams;
   const returnSessionId = validReturnSessionId(parameters.session);
   const query = (parameters.query ?? "")
@@ -63,13 +69,13 @@ export default async function PeoplePage({
     ).people;
   } catch (caught) {
     if (isBackendSessionExpiredError(caught)) {
-      error = caught.message;
+      error = translate(locale, caught.message);
       sessionRecoveryHref = backendSessionRecoveryHref(
         directoryHref,
       );
     } else {
       error =
-        "无法连接账号专属后端；系统不会从陈旧数据推断关系状态。";
+        translate(locale, "无法连接账号专属后端；系统不会从陈旧数据推断关系状态。");
     }
   }
 

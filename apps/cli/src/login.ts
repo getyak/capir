@@ -113,11 +113,13 @@ export async function runAuthLogin(
   // Observe early cancellation while native keyring operations settle.
   void cancellation.catch(() => {});
   const requestOptions = () => ({signal:controller.signal,timeoutMs:Math.max(1,deadlineAt-Date.now())});
+  let protocol:import("@talent-signal/contracts").CapirAuthProtocol="capir-auth.v2";
   try {
   if (options.protocolV2) {
     const metadata = await new CapirAuthV2Client(options.environment.backendOrigin, dependencies.fetchImpl).discovery(requestOptions());
     if (!metadata.enabled || metadata.backend_origin !== options.environment.backendOrigin || metadata.web_origin !== options.environment.webOrigin)
       throw new CapirCliError("CAPIR_AUTH_UNAVAILABLE", EXIT.INFRASTRUCTURE, "Browser authorization is unavailable for this configured origin pair.");
+    protocol=metadata.schema_version;
     const prior = await dependencies.store.get();
     if (prior) {
       const record=parseAuthRecord(prior,options.environment);
@@ -128,12 +130,12 @@ export async function runAuthLogin(
         await runAuthLogout(options.environment,{fetchImpl:dependencies.fetchImpl,store:dependencies.store,txn:dependencies.txn,token:prior,protocolV2:true,requestOptions:requestOptions()});
       } else {
         try {
-          const current = await usableCredential(options.environment, dependencies.store, dependencies.fetchImpl, requestOptions());
+          const current = await usableCredential(options.environment, dependencies.store, dependencies.fetchImpl, {...requestOptions(),protocol});
           const verified=await new CapirAuthV2Client(options.environment.backendOrigin, dependencies.fetchImpl, current.token).statusV2(requestOptions());
           const terminal=expired(); if(terminal) throw terminal;
           return { reused: true, identity:verified.identity, grant:verified.grant, environment:options.environment.name, credential_store:dependencies.store.kind, authority:current.authority };
         } catch(error) {
-          if (!(error instanceof CapirCliError) || !['CAPIR_CREDENTIAL_EXPIRED','CAPIR_CREDENTIAL_INACTIVE','CAPIR_GRANT_REVOKED','CAPIR_REFRESH_EXPIRED'].includes(error.code)) throw error;
+          if (!(error instanceof CapirCliError) || !['CAPIR_CREDENTIAL_EXPIRED','CAPIR_CREDENTIAL_INACTIVE','CAPIR_GRANT_REVOKED','CAPIR_REFRESH_EXPIRED','CAPIR_REFRESH_REPLAY','CAPIR_REFRESH_INVALID','CAPIR_LOGOUT_PENDING'].includes(error.code)) throw error;
           if(options.noninteractive || !dependencies.interactive) throw new CapirCliError("CAPIR_LOGIN_NONINTERACTIVE",EXIT.INFRASTRUCTURE,"Run auth login interactively to renew this authorization.");
           await runAuthLogout(options.environment,{fetchImpl:dependencies.fetchImpl,store:dependencies.store,txn:dependencies.txn,token:prior,protocolV2:true,requestOptions:requestOptions()});
         }
@@ -266,7 +268,7 @@ export async function runAuthLogin(
       const redirectUri = `http://127.0.0.1:${address.port}/capir/callback`;
       const authorizeUrl = new URL("/capir/authorize", options.environment.webOrigin);
       authorizeUrl.search = new URLSearchParams({
-        ...(options.protocolV2 ? {schema_version:"capir-auth.v2"} : {}),
+        ...(options.protocolV2 ? {schema_version:protocol} : {}),
         redirect_uri: redirectUri,
         state,
         code_challenge: codeChallenge,
@@ -309,7 +311,7 @@ export async function runAuthLogin(
   // deadline (deadlineAt is fixed at start and can never be renewed), not a
   // fresh transport duration.
   const exchangeClient = options.protocolV2 ? new CapirAuthV2Client(options.environment.backendOrigin, dependencies.fetchImpl) : client;
-  const exchange = options.protocolV2 ? (body: unknown, opts: {signal:AbortSignal;timeoutMs:number}) => (exchangeClient as CapirAuthV2Client).exchangeV2(body, opts) : client.exchange.bind(client);
+  const exchange = options.protocolV2 ? (body: unknown, opts: {signal:AbortSignal;timeoutMs:number}) => (exchangeClient as CapirAuthV2Client).exchangeV2(body, opts, protocol) : client.exchange.bind(client);
   const exchanged = await Promise.race([exchange({
     code: outcome.code,
     code_verifier: codeVerifier,

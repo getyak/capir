@@ -1,5 +1,7 @@
 "use client";
 
+import { useT } from "@/components/locale-provider";
+
 import { Eye, EyeSlash } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import styles from "./login.module.css";
@@ -11,6 +13,7 @@ export function PasswordField({ autoComplete, describedBy, disabled, id, invalid
   maxLength?: number; minLength?: number; name: string; onChange: (value: string) => void;
   placeholder?: string; required?: boolean; value: string;
 }) {
+  const t = useT();
   const [visible, setVisible] = useState(false);
   const [capsLock, setCapsLock] = useState(false);
   // Mask the field again on submit and when the page loses visibility.
@@ -28,10 +31,10 @@ export function PasswordField({ autoComplete, describedBy, disabled, id, invalid
         autoCapitalize="none" spellCheck={false} aria-invalid={invalid || undefined} aria-describedby={describedBy}
         onKeyUp={event => setCapsLock(event.getModifierState("CapsLock"))} onBlur={() => setCapsLock(false)} />
       <button type="button" className={styles.passwordToggle} onClick={() => setVisible(current => !current)}
-        aria-controls={id} aria-label={`${visible ? "隐藏" : "显示"}${label}`} aria-pressed={visible} disabled={disabled}>
+        aria-controls={id} aria-label={t(visible ? "隐藏密码" : "显示密码")} aria-pressed={visible} disabled={disabled}>
         {visible ? <EyeSlash size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
       </button>
     </div>
-    {capsLock && <span className={styles.capsLock} role="status">大写锁定已开启</span>}
+    {capsLock && <span className={styles.capsLock} role="status">{t("大写锁定已开启")}</span>}
   </div>;
 }

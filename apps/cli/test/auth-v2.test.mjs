@@ -9,7 +9,7 @@ import {runCli} from '../dist/run.js';
 import {runAuthLogin} from '../dist/login.js';
 import {runAuthLogout} from '../dist/auth.js';
 import {authV2Status,usableCredential,serializeAuthRecord} from '../dist/authV2.js';
-import {createCredentialTxn} from '../dist/keyring.js';
+import {createCredentialTxn,credentialMutexPath,keyringUsername,KEYRING_SERVICE} from '../dist/keyring.js';
 import {writeEnvironment} from './helpers.mjs';
 const dirs=[];after(()=>dirs.forEach(dir=>rmSync(dir,{recursive:true,force:true})));
 const secret=()=>randomBytes(32).toString('base64url');
@@ -222,4 +222,148 @@ it('browser opener failure exposes a public manual URL and keeps the same loopba
  await runAuthLogin({environment,clientLabel:'Proof',timeoutSeconds:2,noninteractive:false,protocolV2:true},{store:lateStore,txn:createCredentialTxn(lateStore,join(dir,'late-mutex.sqlite')),interactive:true,fetchImpl,onProgress:m=>messages.push(m),openBrowser:async url=>{const consent=new URL(url),callback=new URL(consent.searchParams.get('redirect_uri'));callback.searchParams.set('state',consent.searchParams.get('state'));callback.searchParams.set('code',secret());await fetch(callback);throw Error('Late opener exit');}});
  assert.equal(messages.some(message=>message.includes('/capir/authorize?')),false);
  assert.equal(JSON.parse(lateStore.value).credentials.access_token,c.access_token);
+});
+
+function persistentCredentials(expired=true) {
+ const value=credentials(expired);
+ return {...value,schema_version:'capir-auth.v3',grant:{...value.grant,refresh_expires_at:null,absolute_expires_at:null}};
+}
+function active(value) {return response({schema_version:value.schema_version,state:'active',grant:value.grant,identity});}
+it('v3 lost refresh response resumes the same durable intent after restart without browser login',async()=>{
+ const original=persistentCredentials(),s=store(serializeAuthRecord(environment,original));
+ const successor={...persistentCredentials(false),grant:{...original.grant,access_expires_at:new Date(Date.now()+600000).toISOString()}};
+ let requestId,refreshCalls=0;
+ const transport=async(url,init)=>{
+  if(new URL(url).pathname.endsWith('/refresh')) {
+   const body=JSON.parse(init.body),pending=JSON.parse(s.value);
+   assert.equal(body.schema_version,'capir-auth.v3');assert.equal(pending.pending_refresh.request_id,body.request_id);assert.equal(pending.refresh_inflight,true);
+   assert.equal(body.refresh_token,original.refresh_token);refreshCalls++;
+   if(!requestId){requestId=body.request_id;throw Error('response lost after server commit');}
+   assert.equal(body.request_id,requestId);return response(successor);
+  }
+  return active(successor);
+ };
+ await assert.rejects(usableCredential(environment,s,transport),{code:'CAPIR_TRANSPORT'});
+ const status=await authV2Status(environment,s,async()=>assert.fail('Pending status stays read-only'));
+ assert.equal(status.state,'unverified');assert.equal(status.reason,'renewal_pending');
+ const result=await usableCredential(environment,s,transport);
+ assert.equal(result.token,successor.access_token);assert.equal(refreshCalls,2);
+ assert.equal(JSON.parse(s.value).refresh_inflight,false);assert.equal(JSON.parse(s.value).pending_refresh,undefined);
+});
+it('v3 final keyring write failure preserves pending intent and recovers the exact response',async()=>{
+ const original=persistentCredentials(),s=store(serializeAuthRecord(environment,original));
+ const successor={...persistentCredentials(false),grant:{...original.grant,access_expires_at:new Date(Date.now()+600000).toISOString()}};
+ let writes=0,id;
+ const save=s.set.bind(s);s.set=async(value)=>{writes++;if(writes===2)throw Error('Keychain temporarily locked');await save(value);};
+ const transport=async(url,init)=>{
+  if(new URL(url).pathname.endsWith('/refresh')){const body=JSON.parse(init.body);if(id)assert.equal(body.request_id,id);id=body.request_id;return response(successor);}
+  return active(successor);
+ };
+ await assert.rejects(usableCredential(environment,s,transport),/Keychain temporarily locked/);
+ assert.equal(JSON.parse(s.value).refresh_inflight,true);assert.equal(JSON.parse(s.value).pending_refresh.request_id,id);
+ const result=await usableCredential(environment,s,transport);assert.equal(result.token,successor.access_token);
+});
+it('an expired recovered receipt is committed before rotating its successor to current access',async()=>{
+ const original=persistentCredentials(),s=store(serializeAuthRecord(environment,original));
+ const receipt={...persistentCredentials(),grant:original.grant};
+ const current={...persistentCredentials(false),grant:{...original.grant,access_expires_at:new Date(Date.now()+600000).toISOString()}};
+ const pending=JSON.parse(s.value);pending.refresh_inflight=true;pending.pending_refresh={request_id:randomUUID(),protocol:'capir-auth.v3'};s.value=JSON.stringify(pending);
+ const requests=[];
+ const result=await usableCredential(environment,s,async(url,init)=>{
+  if(new URL(url).pathname.endsWith('/refresh')) {const body=JSON.parse(init.body);requests.push(body);return response(requests.length===1 ? receipt : current);}
+  return active(current);
+ });
+ assert.equal(requests.length,2);assert.equal(requests[0].request_id,pending.pending_refresh.request_id);assert.equal(requests[1].refresh_token,receipt.refresh_token);assert.notEqual(requests[0].request_id,requests[1].request_id);assert.equal(result.token,current.access_token);
+});
+it('v3 concurrent command resolution rotates once and leaves one stable keyring record',async()=>{
+ const original=persistentCredentials(),s=store(serializeAuthRecord(environment,original));
+ const current={...persistentCredentials(false),grant:{...original.grant,access_expires_at:new Date(Date.now()+600000).toISOString()}};let rotations=0;
+ const transport=async(url)=>{if(new URL(url).pathname.endsWith('/refresh')){rotations++;await new Promise(r=>setTimeout(r,20));return response(current);}return active(current);};
+ const [a,b]=await Promise.all([usableCredential(environment,s,transport),usableCredential(environment,s,transport)]);
+ assert.equal(rotations,1);assert.equal(a.token,b.token);assert.equal(a.authority,b.authority);
+});
+it('read-only v3 status distinguishes renewable access expiry from a revoked authorization',async()=>{
+ const value=persistentCredentials(),s=store(serializeAuthRecord(environment,value));
+ const renewable=await authV2Status(environment,s,async()=>response({schema_version:'capir-auth.v3',state:'expired',grant:value.grant,identity}));
+ assert.equal(renewable.state,'renewable');assert.equal(s.writes,0);
+ const revoked=await authV2Status(environment,s,async()=>response({schema_version:'capir-auth.v3',state:'revoked',grant:{...value.grant,state:'revoked'},identity}));assert.equal(revoked.state,'revoked');assert.equal(s.writes,0);
+});
+it('explicit offline logout durably stops renewal and a later retry revokes then removes it',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'capir-persistent-logout-'));dirs.push(dir);
+ const value=persistentCredentials(),s=store(serializeAuthRecord(environment,value)),txn=createCredentialTxn(s,join(dir,'mutex.sqlite'));
+ await assert.rejects(runAuthLogout(environment,{store:s,txn,token:s.value,protocolV2:true,fetchImpl:async()=>{throw Error('offline');}}),{code:'CAPIR_TRANSPORT'});
+ assert.equal(JSON.parse(s.value).logout_pending,true);
+ await assert.rejects(usableCredential(environment,s,async()=>assert.fail('Signed-out record cannot renew')),{code:'CAPIR_LOGOUT_PENDING'});
+ assert.equal((await authV2Status(environment,s,async()=>assert.fail('Signed-out status is local'))).state,'signed_out');
+ await runAuthLogout(environment,{store:s,txn,token:s.value,protocolV2:true,fetchImpl:async()=>response({schema_version:'capir-auth.v2',revoked_grant_id:value.grant.id,revoked_at:new Date().toISOString()})});
+ assert.equal(s.value,null);
+});
+it('v3 real dispatcher negotiates persistent consent, verifies and stores only in OS keyring',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'capir-persistent-dispatch-'));dirs.push(dir);writeEnvironment(dir,environment.name,environment.backendOrigin,environment.webOrigin);
+ const value=persistentCredentials(false),s=store();let browser=0;
+ const transport=async(url,init={})=>{
+  const parsed=new URL(url),path=parsed.pathname;
+  if(path.endsWith('/capabilities')){assert.equal(parsed.searchParams.get('schema_version'),'capir-auth.v3');return response({schema_version:'capir-auth.v3',enabled:true,capabilities:Object.fromEntries(['auth.authorize','auth.exchange','auth.refresh','auth.status','auth.logout','auth.grants'].map(k=>[k,'supported'])),device_auth:'unsupported',scopes:value.grant.scopes,backend_origin:environment.backendOrigin,web_origin:environment.webOrigin,lifetimes:{code_seconds:60,access_seconds:900,refresh_idle_seconds:null,refresh_absolute_seconds:null},unsupported:['device_auth']});}
+  if(path.endsWith('/exchange')){assert.equal(JSON.parse(init.body).schema_version,'capir-auth.v3');return response(value);}
+  if(path.endsWith('/status'))return active(value);
+  assert.fail('Unexpected path '+path);
+ };
+ const deps={env:{CAPIR_CONFIG_DIR:dir},credentialStore:()=>s,credentialTxn:()=>createCredentialTxn(s,join(dir,'mutex.sqlite')),fetchImpl:transport,interactive:true,sleep:async()=>{},openBrowser:async url=>{browser++;const consent=new URL(url);assert.equal(consent.searchParams.get('schema_version'),'capir-auth.v3');const callback=new URL(consent.searchParams.get('redirect_uri'));callback.searchParams.set('state',consent.searchParams.get('state'));callback.searchParams.set('code',secret());await fetch(callback);}};
+ const login=await runCli(['auth','login','--env','v2','--json'],deps);assert.equal(login.exitCode,0,login.output);assert.equal(JSON.parse(s.value).version,'capir-auth.v3');assert.ok(!login.output.includes(value.refresh_token));assert.ok(!login.output.includes(value.access_token));
+ const reused=await runCli(['auth','login','--env','v2','--json'],deps);assert.equal(reused.exitCode,0,reused.output);assert.equal(JSON.parse(reused.output).reused,true);assert.equal(browser,1);
+});
+
+it('auth login preserves a v3 record during a server rollback and resumes it when v3 returns',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'capir-protocol-rollback-'));dirs.push(dir);writeEnvironment(dir,environment.name,environment.backendOrigin,environment.webOrigin);
+ const original=persistentCredentials(),raw=serializeAuthRecord(environment,original,identity),s=store(raw);
+ const current={...persistentCredentials(false),grant:{...original.grant,access_expires_at:new Date(Date.now()+600000).toISOString()}};
+ let protocol='capir-auth.v2',refreshes=0,browser=0;
+ const transport=async(url,init={})=>{
+  const path=new URL(url).pathname;
+  if(path.endsWith('/capabilities'))return response({schema_version:protocol,enabled:true,capabilities:Object.fromEntries(['auth.authorize','auth.exchange','auth.refresh','auth.status','auth.logout','auth.grants'].map(k=>[k,'supported'])),device_auth:'unsupported',scopes:original.grant.scopes,backend_origin:environment.backendOrigin,web_origin:environment.webOrigin,lifetimes:{code_seconds:60,access_seconds:900,refresh_idle_seconds:protocol==='capir-auth.v3'?null:604800,refresh_absolute_seconds:protocol==='capir-auth.v3'?null:2592000},unsupported:['device_auth']});
+  if(path.endsWith('/refresh')){refreshes++;const body=JSON.parse(init.body);assert.equal(body.schema_version,'capir-auth.v3');assert.ok(body.request_id);return response(current);}
+  if(path.endsWith('/status'))return active(current);
+  assert.fail('Rollback must not dispatch logout, consent or exchange: '+path);
+ };
+ const deps={env:{CAPIR_CONFIG_DIR:dir},credentialStore:()=>s,credentialTxn:()=>createCredentialTxn(s,join(dir,'mutex.sqlite')),fetchImpl:transport,interactive:true,sleep:async()=>{},openBrowser:async()=>{browser++;assert.fail('A server rollback does not invalidate saved v3 consent');}};
+ const unavailable=await runCli(['auth','login','--env','v2','--json'],deps);
+ assert.notEqual(unavailable.exitCode,0);assert.equal(JSON.parse(unavailable.output).error.code,'CAPIR_AUTH_PROTOCOL_UNAVAILABLE');
+ assert.equal(s.value,raw);assert.equal(s.writes,0);assert.equal(refreshes,0);assert.equal(browser,0);
+ protocol='capir-auth.v3';
+ const recovered=await runCli(['auth','login','--env','v2','--json'],deps);
+ assert.equal(recovered.exitCode,0,recovered.output);assert.equal(JSON.parse(recovered.output).reused,true);
+ assert.equal(JSON.parse(s.value).version,'capir-auth.v3');assert.equal(JSON.parse(s.value).credentials.grant.id,original.grant.id);
+ assert.equal(JSON.parse(s.value).refresh_inflight,false);assert.equal(refreshes,1);assert.equal(browser,0);
+});
+
+it('server rollback cannot rewrite an already committed v3 refresh intent',async()=>{
+ const value=persistentCredentials(),record=JSON.parse(serializeAuthRecord(environment,value,identity));
+ record.refresh_inflight=true;record.pending_refresh={request_id:randomUUID(),protocol:'capir-auth.v3'};
+ const raw=JSON.stringify(record),s=store(raw);
+ await assert.rejects(usableCredential(environment,s,async()=>assert.fail('No refresh may be sent to the incompatible server'),{protocol:'capir-auth.v2'}),error=>error.code==='CAPIR_AUTH_PROTOCOL_UNAVAILABLE');
+ assert.equal(s.value,raw);assert.equal(s.writes,0);
+ const current={...persistentCredentials(false),grant:{...value.grant,access_expires_at:new Date(Date.now()+600000).toISOString()}};
+ await usableCredential(environment,s,async(url,init={})=>{
+  if(new URL(url).pathname.endsWith('/refresh')){assert.equal(JSON.parse(init.body).request_id,record.pending_refresh.request_id);return response(current);}
+  return active(current);
+ },{protocol:'capir-auth.v3'});
+ assert.equal(JSON.parse(s.value).refresh_inflight,false);assert.equal(JSON.parse(s.value).credentials.grant.id,value.grant.id);
+});
+
+it('explicit logout serializes behind in-flight renewal and removes that same grant successor',async()=>{
+ const original=persistentCredentials(),initial=serializeAuthRecord(environment,original),s=store(initial);
+ const current={...persistentCredentials(false),grant:{...original.grant,access_expires_at:new Date(Date.now()+600000).toISOString()}};
+ let started,release;const ready=new Promise(resolve=>{started=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+ let revoked=false;
+ const transport=async(url,init)=>{
+  const path=new URL(url).pathname;
+  if(path.endsWith('/refresh')){started();await gate;return response(current);}
+  if(path.endsWith('/logout')){const body=JSON.parse(init.body);assert.equal(body.refresh_token,current.refresh_token);assert.equal(JSON.parse(s.value).logout_pending,true);revoked=true;return response({schema_version:'capir-auth.v2',revoked_grant_id:original.grant.id,revoked_at:new Date().toISOString()});}
+  return active(current);
+ };
+ const renewing=usableCredential(environment,s,transport);await ready;
+ const txn=createCredentialTxn(s,credentialMutexPath(KEYRING_SERVICE,keyringUsername(environment.backendOrigin,environment.webOrigin)));
+ const signingOut=runAuthLogout(environment,{store:s,txn,token:initial,protocolV2:true,fetchImpl:transport});
+ release();await renewing;const result=await signingOut;
+ assert.equal(revoked,true);assert.equal(result.local_credential_removed,true);assert.equal(s.value,null);
 });

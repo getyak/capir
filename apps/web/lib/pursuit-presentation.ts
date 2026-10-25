@@ -1,19 +1,22 @@
+import type { LocaleTag } from "@talent-signal/contracts";
+import { translate } from "./i18n";
+
 /** Present an absolute deadline without changing its instant or hiding its zone. */
-export function formatPursuitDeadline(value: string | null, timeZone: string): string {
-  if (!value) return "未设置截止时间";
+export function formatPursuitDeadline(value: string | null, timeZone: string, locale: LocaleTag = "zh-CN"): string {
+  if (!value) return translate(locale, "未设置截止时间");
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "截止时间待核对";
+  if (!Number.isFinite(date.getTime())) return translate(locale, "截止时间待核对");
 
   let zone = timeZone;
   try {
-    new Intl.DateTimeFormat("zh-CN", { timeZone: zone }).format(date);
+    new Intl.DateTimeFormat(locale, { timeZone: zone }).format(date);
   } catch {
     zone = "UTC";
   }
-  const day = new Intl.DateTimeFormat("zh-CN", {
+  const day = new Intl.DateTimeFormat(locale, {
     timeZone: zone, year: "numeric", month: "long", day: "numeric",
   }).format(date);
-  const time = new Intl.DateTimeFormat("zh-CN", {
+  const time = new Intl.DateTimeFormat(locale, {
     timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).format(date);
   return `${day} ${time} · ${zone}`;
@@ -29,19 +32,20 @@ export function formatPursuitDeadlineCompact(
   value: string | null,
   timeZone: string,
   now: Date = new Date(),
+  locale: LocaleTag = "zh-CN",
 ): string {
-  if (!value) return "未设置截止时间";
+  if (!value) return translate(locale, "未设置截止时间");
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return "截止时间待核对";
+  if (!Number.isFinite(date.getTime())) return translate(locale, "截止时间待核对");
 
   let zone = timeZone;
   try {
-    new Intl.DateTimeFormat("zh-CN", { timeZone: zone }).format(date);
+    new Intl.DateTimeFormat(locale, { timeZone: zone }).format(date);
   } catch {
     zone = "UTC";
   }
   const parts = (instant: Date) => {
-    const fields = new Intl.DateTimeFormat("zh-CN", {
+    const fields = new Intl.DateTimeFormat(locale, {
       timeZone: zone, year: "numeric", month: "numeric", day: "numeric",
     }).formatToParts(instant);
     const pick = (type: string) => fields.find((part) => part.type === type)?.value ?? "";
@@ -49,9 +53,13 @@ export function formatPursuitDeadlineCompact(
   };
   const at = parts(date);
   const today = parts(now);
-  const time = new Intl.DateTimeFormat("zh-CN", {
+  const time = new Intl.DateTimeFormat(locale, {
     timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).format(date);
+  if (locale !== "zh-CN") {
+    const day = new Intl.DateTimeFormat(locale, { timeZone: zone, month: "long", day: "numeric", ...(at.year === today.year ? {} : { year: "numeric" }) }).format(date);
+    return `${day} ${time}`;
+  }
   return at.year === today.year
     ? `${at.month} 月 ${at.day} 日 ${time}`
     : `${at.year} 年 ${at.month} 月 ${at.day} 日 ${time}`;

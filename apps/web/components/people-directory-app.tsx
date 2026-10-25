@@ -36,10 +36,10 @@ export function PeopleDirectoryApp({
               <h1>{t("人物")}</h1>
               <p>
                 {error
-                  ? "目录暂时不可用；已保存的联系人资料不会改变。"
-                  : "每段关系保留自己的上下文。"}
+                  ? t("目录暂时不可用；已保存的联系人资料不会改变。")
+                  : t("每段关系保留自己的上下文。")}
                 {returnSessionId
-                  ? " 这次选择会保留原对话入口，但不会自动改变对话范围。"
+                  ? ` ${t("这次选择会保留原对话入口，但不会自动改变对话范围。")}`
                   : ""}
               </p>
             </div>
@@ -54,26 +54,29 @@ export function PeopleDirectoryApp({
 
           <div className={styles.listTools}>
             <PeopleDirectorySearch query={query} returnSessionId={returnSessionId} />
-            <span aria-live="polite">{error ? "暂不可用" : `${people.length === 200 ? "当前显示前 200" : people.length} 位${query ? "匹配人物" : "人物"}`}</span>
+            <span aria-live="polite">{error ? t("暂不可用") : people.length === 200
+              ? t(query ? "当前显示前 200 位匹配人物" : "当前显示前 200 位人物")
+              : t(query ? "{count} 位匹配人物" : "{count} 位人物", { count: people.length })}</span>
           </div>
 
           {error ? (
             <div className={styles.disconnectedState}>
               <WorkspaceDisconnectedState
-                description={error}
+                description={t(error)}
+                eyebrow={t("连接暂时中断")}
                 hint={
                   sessionRecoveryHref
-                    ? "重新登录后会回到同一目录视图；系统不会用陈旧联系人状态替代当前结果。"
-                    : "请稍后重新载入；你的联系人和已保存的来源不会因此丢失。"
+                    ? t("重新登录后会回到同一目录视图；系统不会用陈旧联系人状态替代当前结果。")
+                    : t("请稍后重新载入；你的联系人和已保存的来源不会因此丢失。")
                 }
                 primaryHref={
                   sessionRecoveryHref
                     ? sessionRecoveryHref
                     : withReturnSession(`/workspace/people${query ? `?query=${encodeURIComponent(query)}` : ""}`, returnSessionId)
                 }
-                primaryLabel={sessionRecoveryHref ? "重新登录" : "重新载入"}
+                primaryLabel={sessionRecoveryHref ? t("重新登录") : t("重新载入")}
                 secondaryHref="/workspace"
-                secondaryLabel="返回对话"
+                secondaryLabel={t("返回对话")}
                 title={t("人物目录暂时不可用。")}
               />
             </div>
@@ -81,11 +84,11 @@ export function PeopleDirectoryApp({
             <div className={styles.empty}>
               <AddressBook aria-hidden="true" size={24} weight="duotone" />
               <div>
-                <strong>{query ? "没有匹配人物" : "还没有人物"}</strong>
+                <strong>{query ? t("没有匹配人物") : t("还没有人物")}</strong>
                 <p>
                   {query
-                    ? "请尝试其他姓名、邮箱或电话。联系方式会保持掩码，且只有在你明确输入时才会用于搜索。"
-                    : "从一段聊天或人物介绍开始，整理你的第一位联系人。"}
+                    ? t("请尝试其他姓名、邮箱或电话。联系方式会保持掩码，且只有在你明确输入时才会用于搜索。")
+                    : t("从一段聊天或人物介绍开始，整理你的第一位联系人。")}
                 </p>
               </div>
               {query ? (

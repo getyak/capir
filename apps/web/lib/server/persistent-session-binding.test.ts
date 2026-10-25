@@ -61,3 +61,31 @@ it("rejects an old tab after a real new login rather than weakening to account/u
   expect(response.status).toBe(409);
   expect(f.admit).not.toHaveBeenCalled();
 });
+
+it("keeps browser consent and staged recovery tied to a canonical login across access renewal", async () => {
+  const { primarySessionFingerprint } = await import("./primary-session-binding");
+  const { sessionFingerprint } = await import("./stagedAuth");
+  const first = { backendAccountId: "account", backendUserId: "user", backendAccessToken: "access-one",
+    backendAccountName: "Account", backendAccountSlug: "account", backendExpiresAt: "2099-01-01T00:00:00Z",
+    backendRole: "member" as const, backendUsername: null, backendSessionId: "11111111-1111-4111-8111-111111111111" };
+  const rotated = { ...first, backendAccessToken: "access-two", backendExpiresAt: "2099-01-02T00:00:00Z" };
+  expect(primarySessionFingerprint(first)).toBe(primarySessionFingerprint(rotated));
+  expect(sessionFingerprint(first)).toBe(sessionFingerprint(rotated));
+  expect(sessionFingerprint(first)).not.toBe(sessionFingerprint({ ...rotated, backendSessionId: "22222222-2222-4222-8222-222222222222" }));
+  expect(primarySessionFingerprint({ ...first, backendSessionId: undefined })).not.toBe(primarySessionFingerprint({ ...rotated, backendSessionId: undefined }));
+});
+
+it("preserves existing legacy DOM bindings through verified enrollment and later access rotations", async () => {
+  const { primarySessionFingerprint } = await import("./primary-session-binding");
+  const legacy = { backendAccountId: "account", backendUserId: "user", backendAccessToken: "original-legacy-access",
+    backendAccountName: "Account", backendAccountSlug: "account", backendExpiresAt: "2099-01-01T00:00:00Z",
+    backendRole: "member" as const, backendUsername: null };
+  const upgraded = { ...legacy, backendAccessToken: "renewed-access", backendExpiresAt: "2099-01-02T00:00:00Z",
+    backendSessionId: "11111111-1111-4111-8111-111111111111", backendLegacyAccessToken: legacy.backendAccessToken,
+    backendLegacyExpiresAt: legacy.backendExpiresAt };
+  expect(contactHandoffSessionVersion(upgraded)).toBe(contactHandoffSessionVersion(legacy));
+  expect(workspaceSessionsBinding(upgraded)).toBe(workspaceSessionsBinding(legacy));
+  expect(primarySessionFingerprint(upgraded)).toBe(primarySessionFingerprint(legacy));
+  expect(primarySessionFingerprint({ ...upgraded, backendSessionId: "22222222-2222-4222-8222-222222222222",
+    backendLegacyAccessToken: undefined, backendLegacyExpiresAt: undefined })).not.toBe(primarySessionFingerprint(legacy));
+});

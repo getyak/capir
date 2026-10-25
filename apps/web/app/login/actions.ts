@@ -3,6 +3,9 @@
 import { TalentSignalClient, TalentSignalHttpError } from "@talent-signal/contracts";
 import { clearTestWorkspaceSession } from "@/lib/server/testWorkspaceSession";
 import { readPrimaryBackendSessionClaims, backendAuthBaseUrl, registerBackendAccount } from "@/lib/server/backendAuth";
+import { readRawPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
+import { markWebSessionSignedOut } from "@/lib/server/web-persistent-session";
+import { queueWebRevocation, retryWebRevocations } from "@/lib/server/web-session-cookies";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { prepareGoogleSignIn, bindGoogleNonce } from "@/lib/server/google-session";
@@ -265,6 +268,16 @@ export async function signInWithDefaultAccount(formData: FormData) {
 }
 
 export async function signOutOfWorkspace(formData?: FormData) {
+  // The capability can revoke even when bounded access expired or renewal is
+  // unavailable. Canonical revocation fences any late cookie-renewal response.
+  try {
+    const raw = await readRawPrimaryBackendSessionClaims();
+    if (raw?.backendRenewalSecret && raw.backendSessionId) {
+      await markWebSessionSignedOut(raw.backendSessionId);
+      await queueWebRevocation(raw);
+      await logoutBackendWithinDeadline(() => retryWebRevocations());
+    }
+  } catch { /* Explicit local sign-out is still available during an outage. */ }
   try {
     const backend = await authenticatedBackendClient();
     if (backend) {
@@ -300,6 +313,7 @@ export async function confirmEmailVerification(
   } catch (error) {
     if (isNextRedirectError(error)) throw error;
     if (error instanceof AuthError) {
+      if ("code" in error && error.code === "sign_out_pending") return failedState("sign_out_pending", "register");
       return failedState("invalid_input", "register", undefined, "这个验证链接无效或已过期。请重新注册，获取新的验证邮件。");
     }
     throw error;

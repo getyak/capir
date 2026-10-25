@@ -11,7 +11,9 @@ import {
 } from "@talent-signal/contracts";
 import { headers } from "next/headers";
 import { getToken } from "next-auth/jwt";
+import { selectWebFamilyToken } from "./web-session-cookies";
 import { cache } from "react";
+import { renewWebSession, webSessionWasSignedOut } from "./web-persistent-session";
 
 import { withAuthRequestTimeout } from "@/lib/auth-request-timeout";
 import {
@@ -96,8 +98,15 @@ export async function confirmBackendRegistration(
 
 
 export type BackendSessionClaims = {
-  /** Server-owned canonical ID, set only by persistent Mac authorization. */
+  /** Server-owned canonical login ID; stable while bounded access rotates. */
   backendSessionId?: string;
+  /** Server-only encrypted-cookie capability; never expose in a public session. */
+  backendRenewalSecret?: string;
+  /** Only a protected cookie delivered before the enrollment request sets this. */
+  backendPendingEnrollment?: boolean;
+  /** Original legacy login identity for opaque UI bindings only; never IO authority. */
+  backendLegacyAccessToken?: string;
+  backendLegacyExpiresAt?: string;
   backendAccessToken: string;
   backendAccountId: string;
   backendAccountName: string;
@@ -110,7 +119,7 @@ export type BackendSessionClaims = {
 
 // React discards this memoization between server requests; never persist tokens.
 // https://react.dev/reference/react/cache#caveats
-export const readPrimaryBackendSessionClaims = cache(async (): Promise<BackendSessionClaims | null> => {
+export const readPrimarySessionToken = cache(async () => {
   let requestHeaders: Headers;
   try {
     requestHeaders = await headers();
@@ -131,6 +140,11 @@ export const readPrimaryBackendSessionClaims = cache(async (): Promise<BackendSe
     salt: AUTH_SESSION_COOKIE,
     secret: authSecret(),
   });
+  return selectWebFamilyToken(token);
+});
+export const readRawPrimaryBackendSessionClaims = cache(async (): Promise<BackendSessionClaims | null> => {
+  const token = await readPrimarySessionToken();
+  if (token && await webSessionWasSignedOut(token.backendSessionId)) return null;
   if (
     !token ||
     typeof token.backendAccessToken !== "string" ||
@@ -149,6 +163,12 @@ export const readPrimaryBackendSessionClaims = cache(async (): Promise<BackendSe
   }
   return {
     backendAccessToken: token.backendAccessToken,
+    ...(token.backendPendingEnrollment === true ? { backendPendingEnrollment: true } : {}),
+    ...(typeof token.backendLegacyAccessToken === "string" && typeof token.backendLegacyExpiresAt === "string" &&
+      Number.isFinite(Date.parse(token.backendLegacyExpiresAt)) ? {
+        backendLegacyAccessToken: token.backendLegacyAccessToken, backendLegacyExpiresAt: token.backendLegacyExpiresAt } : {}),
+    ...(typeof token.backendRenewalSecret === "string" && /^[A-Za-z0-9_-]{43}$/.test(token.backendRenewalSecret)
+      ? { backendRenewalSecret: token.backendRenewalSecret } : {}),
     ...(typeof token.backendSessionId === "string" &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token.backendSessionId)
       ? { backendSessionId: token.backendSessionId } : {}),
@@ -160,6 +180,13 @@ export const readPrimaryBackendSessionClaims = cache(async (): Promise<BackendSe
     backendUserId: token.backendUserId,
     backendUsername: token.backendUsername,
   };
+});
+
+// Server Components may read cookies but cannot set them. Renewal returns live
+// bounded access here; the writable heartbeat separately rolls cookie storage.
+export const readPrimaryBackendSessionClaims = cache(async (): Promise<BackendSessionClaims | null> => {
+  const claims = await readRawPrimaryBackendSessionClaims();
+  return claims ? renewWebSession(claims) : null;
 });
 
 export const readBackendSessionClaims = cache(async (): Promise<BackendSessionClaims | null> => {

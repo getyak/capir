@@ -1,3 +1,4 @@
+import { sessionBindingCredentials } from "./primary-session-binding";
 import "server-only";
 
 import { createHmac } from "node:crypto";
@@ -117,15 +118,16 @@ export function isWorkspaceSessionTimestamp(value: unknown): value is string {
  * not. Ordinary browser logins retain their exact credential/expiry boundary.
  */
 export function workspaceSessionsBinding(claims: BackendSessionClaims): string {
+  const identity = sessionBindingCredentials(claims);
   return createHmac("sha256", authSecret())
     .update(
       JSON.stringify([
         "workspace-sessions.v1",
         claims.backendAccountId,
         claims.backendUserId,
-        ...(claims.backendSessionId
-          ? ["persistent-macos.v1", claims.backendSessionId]
-          : [claims.backendAccessToken, claims.backendExpiresAt]),
+        ...(identity.backendSessionId
+          ? ["persistent-macos.v1", identity.backendSessionId]
+          : [identity.backendAccessToken, identity.backendExpiresAt]),
       ]),
     )
     .digest("hex");

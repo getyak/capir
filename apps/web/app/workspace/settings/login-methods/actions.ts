@@ -243,7 +243,7 @@ export async function startProviderReauth(form: FormData): Promise<void> {
             clientLabel,
             accountId: claims.backendAccountId,
             userId: claims.backendUserId,
-            sessionFingerprint: sessionFingerprint(claims.backendAccessToken),
+            sessionFingerprint: sessionFingerprint(claims),
             accountRevision: scope.accountRevision,
             userRevision: scope.userRevision,
           },
@@ -258,7 +258,7 @@ export async function startProviderReauth(form: FormData): Promise<void> {
       clientLabel,
       accountId: claims.backendAccountId,
       userId: claims.backendUserId,
-      sessionFingerprint: sessionFingerprint(claims.backendAccessToken),
+      sessionFingerprint: sessionFingerprint(claims),
       accountRevision: settings.workspace.revision,
       userRevision: settings.user.revision,
       step: "awaiting-reauth",
@@ -354,7 +354,7 @@ async function stagedSessionMatches(operation: AuthOperation | null): Promise<bo
   return Boolean(
     operation &&
       claims &&
-      sessionFingerprint(claims.backendAccessToken) === operation.sessionFingerprint,
+      sessionFingerprint(claims) === operation.sessionFingerprint,
   );
 }
 
@@ -412,7 +412,7 @@ export async function startPasswordStepUpLink(
         targetProvider,
         accountId: claims.backendAccountId,
         userId: claims.backendUserId,
-        sessionFingerprint: sessionFingerprint(claims.backendAccessToken),
+        sessionFingerprint: sessionFingerprint(claims),
         accountRevision: scope.accountRevision,
         userRevision: scope.userRevision,
         step: "awaiting-target",

@@ -8,7 +8,8 @@ final class LiveConversationFlowUITests: XCTestCase {
         super.tearDown()
     }
 
-    private func authenticatedApp(requirePasswordLogin: Bool = false) throws -> XCUIApplication {
+    private func authenticatedApp(requirePasswordLogin: Bool = false, allowInteractiveSignIn: Bool = true,
+                                  requirePersistentReadback: Bool = false) throws -> XCUIApplication {
         continueAfterFailure = false
         let environment = ProcessInfo.processInfo.environment
         guard let backend = environment["TS_IOS_LIVE_BACKEND_URL"],
@@ -23,7 +24,11 @@ final class LiveConversationFlowUITests: XCTestCase {
             "-talent-signal.interface-language", "en"]
         app.launch()
         var enteredCredentials = false
-        if !app.buttons["relationship-guide"].waitForExistence(timeout: 15) {
+        if !app.buttons["relationship-guide"].waitForExistence(timeout: allowInteractiveSignIn ? 15 : 60) {
+            guard allowInteractiveSignIn else {
+                XCTFail("An ordinary relaunch must restore the saved identity without entering credentials")
+                throw NSError(domain: "LivePersistentLoginAcceptance", code: 1)
+            }
             let entry = app.buttons["sign-in-with-email"]
             if !entry.exists {
                 if app.buttons["welcome-skip"].exists { app.buttons["welcome-skip"].tap() }
@@ -67,6 +72,10 @@ final class LiveConversationFlowUITests: XCTestCase {
         XCTAssertTrue(identity.waitForExistence(timeout: 10))
         XCTAssertTrue(identity.label.split(whereSeparator: { $0.isWhitespace || $0 == "," })
             .contains(Substring(email)))
+        if requirePersistentReadback {
+            let persistent = app.staticTexts["sign-in-method-current-device-persistent"]
+            XCTAssertTrue(persistent.waitForExistence(timeout: 30), "The server must report this current native session as persistent")
+        }
         app.navigationBars["Account"].buttons["Workspace"].tap()
         let workspaceBack = app.navigationBars["Workspace"].buttons["Agent"]
         XCTAssertTrue(workspaceBack.waitForExistence(timeout: 5))
@@ -86,6 +95,18 @@ final class LiveConversationFlowUITests: XCTestCase {
     func testLiveKeyboardSignInAndIdentity() throws {
         let app = try authenticatedApp(requirePasswordLogin: true)
         capture(app, "Live keyboard sign-in reached the verified workspace")
+    }
+
+    /// Normal UI authentication and the real Keychain-backed production store.
+    /// The second launch has no credential-entry fallback and creates no content.
+    func testLivePersistentLoginSurvivesOrdinaryRelaunch() throws {
+        let app = try authenticatedApp(requirePersistentReadback: true)
+        capture(app, "Verified native identity before ordinary relaunch")
+        app.terminate()
+        let restored = try authenticatedApp(allowInteractiveSignIn: false, requirePersistentReadback: true)
+        XCTAssertFalse(restored.buttons["sign-in-with-email"].exists)
+        XCTAssertFalse(restored.textFields["login-email"].exists)
+        capture(restored, "Same native identity restored without entering credentials")
     }
 
     func testLiveTextRoundTripAndDraftRecovery() throws {

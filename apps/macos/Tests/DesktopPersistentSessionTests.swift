@@ -49,6 +49,7 @@ final class DesktopPersistentSessionTests: XCTestCase {
         h.transport.beforeSubmit = { action in
             XCTAssertEqual(action, "enroll")
             XCTAssertNotNil(h.vault.value)
+            XCTAssertEqual(h.vault.value?.revocationProof, h.receipt.revocation_proof)
             XCTAssertFalse(h.vault.value!.enrolled)
         }
         let outcome1 = await h.coordinator.restore(in: h.origin)
@@ -56,6 +57,157 @@ final class DesktopPersistentSessionTests: XCTestCase {
         XCTAssertEqual(h.transport.actions, ["enroll"])
         XCTAssertTrue(h.vault.value!.enrolled)
         XCTAssertEqual(h.transport.statusReads, 2)
+    }
+
+    func testFreshEnrollmentRequiresRevocationEscrowAndLegacyPendingMustPersistItBeforeFallback() async throws {
+        let h = PersistentHarness()
+        var unsealed = h.receipt; unsealed.revocation_proof = nil
+        h.transport.live = unsealed
+        let fresh = await h.coordinator.restore(in: h.origin)
+        XCTAssertEqual(fresh, .unavailable)
+        XCTAssertNil(h.vault.value); XCTAssertTrue(h.transport.actions.isEmpty)
+        h.vault.value = h.credential(enrolled: false)
+        h.transport.submitted = .init(status: "revoked")
+        let pending = await h.coordinator.restore(in: h.origin)
+        XCTAssertEqual(pending, .unavailable)
+        XCTAssertEqual(h.transport.actions, ["renew"])
+        h.transport.live = h.receipt
+        h.transport.beforeSubmit = { action in
+            if action == "enroll" {
+                XCTAssertEqual(h.vault.value?.revocationProof, h.receipt.revocation_proof)
+                h.transport.submitted = h.receipt
+            }
+        }
+        let recovered = await h.coordinator.restore(in: h.origin)
+        XCTAssertEqual(recovered, .authenticated(h.receipt))
+        XCTAssertEqual(h.transport.actions, ["renew", "renew", "enroll"])
+    }
+
+    func testOfflineLogoutRetainsScopedVaultAndConstructorResumesItsDurableIndex() async throws {
+        let h = PersistentHarness(), persistence = MemoryLoginPersistence(), vault = ScopedRevocationVault()
+        let index = DesktopRevocationIndex(persistence: persistence)
+        let old = h.selection
+        vault.write(h.credential(enrolled: true), for: old)
+        let transport = RevocationProofTransport(); transport.failure = URLError(.notConnectedToInternet)
+        let coordinator = DesktopPersistentSessionCoordinator(registry: h.registry, vault: vault, transportFactory: { _ in transport }, revocations: index)
+        try coordinator.signOut(in: h.origin)
+        await coordinator.retryPendingRevocations()
+        XCTAssertEqual(try index.pending(), [DesktopRevocationScope(old)])
+        XCTAssertNotNil(vault.values[old.storeIdentifier])
+        let fresh = try h.registry.selection(for: old.origin)
+        XCTAssertNotEqual(fresh.storeIdentifier, old.storeIdentifier)
+        let newCredential = DesktopDeviceCredential(origin: fresh.origin, storeIdentifier: fresh.storeIdentifier, epoch: fresh.epoch,
+            accountID: UUID().uuidString, userID: UUID().uuidString, sessionID: UUID().uuidString, secret: String(repeating: "n", count: 43), enrolled: true)
+        vault.write(newCredential, for: fresh)
+        let metadata = String(decoding: persistence.data!, as: UTF8.self)
+        XCTAssertFalse(metadata.contains(h.credential(enrolled: true).secret))
+        XCTAssertFalse(metadata.contains("revocationProof"))
+        transport.failure = nil
+        let relaunched = DesktopPersistentSessionCoordinator(registry: h.registry, vault: vault, transportFactory: { _ in transport },
+            revocations: DesktopRevocationIndex(persistence: persistence))
+        defer { withExtendedLifetime(relaunched) {} }
+        for _ in 0..<100 where !(try index.pending()).isEmpty { await Task.yield() }
+        XCTAssertTrue(try index.pending().isEmpty, "Construction must retry even without a workspace or restore call")
+        XCTAssertNil(vault.values[old.storeIdentifier])
+        XCTAssertEqual(vault.values[fresh.storeIdentifier], newCredential)
+        XCTAssertTrue(transport.actions.allSatisfy { $0.0 == "revoke" && $0.1 == old.storeIdentifier })
+    }
+
+    func testLockedVaultLogoutRetainsIndexUntilActualUnlockNotification() async throws {
+        let h = PersistentHarness(), persistence = MemoryLoginPersistence(), vault = ScopedRevocationVault()
+        let index = DesktopRevocationIndex(persistence: persistence), transport = RevocationProofTransport()
+        vault.write(h.credential(enrolled: true), for: h.selection); vault.locked = true
+        let coordinator = DesktopPersistentSessionCoordinator(registry: h.registry, vault: vault, transportFactory: { _ in transport }, revocations: index)
+        try coordinator.signOut(in: h.origin)
+        await coordinator.retryPendingRevocations()
+        XCTAssertEqual(try index.pending().count, 1); XCTAssertTrue(transport.actions.isEmpty)
+        vault.locked = false
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        for _ in 0..<100 where !(try index.pending()).isEmpty { await Task.yield() }
+        XCTAssertTrue(try index.pending().isEmpty)
+        XCTAssertNil(vault.values[h.selection.storeIdentifier])
+        XCTAssertEqual(transport.actions.count, 1)
+    }
+
+    func testUnknownRemoteRevocationKeepsBothCredentialAndDurableIntent() async throws {
+        let h = PersistentHarness(), persistence = MemoryLoginPersistence(), vault = ScopedRevocationVault()
+        let index = DesktopRevocationIndex(persistence: persistence), transport = RevocationProofTransport()
+        transport.response = .init(status: "unavailable")
+        vault.write(h.credential(enrolled: true), for: h.selection)
+        let coordinator = DesktopPersistentSessionCoordinator(registry: h.registry, vault: vault, transportFactory: { _ in transport }, revocations: index)
+        try coordinator.signOut(in: h.origin)
+        await coordinator.retryPendingRevocations()
+        XCTAssertEqual(try index.pending(), [DesktopRevocationScope(h.selection)])
+        XCTAssertNotNil(vault.values[h.selection.storeIdentifier])
+        transport.response = .init(status: "revoked")
+        await coordinator.retryPendingRevocations()
+        XCTAssertEqual(try index.pending(), [DesktopRevocationScope(h.selection)], "An old unconfirmed revoked document is not acknowledgement")
+        XCTAssertNotNil(vault.values[h.selection.storeIdentifier])
+    }
+
+    func testLogoutJournalFailurePreservesTheSelectedStoreAndCredential() async throws {
+        let h = PersistentHarness(), persistence = MemoryLoginPersistence(), vault = ScopedRevocationVault()
+        let transport = RevocationProofTransport()
+        vault.write(h.credential(enrolled: true), for: h.selection)
+        persistence.writeFailure = LoginStoreRegistryError.persistenceUnavailable
+        let coordinator = DesktopPersistentSessionCoordinator(registry: h.registry, vault: vault, transportFactory: { _ in transport },
+            revocations: DesktopRevocationIndex(persistence: persistence))
+        XCTAssertThrowsError(try coordinator.signOut(in: h.origin))
+        XCTAssertTrue(h.registry.isCurrent(h.selection))
+        XCTAssertNotNil(vault.values[h.selection.storeIdentifier])
+        let result = await coordinator.restore(in: h.origin)
+        XCTAssertEqual(result, .needsLogin)
+        XCTAssertTrue(transport.actions.isEmpty)
+    }
+
+    func testAlreadyVerifiedCaptureIsFencedWhenLogoutJournalCannotBeWritten() async throws {
+        let h = PersistentHarness(), persistence = MemoryLoginPersistence()
+        let fixture = try PersistentHTTPFixture(receipt: h.receipt)
+        defer { fixture.stop() }
+        let origin = try await fixture.start()
+        let registry = LoginStoreRegistry(persistence: MemoryLoginPersistence(), lockURL: fixture.directory.appendingPathComponent("registry.lock"))
+        let selection = try registry.selection(for: origin.url.absoluteString)
+        let store = try await seedSyntheticCaptureCookie(for: selection)
+        defer { withExtendedLifetime(store) {} }
+        let vault = ScopedRevocationVault()
+        vault.write(.init(origin: selection.origin, storeIdentifier: selection.storeIdentifier, epoch: selection.epoch,
+            accountID: h.receipt.account_id!, userID: h.receipt.user_id!, sessionID: h.receipt.session_id!,
+            secret: String(repeating: "p", count: 43), enrolled: true), for: selection)
+        h.transport.live = h.receipt; h.transport.submitted = h.receipt
+        let coordinator = DesktopPersistentSessionCoordinator(registry: registry, vault: vault, transportFactory: { _ in h.transport },
+            revocations: DesktopRevocationIndex(persistence: persistence))
+        let capture = CaptureWebSession(origin: origin, registry: registry, persistentSession: coordinator, originProvider: { origin })
+        defer { capture.retire() }
+        _ = try await capture.context()
+        let ledger = fixture.directory.appendingPathComponent("requests.json")
+        let before = try JSONSerialization.jsonObject(with: Data(contentsOf: ledger)) as! [[String: Any]]
+        persistence.writeFailure = LoginStoreRegistryError.persistenceUnavailable
+        XCTAssertThrowsError(try coordinator.signOut(in: origin))
+        do { _ = try await capture.context(); XCTFail("An admitted capture cannot survive explicit logout's in-memory fence") }
+        catch let error as CaptureTransportError { XCTAssertEqual(error, .staleOrigin) }
+        let after = try JSONSerialization.jsonObject(with: Data(contentsOf: ledger)) as! [[String: Any]]
+        XCTAssertEqual(after.count, before.count, "No context or capture write may be dispatched after the failed logout journal")
+        XCTAssertEqual(h.transport.actions, ["renew"])
+    }
+
+    func testLogoutEnqueuedDuringAnotherRevocationIsDrainedWithoutANewForeground() async throws {
+        let h = PersistentHarness(), persistence = MemoryLoginPersistence(), vault = ScopedRevocationVault()
+        let index = DesktopRevocationIndex(persistence: persistence), transport = RevocationProofTransport()
+        transport.holdOnce = true
+        vault.write(h.credential(enrolled: true), for: h.selection)
+        let coordinator = DesktopPersistentSessionCoordinator(registry: h.registry, vault: vault, transportFactory: { _ in transport }, revocations: index)
+        try coordinator.signOut(in: h.origin)
+        for _ in 0..<100 where transport.pending == nil { await Task.yield() }
+        XCTAssertNotNil(transport.pending)
+        let second = try h.registry.selection(for: h.selection.origin)
+        vault.write(.init(origin: second.origin, storeIdentifier: second.storeIdentifier, epoch: second.epoch,
+            accountID: UUID().uuidString, userID: UUID().uuidString, sessionID: UUID().uuidString,
+            secret: String(repeating: "b", count: 43), enrolled: true), for: second)
+        try coordinator.signOut(in: h.origin)
+        transport.pending?.resume(returning: .init(status: "revoked", revocation_confirmed: true)); transport.pending = nil
+        await coordinator.retryPendingRevocations()
+        XCTAssertTrue(try index.pending().isEmpty)
+        XCTAssertEqual(transport.actions.map { $0.1 }, [h.selection.storeIdentifier, second.storeIdentifier])
     }
 
     func testVeryOldCredentialRestoresAfterProcessReconstruction() async throws {
@@ -139,10 +291,11 @@ final class DesktopPersistentSessionTests: XCTestCase {
         XCTAssertNotEqual(after.storeIdentifier, h.selection.storeIdentifier)
         XCTAssertGreaterThan(after.epoch, h.selection.epoch)
         XCTAssertFalse(after.unresolved)
-        XCTAssertNil(h.vault.value)
+        XCTAssertNotNil(h.vault.value, "The old capability must survive until remote revocation is confirmed")
         h.transport.pending?.resume(returning: h.receipt); h.transport.pending = nil
         let outcome8 = await running.value
         XCTAssertEqual(outcome8, .cancelled)
+        await h.coordinator.retryPendingRevocations()
         XCTAssertNil(h.vault.value)
     }
 
@@ -570,9 +723,11 @@ private final class PersistentHarness {
     let selection: LoginStoreSelection
     let vault = MemoryCredentialVault()
     let transport = FakePersistentTransport()
+    let revocationPersistence = MemoryLoginPersistence()
     let receipt = DesktopPersistentSessionReceipt(status: "authenticated", account_id: UUID().uuidString,
         user_id: UUID().uuidString, session_id: UUID().uuidString,
-        session_expires_at: ISO8601DateFormatter().string(from: Date().addingTimeInterval(28800)))
+        session_expires_at: ISO8601DateFormatter().string(from: Date().addingTimeInterval(28800)),
+        revocation_proof: "v1." + String(repeating: "a", count: 16) + "." + String(repeating: "b", count: 64) + "." + String(repeating: "c", count: 22))
     lazy var coordinator = newCoordinator()
     init() {
         registry = LoginStoreRegistry(persistence: MemoryLoginPersistence(),
@@ -585,14 +740,47 @@ private final class PersistentHarness {
             secret: String(repeating: "s", count: 43), enrolled: enrolled)
     }
     func newCoordinator() -> DesktopPersistentSessionCoordinator {
-        DesktopPersistentSessionCoordinator(registry: registry, vault: vault, transportFactory: { _ in self.transport })
+        DesktopPersistentSessionCoordinator(registry: registry, vault: vault, transportFactory: { _ in self.transport },
+            revocations: DesktopRevocationIndex(persistence: revocationPersistence))
     }
 }
 
 private final class MemoryLoginPersistence: LoginStoreRegistryPersisting {
     var data: Data?
+    var writeFailure: Error?
     func read() throws -> Data? { data }
-    func write(_ data: Data) throws { self.data = data }
+    func write(_ data: Data) throws { if let writeFailure { throw writeFailure }; self.data = data }
+}
+
+private final class ScopedRevocationVault: DesktopDeviceCredentialStoring {
+    var values: [UUID: DesktopDeviceCredential] = [:]
+    var locked = false
+    func read(for selection: LoginStoreSelection) throws -> DesktopDeviceCredential? {
+        if locked { throw DesktopDeviceCredentialError.keychainUnavailable }
+        return values[selection.storeIdentifier]
+    }
+    func write(_ value: DesktopDeviceCredential, for selection: LoginStoreSelection) { values[selection.storeIdentifier] = value }
+    func remove(for selection: LoginStoreSelection) throws {
+        if locked { throw DesktopDeviceCredentialError.keychainUnavailable }
+        values[selection.storeIdentifier] = nil
+    }
+}
+
+@MainActor
+private final class RevocationProofTransport: DesktopPersistentSessionTransporting {
+    var failure: Error?
+    var response = DesktopPersistentSessionReceipt(status: "revoked", revocation_confirmed: true)
+    var holdOnce = false
+    var pending: CheckedContinuation<DesktopPersistentSessionReceipt, Never>?
+    var actions: [(String, UUID)] = []
+    func status(selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt { .init(status: "unavailable") }
+    func submit(_ action: String, credential: DesktopDeviceCredential, selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt {
+        actions.append((action, selection.storeIdentifier))
+        if let failure { throw failure }
+        if holdOnce { holdOnce = false; return await withCheckedContinuation { pending = $0 } }
+        return response
+    }
+    func cancel() {}
 }
 private final class MemoryCredentialVault: DesktopDeviceCredentialStoring {
     var value: DesktopDeviceCredential?
@@ -621,7 +809,7 @@ private final class FakePersistentTransport: DesktopPersistentSessionTransportin
     }
     func submit(_ action: String, credential: DesktopDeviceCredential, selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt {
         actions.append(action); beforeSubmit?(action)
-        if action == "revoke" { return .init(status: "revoked") }
+        if action == "revoke" { return .init(status: "revoked", revocation_confirmed: true) }
         if suspend { return await withCheckedContinuation { pending = $0 } }
         if let failure { throw failure }
         afterSubmit?(); return submitted ?? live
@@ -723,7 +911,8 @@ private final class PersistentHTTPFixture {
     }
     func start() async throws -> WorkspaceOrigin {
         let body: [String: String] = ["status": receipt.status, "account_id": receipt.account_id!, "user_id": receipt.user_id!,
-                                    "session_id": receipt.session_id!, "session_expires_at": receipt.session_expires_at!]
+                                    "session_id": receipt.session_id!, "session_expires_at": receipt.session_expires_at!,
+                                    "revocation_proof": receipt.revocation_proof ?? ""]
         let configuration: [String: Any] = ["receipt": body, "workspace_account_id": selectedWorkspaceAccountID, "primary_proof": primaryProof]
         let script = #"""
 import sys,time

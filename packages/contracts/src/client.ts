@@ -1,5 +1,6 @@
 import { FormatRegistry } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
+import type { PersistentSessionEnrollRequest, PersistentSessionProof, PersistentSessionRevokeRequest, PersistentSessionResponse } from "./persistentSessionSchemas.js";
 import type {
   CapirTestCapabilitiesResponse,
   CapirTestCreateRequest,
@@ -271,6 +272,11 @@ interface ErrorEnvelope {
   };
 }
 
+/** The host owns secure storage, coalescing and renewal. Resolve before
+ * dispatch, including writes; the SDK never retries a business request. */
+export type AccessTokenResolver = (options:{signal?:AbortSignal}) => Promise<string>;
+export interface TalentSignalClientOptions { accessTokenResolver?:AccessTokenResolver; }
+
 export class TalentSignalClient {
   readonly baseUrl: string;
   private accessToken: string | undefined;
@@ -285,13 +291,33 @@ export class TalentSignalClient {
   getProductRun(id: string, byTask = false): Promise<ProductRunDetail> { return this.request(`/v1/product-runs/${byTask ? "tasks/" : ""}${encodeURIComponent(id)}`, { method: "GET" }); }
   submitProductRunFeedback(taskID: string, body: ProductRunFeedbackMutation): Promise<ProductRunDetail> { return this.request(`/v1/product-runs/tasks/${encodeURIComponent(taskID)}/feedback`, { method: "PUT", body }); }
 
-  constructor(baseUrl: string, accessToken?: string) {
+  constructor(baseUrl: string, accessToken?: string, private readonly options:TalentSignalClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.accessToken = accessToken;
   }
 
   setAccessToken(accessToken: string): void {
     this.accessToken = accessToken;
+  }
+
+  /** The host must securely persist renewal_secret BEFORE enrollment and
+   * retain it on an uncertain response. Never enroll scoped Lab identities. */
+  async enrollPersistentSession(request:PersistentSessionEnrollRequest, signal?:AbortSignal):Promise<PersistentSessionResponse> {
+    const session=await this.request<PersistentSessionResponse>("/v1/auth/persistent/enroll",{method:"POST",body:request,signal});
+    this.setAccessToken(session.access_token);
+    return session;
+  }
+
+  async renewPersistentSession(proof:PersistentSessionProof, signal?:AbortSignal):Promise<PersistentSessionResponse> {
+    const session=await this.request<PersistentSessionResponse>("/v1/auth/persistent/renew",{method:"POST",body:proof,authenticated:false,signal});
+    this.setAccessToken(session.access_token);
+    return session;
+  }
+
+  /** Disable the host resolver before explicit sign-out. Revoke by renewal
+   * proof without first renewing an expired access token. */
+  revokePersistentSession(proof:PersistentSessionRevokeRequest, signal?:AbortSignal):Promise<{revoked:true}> {
+    return this.request("/v1/auth/persistent/revoke",{method:"POST",body:proof,authenticated:false,signal});
   }
 
   async login(request: SimulatedLoginRequest): Promise<SessionResponse> {
@@ -1718,16 +1744,20 @@ export class TalentSignalClient {
     },
   ): Promise<Response> {
     const authenticated = options.authenticated ?? true;
-    if (authenticated && !this.accessToken) {
+    const accessToken = authenticated && this.options.accessTokenResolver
+      ? await this.options.accessTokenResolver(options.signal ? {signal:options.signal} : {})
+      : this.accessToken;
+    if (authenticated && !accessToken) {
       throw new Error("An access token is required for this request.");
     }
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: options.method,
+      redirect: "error",
       headers: {
         ...(options.headers ?? {}),
         "x-talent-signal-platform": this.clientPlatform,
         ...(authenticated
-          ? { authorization: `Bearer ${this.accessToken}` }
+          ? { authorization: `Bearer ${accessToken}` }
           : {}),
       },
       body: options.body,

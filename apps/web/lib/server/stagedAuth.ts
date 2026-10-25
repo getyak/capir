@@ -1,3 +1,5 @@
+import { primarySessionFingerprint } from "./primary-session-binding";
+import type { BackendSessionClaims } from "./backendAuth";
 import "server-only";
 
 import { createHash } from "node:crypto";
@@ -529,8 +531,8 @@ export function renderedScopeMatchesOperation(
  * caller's session at every stage, without any raw bearer token appearing in
  * URLs or page state.
  */
-export function sessionFingerprint(backendAccessToken: string): string {
-  return createHash("sha256").update(backendAccessToken).digest("hex");
+export function sessionFingerprint(session: string | BackendSessionClaims): string {
+  return typeof session === "string" ? createHash("sha256").update(session).digest("hex") : primarySessionFingerprint(session);
 }
 
 /** Small opaque reference for URLs; never contains a token or credential. */
