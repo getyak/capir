@@ -2345,19 +2345,41 @@ final class CandidateSignalUITests: XCTestCase {
         preserveScreenshot("Compact new Session before keyboard assertion")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
 
+        guard app.textFields.matching(identifier: "ask-composer").count == 1,
+              composer.isHittable else {
+            XCTFail("The new Session must expose one hittable composer before typing.")
+            return
+        }
+        let initialValue = composer.value
+        guard let emptyBaseline = initialValue as? String else {
+            let valueType = initialValue.map { String(reflecting: type(of: $0)) } ?? "nil"
+            XCTFail("The empty composer must expose a String AX value; "
+                    + "type=\(valueType), value=\(String(reflecting: initialValue)).")
+            return
+        }
+        guard emptyBaseline != "x" else {
+            XCTFail("The initial empty composer must not already contain the test character.")
+            return
+        }
         typeTextReliably("x", into: composer)
         // Each native typing event requires its target field to have keyboard focus.
         composer.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         composer.typeText(XCUIKeyboardKey.delete.rawValue)
         let emptyComposer = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in
-                guard let value = composer.value as? String else { return false }
-                return value.isEmpty || value == composer.placeholderValue
-            },
+            predicate: NSPredicate(format: "value == %@", emptyBaseline),
             object: composer
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [emptyComposer], timeout: 2), .completed)
+        guard XCTWaiter.wait(for: [emptyComposer], timeout: 2) == .completed else {
+            let currentValue = composer.value
+            let valueType = currentValue.map { String(reflecting: type(of: $0)) } ?? "nil"
+            XCTFail("Deleting the test character must restore the initial AX value; "
+                    + "baseline=\(String(reflecting: emptyBaseline)), "
+                    + "currentType=\(valueType), current=\(String(reflecting: currentValue)), "
+                    + "placeholder=\(String(reflecting: composer.placeholderValue)), "
+                    + "voice=\(app.buttons["ask-voice"].exists), send=\(app.buttons["ask-send"].exists).")
+            return
+        }
         XCTAssertTrue(app.buttons["ask-voice"].waitForExistence(timeout: 2))
         XCTAssertFalse(app.buttons["ask-send"].exists)
         preserveScreenshot("New Session focused empty and voice ready")
