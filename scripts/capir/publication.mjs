@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /** Verified release cohorts and monotonic stable promotion. Drafts may be
  * rebuilt; published version assets are read-only and authoritative. */
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync, copyFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildManifest, verifyManifest, RELEASE_REPOSITORY, RELEASE_BASE_URL, SUPPORTED_PLATFORMS } from './manifest.mjs';
+import {GitHubReleaseProvider} from './github-release-provider.mjs';
 
 export function strictVersion(version) {
   if (typeof version !== 'string' || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(version) || /\s/.test(version) || !version.split('.').every(p => Number.isSafeInteger(Number(p))))
@@ -95,139 +95,80 @@ async function readCheckpoint(channel, publicKey, fetchImpl) {
   if (manifest.version !== version || manifest.source_commit !== record.source_commit || createHash('sha256').update(manifestBytes).digest('hex') !== record.manifest_sha256) throw new Error('stable promotion checkpoint does not match its verified immutable release');
   return { manifest, manifestBytes, signature };
 }
-function realGh(args) {
-  const env = { ...process.env }; delete env.CAPIR_RELEASE_SIGNING_KEY;
-  try { return { code: 0, stdout: execFileSync('gh', args, { encoding: 'utf8', env, stdio: ['ignore','pipe','pipe'], timeout: 720000, maxBuffer: 1048576 }) }; }
-  catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? '') }; }
-}
-export async function publishRelease(options, { gh = realGh, fetchImpl = fetch } = {}) {
+export async function publishRelease(options, { gh, downloadAsset, fetchImpl = fetch, saveReceipt } = {}) {
   const version = strictVersion(options.version), tag = `capir-v${version}`;
   if (options.tag !== tag || !/^[0-9a-f]{40}$/.test(options.commit)) throw new Error('publication reference mismatch');
-  const repoArgs = ['--repo', RELEASE_REPOSITORY];
   const publicKey = readFileSync(options.publicKeyFile, 'utf8');
   const expected = { version, commit: options.commit, nodeVersion: options.nodeVersion, publicKey, installer: options.installer };
+  const provider = new GitHubReleaseProvider({gh,downloadAsset,saveReceipt,receiptDir:options.receiptDir ?? join(process.cwd(),'build','publication-receipts'),context:{mode:'publication',source_commit:options.commit,version}});
   const work = mkdtempSync(join(tmpdir(), 'capir-publication-'));
-  const run = args => { const result = gh(args); if (result.code) throw new Error(`GitHub operation failed: ${args.slice(0,2).join(' ')} (exit ${result.code})`); return result.stdout; };
-  const parseMetadata = (result, releaseTag, expectedId, expectedDraft) => {
-    const status = /^HTTP\/\S+\s+(\d+)/m.exec(result.stdout)?.[1];
-    if (result.code || status !== '200') throw new Error(`GitHub release metadata failed (HTTP ${status ?? 'unknown'})`);
-    const separator = /\r?\n\r?\n/.exec(result.stdout);
-    if (!separator) throw new Error('GitHub release metadata response is malformed');
-    let release;
-    try { release = JSON.parse(result.stdout.slice(separator.index + separator[0].length)); }
-    catch { throw new Error('GitHub release metadata response is malformed'); }
-    if (!Number.isSafeInteger(release?.id) || release.id <= 0 || release.tag_name !== releaseTag || typeof release.draft !== 'boolean'
-      || !Array.isArray(release.assets) || release.assets.some(asset => typeof asset?.name !== 'string')
-      || (release.body !== undefined && release.body !== null && typeof release.body !== 'string')
-      || (expectedId !== undefined && release.id !== expectedId) || (expectedDraft !== undefined && release.draft !== expectedDraft))
-      throw new Error('GitHub release metadata binding mismatch');
-    return release;
-  };
-  const metadata = releaseTag => {
-    const result = gh(['api', '--include', `repos/${RELEASE_REPOSITORY}/releases/tags/${releaseTag}`]);
-    if (/^HTTP\/\S+\s+(\d+)/m.exec(result.stdout)?.[1] !== '404') return parseMetadata(result, releaseTag);
-    // GitHub's tag endpoint exposes published releases only. Enumerate the
-    // publisher-visible drafts after a 404, then independently bind the sole
-    // exact-tag match by numeric ID. Project only these three small fields:
-    // release notes/bodies never accumulate in the paginated command output.
-    // A failure on ANY page cannot be mistaken for an absent release.
-    const listed = gh(['api', '--paginate', `repos/${RELEASE_REPOSITORY}/releases?per_page=100`, '--jq', 'if type != "array" then error("invalid release listing") else .[] | [.id,.tag_name,.draft] | @json end']);
-    if (listed.code) throw new Error('GitHub release draft listing failed');
-    let rows;
-    try { rows = listed.stdout.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line)); }
-    catch { throw new Error('GitHub release draft listing is malformed'); }
-    if (rows.some(row => !Array.isArray(row) || row.length !== 3 || !Number.isSafeInteger(row[0]) || row[0] <= 0 || typeof row[1] !== 'string' || typeof row[2] !== 'boolean'))
-      throw new Error('GitHub release draft listing is malformed');
-    const matches = rows.filter(([, tagName]) => tagName === releaseTag);
-    if (matches.length > 1) throw new Error('GitHub release draft listing is ambiguous');
-    if (!matches.length) return null;
-    const [id, , draft] = matches[0];
-    if (!draft) throw new Error('GitHub published release metadata is inconsistent');
-    return parseMetadata(gh(['api', '--include', `repos/${RELEASE_REPOSITORY}/releases/${id}`]), releaseTag, id, true);
-  };
+  let stage='verify-input-cohort';
   const checkRemoteTag = () => {
-    let object = JSON.parse(run(['api', `repos/${RELEASE_REPOSITORY}/git/ref/tags/${tag}`])).object;
-    for (let depth = 0; object?.type === 'tag' && depth < 8; depth++)
-      object = JSON.parse(run(['api', `repos/${RELEASE_REPOSITORY}/git/tags/${object.sha}`])).object;
-    if (object?.type !== 'commit' || object.sha !== options.commit)
-      throw new Error('remote release tag moved away from the validated commit');
+    let object = provider.request('GET',`repos/${RELEASE_REPOSITORY}/git/ref/tags/${tag}`).object;
+    for (let depth = 0; object?.type === 'tag' && depth < 8; depth++) {
+      if(!/^[0-9a-f]{40}$/.test(object.sha))throw new Error('remote tag annotation is malformed');
+      object=provider.request('GET',`repos/${RELEASE_REPOSITORY}/git/tags/${object.sha}`).object;
+    }
+    if (object?.type !== 'commit' || object.sha !== options.commit) throw new Error('remote release tag moved away from the validated commit');
   };
   const archiveNames = SUPPORTED_PLATFORMS.map(platform => `capir-${version}-${platform}.tar.gz`);
-  const names = ['manifest.json', 'manifest.json.sig', 'install.sh', ...archiveNames];
-  const assertAssets = (release, complete) => {
-    const actual = release.assets.map(asset => asset.name);
-    if (new Set(actual).size !== actual.length || actual.some(name => !names.includes(name)) || (complete && names.some(name => !actual.includes(name))))
-      throw new Error('version release asset set differs from its complete seven-file cohort');
+  const names = ['manifest.json','manifest.json.sig','install.sh',...archiveNames];
+  const channelNames=['manifest.json','manifest.json.sig','install.sh'];
+  const assertAssets=(release,complete,allowed=names)=>{
+    const actual=release.assets.map(asset=>asset.name);
+    if(new Set(actual).size!==actual.length||actual.some(name=>!allowed.includes(name))||(complete&&allowed.some(name=>!actual.includes(name))))throw new Error('version release asset set differs from its complete cohort');
   };
-  const download = (releaseTag, dir, patterns) => run(['release','download',releaseTag,...repoArgs,'--dir',dir,...patterns.flatMap(pattern => ['--pattern',pattern])]);
+  const replaceAssets=(release,dir,assetNames,channel=false)=>{
+    const current=provider.byId(release.id,release.tag_name);
+    assertAssets(current,false,assetNames);
+    for(const asset of current.assets)provider.deleteAsset(current,asset,{channel});
+    for(const name of assetNames)provider.upload(current,join(dir,name),name,{channel});
+  };
   try {
-    // Both the package job and publisher are bound to one validated commit.
     checkRemoteTag();
-    const candidateDir = join(work, 'candidate');
-    // Verify freshly built inputs without relying on their filenames alone.
-    mkdirSync(candidateDir);
-    for (const name of archiveNames) copyFileSync(join(options.archivesDir,name),join(candidateDir,name));
-    for (const name of ['manifest.json','manifest.json.sig']) copyFileSync(join(options.manifestDir,name),join(candidateDir,name));
-    copyFileSync(options.installer,join(candidateDir,'install.sh'));
-    verifyCohort(candidateDir, expected);
-    let release = metadata(tag);
-    if (release) assertAssets(release, !release.draft);
-    const notes = join(work,'notes.md');
-    writeFileSync(notes, `# capir ${version}\n\nStandalone packages for macOS arm64/x64 and Linux glibc arm64/x64. Windows uses source installs.\n\nInstall:\n\n\`\`\`sh\ncurl -fsSL ${RELEASE_BASE_URL}/download/capir-stable/install.sh -o capir-install.sh\nsh capir-install.sh\n\`\`\`\n\nUse \`--version ${version}\` for this immutable release, or \`--replace-existing\` to retain a backup of an existing launcher.\n\nUpdate: \`capir update --check\`, \`capir update\`, \`capir update --rollback\`. Ordinary interactive commands check for newer versions; checks never install them.\n\nBundled runtime: Node ${options.nodeVersion}, official SHA256-verified archive.\nSource revision: ${options.commit}\n`);
-    if (!release) {
-      run(['release','create',tag,...repoArgs,'--verify-tag','--target',options.commit,'--draft','--title',`capir ${version}`,'--notes-file',notes]);
-      release = metadata(tag);
-      if (!release?.draft) throw new Error('new release was not read back as a draft');
-    }
-    if (release.draft) {
-      checkRemoteTag();
-      // Only an unpublished draft may be rebuilt. Replace the entire cohort,
-      // then download and validate all seven files before publication.
-      run(['release','upload',tag,...repoArgs,...names.map(name=>join(candidateDir,name)),'--clobber']);
-    }
-    const authoritative = join(work,'authoritative');
-    download(tag, authoritative, names);
-    const cohort = verifyCohort(authoritative, expected);
-    checkRemoteTag();
-    if (release.draft) run(['release','edit',tag,...repoArgs,'--draft=false','--latest=false','--notes-file',notes]);
-    release = metadata(tag);
-    if (!release || release.draft) throw new Error('version release is not published');
-    assertAssets(release,true);
-    // Published assets are authoritative even when a full rerun rebuilt
-    // different archive bytes from the same immutable source revision.
-    let channel = metadata('capir-stable');
-    let current = null;
-    const checkpoint = await readCheckpoint(channel, publicKey, fetchImpl);
-    if (channel?.assets.length) {
-      const currentNames = channel.assets.map(asset=>asset.name);
-      if (!currentNames.includes('manifest.json') && !checkpoint) throw new Error('stable channel has no recoverable manifest or checkpoint');
-      if (currentNames.includes('manifest.json')) {
-      const currentDir = join(work,'current');
-      const patterns = ['manifest.json', ...(currentNames.includes('manifest.json.sig') ? ['manifest.json.sig'] : [])];
-      download('capir-stable',currentDir,patterns);
-      current = { manifestBytes: readFileSync(join(currentDir,'manifest.json')), signature: currentNames.includes('manifest.json.sig') ? readFileSync(join(currentDir,'manifest.json.sig')) : null };
+    const candidateDir=join(work,'candidate');mkdirSync(candidateDir);
+    for(const name of archiveNames)copyFileSync(join(options.archivesDir,name),join(candidateDir,name));
+    for(const name of ['manifest.json','manifest.json.sig'])copyFileSync(join(options.manifestDir,name),join(candidateDir,name));
+    copyFileSync(options.installer,join(candidateDir,'install.sh'));verifyCohort(candidateDir,expected);
+    const notes=`# capir ${version}\n\nStandalone packages for macOS arm64/x64 and Linux glibc arm64/x64. Windows uses source installs.\n\nInstall:\n\n\`\`\`sh\ncurl -fsSL ${RELEASE_BASE_URL}/download/capir-stable/install.sh -o capir-install.sh\nsh capir-install.sh\n\`\`\`\n\nUse \`--version ${version}\` for this immutable release, or \`--replace-existing\` to retain a backup of an existing launcher.\n\nUpdate: \`capir update --check\`, \`capir update\`, \`capir update --rollback\`.\n\nBundled runtime: Node ${options.nodeVersion}, official SHA256-verified archive.\nSource revision: ${options.commit}\n`;
+    stage='version-discovery';let release=provider.find(tag);
+    if(release){assertAssets(release,!release.draft);if(release.draft&&release.target_commitish!==options.commit)throw new Error('GitHub existing draft source binding mismatch');}
+    if(!release){stage='create-version-draft';release=provider.create({tag,commit:options.commit,name:`capir ${version}`,body:notes});}
+    if(release.draft){stage='upload-version-draft';checkRemoteTag();replaceAssets(release,candidateDir,names);}
+    stage='verify-authoritative-version';const authoritative=join(work,'authoritative');
+    await provider.download(release,authoritative,names);const cohort=verifyCohort(authoritative,expected);checkRemoteTag();
+    if(release.draft){stage='publish-version';release=provider.edit(release,{draft:false,body:notes});}
+    release=provider.byId(release.id,tag,false);assertAssets(release,true);
+    provider.persist('version-published',{stage:'version-published',release_id:release.id,tag});
+    stage='channel-discovery';let channel=provider.find('capir-stable'),current=null;
+    const checkpoint=await readCheckpoint(channel,publicKey,fetchImpl);
+    if(channel?.assets.length){
+      assertAssets(channel,false,channelNames);
+      const currentNames=channel.assets.map(asset=>asset.name);
+      if(!currentNames.includes('manifest.json')&&!checkpoint)throw new Error('stable channel has no recoverable manifest or checkpoint');
+      if(currentNames.includes('manifest.json')){
+        const currentDir=join(work,'current'),patterns=['manifest.json',...(currentNames.includes('manifest.json.sig')?['manifest.json.sig']:[])];
+        await provider.download(channel,currentDir,patterns);
+        current={manifestBytes:readFileSync(join(currentDir,'manifest.json')),signature:currentNames.includes('manifest.json.sig')?readFileSync(join(currentDir,'manifest.json.sig')):null};
       }
     }
-    const decision = await promotionDecision(cohort,current,publicKey,fetchImpl);
-    const minimum = checkpoint && (!decision.current || compare(checkpoint.manifest.version, decision.current) > 0) ? checkpoint.manifest.version : decision.current;
-    if (!decision.promote || (minimum && compare(version, minimum) < 0)) return { version, source_commit: options.commit, channel_promoted: false, stable: minimum };
-    // Persist a verified promotion intent BEFORE clobber can delete any old
-    // channel asset. A rerun authenticates it against the immutable release.
-    const checkpointFile = join(work, 'channel-notes.md');
-    writeFileSync(checkpointFile, checkpointNotes(cohort));
-    if (!channel) run(['release','create','capir-stable',...repoArgs,'--draft','--target',options.commit,'--title','capir stable channel','--notes-file',checkpointFile]);
-    else run(['release','edit','capir-stable',...repoArgs,'--notes-file',checkpointFile,'--latest=false']);
-    const channelNames = ['manifest.json','manifest.json.sig','install.sh'];
-    run(['release','upload','capir-stable',...repoArgs,...channelNames.map(name=>join(authoritative,name)),'--clobber']);
-    const channelReadback = join(work,'channel-readback');
-    download('capir-stable',channelReadback,channelNames);
-    for (const name of channelNames) if (!readFileSync(join(channelReadback,name)).equals(readFileSync(join(authoritative,name)))) throw new Error('stable channel readback differs from the verified cohort');
+    const decision=await promotionDecision(cohort,current,publicKey,fetchImpl);
+    const minimum=checkpoint&&(!decision.current||compare(checkpoint.manifest.version,decision.current)>0)?checkpoint.manifest.version:decision.current;
+    if(!decision.promote||(minimum&&compare(version,minimum)<0))return {version,source_commit:options.commit,channel_promoted:false,stable:minimum};
+    stage='channel-checkpoint';const body=checkpointNotes(cohort);
+    if(!channel)channel=provider.create({tag:'capir-stable',commit:options.commit,name:'capir stable channel',body});
+    else channel=provider.edit(channel,{body},{channel:true});
+    stage='channel-upload';replaceAssets(channel,authoritative,channelNames,true);
+    const channelReadback=join(work,'channel-readback');await provider.download(channel,channelReadback,channelNames);
+    for(const name of channelNames)if(!readFileSync(join(channelReadback,name)).equals(readFileSync(join(authoritative,name))))throw new Error('stable channel readback differs from the verified cohort');
     signedManifest(readFileSync(join(channelReadback,'manifest.json')),readFileSync(join(channelReadback,'manifest.json.sig')),publicKey);
-    run(['release','edit','capir-stable',...repoArgs,'--draft=false','--latest=false']);
-    channel = metadata('capir-stable');
-    if (!channel || channel.draft || channelNames.some(name=>!channel.assets.some(asset=>asset.name===name))) throw new Error('stable channel publication readback failed');
-    return { version, source_commit: options.commit, channel_promoted: true, stable: version };
-  } finally { rmSync(work,{recursive:true,force:true}); }
+    stage='publish-channel';channel=provider.edit(channel,{draft:false},{channel:true});assertAssets(channel,true,channelNames);
+    provider.persist('publication-complete',{stage:'publication-complete',release_id:release.id,channel_id:channel.id,tag});
+    return {version,source_commit:options.commit,channel_promoted:true,stable:version};
+  } catch(error) {
+    if(provider.receiptHealthy)provider.persist('publication-failed',{stage,result:'failed'});
+    throw error;
+  } finally {rmSync(work,{recursive:true,force:true});}
 }
 function isMain() {
   try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
@@ -239,8 +180,11 @@ if (process.argv[1] && isMain()) {
     for (let i=0;i<args.length;i+=2) values[args[i].slice(2)] = args[i+1];
     if (command === 'version') { strictVersion(process.env.CAPIR_DISPATCH_VERSION); }
     else if (command === 'publish') {
-      const result = await publishRelease({version:values.version,tag:values.tag,commit:values.commit,nodeVersion:values['node-version'],archivesDir:values['archives-dir'],manifestDir:values['manifest-dir'],installer:values.installer,publicKeyFile:values['public-key']});
+      const result = await publishRelease({version:values.version,tag:values.tag,commit:values.commit,nodeVersion:values['node-version'],archivesDir:values['archives-dir'],manifestDir:values['manifest-dir'],installer:values.installer,publicKeyFile:values['public-key'],receiptDir:values['receipt-dir']});
       process.stdout.write(`${JSON.stringify(result)}\n`);
     } else throw new Error('expected version or publish command');
-  } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode=1; }
+  } catch (error) {
+    if(error.safeReceipt)process.stdout.write(JSON.stringify({result:'failed',receipt_write_failed:true,safe_receipt:error.safeReceipt})+'\n');
+    process.stderr.write(`${error.message}\n`); process.exitCode=1;
+  }
 }
