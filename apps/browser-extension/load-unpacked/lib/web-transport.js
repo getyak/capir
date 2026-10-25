@@ -7,19 +7,21 @@ export async function webRequest(originValue, path, options = {}) {
   if (!/^\/api\/browser-extension\/(session|captures(?:\/[a-zA-Z0-9-]{8,80})?)$/.test(path)) throw new Error("Unsupported capture endpoint.");
   const tabs = await chrome.tabs.query({ url: `${origin}/*` });
   const tab = tabs.find(item => item.id && item.url && new URL(item.url).origin === origin);
-  if (!tab) throw new Error("Open capri and sign in, then connect again.");
+  if (!tab) throw new Error("Open capri at the selected workspace, then retry the connection. Your review is kept.");
   const [{result}] = await chrome.scripting.executeScript({
     target: {tabId: tab.id},
     args: [origin, path, options],
     func: async (expectedOrigin, endpoint, input) => {
-      if (location.origin !== expectedOrigin) return {status:409,body:{code:"session_stale"}};
+      if (location.origin !== expectedOrigin) return {status:409,body:{code:"session_changed"}};
       try {
         const response = await fetch(endpoint, {
           method: input.method ?? "GET", credentials:"same-origin", cache:"no-store", redirect:"error",
           headers: input.headers ?? {}, ...(input.body?{body:input.body}:{}),
           signal: AbortSignal.timeout(45000),
         });
-        return {status:response.status,body:await response.json()};
+        let body;
+        try { body = await response.json(); } catch { body = {}; }
+        return {status:response.status,body};
       } catch { return {status:503,body:{code:"receipt_unknown",message:"Receipt not confirmed. Check this capture before retrying."}}; }
     },
   });

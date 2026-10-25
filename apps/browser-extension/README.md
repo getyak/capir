@@ -54,6 +54,19 @@ retries in PostgreSQL. A receipt includes the durable `task_id`; a `capture_id`
 and Person may appear later. Received means durable admission, not AI completion.
 Unknown network results remain unknown until reconciliation or a same-key retry.
 
+Temporary connection, permission, server and malformed-response failures keep
+the browser-managed login and reviewed draft. Use **Retry connection** or
+**Check receipt**; these actions never submit a capture automatically. Only a
+confirmed HTTP401 response offers **Open sign-in**. An observed session-binding
+change instead asks you to recheck the original workspace. A reply containing a
+login-looking error code without HTTP401 is not evidence that login ended.
+
+Image receipt checks send only the original metadata request key through the
+read-only recovery path. A failed POST or failed post-submit readback stays
+unknown; checking it does not resend pixels. A later connection failure cannot
+erase an existing unresolved recovery journal. Draft pixels/text remain in the
+open review panel; they are not added to the persistent metadata journal.
+
 No fixture login or synthetic text substitution is used on this real path.
 Synthetic fixture mode remains network-free and explicitly labeled.
 
@@ -113,6 +126,26 @@ node --test apps/browser-extension/tests/*.test.mjs
 node apps/browser-extension/scripts/validate-package.mjs
 node apps/chrome-extension/scripts/build.mjs
 ```
+
+The current load-unpacked version is **0.2.1**. The copy build produces the
+complete loadable package at `apps/chrome-extension/dist`, with `manifest.json`
+at its root. Keep every file, including `lib/` and `icons/`, when distributing a
+versioned copy or ZIP. A complete unpacked directory is the supported delivery
+surface here; this build does not publish to the Chrome Web Store.
+
+For an existing installation, finish any open review before reloading. Confirm
+its actual loaded directory in Chrome's extension details, then update that
+same directory and reload the same extension. Loading another path can create
+a different extension ID and does not transfer the existing metadata journal.
+Keep the old installation until pending receipts are resolved. If the loaded
+path is unverified, deliver a separate versioned package and report installation
+as unverified rather than overwriting a guessed directory.
+
+The Node tests execute the production panel transport, worker message handlers
+and serialized Web function against synthetic replies. They verify connection
+recovery, exact session binding, retained metadata and GET-only reconciliation.
+They do not establish a real installed extension's update, browser restart or
+GUI acceptance; those are separate operator checks.
 
 Backend, Web and model checks are recorded in
 [`plans/web-capture-pipeline.md`](../../plans/web-capture-pipeline.md).

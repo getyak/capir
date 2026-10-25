@@ -31,7 +31,7 @@ test("lost response recovery reads the original receipt without POST and denies 
   globalThis.location = { origin, pathname: "/contact-agent" };
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
-    return { ok: true, json: async () => url.endsWith("session") ? { session_version: activeSession, contact_agent: true } : { task_id: task, status } };
+    return { ok: true, status: 200, json: async () => url.endsWith("session") ? { status: "ready", session_version: activeSession, contact_agent: true } : { task_id: task, status } };
   };
   try {
     const result = await recoverContactTaskInWeb(origin, "original-session", "original-reviewed-request");
@@ -40,7 +40,7 @@ test("lost response recovery reads the original receipt without POST and denies 
     assert.equal(calls[1].url, "/api/contact-agent/tasks?handoff_request_id=original-reviewed-request");
     assert.ok(calls.every(call => !call.options.method || call.options.method === "GET"));
     calls.length = 0; activeSession = "replacement";
-    assert.equal((await recoverContactTaskInWeb(origin, "original-session", "original-reviewed-request")).code, "session_stale");
+    assert.equal((await recoverContactTaskInWeb(origin, "original-session", "original-reviewed-request")).code, "session_changed");
     assert.equal(calls.length, 1);
     activeSession = "original-session"; status = "deleted";
     assert.equal((await recoverContactTaskInWeb(origin, "original-session", "original-reviewed-request")).state, "unavailable");

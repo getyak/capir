@@ -1,4 +1,5 @@
 import { webRequest, connectWebOrigin } from "./lib/web-transport.js";
+import { submitReviewedCapture, readCaptureReceipt } from "./lib/handoff-transport.js";
 import { extensionVersion, installedExtensionVersion } from "./lib/version-status.js";
 import {
   makeCaptureDraft,
@@ -15,7 +16,6 @@ import {
 import {
   buildExactWebReviewUrl,
   buildHandoffEnvelope,
-  classifyReceiptResponse,
   classifyTransportError,
   createRequestIdentity,
   DEFAULT_LOCAL_ORIGIN,
@@ -23,6 +23,7 @@ import {
   normalizeLocalOrigin,
   retentionCompatibility,
   sessionCopy,
+  sessionAfterHandoff,
 } from "./lib/handoff-contract.js";
 import { contactTaskReviewURL } from "./lib/contact-handoff.js";
 import {
@@ -231,7 +232,6 @@ function setCaptureBusy(busy, label = "Capturing…") {
 
 function resetDecision() {
   state.reviewGeneration = (state.reviewGeneration ?? 0) + 1;
-  state.contactHandoffEnvelope = null;
   state.requestIdentity = null;
   state.submitAttempt = 0;
   state.submission = {
@@ -450,7 +450,6 @@ async function loadImage(dataUrl) {
 
 async function openReview(draft) {
   clearCaptureAlert();
-  state.contactHandoffEnvelope = null;
   state.draft = draft;
   state.image = null;
   state.fixtureRecovered = false;
@@ -478,7 +477,6 @@ function clearDraft() {
     state.draft.fixture_case = null;
   }
   state.draft = null;
-  state.contactHandoffEnvelope = null;
   state.image = null;
   state.drawRedaction = null;
   state.requestIdentity = null;
@@ -847,12 +845,13 @@ function renderSession() {
   const presentation = sessionPresentation(state.session, synthetic);
   elements.originField.hidden = synthetic;
   elements.openSignIn.hidden = synthetic;
+  elements.openSignIn.textContent = state.session.authentication_required === true ? "Open sign-in" : "Open capri";
   elements.checkSession.hidden = false;
   elements.checkSession.textContent = synthetic
     ? state.session.state === "ready"
       ? "Refresh synthetic session"
       : "Check synthetic session"
-    : "Check session";
+    : state.session.state === "unavailable" ? "Retry connection" : "Check session";
   elements.checkSession.disabled = presentation.busy;
   elements.sessionState.className = `state-chip ${presentation.chip_class}`;
   elements.sessionState.textContent = presentation.chip_label;
@@ -1011,28 +1010,12 @@ async function responseBody(response) {
   }
 }
 
-async function postRealHandoff(origin, envelope) {
-  if (envelope.source.capture_kind === "visible_tab") {
-    state.contactHandoffEnvelope = envelope;
-    return chrome.runtime.sendMessage({ type: "handoff.reviewed-image", envelope });
-  }
-  const response = await webRequest(origin, "/api/browser-extension/captures", {
-    method:"POST",headers:{"Content-Type":"application/json","Idempotency-Key":envelope.idempotency_key,"X-Talent-Signal-Session-Version":envelope.session.version},body:JSON.stringify(envelope),
-  });
-  return classifyReceiptResponse(response.status,response.body);
-}
-async function getRealReceipt(origin, requestId) {
-  const response=await webRequest(origin,`/api/browser-extension/captures/${encodeURIComponent(requestId)}`);
-  return classifyReceiptResponse(response.status,response.body);
-}
-
 function clearPrivatePayloadAfterReceipt() {
   if (!state.draft || state.draft.kind === "fixture") {
     return;
   }
 
   state.draft.original_data_url = null;
-  state.contactHandoffEnvelope = null;
   state.draft.original_text = null;
   state.draft.reviewed_text = null;
   state.draft.local_cleared = true;
@@ -1115,17 +1098,11 @@ async function submitHandoff() {
             scenario,
             attempt: state.submitAttempt,
           })
-        : await postRealHandoff(origin, envelope);
+        : await submitReviewedCapture(origin, envelope);
     if (reviewGeneration !== state.reviewGeneration) return;
     state.submission = result;
-    if (result.code === "session_stale") {
-      state.session = {
-        state: "not_ready",
-        message:
-          "The local service rejected the previous session version. Open or check sign-in before retrying.",
-      };
-      renderSession();
-    }
+    state.session = sessionAfterHandoff(state.session, result);
+    renderSession();
     if (result.state === "received") {
       clearPrivatePayloadAfterReceipt();
     }
@@ -1163,11 +1140,11 @@ async function checkReceipt() {
             requestId: state.requestIdentity.request_id,
             scenario: elements.fixtureScenario.value,
           })
-        : state.draft.kind === "visible_tab" && state.contactHandoffEnvelope
-          ? await postRealHandoff(origin, state.contactHandoffEnvelope)
-          : await getRealReceipt(origin, state.requestIdentity.request_id);
+        : await readCaptureReceipt(origin, state.draft.kind, state.requestIdentity);
     if (reviewGeneration !== state.reviewGeneration) return;
     state.submission = result;
+    state.session = sessionAfterHandoff(state.session, result);
+    renderSession();
     if (result.state === "received") {
       clearPrivatePayloadAfterReceipt();
     }
@@ -1185,11 +1162,14 @@ async function checkSession() {
   }
 
   const synthetic = isSyntheticTransport(state.draft);
+  const previous = state.session;
+  const reviewGeneration = state.reviewGeneration;
   state.session = {
+    ...previous,
     state: "checking",
     message: synthetic
       ? "Checking the synthetic session without making a network request."
-      : "Checking only the browser-managed localhost session.",
+      : "Checking the browser-managed Web connection. Your reviewed capture is kept.",
   };
   renderSession();
 
@@ -1197,7 +1177,7 @@ async function checkSession() {
     await new Promise((resolve) => setTimeout(resolve, 140));
     if (
       elements.fixtureScenario.value === "stale_session" &&
-      state.submission.code === "session_stale"
+      ["session_stale", "session_changed"].includes(state.submission.code)
     ) {
       state.fixtureRecovered = true;
     }
@@ -1217,13 +1197,11 @@ async function checkSession() {
     const origin = normalizeLocalOrigin(elements.localOrigin.value);
     await connectWebOrigin(origin);
     const response=await webRequest(origin,"/api/browser-extension/session");
-    state.session = sessionCopy(response.status,response.body);
+    if (reviewGeneration !== state.reviewGeneration || origin !== normalizeLocalOrigin(elements.localOrigin.value)) return;
+    state.session = { ...sessionCopy(response.status, response.body, previous.origin === origin ? previous : {}), origin };
   } catch (error) {
-    state.session = {
-      state: "not_ready",
-      message:
-        "No local session was observed. Nothing was submitted; open the local sign-in flow and check again.",
-    };
+    if (reviewGeneration !== state.reviewGeneration) return;
+    state.session = sessionCopy(0, {}, previous);
   }
 
   renderSession();
@@ -1234,15 +1212,13 @@ async function openSignIn() {
   try {
     const origin = normalizeLocalOrigin(elements.localOrigin.value);
     await connectWebOrigin(origin);
-    const target = new URL("/login", origin);
+    const requiresSignIn = state.session.authentication_required === true;
+    const target = new URL(requiresSignIn ? "/login" : "/", origin);
     target.searchParams.set("source", "browser-extension");
-    target.searchParams.set("callbackUrl", "/workspace/captures");
+    if (requiresSignIn) target.searchParams.set("callbackUrl", "/workspace/captures");
     await chrome.tabs.create({ url: target.toString() });
   } catch (error) {
-    state.session = {
-      state: "not_ready",
-      message: error.message,
-    };
+    state.session = sessionCopy(0, {}, state.session);
     renderSession();
   }
 }

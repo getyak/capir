@@ -1,7 +1,12 @@
 import "../../browser-extension/tests/capture-contract.test.mjs";
 import "../../browser-extension/tests/contact-handoff.test.mjs";
-import "../../browser-extension/tests/fixture-contract.test.mjs";
+import "../../browser-extension/tests/fixture-suite.test.mjs";
+import "../../browser-extension/tests/contact-recovery.test.mjs";
+import "../../browser-extension/tests/login-recovery.test.mjs";
+import "../../browser-extension/tests/worker-recovery.test.mjs";
+import "../../browser-extension/tests/web-transport.test.mjs";
 import "../../browser-extension/tests/handoff-contract.test.mjs";
 import "../../browser-extension/tests/image-review.test.mjs";
 import "../../browser-extension/tests/manifest.test.mjs";
 import "../../browser-extension/tests/review-presentation.test.mjs";
+import "../../browser-extension/tests/version-status.test.mjs";

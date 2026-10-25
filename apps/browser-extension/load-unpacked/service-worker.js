@@ -3,7 +3,7 @@ import {
   normalizeSelection,
   normalizeTabSource,
 } from "./lib/capture-contract.js";
-import { contactTaskFromReviewedImage, contactTaskReviewURL, submitContactTaskInWeb, recoverContactTaskInWeb } from "./lib/contact-handoff.js";
+import { contactTaskFromReviewedImage, contactTaskReviewURL, contactHandoffInWeb } from "./lib/contact-handoff.js";
 import { normalizeLocalOrigin } from "./lib/handoff-contract.js";
 
 import { contactRecoveryJournal } from "./lib/contact-recovery.js";
@@ -24,7 +24,7 @@ async function recoverHandoff(requestKey) {
   const origin = normalizeLocalOrigin(record.origin);
   const tab = await readyWebTab(origin);
   const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "MAIN",
-    func: recoverContactTaskInWeb, args: [origin, record.sessionVersion, record.requestKey] });
+    func: contactHandoffInWeb, args: [origin, record.sessionVersion, "recover", record.requestKey] });
   if (result.result?.contact_task_id) await chrome.tabs.update(tab.id, { url: contactTaskReviewURL(origin, result.result.contact_task_id) });
   if (["received", "unavailable"].includes(result.result?.state)) await journal.complete(requestKey);
   return result.result;
@@ -51,10 +51,11 @@ async function handoffReviewedImage(envelope) {
   // Chrome executes the supplied function in the exact tab and awaits its
   // Promise. No bearer token, broad host permission or new backend bypass.
   const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "MAIN",
-    func: submitContactTaskInWeb, args: [origin, envelope.session.version, payload] });
+    func: contactHandoffInWeb, args: [origin, envelope.session.version, "submit", payload] });
   if (result.result?.contact_task_id) await chrome.tabs.update(tab.id, { url: contactTaskReviewURL(origin, result.result.contact_task_id) });
   if (result.result?.state === "received") await journal.complete(envelope.idempotency_key);
-  else if (result.result?.no_submit === true) await journal.remove(envelope.idempotency_key);
+  // A later preflight failure cannot erase an earlier unknown POST outcome.
+  // Keep the same bounded metadata record until its actual receipt is read.
   return result.result;
 }
 
@@ -127,7 +128,7 @@ async function captureSelectedText(page = false) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "handoff.reviewed-image" && sender.id === chrome.runtime.id) {
     serialized(() => handoffReviewedImage(message.envelope)).then(sendResponse).catch(() => sendResponse({ state: "unknown",
-      code: "contact_handoff_unverified", message: "Receipt not verified. Retry the same reviewed image to recover the existing task without duplicating it." }));
+      code: "contact_handoff_unverified", message: "Receipt not verified. Check the original task before submitting another copy." }));
     return true;
   }
   if (["handoff.recovery-list", "handoff.recover"].includes(message?.type) && sender.id === chrome.runtime.id) {
