@@ -11,6 +11,7 @@ import type { Pool } from "pg";
 import { inTransaction, type DatabaseClient } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import type { AuthContext } from "./auth.js";
+import { retainsRenewableSessionReplaySQL } from "./sessionReplayRetention.js";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const scope = (auth: AuthContext) => [auth.accountId, auth.userId, auth.sessionId];
@@ -154,6 +155,7 @@ export class LabFeatureOverrideService {
 
   async scrubExpired(): Promise<void> {
     await this.pool.query(`DELETE FROM lab_feature_overrides o USING sessions s
-      WHERE o.auth_session_id=s.id AND COALESCE(s.revoked_at,s.expires_at) < now()-interval '7 days'`);
+      WHERE o.auth_session_id=s.id AND COALESCE(s.revoked_at,s.expires_at) < now()-interval '7 days'
+        AND NOT ${retainsRenewableSessionReplaySQL}`);
   }
 }

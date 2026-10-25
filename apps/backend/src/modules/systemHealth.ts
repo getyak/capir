@@ -26,6 +26,8 @@ export const REQUIRED_SYSTEM_MIGRATIONS = [
   "079_memory_source_authority",
   "105_conversation_queue_session_expiry",
   "106_desktop_persistent_sessions",
+  "107_persistent_user_sessions",
+  "108_capir_persistent_login",
 ] as const;
 
 function elapsedMilliseconds(startedAt: number): number {

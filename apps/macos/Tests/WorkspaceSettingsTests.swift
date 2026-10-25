@@ -176,28 +176,46 @@ final class WorkspaceSettingsTests: XCTestCase {
             let node = try XCTUnwrap(message, "The actual login phase must be readable in the visible fixture (visible=\(window.isVisible), frame=\(host.frame), id=\(identifier)); \(accessibilityTreeSummary(host))")
             let label = NSSelectorFromString("accessibilityLabel")
             let value = NSSelectorFromString("accessibilityValue")
-            let labelText = node.responds(to: label) ? node.perform(label)?.takeUnretainedValue() as? String : nil
-            let valueText = node.responds(to: value) ? node.perform(value)?.takeUnretainedValue() as? String : nil
+            let labelText = accessibilityValue(node, getter: label, attribute: "AXDescription") as? String
+            let valueText = accessibilityValue(node, getter: value, attribute: "AXValue") as? String
             XCTAssertTrue(labelText == expected || valueText == expected,
                           "Expected localized phase copy, got label=\(String(describing: labelText)), value=\(String(describing: valueText))")
             if phase == .waiting {
                 let hint = try XCTUnwrap(findAccessibilityElement(host, identifier: "desktop.login.matchingHint"))
-                let hintText = hint.responds(to: value) ? hint.perform(value)?.takeUnretainedValue() as? String : nil
-                let hintLabel = hint.responds(to: label) ? hint.perform(label)?.takeUnretainedValue() as? String : nil
+                let hintText = accessibilityValue(hint, getter: value, attribute: "AXValue") as? String
+                let hintLabel = accessibilityValue(hint, getter: label, attribute: "AXDescription") as? String
                 XCTAssertTrue(hintText == "AbC-42" || hintLabel == "AbC-42")
             }
         }
+    }
+
+    /// NSHostingView can expose children through the public legacy AppKit
+    /// bridge while its modern getter returns an empty inherited value.
+    @MainActor
+    private func accessibilityValue(_ node: NSObject, getter: Selector, attribute: String) -> Any? {
+        if node.responds(to: getter), let value = node.perform(getter)?.takeUnretainedValue() {
+            if let array = value as? [Any], array.isEmpty { }
+            else if let text = value as? String, text.isEmpty { }
+            else { return value }
+        }
+        let legacy = NSSelectorFromString("accessibilityAttributeValue:")
+        guard node.responds(to: legacy) else { return nil }
+        return node.perform(legacy, with: attribute)?.takeUnretainedValue()
+    }
+
+    @MainActor
+    private func accessibilityChildren(_ node: NSObject) -> [NSObject] {
+        let children = accessibilityValue(node, getter: NSSelectorFromString("accessibilityChildren"),
+                                          attribute: "AXChildren") as? [Any] ?? []
+        return children.compactMap { $0 as? NSObject }
     }
 
     @MainActor
     private func findAccessibilityElement(_ node: NSObject, identifier: String, depth: Int = 0) -> NSObject? {
         guard depth < 16 else { return nil }
         let id = NSSelectorFromString("accessibilityIdentifier")
-        if node.responds(to: id), node.perform(id)?.takeUnretainedValue() as? String == identifier { return node }
-        let children = NSSelectorFromString("accessibilityChildren")
-        guard node.responds(to: children),
-              let descendants = node.perform(children)?.takeUnretainedValue() as? [NSObject] else { return nil }
-        for child in descendants {
+        if accessibilityValue(node, getter: id, attribute: "AXIdentifier") as? String == identifier { return node }
+        for child in accessibilityChildren(node) {
             if let found = findAccessibilityElement(child, identifier: identifier, depth: depth + 1) { return found }
         }
         return nil
@@ -215,14 +233,14 @@ final class WorkspaceSettingsTests: XCTestCase {
         let id = value("accessibilityIdentifier") as? String ?? "nil"
         let role = value("accessibilityRole") as? String ?? "nil"
         let raw = value("accessibilityChildren")
-        let children = raw as? [Any] ?? []
+        let rawChildren = raw as? [Any] ?? []
+        let children = accessibilityChildren(node)
         let legacy = NSSelectorFromString("accessibilityAttributeValue:")
         let legacyChildren = node.responds(to: legacy)
             ? node.perform(legacy, with: "AXChildren")?.takeUnretainedValue() as? [Any] : nil
-        let own = "\(type(of: node)) role=\(role) id=\(id) modern=\(String(describing: raw.map { type(of: $0) })) children=\(children.count) NSObjectArray=\(raw is [NSObject]) legacyChildren=\(String(describing: legacyChildren?.count))"
+        let own = "\(type(of: node)) role=\(role) id=\(id) modern=\(String(describing: raw.map { type(of: $0) })) modernChildren=\(rawChildren.count) traversedChildren=\(children.count) NSObjectArray=\(raw is [NSObject]) legacyChildren=\(String(describing: legacyChildren?.count))"
         return ([own] + children.prefix(12).map { child in
-            guard let object = child as? NSObject else { return "non-NSObject \(type(of: child))" }
-            return accessibilityTreeSummary(object, depth: depth + 1)
+            accessibilityTreeSummary(child, depth: depth + 1)
         }).joined(separator: " | ")
     }
 

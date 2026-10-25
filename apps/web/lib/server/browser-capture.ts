@@ -5,7 +5,7 @@ import { z } from "zod";
 import { ScreenshotContactTaskResponseSchema, type ScreenshotContactTaskResponse } from "@talent-signal/agent/contact-intake";
 import { backendAuthBaseUrl, readBackendSessionClaims, type BackendSessionClaims } from "./backendAuth";
 import { contactHandoffSessionVersion } from "./contact-handoff-session";
-import { backendSessionIsExpired } from "@/lib/backend-session";
+import { backendSessionIsExpired, isBackendSessionExpiredError } from "@/lib/backend-session";
 
 const source = z.object({
   capture_kind: z.enum(["selected_text", "page_text", "visible_tab"]),
@@ -38,8 +38,13 @@ export function browserSessionVersion(claims: BackendSessionClaims) {
 }
 
 export async function browserClaims() {
-  const claims = await readBackendSessionClaims();
-  return claims && !backendSessionIsExpired(claims.backendExpiresAt) ? claims : null;
+  try {
+    const claims = await readBackendSessionClaims();
+    return claims && !backendSessionIsExpired(claims.backendExpiresAt) ? claims : null;
+  } catch (error) {
+    if (isBackendSessionExpiredError(error)) return null;
+    throw error;
+  }
 }
 
 export function browserCaptureInput(value: unknown, headers: Headers, claims: BackendSessionClaims, origin: string) {
