@@ -8,7 +8,7 @@ enum BackgroundCaptureError: LocalizedError {
     case signIn, enableSending, unavailable
     var errorDescription: String? {
         switch self {
-        case .signIn: return "Open capri and sign in before sending a screenshot."
+        case .signIn: return "Open capri to restore your secure sign-in before sending a screenshot."
         case .enableSending: return "Open Action Button & Shortcuts in capri and enable screenshot sending first."
         case .unavailable: return "Open capri to check this capture and continue."
         }
@@ -17,7 +17,7 @@ enum BackgroundCaptureError: LocalizedError {
 
 enum BackgroundCaptureAuthorization {
     static func currentSession() throws -> TalentSignalSession {
-        let directory = RuntimeEnvironmentDirectory(buildEndpoint: TalentSignalAuthenticationConfiguration.baseURL(arguments: []))
+        let directory = RuntimeEnvironmentDirectory(buildEndpoint: TalentSignalAuthenticationConfiguration.baseURL(arguments: ProcessInfo.processInfo.arguments))
         guard let endpoint = directory.selected?.endpoint else { throw BackgroundCaptureError.signIn }
         return try validatedSession(endpoint: endpoint, sessions: KeychainTalentSignalSessionStore(baseURL: endpoint),
             endings: KeychainAppSessionEndingStore(endpoint: endpoint))
@@ -27,14 +27,29 @@ enum BackgroundCaptureAuthorization {
         guard let session = try sessions.load(), session.expiresAt > Date(), RuntimeEndpoint.same(session.baseURL, endpoint) else {
             throw BackgroundCaptureError.signIn
         }
-        try assertNoEnding(endpoint: endpoint, token: session.accessToken, endings: endings)
+        guard try !endings.load().contains(where: { $0.blocks(session) }) else { throw BackgroundCaptureError.signIn }
         return session
     }
     static func assertNoEnding(endpoint: URL, token: String, endings: any AppSessionEndingPersisting) throws {
         let fingerprint = SHA256.hex(RuntimeEndpoint.scope(endpoint) + "|" + token)
-        guard try !endings.load().contains(where: { $0.credentialFingerprint == fingerprint }) else {
+        guard try !endings.load().contains(where: { $0.credentialFingerprint == fingerprint || ($0.blockedCredentialFingerprints ?? []).contains(fingerprint) }) else {
             throw BackgroundCaptureError.signIn
         }
+    }
+    static func renewedCurrentSession() async throws -> TalentSignalSession {
+        let directory = RuntimeEnvironmentDirectory(buildEndpoint: TalentSignalAuthenticationConfiguration.baseURL(arguments: ProcessInfo.processInfo.arguments))
+        guard let endpoint = directory.selected?.endpoint else { throw BackgroundCaptureError.signIn }
+        let sessions = KeychainTalentSignalSessionStore(baseURL: endpoint)
+        let endings = KeychainAppSessionEndingStore(endpoint: endpoint)
+        // Reading the WhenUnlocked item is required for NEW authority. Locked
+        // continuation below continues only an already frozen OS credential.
+        guard let stored = try sessions.load(), RuntimeEndpoint.same(stored.baseURL, endpoint),
+              try !endings.load().contains(where: { $0.blocks(stored) }) else { throw BackgroundCaptureError.signIn }
+        if stored.persistent != nil {
+            return try await IOSPersistentSessionCoordinator.shared.resolve(stored, persistence: sessions,
+                endings: endings, client: AppAuthenticationClient(baseURL: endpoint))
+        }
+        return try validatedSession(endpoint: endpoint, sessions: sessions, endings: endings)
     }
     static func enabled(_ session: TalentSignalSession) -> Bool {
         UserDefaults.standard.bool(forKey: key(session))
@@ -118,7 +133,7 @@ actor BackgroundCaptureDelivery {
     }
 
     func capture(_ input: ScreenshotInput) async throws -> BackgroundCaptureRecord {
-        let session = try BackgroundCaptureAuthorization.currentSession()
+        let session = try await BackgroundCaptureAuthorization.renewedCurrentSession()
         guard BackgroundCaptureAuthorization.enabled(session) else { throw BackgroundCaptureError.enableSending }
         try logoutDenyMirror.prepare(endpoint: session.baseURL,
             fingerprints: KeychainAppSessionEndingStore(endpoint: session.baseURL).load().map(\.credentialFingerprint))
@@ -148,7 +163,7 @@ actor BackgroundCaptureDelivery {
         var body: [String: Any] = ["session_operation_id": record.sessionOperationID.uuidString.lowercased(),
             "initial_session": initial, "message": message]
         if let token = record.activityToken {
-            record.registrationCredentialFingerprint = AppSessionEnding.fingerprint(session)
+            record.registrationCredentialFingerprint = IOSPersistentSessionCredential.tokenFingerprint(session.accessToken, endpoint: session.baseURL)
             record = try save(record)
             body["capture_activity"] = ["activity_instance_id": record.activityInstanceID.uuidString.lowercased(),
                 "token": token, "token_generation": max(1, record.tokenGeneration ?? 1),
@@ -205,6 +220,9 @@ actor BackgroundCaptureDelivery {
     private func currentOwner(_ record: BackgroundCaptureRecord) throws -> TalentSignalSession {
         let session = try authorizationReader?() ?? BackgroundCaptureAuthorization.currentSession()
         guard record.belongs(to: session), BackgroundCaptureAuthorization.enabled(session) else { throw BackgroundCaptureError.signIn }
+        if let family = record.credentialFamilyFingerprint {
+            guard family == AppSessionEnding.fingerprint(session) else { throw BackgroundCaptureError.signIn }
+        }
         try validateLocalScope(record)
         return session
     }
@@ -233,7 +251,7 @@ actor BackgroundCaptureDelivery {
             return session.accessToken
         }
         catch AppSessionError.keychain(let status) where status == errSecInteractionNotAllowed || status == errSecNotAvailable {
-            let directory = RuntimeEnvironmentDirectory(buildEndpoint: TalentSignalAuthenticationConfiguration.baseURL(arguments: []))
+            let directory = RuntimeEnvironmentDirectory(buildEndpoint: TalentSignalAuthenticationConfiguration.baseURL(arguments: ProcessInfo.processInfo.arguments))
             let selectedEndpoint = selectedEndpointReader.map { $0() } ?? directory.selected?.endpoint
             guard let selected = selectedEndpoint, RuntimeEndpoint.same(selected, record.baseURL),
                   BackgroundCaptureAuthorization.enabled(scope: record.runtimeScope),
@@ -246,6 +264,9 @@ actor BackgroundCaptureDelivery {
             try sessionDenials.assertAllowed(scope: record.runtimeScope, sessionID: record.sessionID, epoch: epoch)
             try logoutDenyMirror.assertAllowed(endpoint: record.baseURL,
                 fingerprint: SHA256.hex(RuntimeEndpoint.scope(record.baseURL) + "|" + frozen))
+            if let family = record.credentialFamilyFingerprint {
+                try logoutDenyMirror.assertAllowed(endpoint: record.baseURL, fingerprint: family)
+            }
             return frozen
         }
     }
@@ -253,6 +274,13 @@ actor BackgroundCaptureDelivery {
         guard !active.contains(id), var record = try? load(id), record.stage != .admitted, record.stage != .cancelled else { return }
         active.insert(id); defer { active.remove(id) }
         do {
+            if credentialProvider == nil && authorizationReader == nil {
+                // Refresh only while the normal WhenUnlocked authority is
+                // readable. A locked read falls through to the exact frozen
+                // OS credential path; it never loads a refresh capability.
+                do { _ = try await BackgroundCaptureAuthorization.renewedCurrentSession() }
+                catch AppSessionError.keychain(let status) where status == errSecInteractionNotAllowed || status == errSecNotAvailable { }
+            }
             let token = try credential(record)
             if record.usesSingleAdmission != true && (record.stage == .saved || record.stage == .needsSignIn || record.stage == .failed) {
                 var created = false
@@ -450,6 +478,10 @@ actor BackgroundCaptureDelivery {
         guard var record = try? load(id), record.stage == .admitted,
               !record.tokenRegistered, let token = record.activityToken else { return }
         do {
+            if credentialProvider == nil && authorizationReader == nil {
+                do { _ = try await BackgroundCaptureAuthorization.renewedCurrentSession() }
+                catch AppSessionError.keychain(let status) where status == errSecInteractionNotAllowed || status == errSecNotAvailable { }
+            }
             let authorization = try credential(record)
             let fingerprint = SHA256.hex(RuntimeEndpoint.scope(record.baseURL) + "|" + authorization)
             if record.registrationCredentialFingerprint != fingerprint {

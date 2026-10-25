@@ -59,7 +59,10 @@ final class LabResetExecutor: LabResetExecuting {
             return .init(verified: true)
         case .workspace:
             guard let refreshWorkspace else { throw LabResetError.unavailable }
-            return .init(verified: await refreshWorkspace())
+            let permission = session?.currentSession.flatMap { RuntimePersistentRenewalPermission(owner: permit, session: $0) }
+            return await RuntimeMaintenanceContext.$persistentRenewal.withValue(permission) {
+                .init(verified: await refreshWorkspace())
+            }
         case .demo:
             return try LabDemoReset.perform(operation: operation, persistence: onboarding)
         case .signOut: throw LabResetError.unavailable

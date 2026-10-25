@@ -53,7 +53,7 @@ export async function GET(): Promise<never> {
   // The exact original session must still be the caller's session, and the
   // flow must still be inside its frozen absolute lifetime.
   if (
-    sessionFingerprint(claims.backendAccessToken) !== operation.sessionFingerprint ||
+    sessionFingerprint(claims) !== operation.sessionFingerprint ||
     !flowIsLive(operation)
   ) {
     return fail(errorTail);

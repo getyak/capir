@@ -57,6 +57,15 @@ enum RuntimeEndpoint {
         return parts.string ?? url.absoluteString
     }
     static func same(_ first: URL, _ second: URL) -> Bool { canonical(first) == canonical(second) }
+    static func relativeRoute(_ url: URL, endpoint: URL) -> String? {
+        func port(_ value: URL) -> Int? { value.port ?? (value.scheme?.lowercased() == "https" ? 443 : value.scheme?.lowercased() == "http" ? 80 : nil) }
+        guard url.scheme?.lowercased() == endpoint.scheme?.lowercased(), url.host?.lowercased() == endpoint.host?.lowercased(),
+              port(url) == port(endpoint) else { return nil }
+        var prefix = endpoint.path
+        while prefix.hasSuffix("/") { prefix.removeLast() }
+        guard prefix.isEmpty || url.path == prefix || url.path.hasPrefix(prefix + "/") else { return nil }
+        return String(url.path.dropFirst(prefix.count))
+    }
     static func permitted(_ url: URL, allowsLoopbackHTTP: Bool) -> Bool {
         guard let host = url.host?.lowercased(), !host.isEmpty,
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,

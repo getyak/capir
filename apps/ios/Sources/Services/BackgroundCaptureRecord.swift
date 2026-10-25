@@ -23,6 +23,7 @@ struct BackgroundCaptureRecord: Codable, Identifiable {
     var revision: Int? = 0
     var tokenGeneration: Int? = 0
     var registrationCredentialFingerprint: String? = nil
+    var credentialFamilyFingerprint: String? = nil
     var localDeletionEpoch: Int? = nil
     var registrationRetries: Int? = 0
     var recoveryAttempts: Int? = 0
@@ -34,6 +35,7 @@ struct BackgroundCaptureRecord: Codable, Identifiable {
         id = UUID(); sessionID = UUID(); messageID = UUID(); attachmentID = UUID()
         sessionOperationID = UUID(); activityInstanceID = UUID()
         baseURL = session.baseURL; accountID = session.account.id; userID = session.user.id
+        credentialFamilyFingerprint = session.persistent.map { _ in AppSessionEnding.fingerprint(session) }
         createdAt = now; timeZone = TimeZone.current.identifier
         sessionPayload = PersistedAgentSession(AgentSession(id: sessionID, scope: .unresolvedIntent,
             title: "Screenshot", turns: [], contactReceipts: [], updatedAt: now,

@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { CONTRACT_VERSION, type DesktopPersistentSessionEnrollRequest,
   type DesktopPersistentSessionProof, type DesktopPersistentSessionResponse,
-  type DesktopPersistentSessionStatus } from "@talent-signal/contracts";
+  type DesktopPersistentSessionStatus, type DesktopPersistentSessionRevokeRequest } from "@talent-signal/contracts";
 import type { Pool, PoolClient } from "pg";
 import type { BackendConfig } from "../config.js";
 import { inTransaction } from "../database/pool.js";
@@ -145,10 +145,46 @@ export function renewDesktopPersistentSession(pool: Pool, config: BackendConfig,
   return withDevice(pool, config, input, audience, (client, credential, session, identity) =>
     issue(client, config, input.device_secret, credential, session, identity));
 }
-export function revokeDesktopPersistentSession(pool: Pool, config: BackendConfig,
-  input: DesktopPersistentSessionProof, audience?: readonly string[]): Promise<{ revoked: true }> {
-  return withDevice(pool, config, input, audience, async (client, _credential, session) => {
-    await client.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [session.id]);
+export async function revokeDesktopPersistentSession(pool: Pool, config: BackendConfig,
+  input: DesktopPersistentSessionRevokeRequest, audience?: readonly string[]): Promise<{ revoked: true }> {
+  validateSecret(input.device_secret);
+  if (input.original_access_token !== undefined) validateSecret(input.original_access_token);
+  const origin = requireAllowedWebOrigin(config, input.web_origin);
+  const invalid = () => new ApiError(401, "DESKTOP_SESSION_PROOF_INVALID", "The revocation proof could not be verified.");
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(input.account_id) || !uuid.test(input.user_id) || (input.session_id !== undefined && !uuid.test(input.session_id))) throw invalid();
+  if ((input.session_id === undefined) !== (input.original_access_token === undefined)) throw invalid();
+  // Legacy enrolled clients have only the device proof. Its lookup cannot
+  // certify that an unknown pending enrollment has ended.
+  const binding = input.session_id ? { session_id: input.session_id.toLowerCase(),
+    account_id: input.account_id.toLowerCase(), user_id: input.user_id.toLowerCase() }
+    : (await pool.query<Binding>(`SELECT session_id,account_id,user_id
+      FROM desktop_persistent_session_credentials WHERE credential_hash=$1`, [sha256(input.device_secret)])).rows[0];
+  if (!binding || binding.account_id !== input.account_id.toLowerCase() || binding.user_id !== input.user_id.toLowerCase()) throw invalid();
+  admitAudience(binding.account_id, audience);
+  return inTransaction(pool, async client => {
+    // Lock the canonical row BEFORE reading capability state: an enrollment
+    // may hold this row while its INSERT remains invisible until COMMIT.
+    const account = (await client.query("SELECT id FROM accounts WHERE id=$1 FOR SHARE", [binding.account_id])).rows[0];
+    const user = (await client.query<{ kind: string }>("SELECT kind FROM users WHERE account_id=$1 AND id=$2 FOR SHARE",
+      [binding.account_id, binding.user_id])).rows[0];
+    if (!account || !user || !REAL_USER_KINDS.includes(user.kind as typeof REAL_USER_KINDS[number])) throw invalid();
+    const session = (await client.query<SessionRow & { previous_token_hash: string | null }>(
+      "SELECT id,token_hash,previous_token_hash,expires_at,revoked_at FROM sessions WHERE id=$1 AND account_id=$2 AND user_id=$3 FOR UPDATE",
+      [binding.session_id, binding.account_id, binding.user_id])).rows[0];
+    if (!session) throw invalid();
+    const credential = await credentialFor(client, session.id);
+    const capabilityMatches = credential?.credential_hash === sha256(input.device_secret) && credential.origin === origin;
+    const originalHash = input.original_access_token === undefined ? null : sha256(input.original_access_token);
+    let originalMatches = originalHash !== null && (session.token_hash === originalHash || session.previous_token_hash === originalHash);
+    if (originalMatches) {
+      const grant = await client.query(`SELECT id FROM desktop_browser_login_attempts
+        WHERE device_session_id=$1 AND account_id=$2 AND user_id=$3 AND origin=$4 AND state='consumed'`,
+      [session.id, binding.account_id, binding.user_id, origin]);
+      originalMatches = !!grant.rowCount;
+    }
+    if (!capabilityMatches && !originalMatches) throw invalid();
+    if (!session.revoked_at) await client.query("UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1", [session.id]);
     return { revoked: true };
   });
 }

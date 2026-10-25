@@ -141,6 +141,7 @@ export async function insertSession(
   // transaction so a concurrent retirement cannot admit a stale session.
   await assertAccountActive(client, identity.accountId);
   const accessToken = sessionToken();
+  const sessionId = randomUUID();
   const expiresAt = new Date(Date.now() + config.sessionTtlSeconds * 1_000);
   await client.query(
     `INSERT INTO sessions(
@@ -148,7 +149,7 @@ export async function insertSession(
      )
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [
-      randomUUID(),
+      sessionId,
       identity.accountId,
       identity.userId,
       sha256(accessToken),
@@ -159,6 +160,7 @@ export async function insertSession(
   return {
     contract_version: CONTRACT_VERSION,
     access_token: accessToken,
+    session_id: sessionId,
     expires_at: expiresAt.toISOString(),
     account: {
       id: identity.accountId,
@@ -817,6 +819,7 @@ export async function currentSession(
        AND sessions.revoked_at IS NULL
        AND sessions.expires_at > now()
        AND users.status = 'active'
+       AND accounts.retired_at IS NULL
        AND ${labWorkspaceSessionActiveSQL}`,
     [auth.sessionId, auth.accountId, auth.userId],
   );
@@ -826,6 +829,7 @@ export async function currentSession(
   }
   return {
     contract_version: CONTRACT_VERSION,
+    session_id: auth.sessionId,
     expires_at: session.expires_at.toISOString(),
     account: {
       id: auth.accountId,

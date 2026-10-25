@@ -1,5 +1,6 @@
 import 'server-only';
-import {createHash, createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
+import { primarySessionFingerprint } from './primary-session-binding';
+import {createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
 import {Value} from '@sinclair/typebox/value';
 import {CapirAuthAuthorizeRequestSchema, type CapirAuthAuthorizeRequest} from '@talent-signal/contracts';
 import {authSecret, backendAuthBaseUrl, type BackendSessionClaims} from './backendAuth';
@@ -30,17 +31,17 @@ export async function capirAuthRequest<T>(path:string, claims:BackendSessionClai
 }
 export function validateConsentParams(params:Record<string,string|string[]|undefined>, scopes:CapirAuthAuthorizeRequest['scopes']):CapirAuthAuthorizeRequest {
   const origins=capirAuthOrigins();
-  const request={schema_version:'capir-auth.v2', redirect_uri:params.redirect_uri, state:params.state,
+  const request={schema_version:params.schema_version, redirect_uri:params.redirect_uri, state:params.state,
     code_challenge:params.code_challenge, code_challenge_method:params.code_challenge_method,
     web_origin:params.web_origin, backend_origin:params.backend_origin, client_label:params.client_label, scopes, consent:true};
-  if (!Value.Check(CapirAuthAuthorizeRequestSchema, request) || request.web_origin !== origins.web || request.backend_origin !== origins.backend || params.schema_version !== 'capir-auth.v2')
+  if (!Value.Check(CapirAuthAuthorizeRequestSchema, request) || request.web_origin !== origins.web || request.backend_origin !== origins.backend || !['capir-auth.v2','capir-auth.v3'].includes(String(params.schema_version)))
     throw new Error('Invalid CLI authorization request.');
   const redirect = new URL(request.redirect_uri);
   if (redirect.origin !== `http://127.0.0.1:${redirect.port}` || !redirect.port || Number(redirect.port)<1024 || redirect.pathname !== '/capir/callback' || redirect.search || redirect.hash || redirect.username || redirect.password)
     throw new Error('Invalid loopback callback.');
   return request;
 }
-function sessionDigest(claims:BackendSessionClaims) {return createHash('sha256').update(claims.backendAccessToken).digest('hex');}
+function sessionDigest(claims:BackendSessionClaims) {return primarySessionFingerprint(claims);}
 function sign(value:string) {return createHmac('sha256',authSecret()).update('capir-auth.v2\n'+value).digest('base64url');}
 export function sealCapirForm(claims:BackendSessionClaims, value:unknown):string {
   const payload=Buffer.from(JSON.stringify({session:sessionDigest(claims), value, expires:Date.now()+300000, nonce:randomBytes(16).toString('hex')})).toString('base64url');

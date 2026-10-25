@@ -139,6 +139,8 @@ export type CredentialCommit = "committed" | "existing_preserved";
 export type CredentialRemoval = "removed" | "already_absent" | "preserved_newer" | "unverified";
 
 export interface CredentialTxn {
+  /** Serialize a complete durable logout transaction with renewal/login. */
+  runExclusive?<T>(work:(store:CredentialStore)=>Promise<T>):Promise<T>;
   /** Store `token` only when no credential exists; never overwrite. */
   commitIfAbsent(token: string): Promise<CredentialCommit>;
   /** Remove the stored credential only when it is exactly `token`. */
@@ -183,6 +185,9 @@ export function createCredentialTxn(
   lockOptions?: ProcessLockOptions,
 ): CredentialTxn {
   return {
+    async runExclusive<T>(work:(store:CredentialStore)=>Promise<T>):Promise<T> {
+      return new ProcessLock(mutexFile,lockOptions).runAsync(()=>work(store));
+    },
     async commitIfAbsent(token: string): Promise<CredentialCommit> {
       return new ProcessLock(mutexFile, lockOptions).runAsync(async () => {
         const current = await store.get();

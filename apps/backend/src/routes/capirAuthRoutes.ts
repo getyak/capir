@@ -55,9 +55,9 @@ export function registerCapirAuthRoutes(
   app.get(
     "/v1/capir/auth/capabilities",
     { config: rate, schema: { response: { 200: CapirAuthCapabilitiesResponseSchema } } },
-    async (_request, reply) => {
+    async (request, reply) => {
       noStore(reply);
-      return service.capabilities();
+      return service.capabilities((request.query as {schema_version?:string}).schema_version === "capir-auth.v3" ? "capir-auth.v3" : "capir-auth.v2");
     },
   );
 

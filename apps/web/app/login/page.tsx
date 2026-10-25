@@ -1,3 +1,5 @@
+import { hasPendingWebRevocations } from "@/lib/server/web-session-cookies";
+import { authFailureMessage } from "@/lib/auth-feedback";
 import { AppleLogo, ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
 import type { Metadata } from "next";
 import Image from "next/image";
@@ -45,7 +47,7 @@ const oauthErrors: Record<string, string> = {
 };
 
 export default async function LoginPage({ searchParams }: {
-  searchParams: Promise<{ callbackUrl?: string; error?: string; reason?: string; mode?: string; verification?: string; connect?: string }>;
+  searchParams: Promise<{ callbackUrl?: string; error?: string; reason?: string; mode?: string; verification?: string; connect?: string; code?: string }>;
 }) {
   const [session, parameters] = await Promise.all([auth(), searchParams]);
   const requestHeaders = await headers();
@@ -133,7 +135,7 @@ export default async function LoginPage({ searchParams }: {
   const availability = getAuthAvailability(process.env, { google: Boolean(getGoogleOAuthCredentials()) });
   const error = sessionExpired ? "登录已过期。重新登录后，可以继续刚才的工作。"
     : collisionHint ? ""
-    : parameters.error ? (oauthErrors[parameters.error] ?? "登录未完成，请重试或换一种方式。") : "";
+    : parameters.error ? (parameters.code === "sign_out_pending" && await hasPendingWebRevocations() ? authFailureMessage("sign_out_pending", "sign-in") : oauthErrors[parameters.error] ?? "登录未完成，请重试或换一种方式。") : "";
   const providers = (
     <div className={styles.providers}>
       <form action={signInWithGoogle} data-oauth-form="true">

@@ -2,6 +2,7 @@ import "server-only";
 import type { SessionResponse } from "@talent-signal/contracts";
 import { desktopAuthDeploymentOrigin, desktopAuthWebOrigin } from "./desktop-browser-login";
 import { backendAuthBaseUrl } from "./backendAuth";
+import { openDesktopRevocationProof } from "./desktop-revocation-seal";
 
 export const DESKTOP_PERSISTENT_PATH = "/api/desktop-auth/persistent";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,6 +20,8 @@ export type DesktopPersistentFields = {
   device_secret: string;
   account_id: string;
   user_id: string;
+  session_id?: string;
+  revocation_proof?: string;
 };
 export type DesktopPersistentStatus = {
   status: "authenticated";
@@ -26,6 +29,7 @@ export type DesktopPersistentStatus = {
   user_id: string;
   session_id: string;
   session_expires_at: string;
+  revocation_proof?: string;
 };
 
 async function boundedJSON(source: Request | Response, limit: number): Promise<unknown> {
@@ -62,8 +66,14 @@ export function desktopPersistentFields(value: unknown): DesktopPersistentFields
       typeof v.user_id !== "string" || !UUID.test(v.user_id)) {
     throw new DesktopPersistentSessionError(400);
   }
+  const hasRevocation = v.session_id !== undefined || v.revocation_proof !== undefined;
+  if (hasRevocation && (v.action !== "revoke" || typeof v.session_id !== "string" || !UUID.test(v.session_id)
+    || typeof v.revocation_proof !== "string" || v.revocation_proof.length > 2048 || !v.revocation_proof)) {
+    throw new DesktopPersistentSessionError(400);
+  }
   return { action: v.action as DesktopPersistentFields["action"], device_secret: v.device_secret,
-    account_id: v.account_id, user_id: v.user_id };
+    account_id: v.account_id, user_id: v.user_id,
+    ...(hasRevocation ? { session_id: v.session_id as string, revocation_proof: v.revocation_proof as string } : {}) };
 }
 
 /** JSON plus the custom native header cannot be submitted by a cross-site
@@ -79,7 +89,9 @@ export async function desktopPersistentPostFields(request: Request): Promise<Des
       (site !== null && !["none", "same-origin"].includes(site))) {
     throw new DesktopPersistentSessionError(403);
   }
-  return desktopPersistentFields(await boundedJSON(request, 4096));
+  const body = await boundedJSON(request, 4096);
+  if (body && typeof body === "object" && "original_access_token" in body) throw new DesktopPersistentSessionError(400);
+  return desktopPersistentFields(body);
 }
 
 async function backend(path: string, body?: unknown, access?: string): Promise<unknown> {
@@ -159,8 +171,16 @@ export async function authorizeDesktopPersistentSession(credentials: Partial<Rec
 }
 
 export async function revokeDesktopPersistentSession(fields: DesktopPersistentFields) {
-  await backend("/v1/desktop-persistent-session/revoke", {
+  if (fields.action !== "revoke") throw new DesktopPersistentSessionError(400);
+  const origin = await desktopAuthDeploymentOrigin();
+  let original: string | undefined;
+  if (fields.revocation_proof !== undefined) {
+    try { original = openDesktopRevocationProof(fields.revocation_proof, origin, { ...fields, session_id: fields.session_id! }); }
+    catch { throw new DesktopPersistentSessionError(503); }
+  }
+  const result = await backend("/v1/desktop-persistent-session/revoke", {
     device_secret: fields.device_secret, account_id: fields.account_id, user_id: fields.user_id,
-    web_origin: await desktopAuthDeploymentOrigin(),
+    web_origin: origin, ...(original ? { session_id: fields.session_id, original_access_token: original } : {}),
   });
+  if (!result || typeof result !== "object" || !("revoked" in result) || result.revoked !== true) throw new DesktopPersistentSessionError(503);
 }

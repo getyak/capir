@@ -49,7 +49,11 @@ struct LabSessionEndingsView: View {
                     Text(language.text(receipt.settled ? "Sign-out checked" : "Sign-out needs attention"))
                 } footer: {
                     if [.pending, .unverified].contains(receipt.remote) {
-                        Text(language.text("A protected copy of this old credential is retained only to retry revocation, until its reported expiry. It cannot reopen account content. Retry preserves any newer sign-in."))
+                        if receipt.renewable {
+                            Text(language.text("A protected copy is retained only until server revocation is verified. Short access expiry does not end this renewable session. This copy cannot reopen account content; retry preserves any newer sign-in."))
+                        } else {
+                            Text(language.text("A protected copy of this old credential is retained only to retry revocation, until its reported expiry. It cannot reopen account content. Retry preserves any newer sign-in."))
+                        }
                     } else if receipt.remote == .expired {
                         Text(language.text("The saved expiry has passed. This is not a new server verification."))
                     }

@@ -5,11 +5,13 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import type { BackendConfig } from "../config.js";
 import { createAuthGuard, type AuthContext } from "./auth.js";
 import { sha256 } from "../lib/hash.js";
+import { ApiError } from "../lib/apiError.js";
 import { approveDesktopBrowserLogin, consumeDesktopBrowserLogin, pkceS256,
   postgresDesktopBrowserLoginDb, prepareDesktopBrowserLogin } from "./desktopBrowserLogin.js";
 import { enrollDesktopPersistentSession, renewDesktopPersistentSession,
   revokeDesktopPersistentSession } from "./desktopPersistentSession.js";
 import { readAccountSettings, mutateAccountSettings } from "./accountManagement.js";
+import { registerDesktopPersistentSession } from "../routes/desktopPersistentSession.js";
 
 const database = process.env.DESKTOP_PERSISTENT_SESSION_TEST_DATABASE_URL;
 if (database) {
@@ -24,6 +26,72 @@ const pool = database ? new Pool({ connectionString: database, max: 8,
 const config = { allowedOrigins: ["https://web.test"], sessionTtlSeconds: 28800 } as BackendConfig;
 const secret = () => randomBytes(32).toString("base64url");
 const accounts: { accountId: string; email: string }[] = [];
+
+/** Transparent fault injection: execute every real statement, holding only the
+ * selected transaction's COMMIT. No fixture supplies missing protocol state. */
+function holdSessionCommit(sessionId: string, operation: "enroll" | "revoke") {
+  let release!: () => void, reached!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const atCommit = new Promise<void>(resolve => { reached = resolve; });
+  let holderPid: number | null = null;
+  const marker = operation === "enroll" ? "INSERT INTO desktop_persistent_session_credentials"
+    : "UPDATE sessions SET revoked_at=clock_timestamp()";
+  const wrapped = new Proxy(pool!, {
+    get(target, property) {
+      if (property !== "connect") {
+        const value: unknown = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async () => {
+        const client = await target.connect();
+        let matches = false;
+        return new Proxy(client, {
+          get(connection, key) {
+            if (key !== "query") {
+              const value: unknown = Reflect.get(connection, key);
+              return typeof value === "function" ? value.bind(connection) : value;
+            }
+            return async (...args: unknown[]) => {
+              const [sql, values] = args;
+              if (typeof sql === "string" && sql.includes(marker)
+                && Array.isArray(values) && values[0] === sessionId) matches = true;
+              if (sql === "COMMIT" && matches) {
+                matches = false;
+                holderPid = (await connection.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
+                reached();
+                await released;
+              }
+              const query = connection.query as unknown as (...parameters: unknown[]) => Promise<unknown>;
+              return query.apply(connection, args);
+            };
+          },
+        });
+      };
+    },
+  });
+  return { pool: wrapped, atCommit, release, holderPid: () => holderPid };
+}
+
+async function waitForBlockedTransaction(holderPid: number | null) {
+  expect(holderPid).not.toBeNull();
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const row = await pool!.query(`SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+      AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid))`, [holderPid]);
+    if (row.rowCount) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error("The expected production transaction did not reach the held row lock.");
+}
+
+async function waitForCommit(gate: ReturnType<typeof holdSessionCommit>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([gate.atCommit, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("The production transaction did not reach COMMIT.")), 5_000);
+    })]);
+  } finally { if (timer) clearTimeout(timer); }
+}
 
 async function fixture() {
   const accountId = randomUUID(), userId = randomUUID(), browserId = randomUUID();
@@ -209,6 +277,96 @@ describe.skipIf(!pool)("persistent Mac sessions (disposable PostgreSQL)", () => 
     await revokeDesktopPersistentSession(pool!, config, f.proof);
     expect(await accepted(enrolled.access_token)).toBe(false);
     await expect(renewDesktopPersistentSession(pool!, config, f.proof)).rejects.toMatchObject({ statusCode: 401 });
+  });
+
+  it("revokes an expired pending Mac enrollment using only its exact original access proof", async () => {
+    const f = await fixture();
+    await pool!.query("UPDATE sessions SET expires_at=now()-interval '1 day' WHERE id=$1", [f.sessionId]);
+    const proof = { ...f.proof, session_id: f.sessionId, original_access_token: f.mac.access_token };
+    await expect(revokeDesktopPersistentSession(pool!, config, proof)).resolves.toEqual({ revoked: true });
+    await expect(revokeDesktopPersistentSession(pool!, config, proof)).resolves.toEqual({ revoked: true });
+    await expect(enrollDesktopPersistentSession(pool!, config, f.auth, f.proof)).rejects.toMatchObject({ code: "DESKTOP_SESSION_REVOKED" });
+    expect(await accepted(f.mac.access_token)).toBe(false);
+  });
+
+  it.each(["enroll", "revoke"] as const)("serializes pending %s COMMIT against the competing Mac transition", async first => {
+    const f = await fixture(), gate = holdSessionCommit(f.sessionId, first);
+    const proof = { ...f.proof, session_id: f.sessionId, original_access_token: f.mac.access_token };
+    let enrollment: Promise<unknown> | undefined, logout: Promise<unknown> | undefined;
+    try {
+      if (first === "enroll") {
+        await pool!.query("UPDATE sessions SET expires_at=clock_timestamp()+interval '1 second' WHERE id=$1", [f.sessionId]);
+        enrollment = enrollDesktopPersistentSession(gate.pool, config, f.auth, f.proof);
+        await waitForCommit(gate);
+        const deadline = Date.now() + 2500;
+        let expired = false;
+        while (Date.now() < deadline) {
+          expired = (await pool!.query("SELECT clock_timestamp()>expires_at AS expired FROM sessions WHERE id=$1", [f.sessionId])).rows[0].expired;
+          if (expired) break;
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        expect(expired).toBe(true);
+        expect((await pool!.query("SELECT 1 FROM desktop_persistent_session_credentials WHERE session_id=$1", [f.sessionId])).rowCount).toBe(0);
+        logout = revokeDesktopPersistentSession(pool!, config, proof);
+      } else {
+        logout = revokeDesktopPersistentSession(gate.pool, config, proof);
+        await waitForCommit(gate);
+        enrollment = enrollDesktopPersistentSession(pool!, config, f.auth, f.proof).catch(error => ({ error }));
+      }
+      await waitForBlockedTransaction(gate.holderPid());
+      gate.release();
+      const [enrolled, ended] = await Promise.all([enrollment, logout]);
+      expect(ended).toEqual({ revoked: true });
+      if (first === "enroll") {
+        expect(await accepted((enrolled as { access_token: string }).access_token)).toBe(false);
+      } else {
+        expect(enrolled).toMatchObject({ error: { code: "DESKTOP_SESSION_REVOKED" } });
+        expect((await pool!.query("SELECT 1 FROM desktop_persistent_session_credentials WHERE session_id=$1", [f.sessionId])).rowCount).toBe(0);
+      }
+      await expect(renewDesktopPersistentSession(pool!, config, f.proof)).rejects.toMatchObject({ code: "DESKTOP_SESSION_REVOKED" });
+    } finally { gate.release(); await Promise.allSettled([enrollment, logout]); }
+  }, 12_000);
+
+  it("rejects wrong original proof, other sessions, Web grants and origins without reporting revocation", async () => {
+    const f = await fixture();
+    const proof = { ...f.proof, session_id: f.sessionId, original_access_token: f.mac.access_token };
+    for (const wrong of [
+      { ...proof, original_access_token: secret() },
+      { ...proof, session_id: f.browser.sessionId },
+      { ...proof, session_id: f.browser.sessionId, original_access_token: f.browserToken },
+      { ...proof, web_origin: "https://other.test" },
+    ]) {
+      await expect(revokeDesktopPersistentSession(pool!, { ...config, allowedOrigins: [...config.allowedOrigins, "https://other.test"] }, wrong))
+        .rejects.toMatchObject({ code: "DESKTOP_SESSION_PROOF_INVALID" });
+    }
+    await expect(revokeDesktopPersistentSession(pool!, config, f.proof)).rejects.toMatchObject({ code: "DESKTOP_SESSION_PROOF_INVALID" });
+    expect((await pool!.query("SELECT revoked_at FROM sessions WHERE id=$1", [f.sessionId])).rows[0].revoked_at).toBeNull();
+  });
+
+  it("accepts an expired previous Mac access only for destructive revoke", async () => {
+    const f = await fixture();
+    await enrollDesktopPersistentSession(pool!, config, f.auth, f.proof);
+    await pool!.query("UPDATE sessions SET previous_token_expires_at=now()-interval '1 day' WHERE id=$1", [f.sessionId]);
+    await expect(revokeDesktopPersistentSession(pool!, config, { ...f.proof, device_secret: secret(), session_id: f.sessionId,
+      original_access_token: f.mac.access_token })).resolves.toEqual({ revoked: true });
+    await expect(renewDesktopPersistentSession(pool!, config, f.proof)).rejects.toMatchObject({ code: "DESKTOP_SESSION_REVOKED" });
+  });
+
+  it("the production route schemas reject original bearer proof on enrollment and renewal", async () => {
+    const f = await fixture(), app = Fastify();
+    app.setErrorHandler((error, request, reply) => reply.code(error instanceof ApiError ? error.statusCode : 500).send({
+      error: { code: error instanceof ApiError ? error.code : "UNKNOWN", message: "Synthetic failure", request_id: request.id },
+    }));
+    registerDesktopPersistentSession(app, pool!, config, createAuthGuard(pool!));
+    try {
+      for (const action of ["enroll", "renew"]) {
+        const payload = action === "enroll" ? { device_secret: f.proof.device_secret, web_origin: f.proof.web_origin }
+          : f.proof;
+        const response = await app.inject({ method: "POST", url: "/v1/desktop-persistent-session/" + action,
+          headers: { authorization: `Bearer ${f.mac.access_token}` }, payload: { ...payload, original_access_token: f.mac.access_token } });
+        expect(response.statusCode).toBe(400);
+      }
+    } finally { await app.close(); }
   });
 
   it.each(["disable", "retire", "delete"] as const)("does not revive a device after %s", async action => {

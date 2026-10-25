@@ -1,3 +1,6 @@
+import { isWebSessionUnavailable } from "@/lib/server/web-persistent-session";
+import { WorkspaceAccessRecovery } from "@/components/workspace-access-recovery";
+import { SessionRetryButton } from "@/components/session-retry-button";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -22,10 +25,13 @@ export default async function OnboardingPage({ searchParams }: {
   const requested = safeRedirectTarget(parameters.callbackUrl);
   const callbackUrl = /^\/(?:onboarding|login)(?:[/?#]|$)/.test(requested) ? "/workspace" : requested;
   const edit = parameters.edit === "true";
-  const claims = await readBackendSessionClaims().catch((error) => {
+  const result = await readBackendSessionClaims().then(claims => ({ claims, unavailable: false })).catch((error) => {
+    if (isWebSessionUnavailable(error)) return { claims: null, unavailable: true };
     if (isBackendSessionExpiredError(error)) redirect(`/login?reason=backend_session_expired&callbackUrl=${encodeURIComponent(callbackUrl)}`);
     throw error;
   });
+  const { claims } = result;
+  if (result.unavailable) return <WorkspaceAccessRecovery unavailable><SessionRetryButton /></WorkspaceAccessRecovery>;
   if (!claims && !(await auth())?.user) {
     redirect(`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }

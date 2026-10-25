@@ -61,7 +61,7 @@ export const labWorkspaceSessionActiveSQL = `(users.kind <> 'lab_human' OR EXIST
   WHERE w.target_account_id=users.account_id AND w.target_user_id=users.id
     AND w.state='active' AND w.expires_at>clock_timestamp()
     AND e.revoked_at IS NULL AND e.expires_at>clock_timestamp()
-    AND parent.revoked_at IS NULL AND parent.expires_at>clock_timestamp()
+    AND parent.revoked_at IS NULL AND (parent.expires_at>clock_timestamp() OR EXISTS (SELECT 1 FROM capir_auth_grants pg WHERE pg.backing_session_id=parent.id AND pg.protocol_version='capir-auth.v3' AND pg.state='active'))
     AND owner.status='active' AND owner.kind<>'lab_human'
     AND (NOT EXISTS (
            SELECT 1 FROM capir_auth_grants g WHERE g.backing_session_id=parent.id)
@@ -70,7 +70,7 @@ export const labWorkspaceSessionActiveSQL = `(users.kind <> 'lab_human' OR EXIST
            JOIN capir_user_test_entitlements t
              ON t.account_id=g.account_id AND t.user_id=g.user_id AND t.state='active'
           WHERE g.backing_session_id=parent.id AND g.state='active'
-            AND g.absolute_expires_at>clock_timestamp()
+            AND (g.absolute_expires_at IS NULL OR g.absolute_expires_at>clock_timestamp())
             AND t.generation=g.test_entitlement_generation
             AND 'test.handoff'=ANY(t.scopes) AND 'test.handoff'=ANY(g.scopes)))
 ) OR EXISTS (

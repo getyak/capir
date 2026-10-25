@@ -1,4 +1,5 @@
 'use server';
+import { primarySessionFingerprint } from "@/lib/server/primary-session-binding";
 import { createHmac } from 'node:crypto';
 import { TalentSignalClient, TalentSignalHttpError, type LabWorkspace, type LabWorkspaceEntry } from '@talent-signal/contracts';
 import { redirect } from 'next/navigation';
@@ -31,7 +32,7 @@ export async function manageTestWorkspace(_previous:TestActionState,form:FormDat
     if(kind!=='enter')return {error:'无法识别操作。'};
     if(await testWorkspaceSession(primary))return {error:'请先返回我的空间，再进入另一个测试空间。'};
     // Stable, secret entry credential makes retries recover the same backend entry.
-    const accessToken=createHmac('sha256',authSecret()).update(`${primary.backendAccessToken}:${workspaceId}:${operationId}`).digest('base64url');
+    const accessToken=createHmac('sha256',authSecret()).update(`${primary.backendLegacyAccessToken ?? (primary.backendSessionId ? primarySessionFingerprint(primary) : primary.backendAccessToken)}:${workspaceId}:${operationId}`).digest('base64url');
     const result=await testWorkspaceRequest<{entry:LabWorkspaceEntry}>(`/${workspaceId}/entries`,{id:operationId,access_token:accessToken});
     if(result.entry.state!=='active'||!result.entry.session)throw new Error('Inactive test session');
     const session=await new TalentSignalClient(backendAuthBaseUrl(),accessToken).currentSession();

@@ -118,7 +118,8 @@ Sign-out records protected intent before closing account views and shortcut
 recovery. Late validation cannot reopen that session. Local credential removal
 and server revocation have separate receipts, accessible at sign-in and in Lab.
 Failed remote revocation retains a protected, revocation-only credential until
-resolved or its reported expiry; expiry is not a fresh server verification.
+resolved. Only older, nonrenewable credentials settle at their reported access
+expiry; expiry is not a fresh server verification.
 Retry preserves a newer sign-in and can remove an old identity slot after its
 revocation credential has been discarded. Normal sign-out preserves scoped
 drafts and operation recovery rather than treating them as caches. These records
@@ -378,6 +379,32 @@ For Simulator verification, the existing Debug-only `--workspace-backend-url`
 route authenticates through the same loopback fixture account. See
 [ADR 0012](../../docs/decisions/0012-useful-device-lab-and-real-experiments.md)
 for the product and isolation decision.
+
+## Persistent sign-in
+
+Real password, Apple and Google sign-ins keep a device-only renewal capability
+inside the existing `WhenUnlockedThisDeviceOnly` Keychain record. Its canonical
+session survives app updates, relaunch and device reboot without an idle or
+absolute login deadline. Short access still expires after eight hours. Startup,
+foreground, a foreground timer, ordinary requests and SSE connection admission
+share one renewal owner. Routine access rotation keeps the workspace, drafts and
+account-operation identity mounted; business writes are never replayed to recover
+authentication. Unavailable transport or secure storage preserves the capability.
+
+Enrollment persists a pending secret and verified canonical session ID before
+dispatch. Lost responses resume that same capability. An existing healthy login
+can migrate automatically; an already expired older login without a capability
+requires one sign-in. Lab and simulated sessions keep their own bounded grants.
+Explicit logout and confirmed revocation fence the entire canonical family,
+including stale clients and frozen capture credentials, before removing active
+authority. Revocation-only recovery can revoke even after short access expires.
+
+The device must be unlocked after reboot before its protected session is usable.
+Locked background continuation still uses only the previously authorized exact
+capture bearer; it cannot read the renewal secret or authorize a new screenshot.
+The [Apple Keychain accessibility contract](https://developer.apple.com/documentation/security/ksecattraccessiblewhenunlockedthisdeviceonly)
+owns this device protection. Deleting the Keychain credential or restoring onto
+a different device requires fresh authentication.
 
 ## Requirements
 

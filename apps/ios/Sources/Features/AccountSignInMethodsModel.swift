@@ -8,6 +8,21 @@ struct AccountOperationScope: Hashable, Sendable {
     var accessToken: String
     var accountID: String
     var userID: String
+    private var family: String?
+
+    init(baseURL: URL, accessToken: String, accountID: String, userID: String) {
+        self.baseURL = baseURL; self.accessToken = accessToken
+        self.accountID = accountID; self.userID = userID
+        family = IOSSessionFamilyRegistry.shared.family(endpoint: baseURL, token: accessToken)
+    }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        RuntimeEndpoint.same(lhs.baseURL, rhs.baseURL) && lhs.accountID == rhs.accountID && lhs.userID == rhs.userID
+            && (lhs.family ?? lhs.accessToken) == (rhs.family ?? rhs.accessToken)
+    }
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(RuntimeEndpoint.scope(baseURL)); hasher.combine(accountID)
+        hasher.combine(userID); hasher.combine(family ?? accessToken)
+    }
 }
 
 /// The immutable context of one provider authorization round. The round is
@@ -141,12 +156,7 @@ final class AccountSignInMethodsModel: ObservableObject {
         operationID: String? = nil,
         requestID: String? = nil
     ) -> Bool {
-        guard let live = currentScope(),
-              live.baseURL == scope.baseURL,
-              live.accessToken == scope.accessToken,
-              live.accountID == scope.accountID,
-              live.userID == scope.userID
-        else { return false }
+        guard let live = currentScope(), live == scope else { return false }
         if let operationID, operationID != self.operationID { return false }
         if let requestID, requestID != self.currentRequestID { return false }
         return true

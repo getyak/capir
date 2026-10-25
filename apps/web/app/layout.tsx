@@ -4,6 +4,7 @@ import { siteConfig } from "@/lib/site";
 import "./globals.css";
 import { accountDisplayLanguage, getMarketingLocale } from "@/lib/server/marketing-locale";
 import { MarketingLocaleProvider } from "@/components/marketing/locale-provider";
+import { BrowserSessionRenewal } from "@/components/browser-session-renewal";
 import { translate } from "@/lib/i18n";
 
 export const metadata: Metadata = {
@@ -89,6 +90,7 @@ export default async function RootLayout({
           {translate(locale, "nav.skipToContent")}
         </a>
         <MarketingLocaleProvider locale={locale} accountLocale={accountLanguage !== null} accountLanguage={accountLanguage}>
+          <BrowserSessionRenewal />
           {children}
         </MarketingLocaleProvider>
       </body>

@@ -301,6 +301,9 @@ struct ConversationImageTransport {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 60
         if LabFaultURLProtocol.isIsolated(session), !LabFaultURLProtocol.permits(request) { throw URLError(.unsupportedURL) }
+        if !LabFaultURLProtocol.isIsolated(session) {
+            request = try await IOSSessionRequestResolution.coordinator.preflight(request)
+        }
         // A task delegate also protects injected/test sessions from forwarding credentials.
         let (bytes, response) = try await session.bytes(for: request, delegate: RuntimeRedirectGuard())
         defer { bytes.task.cancel() }
