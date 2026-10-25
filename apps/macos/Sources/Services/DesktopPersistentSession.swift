@@ -229,6 +229,35 @@ final class DesktopPersistentSessionCoordinator {
     }
 }
 
+#if DEBUG
+/// Test-owned observation only: fixed categories contain no request, document,
+/// identity, credential, URL or arbitrary error text. Release has no observer.
+struct DesktopPersistentSessionWKDiagnosticEvent: Codable {
+    enum Phase: String, Codable {
+        case request, loadStarted, actionPolicy, responsePolicy, commit, finish, fail, watchdog, readbackStart, readbackDone
+    }
+    enum ErrorDomain: String, Codable {
+        case cancellation, url = "NSURLErrorDomain", cocoa = "NSCocoaErrorDomain", webKit = "WKErrorDomain", other
+    }
+    let phase: Phase
+    let elapsedMilliseconds: Int
+    let statusCode: Int?
+    let errorDomain: ErrorDomain?
+    let errorCode: Int?
+
+    static func errorMetadata(_ error: Error) -> (domain: ErrorDomain, code: Int?) {
+        if error is CancellationError { return (.cancellation, nil) }
+        let value = error as NSError
+        switch value.domain {
+        case NSURLErrorDomain: return (.url, value.code)
+        case NSCocoaErrorDomain: return (.cocoa, value.code)
+        case WKErrorDomain: return (.webKit, value.code)
+        default: return (.other, nil)
+        }
+    }
+}
+#endif
+
 /// A dedicated hidden WK host shares only the selected persistent cookie jar;
 /// it never receives workspace JavaScript, a bridge, or a native bearer token.
 @MainActor
@@ -243,6 +272,20 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
     private var timeout: Task<Void, Never>?
     private var revoking = false
     private var endpoint: URL { origin.url.appendingPathComponent("api/desktop-auth/persistent") }
+#if DEBUG
+    var diagnosticObserver: ((DesktopPersistentSessionWKDiagnosticEvent) -> Void)?
+    private var diagnosticEventCount = 0
+    private let diagnosticStarted = ProcessInfo.processInfo.systemUptime
+    private func diagnose(_ phase: DesktopPersistentSessionWKDiagnosticEvent.Phase, statusCode: Int? = nil, error: Error? = nil) {
+        guard let diagnosticObserver, diagnosticEventCount < 64 else { return }
+        diagnosticEventCount += 1
+        let metadata = error.map(DesktopPersistentSessionWKDiagnosticEvent.errorMetadata)
+        diagnosticObserver(.init(phase: phase,
+            elapsedMilliseconds: max(0, Int((ProcessInfo.processInfo.systemUptime - diagnosticStarted) * 1000)),
+            statusCode: statusCode.flatMap { (100...599).contains($0) ? $0 : nil },
+            errorDomain: metadata?.domain, errorCode: metadata?.code))
+    }
+#endif
 
     init(origin: WorkspaceOrigin, registry: LoginStoreRegistry) { self.origin = origin; self.registry = registry }
 
@@ -250,6 +293,9 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
         guard selection.origin == origin.url.absoluteString, (revoking || registry.isCurrent(selection)), !Task.isCancelled else { throw CancellationError() }
     }
     private func load(_ request: URLRequest, selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt {
+#if DEBUG
+        diagnose(.request)
+#endif
         try validate(selection)
         if webView == nil {
             let configuration = WKWebViewConfiguration()
@@ -262,14 +308,32 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
             self.continuation = continuation
             navigation = webView?.load(request)
             guard navigation != nil else { finish(.failure(URLError(.badServerResponse))); return }
+#if DEBUG
+            diagnose(.loadStarted)
+#endif
             timeout = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(20))
                 guard !Task.isCancelled else { return }
+#if DEBUG
+                self?.diagnose(.watchdog)
+#endif
                 self?.finish(.failure(URLError(.timedOut))); self?.webView?.stopLoading()
             }
         }
         try validate(selection)
+#if DEBUG
+        diagnose(.readbackStart)
+        let raw: Any?
+        do {
+            raw = try await webView!.callAsyncJavaScript("return document.body?.textContent ?? '';", arguments: [:], in: nil, contentWorld: Self.world)
+        } catch {
+            diagnose(.fail, error: error)
+            throw error
+        }
+        diagnose(.readbackDone)
+#else
         let raw = try await webView!.callAsyncJavaScript("return document.body?.textContent ?? '';", arguments: [:], in: nil, contentWorld: Self.world)
+#endif
         try validate(selection)
         guard let text = raw as? String, let data = text.data(using: .utf8), data.count <= 4096,
               let receipt = try? JSONDecoder().decode(DesktopPersistentSessionReceipt.self, from: data) else { throw URLError(.badServerResponse) }
@@ -293,21 +357,40 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
         return try await load(request, selection: selection)
     }
     private func finish(_ result: Result<Void, Error>) {
+#if DEBUG
+        if case .failure(let error) = result { diagnose(.fail, error: error) }
+#endif
         let pending = continuation; continuation = nil; navigation = nil
         timeout?.cancel(); timeout = nil; pending?.resume(with: result)
     }
     func cancel() { finish(.failure(CancellationError())); webView?.stopLoading() }
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+#if DEBUG
+        diagnose(.actionPolicy)
+#endif
         guard action.targetFrame?.isMainFrame != false, action.request.url == endpoint, let selection,
               revoking || registry.isCurrent(selection) else { decisionHandler(.cancel); finish(.failure(CancellationError())); return }
         decisionHandler(.allow)
     }
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+#if DEBUG
+        diagnose(.responsePolicy, statusCode: (response.response as? HTTPURLResponse)?.statusCode)
+#endif
         guard response.isForMainFrame, response.response.url == endpoint else { decisionHandler(.cancel); finish(.failure(URLError(.badServerResponse))); return }
         decisionHandler(.allow)
     }
+#if DEBUG
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard navigation === self.navigation else { return }
+        diagnose(.commit)
+    }
+#endif
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard navigation === self.navigation else { return }; finish(.success(()))
+        guard navigation === self.navigation else { return }
+#if DEBUG
+        diagnose(.finish)
+#endif
+        finish(.success(()))
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard navigation === self.navigation else { return }; finish(.failure(error))
