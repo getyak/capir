@@ -19,11 +19,11 @@ import styles from "./workspace-shell.module.css";
 
 /**
  * The compact bottom-left workspace footer: account avatar, a flexible
- * Connect apps link and a compact download/update control.
+ * Connect apps capsule and a compact download/update control.
  *
- * Labels remain visible in the expanded sidebar, with stable targets on hover
- * and focus. Hover never executes an effect; only an explicit activation opens
- * the entry's link.
+ * The download entry expands on hover or keyboard focus while Connect apps
+ * yields space inside the same anchored row. Real progress remains visible at
+ * rest. Hover never executes an effect; only explicit activation opens a link.
  */
 
 export function ConnectAppsPill() {
@@ -185,6 +185,7 @@ export function WorkspaceDownloadEntry() {
           className={styles.footerEntry}
           data-interactive="false"
           data-phase={state?.phase}
+          data-progress={state?.phase === "downloading" ? state.progress ?? undefined : undefined}
           role="status"
           tabIndex={0}
           ref={controlRef}

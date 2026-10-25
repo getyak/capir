@@ -10,8 +10,8 @@
  *
  * Shared utility type: workspace metadata (13px) carries labels, counters and
  * help; workspace body (15px) carries names and inputs; weights stay 400/500/
- * 600. Interaction states share the 180ms transition; footer targets stay
- * fixed while their surface and text respond.
+ * 600. Interaction states share the 180ms transition; footer capsules exchange
+ * space within their anchored row over 220ms.
  */
 
 .shell {
@@ -1307,49 +1307,57 @@
 
 /* ── Workspace footer strip ────────────────────────────────────────── */
 
-/* One quiet utility row. Every control has a 44px target; labels stay visible
-   in the expanded sidebar, so discovering an update never moves its neighbor. */
+/* The account and trailing edge stay anchored while the utility capsules
+   exchange space. Every control retains a 44px target. */
 .accountStrip { display:flex; align-items:center; gap:6px; min-width:0; width:100%; }
 .accountStrip > .accountMenu { flex:0 0 44px; min-width:0; }
 .accountStrip .accountTrigger { border-radius:50%; height:44px; justify-content:center; min-height:44px; padding:0; width:44px; }
-.accountStrip .accountTrigger .avatar[data-size="account"] { font-size:11px; height:28px; width:28px; }
+.accountStrip .accountTrigger .avatar[data-size="account"] { font-size:12px; height:32px; width:32px; }
 .accountStrip .accountName,.accountStrip .accountChevron { display:none; }
 .connectPill {
   align-items: center;
-  background: transparent;
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 999px;
   color: var(--muted-strong);
   display: inline-flex;
   flex: 1 1 0;
   font-size: 13px;
   font-weight: 500;
-  gap: 5px;
+  gap: 6px;
   height: 44px;
   justify-content: center;
   overflow: hidden;
-  padding: 0 5px;
+  padding: 0 6px;
   text-decoration: none;
   transition:
+    padding 220ms var(--ease-out, ease),
+    gap 220ms var(--ease-out, ease),
     background 180ms ease,
     color 180ms ease;
   min-width: 44px;
 }
 .connectPill:hover {
-  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
   color: var(--ink);
 }
 .connectPill:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
-.connectPillLabel { white-space: nowrap; }
+.connectPillLabel {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: max-width 220ms var(--ease-out, ease), opacity 160ms ease;
+}
 .connectPill svg, .footerEntry svg { flex-shrink: 0; }
 
 .footerEntryWrap { display: inline-flex; flex: 0 0 auto; position: relative; }
 .footerEntry {
   align-items: center;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted-strong);
   cursor: pointer;
   display: inline-flex;
   flex: 0 0 auto;
@@ -1357,21 +1365,23 @@
   font-size: 13px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  gap: 5px;
+  gap: 0;
   height: 44px;
   justify-content: center;
   overflow: hidden;
   padding: 0;
   text-decoration: none;
   transition:
+    width 220ms var(--ease-out, ease),
+    gap 220ms var(--ease-out, ease),
     background 180ms ease,
     border-color 180ms ease,
     color 180ms ease;
-  width: 76px;
+  width: 44px;
 }
 .footerEntry:hover {
-  background: var(--surface);
-  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  color: var(--ink);
 }
 .footerEntry:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 .footerEntry[data-phase="available"] {
@@ -1382,7 +1392,50 @@
 }
 .footerEntry[data-phase="available"]:hover { background: var(--ink-soft); }
 .footerEntry[data-interactive="false"] { cursor: default; }
-.footerEntryLabel { white-space: nowrap; }
+.footerEntryLabel {
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: max-width 220ms var(--ease-out, ease), opacity 160ms ease;
+}
+
+/* Progress and recovery remain readable without hovering. A percentage fits
+   the resting circle; the arrow joins it only when there is room. */
+.footerEntry[data-interactive="false"] svg { display: none; }
+.footerEntry[data-interactive="false"] .footerEntryLabel,
+.footerEntry[data-phase="failed"] .footerEntryLabel { max-width: 90px; opacity: 1; }
+.footerEntry[data-phase="failed"] { gap: 5px; width: clamp(44px, calc(var(--workspace-sidebar-width, 248px) - 125px), 76px); }
+.footerEntry[data-phase="installing"],
+.footerEntry[data-phase="downloading"]:not([data-progress]) {
+  width: clamp(44px, calc(var(--workspace-sidebar-width, 248px) - 125px), 96px);
+}
+
+@media (min-width: 761px) and (hover: hover) and (pointer: fine) {
+  .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .connectPill {
+    gap: 0;
+    padding: 0;
+  }
+  .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .connectPillLabel {
+    max-width: 0;
+    opacity: 0;
+  }
+  .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .footerEntry {
+    gap: 7px;
+    width: clamp(44px, calc(var(--workspace-sidebar-width, 248px) - 125px), 124px);
+  }
+  .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .footerEntryLabel {
+    max-width: 90px;
+    opacity: 1;
+  }
+  .shell:not(:has(.sidebarState[data-collapsed="true"])) .accountStrip:has(.footerEntryWrap:is(:hover, :focus-within)) .footerEntry svg { display: block; }
+}
+
+@media (min-width: 761px) and (hover: none), (min-width: 761px) and (pointer: coarse) {
+  .footerEntry { gap: 5px; width: clamp(44px, calc(var(--workspace-sidebar-width, 248px) - 125px), 76px); }
+  .footerEntryLabel { max-width: 90px; opacity: 1; }
+}
 
 /* Custom tooltip above the entry; no native title tooltip duplicates it. */
 .footerTooltip {
@@ -1394,8 +1447,9 @@
   color: var(--ink);
   display: grid;
   gap: 2px;
-  max-width: 220px;
+  max-width: min(220px, calc(var(--workspace-sidebar-width, 248px) - 24px));
   opacity: 0;
+  overflow-wrap: anywhere;
   padding: 8px 11px;
   pointer-events: auto;
   position: absolute;
@@ -1572,7 +1626,9 @@
    opens into the canvas instead of clipping against the window's left edge. */
 .shell:has(.sidebarState[data-collapsed="true"]) .footerEntry[data-interactive="false"] svg { display: none; }
 .shell:has(.sidebarState[data-collapsed="true"]) .footerEntry[data-interactive="false"] .footerEntryLabel { display: inline; font-size: 12px; }
-.shell:has(.sidebarState[data-collapsed="true"]) .sidebar .footerTooltip { left: 0; right: auto; }
+.shell:has(.sidebarState[data-collapsed="true"]) .footerEntry[data-phase="failed"] svg { display: none; }
+.shell:has(.sidebarState[data-collapsed="true"]) .footerEntry[data-phase="failed"] .footerEntryLabel { display: inline; font-size: 12px; }
+.shell:has(.sidebarState[data-collapsed="true"]) .sidebar .footerTooltip { left: 0; right: auto; max-width: min(220px, calc(100vw - 32px)); }
 @media (prefers-reduced-motion: reduce) {
   .connectPill,
   .connectPillLabel,
