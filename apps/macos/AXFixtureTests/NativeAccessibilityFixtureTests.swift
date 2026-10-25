@@ -6,13 +6,14 @@ import XCTest
 /// nodes. Direct NSHostingView children alone expose only AppKit containers.
 final class NativeAccessibilityFixtureTests: XCTestCase {
     private var client: XCUIApplication?
+    private var axDiagnostics: [String] = []
 
     override func tearDown() {
         if let client {
             let cleanup = client.buttons["fixture.cleanup"]
             if cleanup.exists {
                 cleanup.click()
-                XCTAssertEqual(client.staticTexts["fixture.preferences"].label, "cleaned")
+                XCTAssertEqual(text(client.staticTexts["fixture.preferences"]), "cleaned")
             }
             client.terminate()
         }
@@ -57,7 +58,7 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
             ("failed", "desktop.login.message", "原始返回错误：do not translate %@")
         ]
         for (index, item) in cases.enumerated() {
-            XCTAssertEqual(app.staticTexts["fixture.phase"].label, item.0)
+            XCTAssertEqual(text(app.staticTexts["fixture.phase"]), item.0)
             let node = app.descendants(matching: .any).matching(identifier: item.1).firstMatch
             XCTAssertTrue(node.waitForExistence(timeout: 5))
             let expected = index == 8 ? item.2 : chinese.localizedString(forKey: item.2, value: nil, table: nil)
@@ -77,7 +78,8 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
         XCTAssertTrue(app.buttons["desktopPet.openWorkspace"].waitForExistence(timeout: 10))
         let running = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.getyak.acceptance.native-ax").first)
         let root = AXUIElementCreateApplication(running.processIdentifier)
-        let button = try XCTUnwrap(find(root, identifier: "desktopPet.openWorkspace"))
+        let button = try XCTUnwrap(find(root, identifier: "desktopPet.openWorkspace"),
+                                   "CoreAX trusted=\(AXIsProcessTrusted()); \(axDiagnostics.joined(separator: " | "))")
         XCTAssertEqual(string(button, attribute: kAXRoleAttribute), kAXButtonRole)
         var actions: CFArray?
         XCTAssertEqual(AXUIElementCopyActionNames(button, &actions), .success)
@@ -85,11 +87,15 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
         // This performs the virtual child's default AX action, not a physical
         // mouse click, hosting-view override or direct controller call.
         XCTAssertEqual(AXUIElementPerformAction(button, kAXPressAction as CFString), .success)
-        let opened = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == '1'"),
+        let opened = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == '1' OR value == '1'"),
                                               object: app.staticTexts["fixture.opens"])
         XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 5), .completed)
-        XCTAssertEqual(app.staticTexts["fixture.opens"].label, "1")
-        XCTAssertEqual(app.staticTexts["fixture.invariants"].label, "preserved")
+        XCTAssertEqual(text(app.staticTexts["fixture.opens"]), "1")
+        XCTAssertEqual(text(app.staticTexts["fixture.invariants"]), "preserved")
+    }
+
+    private func text(_ node: XCUIElement) -> String {
+        node.label.isEmpty ? (node.value as? String ?? "") : node.label
     }
 
     private func string(_ node: AXUIElement, attribute: String) -> String? {
@@ -101,8 +107,11 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
         guard depth < 24 else { return nil }
         if string(node, attribute: kAXIdentifierAttribute) == identifier { return node }
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &value) == .success,
-              let children = value as? [AXUIElement] else { return nil }
+        let result = AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &value)
+        if axDiagnostics.count < 40 {
+            axDiagnostics.append("depth=\(depth) role=\(string(node, attribute: kAXRoleAttribute) ?? "nil") id=\(string(node, attribute: kAXIdentifierAttribute) ?? "nil") childrenResult=\(result.rawValue) count=\((value as? [AXUIElement])?.count ?? -1)")
+        }
+        guard result == .success, let children = value as? [AXUIElement] else { return nil }
         for child in children {
             if let found = find(child, identifier: identifier, depth: depth + 1) { return found }
         }
