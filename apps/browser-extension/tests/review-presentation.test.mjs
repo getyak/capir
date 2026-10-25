@@ -66,8 +66,9 @@ test("presents pending, received, failed, stale, and unknown receipt truth disti
     submissionPresentation({
       state: "failed",
       code: "session_stale",
+      authentication_required: true,
     }).title,
-    "Local session changed",
+    "Sign-in required",
   );
 });
 

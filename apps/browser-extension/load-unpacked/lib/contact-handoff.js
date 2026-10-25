@@ -33,37 +33,66 @@ export function contactTaskReviewURL(origin, taskID) {
   url.searchParams.set("task", taskID); url.searchParams.set("source", "browser-extension"); return url.toString();
 }
 
-/** Runs in the newly opened, exact trusted Web origin. Cookies stay in Web. */
-export async function submitContactTaskInWeb(origin, sessionVersion, payload) {
-  if (location.origin !== origin || location.pathname !== "/contact-agent") return { state: "failed", code: "session_stale", no_submit: true };
-  const sessionResponse = await fetch("/api/browser-extension/session", { credentials: "same-origin", cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10_000) });
-  const session = await sessionResponse.json();
-  if (!sessionResponse.ok || !sessionVersion || session.session_version !== sessionVersion || session.contact_agent !== true) {
-    return { state: "failed", code: "session_stale", no_submit: true };
-  }
-  const response = await fetch("/api/contact-agent/tasks", { method: "POST", credentials: "same-origin", redirect: "error",
-    headers: { "content-type": "application/json", "x-contact-handoff-session": sessionVersion }, body: JSON.stringify(payload), signal: AbortSignal.timeout(40_000) });
-  const created = await response.json();
-  if (!response.ok) return { state: "failed", code: response.status === 401 || created.code === "session_stale" ? "session_stale" : "contact_handoff_rejected" };
-  if (!/^[0-9a-f-]{36}$/iu.test(created.task_id)) throw new Error("CONTACT_TASK_RECEIPT_INVALID");
-  const readback = await fetch(`/api/contact-agent/tasks/${created.task_id}`, { credentials: "same-origin", headers: { "x-contact-handoff-session": sessionVersion }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10_000) });
-  const saved = await readback.json();
-  if (!readback.ok || saved.task_id !== created.task_id) throw new Error("CONTACT_TASK_READBACK_FAILED");
-  return { state: "received", receipt_id: saved.task_id, capture_id: saved.task_id, contact_task_id: saved.task_id,
-    duplicate: response.status === 200, message: "The reviewed image reached the shared Agent. Continue in Web; profile fields still require your review." };
+/** Passed directly to chrome.scripting: every helper must remain inside this
+ * function's serialization scope. Cookies and renewal proof stay in Web. */
+export async function contactHandoffInWeb(origin, sessionVersion, operation, input) {
+  let dispatched = false;
+  const unknown = () => ({ state: operation === "recover" || dispatched ? "unknown" : "failed",
+    code: "connection_unavailable", retryable: true, no_submit: !dispatched,
+    message: dispatched || operation === "recover"
+      ? "Receipt could not be verified. Your recovery record is kept; check the same task again before submitting another copy."
+      : "Connection could not be verified. Your reviewed capture is kept; retry the connection before submitting." });
+  const signedOut = () => ({ state: dispatched || operation === "recover" ? "unknown" : "failed",
+    code: "session_stale", authentication_required: true, no_submit: !dispatched,
+    message: "The Web session requires sign-in. Keep this review and check the original task after signing in." });
+  const changed = () => ({ state: "failed", code: "session_changed", no_submit: !dispatched,
+    message: "The Web workspace or session changed. Recheck the original connection before continuing this review." });
+  const options = (timeout = 10_000) => ({ credentials: "same-origin", cache: "no-store", redirect: "error", signal: AbortSignal.timeout(timeout) });
+  const document = async response => {
+    const value = await response.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_REPLY");
+    return value;
+  };
+  const validTask = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value);
+  if (location.origin !== origin || location.pathname !== "/contact-agent" || !["submit", "recover"].includes(operation)) return changed();
+  try {
+    const preflight = await fetch("/api/browser-extension/session", options());
+    if (preflight.status === 401) return signedOut();
+    if (!preflight.ok) return unknown();
+    const session = await document(preflight);
+    if (session.status !== "ready" || session.contact_agent !== true || typeof session.session_version !== "string" || !session.session_version) return unknown();
+    if (!sessionVersion || session.session_version !== sessionVersion) return changed();
+    const headers = { "x-contact-handoff-session": sessionVersion };
+    let response, created;
+    if (operation === "submit") {
+      dispatched = true;
+      response = await fetch("/api/contact-agent/tasks", { ...options(40_000), method: "POST",
+        headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(input) });
+      if (response.status === 401) return signedOut();
+      if (!response.ok) return unknown();
+      created = await document(response);
+      if (!validTask(created.task_id)) return unknown();
+    } else if (typeof input !== "string" || !input || input.length > 128) return changed();
+    const path = operation === "recover" ? `/api/contact-agent/tasks?handoff_request_id=${encodeURIComponent(input)}` : `/api/contact-agent/tasks/${created.task_id}`;
+    const readback = await fetch(path, { ...options(), headers });
+    if (readback.status === 401) return signedOut();
+    if (!readback.ok) return unknown();
+    const saved = await document(readback);
+    if (!validTask(saved.task_id) || created && saved.task_id !== created.task_id) return unknown();
+    if (["deleted", "expired", "cancelled"].includes(saved.status)) return { state: "unavailable", code: "contact_handoff_unavailable",
+      message: "The original task is no longer available. It was not recreated." };
+    return { state: "received", contact_task_id: saved.task_id, receipt_id: saved.task_id, capture_id: saved.task_id,
+      duplicate: operation === "recover" || response.status === 200,
+      message: operation === "recover" ? "Recovered the original task. No image was submitted again."
+        : "The reviewed image reached the shared Agent. Continue in Web; profile fields still require your review." };
+  } catch { return unknown(); }
 }
 
-/** Read-only lookup after panel/service-worker restart; never resubmit pixels. */
-export async function recoverContactTaskInWeb(origin, sessionVersion, requestKey) {
-  if (location.origin !== origin || location.pathname !== "/contact-agent") return { state: "failed", code: "session_stale" };
-  const sessionResponse = await fetch("/api/browser-extension/session", { credentials: "same-origin", cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10_000) });
-  const session = await sessionResponse.json();
-  if (!sessionResponse.ok || !sessionVersion || session.session_version !== sessionVersion || session.contact_agent !== true) return { state: "failed", code: "session_stale", message: "Sign in to the original Web session to recover this handoff." };
-  const response = await fetch(`/api/contact-agent/tasks?handoff_request_id=${encodeURIComponent(requestKey)}`, {
-    credentials: "same-origin", headers: { "x-contact-handoff-session": sessionVersion }, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(10_000) });
-  const saved = await response.json();
-  if (!response.ok || !/^[0-9a-f-]{36}$/iu.test(saved.task_id)) return { state: "unknown", code: "contact_handoff_unverified", message: "No receipt is available yet. Check again before submitting another copy." };
-  if (["deleted", "expired", "cancelled"].includes(saved.status)) return { state: "unavailable", code: "contact_handoff_unavailable", message: "The original task is no longer available. It was not recreated." };
-  return { state: "received", contact_task_id: saved.task_id, receipt_id: saved.task_id, duplicate: true,
-    message: "Recovered the original task. No image was submitted again." };
+// Convenience entry points for local callers. The worker injects the complete
+// contactHandoffInWeb function, never these module-dependent wrappers.
+export function submitContactTaskInWeb(origin, sessionVersion, payload) {
+  return contactHandoffInWeb(origin, sessionVersion, "submit", payload);
+}
+export function recoverContactTaskInWeb(origin, sessionVersion, requestKey) {
+  return contactHandoffInWeb(origin, sessionVersion, "recover", requestKey);
 }

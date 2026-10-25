@@ -31,18 +31,22 @@ import {
 import { WorkspaceNewConversation } from "@/components/new-conversation";
 import WorkspaceLoading from "./loading";
 import { isCreatePersonEntry } from "@/lib/workspace-create-entry";
+import { translate } from "@/lib/i18n";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "工作区",
-  description:
-    "账号专属的对话画布：从一条消息开始，始终关联可核验的来源。",
-  robots: {
-    follow: false,
-    index: false,
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMarketingLocale();
+  return {
+    title: translate(locale, "工作区"),
+    description: translate(
+      locale,
+      "账号专属的对话画布：从一条消息开始，始终关联可核验的来源。",
+    ),
+    robots: { follow: false, index: false },
+  };
+}
 
 export default async function WorkspacePage({
   searchParams,

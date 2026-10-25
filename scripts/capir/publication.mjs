@@ -97,7 +97,7 @@ async function readCheckpoint(channel, publicKey, fetchImpl) {
 }
 function realGh(args) {
   const env = { ...process.env }; delete env.CAPIR_RELEASE_SIGNING_KEY;
-  try { return { code: 0, stdout: execFileSync('gh', args, { encoding: 'utf8', env, stdio: ['ignore','pipe','pipe'], timeout: 720000 }) }; }
+  try { return { code: 0, stdout: execFileSync('gh', args, { encoding: 'utf8', env, stdio: ['ignore','pipe','pipe'], timeout: 720000, maxBuffer: 1048576 }) }; }
   catch (error) { return { code: error.status ?? 1, stdout: String(error.stdout ?? '') }; }
 }
 export async function publishRelease(options, { gh = realGh, fetchImpl = fetch } = {}) {
@@ -108,14 +108,42 @@ export async function publishRelease(options, { gh = realGh, fetchImpl = fetch }
   const expected = { version, commit: options.commit, nodeVersion: options.nodeVersion, publicKey, installer: options.installer };
   const work = mkdtempSync(join(tmpdir(), 'capir-publication-'));
   const run = args => { const result = gh(args); if (result.code) throw new Error(`GitHub operation failed: ${args.slice(0,2).join(' ')} (exit ${result.code})`); return result.stdout; };
-  const metadata = releaseTag => {
-    const result = gh(['api', '--include', `repos/${RELEASE_REPOSITORY}/releases/tags/${releaseTag}`]);
+  const parseMetadata = (result, releaseTag, expectedId, expectedDraft) => {
     const status = /^HTTP\/\S+\s+(\d+)/m.exec(result.stdout)?.[1];
-    if (status === '404') return null;
     if (result.code || status !== '200') throw new Error(`GitHub release metadata failed (HTTP ${status ?? 'unknown'})`);
     const separator = /\r?\n\r?\n/.exec(result.stdout);
     if (!separator) throw new Error('GitHub release metadata response is malformed');
-    return JSON.parse(result.stdout.slice(separator.index + separator[0].length));
+    let release;
+    try { release = JSON.parse(result.stdout.slice(separator.index + separator[0].length)); }
+    catch { throw new Error('GitHub release metadata response is malformed'); }
+    if (!Number.isSafeInteger(release?.id) || release.id <= 0 || release.tag_name !== releaseTag || typeof release.draft !== 'boolean'
+      || !Array.isArray(release.assets) || release.assets.some(asset => typeof asset?.name !== 'string')
+      || (release.body !== undefined && release.body !== null && typeof release.body !== 'string')
+      || (expectedId !== undefined && release.id !== expectedId) || (expectedDraft !== undefined && release.draft !== expectedDraft))
+      throw new Error('GitHub release metadata binding mismatch');
+    return release;
+  };
+  const metadata = releaseTag => {
+    const result = gh(['api', '--include', `repos/${RELEASE_REPOSITORY}/releases/tags/${releaseTag}`]);
+    if (/^HTTP\/\S+\s+(\d+)/m.exec(result.stdout)?.[1] !== '404') return parseMetadata(result, releaseTag);
+    // GitHub's tag endpoint exposes published releases only. Enumerate the
+    // publisher-visible drafts after a 404, then independently bind the sole
+    // exact-tag match by numeric ID. Project only these three small fields:
+    // release notes/bodies never accumulate in the paginated command output.
+    // A failure on ANY page cannot be mistaken for an absent release.
+    const listed = gh(['api', '--paginate', `repos/${RELEASE_REPOSITORY}/releases?per_page=100`, '--jq', 'if type != "array" then error("invalid release listing") else .[] | [.id,.tag_name,.draft] | @json end']);
+    if (listed.code) throw new Error('GitHub release draft listing failed');
+    let rows;
+    try { rows = listed.stdout.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line)); }
+    catch { throw new Error('GitHub release draft listing is malformed'); }
+    if (rows.some(row => !Array.isArray(row) || row.length !== 3 || !Number.isSafeInteger(row[0]) || row[0] <= 0 || typeof row[1] !== 'string' || typeof row[2] !== 'boolean'))
+      throw new Error('GitHub release draft listing is malformed');
+    const matches = rows.filter(([, tagName]) => tagName === releaseTag);
+    if (matches.length > 1) throw new Error('GitHub release draft listing is ambiguous');
+    if (!matches.length) return null;
+    const [id, , draft] = matches[0];
+    if (!draft) throw new Error('GitHub published release metadata is inconsistent');
+    return parseMetadata(gh(['api', '--include', `repos/${RELEASE_REPOSITORY}/releases/${id}`]), releaseTag, id, true);
   };
   const checkRemoteTag = () => {
     let object = JSON.parse(run(['api', `repos/${RELEASE_REPOSITORY}/git/ref/tags/${tag}`])).object;

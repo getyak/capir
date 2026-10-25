@@ -182,8 +182,29 @@ PR may opt into `.github/workflows/build-backend-image.yml` with the exact
 head, cold-builds the unchanged canonical Dockerfile through the complete frozen
 install and native execution gates, and retains a source-bound OCI archive plus
 checksums and measurements. It neither uses production secrets nor pushes to a
-registry, imports an image, or changes a resident service. The CI-only preventive
-space floor does not replace the resident host's independent storage policy.
+registry, imports an image, or changes a resident service with this label alone.
+The CI-only preventive space floor does not replace the resident host's independent storage policy.
+
+A second exact label, `backend-import-probe`, on the same-repository PR opts
+into a separate disposable import job after that build succeeds. Manual dispatch
+and `backend-image` alone remain build-only. The new job downloads the immutable
+artifact ID from its own run, reinspects source/hash/config/platform, and streams
+it into the pinned Docker 29.5.2 / containerd 2.2.4 ARM64 nested engine. Fresh
+4 KiB ext4 storage has a fixed experimental 2 GiB cap for verified Docker,
+containerd content/ingest/snapshot/metadata, state and temporary paths. It fails
+closed on insufficient space, incomplete unpack, errors or failed version-only
+runtime probes; it never raises the cap automatically. The worker has no network
+or published ports and receives no production socket or credentials.
+
+The three-day sanitized proof records filesystem/engine identity, the enforced
+cap, observed usage, complete unpack, network-disabled read-only Node/native
+version probes and cleanup status. Samples alone are not a peak upper bound.
+Outer runner image/control/log costs are explicit exceptions outside the cap;
+the archive is streamed from outside it. This proves only a successful disposable
+import experiment for that archive, not resident capacity, database/WAL growth,
+API/worker startup, activation, rollback or failure-cleanup guarantees. The
+resident capacity STOP and independent reserve/activation approval remain in
+force. Review the implementation independently before enabling the new label.
 
 Use `scripts/deploy/inspect_backend_oci.py` to verify a downloaded archive's
 expected revision label, platform, blob sizes/digests and expanded layer diff IDs.
