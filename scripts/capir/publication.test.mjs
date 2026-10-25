@@ -73,6 +73,19 @@ test('tag movement before publication preserves the complete draft and never pro
   const mock=mockGitHub(),a=cohort('1.4.0','move');mock.move();
   await assert.rejects(publishRelease(a,mock),/tag moved/);assert.equal(mock.releases.get(a.tag).draft,true);assert.equal(mock.releases.has('capir-stable'),false);
 });
+test('a mismatched version publication response stops before any stable write',async()=>{
+ const mock=mockGitHub(),a=cohort('1.4.1','edit-tag-drift');
+ const gh=(args,options)=>{
+  const response=mock.gh(args,options);
+  if(requestInfo(args)?.method==='PATCH'){
+   const body=JSON.parse(response.stdout.split('\n\n')[1]);body.tag_name='untagged-synthetic';return mock.response(200,body);
+  }
+  return response;
+ };
+ await assert.rejects(publishRelease(a,{...mock,gh}),/binding mismatch/);
+ assert.equal(mock.releases.has('capir-stable'),false);assert.equal(mock.releases.get(a.tag).assets.size,7);
+ assert.equal(mock.calls.filter(args=>requestInfo(args)?.method==='PATCH').length,1);
+});
 test('a transient metadata error is not mistaken for a missing release',async()=>{
  const mock=mockGitHub(),a=cohort('1.5.0','metadata');
  const gh=(args,options)=>requestInfo(args)?.path.includes('/releases/tags/')?mock.response(503,{}):mock.gh(args,options);
