@@ -114,7 +114,7 @@ struct AgentMarkdownView: View {
 
     var body: some View {
         AgentMarkdownBlocks(blocks: blocks)
-            .font(.subheadline)
+            .modifier(ConversationReadingStyle())
             .foregroundStyle(Color.tsInk)
             .tint(Color.tsVermilion)
             .textSelection(.enabled)
@@ -129,7 +129,7 @@ private struct AgentMarkdownBlocks: View {
     @Environment(\.appLanguage) private var language
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 7) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
@@ -140,14 +140,14 @@ private struct AgentMarkdownBlocks: View {
         switch block {
         case let .paragraph(text):
             return AnyView(Text(text).fixedSize(horizontal: false, vertical: true))
-        case let .heading(level, text):
+        case let .heading(_, text):
             return AnyView(Text(text)
-                .font(level <= 2 ? .headline : .subheadline.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 4)
+                .padding(.top, 2)
                 .accessibilityAddTraits(.isHeader))
         case let .listItem(marker, children):
-            return AnyView(HStack(alignment: .firstTextBaseline, spacing: 9) {
+            return AnyView(HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(marker)
                     .foregroundStyle(Color.tsMutedInk)
                     .accessibilityLabel(markerLabel(marker))
@@ -156,7 +156,7 @@ private struct AgentMarkdownBlocks: View {
             })
         case let .quote(children):
             return AnyView(AgentMarkdownBlocks(blocks: children)
-                .padding(.leading, 13)
+                .padding(.leading, 10)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(Color.tsLine).frame(width: 3)
                 })
@@ -211,7 +211,7 @@ private struct AgentMarkdownCode: View {
             .foregroundStyle(Color.tsMutedInk)
             ScrollView(.horizontal) {
                 Text(verbatim: code)
-                    .font(.system(.subheadline, design: .monospaced))
+                    .modifier(ConversationReadingStyle(monospaced: true))
                     .fixedSize(horizontal: true, vertical: true)
                     .textSelection(.enabled)
                     .padding(.bottom, 12)
@@ -284,7 +284,7 @@ private struct AgentMarkdownTable: View {
         Text(text)
             .fixedSize(horizontal: false, vertical: true)
             .frame(minWidth: 100, maxWidth: 220, alignment: .topLeading)
-            .padding(10)
+            .padding(8)
             .overlay(alignment: .bottom) { Divider() }
     }
 }

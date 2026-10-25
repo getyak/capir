@@ -500,17 +500,6 @@ struct RelationshipAskView: View {
                         Spacer(minLength: 0)
                         compactComposerContext
                         composer
-                        Text(
-                            appLanguage.text(
-                                "Send naturally. Agent uses contact context only when it helps.",
-                                zhHans: "直接发送即可。Agent 只会在有帮助时使用联系人上下文。"
-                            )
-                        )
-                        .font(.caption)
-                        .foregroundStyle(Color.tsMutedInk)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 28)
-                        .accessibilityIdentifier("ask-recall-disclosure")
                         if !isCanonical {
                             starterGrid
                                 .padding(.horizontal, 28)
@@ -1047,18 +1036,6 @@ struct RelationshipAskView: View {
             .accessibilityIdentifier("ask-scope-selector")
 
             if isChoosingScope {
-                if isResolvingPreferredPerson {
-                    Text(
-                        appLanguage.text(
-                            "Choosing a relationship is optional. Otherwise Agent will resolve it after Send.",
-                            zhHans: "选择关系是可选的；未选择时，Agent 会在发送后判断。"
-                        )
-                    )
-                    .font(.caption)
-                    .foregroundStyle(Color.tsMutedInk)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("ask-preferred-scope-optional")
-                }
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(Color.tsMutedInk)
@@ -1213,7 +1190,7 @@ struct RelationshipAskView: View {
     private var conversation: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     if shouldShowScopeBar,
                        contactDraft == nil || contactSaveMessage != nil,
                        usesScrollableScopeBar {
@@ -1256,7 +1233,7 @@ struct RelationshipAskView: View {
                                 )
                                 .id(item.id)
                             case let .ask(turn):
-                            VStack(alignment: .leading, spacing: 18) {
+                            VStack(alignment: .leading, spacing: 12) {
                             AskTurnView(
                                 turn: turn,
                                 language: appLanguage,
@@ -1463,8 +1440,8 @@ struct RelationshipAskView: View {
                             .id("ask-conversation-reading-clearance")
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 20)
+                .padding(.horizontal, usesAccessibilityLayout ? 20 : 16)
+                .padding(.vertical, usesAccessibilityLayout ? 20 : 12)
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("ask-conversation")
@@ -1693,8 +1670,8 @@ struct RelationshipAskView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
         .background(Color.tsSurface.opacity(0.98))
         .animation(
             reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.84),
@@ -1731,10 +1708,10 @@ struct RelationshipAskView: View {
     private var compactMarkdownComposer: some View {
         VStack(spacing: 0) {
             composerTextInput(
-                lineLimit: usesAccessibilityLayout ? 3...7 : 5...9,
-                minimumHeight: usesAccessibilityLayout ? 174 : 148,
-                horizontalPadding: 16,
-                verticalPadding: 14
+                lineLimit: usesAccessibilityLayout ? 3...7 : 3...8,
+                minimumHeight: usesAccessibilityLayout ? 174 : 104,
+                horizontalPadding: 14,
+                verticalPadding: 10
             )
 
             Divider()
@@ -1787,12 +1764,12 @@ struct RelationshipAskView: View {
                 }
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.vertical, usesAccessibilityLayout ? 7 : 4)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("ask-markdown-toolbar")
         }
         .frame(
-            minHeight: usesAccessibilityLayout ? 246 : 218,
+            minHeight: usesAccessibilityLayout ? 246 : 164,
             alignment: .topLeading
         )
         .background(
@@ -1831,9 +1808,9 @@ struct RelationshipAskView: View {
                     composerAttachmentControl(size: controlSize)
                     composerTextInput(
                         lineLimit: 1...5,
-                        minimumHeight: 52,
+                        minimumHeight: 44,
                         horizontalPadding: 8,
-                        verticalPadding: 12
+                        verticalPadding: 8
                     )
                     voiceQuickControl
                     if hasComposerInput {
@@ -1842,7 +1819,7 @@ struct RelationshipAskView: View {
                 }
             }
         }
-        .padding(5)
+        .padding(usesAccessibilityLayout ? 5 : 3)
         .background(
             Color.tsCanvas,
             in: RoundedRectangle(cornerRadius: 28, style: .continuous)
@@ -2051,6 +2028,7 @@ struct RelationshipAskView: View {
             axis: .vertical
         )
         .focused($composerFocused)
+        .modifier(ConversationReadingStyle())
         .lineLimit(lineLimit)
         .submitLabel(.send)
         .onSubmit {
@@ -2391,11 +2369,11 @@ struct RelationshipAskView: View {
     }
 
     private var composerPrimaryControlSize: CGFloat {
-        max(52, composerControlSize)
+        composerControlSize
     }
 
     private var markdownControlSize: CGFloat {
-        48
+        usesAccessibilityLayout ? 48 : 44
     }
 
     @ViewBuilder
@@ -2814,25 +2792,11 @@ struct RelationshipAskView: View {
     private var homeAttachmentChooser: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text(appLanguage.text("ADD TO MESSAGE"))
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.15)
-                    .foregroundStyle(Color.tsVermilion)
                 Text(
                     appLanguage.text("Choose a source first.")
                 )
-                .font(.custom("Georgia", size: 30, relativeTo: .title2))
+                .font(.headline)
                 .foregroundStyle(Color.tsInk)
-                .tracking(-0.45)
-                .padding(.top, 8)
-                Text(
-                    appLanguage.text(
-                        "Nothing is imported until you make a choice."
-                    )
-                )
-                .font(.subheadline)
-                .foregroundStyle(Color.tsMutedInk)
-                .padding(.top, 7)
 
                 VStack(spacing: 10) {
                     homeAttachmentChoice(
@@ -4466,7 +4430,7 @@ struct RelationshipAskView: View {
                 contextManifestID: "none-unbound-conversation",
                 knowledgeSnapshotID: "none-unbound-conversation", disposition: "answer",
                 blocks: [.init(
-                    id: UUID().uuidString.lowercased(), kind: "answer", title: "Review plan",
+                    id: UUID().uuidString.lowercased(), kind: "answer", title: appLanguage.text("Agent answer"),
                     body: """
                     # Delivery plan
 
@@ -7760,7 +7724,7 @@ private struct AskTurnView: View {
     @State private var didCopy = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .trailing, spacing: 7) {
                 if !turn.images.isEmpty {
                     ConversationImageAlbum(messageID: turn.id, images: turn.images, initialImages: initialConversationImages,
@@ -7805,24 +7769,20 @@ private struct AskTurnView: View {
             }
 
             ForEach(turn.response.blocks) { block in
-                VStack(alignment: .leading, spacing: 9) {
-                    if let eyebrow = responseEyebrow(for: block) {
-                        Text(eyebrow)
-                            .font(.caption2.weight(.semibold))
-                            .tracking(0.7)
-                            .foregroundStyle(Color.tsMutedInk)
-                    }
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(responseTitle(for: block))
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(Color.tsInk)
-                        Spacer(minLength: 8)
-                        if block.requiresUserDecision {
-                            Image(systemName: "checkmark.circle.badge.questionmark")
-                                .foregroundStyle(Color.tsVermilion)
-                                .accessibilityLabel(
-                                    language.text("Needs review", zhHans: "需要审阅")
-                                )
+                VStack(alignment: .leading, spacing: 7) {
+                    if block.requiresUserDecision || !isGenericAnswer(block) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(responseTitle(for: block))
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.tsInk)
+                            Spacer(minLength: 8)
+                            if block.requiresUserDecision {
+                                Image(systemName: "checkmark.circle.badge.questionmark")
+                                    .foregroundStyle(Color.tsVermilion)
+                                    .accessibilityLabel(
+                                        language.text("Needs review", zhHans: "需要审阅")
+                                    )
+                            }
                         }
                     }
                     if block.kind == "active_action" {
@@ -7921,10 +7881,9 @@ private struct AskTurnView: View {
                         .foregroundStyle(Color.tsMutedInk)
                     }
                 }
-                .padding(.vertical, 14)
-                .overlay(alignment: .bottom) { Divider().overlay(Color.tsLine) }
+                .padding(.vertical, 6)
                 .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("ask-response-block-\(turn.response.taskID)-\(block.id)")
+                .accessibilityIdentifier(responseBlockIdentifier(for: block))
                 .id("ask-response-block-\(block.id)")
             }
 
@@ -8034,13 +7993,17 @@ private struct AskTurnView: View {
         .accessibilityIdentifier(identifier)
     }
 
-    private func responseEyebrow(
-        for block: RelationshipAskResponse.Block
-    ) -> String? {
-        if turn.response.knowledgeSnapshotID == "local-workspace-index" {
-            return language.text("On-device workspace index")
-        }
-        return nil
+    private func responseBlockIdentifier(for block: RelationshipAskResponse.Block) -> String {
+        // A titleless block can reuse its Markdown child's accessibility element.
+        // Keep the answer role on this owning container with its unique identity.
+        let prefix = isGenericAnswer(block) ? "ask-response-block-answer" : "ask-response-block"
+        return "\(prefix)-\(turn.response.taskID)-\(block.id)"
+    }
+
+    private func isGenericAnswer(_ block: RelationshipAskResponse.Block) -> Bool {
+        guard block.kind == "answer" else { return false }
+        let title = responseTitle(for: block).trimmingCharacters(in: .whitespacesAndNewlines)
+        return title == "Agent answer" || title == "Agent 回答"
     }
 
     private func responseTitle(
