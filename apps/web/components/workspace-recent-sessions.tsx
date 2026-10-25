@@ -1,6 +1,6 @@
 "use client";
 
-import { CaretRight, Plus, PushPin } from "@phosphor-icons/react";
+import { CaretRight, NotePencil, PushPin } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useId, useState } from "react";
@@ -16,6 +16,7 @@ import {
   useSessionOrganization,
 } from "@/lib/workspace-session-organization";
 import { WorkspaceSessionAvatar } from "./workspace-session-avatar";
+import { useDesktopChrome } from "./desktop-chrome";
 import { useT } from "./locale-provider";
 import { useWorkspaceDirectory } from "./workspace-search";
 import { WorkspaceListRow, useArrivalRegistry } from "./workspace-list-motion";
@@ -39,6 +40,7 @@ export function WorkspaceRecentSessions({
   storageScope?: string | null;
 }) {
   const t = useT();
+  const desktop = useDesktopChrome();
   const pathname = usePathname();
   const router = useRouter();
   const [archiveExpanded, setArchiveExpanded] = useState(false);
@@ -82,14 +84,16 @@ export function WorkspaceRecentSessions({
   return (
     <section aria-label={t("sessions.recent")} className={styles.group}>
       <div className={styles.historyBar}>
+        <h2 className={styles.historyHeading}>{t("sessions.recent")}</h2>
         <button
           aria-label={t("conversation.startNew")}
+          aria-keyshortcuts={desktop ? "Meta+N" : undefined}
           className={styles.newConversation}
           onClick={startNewConversation}
-          title={t("conversation.startNew")}
+          title={desktop ? `${t("新对话")} · ⌘N` : t("新对话")}
           type="button"
         >
-          <Plus aria-hidden="true" size={18} />
+          <NotePencil aria-hidden="true" size={18} />
         </button>
       </div>
       {snapshot.pendingInMemory ? (
