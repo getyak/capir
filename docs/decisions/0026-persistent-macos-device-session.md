@@ -57,6 +57,8 @@ selection can make those account IDs differ. Capture context carries both
 identities; the primary tuple must match the renewal receipt while business
 owner, login binding, store epoch and processing policy retain their own
 guards. Account equality between these two roles is not authorization proof.
+Until that primary proof is verified, every read must rejoin recovery. Failed
+attempts grant no later admission through an existing business cookie.
 
 Explicit sign-out synchronously disables renewal, persists a fresh empty store
 epoch and discards only the former scope's capability. Late writes stay in the

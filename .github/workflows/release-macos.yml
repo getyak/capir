@@ -145,12 +145,19 @@ jobs:
           shasum -a 256 "$download/$base.zip" > "$RUNNER_TEMP/macos-first-run-published-sha256.txt"
           shasum -a 256 "$download/$base.dmg" >> "$RUNNER_TEMP/macos-first-run-published-sha256.txt"
           MACOS_FIRST_RUN_APP_PATH="$app" scripts/macos/first-run-acceptance.sh
+      - name: Export native unit-test diagnostics
+        if: always()
+        run: |
+          python3 scripts/macos/export-test-diagnostics.py \
+            "$RUNNER_TEMP/talent-signal-macos-release-check/Logs/Test" \
+            "$RUNNER_TEMP/macos-native-test-diagnostics"
       - name: Retain published-app acceptance evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-first-run-release-${{ needs.prepare.outputs.sha }}
           path: |
+            ${{ runner.temp }}/macos-native-test-diagnostics
             ${{ runner.temp }}/macos-first-run-release.xcresult
             ${{ runner.temp }}/macos-first-run-release-summary.json
             ${{ runner.temp }}/macos-installer-drag-release.xcresult

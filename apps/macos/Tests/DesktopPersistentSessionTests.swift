@@ -335,11 +335,15 @@ final class DesktopPersistentSessionTests: XCTestCase {
             let origin = try await fixture.start()
             let registry = LoginStoreRegistry(persistence: MemoryLoginPersistence(), lockURL: fixture.directory.appendingPathComponent("registry.lock"))
             let selection = try registry.selection(for: origin.url.absoluteString)
+            let dataStore = try await seedSyntheticCaptureCookie(for: selection)
+            defer { withExtendedLifetime(dataStore) {} }
             let vault = MemoryCredentialVault()
             vault.value = DesktopDeviceCredential(origin: selection.origin, storeIdentifier: selection.storeIdentifier, epoch: selection.epoch,
                 accountID: h.receipt.account_id!, userID: h.receipt.user_id!, sessionID: h.receipt.session_id!,
                 secret: String(repeating: "p", count: 43), enrolled: true)
-            let persistent = DesktopPersistentSessionCoordinator(registry: registry, vault: vault)
+            let proofTransport = FakePersistentTransport()
+            proofTransport.live = h.receipt; proofTransport.submitted = h.receipt
+            let persistent = DesktopPersistentSessionCoordinator(registry: registry, vault: vault, transportFactory: { _ in proofTransport })
             let capture = CaptureWebSession(origin: origin, registry: registry, persistentSession: persistent, originProvider: { origin })
             defer { capture.retire() }
             for _ in 0..<2 {
@@ -350,9 +354,78 @@ final class DesktopPersistentSessionTests: XCTestCase {
             let ledger = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))) as! [[String: Any]]
             XCTAssertEqual(ledger.filter { $0["path"] as? String == "/api/desktop-capture/context" }.count, 2)
             let posts = ledger.filter { $0["method"] as? String == "POST" }
-            XCTAssertEqual(posts.count, 1)
-            XCTAssertEqual(posts.first?["path"] as? String, "/api/desktop-auth/persistent", "Scope rejection cannot replay capture writes")
+            XCTAssertTrue(posts.isEmpty, "Controlled proof rejection cannot dispatch or replay capture writes")
+            XCTAssertEqual(proofTransport.actions, ["renew"])
         }
+    }
+
+    func testCaptureRetryRejoinsVerificationAfterInitialRestoreWasUnavailable() async throws {
+        let h = PersistentHarness()
+        var wrongSession = ["primary_account_id": h.receipt.account_id!, "primary_user_id": h.receipt.user_id!, "primary_session_id": h.receipt.session_id!]
+        wrongSession["primary_session_id"] = UUID().uuidString
+        let fixture = try PersistentHTTPFixture(receipt: h.receipt, selectedWorkspaceAccountID: UUID().uuidString, primaryProof: wrongSession)
+        defer { fixture.stop() }
+        let origin = try await fixture.start()
+        let registry = LoginStoreRegistry(persistence: MemoryLoginPersistence(), lockURL: fixture.directory.appendingPathComponent("registry.lock"))
+        let selection = try registry.selection(for: origin.url.absoluteString)
+        let dataStore = try await seedSyntheticCaptureCookie(for: selection)
+        defer { withExtendedLifetime(dataStore) {} }
+        let vault = MemoryCredentialVault()
+        vault.value = DesktopDeviceCredential(origin: selection.origin, storeIdentifier: selection.storeIdentifier, epoch: selection.epoch,
+            accountID: h.receipt.account_id!, userID: h.receipt.user_id!, sessionID: h.receipt.session_id!,
+            secret: String(repeating: "p", count: 43), enrolled: true)
+        h.transport.live = h.receipt; h.transport.submitted = .init(status: "unavailable")
+        let persistent = DesktopPersistentSessionCoordinator(registry: registry, vault: vault, transportFactory: { _ in h.transport })
+        let capture = CaptureWebSession(origin: origin, registry: registry, persistentSession: persistent, originProvider: { origin })
+        defer { capture.retire() }
+        do { _ = try await capture.context(); XCTFail("Unknown initial restoration cannot admit a context") }
+        catch let error as CaptureTransportError { XCTAssertEqual(error, .unavailable) }
+        let ledgerURL = fixture.directory.appendingPathComponent("requests.json")
+        let before = try JSONSerialization.jsonObject(with: Data(contentsOf: ledgerURL)) as! [[String: Any]]
+        XCTAssertTrue(before.isEmpty, "No context or host GET is permitted before primary verification")
+        h.transport.submitted = h.receipt
+        for _ in 0..<2 {
+            do { _ = try await capture.context(); XCTFail("Retry must rejoin primary verification and reject the wrong session") }
+            catch let error as CaptureTransportError { XCTAssertEqual(error, .staleOrigin) }
+        }
+        XCTAssertEqual(h.transport.actions, ["renew", "renew"], "Retry cannot bypass the consumed initial restoration")
+        XCTAssertNotNil(vault.value)
+        let after = try JSONSerialization.jsonObject(with: Data(contentsOf: ledgerURL)) as! [[String: Any]]
+        XCTAssertEqual(after.filter { $0["path"] as? String == "/api/desktop-capture/context" }.count, 2)
+        XCTAssertFalse(after.contains { $0["method"] as? String == "POST" }, "Context rejection cannot replay capture writes")
+    }
+
+    func testCaptureNeedsLoginCannotUseAHealthyCookieWithoutPrimaryProof() async throws {
+        let h = PersistentHarness()
+        let fixture = try PersistentHTTPFixture(receipt: h.receipt, selectedWorkspaceAccountID: UUID().uuidString)
+        defer { fixture.stop() }
+        let origin = try await fixture.start()
+        let registry = LoginStoreRegistry(persistence: MemoryLoginPersistence(), lockURL: fixture.directory.appendingPathComponent("registry.lock"))
+        let selection = try registry.selection(for: origin.url.absoluteString)
+        let dataStore = try await seedSyntheticCaptureCookie(for: selection)
+        defer { withExtendedLifetime(dataStore) {} }
+        let vault = MemoryCredentialVault()
+        vault.failure = DesktopDeviceCredentialError.invalidRecord
+        let persistent = DesktopPersistentSessionCoordinator(registry: registry, vault: vault, transportFactory: { _ in h.transport })
+        let capture = CaptureWebSession(origin: origin, registry: registry, persistentSession: persistent, originProvider: { origin })
+        defer { capture.retire() }
+        for _ in 0..<2 {
+            do { _ = try await capture.context(); XCTFail("A healthy short cookie cannot replace primary device proof") }
+            catch let error as CaptureTransportError { XCTAssertEqual(error, .server(401, "desktop_session_requires_sign_in")) }
+        }
+        let ledger = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))) as! [[String: Any]]
+        XCTAssertTrue(ledger.isEmpty, "Needs-login must remain blocked before all business GETs on repeated reads")
+    }
+
+    private func seedSyntheticCaptureCookie(for selection: LoginStoreSelection) async throws -> WKWebsiteDataStore {
+        let dataStore = WKWebsiteDataStore(forIdentifier: selection.storeIdentifier)
+        let store = dataStore.httpCookieStore
+        let cookie = try XCTUnwrap(HTTPCookie(properties: [.domain: "127.0.0.1", .path: "/", .name: "capri-persistent-proof",
+            .value: "1", .expires: Date().addingTimeInterval(3600)]))
+        await withCheckedContinuation { continuation in store.setCookie(cookie) { continuation.resume() } }
+        let observed: [HTTPCookie] = await withCheckedContinuation { continuation in store.getAllCookies { continuation.resume(returning: $0) } }
+        XCTAssertTrue(observed.contains { $0.name == "capri-persistent-proof" }, "Synthetic pre-existing cookie must be confirmed")
+        return dataStore
     }
 
     func testLegacyCaptureContextDecodesWithoutOptionalPrimaryMetadata() throws {
@@ -426,13 +499,13 @@ final class DesktopPersistentSessionTests: XCTestCase {
                     XCTAssertEqual(error, .unavailable)
                     XCTAssertNotNil(vault.value)
                 } else {
-                    XCTAssertEqual(error, .server(401, "backend_session_expired"))
+                    XCTAssertEqual(error, .server(401, "desktop_session_requires_sign_in"))
                     XCTAssertNil(vault.value)
                 }
             }
             let ledgerData = (try? Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))) ?? Data("[]".utf8)
             let ledger = try JSONSerialization.jsonObject(with: ledgerData) as! [[String: Any]]
-            XCTAssertEqual(ledger.filter { $0["path"] as? String == "/api/desktop-capture/context" }.count, status == "unavailable" ? 0 : 1)
+            XCTAssertEqual(ledger.filter { $0["path"] as? String == "/api/desktop-capture/context" }.count, 0)
         }
     }
 }

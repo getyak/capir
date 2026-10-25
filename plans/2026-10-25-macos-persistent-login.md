@@ -83,3 +83,11 @@ follow-up keeps both identities explicit and adds startup/recovery and wrong
 primary counterexamples. Readiness also requires migration106 before advertising
 the new device-session path as ready. ADR0026 owns the identity decision; tests enforce it.
 Signed installation and live acceptance remain incomplete in this snapshot.
+
+Cloud PR428 validation exposed an additional admission failure: consuming an
+unavailable initial restore left no verified primary, allowing the next context
+read to skip restoration. Every unverified read must rejoin shared restore;
+unavailability permits no business GET. Controlled recovery counterexamples
+separate that state invariant from transport timing. Exact failed-test IDs also
+retain all bounded fixture metadata in both check and release workflows;
+assertion-only attachment filtering had omitted successful fixture activities.
