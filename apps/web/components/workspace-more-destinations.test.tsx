@@ -38,17 +38,39 @@ beforeEach(() => {
   vi.spyOn(window, "matchMedia").mockImplementation(() => ({ matches: state.mobile, addEventListener: () => {}, removeEventListener: () => {} }) as unknown as MediaQueryList);
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.restoreAllMocks(); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); delete window.talentSignalDesktop; vi.restoreAllMocks(); });
 
 describe("expanded and collapsed workspace navigation", () => {
-  it("keeps the recent list open with one icon-only add action", async () => {
+  it("groups one icon-only compose action with the visible recent heading", async () => {
     await render();
     const recent = host.querySelector('section[aria-label="最近对话"]')!;
     const add = recent.querySelector('button[aria-label="开始新对话"]')!;
     expect(add.textContent).toBe("");
     expect(recent.querySelector('button[aria-controls]')).toBeNull();
     expect(recent.querySelector('a[title="Conversation 1"]')).toBeTruthy();
-    expect(recent.textContent).not.toContain("最近对话");
+    expect(recent.querySelector("h2")?.textContent).toBe("最近对话");
+    expect(recent.querySelectorAll('button[aria-label="开始新对话"]')).toHaveLength(1);
+  });
+
+  it("advertises the native compose shortcut only with a supported desktop host", async () => {
+    await render();
+    const add = host.querySelector('section button[aria-label="开始新对话"]')!;
+    expect(add.getAttribute("title")).toBe("新对话");
+    expect(add.hasAttribute("aria-keyshortcuts")).toBe(false);
+
+    await act(async () => {
+      window.talentSignalDesktop = { protocolVersion: 1, availableVersion: null } as never;
+      window.dispatchEvent(new Event("talent-signal-desktop"));
+    });
+    expect(add.getAttribute("title")).toBe("新对话 · ⌘N");
+    expect(add.getAttribute("aria-keyshortcuts")).toBe("Meta+N");
+
+    await act(async () => {
+      window.talentSignalDesktop = { protocolVersion: 2, availableVersion: null } as never;
+      window.dispatchEvent(new Event("talent-signal-desktop"));
+    });
+    expect(add.getAttribute("title")).toBe("新对话");
+    expect(add.hasAttribute("aria-keyshortcuts")).toBe(false);
   });
 
   it.each([

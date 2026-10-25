@@ -29,7 +29,7 @@ async function openAccount() {
 }
 beforeEach(() => { directory.data = { sessions: { session_version: "a", sessions: [] } }; directory.loading = false; directory.failed = false; });
 describe("quiet workspace chrome states", () => {
-  it("keeps directory access beneath an icon-only header when history is empty", () => {
+  it("keeps directory access and the recent heading when history is empty", () => {
     const html = renderToStaticMarkup(createElement(WorkspaceRecentSessions, { binding: "a" }));
     expect(html).toContain('href="/workspace/sessions"');
     expect(html).toContain("对话记录");
