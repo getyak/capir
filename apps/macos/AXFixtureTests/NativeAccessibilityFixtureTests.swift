@@ -1,12 +1,10 @@
 import AppKit
-import ApplicationServices
 import XCTest
 
 /// An actual out-of-process accessibility client requests SwiftUI's virtual
 /// nodes. Direct NSHostingView children alone expose only AppKit containers.
 final class NativeAccessibilityFixtureTests: XCTestCase {
     private var client: XCUIApplication?
-    private var axDiagnostics: [String] = []
 
     override func tearDown() {
         if let client {
@@ -76,17 +74,12 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
     func testDesktopPetVirtualButtonDefaultPressOpensExistingWorkspaceOnce() throws {
         let app = try launch()
         XCTAssertTrue(app.buttons["desktopPet.openWorkspace"].waitForExistence(timeout: 10))
-        let running = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.getyak.acceptance.native-ax").first)
-        let root = AXUIElementCreateApplication(running.processIdentifier)
-        let button = try XCTUnwrap(find(root, identifier: "desktopPet.openWorkspace"),
-                                   "CoreAX trusted=\(AXIsProcessTrusted()); \(axDiagnostics.joined(separator: " | "))")
-        XCTAssertEqual(string(button, attribute: kAXRoleAttribute), kAXButtonRole)
-        var actions: CFArray?
-        XCTAssertEqual(AXUIElementCopyActionNames(button, &actions), .success)
-        XCTAssertTrue((actions as? [String])?.contains(kAXPressAction) == true)
-        // This performs the virtual child's default AX action, not a physical
-        // mouse click, hosting-view override or direct controller call.
-        XCTAssertEqual(AXUIElementPerformAction(button, kAXPressAction as CFString), .success)
+        // The disposable runner cannot acquire additional CoreAX authority.
+        // After its actual AX client exposes the button, ask the fixture to
+        // invoke that exact child's public AppKit handler, with no parent or
+        // controller shortcut. Full cross-process AX transport remains manual.
+        app.buttons["fixture.press"].click()
+        XCTAssertEqual(text(app.staticTexts["fixture.pressResult"]), "performed")
         let opened = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == '1' OR value == '1'"),
                                               object: app.staticTexts["fixture.opens"])
         XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 5), .completed)
@@ -98,23 +91,4 @@ final class NativeAccessibilityFixtureTests: XCTestCase {
         node.label.isEmpty ? (node.value as? String ?? "") : node.label
     }
 
-    private func string(_ node: AXUIElement, attribute: String) -> String? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(node, attribute as CFString, &value) == .success else { return nil }
-        return value as? String
-    }
-    private func find(_ node: AXUIElement, identifier: String, depth: Int = 0) -> AXUIElement? {
-        guard depth < 24 else { return nil }
-        if string(node, attribute: kAXIdentifierAttribute) == identifier { return node }
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &value)
-        if axDiagnostics.count < 40 {
-            axDiagnostics.append("depth=\(depth) role=\(string(node, attribute: kAXRoleAttribute) ?? "nil") id=\(string(node, attribute: kAXIdentifierAttribute) ?? "nil") childrenResult=\(result.rawValue) count=\((value as? [AXUIElement])?.count ?? -1)")
-        }
-        guard result == .success, let children = value as? [AXUIElement] else { return nil }
-        for child in children {
-            if let found = find(child, identifier: identifier, depth: depth + 1) { return found }
-        }
-        return nil
-    }
 }

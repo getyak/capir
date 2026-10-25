@@ -298,8 +298,12 @@ workflow unless those process-level boundaries are separately proven.
 SwiftUI accessibility acceptance uses `native-accessibility-acceptance.sh` on
 that disposable host. Its separate `TalentSignalAXFixture` target compiles real
 presentation components and resources but excludes the production App entry
-point and delegate installation. An out-of-process accessibility client reads
-login phases and invokes the virtual companion button's default press. A direct
+point and delegate installation. An out-of-process XCTest client reads
+login phases and exposes the real companion button. The fixture then invokes
+that exact virtual child's public AppKit default-action handler, rejecting the
+hosting parent and direct controller calls. This avoids granting additional
+CoreAX authority to an untrusted disposable runner; it does not prove the
+cross-process CoreAX transport used by an installed assistive client. A direct
 controller call or an AppKit container-only walk cannot substitute for that
 assertion. The script retains its result bundle and requires both tests with
 zero failures or skips; this component proof does not establish installed-app

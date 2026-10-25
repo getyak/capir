@@ -23,8 +23,11 @@ struct NativeAccessibilityFixtureApp: App {
                                                onStart: {}, onCancel: {}, onCheckResult: {})
                         .frame(minWidth: 560, maxWidth: .infinity, minHeight: 520)
                     VStack {
-                        DesktopPetArtworkView(controller: fixture.pet)
+                        NativePetFixtureHost(fixture: fixture).frame(width: 100, height: 100)
                         Text(String(fixture.opens)).accessibilityIdentifier("fixture.opens")
+                        Button("Invoke child default AX action") { fixture.pressActualChild() }
+                            .accessibilityIdentifier("fixture.press")
+                        Text(fixture.pressResult).accessibilityIdentifier("fixture.pressResult")
                         Text(fixture.invariantsPreserved ? "preserved" : "changed")
                             .accessibilityIdentifier("fixture.invariants")
                     }.frame(width: 140)
@@ -50,6 +53,8 @@ private final class NativeAccessibilityFixtureModel: ObservableObject {
     let preferencesBefore: NSDictionary?
     let destinationBefore: WorkspaceDestination?
     let urlBefore: URL?
+    weak var petHost: NSHostingView<DesktopPetArtworkView>?
+    @Published var pressResult = "not-run"
     @Published var opens = 0
     @Published var phaseIndex = 0
     @Published var cleaned = false
@@ -88,9 +93,71 @@ private final class NativeAccessibilityFixtureModel: ObservableObject {
         WorkspaceNavigation.shared.pendingURL == urlBefore &&
         (defaults.persistentDomain(forName: suite) as NSDictionary?) == preferencesBefore
     }
+    /// XCTest has already requested the real virtual button. Invoke that
+    /// node's public server-side AX handler without granting the UI runner
+    /// cross-application CoreAX authority. No controller or parent-press fallback.
+    func pressActualChild() {
+        guard let host = petHost else { pressResult = "missing-host"; return }
+        func attribute(_ node: NSObject, _ modern: String, _ legacyName: String) -> Any? {
+            let getter = NSSelectorFromString(modern)
+            if node.responds(to: getter), let value = node.perform(getter)?.takeUnretainedValue() {
+                if let array = value as? [Any], array.isEmpty { }
+                else if let string = value as? String, string.isEmpty { }
+                else { return value }
+            }
+            let legacy = NSSelectorFromString("accessibilityAttributeValue:")
+            return node.responds(to: legacy) ? node.perform(legacy, with: legacyName)?.takeUnretainedValue() : nil
+        }
+        func find(_ node: NSObject, depth: Int = 0) -> NSObject? {
+            guard depth < 16 else { return nil }
+            if attribute(node, "accessibilityIdentifier", "AXIdentifier") as? String == "desktopPet.openWorkspace" { return node }
+            let children = attribute(node, "accessibilityChildren", "AXChildren") as? [Any] ?? []
+            for child in children.compactMap({ $0 as? NSObject }) {
+                if let value = find(child, depth: depth + 1) { return value }
+            }
+            return nil
+        }
+        var actual = find(host)
+        if actual == nil, let window = host.window {
+            let point = window.convertPoint(toScreen: host.convert(NSPoint(x: host.bounds.midX, y: host.bounds.midY), to: nil))
+            actual = host.accessibilityHitTest(point) as? NSObject
+        }
+        guard let node = actual, node !== host,
+              attribute(node, "accessibilityIdentifier", "AXIdentifier") as? String == "desktopPet.openWorkspace",
+              attribute(node, "accessibilityRole", "AXRole") as? String == "AXButton" else {
+            pressResult = "missing-actual-virtual-child"; return
+        }
+        let actions = NSSelectorFromString("accessibilityActionNames")
+        let legacyPress = NSSelectorFromString("accessibilityPerformAction:")
+        let names = node.responds(to: actions) ? node.perform(actions)?.takeUnretainedValue() as? [String] : nil
+        if names?.contains("AXPress") == true && node.responds(to: legacyPress) {
+            typealias Press = @convention(c) (AnyObject, Selector, NSString) -> Void
+            unsafeBitCast(node.method(for: legacyPress), to: Press.self)(node, legacyPress, "AXPress")
+            pressResult = "performed"
+        } else {
+            let selector = NSSelectorFromString("accessibilityPerformPress")
+            guard node.responds(to: selector) else { pressResult = "missing-default-action"; return }
+            typealias Press = @convention(c) (AnyObject, Selector) -> Bool
+            let triggered = unsafeBitCast(node.method(for: selector), to: Press.self)(node, selector)
+            pressResult = triggered ? "performed" : "default-action-rejected"
+        }
+    }
     func nextPhase() { phaseIndex = min(phaseIndex + 1, 8) }
     func cleanup() {
         defaults.removePersistentDomain(forName: suite)
         cleaned = defaults.persistentDomain(forName: suite) == nil
+    }
+}
+
+/// Plain hosting view: it has no product interaction view's AppKit press override.
+private struct NativePetFixtureHost: NSViewRepresentable {
+    let fixture: NativeAccessibilityFixtureModel
+    func makeNSView(context: Context) -> NSHostingView<DesktopPetArtworkView> {
+        let host = NSHostingView(rootView: DesktopPetArtworkView(controller: fixture.pet))
+        fixture.petHost = host
+        return host
+    }
+    func updateNSView(_ host: NSHostingView<DesktopPetArtworkView>, context: Context) {
+        host.rootView = DesktopPetArtworkView(controller: fixture.pet)
     }
 }
