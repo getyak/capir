@@ -35,6 +35,11 @@ struct CaptureContext: Equatable, Sendable {
     let origin: String
     let ownerScope: String
     let workspaceAccountID: String
+    /// Primary device identity is separate from an authorized selected workspace.
+    /// Older context fixtures may omit it until persistent restore is required.
+    let primaryAccountID: String?
+    let primaryUserID: String?
+    let primarySessionID: String?
     let loginBinding: String
     let expiresAt: Date
     let processing: CaptureProcessing
@@ -43,16 +48,23 @@ struct CaptureContext: Equatable, Sendable {
         let protocolVersion: Int
         let ownerScope: String
         let workspaceAccountId: String?
+        let primaryAccountId: String?
+        let primaryUserId: String?
+        let primarySessionId: String?
         let loginBinding: String
         let expiresAt: String
         let processing: CaptureProcessing
     }
 
     init(origin: String, ownerScope: String, loginBinding: String, expiresAt: Date,
-         processing: CaptureProcessing, workspaceAccountID: String = "") {
+         processing: CaptureProcessing, workspaceAccountID: String = "",
+         primaryAccountID: String? = nil, primaryUserID: String? = nil, primarySessionID: String? = nil) {
         self.origin = origin
         self.ownerScope = ownerScope
         self.workspaceAccountID = workspaceAccountID
+        self.primaryAccountID = primaryAccountID
+        self.primaryUserID = primaryUserID
+        self.primarySessionID = primarySessionID
         self.loginBinding = loginBinding
         self.expiresAt = expiresAt
         self.processing = processing
@@ -73,7 +85,9 @@ struct CaptureContext: Equatable, Sendable {
         else { throw CaptureIntentError.invalidContext }
         return CaptureContext(origin: origin, ownerScope: wire.ownerScope, loginBinding: wire.loginBinding,
                               expiresAt: expiry, processing: wire.processing,
-                              workspaceAccountID: wire.workspaceAccountId ?? "")
+                              workspaceAccountID: wire.workspaceAccountId ?? "",
+                              primaryAccountID: wire.primaryAccountId, primaryUserID: wire.primaryUserId,
+                              primarySessionID: wire.primarySessionId)
     }
 }
 
