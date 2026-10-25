@@ -4,7 +4,9 @@ import { browserBackend, browserCaptureInput, browserClaims, browserReceipt } fr
 export const dynamic="force-dynamic";
 export async function POST(request:Request){
   if(!isAllowedMutationOrigin(request.headers,true))return NextResponse.json({message:"请求来源不受支持。"},{status:403});
-  const claims=await browserClaims();
+  let claims:Awaited<ReturnType<typeof browserClaims>>;
+  try{claims=await browserClaims();}
+  catch{return NextResponse.json({code:"backend_unavailable"},{status:503});}
   if(!claims)return NextResponse.json({code:"session_stale"},{status:401});
   let input:unknown;
   try{
