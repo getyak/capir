@@ -274,7 +274,8 @@ final class DesktopPersistentSessionTests: XCTestCase {
 
     func testMenuBarCaptureContextRenewsAndRetriesOnlyTheRead() async throws {
         let h = PersistentHarness()
-        let fixture = try PersistentHTTPFixture(receipt: h.receipt)
+        let selectedTarget = UUID().uuidString
+        let fixture = try PersistentHTTPFixture(receipt: h.receipt, selectedWorkspaceAccountID: selectedTarget)
         defer { fixture.stop() }
         let origin = try await fixture.start()
         let registry = LoginStoreRegistry(persistence: MemoryLoginPersistence(), lockURL: fixture.directory.appendingPathComponent("registry.lock"))
@@ -287,7 +288,10 @@ final class DesktopPersistentSessionTests: XCTestCase {
         let capture = CaptureWebSession(origin: origin, registry: registry, persistentSession: persistent, originProvider: { origin })
         defer { capture.retire() }
         let context = try await capture.context()
-        XCTAssertEqual(context.workspaceAccountID, h.receipt.account_id)
+        XCTAssertEqual(context.workspaceAccountID, selectedTarget)
+        XCTAssertEqual(context.primaryAccountID, h.receipt.account_id)
+        XCTAssertEqual(context.primaryUserID, h.receipt.user_id)
+        XCTAssertEqual(context.primarySessionID, h.receipt.session_id)
         XCTAssertEqual(context.origin, origin.url.absoluteString)
         // Simulate the short cookie expiring while the menu-bar host remains
         // alive, without changing a real account or the resident service.
@@ -300,6 +304,9 @@ final class DesktopPersistentSessionTests: XCTestCase {
         }
         let restored = try await capture.context()
         XCTAssertEqual(restored.workspaceAccountID, context.workspaceAccountID)
+        XCTAssertEqual(restored.primaryAccountID, context.primaryAccountID)
+        XCTAssertEqual(restored.primaryUserID, context.primaryUserID)
+        XCTAssertEqual(restored.primarySessionID, context.primarySessionID)
         let ledger = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))) as! [[String: Any]]
         let contextReads = ledger.filter { $0["path"] as? String == "/api/desktop-capture/context" }
         XCTAssertEqual(contextReads.count, 3)
@@ -308,6 +315,56 @@ final class DesktopPersistentSessionTests: XCTestCase {
         let posts = ledger.filter { $0["method"] as? String == "POST" }
         XCTAssertEqual(posts.count, 2)
         XCTAssertTrue(posts.allSatisfy { $0["path"] as? String == "/api/desktop-auth/persistent" }, "No capture upload/admission is replayed")
+    }
+
+    func testPersistentCaptureRejectsWrongOrMissingPrimaryProofOnEveryRead() async throws {
+        let h = PersistentHarness()
+        let valid = ["primary_account_id": h.receipt.account_id!, "primary_user_id": h.receipt.user_id!, "primary_session_id": h.receipt.session_id!]
+        var variants: [(proof: [String: String], include: Bool, expected: CaptureTransportError)] = []
+        for field in ["primary_account_id", "primary_user_id", "primary_session_id"] {
+            var changed = valid; changed[field] = UUID().uuidString
+            variants.append((changed, true, .staleOrigin))
+        }
+        variants.append((valid, false, .malformedResponse))
+        var malformed = valid; malformed["primary_session_id"] = "not-a-session-id"
+        variants.append((malformed, true, .malformedResponse))
+        for variant in variants {
+            let fixture = try PersistentHTTPFixture(receipt: h.receipt, selectedWorkspaceAccountID: UUID().uuidString,
+                primaryProof: variant.proof, includePrimaryProof: variant.include)
+            defer { fixture.stop() }
+            let origin = try await fixture.start()
+            let registry = LoginStoreRegistry(persistence: MemoryLoginPersistence(), lockURL: fixture.directory.appendingPathComponent("registry.lock"))
+            let selection = try registry.selection(for: origin.url.absoluteString)
+            let vault = MemoryCredentialVault()
+            vault.value = DesktopDeviceCredential(origin: selection.origin, storeIdentifier: selection.storeIdentifier, epoch: selection.epoch,
+                accountID: h.receipt.account_id!, userID: h.receipt.user_id!, sessionID: h.receipt.session_id!,
+                secret: String(repeating: "p", count: 43), enrolled: true)
+            let persistent = DesktopPersistentSessionCoordinator(registry: registry, vault: vault)
+            let capture = CaptureWebSession(origin: origin, registry: registry, persistentSession: persistent, originProvider: { origin })
+            defer { capture.retire() }
+            for _ in 0..<2 {
+                do { _ = try await capture.context(); XCTFail("A managed capture must verify the primary tuple on every read") }
+                catch let error as CaptureTransportError { XCTAssertEqual(error, variant.expected) }
+            }
+            XCTAssertNotNil(vault.value, "A scope-proof failure is not device revocation")
+            let ledger = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))) as! [[String: Any]]
+            XCTAssertEqual(ledger.filter { $0["path"] as? String == "/api/desktop-capture/context" }.count, 2)
+            let posts = ledger.filter { $0["method"] as? String == "POST" }
+            XCTAssertEqual(posts.count, 1)
+            XCTAssertEqual(posts.first?["path"] as? String, "/api/desktop-auth/persistent", "Scope rejection cannot replay capture writes")
+        }
+    }
+
+    func testLegacyCaptureContextDecodesWithoutOptionalPrimaryMetadata() throws {
+        let h = PersistentHarness()
+        let target = UUID().uuidString
+        let body: [String: Any] = ["protocol_version": 1, "owner_scope": "legacy-owner", "workspace_account_id": target,
+            "login_binding": "legacy-binding", "expires_at": h.receipt.session_expires_at!,
+            "processing": ["policy_version": "legacy-policy", "workspace_label": "Synthetic", "processor_labels": ["Synthetic"],
+                           "source_retention_days": 30, "available": true]]
+        let context = try CaptureContext.decode(JSONSerialization.data(withJSONObject: body), origin: h.origin.url.absoluteString)
+        XCTAssertEqual(context.workspaceAccountID, target)
+        XCTAssertNil(context.primaryAccountID); XCTAssertNil(context.primaryUserID); XCTAssertNil(context.primarySessionID)
     }
 
     func testHealthyMenuBarOnlyCookieEnrollsBeforeFirstCaptureContextRead() async throws {
@@ -467,10 +524,17 @@ private final class PersistentHTTPFixture {
     private let receipt: DesktopPersistentSessionReceipt
     private let startupDelay: TimeInterval
     private let readinessTimeout: TimeInterval
-    init(receipt: DesktopPersistentSessionReceipt, startupDelay: TimeInterval = 0, readinessTimeout: TimeInterval = 10) throws {
+    private let selectedWorkspaceAccountID: String
+    private let primaryProof: [String: String]
+    init(receipt: DesktopPersistentSessionReceipt, startupDelay: TimeInterval = 0, readinessTimeout: TimeInterval = 10,
+         selectedWorkspaceAccountID: String? = nil, primaryProof: [String: String]? = nil, includePrimaryProof: Bool = true) throws {
         self.receipt = receipt
         self.startupDelay = startupDelay
         self.readinessTimeout = readinessTimeout
+        self.selectedWorkspaceAccountID = selectedWorkspaceAccountID ?? receipt.account_id!
+        self.primaryProof = includePrimaryProof ? (primaryProof ?? [
+            "primary_account_id": receipt.account_id!, "primary_user_id": receipt.user_id!, "primary_session_id": receipt.session_id!,
+        ]) : [:]
         let root = ProcessInfo.processInfo.environment["MACOS_PERSISTENT_PROOF_ARTIFACTS"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.temporaryDirectory
         directory = root.appendingPathComponent("persistent-http-\(UUID().uuidString)", isDirectory: true)
@@ -480,12 +544,13 @@ private final class PersistentHTTPFixture {
     func start() async throws -> WorkspaceOrigin {
         let body: [String: String] = ["status": receipt.status, "account_id": receipt.account_id!, "user_id": receipt.user_id!,
                                     "session_id": receipt.session_id!, "session_expires_at": receipt.session_expires_at!]
+        let configuration: [String: Any] = ["receipt": body, "workspace_account_id": selectedWorkspaceAccountID, "primary_proof": primaryProof]
         let script = #"""
 import sys,time
 time.sleep(float(sys.argv[3]))
 import http.server,json,pathlib
 from datetime import datetime,timezone,timedelta
-root=pathlib.Path(sys.argv[1]); response=json.loads(sys.argv[2]); records=[]; enrolled_secret=None
+root=pathlib.Path(sys.argv[1]); configuration=json.loads(sys.argv[2]); response=configuration['receipt']; records=[]; enrolled_secret=None
 class Handler(http.server.BaseHTTPRequestHandler):
  def log_message(self,*args): pass
  def answer(self,status,payload,cookie=False):
@@ -522,10 +587,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
    self.end_headers();self.wfile.write(data);return
   if self.path=='/api/desktop-capture/context':
    if 'capri-persistent-proof=1' not in self.headers.get('Cookie',''):return self.answer(401,{'code':'backend_session_expired'})
-   return self.answer(200,{'protocol_version':1,'owner_scope':'synthetic-owner','workspace_account_id':response['account_id'],
+   context={'protocol_version':1,'owner_scope':'synthetic-owner','workspace_account_id':configuration['workspace_account_id'],
     'login_binding':'synthetic-binding','expires_at':(datetime.now(timezone.utc)+timedelta(minutes=5)).isoformat(),
     'processing':{'policy_version':'synthetic-policy','workspace_label':'Synthetic proof','processor_labels':['Synthetic processor'],
-     'source_retention_days':30,'available':True}})
+     'source_retention_days':30,'available':True}}
+   context.update(configuration['primary_proof']);return self.answer(200,context)
   if 'capri-persistent-proof=1' not in self.headers.get('Cookie',''):return self.answer(401,{'status':'signed_out'})
   self.answer(200,response)
 server=http.server.HTTPServer(('127.0.0.1',0),Handler)
@@ -534,7 +600,7 @@ server=http.server.HTTPServer(('127.0.0.1',0),Handler)
 server.serve_forever()
 """#
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-c", script, directory.path, String(data: try JSONSerialization.data(withJSONObject: body), encoding: .utf8)!, String(startupDelay)]
+        process.arguments = ["-c", script, directory.path, String(data: try JSONSerialization.data(withJSONObject: configuration), encoding: .utf8)!, String(startupDelay)]
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
         let started = ProcessInfo.processInfo.systemUptime
         var startupStatus = "waiting"

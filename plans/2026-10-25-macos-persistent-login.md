@@ -71,3 +71,15 @@ remote revocation, disabled/retired identity, origin/account binding and transie
 outages. Never run expiry fixtures against real/resident data. Helper tests do
 not establish installed update or physical reboot acceptance. Do not reboot the
 shared computer; preserve deployed current/rollback versions and unrelated work.
+
+## Capture primary-owner correction
+
+PR426 merged after all applicable current-head and merged-main checks passed.
+The merged backend was deployed and its prepared image/revision pair saved and
+read back before resuming recovery. Release40163919378 was cancelled before
+publication when pre-installation review found a P2: native capture compared a
+primary-owner receipt to the independently selected business account. The
+follow-up keeps both identities explicit and adds startup/recovery and wrong
+primary counterexamples. Readiness also requires migration106 before advertising
+the new device-session path as ready. ADR0026 owns the identity decision; tests enforce it.
+Signed installation and live acceptance remain incomplete in this snapshot.

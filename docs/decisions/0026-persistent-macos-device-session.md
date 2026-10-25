@@ -51,6 +51,13 @@ Normal renewal preserves conversation/draft/store state. Transient service,
 transport and locked-Keychain failures retain the capability and drafts; they
 do not establish revocation.
 
+Native recovery verifies the live primary account, user and canonical device
+session separately from the selected business workspace. Authorized test-space
+selection can make those account IDs differ. Capture context carries both
+identities; the primary tuple must match the renewal receipt while business
+owner, login binding, store epoch and processing policy retain their own
+guards. Account equality between these two roles is not authorization proof.
+
 Explicit sign-out synchronously disables renewal, persists a fresh empty store
 epoch and discards only the former scope's capability. Late writes stay in the
 retired store. Server revocation and renewal share canonical session locking;

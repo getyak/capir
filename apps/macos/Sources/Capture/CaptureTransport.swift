@@ -47,6 +47,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     private var initialSessionRestore: Task<DesktopPersistentSessionOutcome, Never>?
     private var retired = false
     private let contextFence = CaptureContextReadFence()
+    private var verifiedPrimarySession: DesktopPersistentSessionReceipt?
 
     init(origin: WorkspaceOrigin, registry: LoginStoreRegistry? = nil,
          persistentSession: DesktopPersistentSessionCoordinator? = nil,
@@ -76,6 +77,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
     }
 
     func retire() {
+        verifiedPrimarySession = nil
         initialSessionRestore?.cancel(); initialSessionRestore = nil
         retired = true; loaded = false; webView.stopLoading(); webView.navigationDelegate = nil
         finishLoading(.failure(CaptureTransportError.staleOrigin))
@@ -187,8 +189,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
                 if case .cancelled? = initialOutcome { throw CaptureTransportError.staleOrigin }
             }
             let data: Data
-            var recoveredAccount: String?
-            if case .authenticated(let live)? = initialOutcome { recoveredAccount = live.account_id }
+            if case .authenticated(let live)? = initialOutcome { try rememberVerifiedPrimarySession(live) }
             do {
                 data = try await fetch(path: "/api/desktop-capture/context", method: "GET")
             } catch CaptureTransportError.server(401, let code) {
@@ -204,7 +205,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
                 try assertOrigin()
                 switch outcome {
                 case .authenticated(let live):
-                    recoveredAccount = live.account_id
+                    try rememberVerifiedPrimarySession(live)
                     data = try await fetch(path: "/api/desktop-capture/context", method: "GET")
                 case .needsLogin: throw CaptureTransportError.server(401, code)
                 case .unavailable: throw CaptureTransportError.unavailable
@@ -212,13 +213,29 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
                 }
             }
             let context = try CaptureContext.decode(data, origin: origin.url.absoluteString)
-            if let recoveredAccount, context.workspaceAccountID != recoveredAccount { throw CaptureTransportError.staleOrigin }
+            if let verifiedPrimarySession {
+                guard let account = context.primaryAccountID, UUID(uuidString: account) != nil,
+                      let user = context.primaryUserID, UUID(uuidString: user) != nil,
+                      let session = context.primarySessionID, UUID(uuidString: session) != nil
+                else { throw CaptureTransportError.malformedResponse }
+                guard account == verifiedPrimarySession.account_id, user == verifiedPrimarySession.user_id,
+                      session == verifiedPrimarySession.session_id else { throw CaptureTransportError.staleOrigin }
+            }
             try contextFence.accept(context, sequence: sequence)
             return context
         } catch CaptureTransportError.server(401, let code) {
             guard contextFence.signedOut(sequence: sequence) else { throw CaptureTransportError.staleOrigin }
             throw CaptureTransportError.server(401, code)
         }
+    }
+
+    private func rememberVerifiedPrimarySession(_ live: DesktopPersistentSessionReceipt) throws {
+        guard live.authenticated else { throw CaptureTransportError.malformedResponse }
+        if let prior = verifiedPrimarySession,
+           prior.account_id != live.account_id || prior.user_id != live.user_id || prior.session_id != live.session_id {
+            throw CaptureTransportError.staleOrigin
+        }
+        verifiedPrimarySession = live
     }
 
     func recentSession(context current: CaptureContext) async throws -> UUID? {
