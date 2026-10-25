@@ -97,7 +97,6 @@
   "app/blog/page.tsx": 13,
   "app/onboarding/actions.ts": 13,
   "app/workspace/settings/conflict/actions.ts": 13,
-  "components/workspace-search.tsx": 13,
   "lib/composer-document.ts": 13,
   "components/conversation/session-message-parts.tsx": 12,
   "components/desktop-chrome.tsx": 12,

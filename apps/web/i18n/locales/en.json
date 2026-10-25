@@ -2244,5 +2244,17 @@
   "从一段聊天或人物介绍开始，整理你的第一位联系人。": "Start with a chat or an introduction to organize your first contact.",
   "账号专属的人物、关系情境与受治理来源目录。": "An account-specific directory of people, relationship contexts and governed sources.",
   "无法连接账号专属后端；系统不会从陈旧数据推断关系状态。": "Cannot connect to the account backend; relationship state will not be inferred from stale data.",
-  "登录状态已失效，请重新登录后继续。": "Your session is no longer valid. Sign in again to continue."
+  "登录状态已失效，请重新登录后继续。": "Your session is no longer valid. Sign in again to continue.",
+  "搜索": "Search",
+  "账号专属对话": "Account-specific conversation",
+  "搜索人物或对话": "Search people or conversations",
+  "搜索人物与对话": "Search people and conversations",
+  "搜索当前账号的人物和对话；使用方向键选择，Enter 打开，Esc 关闭。": "Search people and conversations in the current account. Use the arrow keys to select, Enter to open and Esc to close.",
+  "关闭搜索": "Close search",
+  "↑ ↓ 选择 · Enter 打开 · Esc 关闭": "↑ ↓ Select · Enter Open · Esc Close",
+  "输入姓名、机构或对话标题。": "Enter a name, organization or conversation title.",
+  "正在读取当前账号的目录…": "Reading the current account's directory…",
+  "暂时无法读取人物与对话。请重试，已保存的内容不会丢失。": "Cannot read people and conversations right now. Try again; saved content will not be lost.",
+  "没有找到“{query}”。试试姓名的一部分或机构名称。": "No results for “{query}”. Try part of a name or an organization.",
+  "对话": "Conversations"
 }
