@@ -125,7 +125,7 @@ final class WorkspaceSettingsTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
             host.layoutSubtreeIfNeeded()
         }
-        let button = try XCTUnwrap(virtualButton, "The actual SwiftUI accessibility child must exist in the visible fixture (visible=\(window.isVisible), frame=\(host.frame))")
+        let button = try XCTUnwrap(virtualButton, "The actual SwiftUI accessibility child must exist in the visible fixture (visible=\(window.isVisible), frame=\(host.frame)); \(accessibilityTreeSummary(host))")
         XCTAssertFalse(button === host, "Pressing the parent would miss the missing-child-action regression")
         let press = NSSelectorFromString("accessibilityPerformPress")
         XCTAssertTrue(button.responds(to: press))
@@ -173,7 +173,7 @@ final class WorkspaceSettingsTests: XCTestCase {
                 if message != nil { break }
                 try await Task.sleep(for: .milliseconds(10))
             }
-            let node = try XCTUnwrap(message, "The actual login phase must be readable in the visible fixture (visible=\(window.isVisible), frame=\(host.frame), id=\(identifier))")
+            let node = try XCTUnwrap(message, "The actual login phase must be readable in the visible fixture (visible=\(window.isVisible), frame=\(host.frame), id=\(identifier)); \(accessibilityTreeSummary(host))")
             let label = NSSelectorFromString("accessibilityLabel")
             let value = NSSelectorFromString("accessibilityValue")
             let labelText = node.responds(to: label) ? node.perform(label)?.takeUnretainedValue() as? String : nil
@@ -201,6 +201,29 @@ final class WorkspaceSettingsTests: XCTestCase {
             if let found = findAccessibilityElement(child, identifier: identifier, depth: depth + 1) { return found }
         }
         return nil
+    }
+
+    /// Report only the isolated fixture's role/type/ID and raw child shape.
+    /// Do not enumerate other windows, labels, values, credentials or content.
+    @MainActor
+    private func accessibilityTreeSummary(_ node: NSObject, depth: Int = 0) -> String {
+        guard depth < 5 else { return "…" }
+        func value(_ getter: String) -> Any? {
+            let selector = NSSelectorFromString(getter)
+            return node.responds(to: selector) ? node.perform(selector)?.takeUnretainedValue() : nil
+        }
+        let id = value("accessibilityIdentifier") as? String ?? "nil"
+        let role = value("accessibilityRole") as? String ?? "nil"
+        let raw = value("accessibilityChildren")
+        let children = raw as? [Any] ?? []
+        let legacy = NSSelectorFromString("accessibilityAttributeValue:")
+        let legacyChildren = node.responds(to: legacy)
+            ? node.perform(legacy, with: "AXChildren")?.takeUnretainedValue() as? [Any] : nil
+        let own = "\(type(of: node)) role=\(role) id=\(id) modern=\(String(describing: raw.map { type(of: $0) })) children=\(children.count) NSObjectArray=\(raw is [NSObject]) legacyChildren=\(String(describing: legacyChildren?.count))"
+        return ([own] + children.prefix(12).map { child in
+            guard let object = child as? NSObject else { return "non-NSObject \(type(of: child))" }
+            return accessibilityTreeSummary(object, depth: depth + 1)
+        }).joined(separator: " | ")
     }
 
     /// Every row in the native window is a device control that needs no Web
