@@ -87,7 +87,7 @@ export default async function SettingsPage({
       operation!.userId === data!.user.id &&
       operation!.accountRevision === data!.workspace.revision &&
       operation!.userRevision === data!.user.revision &&
-      sessionFingerprint(currentClaims!.backendAccessToken) === operation!.sessionFingerprint;
+      sessionFingerprint(currentClaims!) === operation!.sessionFingerprint;
     if (operation && operation.roleChallenges && flowMatchesCurrent) {
       // Authoritative status: a proof is shown as verified only when its role,
       // provider, challenge and age all validate against the frozen flow.

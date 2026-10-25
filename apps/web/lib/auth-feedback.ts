@@ -3,6 +3,7 @@ export type AuthFailureMode = "register" | "sign-in";
 export type AuthFailureCode =
   | "invalid_credentials"
   | "service_unavailable"
+  | "sign_out_pending"
   | "test_workspace_session_limit"
   | "rate_limited"
   | "account_exists"
@@ -13,6 +14,10 @@ const authFailureMessages: Record<
   AuthFailureCode,
   Record<AuthFailureMode, string>
 > = {
+  sign_out_pending: {
+    register: "还有退出登录正在等待服务器确认。凭据已保留，连接恢复后会自动重试；请稍后再登录。",
+    "sign-in": "还有退出登录正在等待服务器确认。凭据已保留，连接恢复后会自动重试；请稍后再登录。",
+  },
   registration_result_unknown: {
     register: "暂未确认账号是否创建成功，请先尝试登录。",
     "sign-in": "账号服务暂时不可用，请稍后重试。",
@@ -51,7 +56,7 @@ export function authFailureMessage(
 }
 
 export function authFailureIsRetryable(code: AuthFailureCode): boolean {
-  return code === "service_unavailable";
+  return code === "service_unavailable" || code === "sign_out_pending";
 }
 
 /**
@@ -64,6 +69,8 @@ export function authFailureCodeFromCredentialsCode(
   mode: AuthFailureMode,
 ): AuthFailureCode {
   switch (rawCode) {
+    case "sign_out_pending":
+      return "sign_out_pending";
     case "rate_limited":
       return "rate_limited";
     case "service_unavailable":

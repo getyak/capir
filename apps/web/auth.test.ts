@@ -186,19 +186,26 @@ afterEach(() => {
 });
 
 describe("lazy Apple auth configuration", () => {
-  it("keeps a canonical session binding only for server-authorized persistent Mac sign-in", async () => {
+  it("accepts canonical IDs only from verified persistent authorization, including ordinary Web enrollment", async () => {
     const jwt = resolveConfig().callbacks!.jwt!;
-    const user = { id: "fixture-user", backendAccessToken: "bounded-access", backendAccountId: "fixture-account",
+    const user = { id: "33333333-3333-4333-8333-333333333333", backendAccessToken: "bounded-access", backendAccountId: "44444444-4444-4444-8444-444444444444",
       backendAccountName: "Account", backendAccountSlug: "account", backendExpiresAt: "2099-01-01T00:00:00.000Z",
-      backendRole: "member", backendUserId: "fixture-user", backendUsername: null,
+      backendRole: "member", backendUserId: "33333333-3333-4333-8333-333333333333", backendUsername: null,
       backendSessionId: "11111111-1111-4111-8111-111111111111" };
     const mac = await jwt({ token: {}, user, account: { provider: "desktop-persistent", type: "credentials", providerAccountId: user.id },
       trigger: "signIn", session: undefined });
     expect(mac?.backendSessionId).toBe(user.backendSessionId);
+    const serverId = "22222222-2222-4222-8222-222222222222";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ session_id: serverId, access_token: "web-bounded-access",
+      expires_at: "2099-01-01T00:00:00.000Z", account: { id: user.backendAccountId, name: "Account", slug: "account" },
+      user: { id: user.backendUserId, role: "member", username: null } })));
     const ordinary = await jwt({ token: { backendSessionId: user.backendSessionId }, user,
       account: { provider: "password-account", type: "credentials", providerAccountId: user.id },
       trigger: "signIn", session: undefined });
-    expect(ordinary?.backendSessionId).toBeUndefined();
+    expect(ordinary?.backendSessionId).toBe(serverId);
+    expect(ordinary?.backendSessionId).not.toBe(user.backendSessionId);
+    expect(ordinary?.backendRenewalSecret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    vi.unstubAllGlobals();
   });
   it("configures NextAuth lazily so provider resolution runs per invocation", () => {
     expect(typeof captured.config).toBe("function");

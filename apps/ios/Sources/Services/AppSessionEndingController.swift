@@ -32,7 +32,7 @@ final class AppSessionEndingController {
               records[index].endpointScope == RuntimeEndpoint.scope(endpoint) else { throw AppSessionError.scopeMismatch }
         var record = records[index]
         if record.credential == nil && !record.remoteSettled,
-           let saved = try sessions.load(), AppSessionEnding.fingerprint(saved) == record.credentialFingerprint {
+           let saved = try sessions.load(), record.blocks(saved) {
             record.credential = saved
             records[index] = record; try endings.save(records)
         }
@@ -43,12 +43,19 @@ final class AppSessionEndingController {
         } catch { record.local = .failed; record.failure = .storage }
         records[index] = record; try endings.save(records)
         if !record.remoteSettled {
-            if record.expiresAt <= Date() {
+            if record.renewable != true && record.expiresAt <= Date() {
                 record.remote = .expired
             } else if let credential = record.credential {
                 do { try await client.logout(credential); record.remote = .revoked }
                 catch let error as AppSessionError {
-                    if case let .backend(status, code, _) = error, status == 401, code == "SESSION_INVALID" {
+                    // An absent pending capability cannot prove that an older
+                    // enrollment transaction will never commit. Keep its
+                    // original bearer for the atomic destructive revoke proof.
+                    let pendingEnrollment = record.credential?.persistent?.enrolled == false
+                    if (!pendingEnrollment && error.invalidatesSession) || {
+                        if case let .backend(status, code, _) = error { return status == 401 && code == "SESSION_INVALID" && record.renewable != true }
+                        return false
+                    }() {
                         record.remote = .alreadyInvalid
                     } else {
                         record.remote = .unverified

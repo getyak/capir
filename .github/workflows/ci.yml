@@ -396,6 +396,17 @@ jobs:
           pnpm --filter @talent-signal/backend exec vitest run src/modules/accountSettingsIsolation.integration.test.ts src/modules/accountSettingsHttp.integration.test.ts
           pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 src/modules/accountIdentity.integration.test.ts
 
+      - name: Verify persistent first-party sessions with PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          PERSISTENT_SESSION_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/capri_persistent_test_ci
+          DESKTOP_PERSISTENT_SESSION_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/capri_persistent_test_ci
+          PERSISTENT_SESSION_TEST_ARTIFACT_DIR: ${{ runner.temp }}/persistent-session-proof
+        run: |
+          pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE capri_persistent_test_ci'); } finally { await pool.end(); }"
+          DATABASE_URL="$PERSISTENT_SESSION_TEST_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
+          pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism --maxWorkers=1 src/modules/persistentSession.test.ts src/modules/persistentSession.postgres.test.ts src/modules/desktopPersistentSession.postgres.test.ts
+
       - name: Verify capir authorization and test provisioning with PostgreSQL
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci

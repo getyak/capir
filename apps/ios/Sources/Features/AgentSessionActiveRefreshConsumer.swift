@@ -15,6 +15,14 @@ final class AgentSessionActiveRefreshConsumer {
         var accountID: String
         var userID: String
         var openSessionID: UUID?
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.scopeID == rhs.scopeID && RuntimeEndpoint.same(lhs.endpoint, rhs.endpoint)
+                && lhs.accountID == rhs.accountID && lhs.userID == rhs.userID && lhs.openSessionID == rhs.openSessionID
+        }
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(scopeID); hasher.combine(RuntimeEndpoint.scope(endpoint))
+            hasher.combine(accountID); hasher.combine(userID); hasher.combine(openSessionID)
+        }
     }
 
     static let scopePrefix = "agent-sessions-"
@@ -53,7 +61,8 @@ final class AgentSessionActiveRefreshConsumer {
         openSessionID: UUID?
     ) -> Lease? {
         guard let endpoint else { return nil }
-        let identity = [endpoint.absoluteString, accessToken, accountID, userID].joined(separator: "\u{0}")
+        let family = IOSSessionFamilyRegistry.shared.family(endpoint: endpoint, token: accessToken) ?? accessToken
+        let identity = [RuntimeEndpoint.canonical(endpoint), family, accountID, userID].joined(separator: "\u{0}")
         let fingerprint = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         return Lease(
             scopeID: scopePrefix + fingerprint + "-" + (openSessionID?.uuidString ?? "directory"),

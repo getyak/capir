@@ -1,3 +1,5 @@
+import { hasPendingWebRevocations } from "@/lib/server/web-session-cookies";
+import { authFailureMessage } from "@/lib/auth-feedback";
 import { AppleLogo, ArrowUpRight } from "@phosphor-icons/react/dist/ssr";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
 import { translate, type TranslateVars } from "@/lib/i18n";
@@ -44,7 +46,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function LoginPage({ searchParams }: {
-  searchParams: Promise<{ callbackUrl?: string; error?: string; reason?: string; mode?: string; verification?: string; connect?: string }>;
+  searchParams: Promise<{ callbackUrl?: string; error?: string; reason?: string; mode?: string; verification?: string; connect?: string; code?: string }>;
 }) {
   const [session, parameters, locale] = await Promise.all([auth(), searchParams, getMarketingLocale()]);
   const t = (key: string, vars?: TranslateVars) => translate(locale, key, vars);
@@ -141,7 +143,11 @@ export default async function LoginPage({ searchParams }: {
   const availability = getAuthAvailability(process.env, { google: Boolean(getGoogleOAuthCredentials()) });
   const error = sessionExpired ? t("登录已过期。重新登录后，可以继续刚才的工作。")
     : collisionHint ? ""
-    : parameters.error ? (oauthErrors[parameters.error] ?? t("登录未完成，请重试或换一种方式。")) : "";
+    : parameters.error ? (
+      parameters.code === "sign_out_pending" && await hasPendingWebRevocations()
+        ? t(authFailureMessage("sign_out_pending", "sign-in"))
+        : oauthErrors[parameters.error] ?? t("登录未完成，请重试或换一种方式。")
+    ) : "";
   const providers = (
     <div className={styles.providers}>
       <form action={signInWithGoogle} data-oauth-form="true">

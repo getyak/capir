@@ -1,6 +1,7 @@
 import { TalentSignalHttpError } from "@talent-signal/contracts";
-import NextAuth, { AuthError, CredentialsSignin } from "next-auth";
+import NextAuth, { AuthError, CredentialsSignin, type Session } from "next-auth";
 import type { NextAuthConfig } from "next-auth";
+import type { NextRequest } from "next/server";
 import Apple from "next-auth/providers/apple";
 import Credentials from "next-auth/providers/credentials";
 import {
@@ -9,8 +10,7 @@ import {
 } from "@/lib/server/desktop-persistent-session";
 import Google from "next-auth/providers/google";
 import type { Provider } from "next-auth/providers";
-import { cookies, headers } from "next/headers";
-import { getToken } from "next-auth/jwt";
+import { cookies } from "next/headers";
 import {
   appleFormPostCookiesSupported,
   emailSignInSchema,
@@ -34,6 +34,10 @@ import {
 import { getGoogleOAuthCredentials } from "@/lib/server/google-oauth";
 import { sealLoginCollisionHint } from "@/lib/server/loginCollision";
 import { TEST_WORKSPACE_COOKIE } from "@/lib/server/testWorkspaceSession";
+import { readPrimarySessionToken, readPrimaryBackendSessionClaims, type BackendSessionClaims } from "@/lib/server/backendAuth";
+import { enrollWebSession, renewWebSession, WEB_SESSION_MAX_AGE, isWebSessionUnavailable, webSessionWasSignedOut } from "@/lib/server/web-persistent-session";
+import { writeWebFamilyToken, writeWebLoginBarrier, prepareWebEnrollment, nextWebLoginAt, PendingWebRevocationsError, boundedWebAvatar } from "@/lib/server/web-session-cookies";
+import { isBackendSessionExpiredError } from "@/lib/backend-session";
 
 import { authCookieSecure } from "@/lib/auth-cookie-policy";
 import { OAUTH_NONCE_COOKIE, OAuthAccountLinkRequired, oauthBackendClaims } from "@/lib/server/oauth-session";
@@ -41,7 +45,6 @@ import { finishGoogleSignIn } from "@/lib/server/google-session";
 import {
   clearStagedAuth,
   readAuthOperation,
-  readAuthProof,
   readAuthRound,
   readCallbackPath,
   resolveProviderReturn,
@@ -77,14 +80,18 @@ async function exchangeProviderSession<T>(
   }
 }
 
-function applyBackendSessionToToken(
+async function applyBackendSessionToToken(
   token: Record<string, unknown>,
   backend: Awaited<ReturnType<typeof finishGoogleSignIn>>,
 ) {
   token.sub = backend.user.id;
   token.email = backend.user.email;
   token.name = backend.user.display_name;
-  Object.assign(token, oauthBackendClaims(backend));
+  await prepareBrowserEnrollment();
+  Object.assign(token, await enrollWebSession(oauthBackendClaims(backend)));
+  token.backendLoginAt = await nextWebLoginAt();
+  if (token.backendRenewalSecret) await writeWebFamilyToken(token);
+  else await writeWebLoginBarrier(token);
   return token;
 }
 
@@ -112,6 +119,12 @@ const credentialAttempts = new Map<
 >();
 const credentialWindowMs = 60_000;
 const credentialAttemptLimit = 6;
+
+class PendingSignoutCredentialsError extends CredentialsSignin { code = "sign_out_pending"; }
+async function prepareBrowserEnrollment() {
+  try { await prepareWebEnrollment(); }
+  catch (error) { if (error instanceof PendingWebRevocationsError) throw new PendingSignoutCredentialsError(); throw error; }
+}
 
 class AccountExistsCredentialsError extends CredentialsSignin {
   code = "account_exists";
@@ -453,6 +466,7 @@ export function buildAuthConfig(): NextAuthConfig {
     },
     callbacks: {
       async jwt({ token, user, account, profile }) {
+        token.picture = boundedWebAvatar(token.picture) ?? undefined;
         if (
           account &&
           (account.provider === "google" || account.provider === "apple")
@@ -506,12 +520,22 @@ export function buildAuthConfig(): NextAuthConfig {
         }
         if (account?.provider === "google") {
           delete token.backendSessionId;
+          delete token.backendRenewalSecret;
+          delete token.backendRenewalState;
+          delete token.backendLegacyAccessToken;
+          delete token.backendLegacyExpiresAt;
+          delete token.backendPendingEnrollment;
           if (!account.id_token) throw new Error("Google did not return an identity token.");
           const backend = await exchangeProviderSession("google", () => finishGoogleSignIn(account.id_token!));
           return applyBackendSessionToToken(token, backend);
         }
         if (account?.provider === "apple") {
           delete token.backendSessionId;
+          delete token.backendRenewalSecret;
+          delete token.backendRenewalState;
+          delete token.backendLegacyAccessToken;
+          delete token.backendLegacyExpiresAt;
+          delete token.backendPendingEnrollment;
           if (!account.id_token) throw new Error("Apple did not return an identity token.");
           const backend = await exchangeProviderSession("apple", () => finishAppleSignIn({
             identityToken: account.id_token!,
@@ -520,6 +544,7 @@ export function buildAuthConfig(): NextAuthConfig {
           return applyBackendSessionToToken(token, backend);
         }
         if (user) {
+          token.backendLoginAt = await nextWebLoginAt();
           const backendUser = user as typeof user & {
             backendAccessToken?: string;
             backendAccountId?: string;
@@ -530,6 +555,7 @@ export function buildAuthConfig(): NextAuthConfig {
             backendUserId?: string;
             backendUsername?: string | null;
             backendSessionId?: string;
+            backendRenewalSecret?: string;
           };
           token.backendAccessToken = backendUser.backendAccessToken;
           token.backendAccountId = backendUser.backendAccountId;
@@ -539,10 +565,35 @@ export function buildAuthConfig(): NextAuthConfig {
           token.backendRole = backendUser.backendRole;
           token.backendUserId = backendUser.backendUserId;
           token.backendUsername = backendUser.backendUsername;
-          // Only the verified persistent-Mac provider can assert the canonical
-          // session binding. Ordinary primary logins retain exact-access scope.
+          delete token.backendRenewalSecret;
+          delete token.backendRenewalState;
+          delete token.backendLegacyAccessToken;
+          delete token.backendLegacyExpiresAt;
+          delete token.backendPendingEnrollment;
           token.backendSessionId = account?.provider === "desktop-persistent"
             ? backendUser.backendSessionId : undefined;
+          if (["password-account", "email-verification"].includes(account?.provider ?? "")) {
+            try {
+              await prepareBrowserEnrollment();
+              Object.assign(token, await enrollWebSession(token as unknown as BackendSessionClaims));
+              if (token.backendRenewalSecret) await writeWebFamilyToken(token);
+            } catch (error) {
+              if (error instanceof PendingSignoutCredentialsError) throw error;
+              throw new AccountServiceCredentialsError();
+            }
+          }
+          if (!token.backendRenewalSecret) await writeWebLoginBarrier(token);
+        } else if (await webSessionWasSignedOut(token.backendSessionId)) {
+          token.backendRenewalState = "revoked";
+        } else if (typeof token.backendRenewalSecret === "string") {
+          try {
+            Object.assign(token, await renewWebSession(token as unknown as BackendSessionClaims));
+            delete token.backendRenewalState;
+          } catch (error) {
+            if (isBackendSessionExpiredError(error)) token.backendRenewalState = "revoked";
+            else if (isWebSessionUnavailable(error)) token.backendRenewalState = "unavailable";
+            else throw error;
+          }
         }
         return token;
       },
@@ -555,9 +606,13 @@ export function buildAuthConfig(): NextAuthConfig {
             slug: string;
           };
         };
+        if (token.backendRenewalState === "unavailable") {
+          (publicSession as typeof publicSession & { renewalStatus?: string }).renewalStatus = "unavailable";
+        }
         if (
-          typeof token.backendExpiresAt === "string" &&
-          backendSessionIsExpired(token.backendExpiresAt)
+          token.backendRenewalState === "revoked" ||
+          (!token.backendRenewalSecret && typeof token.backendExpiresAt === "string" &&
+          backendSessionIsExpired(token.backendExpiresAt))
         ) {
           delete (publicSession as unknown as { user?: unknown }).user;
           publicSession.account = undefined;
@@ -606,7 +661,7 @@ export function buildAuthConfig(): NextAuthConfig {
       error: "/login",
     },
     session: {
-      maxAge: 60 * 60 * 8,
+      maxAge: WEB_SESSION_MAX_AGE,
       strategy: "jwt",
     },
     events: {
@@ -639,4 +694,44 @@ export function buildAuthConfig(): NextAuthConfig {
 
 // Lazy configuration: NextAuth invokes the factory per request, so the freshly
 // generated Apple client secret is never captured for the process lifetime.
-export const { auth, handlers, signIn, signOut } = NextAuth(() => buildAuthConfig());
+const configuredAuth = NextAuth(() => buildAuthConfig());
+export const { signIn, signOut } = configuredAuth;
+
+/** Every server surface resolves the same immutable primary family. A browser
+ * heartbeat never replaces the shared Auth.js cookie, so its late response
+ * cannot overwrite a later login. Family storage can outlive a stale pointer. */
+export async function auth(): Promise<Session | null> {
+  const token = await readPrimarySessionToken();
+  if (!token) return null;
+  if (!token.backendRenewalSecret) return configuredAuth.auth();
+  let claims: BackendSessionClaims | null;
+  let unavailable = false;
+  try { claims = await readPrimaryBackendSessionClaims(); }
+  catch (error) {
+    if (isBackendSessionExpiredError(error)) return null;
+    if (!isWebSessionUnavailable(error)) throw error;
+    unavailable = true;
+    claims = token as unknown as BackendSessionClaims;
+  }
+  if (!claims) return null;
+  return { user: { name: typeof token.name === "string" ? token.name : null, email: typeof token.email === "string" ? token.email : null,
+      image: boundedWebAvatar(token.picture) },
+    expires: new Date(Date.now() + WEB_SESSION_MAX_AGE * 1000).toISOString(),
+    account: { id: claims.backendAccountId, name: claims.backendAccountName, slug: claims.backendAccountSlug, role: claims.backendRole },
+    ...(unavailable ? { renewalStatus: "unavailable" } : {}),
+  } as Session;
+}
+export const handlers = {
+  ...configuredAuth.handlers,
+  // Auth.js GET/session ordinarily rolls the shared cookie. Exposing the
+  // same read-only public resolver avoids another late Set-Cookie race.
+  GET: async (request: NextRequest) => new URL(request.url).pathname === "/api/auth/session"
+    ? Response.json(await auth(), { headers: { "cache-control": "no-store" } })
+    : configuredAuth.handlers.GET(request),
+  // There is no client-controlled JWT/session update authority. Keep POST
+  // session read-only too, so a future useSession().update cannot reintroduce
+  // shared-cookie rolling races. Deliberate login/logout keep Auth.js handlers.
+  POST: async (request: NextRequest) => new URL(request.url).pathname === "/api/auth/session"
+    ? Response.json(await auth(), { headers: { "cache-control": "no-store" } })
+    : configuredAuth.handlers.POST(request),
+};

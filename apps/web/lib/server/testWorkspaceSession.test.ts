@@ -62,3 +62,16 @@ it("never carries an existing canonical device selection into a different primar
   await rebindTestWorkspaceParent(primary, other);
   await expect(testWorkspaceSession(other)).rejects.toMatchObject({ code: "backend_session_expired" });
 });
+
+it("keeps a verified legacy Web selection without any heartbeat shared-cookie rewrite or lifetime extension", async () => {
+  const legacy = { ...primary, backendSessionId: undefined };
+  await setTestWorkspaceSession(legacy, data);
+  const originalCookie = f.value;
+  const migrated = { ...primary, backendRenewalSecret: "s".repeat(43), backendLegacyAccessToken: legacy.backendAccessToken,
+    backendLegacyExpiresAt: legacy.backendExpiresAt, backendAccessToken: "rotated-access" };
+  f.set.mockClear();
+  await rebindTestWorkspaceParent(legacy, migrated);
+  expect(f.set).not.toHaveBeenCalled(); expect(f.value).toBe(originalCookie);
+  expect((await testWorkspaceSession(migrated))?.entryId).toBe(data.entryId);
+  expect((await testWorkspaceSession({ ...migrated, backendAccessToken: "next-rotation" }))?.entryId).toBe(data.entryId);
+});

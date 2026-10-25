@@ -109,7 +109,7 @@ export async function prepareConflictRecovery(
       scope.userId === operation.userId &&
       scope.accountRevision === operation.accountRevision &&
       scope.userRevision === operation.userRevision &&
-      sessionFingerprint(claims.backendAccessToken) === operation.sessionFingerprint,
+      sessionFingerprint(claims) === operation.sessionFingerprint,
   );
   const asProviderProof = (staged: {
     provider: "apple" | "google";

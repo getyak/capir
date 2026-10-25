@@ -3,6 +3,8 @@ import { decode } from "next-auth/jwt";
 import { signIn } from "@/auth";
 import { AUTH_SESSION_COOKIE, authSecret, readPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
 import { rebindTestWorkspaceParent } from "@/lib/server/testWorkspaceSession";
+import { desktopAuthDeploymentOrigin } from "@/lib/server/desktop-browser-login";
+import { sealDesktopRevocationProof } from "@/lib/server/desktop-revocation-seal";
 import {
   desktopPersistentPostFields,
   DesktopPersistentSessionError,
@@ -54,7 +56,9 @@ export async function GET() {
   try {
     const claims = await readPrimaryBackendSessionClaims();
     if (!claims) return json({ status: "signed_out" }, 401);
-    return json(await readDesktopPersistentStatus(claims.backendAccessToken));
+    const live = await readDesktopPersistentStatus(claims.backendAccessToken);
+    const revocation_proof = sealDesktopRevocationProof(await desktopAuthDeploymentOrigin(), live, claims.backendAccessToken);
+    return json({ ...live, revocation_proof });
   } catch (error) {
     if (error instanceof DesktopPersistentSessionError && error.status === 401) return json({ status: "signed_out" }, 401);
     return failure(error);
@@ -66,12 +70,14 @@ export async function GET() {
  * https://authjs.dev/reference/nextjs#signin */
 export async function POST(request: Request) {
   let enrollment = false;
+  let revoking = false;
   try {
     const fields = await desktopPersistentPostFields(request);
     enrollment = fields.action === "enroll";
+    revoking = fields.action === "revoke";
     if (fields.action === "revoke") {
       await revokeDesktopPersistentSession(fields);
-      return json({ status: "revoked" });
+      return json({ status: "revoked", revocation_confirmed: true });
     }
     // Renewal does not require an incoming access cookie. If one is still
     // readable, retain it only to migrate an already verified legacy selection
@@ -108,5 +114,9 @@ export async function POST(request: Request) {
       await rebindTestWorkspaceParent(claims, { ...claims, backendSessionId: status.session_id });
     }
     return json(status);
-  } catch (error) { return failure(error, enrollment); }
+  } catch (error) {
+    // A legacy resident backend can report an unknown pending capability as
+    // canonical 401. Only verified backend 200 {revoked:true} is completion.
+    return revoking ? json({ status: "unavailable" }, 503) : failure(error, enrollment);
+  }
 }

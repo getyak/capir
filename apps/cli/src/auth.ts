@@ -47,6 +47,28 @@ export async function runAuthLogout(
   }
   const client = new CapirBackendClient(environment.backendOrigin, deps.fetchImpl, deps.token);
   if (record) {
+    if (deps.txn.runExclusive) return deps.txn.runExclusive(async store => {
+      const current=await store.get();
+      if (!current) return {remote_revoked:false,remote_status:'already_unavailable',local_credential_state:'already_absent',local_credential_removed:false,environment:environment.name};
+      const currentRecord=parseAuthRecord(current,environment);
+      if (!currentRecord || currentRecord.credentials.grant.id!==record.credentials.grant.id)
+        return {remote_revoked:false,remote_status:'unverified',local_credential_state:'preserved_newer',local_credential_removed:false,environment:environment.name,next_action:`${environment.webOrigin}/workspace/settings/cli`};
+      // Explicit local sign-out takes effect BEFORE the network request. A
+      // crash or failed revoke must never let the next command renew it.
+      const pending=JSON.stringify({...currentRecord,logout_pending:true});
+      await store.set(pending);
+      try {
+        const result=await new CapirAuthV2Client(environment.backendOrigin,deps.fetchImpl,currentRecord.credentials.access_token)
+          .logoutV2(currentRecord.credentials.refresh_token,deps.requestOptions);
+        const removed=await store.delete();
+        const state=removed || await store.get()===null ? 'removed' : 'unverified';
+        return {remote_revoked:true,revoked_grant_id:result.revoked_grant_id,local_credential_state:state,local_credential_removed:state==='removed',environment:environment.name};
+      } catch(error) {
+        throw new CapirCliError(error instanceof CapirCliError ? error.code : 'CAPIR_LOGOUT_FAILED',EXIT.INFRASTRUCTURE,
+          'Signed out locally. Remote revocation is pending; retry auth logout. Automatic renewal remains disabled.',
+          {clientState:{local_signed_out:true,remote_revoked:false}});
+      }
+    });
     // Refresh is unnecessary even after access expiry. Retain the exact record
     // on every failed revoke; an uncertain rotation can still prove its family.
     const result = await new CapirAuthV2Client(environment.backendOrigin, deps.fetchImpl, record.credentials.access_token).logoutV2(record.credentials.refresh_token,deps.requestOptions);

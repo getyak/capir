@@ -2353,13 +2353,19 @@
   "需要重新确认登录空间": "Confirm your signed-in workspace again",
   "登录空间已变化或会话已过期，暂不能显示工作区内容。": "The signed-in workspace has changed or the session expired. Workspace content cannot be shown right now.",
   "确认之前，这里不展示人物、对话或草稿。": "People, conversations and drafts stay hidden until confirmation.",
-  "正在退出登录…": "Signing out…",
-  "页面已更新。请重新载入后，再选择退出登录。本地草稿仍保留。": "This page was updated. Reload it, then choose Sign out again. Your local drafts are kept.",
-  "无法确认退出结果。本地草稿仍保留。请重新载入并核对当前账号，再决定是否重试。": "Sign-out could not be confirmed. Your local drafts are kept. Reload the page and check the current account before deciding whether to try again.",
+  "连接恢复中": "Reconnecting",
+  "暂时无法连接账号服务": "The account service is temporarily unavailable",
+  "登录凭据和本地草稿已保留。连接恢复后可以继续，无需重新登录。": "Your sign-in credentials and local drafts are preserved. Continue when the connection returns; you do not need to sign in again.",
+  "还有退出登录正在等待服务器确认。凭据已保留，连接恢复后会自动重试；请稍后再登录。": "Some sign-outs are still awaiting server confirmation. Their revocation credentials are saved and will retry automatically when the connection returns. Please try signing in later.",
+  "重试连接": "Retry connection",
+  "主动退出或撤销时失效": "Expires only when you sign out or revoke it",
   "重新载入页面": "Reload page",
+  "无法核验当前登录空间，未执行这次退出请求。请重新载入后核对当前账号。": "The current signed-in workspace could not be verified. This sign-out request was not executed. Reload the page to check the current account.",
+  "无法确认退出结果。本地草稿仍保留。请重新载入并核对当前账号，再决定是否重试。": "Sign-out could not be confirmed. Your local drafts are kept. Reload the page and check the current account before deciding whether to try again.",
+  "正在退出登录…": "Signing out…",
   "页面登录已确认退出，但本地清理或页面跳转未完成。请打开退出后的页面继续。": "Local sign-out is confirmed. Local cleanup or navigation did not finish. Open the signed-out page to continue.",
   "打开退出后的页面": "Open signed-out page",
   "页面登录已确认退出": "Local sign-out is confirmed",
   "当前工作区已关闭。请打开退出后的页面继续。": "This workspace is closed. Open the signed-out page to continue.",
-  "无法核验当前登录空间，未执行这次退出请求。请重新载入后核对当前账号。": "The current signed-in workspace could not be verified. This sign-out request was not executed. Reload the page to check the current account."
+  "页面已更新。请重新载入后，再选择退出登录。本地草稿仍保留。": "This page was updated. Reload it, then choose Sign out again. Your local drafts are kept."
 }

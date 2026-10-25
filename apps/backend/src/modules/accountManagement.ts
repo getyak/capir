@@ -51,7 +51,8 @@ async function read(client: PoolClient, auth: AuthContext, labEnabled: boolean):
   // idle period or many newer logins. Only ordinary short sessions are capped.
   const sessions = (await client.query<{id: string; client_label: string; created_at: Date; expires_at: Date; persistent: boolean}>(`WITH owned_sessions AS (
     SELECT id,client_label,created_at,expires_at,
-      EXISTS (SELECT 1 FROM desktop_persistent_session_credentials d WHERE d.session_id=sessions.id) AS persistent
+      (EXISTS (SELECT 1 FROM desktop_persistent_session_credentials d WHERE d.session_id=sessions.id)
+       OR EXISTS (SELECT 1 FROM persistent_session_credentials p WHERE p.session_id=sessions.id)) AS persistent
     FROM sessions WHERE account_id=$1 AND user_id=$2 AND revoked_at IS NULL
   )
   SELECT * FROM owned_sessions WHERE persistent OR id IN (

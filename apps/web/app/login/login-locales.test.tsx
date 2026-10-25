@@ -2,8 +2,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { auth, redirect, jar, backend, language } = vi.hoisted(() => ({
+const { auth, redirect, jar, backend, language, pendingRevocations } = vi.hoisted(() => ({
   language: { locale: "en" as string },
+  pendingRevocations: vi.fn(),
   auth: vi.fn(),
   redirect: vi.fn((url: string) => {
     throw Object.assign(new Error(`NEXT_REDIRECT:${url}`), {
@@ -42,6 +43,10 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers({ host: "web.test" }),
 }));
 vi.mock("next/navigation", () => ({ redirect }));
+vi.mock("@/lib/server/web-session-cookies", async original => ({
+  ...await original<typeof import("@/lib/server/web-session-cookies")>(),
+  hasPendingWebRevocations: pendingRevocations,
+}));
 vi.mock("@/lib/server/marketing-locale", () => ({getMarketingLocale: async () => language.locale}));
 
 vi.mock("@/lib/server/backendAuth", () => ({
@@ -77,7 +82,7 @@ import LoginPage, { generateMetadata } from "./page";
 import { LocaleProvider } from "@/components/locale-provider";
 import type { LocaleTag } from "@talent-signal/contracts";
 beforeEach(() => {
-  auth.mockResolvedValue(null); jar.entries.clear();
+  auth.mockResolvedValue(null); jar.entries.clear(); pendingRevocations.mockReset(); pendingRevocations.mockResolvedValue(false);
   vi.stubEnv("TALENT_SIGNAL_PASSWORD_AUTH_ENABLED", "true");
   vi.stubEnv("TALENT_SIGNAL_PASSWORD_REGISTRATION_ENABLED", "true");
 });
@@ -123,4 +128,29 @@ it("keeps the native login defense inert while following the selected language",
   expect(html).toContain("Sign in from the capri app");
   expect(html).not.toContain("<form");
   expect(html).not.toContain("<input");
+});
+
+it.each([
+  ["en", "Some sign-outs are still awaiting server confirmation."],
+  ["zh-CN", "还有退出登录正在等待服务器确认。"],
+  ["zh-TW", "仍有登出正在等待伺服器確認。"],
+  ["ja", "ログアウトのサーバー確認が完了していません。"],
+  ["ko", "로그아웃에 대한 서버 확인을 기다리고 있습니다."],
+])("localizes a verified pending sign-out in %s while preserving the callback", async (locale, notice) => {
+  language.locale = locale; pendingRevocations.mockResolvedValue(true);
+  const callbackUrl = "/workspace/today";
+  const page = await LoginPage({ searchParams: Promise.resolve({ error: "CredentialsSignin", code: "sign_out_pending", callbackUrl }) });
+  const html = renderToStaticMarkup(<LocaleProvider locale={locale as LocaleTag}>{page}</LocaleProvider>);
+  expect(html).toContain(notice);
+  const host = document.createElement("div"); host.innerHTML = html;
+  expect(host.querySelector<HTMLInputElement>("input[name=redirectTo]")?.value).toBe(callbackUrl);
+  if (locale === "en") expect(host.textContent).not.toMatch(/[\u3400-\u9fff]/);
+});
+
+it("does not claim pending revocation from a forged URL code", async () => {
+  language.locale = "en"; pendingRevocations.mockResolvedValue(false);
+  const page = await LoginPage({ searchParams: Promise.resolve({ error: "CredentialsSignin", code: "sign_out_pending" }) });
+  const html = renderToStaticMarkup(<LocaleProvider locale="en">{page}</LocaleProvider>);
+  expect(html).not.toContain("Some sign-outs are still awaiting server confirmation.");
+  expect(html).toContain("Sign-in did not finish");
 });

@@ -85,6 +85,7 @@ final class CaptureWebSession: NSObject, CaptureTransporting, WKNavigationDelega
 
     private func assertOrigin() throws {
         guard !retired, let storeSelection, registry.isCurrent(storeSelection),
+              !persistentSession.isLocallySignedOut(storeSelection),
               !registry.hasUnresolvedLogin(for: origin.url.absoluteString),
               originProvider() == origin else { throw CaptureTransportError.staleOrigin }
         if let current = webView.url, !origin.contains(current) { throw CaptureTransportError.untrustedHost }

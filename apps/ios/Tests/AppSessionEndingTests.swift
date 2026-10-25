@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class AppSessionEndingTests: XCTestCase {
-    private let endpoint = URL(string: "https://session-ending.example.test")!
+    private let endpoint = URL(string: "https://session-ending-" + UUID().uuidString.lowercased() + ".example.test")!
     private func session(token: String = "synthetic-original") -> TalentSignalSession {
         .init(baseURL: endpoint, accessToken: token, expiresAt: Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) + 3600),
             account: .init(id: "fixture-account", slug: "fixture-account", name: "Synthetic account"),
@@ -47,7 +47,7 @@ final class AppSessionEndingTests: XCTestCase {
             client: EndingAuthentication(), endings: journal)
         await store.restore()
         XCTAssertTrue(store.needsSignOutRecovery)
-        XCTAssertEqual(store.phase, .signedOut)
+        XCTAssertEqual(store.phase, .restoring, "An unreadable protected journal withholds content without asking for a new login")
         journal.failsLoad = false
         store.refreshSignOutReceipts()
         XCTAssertFalse(store.needsSignOutRecovery)
@@ -58,7 +58,9 @@ final class AppSessionEndingTests: XCTestCase {
         local.value = saved; client.response = saved; client.suspendsValidation = true
         let store = AppSessionStore(baseURL: endpoint, persistence: local, client: client, endings: journal)
         let restoring = Task { await store.restore() }
-        while client.validation == nil { await Task.yield() }
+        let deadline = Date().addingTimeInterval(5)
+        while client.validation == nil && Date() < deadline { await Task.yield() }
+        guard client.validation != nil else { restoring.cancel(); XCTFail("Validation did not reach the expected suspension within 5 seconds"); return }
         XCTAssertEqual(store.phase, .signedIn(saved))
         let generation = store.contextGeneration
         let result = await store.signOut()

@@ -68,6 +68,26 @@ describe("request-only identity memoization", () => {
     expect(await authenticatedBackendClient()).toBeNull();
   });
 
+  it("restores an expired access cookie through the production SSR/API claims reader without cookie writes", async () => {
+    const old = { ...claims("11111111-1111-4111-8111-111111111111", "2000-01-01T00:00:00Z"),
+      backendUserId: "22222222-2222-4222-8222-222222222222", backendSessionId: "33333333-3333-4333-8333-333333333333", backendRenewalSecret: "s".repeat(43) };
+    getToken.mockResolvedValue(old);
+    const fetcher = vi.fn().mockImplementation(async () => jsonResponse({ ...sessionPayload, session_id: old.backendSessionId,
+      access_token: "fresh-access", expires_at: new Date(Date.now() + 3600000).toISOString(),
+      account: { ...sessionPayload.account, id: old.backendAccountId }, user: { ...sessionPayload.user, id: old.backendUserId } }));
+    vi.stubGlobal("fetch", fetcher);
+    expect((await readBackendSessionClaims())?.backendAccessToken).toBe("fresh-access");
+    expect(await authenticatedBackendClient()).not.toBeNull();
+    expect(fetcher.mock.calls[0][0]).toContain("/v1/auth/persistent/renew");
+  });
+
+  it("preserves an expired cookie capability on an unknown proxy 401 instead of claiming revocation", async () => {
+    getToken.mockResolvedValue({ ...claims("owner", "2000-01-01T00:00:00Z"),
+      backendSessionId: "33333333-3333-4333-8333-333333333333", backendRenewalSecret: "s".repeat(43) });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: { code: "UNKNOWN_PROXY_DENIAL" } }, 401)));
+    await expect(readBackendSessionClaims()).rejects.toMatchObject({ status: 503, code: "session_temporarily_unavailable" });
+  });
+
   it("checks expiry at client use time even when the decoded token is unchanged", async () => {
     vi.useFakeTimers();
     const start = Date.now();

@@ -28,6 +28,9 @@ final class AppSessionStore: ObservableObject {
     private let clientFactory: (URL) -> any AppAuthenticationServing
     private let persistenceFactory: (URL?) -> any TalentSignalSessionPersisting
     private let closeSessionSurfaces: () async -> Void
+    private let coordinator: IOSPersistentSessionCoordinator
+    private var restoration: (id: UUID, generation: UUID, task: Task<Void, Never>)?
+    private var stagedSignInFingerprint: String?
 
     init(
         baseURL: URL?,
@@ -37,7 +40,8 @@ final class AppSessionStore: ObservableObject {
         endingFactory: @escaping (URL?) -> any AppSessionEndingPersisting = { KeychainAppSessionEndingStore(endpoint: $0) },
         clientFactory: @escaping (URL) -> any AppAuthenticationServing = { AppAuthenticationClient(baseURL: $0) },
         persistenceFactory: @escaping (URL?) -> any TalentSignalSessionPersisting = { KeychainTalentSignalSessionStore(baseURL: $0) },
-        closeSessionSurfaces: @escaping () async -> Void = {}
+        closeSessionSurfaces: @escaping () async -> Void = {},
+        coordinator: IOSPersistentSessionCoordinator = .shared
     ) {
         self.baseURL = baseURL
         self.endingFactory = endingFactory
@@ -47,6 +51,7 @@ final class AppSessionStore: ObservableObject {
         self.persistence = persistence ?? persistenceFactory(baseURL)
         self.client = client ?? baseURL.map(clientFactory)
         self.closeSessionSurfaces = closeSessionSurfaces
+        self.coordinator = coordinator
     }
 
     func requireEnvironmentVerification(_ message: String) {
@@ -76,6 +81,22 @@ final class AppSessionStore: ObservableObject {
     }
 
     func restore(allowOfflineWorkspace: Bool = true) async {
+        if let restoration, restoration.generation == contextGeneration {
+            await restoration.task.value
+            return
+        }
+        guard !isWorking else { return }
+        let id = UUID(), generation = contextGeneration
+        let task = Task { [weak self] in
+            guard let self, self.contextGeneration == generation else { return }
+            await self.restoreOnce(allowOfflineWorkspace: allowOfflineWorkspace)
+        }
+        restoration = (id, generation, task)
+        await task.value
+        if restoration?.id == id { restoration = nil }
+    }
+
+    private func restoreOnce(allowOfflineWorkspace: Bool) async {
         guard !isWorking else { return }
         let generation = contextGeneration
         let persistence = persistence
@@ -85,6 +106,7 @@ final class AppSessionStore: ObservableObject {
             return
         }
         do {
+            if let current = currentSession { try await coordinator.assertRestorable(current) }
             let endingRecords: [AppSessionEnding]
             do {
                 endingRecords = try endingPersistence.load()
@@ -94,63 +116,93 @@ final class AppSessionStore: ObservableObject {
                 throw error
             }
             endingReceipts = endingRecords.map(AppSessionEndingReceipt.init)
-            guard let stored = try persistence.load(), stored.expiresAt > .now else {
-                try? persistence.delete()
+            guard var stored = try persistence.load() else {
                 phase = .signedOut
                 await prepareChallenge()
                 return
             }
-            if endingRecords.contains(where: { $0.credentialFingerprint == AppSessionEnding.fingerprint(stored) }) {
+            if endingRecords.contains(where: { $0.blocks(stored) }) {
                 phase = .signedOut
                 await prepareChallenge()
                 notice = "This session was signed out. Protected removal or remote revocation can be reviewed in Lab."
                 return
             }
-            // Never send a saved token to a different endpoint, even with injected/legacy persistence.
             guard RuntimeEndpoint.same(stored.baseURL, baseURL) else { throw AppSessionError.scopeMismatch }
+            try await coordinator.assertRestorable(stored)
+            guard stored.persistent != nil || stored.expiresAt > .now else {
+                _ = try persistence.removeMatching(stored)
+                phase = .signedOut
+                await prepareChallenge()
+                notice = "This older sign-in expired before automatic renewal was enabled. Sign in once to keep this device signed in."
+                return
+            }
+            IOSSessionFamilyRegistry.shared.remember(stored)
             if allowOfflineWorkspace { phase = .signedIn(stored) }
             do {
-                let validated = try await client.validate(stored)
+                let validated: TalentSignalSession
+                if client.supportsPersistentSessions, stored.isRealUserSession {
+                    if stored.persistent == nil {
+                        // A healthy legacy session is verified before a pending
+                        // capability is persisted. Expired legacy access grants
+                        // no authority to manufacture a new permanent login.
+                        let original = stored
+                        stored = try await client.validate(stored)
+                        guard generation == contextGeneration else { return }
+                        try verify(stored, endpoint: baseURL)
+                        guard let current = try persistence.load(), RuntimeEndpoint.same(current.baseURL, baseURL),
+                              current.account.id == stored.account.id, current.user.id == stored.user.id else { throw CancellationError() }
+                        if current.persistent != nil {
+                            guard current.persistent?.sessionID == stored.sessionID else { throw CancellationError() }
+                            stored = current
+                        } else {
+                            guard current.accessToken == original.accessToken else { throw CancellationError() }
+                            stored.persistent = try IOSPersistentSessionCredential.pending(session: stored)
+                            try persistence.save(stored)
+                        }
+                    }
+                    validated = try await coordinator.resolve(stored,
+                        persistence: persistence, endings: endingPersistence, client: client, force: true)
+                } else { validated = try await client.validate(stored) }
                 guard generation == contextGeneration else { return }
                 try verify(validated, endpoint: baseURL)
-                guard validated.account.id == stored.account.id, validated.user.id == stored.user.id else {
-                    throw AppSessionError.scopeMismatch
-                }
+                guard validated.account.id == stored.account.id, validated.user.id == stored.user.id,
+                      try !endingPersistence.load().contains(where: { $0.blocks(validated) }) else { throw AppSessionError.scopeMismatch }
                 try persistence.save(validated)
+                IOSSessionFamilyRegistry.shared.remember(validated)
                 phase = .signedIn(validated)
+                notice = nil
             } catch let error as AppSessionError where error.invalidatesSession {
                 guard generation == contextGeneration else { return }
-                // The backend rejected this access token. Two cases share the
-                // 401 status: (1) the access token is genuinely invalid, or
-                // (2) the backend's session row was lost (database reset,
-                // migration, ephemeral volume). The local credential may
-                // still be inside its server-issued `expiresAt`, so we keep
-                // it on disk and let the workspace render from the last
-                // verified identity. The user is told the saved sign-in is
-                // in use; the next successful network round-trip can refresh
-                // the local copy without forcing a fresh sign-in.
-                if allowOfflineWorkspace {
-                    phase = .signedIn(stored)
-                    notice = "Saved sign-in kept on this device. The workspace will re-verify when the service is reachable."
-                } else {
-                    try? persistence.delete()
-                    phase = .signedOut
-                    notice = error.localizedDescription
-                    await prepareChallenge()
-                }
+                _ = try? persistence.removeMatching(stored)
+                contextGeneration = UUID()
+                phase = .signedOut
+                await closeSessionSurfaces()
+                await prepareChallenge()
+                notice = "This device session was revoked. Sign in again to continue."
             } catch {
                 guard generation == contextGeneration else { return }
-                if allowOfflineWorkspace, !(error is AppSessionError) {
-                    notice = "Offline · showing the last verified workspace."
+                if error is CancellationError { return }
+                if allowOfflineWorkspace {
+                    phase = .signedIn(stored)
+                    notice = "Saved sign-in kept on this device. Automatic renewal will retry when secure storage and the service are available."
                 } else {
-                    phase = .signedOut
+                    phase = .restoring
                     notice = error.localizedDescription
-                    // Keep the scoped credential for retry; never fall back to another environment.
                 }
             }
         } catch {
             guard generation == contextGeneration else { return }
-            phase = .signedOut
+            if let failure = error as? AppSessionError, failure.invalidatesSession {
+                contextGeneration = UUID()
+                phase = .signedOut
+                await closeSessionSurfaces()
+                await prepareChallenge()
+                notice = "This device session was revoked. Sign in again to continue."
+                return
+            }
+            // A locked/corrupt secure store is unavailable, not a signed-out
+            // identity. Preserve its bytes and expose an explicit retry.
+            if currentSession == nil { phase = .restoring }
             notice = error.localizedDescription
         }
     }
@@ -182,6 +234,7 @@ final class AppSessionStore: ObservableObject {
             notice = AppSessionError.invalidIdentityToken.localizedDescription
             return
         }
+        stagedSignInFingerprint = nil
         let generation = contextGeneration
         let persistence = persistence
         isWorking = true
@@ -191,15 +244,17 @@ final class AppSessionStore: ObservableObject {
                 givenName: fullName?.givenName, familyName: fullName?.familyName)
             guard generation == contextGeneration else { return }
             try verify(session, endpoint: baseURL)
-            guard try !endingPersistence.load().contains(where: { $0.credentialFingerprint == AppSessionEnding.fingerprint(session) }) else {
+            guard try !endingPersistence.load().contains(where: { $0.blocks(session) }) else {
                 throw AppSessionError.scopeMismatch
             }
-            try persistence.save(session)
+            let admitted = try await persistAuthenticatedSession(session)
+            guard generation == contextGeneration else { return }
             self.challenge = nil
             notice = nil
-            phase = .signedIn(session)
+            phase = .signedIn(admitted)
         } catch {
             guard generation == contextGeneration else { return }
+            if retainPendingSignIn() { return }
             self.challenge = nil
             let signInNotice = self.signInNotice(error)
             isWorking = false
@@ -211,6 +266,7 @@ final class AppSessionStore: ObservableObject {
 
     func signInWithGoogle() async {
         guard authenticationAllowed, !isWorking, let client, let baseURL else { return }
+        stagedSignInFingerprint = nil
         let generation = contextGeneration
         isWorking = true; notice = nil
         defer { if generation == contextGeneration { isWorking = false } }
@@ -227,17 +283,20 @@ final class AppSessionStore: ObservableObject {
             guard generation == contextGeneration else { return }
             try verify(validated, endpoint: baseURL)
             guard validated.account.id == session.account.id, validated.user.id == session.user.id else { throw AppSessionError.scopeMismatch }
-            guard try !endingPersistence.load().contains(where: { $0.credentialFingerprint == AppSessionEnding.fingerprint(validated) }) else { throw AppSessionError.scopeMismatch }
-            try persistence.save(validated)
-            phase = .signedIn(validated); self.challenge = nil
+            guard try !endingPersistence.load().contains(where: { $0.blocks(validated) }) else { throw AppSessionError.scopeMismatch }
+            let admitted = try await persistAuthenticatedSession(validated)
+            guard generation == contextGeneration else { return }
+            phase = .signedIn(admitted); self.challenge = nil
         } catch {
             guard generation == contextGeneration else { return }
+            if retainPendingSignIn() { return }
             if (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin { notice = signInNotice(error) }
         }
     }
 
     func signInWithEmail(email: String, password: String, registering: Bool) async {
         guard authenticationAllowed, !isWorking, let client, let baseURL else { return }
+        stagedSignInFingerprint = nil
         let generation = contextGeneration
         isWorking = true; notice = nil
         defer { if generation == contextGeneration { isWorking = false } }
@@ -249,11 +308,13 @@ final class AppSessionStore: ObservableObject {
             guard generation == contextGeneration else { return }
             try verify(validated, endpoint: baseURL)
             guard validated.account.id == session.account.id, validated.user.id == session.user.id else { throw AppSessionError.scopeMismatch }
-            guard try !endingPersistence.load().contains(where: { $0.credentialFingerprint == AppSessionEnding.fingerprint(validated) }) else { throw AppSessionError.scopeMismatch }
-            try persistence.save(validated)
-            phase = .signedIn(validated); challenge = nil
+            guard try !endingPersistence.load().contains(where: { $0.blocks(validated) }) else { throw AppSessionError.scopeMismatch }
+            let admitted = try await persistAuthenticatedSession(validated)
+            guard generation == contextGeneration else { return }
+            phase = .signedIn(admitted); challenge = nil
         } catch {
             guard generation == contextGeneration else { return }
+            if retainPendingSignIn() { return }
             notice = signInNotice(error)
         }
     }
@@ -279,6 +340,7 @@ final class AppSessionStore: ObservableObject {
     /// account session; a scanner or a plain link never signs in.
     func confirmRegistration(secret: String) async {
         guard authenticationAllowed, !isWorking, let client, let baseURL else { return }
+        stagedSignInFingerprint = nil
         let generation = contextGeneration
         isWorking = true; notice = nil
         defer { if generation == contextGeneration { isWorking = false } }
@@ -290,13 +352,86 @@ final class AppSessionStore: ObservableObject {
             guard generation == contextGeneration else { return }
             try verify(validated, endpoint: baseURL)
             guard validated.account.id == session.account.id, validated.user.id == session.user.id else { throw AppSessionError.scopeMismatch }
-            guard try !endingPersistence.load().contains(where: { $0.credentialFingerprint == AppSessionEnding.fingerprint(validated) }) else { throw AppSessionError.scopeMismatch }
-            try persistence.save(validated)
-            phase = .signedIn(validated); challenge = nil
+            guard try !endingPersistence.load().contains(where: { $0.blocks(validated) }) else { throw AppSessionError.scopeMismatch }
+            let admitted = try await persistAuthenticatedSession(validated)
+            guard generation == contextGeneration else { return }
+            phase = .signedIn(admitted); challenge = nil
         } catch {
             guard generation == contextGeneration else { return }
+            if retainPendingSignIn() { return }
             notice = signInNotice(error)
         }
+    }
+
+    private func persistAuthenticatedSession(_ session: TalentSignalSession) async throws -> TalentSignalSession {
+        guard let client, let baseURL else { throw AppSessionError.scopeMismatch }
+        let generation = contextGeneration
+        var pending = session
+        if client.supportsPersistentSessions, session.isRealUserSession, session.persistent == nil {
+            if pending.sessionID == nil {
+                // Older compatible deployments can omit the new optional ID.
+                // Retain this verified ordinary receipt while its canonical
+                // readback is unavailable; never invent a permanent family.
+                guard try !endingPersistence.load().contains(where: { $0.blocks(session) }) else { throw AppSessionError.scopeMismatch }
+                try persistence.save(session)
+                stagedSignInFingerprint = AppSessionEnding.fingerprint(session)
+                pending = try await client.validate(session)
+                guard generation == contextGeneration else { throw CancellationError() }
+                guard pending.account.id == session.account.id, pending.user.id == session.user.id else { throw AppSessionError.scopeMismatch }
+            }
+            try verify(pending, endpoint: baseURL)
+            pending.persistent = try IOSPersistentSessionCredential.pending(session: pending)
+        }
+        guard try !endingPersistence.load().contains(where: { $0.blocks(pending) }) else { throw AppSessionError.scopeMismatch }
+        try persistence.save(pending)
+        stagedSignInFingerprint = AppSessionEnding.fingerprint(pending)
+        guard pending.persistent != nil else { stagedSignInFingerprint = nil; return pending }
+        // A failed enrollment retains this exact protected pending capability.
+        // Relaunch/foreground resumes it rather than minting another family.
+        let admitted = try await coordinator.resolve(pending,
+            persistence: persistence, endings: endingPersistence, client: client, force: true)
+        IOSSessionFamilyRegistry.shared.remember(admitted)
+        stagedSignInFingerprint = nil
+        return admitted
+    }
+
+    private func retainPendingSignIn() -> Bool {
+        guard let stagedSignInFingerprint, let stored = try? persistence.load(),
+              AppSessionEnding.fingerprint(stored) == stagedSignInFingerprint,
+              (try? endingPersistence.load().contains(where: { $0.blocks(stored) })) == false else { return false }
+        phase = .restoring
+        challenge = nil
+        notice = "Your sign-in is saved securely. Automatic renewal could not finish; retry when the service and secure storage are available."
+        return true
+    }
+
+    func refreshIfNeeded(force: Bool = false) async {
+        if !isWorking, phase == .restoring, force || notice != nil {
+            // Unlock/foreground resumes unavailable protected storage through
+            // the same owner. Keep strict account admission for a target that
+            // has not yet completed its online identity readback.
+            await restore(allowOfflineWorkspace: false)
+            return
+        }
+        guard !isWorking, let current = currentSession, current.persistent != nil,
+              force || current.expiresAt.timeIntervalSinceNow <= 4 * 3600 else { return }
+        await restore()
+    }
+
+    func adoptRenewedSession(_ session: TalentSignalSession) {
+        guard let current = currentSession, current.loginIdentity == session.loginIdentity else { return }
+        IOSSessionFamilyRegistry.shared.remember(session)
+        phase = .signedIn(session)
+        notice = nil
+    }
+
+    func observeRevocation(_ identity: String) async {
+        guard currentSession?.loginIdentity == identity else { return }
+        contextGeneration = UUID()
+        phase = .signedOut
+        await closeSessionSurfaces()
+        await prepareChallenge()
+        notice = "This device session was revoked. Sign in again to continue."
     }
 
     private func signInNotice(_ error: Error) -> String {
@@ -375,17 +510,24 @@ final class AppSessionStore: ObservableObject {
         } else if phase != .signedOut {
             throw LabWorkspaceError.wrongAccount
         }
-        try verify(candidate, endpoint: baseURL)
+        guard RuntimeEndpoint.same(candidate.baseURL, baseURL), candidate.persistent != nil || candidate.expiresAt > Date() else {
+            throw AppSessionError.scopeMismatch
+        }
         let generation = contextGeneration
         isWorking = true
         defer { if generation == contextGeneration { isWorking = false } }
-        let validated = try await client.validate(candidate)
+        try await coordinator.assertRestorable(candidate)
+        guard generation == contextGeneration else { throw LabWorkspaceError.busy }
+        let permission = RuntimePersistentRenewalPermission(owner: maintenancePermit, session: candidate)
+        let validated = try await RuntimeMaintenanceContext.$persistentRenewal.withValue(permission) { try await client.validate(candidate) }
+        guard generation == contextGeneration else { throw LabWorkspaceError.busy }
+        try await coordinator.assertRestorable(validated)
         guard generation == contextGeneration else { throw LabWorkspaceError.busy }
         try verify(validated, endpoint: baseURL)
         guard validated.account.id == candidate.account.id,
               validated.user.id == candidate.user.id,
               try !endingPersistence.load().contains(where: {
-                  $0.credentialFingerprint == AppSessionEnding.fingerprint(validated)
+                  $0.blocks(validated)
               }) else { throw LabWorkspaceError.wrongAccount }
         try persistence.save(validated)
         guard let saved = try persistence.load(),
@@ -393,6 +535,7 @@ final class AppSessionStore: ObservableObject {
             throw LabWorkspaceError.secureStore
         }
         contextGeneration = UUID()
+        IOSSessionFamilyRegistry.shared.remember(validated)
         challenge = nil
         notice = nil
         phase = .signedIn(validated)
@@ -417,6 +560,9 @@ final class AppSessionStore: ObservableObject {
             // The protected intent exists before old content is closed. Every
             // earlier validate/sign-in completion now belongs to an old root.
             let target = records.first { $0.id == id }
+            if let credential = target?.credential {
+                await coordinator.retire(credential)
+            }
             try DeviceCalendarReceiptStore.clearLegacyPrivateDetails()
             if let session = target?.credential {
                 try DeviceCalendarReceiptStore(scope: RuntimeEndpoint.scope(session.baseURL,
@@ -433,7 +579,9 @@ final class AppSessionStore: ObservableObject {
                 contextGeneration = UUID(); challenge = nil; phase = .signedOut; closed = true
                 await closeSessionSurfaces()
             }
-            let record = try await RuntimeMaintenanceContext.$logoutPermit.withValue(permit) { try await controller.run(id) }
+            let record = try await RuntimeMaintenanceContext.$logoutPermit.withValue(permit) {
+                try await RuntimeMaintenanceContext.$logoutEndpoint.withValue(baseURL) { try await controller.run(id) }
+            }
             result = AppSessionEndingReceipt(record)
             endingReceipts = try endingPersistence.load().map(AppSessionEndingReceipt.init)
             if record.local == .removed {

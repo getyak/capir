@@ -65,7 +65,9 @@ final class RuntimeEnvironmentTests: XCTestCase {
         let store = AppSessionStore(baseURL: firstURL, persistence: firstPersistence, client: firstClient,
             endingFactory: { _ in MemoryAppSessionEndings() }, clientFactory: { _ in secondClient }, persistenceFactory: { _ in secondPersistence })
         let restoring = Task { await store.restore() }
-        while firstClient.continuation == nil { await Task.yield() }
+        let deadline = Date().addingTimeInterval(5)
+        while firstClient.continuation == nil && Date() < deadline { await Task.yield() }
+        guard firstClient.continuation != nil else { restoring.cancel(); XCTFail("Old environment validation did not start within 5 seconds"); return }
         let oldGeneration = store.contextGeneration
         try await store.activateEnvironment(secondURL)
         XCTAssertEqual(store.phase, .signedIn(b))
@@ -85,7 +87,7 @@ final class RuntimeEnvironmentTests: XCTestCase {
         let store = AppSessionStore(baseURL: firstURL, persistence: RuntimeMemorySession(nil), client: RuntimeAuthenticationStub(),
             endingFactory: { _ in MemoryAppSessionEndings() }, clientFactory: { _ in client }, persistenceFactory: { _ in target })
         try await store.activateEnvironment(secondURL)
-        XCTAssertEqual(store.phase, .signedOut)
+        XCTAssertEqual(store.phase, .restoring, "An offline target remains retryable without credential loss")
         XCTAssertEqual(store.baseURL, secondURL)
         XCTAssertNotNil(target.value)
         XCTAssertNotNil(store.notice)
@@ -96,7 +98,7 @@ final class RuntimeEnvironmentTests: XCTestCase {
         let store = AppSessionStore(baseURL: firstURL, persistence: RuntimeMemorySession(session(secondURL, token: "must-not-send")), client: client, endings: MemoryAppSessionEndings())
         await store.restore()
         XCTAssertEqual(client.validations, 0)
-        XCTAssertEqual(store.phase, .signedOut)
+        XCTAssertEqual(store.phase, .restoring, "A scope mismatch withholds content and preserves the record for recovery")
     }
 
     func testRedirectGuardRefusesCredentialForwarding() async throws {

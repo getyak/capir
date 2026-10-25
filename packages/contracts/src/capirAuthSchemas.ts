@@ -1,12 +1,14 @@
 import { Type, type Static } from "@sinclair/typebox";
 
 /**
- * Browser-owned CLI authorization, `capir-auth.v2`.
+ * Browser-owned CLI authorization, finite `capir-auth.v2` and persistent `capir-auth.v3`.
  *
  * This module is the explicit versioned successor to the legacy `capir.v1`
  * human-grant surface. The legacy schema keeps `refresh_supported=false` and
  * must never be mutated into pretend rotation support: only a grant negotiated
- * under `capir-auth.v2` carries a rotating refresh credential.
+ * under v2/v3 carries a rotating refresh credential. V3 explicitly negotiates
+ * nullable refresh/absolute deadlines and durable idempotent refresh intents.
+ * The v2 wire producer retains finite deadlines and one-use refresh semantics.
  *
  * The v2 protocol binds every grant to the real browser identity, the exact
  * configured backend/Web origin pair, the literal loopback redirect, the PKCE
@@ -18,12 +20,16 @@ import { Type, type Static } from "@sinclair/typebox";
 
 const ID = Type.String({ format: "uuid" });
 const Time = Type.String({ format: "date-time" });
+const Deadline = Type.Union([Time, Type.Null()]);
+const Protocol = Type.Union([Type.Literal("capir-auth.v2"), Type.Literal("capir-auth.v3")]);
 const Origin = Type.String({ minLength: 1, maxLength: 240 });
 /** 32 random bytes, base64url without padding (state, codes, tokens). */
 const Secret = Type.String({ pattern: "^[A-Za-z0-9_-]{43}$", minLength: 43, maxLength: 43 });
 const Verifier = Type.String({ pattern: "^[A-Za-z0-9._~-]{43,128}$" });
 
 export const CAPIR_AUTH_SCHEMA_VERSION = "capir-auth.v2" as const;
+export const CAPIR_PERSISTENT_AUTH_SCHEMA_VERSION = "capir-auth.v3" as const;
+export type CapirAuthProtocol = "capir-auth.v2" | "capir-auth.v3";
 
 /**
  * Scopes are fixed by the shared contract. The minimal user grant only ever
@@ -64,7 +70,7 @@ const ScopeArray = Type.Array(
  */
 export const CapirAuthCapabilitiesResponseSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     enabled: Type.Boolean(),
     capabilities: Type.Record(
       Type.Union(CAPIR_AUTH_CAPABILITY_NAMES.map((name) => Type.Literal(name))),
@@ -79,8 +85,8 @@ export const CapirAuthCapabilitiesResponseSchema = Type.Object(
       {
         code_seconds: Type.Integer({ minimum: 30, maximum: 300 }),
         access_seconds: Type.Integer({ minimum: 60, maximum: 3600 }),
-        refresh_idle_seconds: Type.Integer({ minimum: 600 }),
-        refresh_absolute_seconds: Type.Integer({ minimum: 600 }),
+        refresh_idle_seconds: Type.Union([Type.Integer({ minimum: 600 }), Type.Null()]),
+        refresh_absolute_seconds: Type.Union([Type.Integer({ minimum: 600 }), Type.Null()]),
       },
       { additionalProperties: false },
     ),
@@ -94,7 +100,7 @@ export const CapirAuthCapabilitiesResponseSchema = Type.Object(
  * human click; a GET, prefetch or mail scanner can never reach this route. */
 export const CapirAuthAuthorizeRequestSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     redirect_uri: Type.String({ minLength: 1, maxLength: 240 }),
     state: Secret,
     code_challenge: Secret,
@@ -112,7 +118,7 @@ export const CapirAuthAuthorizeRequestSchema = Type.Object(
 
 export const CapirAuthAuthorizeResponseSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     code: Secret,
     state: Secret,
     redirect_uri: Type.String(),
@@ -123,7 +129,7 @@ export const CapirAuthAuthorizeResponseSchema = Type.Object(
 
 export const CapirAuthExchangeRequestSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     code: Secret,
     code_verifier: Verifier,
     state: Secret,
@@ -145,8 +151,8 @@ export const CapirAuthGrantSchema = Type.Object(
     created_at: Time,
     last_verified_at: Type.Union([Time, Type.Null()]),
     access_expires_at: Time,
-    refresh_expires_at: Time,
-    absolute_expires_at: Time,
+    refresh_expires_at: Deadline,
+    absolute_expires_at: Deadline,
     state: Type.Union([
       Type.Literal("active"),
       Type.Literal("expired"),
@@ -161,7 +167,7 @@ export const CapirAuthGrantSchema = Type.Object(
 
 export const CapirAuthExchangeResponseSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     access_token: Secret,
     refresh_token: Secret,
     grant: CapirAuthGrantSchema,
@@ -171,8 +177,10 @@ export const CapirAuthExchangeResponseSchema = Type.Object(
 
 export const CapirAuthRefreshRequestSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     refresh_token: Secret,
+    // Required by v3: persist before dispatch; same request may be recovered.
+    request_id: Type.Optional(ID),
     web_origin: Origin,
     backend_origin: Origin,
   },
@@ -181,7 +189,7 @@ export const CapirAuthRefreshRequestSchema = Type.Object(
 
 export const CapirAuthRefreshResponseSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     access_token: Secret,
     refresh_token: Secret,
     grant: CapirAuthGrantSchema,
@@ -191,7 +199,7 @@ export const CapirAuthRefreshResponseSchema = Type.Object(
 
 export const CapirAuthV2StatusResponseSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     // "unverified" is returned when the server cannot confirm liveness; the
     // CLI renders a cached identity only as "last verified", never as current.
     state: Type.Union([
@@ -225,7 +233,7 @@ export const CapirAuthV2StatusResponseSchema = Type.Object(
  */
 export const CapirAuthLogoutRequestSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     refresh_token: Type.Optional(Secret),
   },
   { additionalProperties: false },
@@ -233,7 +241,7 @@ export const CapirAuthLogoutRequestSchema = Type.Object(
 
 export const CapirAuthLogoutResponseSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     revoked_grant_id: ID,
     revoked_at: Time,
   },
@@ -253,7 +261,7 @@ export const CapirAuthManagedGrantSchema = Type.Object(
     created_at: Time,
     last_used_at: Type.Union([Time, Type.Null()]),
     access_expires_at: Time,
-    absolute_expires_at: Time,
+    absolute_expires_at: Deadline,
     state: Type.Union([
       Type.Literal("active"),
       Type.Literal("expired"),
@@ -265,7 +273,7 @@ export const CapirAuthManagedGrantSchema = Type.Object(
 
 export const CapirAuthGrantListResponseSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     grants: Type.Array(CapirAuthManagedGrantSchema),
   },
   { additionalProperties: false },
@@ -273,7 +281,7 @@ export const CapirAuthGrantListResponseSchema = Type.Object(
 
 export const CapirAuthGrantRevokeRequestSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     grant_id: ID,
   },
   { additionalProperties: false },
@@ -281,7 +289,7 @@ export const CapirAuthGrantRevokeRequestSchema = Type.Object(
 
 export const CapirAuthGrantRevokeResponseSchema = Type.Object(
   {
-    schema_version: Type.Literal(CAPIR_AUTH_SCHEMA_VERSION),
+    schema_version: Protocol,
     revoked_grant_id: ID,
     revoked_at: Time,
   },
