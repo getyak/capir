@@ -5,6 +5,7 @@ import styles from "./workspace-disconnected-state.module.css";
 
 export function WorkspaceDisconnectedState({
   description,
+  eyebrow = "连接暂时中断",
   hint,
   primaryHref = "/workspace",
   primaryLabel = "返回工作台",
@@ -13,6 +14,7 @@ export function WorkspaceDisconnectedState({
   title = "工作台暂时无法连接。",
 }: {
   description: string;
+  eyebrow?: string;
   hint: string;
   primaryHref?: string;
   primaryLabel?: string;
@@ -27,7 +29,7 @@ export function WorkspaceDisconnectedState({
           <WarningCircle aria-hidden="true" size={22} />
         </span>
         <div className={styles.copy}>
-          <p className={styles.eyebrow}>连接暂时中断</p>
+          <p className={styles.eyebrow}>{eyebrow}</p>
           <h2>{title}</h2>
           <p>{description}</p>
         </div>
