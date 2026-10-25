@@ -159,7 +159,7 @@ export function QueuedConversation(props: Props) {
   useEffect(() => {
     if (!chat.attachmentDraftUnsafe || chat.unavailable) return;
     const route = window.location.href;
-    const historyState = window.history.state;
+    const navigation = (window as Window & { navigation?: EventTarget }).navigation;
     const warning = t("图片尚未保存在本机，离开可能丢失。仍要离开吗？");
     const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     const link = (event: MouseEvent) => {
@@ -171,21 +171,26 @@ export function QueuedConversation(props: Props) {
       if (target.origin === current.origin && target.pathname === current.pathname && target.search === current.search) return;
       if (!window.confirm(warning)) { event.preventDefault(); event.stopImmediatePropagation(); }
     };
-    const back = (event: PopStateEvent) => {
-      if (window.location.href === route) return;
-      if (!window.confirm(warning)) {
-        event.stopImmediatePropagation();
-        window.history.pushState(historyState, "", route);
-      }
+    const beforeTraversal = (event: Event) => {
+      const traversal = event as Event & { navigationType: string; destination: { url: string; sameDocument: boolean } };
+      if (traversal.navigationType !== "traverse" || !traversal.destination.sameDocument || !event.cancelable) return;
+      const destination = new URL(traversal.destination.url);
+      const current = new URL(route);
+      if (destination.origin === current.origin && destination.pathname === current.pathname && destination.search === current.search) return;
+      // This event precedes URL/history commitment and App Router's popstate
+      // restore. Cancelling it keeps the actual entry, subtree and original
+      // files in place; a post-popstate push cannot restore unmounted files.
+      if (!window.confirm(warning)) event.preventDefault();
     };
     window.addEventListener("beforeunload", unload);
-    // Capture before Next's delegated Link and history listeners unmount input.
+    // Link capture precedes the delegated Link handler. History traversal
+    // needs the browser's pre-commit event, not listener order on popstate.
     window.addEventListener("click", link, true);
-    window.addEventListener("popstate", back, true);
+    if (navigation) navigation.addEventListener("navigate", beforeTraversal);
     return () => {
       window.removeEventListener("beforeunload", unload);
       window.removeEventListener("click", link, true);
-      window.removeEventListener("popstate", back, true);
+      if (navigation) navigation.removeEventListener("navigate", beforeTraversal);
     };
   }, [chat.attachmentDraftUnsafe, chat.unavailable, t]);
   const [editing, setEditing] = useState<Pick<QueueEditOperation, "entry" | "owner" | "sessionId" | "token"> | null>(null);
@@ -590,11 +595,14 @@ export function QueuedConversation(props: Props) {
         {chat.attachments.map((attachment, index) => <span className={styles.composerImage} key={attachment.id}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={attachment.manifest.file_name} src={attachment.url} />
-          <button aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable} onClick={() => chat.removeAttachment(attachment.id)} type="button"><X size={12} weight="bold"/></button>
+          <button aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable || chat.preparing} onClick={() => chat.removeAttachment(attachment.id)} type="button"><X size={12} weight="bold"/></button>
         </span>)}
       </div>}
       {imageCount >= 10 && <p className={styles.composerImageHint} role="status">{t("conversation.images.limit")}</p>}
       {chat.attachmentDraftUnsafe && !chat.preparing && !chat.unavailable && <button type="button" onClick={() => void chat.retryAttachmentDraft()}>{t("重试保存图片")}</button>}
+      {chat.attachmentDraftRecoveryNeeded && !chat.preparing && !chat.unavailable && <button type="button" onClick={() => {
+        if (window.confirm(t("这会放弃当前页的图片预览并载入本机草稿，文字不变。继续吗？"))) void chat.useStoredAttachmentDraft();
+      }}>{t("使用本机已保存的图片")}</button>}
       {chat.preparing && <p className={styles.composerImageHint} role="status">{t("conversation.images.preparing")}</p>}
       {chat.submitting && <p className={styles.composerImageHint} role="status">{t("conversation.images.sending")}</p>}
       <div className={styles.composer}>

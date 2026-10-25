@@ -193,8 +193,8 @@ it("preserves text typed while the durable image put is in flight", async () => 
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const base = memory.store;
-  setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
   await act(async () => { await chat.addFiles([imageFile("a.png")]); });
+  setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
   await act(async () => { chat.changeDraft("original"); });
   let pending!: Promise<boolean>;
   await act(async () => { pending = chat.submit(); });
@@ -211,13 +211,14 @@ it("keeps an image added while the durable put is in flight", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const base = memory.store;
-  setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
   await act(async () => { await chat.addFiles([imageFile("first.png")]); });
+  setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
   await act(async () => { chat.changeDraft("caption"); });
   let pending!: Promise<boolean>;
   await act(async () => { pending = chat.submit(); });
-  await act(async () => { await chat.addFiles([imageFile("second.png")]); });
-  await act(async () => { release(); await pending; });
+  let adding!: Promise<void>;
+  await act(async () => { adding = chat.addFiles([imageFile("second.png")]); });
+  await act(async () => { release(); await pending; await adding; });
   await flush();
   expect(chat.attachments).toHaveLength(1);
   expect(chat.attachments[0]!.manifest.file_name).toBe("second.png");
@@ -229,8 +230,8 @@ it("aborts a durable put on unmount without sending or leaving orphan bytes", as
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const base = memory.store;
-  setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
   await act(async () => { await chat.addFiles([imageFile("orphan.png")]); });
+  setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
   await act(async () => { chat.changeDraft("orphan"); });
   let pending!: Promise<boolean>;
   await act(async () => { pending = chat.submit(); });
@@ -357,17 +358,17 @@ it("persists explicit removal and transfers only remaining files to a durable me
 });
 
 
-it("keeps originals and reports unsaved when the initial draft write is denied", async () => {
+it("explicitly refuses an initial unpersisted batch and accepts a deliberate reselection after recovery", async () => {
   memory.fail(true);
-  await act(async () => { await chat.addFiles([imageFile("unsaved.png")]); }); await flush();
-  expect(chat.attachments[0]!.file.name).toBe("unsaved.png");
-  expect(chat.attachmentDraftUnsafe).toBe(true);
-  expect(chat.error).toContain("无法安全保存在本机");
-  memory.fail(false);
-  await act(async () => { expect(await chat.retryAttachmentDraft()).toBe(true); });
+  const file = imageFile("reselect.png");
+  await act(async () => { await chat.addFiles([file]); });
+  expect(chat.attachments).toEqual([]);
   expect(chat.attachmentDraftUnsafe).toBe(false);
+  expect(chat.error).toContain("未添加");
+  memory.fail(false);
+  await act(async () => { await chat.addFiles([file]); });
   await remount();
-  expect(chat.attachments[0]!.file.name).toBe("unsaved.png");
+  expect(chat.attachments[0]!.file.name).toBe("reselect.png");
   expect(queuePosts()).toHaveLength(0);
 });
 
@@ -384,11 +385,13 @@ it("recovers a slow draft put after unmount and keeps a newer removal ordered af
   const gate = new Promise<void>(resolve => { release = resolve; });
   const base = memory.store;
   setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
-  await act(async () => { await chat.addFiles([imageFile("slow.png")]); });
+  let adding!: Promise<void>;
+  await act(async () => { adding = chat.addFiles([imageFile("slow.png")]); }); await flush(1);
+  expect(chat.attachments).toEqual([]);
   expect(chat.attachmentDraftUnsafe).toBe(true);
   await act(async () => { root.unmount(); }); root = createRoot(mount);
   await act(async () => { root.render(createElement(Probe)); });
-  await act(async () => { release(); }); await flush();
+  await act(async () => { release(); await adding; }); await flush();
   expect(chat.attachments.map(a => a.file.name)).toEqual(["slow.png"]);
   await act(async () => { await chat.removeAttachment(chat.attachments[0]!.id); });
   await remount(); expect(chat.attachments).toEqual([]); expect(queuePosts()).toHaveLength(0);
@@ -410,9 +413,10 @@ it("clears a late draft write after session deletion instead of resurrecting byt
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
   const base = memory.store;
   setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
-  await act(async () => { await chat.addFiles([imageFile("deleted.png")]); });
+  let adding!: Promise<void>;
+  await act(async () => { adding = chat.addFiles([imageFile("deleted.png")]); }); await flush(1);
   clearConversationImageStore("owner", sid);
-  await act(async () => { release(); }); await flush();
+  await act(async () => { release(); await adding; }); await flush();
   expect(memory.map.size).toBe(0); await remount(); expect(chat.attachments).toEqual([]);
 });
 
@@ -461,7 +465,13 @@ it("keeps a second writer's original input when another tab already replaced its
   const theirs = memory.map.get(key)!.map(record => ({ ...record, attachment_id: crypto.randomUUID(), file_name: "theirs.png" }));
   await memory.store.put(key, theirs);
   await act(async () => { await chat.addFiles([imageFile("new.png")]); }); await flush();
-  expect(chat.attachments.map(a => a.file.name)).toEqual(["ours.png", "new.png"]);
+  const original = chat.attachments[0]!;
+  expect(chat.attachments.map(a => a.file.name)).toEqual(["ours.png"]);
+  expect(chat.error).toContain("未添加");
+  expect(chat.attachmentDraftUnsafe).toBe(true);
+  expect(chat.error).toContain("离开或刷新可能丢失");
+  await act(async () => { expect(await chat.retryAttachmentDraft()).toBe(false); });
+  expect(chat.attachments[0]).toBe(original);
   expect(chat.attachmentDraftUnsafe).toBe(true);
   expect(memory.map.get(key)).toEqual(theirs);
   expect(queuePosts()).toHaveLength(0);
@@ -476,23 +486,18 @@ it("retains original File metadata separately from the bounded send manifest", a
   expect(chat.attachments[0]!.manifest.file_name).toHaveLength(200);
 });
 
-it("bounds slow draft snapshots and keeps a refused newer selection available for explicit retry", async () => {
+it("serializes rapid selections behind durable acknowledgement without exposing unpersisted previews", async () => {
   const base = memory.store;
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
   setConversationImageStoreForTest({ ...base, put: async (key, images, expected) => { await gate; return base.put(key, images, expected); } });
-  await act(async () => { await chat.addFiles([imageFile("one.png")]); });
-  await act(async () => { await chat.addFiles([imageFile("two.png")]); });
-  await act(async () => { await chat.addFiles([imageFile("three.png")]); });
-  expect(chat.attachments).toHaveLength(3);
-  expect(chat.attachmentDraftUnsafe).toBe(true);
-  await act(async () => { release(); }); await flush();
-  // Completing the older accepted snapshots cannot claim the newer input saved.
-  expect(chat.attachmentDraftUnsafe).toBe(true);
-  await act(async () => { await chat.retryAttachmentDraft(); }); await flush();
+  let additions!: Promise<void>[];
+  await act(async () => { additions = ["one.png", "two.png", "three.png"].map(name => chat.addFiles([imageFile(name)])); }); await flush(1);
+  expect(chat.attachments).toEqual([]);
+  expect(chat.preparing).toBe(true);
+  await act(async () => { release(); await Promise.all(additions); });
   await remount();
   expect(chat.attachments.map(a => a.file.name)).toEqual(["one.png", "two.png", "three.png"]);
 });
-
 
 it("does not let an old scope's slow removal block or clear a replacement conversation", async () => {
   await act(async () => { await chat.addFiles([imageFile("old.png")]); }); await flush();
@@ -540,4 +545,114 @@ it("explicitly refuses a new selection while a slow draft read later fails, then
   await act(async () => { await chat.retryAttachmentDraft(); }); await flush();
   expect(chat.attachments.map(({ id, manifest, file }) => ({ id, manifest, file }))).toEqual(original);
   expect(queuePosts()).toHaveLength(0);
+});
+
+it("accepts a legacy-browser batch only after its scoped durable write acknowledges it", async () => {
+  vi.stubGlobal("navigation", undefined);
+  const base = memory.store;
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  setConversationImageStoreForTest({ ...base, put: async (key, images, expected) => { await gate; return base.put(key, images, expected); } });
+  let adding!: Promise<void>;
+  await act(async () => { adding = chat.addFiles([imageFile("pending.png")]); }); await flush(1);
+  try { expect(chat.attachments).toEqual([]); expect(chat.preparing).toBe(true); }
+  finally { await act(async () => { release(); await adding; }); }
+  expect(chat.attachments.map(a => a.file.name)).toEqual(["pending.png"]);
+  expect(memory.map.get(conversationImageKey("owner", sid, CONVERSATION_IMAGE_DRAFT))?.map(a => a.file_name)).toEqual(["pending.png"]);
+  expect(queuePosts()).toHaveLength(0);
+});
+
+it("refuses an unpersisted legacy-browser batch without changing previously accepted input", async () => {
+  vi.stubGlobal("navigation", undefined);
+  await act(async () => { chat.changeDraft("原话保留"); await chat.addFiles([imageFile("stored.png")]); }); await flush();
+  const originals = chat.attachments;
+  memory.fail(true);
+  await act(async () => { await chat.addFiles([imageFile("refused.png")]); });
+  expect(chat.attachments).toEqual(originals);
+  expect(chat.error).toContain("未添加");
+  expect(chat.attachmentDraftUnsafe).toBe(false);
+  expect(chat.draft).toBe("原话保留");
+  memory.fail(false); await remount();
+  expect(chat.attachments.map(a => a.file.name)).toEqual(["stored.png"]);
+  expect(chat.draft).toBe("原话保留");
+  expect(queuePosts()).toHaveLength(0);
+});
+
+it("never accepts a delayed legacy-browser batch after account invalidation", async () => {
+  vi.stubGlobal("navigation", undefined);
+  const base = memory.store;
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  setConversationImageStoreForTest({ ...base, put: async (key, images, expected) => { await gate; return base.put(key, images, expected); } });
+  let adding!: Promise<void>;
+  await act(async () => { adding = chat.addFiles([imageFile("old-account.png")]); }); await flush(1);
+  sweepConversationImageStore("other"); sweepConversationImageStore("owner");
+  await act(async () => { release(); await adding; }); await flush();
+  expect(chat.attachments).toEqual([]);
+  expect(memory.map.size).toBe(0);
+  expect(queuePosts()).toHaveLength(0);
+});
+
+it("counts unacknowledged selections against the existing ten-image bound", async () => {
+  const base = memory.store;
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  setConversationImageStoreForTest({ ...base, put: async (key, images, expected) => { await gate; return base.put(key, images, expected); } });
+  let adding!: Promise<void>;
+  await act(async () => { adding = chat.addFiles(Array.from({ length: 10 }, (_, i) => imageFile(`${i}.png`))); }); await flush(1);
+  await act(async () => { await chat.addFiles([imageFile("over-limit.png")]); });
+  expect(chat.attachments).toEqual([]);
+  expect(chat.error).toContain("最多添加 10");
+  await act(async () => { release(); await adding; });
+  expect(chat.attachments.map(a => a.file.name)).toEqual(Array.from({ length: 10 }, (_, i) => `${i}.png`));
+});
+
+it("does not claim prior previews safe when their backing read is uncertain after a refused batch", async () => {
+  await act(async () => { await chat.addFiles([imageFile("original.png")]); });
+  const original = chat.attachments[0]!;
+  const base = memory.store;
+  setConversationImageStoreForTest({ ...base, put: async () => false, get: async () => { throw new Error("temporarily unreadable"); } });
+  await act(async () => { await chat.addFiles([imageFile("refused.png")]); });
+  expect(chat.attachments).toEqual([original]);
+  expect(chat.attachmentDraftUnsafe).toBe(true);
+  expect(chat.error).toContain("离开或刷新可能丢失");
+  setConversationImageStoreForTest(base);
+  await act(async () => { expect(await chat.retryAttachmentDraft()).toBe(true); });
+  expect(chat.attachments[0]).toBe(original);
+  expect(chat.attachmentDraftUnsafe).toBe(false);
+  await remount();
+  expect(chat.attachments.map(a => a.manifest)).toEqual([original.manifest]);
+  expect(await chat.attachments[0]!.file.arrayBuffer()).toEqual(await original.file.arrayBuffer());
+  expect(queuePosts()).toHaveLength(0);
+});
+
+it("does not overwrite a competing draft after an explicitly chosen stored version fails validation", async () => {
+  await act(async () => { await chat.addFiles([imageFile("ours.png")]); });
+  const original = chat.attachments[0]!;
+  const key = conversationImageKey("owner", sid, CONVERSATION_IMAGE_DRAFT);
+  const theirs = memory.map.get(key)!.map(record => ({ ...record, attachment_id: crypto.randomUUID(), file_name: "theirs.png", blob: imageFile("theirs.png") }));
+  memory.map.set(key, theirs);
+  await act(async () => { await chat.addFiles([imageFile("refused.png")]); });
+  const read = vi.spyOn(theirs[0]!.blob, "arrayBuffer").mockRejectedValueOnce(new Error("read interrupted"));
+  try {
+    await act(async () => { await chat.useStoredAttachmentDraft(); });
+    expect(chat.attachments[0]).toBe(original);
+    expect(chat.attachmentDraftUnsafe).toBe(true);
+    await act(async () => { expect(await chat.retryAttachmentDraft()).toBe(false); });
+    expect(memory.map.get(key)).toEqual(theirs);
+    expect(chat.attachments[0]).toBe(original);
+  } finally { read.mockRestore(); }
+});
+
+it("does not let an old backing verification paint the replacement account", async () => {
+  await act(async () => { await chat.addFiles([imageFile("ours.png")]); });
+  const base = memory.store;
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  setConversationImageStoreForTest({ ...base, put: async () => false, get: async key => { if (key.startsWith("owner:")) await gate; return base.get(key); } });
+  let adding!: Promise<void>;
+  await act(async () => { adding = chat.addFiles([imageFile("refused.png")]); }); await flush(1);
+  await act(async () => { root.render(createElement(Probe, { scope: "other" })); }); await flush();
+  await act(async () => { chat.changeDraft("新账号原文"); release(); await adding; }); await flush();
+  expect(chat.draft).toBe("新账号原文");
+  expect(chat.attachments).toEqual([]);
+  expect(chat.attachmentDraftUnsafe).toBe(false);
+  expect(chat.attachmentDraftRecoveryNeeded).toBe(false);
+  expect(chat.error).toBe("");
 });
