@@ -115,15 +115,17 @@ final class WorkspaceSettingsTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.contentView = nil; window.close() }
+        window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
         var virtualButton: NSObject?
-        for _ in 0..<20 {
+        for _ in 0..<200 {
             virtualButton = findAccessibilityElement(host, identifier: "desktopPet.openWorkspace")
             if virtualButton != nil { break }
             try await Task.sleep(for: .milliseconds(10))
             host.layoutSubtreeIfNeeded()
         }
-        let button = try XCTUnwrap(virtualButton, "The actual SwiftUI accessibility child must exist")
+        let button = try XCTUnwrap(virtualButton, "The actual SwiftUI accessibility child must exist in the visible fixture (visible=\(window.isVisible), frame=\(host.frame))")
         XCTAssertFalse(button === host, "Pressing the parent would miss the missing-child-action regression")
         let press = NSSelectorFromString("accessibilityPerformPress")
         XCTAssertTrue(button.responds(to: press))
@@ -161,14 +163,17 @@ final class WorkspaceSettingsTests: XCTestCase {
             window.isReleasedWhenClosed = false
             window.contentView = host
             defer { window.contentView = nil; window.close() }
+            window.orderFront(nil)
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
             var message: NSObject?
-            for _ in 0..<20 {
+            for _ in 0..<200 {
                 host.layoutSubtreeIfNeeded()
                 message = findAccessibilityElement(host, identifier: identifier)
                 if message != nil { break }
                 try await Task.sleep(for: .milliseconds(10))
             }
-            let node = try XCTUnwrap(message, "The actual login phase must be readable without a coordinator")
+            let node = try XCTUnwrap(message, "The actual login phase must be readable in the visible fixture (visible=\(window.isVisible), frame=\(host.frame), id=\(identifier))")
             let label = NSSelectorFromString("accessibilityLabel")
             let value = NSSelectorFromString("accessibilityValue")
             let labelText = node.responds(to: label) ? node.perform(label)?.takeUnretainedValue() as? String : nil

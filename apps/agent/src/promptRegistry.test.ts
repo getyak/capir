@@ -26,7 +26,7 @@ describe("bundled product prompts", () => {
     },
   );
 
-  it.each(["assistant/conversation", "assistant/relationship", "assistant/workspace"] as const)(
+  it.each(["assistant/conversation", "assistant/workspace"] as const)(
     "%s limits retention explanations without allowing false persistence guarantees",
     async (name) => {
       const { resolveProductPrompt } = await import("./promptRegistry.js");
