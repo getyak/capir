@@ -2357,5 +2357,6 @@
   "暂时无法连接账号服务": "The account service is temporarily unavailable",
   "登录凭据和本地草稿已保留。连接恢复后可以继续，无需重新登录。": "Your sign-in credentials and local drafts are preserved. Continue when the connection returns; you do not need to sign in again.",
   "还有退出登录正在等待服务器确认。凭据已保留，连接恢复后会自动重试；请稍后再登录。": "Some sign-outs are still awaiting server confirmation. Their revocation credentials are saved and will retry automatically when the connection returns. Please try signing in later.",
-  "重试连接": "Retry connection"
+  "重试连接": "Retry connection",
+  "主动退出或撤销时失效": "Expires only when you sign out or revoke it"
 }

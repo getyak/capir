@@ -2,9 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTRACT_VERSION, type PersonDirectoryItem } from "@talent-signal/contracts";
 
 vi.mock("server-only", () => ({}));
-// These fixture integration cases have no rendered workspace binding.
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+// The real primary/family resolver reads both request headers and cookies.
+// An empty jar means these fixture cases are truly anonymous, not that auth
+// was bypassed or replaced with a null-returning backend client.
+const requestCookies = vi.hoisted(() => new Map<string, string>());
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers({ cookie: [...requestCookies].map(([name,value]) => `${name}=${value}`).join("; ") }),
+  cookies: async () => ({
+    get: (name: string) => requestCookies.has(name) ? { name, value: requestCookies.get(name)! } : undefined,
+    getAll: () => [...requestCookies].map(([name,value]) => ({ name, value })),
+    has: (name: string) => requestCookies.has(name),
+  }),
+}));
+afterEach(() => { requestCookies.clear(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 
+import { encode } from "next-auth/jwt";
+import { AUTH_SESSION_COOKIE } from "./backendAuth";
 import { parseScreenshotCaptureDraft } from "../screenshot-capture";
 import { issueScreenshotAnalysisReceipt } from "./screenshot-analysis-receipt";
 import {
@@ -549,5 +562,47 @@ describe("governed resource observation time validation", () => {
     // Product copy must not expose internal format names or request plumbing.
     expect((caught as Error).message).not.toMatch(/ISO|时间戳|request/i);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("real renewable-session resolver before local backend IO", () => {
+  const accountId = "10000000-0000-4000-8000-000000000001";
+  const userId = "10000000-0000-4000-8000-000000000002";
+  const sessionId = "10000000-0000-4000-8000-000000000003";
+  async function installedRenewableCookie() {
+    vi.stubEnv("AUTH_SECRET", "local-backend-renewable-test-secret");
+    const token = await encode({ secret: "local-backend-renewable-test-secret", salt: AUTH_SESSION_COOKIE, maxAge: 400 * 86400,
+      token: { backendAccountId: accountId, backendUserId: userId, backendSessionId: sessionId, backendAccessToken: "a".repeat(43),
+        backendRenewalSecret: "s".repeat(43), backendExpiresAt: "2000-01-01T00:00:00Z", backendAccountName: "Fixture owner",
+        backendAccountSlug: "fixture-owner", backendUsername: null, backendRole: "member" } });
+    requestCookies.set(AUTH_SESSION_COOKIE, token);
+  }
+  const live = () => ({ contract_version: CONTRACT_VERSION, session_id: sessionId, access_token: "b".repeat(43),
+    expires_at: new Date(Date.now() + 3600000).toISOString(), account: { id: accountId, name: "Fixture owner", slug: "fixture-owner" },
+    user: { id: userId, username: null, email: "fixture@example.invalid", display_name: "Fixture", role: "member", kind: "password_human" } });
+
+  it("renews an expired access cookie through the actual resolver and uses its current bearer without fixture login", async () => {
+    await installedRenewableCookie();
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(live())).mockResolvedValueOnce(jsonResponse(live()))
+      .mockResolvedValueOnce(jsonResponse({ task_id: researchTaskId, seed_resource_id: seedResourceId, status: "running" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getLatestRelationshipResearch(seedResourceId)).resolves.toMatchObject({ task_id: researchTaskId });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:4317/v1/auth/persistent/renew");
+    expect(fetchMock.mock.calls[1][0]).toBe("http://127.0.0.1:4317/v1/auth/session");
+    expect(fetchMock.mock.calls[2][0]).toBe(`http://127.0.0.1:4317/v1/research-tasks/latest?seed_resource_id=${seedResourceId}`);
+    expect(fetchMock.mock.calls[2][1].headers.authorization).toBe(`Bearer ${"b".repeat(43)}`);
+  });
+
+  it.each([
+    [401, "PERSISTENT_SESSION_REVOKED", "backend_session_expired"],
+    [503, "UPSTREAM_UNAVAILABLE", "session_temporarily_unavailable"],
+  ])("does not fall back to fixture authority after a real resolver %s/%s failure", async (status, code, expected) => {
+    await installedRenewableCookie();
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ error: { code } }, { status: status as number }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getLatestRelationshipResearch(seedResourceId)).rejects.toMatchObject({ code: expected });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:4317/v1/auth/persistent/renew");
   });
 });
