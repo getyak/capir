@@ -105,15 +105,24 @@ jobs:
 
       - name: Create a fresh disposable builder
         id: builder
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-        with:
-          name: backend-image-${{ github.run_id }}-${{ github.run_attempt }}
-          driver: docker-container
-          # Explicit flags omit the action's default insecure/host entitlements.
-          buildkitd-flags: --oci-worker-gc=true
-          cache-binary: false
-          keep-state: false
-          cleanup: true
+        run: |
+          set -euo pipefail
+          builder_name="backend-image-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          [[ "$builder_name" =~ ^backend-image-[0-9]+-[0-9]+$ ]]
+          docker --version | tee "$BACKEND_IMAGE_DIR/tool-versions.txt"
+          docker buildx version | tee -a "$BACKEND_IMAGE_DIR/tool-versions.txt"
+          if docker buildx inspect "$builder_name" >/dev/null 2>&1; then
+            echo "::error::Refusing to reuse an existing builder"
+            exit 1
+          fi
+          # Runner-provided CLI; no default-builder switch or extra entitlements.
+          docker buildx create \
+            --name "$builder_name" \
+            --driver docker-container \
+            --buildkitd-flags '--oci-worker-gc=true'
+          # Record ownership immediately: cleanup must also run if bootstrap fails.
+          printf 'name=%s\ncreated=true\n' "$builder_name" >> "$GITHUB_OUTPUT"
+          docker buildx inspect --bootstrap "$builder_name" | tee "$BACKEND_IMAGE_DIR/builder-inspect.txt"
 
       - name: Build the unmodified canonical backend Dockerfile without cache
         env:
@@ -158,3 +167,13 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 3
+
+      - name: Remove only this job's builder
+        id: cleanup-builder
+        if: always() && steps.builder.outputs.created == 'true'
+        env:
+          BACKEND_BUILDER: ${{ steps.builder.outputs.name }}
+        run: |
+          set -euo pipefail
+          test "$BACKEND_BUILDER" = "backend-image-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker buildx rm "$BACKEND_BUILDER"
