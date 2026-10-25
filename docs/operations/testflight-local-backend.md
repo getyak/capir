@@ -314,6 +314,17 @@ require `git status --porcelain` to be empty, require detached HEAD, and verify
 HEAD matches the intended approved revision. Never build or deploy from a dirty
 checkout: the backend revision records HEAD, while Docker builds the working tree.
 
+Before stopping the current Web job, the installer runs `web-local.sh check`
+through the same Infisical producer used at startup. This verifies fresh runtime
+configuration without building or opening a listener; caller-injected secrets
+cannot stand in for the launchd job's own login. Revoked or unavailable credentials
+leave the existing service, symlink and LaunchAgent unchanged. The private
+`web/preflight-last.json` contains bounded status/exit categories, never secret
+values or provider error bodies. A preflight success does not replace the final
+45-probe authentication and listener-ownership gate or guarantee later credential
+availability. Refresh the normal Keychain-backed Infisical login when required;
+do not export secrets to recover an invalid session.
+
 The build writes a revision/build-ID receipt from clean source. The installer
 checks that receipt and the listener process ownership, replaces the
 `web/current` symlink, and registers `com.talentsignal.web` with `RunAtLoad`
