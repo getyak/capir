@@ -8,6 +8,8 @@ name: Release capir
 #   HEAD == event SHA == tagged commit, tag on main ancestry). Publication uses the
 #   Infisical OIDC signing secret ONLY (no GitHub secret fallback) inside the
 #   trusted capir-release environment.
+# - main-only workflow_dispatch: a tiny unpublished installation-token
+#   contract. No builds, Infisical, signing key, OIDC, stable or publication.
 #
 # The version release (immutable tag capir-vX.Y.Z) is created as a draft with
 # its assets, then published with --latest=false. Desktop releases share this
@@ -19,6 +21,15 @@ on:
   push:
     tags:
       - "capir-v*"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run the no-secret unpublished provider contract only"
+        required: true
+        type: choice
+        default: contract-only
+        options:
+          - contract-only
 
 permissions:
   contents: read
@@ -31,8 +42,39 @@ env:
   CAPIR_NODE_VERSION: "22.23.2"
 
 jobs:
+  publication-contract:
+    name: Verify GitHub installation-token publication contract
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.mode == 'contract-only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Exercise the real response-bound draft and asset APIs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/capir/publication-contract.mjs run --receipt-dir build/publication-contract
+      - name: Preserve safe contract acknowledgements
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: publication-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/publication-contract/*.json
+          if-no-files-found: warn
+
   validate:
     name: Validate release reference
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -228,4 +270,13 @@ jobs:
             --archives-dir build/release \
             --manifest-dir build/manifest \
             --installer scripts/capir/install.sh \
-            --public-key scripts/capir/release-public-key.txt
+            --public-key scripts/capir/release-public-key.txt \
+            --receipt-dir build/publication-receipts
+
+      - name: Preserve safe publication acknowledgements
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: publication-receipts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/publication-receipts/*.json
+          if-no-files-found: warn
