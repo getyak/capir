@@ -23,6 +23,8 @@ import {
   traceSpanId,
   type WebTraceHandle,
 } from "@/lib/telemetry";
+import type { LocaleTag } from "@talent-signal/contracts";
+import { useLocale, useT, type TFunction } from "./locale-provider";
 import { useWorkspaceSessionRecovery } from "./use-workspace-session-recovery";
 import {
   workspaceSessionExpired,
@@ -58,9 +60,10 @@ const evidenceCopy = {
   not_required: "由你记录",
 } as const;
 
-function formatDate(value: string): string {
+function formatDate(value: string, locale: LocaleTag): string {
   const date = new Date(`${value}T12:00:00Z`);
   if (Number.isNaN(date.getTime())) return value;
+  if (locale !== "zh-CN") return new Intl.DateTimeFormat(locale, { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(date);
   const fields = new Intl.DateTimeFormat("zh-CN", {
     day: "numeric",
     month: "numeric",
@@ -103,8 +106,8 @@ const valueLabels: Record<string, string> = {
   shortlist_review: "候选名单审阅",
 };
 
-function humanize(value: string): string {
-  return valueLabels[value] ?? value.replaceAll("_", " ");
+function humanize(value: string, t: TFunction = (key) => key): string {
+  return valueLabels[value] ? t(valueLabels[value]) : value.replaceAll("_", " ");
 }
 
 function AgentComposer({
@@ -116,6 +119,7 @@ function AgentComposer({
   providerMode: Props["providerMode"];
   sessionRecoveryHref: string | null;
 }) {
+  const t = useT();
   const router = useRouter();
   const defaultObjective = useMemo(
     () =>
@@ -187,7 +191,7 @@ function AgentComposer({
       if (!response.ok || !payload.run?.terminal_receipt) {
         throw new Error(
           payload.error?.message ??
-            "无法核验智能助理结果，任何状态都没有改变。",
+            t("无法核验智能助理结果，任何状态都没有改变。"),
         );
       }
       setResult({
@@ -262,7 +266,7 @@ function AgentComposer({
       setError(
         caught instanceof Error
           ? caught.message
-          : "智能助理未能完成，任何状态都没有改变。",
+          : t("智能助理未能完成，任何状态都没有改变。"),
       );
     } finally {
       setSubmitting(false);
@@ -283,17 +287,17 @@ function AgentComposer({
           <Sparkle size={18} weight="fill" />
         </span>
         <div>
-          <h3 id="agent-composer-title">在本次目标范围内询问</h3>
+          <h3 id="agent-composer-title">{t("在本次目标范围内询问")}</h3>
           <p>
             {providerMode === "live_remote"
-              ? "固定远程模型 · 仅处理合成内容 · 四项受治理工具"
-              : "安全的确定性服务 · 不进行模型推断"}
+              ? t("固定远程模型 · 仅处理合成内容 · 四项受治理工具")
+              : t("安全的确定性服务 · 不进行模型推断")}
           </p>
         </div>
-        <ShieldCheck aria-label="仅供审阅；无外部效果" size={20} />
+        <ShieldCheck aria-label={t("仅供审阅；无外部效果")} size={20} />
       </header>
 
-      <label htmlFor={`objective-${item.pursuitId}`}>运行目标</label>
+      <label htmlFor={`objective-${item.pursuitId}`}>{t("运行目标")}</label>
       <textarea
         id={`objective-${item.pursuitId}`}
         maxLength={1_000}
@@ -303,7 +307,7 @@ function AgentComposer({
       />
       <div className={styles.agentActions}>
         <p>
-          读取 {item.agentContext.evidenceRefs.length} 条准确证据片段。输出只会是提案或无需行动。
+          {t("读取 {count} 条准确证据片段。输出只会是提案或无需行动。", { count: item.agentContext.evidenceRefs.length })}
         </p>
         <button
           disabled={
@@ -312,7 +316,7 @@ function AgentComposer({
           onClick={runAgent}
           type="button"
         >
-          {submitting ? "正在执行边界检查…" : "运行有边界的智能助理"}
+          {submitting ? t("正在执行边界检查…") : t("运行有边界的智能助理")}
           {!submitting && <ArrowRight aria-hidden="true" size={16} />}
         </button>
       </div>
@@ -321,7 +325,7 @@ function AgentComposer({
         <div className={styles.runError} role="alert">
           <WarningCircle aria-hidden="true" size={19} />
           <p>
-            <strong>运行结果未核验</strong>
+            <strong>{t("运行结果未核验")}</strong>
             <span>{error}</span>
           </p>
         </div>
@@ -341,18 +345,18 @@ function AgentComposer({
           <div>
             <strong>
               {result.status === "proposal_staged"
-                ? "提案已暂存，等待审阅"
+                ? t("提案已暂存，等待审阅")
                 : result.status === "no_action"
-                  ? "有证据支持的结果是无需行动"
-                  : `智能助理已安全停止：${humanize(result.status)}`}
+                  ? t("有证据支持的结果是无需行动")
+                  : t("智能助理已安全停止：{status}", { status: humanize(result.status, t) })}
             </strong>
             <p>
-              {humanize(result.reason)} · {result.externalEffectCount} 项外部效果
+              {humanize(result.reason)} · {t("{count} 项外部效果", { count: result.externalEffectCount })}
             </p>
           </div>
           {result.proposalId ? (
             <Link href={`/workspace/pursuits/${item.pursuitId}#proposal`}>
-              审阅
+              {t("审阅")}
               <ArrowRight aria-hidden="true" size={15} />
             </Link>
           ) : null}
@@ -380,9 +384,11 @@ function FocusItem({
   providerMode: Props["providerMode"];
   sessionRecoveryHref: string | null;
 }) {
+  const t = useT();
+  const locale = useLocale();
   const metaLine = [
-    item.action ? `负责人：${item.action.owner}` : null,
-    `目标 ${formatDate(item.targetDate)}`,
+    item.action ? t("负责人：{owner}", { owner: item.action.owner }) : null,
+    t("目标 {date}", { date: formatDate(item.targetDate, locale) }),
   ].filter((part): part is string => Boolean(part));
   const evidenceFlagged =
     item.evidenceState === "unavailable" || item.evidenceState === "partial";
@@ -393,10 +399,10 @@ function FocusItem({
       data-evidence-state={item.evidenceState}
     >
       <p className={styles.kicker}>
-        <span>{kindCopy(item)}</span>
+        <span>{t(kindCopy(item))}</span>
         {item.action ? (
           <span>
-            <PursuitDeadline value={item.action.dueAt} compact /> 截止
+            <PursuitDeadline value={item.action.dueAt} compact /> {t("截止")}
           </span>
         ) : null}
       </p>
@@ -411,12 +417,12 @@ function FocusItem({
 
       <dl className={styles.focusFacts}>
         <div>
-          <dt>目标结果</dt>
-          <dd>{humanize(item.targetOutcome)}</dd>
+          <dt>{t("目标结果")}</dt>
+          <dd>{humanize(item.targetOutcome, t)}</dd>
         </div>
         <div>
-          <dt>当前里程碑</dt>
-          <dd>{humanize(item.milestone)}</dd>
+          <dt>{t("当前里程碑")}</dt>
+          <dd>{humanize(item.milestone, t)}</dd>
         </div>
       </dl>
 
@@ -424,13 +430,13 @@ function FocusItem({
         <div className={styles.supportingWork}>
           {item.gap ? (
             <div>
-              <span>关闭条件</span>
+              <span>{t("关闭条件")}</span>
               <p>{item.gap.closeCondition}</p>
             </div>
           ) : null}
           {item.action && item.attentionKind !== "action" ? (
             <div>
-              <span>已分配行动</span>
+              <span>{t("已分配行动")}</span>
               <p>{item.action.title}</p>
               <small>
                 {item.action.owner} · <PursuitDeadline value={item.action.dueAt} />
@@ -447,33 +453,33 @@ function FocusItem({
           data-evidence-state={item.evidenceState}
         >
           {evidenceFlagged ? <WarningCircle aria-hidden="true" size={15} /> : null}
-          {evidenceCopy[item.evidenceState]}
+          {t(evidenceCopy[item.evidenceState])}
         </span>
       </p>
 
       <details className={styles.focusDetails}>
-        <summary>来源与记录</summary>
+        <summary>{t("来源与记录")}</summary>
         <div>
           <p>
-            证据来源：
+            {t("证据来源：")}
             {item.agentContext
-              ? `已审阅且获授权的采集内容 · ${item.agentContext.evidenceRefs.length} 条准确证据片段。`
-              : "此视图没有可引用的已授权采集内容。"}
+              ? t("已审阅且获授权的采集内容 · {count} 条准确证据片段。", { count: item.agentContext.evidenceRefs.length })
+              : t("此视图没有可引用的已授权采集内容。")}
           </p>
-          <p>修订版本 {item.revision}。打开此视图不会改变任何状态。</p>
+          <p>{t("修订版本 {revision}。打开此视图不会改变任何状态。", { revision: item.revision })}</p>
         </div>
       </details>
 
       {item.attentionKind !== "review" && !item.agentContext ? (
-        <p className={styles.evidenceNote}>{evidenceAuthorityNote(item)}</p>
+        <p className={styles.evidenceNote}>{t(evidenceAuthorityNote(item))}</p>
       ) : null}
 
       <div className={styles.focusLink}>
         <Link href={pursuitHref(item)}>
           {item.attentionKind === "review" &&
           item.proposalStatus === "needs_review"
-            ? "审阅提案"
-            : "打开目标工作区"}
+            ? t("审阅提案")
+            : t("打开目标工作区")}
           <ArrowRight aria-hidden="true" size={17} />
         </Link>
       </div>
@@ -490,14 +496,16 @@ function FocusItem({
 }
 
 function Continuation({ item }: { item: PursuitTodayItem }) {
+  const t = useT();
+  const locale = useLocale();
   return (
     <Link
       className={styles.continuation}
       href={pursuitHref(item)}
     >
       <div>
-        <span>{kindCopy(item)}</span>
-        <span>{evidenceCopy[item.evidenceState]}</span>
+        <span>{t(kindCopy(item))}</span>
+        <span>{t(evidenceCopy[item.evidenceState])}</span>
       </div>
       <h3>{item.attentionTitle}</h3>
       <p>
@@ -505,7 +513,7 @@ function Continuation({ item }: { item: PursuitTodayItem }) {
         {item.title}
       </p>
       <footer>
-        <span>{formatDate(item.targetDate)}</span>
+        <span>{formatDate(item.targetDate, locale)}</span>
         {item.action ? <span><PursuitDeadline value={item.action.dueAt} /></span> : null}
         <ArrowRight aria-hidden="true" size={16} />
       </footer>
@@ -523,6 +531,7 @@ export function PursuitTodayPage({
   providerMode,
   sessionRecoveryHref,
 }: Props) {
+  const t = useT();
   const { sessionRecoveryHref: activeSessionRecoveryHref } =
     useWorkspaceSessionRecovery(sessionRecoveryHref);
   const focus = projection?.items[0] ?? null;
@@ -544,11 +553,11 @@ export function PursuitTodayPage({
           >
             <WarningCircle aria-hidden="true" size={23} />
             <div>
-              <h2>登录后继续本次目标。</h2>
+              <h2>{t("登录后继续本次目标。")}</h2>
               <p>
-                上一次核验的今日视图仍保持可见。在账号会话恢复前，新的智能助理与审阅写入都会暂停。
+                {t("上一次核验的今日视图仍保持可见。在账号会话恢复前，新的智能助理与审阅写入都会暂停。")}
               </p>
-              <Link href={activeSessionRecoveryHref}>重新登录</Link>
+              <Link href={activeSessionRecoveryHref}>{t("重新登录")}</Link>
             </div>
           </section>
         ) : null}
@@ -559,27 +568,28 @@ export function PursuitTodayPage({
               <section className={styles.pageError} role="alert">
                 <WarningCircle aria-hidden="true" size={23} />
                 <div>
-                  <h2>重新登录后继续今日事项。</h2>
-                  <p>账号会话已失效，已保存的内容不会丢失。</p>
-                  <Link href={activeSessionRecoveryHref}>重新登录</Link>
+                  <h2>{t("重新登录后继续今日事项。")}</h2>
+                  <p>{t("账号会话已失效，已保存的内容不会丢失。")}</p>
+                  <Link href={activeSessionRecoveryHref}>{t("重新登录")}</Link>
                 </div>
               </section>
             ) : (
               <WorkspaceDisconnectedState
-                description="连接恢复后，即可继续查看需要关注的人物与事项。已保存的内容不会丢失。"
-                hint="可以先返回对话，或稍后重新载入本页。"
+                eyebrow={t("连接暂时中断")}
+                description={t("连接恢复后，即可继续查看需要关注的人物与事项。已保存的内容不会丢失。")}
+                hint={t("可以先返回对话，或稍后重新载入本页。")}
                 primaryHref="/workspace/today"
-                primaryLabel="重新载入"
+                primaryLabel={t("重新载入")}
                 secondaryHref="/workspace"
-                secondaryLabel="返回对话"
-                title="稍后继续今日事项。"
+                secondaryLabel={t("返回对话")}
+                title={t("稍后继续今日事项。")}
               />
             )}
-            <details><summary>错误详情</summary><p>{error}</p></details>
+            <details><summary>{t("错误详情")}</summary><p>{error}</p></details>
           </div>
         ) : focus ? (
           <div className={styles.todayGrid}>
-            <section aria-label="重点">
+            <section aria-label={t("重点")}>
               <FocusItem
                 item={focus}
                 key={focus.pursuitId}
@@ -589,7 +599,7 @@ export function PursuitTodayPage({
             </section>
             <aside aria-labelledby="continue-heading">
               <h2 className={styles.railTitle} id="continue-heading">
-                继续
+                {t("继续")}
               </h2>
               {continuations.length > 0 ? (
                 <div className={styles.continuations}>
@@ -599,22 +609,22 @@ export function PursuitTodayPage({
                 </div>
               ) : (
                 <div className={styles.quietState}>
-                  <p>暂时没有其他事项需要你决定。</p>
-                  <span>有新的变化时，会在这里出现。</span>
+                  <p>{t("暂时没有其他事项需要你决定。")}</p>
+                  <span>{t("有新的变化时，会在这里出现。")}</span>
                 </div>
               )}
               {hiddenAttentionCount > 0 ? (
                 <div className={styles.queueBoundary}>
                   <p>
                     <strong>
-                      {hiddenAttentionCount} 项较低优先级内容保持安静。
+                      {t("{count} 项较低优先级内容保持安静。", { count: hiddenAttentionCount })}
                     </strong>
                     <span>
-                      当你明确需要时可以打开完整队列；它不会默认进入聚焦视图。
+                      {t("当你明确需要时可以打开完整队列；它不会默认进入聚焦视图。")}
                     </span>
                   </p>
                   <Link href="/workspace/today?view=all">
-                    打开完整队列
+                    {t("打开完整队列")}
                     <ArrowRight aria-hidden="true" size={15} />
                   </Link>
                 </div>
@@ -623,10 +633,10 @@ export function PursuitTodayPage({
                   TODAY_FOCUSED_ITEM_LIMIT ? (
                 <div className={styles.queueBoundary}>
                   <p>
-                    <strong>完整注意事项队列已打开。</strong>
-                    <span>日常工作可返回有边界的聚焦视图。</span>
+                    <strong>{t("完整注意事项队列已打开。")}</strong>
+                    <span>{t("日常工作可返回有边界的聚焦视图。")}</span>
                   </p>
-                  <Link href="/workspace/today">返回重点</Link>
+                  <Link href="/workspace/today">{t("返回重点")}</Link>
                 </div>
               ) : null}
             </aside>
@@ -634,14 +644,14 @@ export function PursuitTodayPage({
         ) : (
           <section className={styles.empty}>
             <CheckCircle aria-hidden="true" size={30} weight="duotone" />
-            <p className={styles.eyebrow}>目标与待审阅内容</p>
-            <h2>目标暂无待处理事项</h2>
+            <p className={styles.eyebrow}>{t("目标与待审阅内容")}</p>
+            <h2>{t("目标暂无待处理事项")}</h2>
             <p>
               {projection?.totalPursuits
-                ? `${projection.noActionCount} 项活跃目标没有待审阅内容、已分配行动或有证据支撑的缺口。`
-                : "还没有活跃目标进入此工作台。"}
+                ? t("{count} 项活跃目标没有待审阅内容、已分配行动或有证据支撑的缺口。", { count: projection.noActionCount })
+                : t("还没有活跃目标进入此工作台。")}
             </p>
-            <Link href="/workspace">打开关系工作台</Link>
+            <Link href="/workspace">{t("打开关系工作台")}</Link>
           </section>
         )}
       </main>
