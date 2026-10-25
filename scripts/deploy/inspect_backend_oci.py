@@ -108,23 +108,26 @@ def hash_stream(stream):
 
 def bounded_tar_info():
     # tarfile consumes PAX/GNU extension headers before yielding a member. Bound
-    # those reads in the public TarInfo.frombuf hook, including hidden headers.
+    # reads at its member-processing entry point, including hidden headers.
+    # Patched Python versions bypass public frombuf() for _frombuf(), but both
+    # paths call _proc_member() before allocating extension payloads. Delegating
+    # after these checks preserves upstream parsing (including dircheck).
     class BoundedTarInfo(tarfile.TarInfo):
         header_count = 0
         metadata_bytes = 0
 
-        @classmethod
-        def frombuf(cls, buf, encoding, errors):
-            member = super().frombuf(buf, encoding, errors)
+        def _proc_member(self, archive):
+            cls = type(self)
             cls.header_count += 1
             require(cls.header_count <= MAX_MEMBERS, "tar header count limit exceeded")
-            require(not member.issparse(), "unsupported sparse archive member")
-            if member.type in (tarfile.XHDTYPE, tarfile.XGLTYPE,
-                               tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK):
-                cls.metadata_bytes += member.size
-                require(0 <= member.size <= MAX_JSON_BYTES and cls.metadata_bytes <= MAX_JSON_BYTES,
+            require(self.type != tarfile.GNUTYPE_SPARSE and not self.issparse(),
+                    "unsupported sparse archive member")
+            if self.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE,
+                             tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK):
+                cls.metadata_bytes += self.size
+                require(0 <= self.size <= MAX_JSON_BYTES and cls.metadata_bytes <= MAX_JSON_BYTES,
                         "tar metadata byte limit exceeded")
-            return member
+            return super()._proc_member(archive)
 
     return BoundedTarInfo
 

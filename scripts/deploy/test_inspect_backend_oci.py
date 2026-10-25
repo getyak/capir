@@ -208,6 +208,83 @@ class InspectorTests(unittest.TestCase):
         self.assert_rejected(Fixture(), "tar metadata byte limit",
                              pax_headers={"comment": "x" * (4 * 1024**2 + 1)})
 
+    def test_all_extended_header_types_are_rejected_before_payload_reads(self):
+        spec = importlib.util.spec_from_file_location("bounded_inspector", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        class HeaderOnlyStream(io.BytesIO):
+            def read(self, size=-1):
+                if self.tell() >= tarfile.BLOCKSIZE or size != tarfile.BLOCKSIZE:
+                    raise AssertionError("metadata payload read before limit rejection")
+                return super().read(size)
+
+        for kind in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE,
+                     tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK):
+            with self.subTest(type_hex=kind.hex()):
+                member = tarfile.TarInfo("extension")
+                member.type = kind
+                member.size = module.MAX_JSON_BYTES + 1
+                source = HeaderOnlyStream(member.tobuf(format=tarfile.USTAR_FORMAT))
+                with self.assertRaisesRegex(module.InspectionError, "tar metadata byte limit"):
+                    with tarfile.open(fileobj=source, mode="r:",
+                                      tarinfo=module.bounded_tar_info()):
+                        pass
+
+    def test_hidden_extension_headers_share_one_metadata_budget(self):
+        spec = importlib.util.spec_from_file_location("cumulative_inspector", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        # Each extension fits by itself. The second follows a global PAX
+        # header, so tarfile processes it before yielding any visible member.
+        payload = b"x" * (module.MAX_JSON_BYTES // 2)
+        first = tarfile.TarInfo.create_pax_global_header({"comment": payload.decode()})
+        second = tarfile.TarInfo("longname")
+        second.type = tarfile.GNUTYPE_LONGNAME
+        second.size = len(payload)
+        second_header = second.tobuf(format=tarfile.USTAR_FORMAT)
+        payload_offset = len(first) + len(second_header)
+
+        class BoundedReads(io.BytesIO):
+            def read(self, size=-1):
+                if size < 0 or self.tell() + size > payload_offset:
+                    raise AssertionError("second metadata payload read before budget rejection")
+                return super().read(size)
+
+        with BoundedReads(first + second_header) as source:
+            with self.assertRaisesRegex(module.InspectionError, "tar metadata byte limit"):
+                with tarfile.open(fileobj=source, mode="r:",
+                                  tarinfo=module.bounded_tar_info()):
+                    pass
+
+    def test_old_gnu_sparse_is_rejected_before_extension_reads(self):
+        spec = importlib.util.spec_from_file_location("sparse_inspector", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        member = tarfile.TarInfo("sparse")
+        member.type = tarfile.GNUTYPE_SPARSE
+        header = bytearray(member.tobuf(format=tarfile.GNU_FORMAT))
+        header[482] = 1  # The old GNU format signals a following sparse map.
+        header[148:156] = b"        "
+        header[148:156] = ("%06o\0 " % sum(header)).encode("ascii")
+
+        class HeaderOnlyStream(io.BytesIO):
+            def read(self, size=-1):
+                if self.tell() >= tarfile.BLOCKSIZE:
+                    raise AssertionError("sparse extension read before rejection")
+                return super().read(size)
+
+        with HeaderOnlyStream(header) as source:
+            with self.assertRaisesRegex(module.InspectionError, "unsupported sparse"):
+                with tarfile.open(fileobj=source, mode="r:",
+                                  tarinfo=module.bounded_tar_info()):
+                    pass
+
+    def test_small_global_pax_metadata_preserves_valid_oci_inspection(self):
+        result = self.run_cli(Fixture(), pax_headers={"comment": "small metadata"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(self.output.read_text())["platform"], "linux/arm64")
+
     def test_pax_limit_fixture_is_explicit_with_short_paths_and_non_pax_defaults(self):
         with tempfile.TemporaryDirectory(dir="/tmp", prefix="oci-") as directory:
             self.archive = Path(directory) / "a.tar"
