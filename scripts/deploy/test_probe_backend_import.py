@@ -372,6 +372,171 @@ class ProbeTests(unittest.TestCase):
         probe.validate_loop({'loopdevices': [{'name': '/dev/loop7', 'back-file': '/tmp/owned/disk.img'}]}, '/dev/loop7', '/tmp/owned/disk.img')
 
 
+@unittest.skipUnless(importlib.util.find_spec('tomllib'), 'path checks require the CI Python 3.11+ TOML reader')
+class PathProbeTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.item = probe.Probe(Path('/archive'), 'a' * 40, Path(temporary.name) / 'output')
+        self.item.fs = Path(temporary.name) / 'fs'
+        self.item.outer, self.item.cid = ['docker'], 'a' * 64
+        self.item.report['phase'] = 'nested-engine-startup'
+        self.item.runner = PathRunner(self.item.fs)
+
+    def test_actual_startup_defers_only_lazy_content_then_requires_post_import_backing(self):
+        # Pinned containerd's NewStore has not created this directory yet.
+        self.item.check_paths()
+        self.assertIsNone(self.item.report['credited_paths']['content_and_ingest'])
+        self.assertTrue(self.item.report['lazy_content_path']['initially_absent'])
+        self.assertTrue(self.item.report['lazy_content_path']['parent_verified'])
+        self.assertFalse(self.item.report['lazy_content_path']['post_import_verified'])
+        self.item.report['phase'] = 'idle-stabilization'
+        with self.assertRaises(probe.ProbeError):
+            self.item.check_paths()
+        self.item.runner.local(PathRunner.CONTENT).mkdir()
+        self.item.check_paths()
+        self.assertEqual(self.item.report['credited_paths']['content_and_ingest'], PathRunner.CONTENT)
+        self.assertTrue(self.item.report['lazy_content_path']['post_import_verified'])
+
+    def test_actual_startup_rejects_missing_required_plugin_and_retains_safe_path_role(self):
+        self.item.runner.local(PathRunner.OVERLAY).rmdir()
+        with self.assertRaises(probe.ProbeError):
+            self.item.check_paths()
+        self.assertEqual(self.item.report['path_check']['role'], 'snapshots')
+        self.assertEqual(self.item.report['path_check']['operation'], 'device')
+        self.assertFalse(self.item.report['path_check']['verified'])
+        self.assertNotIn('credited_paths', self.item.report)
+
+    def test_lazy_allowance_rejects_links_wrong_device_and_missing_parent(self):
+        for mutation in ('link', 'device', 'parent', 'alias', 'unknown-path'):
+            with self.subTest(mutation=mutation):
+                with tempfile.TemporaryDirectory() as tmp:
+                    item = probe.Probe(Path('/archive'), 'a' * 40, Path(tmp) / 'output')
+                    item.fs, item.outer, item.cid = Path(tmp) / 'fs', ['docker'], 'a' * 64
+                    item.report['phase'] = 'nested-engine-startup'
+                    item.runner = PathRunner(item.fs)
+                    if mutation == 'link':
+                        item.runner.local(PathRunner.CONTENT).symlink_to(item.fs / 'tmp', target_is_directory=True)
+                    elif mutation == 'device':
+                        item.runner.local(PathRunner.CONTENT).mkdir()
+                        item.runner.foreign_device = PathRunner.CONTENT
+                    elif mutation == 'alias':
+                        item.runner.foreign_device = '/var/lib/containerd'
+                    elif mutation == 'unknown-path':
+                        item.runner.config = item.runner.config.replace(PathRunner.ROOT, '/unknown/PRIVATE_PATH')
+                    else:
+                        item.runner.config = item.runner.config.replace(PathRunner.ROOT, '/proof/missing')
+                    with self.assertRaises(probe.ProbeError):
+                        item.check_paths()
+                    self.assertNotIn('credited_paths', item.report)
+                    self.assertNotIn('PRIVATE_PATH', json.dumps(item.report))
+
+
+class RunnerObservationTests(unittest.TestCase):
+    def test_failed_command_retains_only_bounded_metadata_and_survives_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            item = probe.Probe(Path('/archive'), 'a' * 40, Path(tmp) / 'output')
+            item.runner = probe.Runner(Path(tmp))
+            item.cid, item.owner, item.outer = 'a' * 64, 'backend-import-123-1-abc', ['docker']
+            item.report.update({'phase': 'nested-engine-startup', 'substep': 'path-backing',
+                                'path_check': {'role': 'content', 'operation': 'device', 'verified': False}})
+            def failed(argv, **kwargs):
+                if argv == ['docker', 'container', 'inspect', 'a' * 64]:
+                    kwargs['stdout'].write(json.dumps([{'Id': 'a' * 64,
+                        'Config': {'Labels': {'capir.import-probe.owner': 'backend-import-123-1-abc'}}}]).encode())
+                    return subprocess.CompletedProcess(argv, 0)
+                if argv == ['docker', 'container', 'rm', '--force', 'a' * 64]:
+                    return subprocess.CompletedProcess(argv, 0)
+                kwargs['stdout'].write(b'PRIVATE_STDERR_DO_NOT_RETAIN')
+                return subprocess.CompletedProcess(argv, 23)
+            with patch.object(probe.subprocess, 'run', side_effect=failed):
+                with self.assertRaises(probe.ProbeError):
+                    item.runner.run(['docker', 'PRIVATE_ARGV_DO_NOT_RETAIN'])
+                item.cleanup()
+            result = json.loads((item.output / 'proof.json').read_text())
+            observed = result['failure_context']['command']
+            self.assertEqual(observed['sequence'], 1)
+            self.assertEqual(observed['outcome'], 'nonzero-exit')
+            self.assertEqual(observed['exit_code'], 23)
+            self.assertEqual(observed['output_bytes'], 28)
+            self.assertEqual(result['failure_context']['path_check']['role'], 'content')
+            self.assertNotIn('PRIVATE', json.dumps(result))
+            self.assertEqual(result['cleanup'], 'passed')
+            self.assertEqual(item.runner.last_command['outcome'], 'passed')
+            self.assertEqual(item.runner.last_command['sequence'], 3)
+
+    def test_actual_runner_distinguishes_timeout_output_limit_and_launch_failure(self):
+        for case in ('timeout', 'output-limit', 'launch'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                runner = probe.Runner(Path(tmp))
+                def failure(argv, **kwargs):
+                    if case == 'timeout':
+                        raise subprocess.TimeoutExpired(argv, 1, output=b'PRIVATE_OUTPUT')
+                    if case == 'launch':
+                        raise OSError(13, 'PRIVATE_ERROR')
+                    kwargs['stdout'].write(b'x' * 32)
+                    return subprocess.CompletedProcess(argv, 0)
+                with patch.object(probe, 'OUTPUT_LIMIT', 32), patch.object(probe.subprocess, 'run', side_effect=failure):
+                    with self.assertRaises(probe.ProbeError):
+                        runner.run(['PRIVATE_PROGRAM'], timeout=1)
+                self.assertEqual(runner.last_command['outcome'],
+                                 {'timeout': 'timeout', 'output-limit': 'output-limit', 'launch': 'launch-error'}[case])
+                self.assertNotIn('PRIVATE', json.dumps(runner.last_command))
+
+
+class PathRunner:
+    """Synthetic pinned-daemon filesystem; never executes a subprocess."""
+    ROOT = '/proof/docker/containerd/daemon'
+    STATE = '/proof/run/docker/containerd/daemon'
+    CONFIG = '/proof/run/docker/containerd/containerd.toml'
+    ADDRESS = '/proof/run/docker/containerd/containerd.sock'
+    CONTENT = ROOT + '/io.containerd.content.v1.content'
+    OVERLAY = ROOT + '/io.containerd.snapshotter.v1.overlayfs'
+
+    def __init__(self, root):
+        self.root, self.foreign_device = root.resolve(), None
+        self.config = ('version = 2\nroot = "' + self.ROOT + '"\nstate = "' + self.STATE +
+                       '"\n[grpc]\naddress = "' + self.ADDRESS + '"\n')
+        for path in (self.ROOT, self.STATE, self.OVERLAY, self.ROOT + '/io.containerd.metadata.v1.bolt',
+                     '/proof/tmp', '/proof/unused-docker', '/proof/unused-containerd'):
+            self.local(path).mkdir(parents=True, exist_ok=True)
+        self.local(self.CONFIG).touch()
+        self.local(self.ADDRESS).touch()
+
+    def local(self, path):
+        aliases = {'/tmp': '/proof/tmp', '/run': '/proof/run', '/var/lib/docker': '/proof/unused-docker',
+                   '/var/lib/containerd': '/proof/unused-containerd'}
+        path = aliases.get(path, path)
+        if not path.startswith('/proof/'):
+            raise AssertionError('unexpected synthetic path')
+        return self.root / path.removeprefix('/proof/')
+
+    def run(self, argv, **kwargs):
+        prefix = ['docker', 'exec', 'a' * 64]
+        if argv[:3] != prefix:
+            raise AssertionError('unexpected synthetic command prefix')
+        args = argv[3:]
+        if args == ['cat', self.CONFIG]:
+            return self.config
+        if args[:2] == ['sh', '-c'] and len(args) == 3:
+            return '/usr/local/bin/containerd\n--config\n' + self.CONFIG + '\n'
+        if args[:2] == ['sh', '-c'] and args[3:4] == ['probe-path'] and len(args) == 5:
+            path = self.local(args[4])
+            if path.is_symlink() or (path.exists() and not path.is_dir()):
+                raise probe.ProbeError('bounded command failed')
+            return 'present' if path.is_dir() else 'absent'
+        if args[:2] == ['readlink', '-f']:
+            path = self.local(args[2]).resolve()
+            return '/proof/' + str(path.relative_to(self.root)) + '\n'
+        if args[:3] == ['stat', '-c', '%d']:
+            try:
+                device = self.local(args[3]).stat().st_dev
+            except FileNotFoundError:
+                raise probe.ProbeError('bounded command failed') from None
+            return str(device + (args[3] == self.foreign_device)) + '\n'
+        raise AssertionError('unexpected synthetic command')
+
+
 def runtime_fixture(change=None):
     files = {}
     for name in ('containerd', 'containerd-shim-runc-v2', 'ctr'):

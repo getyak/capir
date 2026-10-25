@@ -198,14 +198,19 @@ must match the required resident pair. Actual sanitized metadata is retained
 before acceptance checks, including on failure. These immutable bootstrap
 files remain outside the measured import filesystem and are disclosed. Fresh
 4 KiB ext4 storage has a fixed experimental 2 GiB cap for verified Docker,
-containerd content/ingest/snapshot/metadata, state and temporary paths. It fails
-closed on insufficient space, incomplete unpack, errors or failed version-only
-runtime probes; it never raises the cap automatically. The worker has no network
+containerd content/ingest/snapshot/metadata, state and temporary paths. The known
+content directory may be absent before first ingest; its existing parent must
+pass the backing check, and the directory itself must pass after import before
+receiving allocation credit. Other missing paths, insufficient space, incomplete
+unpack, errors and failed version-only runtime probes fail closed; the cap never
+grows automatically. The worker has no network
 or published ports and receives no production socket or credentials.
 
 The three-day sanitized proof records filesystem/engine identity, the enforced
 cap, observed usage, complete unpack, network-disabled read-only Node/native
-version probes and cleanup status. Samples alone are not a peak upper bound.
+version probes and cleanup status. Failure records retain the substep, fixed
+path role, command sequence, exit status and output byte count without command
+arguments, environment or raw output. Samples alone are not a peak upper bound.
 Outer runner image/control/log costs are explicit exceptions outside the cap;
 the archive is streamed from outside it. This proves only a successful disposable
 import experiment for that archive, not resident capacity, database/WAL growth,

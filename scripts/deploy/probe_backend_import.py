@@ -281,13 +281,20 @@ class Runner:
     def __init__(self, temp):
         self.temp = temp
         self.command_count = 0
+        self.last_command = None
         # No inherited Docker context, TLS settings, credential helper or auth.
         self.env = {key: os.environ[key] for key in ('PATH', 'HOME') if key in os.environ}
         self.env.update({'LC_ALL': 'C', 'TMPDIR': str(temp)})
 
     def run(self, argv, *, stdin=None, timeout=120):
         self.command_count += 1
+        # Fixed-size, content-free provenance; never retain argv, env or output.
+        observed = {'sequence': self.command_count,
+                    'program': argv[0] if argv[0] in ('docker', 'sudo', 'findmnt', 'sync') else 'other',
+                    'outcome': 'command-limit', 'exit_code': None, 'output_bytes': 0}
+        self.last_command = observed
         require(self.command_count <= 512, 'control command limit exceeded')
+        observed['outcome'] = 'started'
         def limit_output():
             resource.setrlimit(resource.RLIMIT_FSIZE, (OUTPUT_LIMIT, OUTPUT_LIMIT))
         with tempfile.TemporaryFile(dir=self.temp) as output:
@@ -295,11 +302,19 @@ class Runner:
                 result = subprocess.run(argv, stdin=stdin, stdout=output, stderr=subprocess.STDOUT,
                                         env=self.env, timeout=timeout, preexec_fn=limit_output)
             except subprocess.TimeoutExpired:
+                observed.update(outcome='timeout', output_bytes=min(output.tell(), OUTPUT_LIMIT))
                 raise ProbeError('bounded command timed out') from None
+            except OSError as error:
+                observed.update(outcome='launch-error', errno=error.errno)
+                raise ProbeError('bounded command could not start') from None
+            observed.update(exit_code=result.returncode, output_bytes=min(output.tell(), OUTPUT_LIMIT))
+            observed['outcome'] = 'output-limit'
             require(output.tell() < OUTPUT_LIMIT, 'command output limit reached')
+            observed['outcome'] = 'nonzero-exit'
+            require(result.returncode == 0, 'bounded command failed')
             output.seek(0)
             text = output.read().decode('utf-8', errors='replace')
-            require(result.returncode == 0, 'bounded command failed')
+            observed['outcome'] = 'passed'
             return text
 
 
@@ -356,51 +371,81 @@ class Probe:
         return self.runner.run(self.outer + ['exec', self.cid, 'ctr',
             '--address', self.containerd_address, '--namespace', 'moby', *args])
 
-    def capped_path(self, path):
+    def capped_path(self, path, role='control'):
+        self.report['substep'] = 'path-backing'
+        observed = {'role': role, 'operation': 'validate', 'verified': False}
+        self.report['path_check'] = observed
         require(isinstance(path, str) and path.startswith('/proof/') and
                 '..' not in path.split('/'), 'unexpected inner path')
+        observed['operation'] = 'resolve'
         resolved = self.runner.run(self.outer + ['exec', self.cid, 'readlink', '-f', path]).strip()
+        observed['operation'] = 'device'
         device = int(self.runner.run(self.outer + ['exec', self.cid, 'stat', '-c', '%d', path]).strip())
         validate_backing(path, resolved, device, os.stat(self.fs).st_dev)
+        observed['verified'] = True
 
     def check_paths(self):
         import tomllib  # Ubuntu 24.04 supplies Python 3.12; guards/tests work on 3.10.
         # Read the running process's actual argv, then the exact generated config.
+        self.report['substep'] = 'containerd-config-argv'
         argv = self.runner.run(self.outer + ['exec', self.cid, 'sh', '-c',
             'for f in /proc/[0-9]*/comm; do '
             'if [ "$(cat "$f" 2>/dev/null)" = containerd ]; then '
             'tr "\\000" "\\n" < "${f%comm}cmdline"; fi; done']).splitlines()
         require(argv.count('--config') == 1, 'cannot identify managed containerd config')
         config_path = argv[argv.index('--config') + 1]
-        self.capped_path(config_path)
+        self.capped_path(config_path, 'containerd-config')
+        self.report['substep'] = 'containerd-config-read'
         config = tomllib.loads(self.runner.run(self.outer + ['exec', self.cid, 'cat', config_path]))
         root, state = config.get('root'), config.get('state')
-        for path in (root, state, '/proof/docker', '/proof/tmp', '/proof/run'):
-            self.capped_path(path)
+        for role, path in (('containerd-root', root), ('containerd-state', state),
+                           ('docker-root', '/proof/docker'), ('temporary', '/proof/tmp'), ('control', '/proof/run')):
+            self.capped_path(path, role)
         # Fail closed if any plugin redirects storage away from its root.
         def validate_overrides(value):
             if isinstance(value, dict):
                 for key, child in value.items():
                     if key in ('root', 'root_path', 'state', 'state_path') and child:
-                        self.capped_path(child)
+                        self.capped_path(child, 'plugin-override')
                     validate_overrides(child)
         validate_overrides(config.get('plugins', {}))
         self.containerd_address = config.get('grpc', {}).get('address')
-        self.capped_path(self.containerd_address)
+        self.capped_path(self.containerd_address, 'containerd-socket')
         content = root + '/io.containerd.content.v1.content'
         snapshots = root + '/io.containerd.snapshotter.v1.overlayfs'
         metadata = root + '/io.containerd.metadata.v1.bolt'
-        for path in (content, snapshots, metadata):
-            self.capped_path(path)
+        # containerd v2.2.4 local.NewStore creates its root only on first ingest.
+        # Only this exact derived child may be absent before import. Do not
+        # create it, credit it as observed, or waive the post-import device check.
+        self.report['substep'] = 'path-presence'
+        self.report['path_check'] = {'role': 'content', 'operation': 'presence', 'verified': False}
+        presence = self.runner.run(self.outer + ['exec', self.cid, 'sh', '-c',
+            'if [ -L "$1" ]; then exit 1; elif [ -d "$1" ]; then printf present; '
+            'elif [ ! -e "$1" ]; then printf absent; else exit 1; fi', 'probe-path', content]).strip()
+        require(presence in ('present', 'absent'), 'invalid content path presence observation')
+        lazy = self.report.setdefault('lazy_content_path', {'initially_absent': presence == 'absent',
+            'parent_verified': True, 'post_import_verified': False})
+        if presence == 'absent':
+            require(self.report.get('phase') == 'nested-engine-startup', 'content store missing after import')
+            self.capped_path(root, 'content-parent')
+            lazy['parent_verified'] = True
+        else:
+            self.capped_path(content, 'content')
+            if self.report.get('phase') != 'nested-engine-startup':
+                lazy['post_import_verified'] = True
+        for role, path in (('snapshots', snapshots), ('metadata', metadata)):
+            self.capped_path(path, role)
         # Explicit environment and bind checks for the non-/proof aliases.
-        for alias, target in (('/tmp', '/proof/tmp'), ('/run', '/proof/run'),
-                              ('/var/lib/docker', '/proof/unused-docker'),
-                              ('/var/lib/containerd', '/proof/unused-containerd')):
+        for role, alias, target in (('alias-tmp', '/tmp', '/proof/tmp'), ('alias-run', '/run', '/proof/run'),
+                                   ('alias-docker', '/var/lib/docker', '/proof/unused-docker'),
+                                   ('alias-containerd', '/var/lib/containerd', '/proof/unused-containerd')):
+            self.report['substep'] = 'path-backing'
+            self.report['path_check'] = {'role': role, 'operation': 'device', 'verified': False}
             device = int(self.runner.run(self.outer + ['exec', self.cid, 'stat', '-c', '%d', alias]).strip())
             require(device == os.stat(self.fs).st_dev, 'uncapped writable daemon alias')
-            self.capped_path(target)
+            self.capped_path(target, role + '-target')
         self.report['credited_paths'] = {'docker_root': '/proof/docker', 'containerd_root': root,
-            'containerd_state': state, 'content_and_ingest': content, 'snapshots': snapshots,
+            'containerd_state': state, 'content_and_ingest': content if presence == 'present' else None, 'snapshots': snapshots,
             'metadata': metadata, 'temporary': '/proof/tmp', 'control': '/proof/run'}
 
     def worker_command(self):
@@ -536,6 +581,7 @@ class Probe:
             (self.fs / path).mkdir()
         (self.fs / 'daemon.json').write_text(json.dumps({'features': {'containerd-snapshotter': True}}))
         self.report['phase'] = 'nested-engine-startup'
+        self.report['substep'] = 'worker-image'
         existing = self.runner.run(self.outer + ['image', 'ls', '--quiet', '--no-trunc']).splitlines()
         self.runner.run(self.outer + ['pull', '--platform=linux/arm64', DIND], timeout=300)
         image = json.loads(self.runner.run(self.outer + ['image', 'inspect', DIND]))[0]
@@ -552,10 +598,13 @@ class Probe:
             'outside_cap': 'archive, pinned read-only worker image and runtime binaries, host Docker control metadata, '
                            'host daemon logging and bounded command capture; not resident import allocations'}
         self.uncertain_resource = True
+        self.report['substep'] = 'worker-create'
         self.cid = self.runner.run(self.worker_command()).strip()
         require(re.fullmatch(r'[0-9a-f]{64}', self.cid) is not None, 'unexpected worker identifier')
         self.uncertain_resource = False
+        self.report['substep'] = 'worker-start'
         self.runner.run(self.outer + ['start', self.cid])
+        self.report['substep'] = 'engine-ready'
         for attempt in range(30):
             try:
                 version = json.loads(self.inner('version', '--format', '{{json .Server}}'))
@@ -565,30 +614,42 @@ class Probe:
                 if attempt == 29:
                     raise
                 time.sleep(1)
+        self.report['substep'] = 'worker-boundaries'
         worker = json.loads(self.runner.run(self.outer + ['container', 'inspect', self.cid]))[0]
         validate_worker(worker, str(self.fs))
+        self.report['substep'] = 'runtime-tools'
         self.check_runtime_tools()
+        self.report['substep'] = 'cgroup-delegation'
         self.check_delegation()
+        self.report['substep'] = 'engine-info'
         info = json.loads(self.inner('info', '--format', '{{json .}}'))
         self.check_engine(version, info)
         self.check_paths()
-        require(not self.inner('image', 'ls', '--quiet', '--all').strip() and
-                not self.ctr('images', 'ls', '--quiet').strip() and
-                not self.ctr('content', 'ls', '--quiet').strip(), 'nonempty initial image/content store')
+        self.report['substep'] = 'empty-docker-images'
+        require(not self.inner('image', 'ls', '--quiet', '--all').strip(), 'nonempty initial image/content store')
+        self.report['substep'] = 'empty-containerd-images'
+        require(not self.ctr('images', 'ls', '--quiet').strip(), 'nonempty initial image/content store')
+        self.report['substep'] = 'empty-containerd-content'
+        require(not self.ctr('content', 'ls', '--quiet').strip(), 'nonempty initial image/content store')
+        self.report['substep'] = 'empty-containerd-snapshots'
         snapshots = self.ctr('snapshots', '--snapshotter', 'overlayfs', 'ls').splitlines()
         require(len(snapshots) <= 1, 'nonempty initial snapshots')
         self.report['empty_store_verified'] = True
         self.report['phase'] = 'streaming-import'
+        self.report['substep'] = 'archive-load'
         with self.archive.open('rb') as stream:
             result = self.runner.run(self.outer + ['exec', '-i', self.cid, 'docker',
                 '--host=unix:///proof/docker.sock', 'load', '--platform=linux/arm64'], stdin=stream, timeout=900)
         validate_logs(result)
         # Repeat integrity after streaming; never accept changed input by accident.
+        self.report['substep'] = 'archive-reinspection-after-load'
         after = inspect_archive(self.archive, self.revision)
         validate_artifact(after, artifact, self.revision, (self.archive.parent / 'SHA256SUMS').read_text())
+        self.report['substep'] = 'loaded-image-identity'
         loaded = json.loads(self.inner('image', 'inspect', artifact['image_config_digest']))
         require(len(loaded) == 1, 'missing loaded image')
         validate_image(loaded[0], artifact)
+        self.report['substep'] = 'complete-unpack'
         refs = self.ctr('images', 'ls', '--quiet').splitlines()
         validate_unpack(self.ctr('images', 'check', '--snapshotter', 'overlayfs'), len(refs))
         self.report['complete_unpack_verified'] = True
@@ -596,11 +657,14 @@ class Probe:
         for name, command, expected in (
             ('node', ['-e', 'if(process.platform!=="linux"||process.arch!=="arm64")process.exit(1);console.log("node-arm64-ok "+process.version)'], 'node-arm64-ok'),
             ('native', ['/app/apps/agent/scripts/verify-native-runtime.cjs'], 'Native Agent runtime verified: linux-arm64;')):
+            self.report['substep'] = name + '-runtime-create'
             runtime = self.inner('create', '--name', self.owner + '-' + name, '--network=none', '--read-only',
                 '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m',
                 '--cpus=1', '--log-driver=none', '--entrypoint=node', artifact['image_config_digest'], *command).strip()
             require(re.fullmatch(r'[0-9a-f]{64}', runtime) is not None, 'unexpected runtime identifier')
+            self.report['substep'] = name + '-runtime-start'
             result = self.inner('start', '--attach', runtime, timeout=90)
+            self.report['substep'] = name + '-runtime-result'
             state = json.loads(self.inner('container', 'inspect', runtime))[0]['State']
             require(state['Status'] == 'exited' and state['ExitCode'] == 0 and not state.get('OOMKilled') and
                     expected in result, 'version-only runtime failed')
@@ -612,6 +676,7 @@ class Probe:
             require(version_match is not None, 'version-only output not recognized')
             self.report[name + '_version'] = version_match[1]
         self.report['phase'] = 'idle-stabilization'
+        self.report['substep'] = 'usage-stabilization'
         previous = None
         stable = 0
         for _ in range(30):
@@ -624,16 +689,21 @@ class Probe:
                 break
             time.sleep(1)
         require(stable >= 5, 'filesystem did not stabilize')
+        self.report['substep'] = 'final-unpack'
         validate_unpack(self.ctr('images', 'check', '--snapshotter', 'overlayfs'), len(refs))
-        self.capped_path('/proof/daemon.log')
+        self.capped_path('/proof/daemon.log', 'daemon-log')
+        self.report['substep'] = 'daemon-log-check'
         validate_logs(self.runner.run(self.outer + ['exec', self.cid, 'cat', '/proof/daemon.log']))
         self.check_paths()
+        self.report['substep'] = 'allocation-sampling'
         require(not self.sample_error, 'allocation sampling failed')
+        self.report['substep'] = 'final-runtime-tools'
         self.check_runtime_tools()
         self.report['idle_stabilized'] = True
         self.report['no_import_errors_observed'] = True
         self.report['status'] = 'passed'
         self.report['phase'] = 'complete'
+        self.report['substep'] = 'complete'
 
     def check_loop(self):
         value = json.loads(self.runner.run(['sudo', '-n', 'losetup', '--json', '--list',
@@ -647,6 +717,12 @@ class Probe:
         return value['filesystems'][0]
 
     def cleanup(self):
+        # Snapshot the primary failure before cleanup replaces last_command.
+        if self.report['status'] != 'passed':
+            self.report['failure_context'] = {'substep': self.report.get('substep'),
+                'path_check': dict(self.report['path_check']) if self.report.get('substep') in
+                    ('path-backing', 'path-presence') else None,
+                'command': dict(self.runner.last_command) if getattr(self.runner, 'last_command', None) else None}
         self.stop.set()
         if self.sampler:
             self.sampler.join(timeout=2)
@@ -683,6 +759,7 @@ class Probe:
                     tools.rmdir()
             self.report['cleanup'] = 'passed'
         except Exception:
+            self.report['cleanup_failed_command'] = dict(self.runner.last_command) if getattr(self.runner, 'last_command', None) else None
             self.report['cleanup'] = 'failed; unknown resources left for ephemeral runner teardown'
             self.report['status'] = 'failed'
         if self.runner and hasattr(self.runner, 'command_count'):
