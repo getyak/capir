@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("inspect_backend_oci.py")
@@ -25,6 +26,14 @@ def encoded(value):
 
 def digest(data):
     return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def first_header(path):
+    with path.open("rb") as source:
+        header = source.read(512)
+    kind = header[156:157]
+    size = int(header[124:136].rstrip(b"\x00 "), 8)
+    return kind, size, f"fixture raw_type_hex={kind.hex()} declared_size={size}"
 
 
 class Fixture:
@@ -63,7 +72,9 @@ class Fixture:
     def write(self, path, *, duplicate=None, unsafe_member=None, pax_headers=None):
         files = {**self.files, "oci-layout": encoded({"imageLayoutVersion": "1.0.0"}),
                  "index.json": encoded(self.index)}
-        with tarfile.open(path, "w", pax_headers=pax_headers) as archive:
+        # GNU/USTAR writers silently ignore pax_headers. Make the requested
+        # on-disk fixture independent of interpreter/platform writer defaults.
+        with tarfile.open(path, "w", format=tarfile.PAX_FORMAT, pax_headers=pax_headers) as archive:
             for name, data in files.items():
                 member = tarfile.TarInfo(name)
                 member.size = len(data)
@@ -88,13 +99,20 @@ class InspectorTests(unittest.TestCase):
 
     def run_cli(self, fixture, **write_options):
         fixture.write(self.archive, **write_options)
+        kind, declared_size, self.fixture_header_summary = first_header(self.archive)
+        if write_options.get("pax_headers"):
+            self.assertEqual(kind, b"g", self.fixture_header_summary)
+            expected_payload_bytes = max(len(value.encode("utf-8"))
+                                         for value in write_options["pax_headers"].values())
+            self.assertGreaterEqual(declared_size, expected_payload_bytes,
+                                    self.fixture_header_summary)
         return subprocess.run([sys.executable, str(SCRIPT), str(self.archive),
                                "--revision", REVISION, "--output", str(self.output)],
                               capture_output=True, text=True)
 
     def assert_rejected(self, fixture, reason, **write_options):
         result = self.run_cli(fixture, **write_options)
-        self.assertNotEqual(result.returncode, 0)
+        self.assertNotEqual(result.returncode, 0, self.fixture_header_summary)
         self.assertIn(reason, result.stderr)
         self.assertFalse(self.output.exists())
         self.assertNotIn("PRIVATE_FIXTURE_MARKER", result.stdout + result.stderr)
@@ -189,6 +207,25 @@ class InspectorTests(unittest.TestCase):
     def test_extended_tar_metadata_is_bounded_before_tarfile_allocates_it(self):
         self.assert_rejected(Fixture(), "tar metadata byte limit",
                              pax_headers={"comment": "x" * (4 * 1024**2 + 1)})
+
+    def test_pax_limit_fixture_is_explicit_with_short_paths_and_non_pax_defaults(self):
+        with tempfile.TemporaryDirectory(dir="/tmp", prefix="oci-") as directory:
+            self.archive = Path(directory) / "a.tar"
+            self.output = Path(directory) / "out.json"
+            for writer_default in [tarfile.GNU_FORMAT, tarfile.USTAR_FORMAT]:
+                with self.subTest(writer_default=writer_default):
+                    with patch.object(tarfile.TarFile, "format", writer_default):
+                        Fixture().write(self.archive,
+                                        pax_headers={"comment": "x" * (4 * 1024**2 + 1)})
+                    kind, declared_size, summary = first_header(self.archive)
+                    self.assertEqual(kind, b"g", summary)
+                    self.assertGreater(declared_size, 4 * 1024**2, summary)
+                    result = subprocess.run([sys.executable, str(SCRIPT), str(self.archive),
+                                             "--revision", REVISION, "--output", str(self.output)],
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0, summary)
+                    self.assertIn("tar metadata byte limit", result.stderr)
+                    self.assertFalse(self.output.exists())
 
     def test_malformed_sparse_metadata_cannot_escape_through_parser_errors(self):
         marker = "PRIVATE_PAX_FIXTURE_MARKER"

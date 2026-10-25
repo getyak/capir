@@ -101,7 +101,15 @@ jobs:
           PY
 
       - name: Check the inspector with synthetic archives
-        run: python3 -m unittest discover -s scripts/deploy -p test_inspect_backend_oci.py -v
+        run: |
+          python3 - <<'PY'
+          import sys
+          import tarfile
+          print("Python version:", sys.version.split()[0])
+          print("tarfile.DEFAULT_FORMAT:", tarfile.DEFAULT_FORMAT)
+          print("tarfile.TarFile.format:", tarfile.TarFile.format)
+          PY
+          python3 -m unittest discover -s scripts/deploy -p test_inspect_backend_oci.py -v
 
       - name: Create a fresh disposable builder
         id: builder
