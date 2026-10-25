@@ -5,6 +5,34 @@ import WebKit
 
 @MainActor
 final class DesktopPersistentSessionTests: XCTestCase {
+    func testHTTPFixtureWaitsForStartupLongerThanTwoSeconds() async throws {
+        let h = PersistentHarness()
+        let fixture = try PersistentHTTPFixture(receipt: h.receipt, startupDelay: 2.2)
+        defer { fixture.stop() }
+        let started = ProcessInfo.processInfo.systemUptime
+        _ = try await fixture.start()
+        XCTAssertGreaterThanOrEqual(ProcessInfo.processInfo.systemUptime - started, 2)
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 11)
+    }
+
+    func testHTTPFixtureCreatesEmptyLedgerBeforeLaunchingPython() throws {
+        let fixture = try PersistentHTTPFixture(receipt: PersistentHarness().receipt)
+        defer { fixture.stop() }
+        let metadata = try Data(contentsOf: fixture.directory.appendingPathComponent("requests.json"))
+        let records = try XCTUnwrap(JSONSerialization.jsonObject(with: metadata) as? [[String: Any]])
+        XCTAssertTrue(records.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.directory.appendingPathComponent("ready.json").path))
+    }
+
+    func testHTTPFixtureStartupTimeoutHasDistinctStageAndRemainsBounded() async throws {
+        let fixture = try PersistentHTTPFixture(receipt: PersistentHarness().receipt, startupDelay: 4, readinessTimeout: 0.2)
+        defer { fixture.stop() }
+        let started = ProcessInfo.processInfo.systemUptime
+        do { _ = try await fixture.start(); XCTFail("The deliberately delayed fixture must exceed its short readiness deadline") }
+        catch let error as PersistentHTTPFixture.StartupError { XCTAssertEqual(error, .timedOut) }
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - started, 2)
+    }
+
     func testHTTPFixturePublishesEmptyLedgerBeforeAnyRequest() async throws {
         let h = PersistentHarness()
         let fixture = try PersistentHTTPFixture(receipt: h.receipt)
@@ -423,21 +451,39 @@ private final class FakePersistentTransport: DesktopPersistentSessionTransportin
 /// Its retained ledger contains metadata only, never the submitted secret.
 @MainActor
 private final class PersistentHTTPFixture {
+    enum StartupError: Error, Equatable, CustomStringConvertible {
+        case couldNotLaunch, exitedBeforeReady(Int32), invalidReadiness, timedOut
+        var description: String {
+            switch self {
+            case .couldNotLaunch: return "persistent_http_fixture_startup_launch_failed"
+            case .exitedBeforeReady(let code): return "persistent_http_fixture_startup_exited_\(code)"
+            case .invalidReadiness: return "persistent_http_fixture_startup_invalid_readiness"
+            case .timedOut: return "persistent_http_fixture_startup_timed_out"
+            }
+        }
+    }
     let directory: URL
     private let process = Process()
     private let receipt: DesktopPersistentSessionReceipt
-    init(receipt: DesktopPersistentSessionReceipt) throws {
+    private let startupDelay: TimeInterval
+    private let readinessTimeout: TimeInterval
+    init(receipt: DesktopPersistentSessionReceipt, startupDelay: TimeInterval = 0, readinessTimeout: TimeInterval = 10) throws {
         self.receipt = receipt
+        self.startupDelay = startupDelay
+        self.readinessTimeout = readinessTimeout
         let root = ProcessInfo.processInfo.environment["MACOS_PERSISTENT_PROOF_ARTIFACTS"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? FileManager.default.temporaryDirectory
         directory = root.appendingPathComponent("persistent-http-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("[]".utf8).write(to: directory.appendingPathComponent("requests.json"), options: .atomic)
     }
     func start() async throws -> WorkspaceOrigin {
         let body: [String: String] = ["status": receipt.status, "account_id": receipt.account_id!, "user_id": receipt.user_id!,
                                     "session_id": receipt.session_id!, "session_expires_at": receipt.session_expires_at!]
         let script = #"""
-import http.server,json,pathlib,sys
+import sys,time
+time.sleep(float(sys.argv[3]))
+import http.server,json,pathlib
 from datetime import datetime,timezone,timedelta
 root=pathlib.Path(sys.argv[1]); response=json.loads(sys.argv[2]); records=[]; enrolled_secret=None
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -482,24 +528,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
      'source_retention_days':30,'available':True}})
   if 'capri-persistent-proof=1' not in self.headers.get('Cookie',''):return self.answer(401,{'status':'signed_out'})
   self.answer(200,response)
-(root/'requests.json').write_text(json.dumps(records))
 server=http.server.HTTPServer(('127.0.0.1',0),Handler)
-(root/'ready.json').write_text(json.dumps({'port':server.server_port}))
+(root/'ready.tmp').write_text(json.dumps({'port':server.server_port}))
+(root/'ready.tmp').replace(root/'ready.json')
 server.serve_forever()
 """#
         process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-        process.arguments = ["-c", script, directory.path, String(data: try JSONSerialization.data(withJSONObject: body), encoding: .utf8)!]
+        process.arguments = ["-c", script, directory.path, String(data: try JSONSerialization.data(withJSONObject: body), encoding: .utf8)!, String(startupDelay)]
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
-        try process.run()
-        for _ in 0..<200 {
-            let ready = directory.appendingPathComponent("ready.json")
-            if let data = try? Data(contentsOf: ready), let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Int], let port = parsed["port"] {
-                return WorkspaceOrigin("http://127.0.0.1:\(port)", allowLocalDevelopment: true)!
+        let started = ProcessInfo.processInfo.systemUptime
+        var startupStatus = "waiting"
+        defer { attachStartupMetadata(started: started, status: Task.isCancelled ? "cancelled" : startupStatus) }
+        do { try process.run() }
+        catch { startupStatus = "launch_failed"; throw StartupError.couldNotLaunch }
+        let deadline = started + readinessTimeout
+        let ready = directory.appendingPathComponent("ready.json")
+        while ProcessInfo.processInfo.systemUptime < deadline {
+            if FileManager.default.fileExists(atPath: ready.path) {
+                guard let data = try? Data(contentsOf: ready),
+                      let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Int],
+                      let port = parsed["port"], (1...65535).contains(port),
+                      let origin = WorkspaceOrigin("http://127.0.0.1:\(port)", allowLocalDevelopment: true)
+                else { startupStatus = "invalid_readiness"; throw StartupError.invalidReadiness }
+                startupStatus = "ready"
+                return origin
             }
-            guard process.isRunning else { throw URLError(.cannotConnectToHost) }
-            try await Task.sleep(for: .milliseconds(10))
+            guard process.isRunning else {
+                startupStatus = "exited_before_ready_\(process.terminationStatus)"
+                throw StartupError.exitedBeforeReady(process.terminationStatus)
+            }
+            try await Task.sleep(for: .milliseconds(20))
         }
-        throw URLError(.timedOut)
+        startupStatus = "timed_out"
+        throw StartupError.timedOut
+    }
+
+    private func attachStartupMetadata(started: TimeInterval, status: String) {
+        let metadata: [String: Any] = [
+            "process_running": process.isRunning,
+            "ready": FileManager.default.fileExists(atPath: directory.appendingPathComponent("ready.json").path),
+            "ledger": FileManager.default.fileExists(atPath: directory.appendingPathComponent("requests.json").path),
+            "elapsed_ms": max(0, Int((ProcessInfo.processInfo.systemUptime - started) * 1000)),
+            "status": status,
+        ]
+        let attachment = XCTAttachment(data: try! JSONSerialization.data(withJSONObject: metadata), uniformTypeIdentifier: "public.json")
+        attachment.name = "persistent-http-startup-metadata"
+        attachment.lifetime = .keepAlways
+        XCTContext.runActivity(named: "Persistent HTTP fixture startup") { $0.add(attachment) }
     }
     func stop() {
         if process.isRunning { process.terminate(); process.waitUntilExit() }

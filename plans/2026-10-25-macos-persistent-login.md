@@ -46,17 +46,19 @@ expiry. A cookie alone cannot guarantee recovery after arbitrary inactivity.
 2. Verification: deterministic edge cases, disposable PostgreSQL races,
    native actual-construction/lifecycle tests, type checks and docs gates.
 3. Independent review, repair and re-review (complete).
-4. Current-head CI and merge (active), affected resident Web/API deployment, signed Mac
+4. Current-head CI and merge, affected resident Web/API deployment, signed Mac
    update and live changed-behavior acceptance.
 5. Preserve proof; reclaim only task-owned temporary resources.
 
 Backend57 tests (including11 actual disposable PostgreSQL tests), Web136
-focused tests, Web/backend type checks and docs gates passed. The final18 native
-persistent-session tests passed with zero skips; a prior broader native suite
-passed76 with three explicitly skipped unrelated fixture-dependent cases.
+focused tests, Web/backend type checks and docs gates passed. The latest full native-unit run passed356 with zero failures and nine
+explicitly skipped fixture-dependent cases. Condition-based fixture startup
+regressions cover delayed readiness and bounded failure; product timeouts are
+unchanged.
 Independent review closed its confirmedP1/P2 issues, including exact-session
 bindings across access rotation and selected-workspace/lost-response recovery.
-CI, merge, deployment and installed acceptance remain open.
+This source snapshot precedes release. Current CI, merge, deployment and
+installed acceptance are tracked in PR426 and the formal delivery record below.
 
 Formal evidence: `/Users/cubxxw/ops/tasks/macos-persistent-login-20261025/`.
 Rebuildable artifacts:
