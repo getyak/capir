@@ -1395,7 +1395,11 @@ async function renderHandoffRecovery() {
     for (const record of records) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = `${record.completed ? "Open previous handoff" : "Check pending handoff"} · ${record.origin}`;
+      button.textContent = `${record.outcome === "not_submitted" ? "Not submitted" : record.completed ? "Open previous handoff" : "Check pending handoff"} · ${record.origin}`;
+      if (record.outcome === "not_submitted") {
+        button.disabled = true;
+        button.title = "Nothing was submitted. You can start a new review.";
+      }
       button.addEventListener("click", async () => {
         button.disabled = true;
         try {

@@ -27,17 +27,29 @@ export function contactRecoveryJournal(storage, now = () => Date.now()) {
       const prior = records.find(record => record.requestKey === requestKey);
       if (prior) {
         if (prior.origin !== origin || prior.sessionVersion !== sessionVersion) throw new Error("CONTACT_RECOVERY_SCOPE_CHANGED");
-        return prior;
       }
-      if (records.some(record => record.origin === origin && record.sessionVersion === sessionVersion && !record.completed)) throw new Error("CONTACT_RECOVERY_PENDING");
-      if (records.length >= 20) {
-        const oldest = records.filter(record => record.completed).sort((a, b) => a.createdAt - b.createdAt)[0];
+      if (!prior && records.some(record => record.origin === origin && record.sessionVersion === sessionVersion
+          && !record.completed && record.outcome !== "not_submitted")) throw new Error("CONTACT_RECOVERY_PENDING");
+      if (!prior && records.length >= 20) {
+        const oldest = records.filter(record => record.completed || record.outcome === "not_submitted").sort((a, b) => a.createdAt - b.createdAt)[0];
         if (!oldest) throw new Error("CONTACT_RECOVERY_PENDING");
         await storage.remove(prefix + oldest.requestKey);
       }
-      const record = { origin, sessionVersion, requestKey, createdAt: now() };
+      // Persist possible dispatch BEFORE returning to the worker. Legacy
+      // records have unknown outcome too. A fresh marker invalidates any late
+      // first-attempt proof once another attempt may have dispatched.
+      const mayConfirmNotSubmitted = !prior || prior.outcome === "not_submitted";
+      const record = { ...(prior ?? { origin, sessionVersion, requestKey, createdAt: now() }),
+        outcome: "unknown", attemptId: crypto.randomUUID() };
       await storage.set({ [prefix + requestKey]: record });
-      return record;
+      return { ...record, mayConfirmNotSubmitted };
+    },
+    async confirmNotSubmitted(claim) {
+      if (claim.mayConfirmNotSubmitted !== true) return;
+      const record = (await list()).find(item => item.requestKey === claim.requestKey);
+      if (!record || record.attemptId !== claim.attemptId || record.origin !== claim.origin
+          || record.sessionVersion !== claim.sessionVersion || record.createdAt !== claim.createdAt) return;
+      await storage.set({ [prefix + record.requestKey]: { ...record, outcome: "not_submitted" } });
     },
     async complete(requestKey) {
       const record = (await list()).find(item => item.requestKey === requestKey);

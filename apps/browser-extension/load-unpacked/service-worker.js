@@ -21,6 +21,8 @@ async function recoverHandoff(requestKey) {
   await storageReady;
   const record = (await journal.list()).find(item => item.requestKey === requestKey);
   if (!record) return { state: "unknown", message: "The local recovery record has expired or was removed. Check your Web tasks before sending another copy." };
+  if (record.outcome === "not_submitted") return { state: "not_submitted", no_submit: true,
+    message: "This capture was not submitted. You can keep the open review or start a new one." };
   const origin = normalizeLocalOrigin(record.origin);
   const tab = await readyWebTab(origin);
   const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "MAIN",
@@ -47,13 +49,14 @@ async function handoffReviewedImage(envelope) {
   const origin = normalizeLocalOrigin(envelope.handoff_target), payload = await contactTaskFromReviewedImage(envelope);
   await storageReady;
   const tab = await readyWebTab(origin);
-  await journal.claim(origin, envelope.session.version, envelope.idempotency_key);
+  const claim = await journal.claim(origin, envelope.session.version, envelope.idempotency_key);
   // Chrome executes the supplied function in the exact tab and awaits its
   // Promise. No bearer token, broad host permission or new backend bypass.
   const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "MAIN",
     func: contactHandoffInWeb, args: [origin, envelope.session.version, "submit", payload] });
   if (result.result?.contact_task_id) await chrome.tabs.update(tab.id, { url: contactTaskReviewURL(origin, result.result.contact_task_id) });
   if (result.result?.state === "received") await journal.complete(envelope.idempotency_key);
+  else if (result.result?.no_submit === true) await journal.confirmNotSubmitted(claim);
   // A later preflight failure cannot erase an earlier unknown POST outcome.
   // Keep the same bounded metadata record until its actual receipt is read.
   return result.result;

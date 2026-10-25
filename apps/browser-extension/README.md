@@ -66,6 +66,11 @@ read-only recovery path. A failed POST or failed post-submit readback stays
 unknown; checking it does not resend pixels. A later connection failure cannot
 erase an existing unresolved recovery journal. Draft pixels/text remain in the
 open review panel; they are not added to the persistent metadata journal.
+The worker persists a possible-dispatch marker before injection. Only a current
+first-attempt preflight proof can record `not_submitted`; this metadata survives
+restart and allows a new review without waiting for a receipt that cannot exist.
+An earlier unknown outcome cannot be downgraded by a later preflight failure.
+An interrupted injection or failed storage write never establishes no submission.
 
 No fixture login or synthetic text substitution is used on this real path.
 Synthetic fixture mode remains network-free and explicitly labeled.
@@ -98,8 +103,8 @@ without inventing a Person. Failed and interrupted work resumes on the same task
 The Web inbox refreshes across devices and links to the actual person and source.
 
 The image recovery journal keeps at most 20 metadata records for 30 days and
-cleans expired records when read. Capacity eviction removes only completed
-records; pending or unknown submissions remain protected. A missing or expired
+cleans expired records when read. Capacity eviction removes only completed or
+confirmed-not-submitted records; unknown submissions remain protected. A missing or expired
 record does not prove that submission never happened. Check the workspace's
 existing task before submitting the source again; never infer failure from a
 lost local receipt.
