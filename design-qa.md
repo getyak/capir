@@ -1,3 +1,107 @@
+# Sidebar contextual creation: design QA
+
+## Findings
+
+- Closed P2: the initial `margin-right: -6px` pushed the compose target outside
+  the scroll container. The real-component fixture measured a 228px scroll
+  width in a 222px panel and the rightmost pointer missed the button. Removing
+  the negative margin restores the full 44px target. The focus outline now sits
+  inside that target and remains visible at the top/right scroll boundaries.
+- No actionable P0/P1/P2 findings remain in the changed header and action.
+
+## Visual truth and normalization
+
+The user selected concept 1 and requested quieter, more elegant details. The
+refined source is
+`/Users/cubxxw/.codex/generated_images/01a17134-e193-7490-a12a-84dccf47161d/exec-11be3805-5b9a-414c-8ccd-a5f8c3bbc1bd.png`.
+It is a 1024x1536 generated concept, not a calibrated browser screenshot.
+Its sidebar occupies approximately the left 544px. For comparison, that region
+was normalized to the product's 248x700 CSS-pixel sidebar. This inferred scale
+is approximately 2.19 source pixels per CSS pixel; do not interpret the concept
+as an exact device-density specification.
+
+Implementation: `http://127.0.0.1:8769/`, the actual shared navigation,
+`WorkspaceBrowseProvider`, `WorkspaceSidebarContext`, recent-session rows,
+footer, locale provider, theme tokens and stylesheet. Only the directory and
+Next navigation are synthetic adapters. No personal conversation data was used.
+
+The browser viewport was 1280x700 CSS px, device scale factor 1. Exact browser
+capture clipped the 248x700 sidebar without resampling. State: expanded,
+Chinese, light theme, supported native-host presentation, six synthetic rows,
+first selected, resting action. This is component evidence, not live-service or
+native-app acceptance.
+
+Evidence root: `/Users/cubxxw/ops/runs/sidebar-contextual-compose-20261025/`.
+
+- Full-view comparison: `comparison-after.png`, source left / implementation
+  right, assembled together after normalization.
+- Focused header comparison: `comparison-detail-after.png`.
+- Exact implementation screenshot: `implementation-after-exact.png`.
+- Hover: `hover-after-exact.png`; keyboard: `focus-after.png`.
+- Responsive/accessibility: `layout-matrix.json`, `narrow-dark-en.png`,
+  `narrow-forced-focus.png`, `narrow-text200.png`, `collapsed.png`.
+
+## Required fidelity surfaces
+
+- Typography: existing system/PingFang fallback, 13px/500 metadata heading,
+  18px line height, and canonical 15px row reading role are preserved. The
+  generated concept has softer text rendering and lighter selected-row text;
+  the product's existing 600 selected-row weight is intentional and unchanged.
+  The heading truncates in English at 200px while its full accessible section
+  name remains available. Other tested locales fit. At 200% root text size,
+  heading truncation preserves the separate 44px compose action.
+- Spacing: the heading and action share one 44px row, followed by 4px to the
+  list. The action contains a 32px rounded hover field and an 18px NotePencil.
+  Existing brand/navigation spacing, 40px row rhythm, 248px sidebar width and
+  footer geometry are retained instead of copying the concept's approximate
+  proportions. Both button edges hit correctly at 200/248/420px after settling.
+- Colors/tokens: existing warm-neutral surfaces, muted text and selected-row
+  token remain. The compose action is transparent at rest and uses the shared
+  4% ink hover / 9% ink pressed tokens. Dark theme and forced colors retain a
+  visible action and keyboard outline. No new shadows, borders or palette.
+- Assets: existing brand SVG assets and Phosphor navigation/NotePencil icons
+  are used. The concept's generic chat mark maps to the existing ChatCircleDots.
+  No generated bitmap, handcrafted logo or decorative approximation enters
+  production. Footer/avatar differences are existing product controls.
+- Copy/content: existing localized recent-section and new-conversation labels
+  are reused across five catalogs. Native Command-N is advertised only for a
+  supported host; ordinary Web retains the short tooltip without that shortcut.
+
+## Comparison history
+
+1. Initial actual-component capture: `implementation-before-fix.png` and
+   `comparison-before.png`. Geometry in `geometry-before.json` confirmed the
+   P2 clipped-target finding; result blocked.
+2. Removed negative margin and inset the focus outline. Rebuilt and captured
+   the same state. `geometry-after.json` reports 44x44px, both panel widths
+   222px, and a successful right-edge hit. The combined full/focused comparisons
+   show the intended grouped heading and unobtrusive compose action. Independent
+   review rechecked the change and closed P2.
+
+## Interaction verification
+
+- Mouse hover, keyboard focus and Enter activation; both existing cancelable
+  in-place event and fresh-draft fallback routing remained intact.
+- 200/248/420px widths, five display languages, dark/light, 200% text, empty,
+  loading, retry and collapsed presentations. One transient width-animation
+  sample was 3px wider; settled samples and both button-edge hits passed.
+- Reduced motion disables both transitions; forced-colors focus remains visible.
+- Console inspection: one initial fixture-only `process.env` shim error was
+  fixed before comparison. No new error/warning appeared during the final run.
+- Focused tests: 38/38 passed; changed-file ESLint and documentation/architecture
+  scripts passed. Current-head CI, clean-source build and live deployment are
+  tracked separately in the active plan and are not claimed by this QA result.
+
+## Implementation checklist
+
+- Complete: fix and recheck the target/focus clipping, compare both fidelity
+  views, verify the meaningful interaction states, close independent review.
+- Pending delivery gate: current-head CI and coordinated live deployment.
+
+Final result: passed
+
+---
+
 # 2026-08-30 — First verified progress onboarding
 
 ## Selected direction and implementation
