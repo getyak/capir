@@ -59,6 +59,7 @@ import { reconcileComposerMentions, type ComposerMention } from "@/lib/composer-
 import { ComposerPersonReference } from "./composer-person-reference";
 import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { useLocale, useT } from "./locale-provider";
+import { useWorkspaceComposerViewMemory } from "./workspace-navigation-continuity";
 import styles from "./workspace-composer.module.css";
 
 type MenuItem = {
@@ -72,6 +73,8 @@ type MenuItem = {
 
 export type WorkspaceComposerProps = {
   id: string;
+  /** Canonical draft/Session identity, only for in-scope editor presentation. */
+  viewKey?: string | null;
   label: string;
   value: string;
   maxLength: number;
@@ -117,6 +120,7 @@ export type WorkspaceComposerProps = {
  */
 export function WorkspaceComposer({
   id,
+  viewKey = null,
   label,
   value,
   maxLength,
@@ -155,6 +159,8 @@ export function WorkspaceComposer({
   const pendingCaret = useRef<number | null>(null);
   const dragDepth = useRef(0);
   const composition = useRef<{ binding: string | null; notify: WorkspaceComposerProps["onComposingChange"] } | null>(null);
+  const viewMemory = useWorkspaceComposerViewMemory();
+  const viewOwner = useRef({ memory: viewMemory, key: viewKey, edited: false, restored: false, previousValue: value });
   // A scope change or unmount releases only the callback that began this
   // composition. It must never clear a newer parent scope's marked-text state.
   useLayoutEffect(() => () => {
@@ -381,10 +387,35 @@ export function WorkspaceComposer({
       const element = event.currentTarget;
       if (typeof element.selectionStart === "number") {
         setCaret(element.selectionStart === element.selectionEnd ? element.selectionStart : -1);
+        if (viewMemory && viewKey && !composition.current) {
+          viewMemory.rememberComposerView(viewKey, element.value, {
+            start: element.selectionStart, end: element.selectionEnd,
+            direction: element.selectionDirection, scrollTop: element.scrollTop,
+          });
+        }
       }
     },
-    [],
+    [viewMemory, viewKey],
   );
+
+  useLayoutEffect(() => {
+    if (viewOwner.current.memory !== viewMemory || viewOwner.current.key !== viewKey) {
+      viewOwner.current = { memory: viewMemory, key: viewKey, edited: false, restored: false, previousValue: value };
+    }
+    const owner = viewOwner.current;
+    const element = textarea.current;
+    if (!viewMemory || !viewKey || !element) return;
+    if (owner.previousValue && !value) viewMemory.forgetComposerView(viewKey);
+    owner.previousValue = value;
+    if (owner.edited || owner.restored || composition.current) return;
+    const remembered = viewMemory.readComposerView(viewKey, value);
+    if (!remembered) return;
+    element.setSelectionRange(remembered.start, remembered.end, remembered.direction);
+    element.scrollTop = remembered.scrollTop;
+    owner.restored = true;
+    // Suggestion state follows the next native selection/input event; restoring
+    // presentation must not manufacture an edit or take DOM focus.
+  }, [value, viewKey, viewMemory]);
 
 
   function close() {
@@ -830,6 +861,7 @@ export function WorkspaceComposer({
         id={id}
         maxLength={maxLength}
         onChange={(event) => {
+          viewOwner.current.edited = true;
           setDismissed(null);
           setPasteError(null);
           setFileError(null);
@@ -863,10 +895,11 @@ export function WorkspaceComposer({
           composition.current = { binding, notify: onComposingChange };
           onComposingChange?.(true);
         }}
-        onCompositionEnd={() => {
+        onCompositionEnd={(event) => {
           const previous = composition.current;
           if (!previous || previous.binding !== binding) return;
           composition.current = null;
+          syncCaret(event);
           previous.notify?.(false);
         }}
         onClick={syncCaret}
@@ -874,7 +907,7 @@ export function WorkspaceComposer({
         onKeyDown={handleKeyDown}
         onKeyUp={syncCaret}
         onSelect={syncCaret}
-        onScroll={event => { if (mirror.current) { mirror.current.scrollTop = event.currentTarget.scrollTop; mirror.current.scrollLeft = event.currentTarget.scrollLeft; } }}
+        onScroll={event => { syncCaret(event); if (mirror.current) { mirror.current.scrollTop = event.currentTarget.scrollTop; mirror.current.scrollLeft = event.currentTarget.scrollLeft; } }}
         placeholder={placeholder}
         readOnly={readOnly}
         ref={textarea}

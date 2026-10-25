@@ -23,14 +23,17 @@ import { contactHandoffSessionVersion } from "@/lib/server/contact-handoff-sessi
 import { mintMemoryEntryCapability } from "@/lib/server/memoryEntryCapability";
 import { readBackendSessionClaims } from "@/lib/server/backendAuth";
 
+import { translate } from "@/lib/i18n";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
+
 import styles from "./person-memory.module.css";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  robots: { follow: false, index: false },
-  title: "人物 · capri",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMarketingLocale();
+  return { robots: { follow: false, index: false }, title: translate(locale, "人物 · capri") };
+}
 
 const FIELD_LABELS: Record<string, string> = {
   company: "公司", employer: "公司", organization: "机构", current_company: "公司",
@@ -50,6 +53,8 @@ export default async function PersonMemoryPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ session?: string; directory_query?: string | string[] }>;
 }) {
+  const locale = await getMarketingLocale();
+  const t = (key: string) => translate(locale, key);
   const { id } = await params;
   const parameters = await searchParams;
   const returnSessionId = validReturnSessionId(parameters.session);
@@ -68,15 +73,15 @@ export default async function PersonMemoryPage({
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.state} aria-labelledby="person-invalid">
           <h1 className={styles.stateTitle} id="person-invalid">
-            人物不可用
+            {t("人物不可用")}
           </h1>
-          <p className={styles.stateText}>这个人物标识无效。</p>
+          <p className={styles.stateText}>{t("这个人物标识无效。")}</p>
           <Link
             className={styles.backLink}
             href={directoryHref}
           >
             <ArrowLeft aria-hidden="true" size={16} />
-            返回人物目录
+            {t("返回人物目录")}
           </Link>
         </section>
       </main>
@@ -99,8 +104,8 @@ export default async function PersonMemoryPage({
     data = await loadPersonMemory(id);
   } catch (caught) {
     error = isBackendSessionExpiredError(caught)
-      ? "登录已过期，请重新登录后查看这个人物。"
-      : "无法读取这个人物的记忆；系统不会用缓存或示例内容代替。";
+      ? t("登录已过期，请重新登录后查看这个人物。")
+      : t("无法读取这个人物的记忆；系统不会用缓存或示例内容代替。");
   }
 
   if (!data) {
@@ -108,7 +113,7 @@ export default async function PersonMemoryPage({
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <section className={styles.state} aria-labelledby="person-unavailable">
           <h1 className={styles.stateTitle} id="person-unavailable">
-            人物记忆不可用
+            {t("人物记忆不可用")}
           </h1>
           <p className={styles.stateText} role="alert">
             {error}
@@ -118,7 +123,7 @@ export default async function PersonMemoryPage({
             href={directoryHref}
           >
             <ArrowLeft aria-hidden="true" size={16} />
-            返回人物目录
+            {t("返回人物目录")}
           </Link>
         </section>
       </main>
@@ -148,7 +153,7 @@ export default async function PersonMemoryPage({
     <main className={styles.main} id="main-content" tabIndex={-1}>
       <div className={styles.pageNavigation}>
         <Link className={styles.backLink} href={personEntryHref}>
-          <ArrowLeft aria-hidden="true" size={15} />返回人物目录
+          <ArrowLeft aria-hidden="true" size={15} />{t("返回人物目录")}
         </Link>
       </div>
       <header className={styles.identity}>
@@ -156,15 +161,15 @@ export default async function PersonMemoryPage({
           id={person?.id ?? id}
           size={48}
           shape="circle"
-          label={person?.display_label ?? "人物"}
+          label={person?.display_label ?? t("人物")}
           url={person?.avatar?.url ?? null}
         />
         <div className={styles.identityText}>
-          <h1>{person?.display_label ?? "人物"}</h1>
+          <h1>{person?.display_label ?? t("人物")}</h1>
           {person?.profile?.headline ? (
             <p className={styles.identityNote}>{person.profile.headline}</p>
           ) : confirmedIdentity ? (
-            <p className={styles.identityNote}>已确认的联系方式</p>
+            <p className={styles.identityNote}>{t("已确认的联系方式")}</p>
           ) : null}
         </div>
       </header>
@@ -174,9 +179,9 @@ export default async function PersonMemoryPage({
           {person && person.contexts.length > 0 ? (
             <nav className={styles.contexts} aria-labelledby="person-contexts">
               <h2 className={styles.sectionTitle} id="person-contexts">
-                关系情境
+                {t("关系情境")}
               </h2>
-              <p className={styles.contextHint}>选择已有情境，继续相关对话。</p>
+              <p className={styles.contextHint}>{t("选择已有情境，继续相关对话。")}</p>
               <ul className={styles.contextList}>
                 {person.contexts.map((context) => (
                   <li key={context.id}>
@@ -188,7 +193,7 @@ export default async function PersonMemoryPage({
                       )}
                     >
                       <span className={styles.contextLabel}>
-                        {context.display_label ?? "关系情境"}
+                        {context.display_label ?? t("关系情境")}
                       </span>
                       <CaretRight aria-hidden="true" size={15} />
                     </Link>
@@ -199,8 +204,8 @@ export default async function PersonMemoryPage({
           ) : (
             <p className={`${styles.quiet} ${styles.contextsEmpty}`}>
               {person
-                ? "还没有关系情境，可直接查看人物记忆。"
-                : "人物目录暂时没有这个人的条目。"}
+                ? t("还没有关系情境，可直接查看人物记忆。")
+                : t("人物目录暂时没有这个人的条目。")}
             </p>
           )}
           {proposals.length > 0 ? (
@@ -209,7 +214,7 @@ export default async function PersonMemoryPage({
               aria-labelledby="person-memory-pending"
             >
               <h2 className={styles.sectionTitle} id="person-memory-pending">
-                待确认变化
+                {t("待确认变化")}
               </h2>
               <ul className={styles.pendingList}>
                 {proposals.map((proposal) => (
@@ -234,33 +239,33 @@ export default async function PersonMemoryPage({
             initialItems={items} hasMore={hasMore} nextCursor={nextCursor} contexts={person?.contexts ?? []} returnSessionId={returnSessionId} />
         </div>
 
-        <aside className={styles.contextColumn} aria-label="人物资料">
+        <aside className={styles.contextColumn} aria-label={t("人物资料")}>
           <section aria-labelledby="person-basic-fields">
-            <h2 className={styles.sectionTitle} id="person-basic-fields">基本信息</h2>
+            <h2 className={styles.sectionTitle} id="person-basic-fields">{t("基本信息")}</h2>
             {fields.size || contactPoints.length ? <dl className={styles.basicFields}>
               {Array.from(fields.entries()).map(([field, entries]) => <div className={styles.basicField} key={field}>
-                <dt>{FIELD_LABELS[field] ?? field}</dt>
+                <dt>{FIELD_LABELS[field] ? t(FIELD_LABELS[field]) : field}</dt>
                 <dd>{entries.map(entry => {
                   const url = ["website", "homepage"].includes(field) ? safeResearchLink(entry.value) : null;
                   return <div className={styles.fieldValue} key={entry.evidence_fragment_id}>
                     {url ? <a href={url} target="_blank" rel="noopener noreferrer">{entry.value}</a> : <span>{entry.value}</span>}
-                    <details className={styles.fieldSource}><summary>{entries.length > 1 ? "已核对来源 · 多条记录" : "已核对来源"}</summary>
-                      <p>{entry.source_label} · {memoryDate(entry.observed_at)}</p>
-                      <Link href={withReturnSession(`/workspace?capture=${encodeURIComponent(entry.capture_id)}`, returnSessionId)}>查看采集来源 <CaretRight size={12} aria-hidden="true" /></Link>
-                      <dl className={styles.sourceMetadata}><dt>证据标识</dt><dd>{entry.evidence_fragment_id}</dd><dt>来源标识</dt><dd>{entry.source_resource_id}</dd></dl>
+                    <details className={styles.fieldSource}><summary>{entries.length > 1 ? t("已核对来源 · 多条记录") : t("已核对来源")}</summary>
+                      <p>{entry.source_label} · {memoryDate(entry.observed_at, locale)}</p>
+                      <Link href={withReturnSession(`/workspace?capture=${encodeURIComponent(entry.capture_id)}`, returnSessionId)}>{t("查看采集来源")} <CaretRight size={12} aria-hidden="true" /></Link>
+                      <dl className={styles.sourceMetadata}><dt>{t("证据标识")}</dt><dd>{entry.evidence_fragment_id}</dd><dt>{t("来源标识")}</dt><dd>{entry.source_resource_id}</dd></dl>
                     </details>
                   </div>;
                 })}</dd>
               </div>)}
-              {contactPoints.map(point => <div className={styles.basicField} key={point.id}><dt>{CONTACT_LABELS[point.type] ?? "联系方式"}</dt><dd>
+              {contactPoints.map(point => <div className={styles.basicField} key={point.id}><dt>{t(CONTACT_LABELS[point.type] ?? "联系方式")}</dt><dd>
                 <span>{point.display_hint}</span>
-                <details className={styles.fieldSource}><summary>已确认联系方式</summary><p>{point.source_display_name ?? "已确认身份线索"} · {memoryDate(point.valid_from)}</p>{point.valid_until ? <p>有效至 {memoryDate(point.valid_until)}</p> : null}</details>
+                <details className={styles.fieldSource}><summary>{t("已确认联系方式")}</summary><p>{point.source_display_name ?? t("已确认身份线索")} · {memoryDate(point.valid_from, locale)}</p>{point.valid_until ? <p>{translate(locale, "有效至 {date}", { date: memoryDate(point.valid_until, locale) })}</p> : null}</details>
               </dd></div>)}
-            </dl> : <p className={styles.quiet}>{person ? "还没有已核对的基础信息。" : "人物目录暂时没有这个人的条目。"}</p>}
+            </dl> : <p className={styles.quiet}>{person ? t("还没有已核对的基础信息。") : t("人物目录暂时没有这个人的条目。")}</p>}
           </section>
           {person?.profile?.summary ? <section className={styles.profileSummary} aria-labelledby="person-profile-summary">
-            <h2 className={styles.scopeTitle} id="person-profile-summary">简介</h2><p>{person.profile.summary}</p>
-            <small>{person.profile.provenance_kind === "user_authored" ? "你补充的" : "已复核公开资料"} · {memoryDate(person.profile.updated_at)}</small>
+            <h2 className={styles.scopeTitle} id="person-profile-summary">{t("简介")}</h2><p>{person.profile.summary}</p>
+            <small>{person.profile.provenance_kind === "user_authored" ? t("你补充的") : t("已复核公开资料")} · {memoryDate(person.profile.updated_at, locale)}</small>
           </section> : null}
         </aside>
       </div>

@@ -2,7 +2,7 @@
 
 ## Outcome and boundary
 
-Keep real-user iOS, Web and capir CLI login usable across access-token expiry,
+Keep real-user iOS, macOS, Web and capir CLI login usable across access-token expiry,
 application updates and restarts, until explicit sign-out or canonical session
 revocation. Preserve the released macOS device protocol, account/workspace
 identity, revocation, and intentionally expiring Lab/test/integration grants.
@@ -10,7 +10,7 @@ Transient transport, server and protected-storage failures must preserve the
 renewal credential and show a recoverable unavailable state.
 
 This task includes implementation, independent review, latest-head CI, merge,
-resident backend/Web deployment, CLI installation/distribution and iOS release.
+resident backend/Web deployment, CLI installation/distribution and native releases.
 Physical reboot and external device installation remain separate acceptance
 claims; no simulated result substitutes for them. Browser storage removal and
 browser-enforced cookie retention are platform limits, not remote revocation.
@@ -65,18 +65,31 @@ Official references: [Auth.js renewal](https://authjs.dev/guides/refresh-token-r
 ## Milestones
 
 1. Complete: production-path audits and frozen interfaces; Pi task `20261025-153159-a4b4ccf8` failed with 401 before code/tokens, so scoped Codex workers implemented without paid provider fallback.
-2. **Active:** implement backend, iOS, Web and CLI; exercise expiry, retries, concurrent use, scope, logout and revocation. Generic backend and CLI focused proofs are green. Independent review found logout/renewal races and missing stream/prefix dispatch paths; repair and closure are required before PR.
-3. Independent review, repair confirmed findings and complete applicable checks on the current revision.
+2. Complete: implement backend, iOS, Web, macOS and CLI; exercise expiry, retries, concurrent use, scope, logout and revocation. Independent review findings about logout/renewal races, stream/prefix dispatch, protocol downgrade and pending-enrollment revocation have been repaired and re-reviewed.
+3. **Active:** integrate current main and already-deployed Web improvements, rebind independent review and complete applicable checks on the final revision.
 4. Merge, deploy affected resident services and distribute native/CLI updates; verify exact live revisions and behavior.
 5. Save sanitized evidence, classify acceptance limits and reclaim only task-owned rebuildable resources.
 
 ## Verification and delivery evidence
 
-Host proof: Agent 592 passed / 24 skipped; backend 1278 passed / 689 skipped
-(database-gated tests are separately recorded). Generic backend proof has
-16 real-app PostgreSQL cases plus policy/auth regression tests. Existing Mac
-persistence PostgreSQL regression: 11 passed. CLI focused proof: 62 host cases
-and 19 route/SDK cases; full suite and review repairs are in progress.
+Host proof before final source integration: Agent 592 passed / 24 skipped;
+backend 1278 passed / 689 skipped (database-gated tests are separately recorded).
+The final generic pending-logout proof has 51 cases, including 20 real-app
+PostgreSQL cases. macOS revoke backend proof has 25 cases, including 17 real-app
+PostgreSQL cases. CLI full suite has 293 passed / 1 conditional skip; the final
+protocol rollback regression has 30 passing auth cases. Web focused auth proof
+has 173 cases before integration, with an additional 34 macOS BFF cases.
+
+iOS signed Simulator proof covers 95 unique related cases across the r4/r5
+runs. The r4 fixture compared fractional dates against existing ISO8601 storage;
+the fixture now uses whole seconds and its full structural assertion passes.
+These are targeted tests, not a claim that the full native suite, physical
+reboot, TestFlight distribution or installed-device acceptance has passed.
+Focused macOS native execution passed 40 cases with 3 integration cases skipped;
+the exact official Sparkle 2.10.0 commit was verified against Package.resolved.
+The app used an isolated acceptance bundle identity, preserving the installed
+signed app and its session. Web merge reconciliation adds 75 passing cases,
+with TypeScript and scoped ESLint checks passing.
 Documentation, Wiki and architecture checks pass with 112 migrations; all 110
 previous migration names, order and SQL bytes match the verified baseline.
 
@@ -95,3 +108,25 @@ PostgreSQL Compose project now hosts `capri_persistent_test_unified` and
 `capir_test_unified` on loopback 51991; it must be removed with its own volumes
 after formal evidence is saved. Native build/test uses the Primary iPhone,
 initially Shutdown, with DerivedData and results inside the registered artifact.
+
+## Integration and release ownership
+
+The auth checkpoint is `f47ee6f2`; main through `998caed1` (including sidebar
+PRs 430/431) was merged as `59da4dcd`. Preserve already-live Web revision
+`fbf7ef07a6a0dcdc21ef0dc3dc646276979b3f80` through a normal merge, including
+its localization and composer recovery. The overlapping login/recovery files
+must retain both continuity and localized unavailable states. This task owns
+the common Web/API activation; the sidebar chat owns its subsequent UI check.
+
+Affected resident runtimes include the primary TestFlight API and its shared
+image sidecar, Web, and the separate development API on port 4318. The latter
+requires its own existing configuration, network, database and volumes; do not
+apply the primary staging Compose configuration to it. Unchanged independent
+research agents and browser executor remain preserved.
+
+The human authorized this release's cross-chat coordination and exactly nine
+recent unused cache IDs. Their parent/child references prevented reclamation
+(0 B); additional descendant deletion is not implied. The bounded follow-up
+proposal retains mutable/shared/in-use records and requires explicit approval
+under the local 168-hour retention policy. Evidence and exact IDs live in the
+permanent task directory; no images, containers, volumes or source are cache.

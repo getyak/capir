@@ -193,7 +193,7 @@ export default async function WorkspaceLayout({
   return (
     <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
-      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope}>
+      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope} binding={pendingBinding}>
       <WorkspaceBrowseProvider key={pendingSessionDraftScope} scope={pendingSessionDraftScope} binding={pendingBinding}>
       <PersonContextPanelProvider binding={pendingBinding}>
       <WorkspaceShellFrame sidebar={<>

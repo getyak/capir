@@ -1,4 +1,4 @@
-import type { TimeActivity, TimeActivityKind, TimeScope } from "@talent-signal/contracts";
+import type { LocaleTag, TimeActivity, TimeActivityKind, TimeScope } from "@talent-signal/contracts";
 import { validMeetingDay } from "./meeting-calendar";
 
 export type TimeView = "timeline" | "week" | "month";
@@ -44,11 +44,11 @@ export function monthDays(day: string): string[] {
   const start = weekStart(`${day.slice(0, 7)}-01`);
   return Array.from({ length: 42 }, (_, i) => addDays(start, i));
 }
-export function formatDay(day: string, options: Intl.DateTimeFormatOptions = { month: "long", day: "numeric", weekday: "long" }) {
-  return new Intl.DateTimeFormat("zh-CN", { ...options, timeZone: "UTC" }).format(new Date(`${day}T12:00:00Z`));
+export function formatDay(day: string, options: Intl.DateTimeFormatOptions = { month: "long", day: "numeric", weekday: "long" }, locale: LocaleTag = "zh-CN") {
+  return new Intl.DateTimeFormat(locale, { ...options, timeZone: "UTC" }).format(new Date(`${day}T12:00:00Z`));
 }
-export function formatTime(value: string, zone: string) {
-  return new Intl.DateTimeFormat("zh-CN", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
+export function formatTime(value: string, zone: string, locale: LocaleTag = "zh-CN") {
+  return new Intl.DateTimeFormat(locale, { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(value));
 }
 export function parseTimeLocation(query: URLSearchParams, defaultZone: string, today: Date = new Date()) {
   const zone = query.get("tz") ?? defaultZone;
