@@ -12,7 +12,9 @@ test("persists only bounded recovery identity before sending and survives both p
   const storage = memoryStorage(), origin = "http://localhost:3000", requestKey = "original-reviewed-request";
   await contactRecoveryJournal(storage, () => 1000).claim(origin, "original-session", requestKey);
   const reopened = contactRecoveryJournal(storage, () => 2000);
-  assert.deepEqual(await reopened.list(), [{ origin, sessionVersion: "original-session", requestKey, createdAt: 1000 }]);
+  const [original] = await reopened.list();
+  assert.deepEqual({ ...original, attemptId: "marker" }, { origin, sessionVersion: "original-session", requestKey, createdAt: 1000, outcome: "unknown", attemptId: "marker" });
+  assert.match(original.attemptId, /^[0-9a-f-]{36}$/i);
   assert.equal((await reopened.claim(origin, "original-session", requestKey)).requestKey, requestKey);
   await assert.rejects(reopened.claim(origin, "original-session", "new-copy"), /CONTACT_RECOVERY_PENDING/);
   await assert.rejects(reopened.claim(origin, "other-session", requestKey), /CONTACT_RECOVERY_SCOPE_CHANGED/);
@@ -24,6 +26,35 @@ test("persists only bounded recovery identity before sending and survives both p
   assert.equal(Object.keys(storage.values).length, 0);
 });
 
+test("only a current first-preflight proof can confirm no submission; old unknown outcomes never downgrade", async () => {
+  const storage = memoryStorage(), journal = contactRecoveryJournal(storage, () => 1000);
+  const first = await journal.claim("http://localhost:3000", "same-session", "first-request");
+  assert.equal((await journal.list())[0].outcome, "unknown");
+  const later = await journal.claim(first.origin, first.sessionVersion, first.requestKey);
+  await journal.confirmNotSubmitted(first);
+  await journal.confirmNotSubmitted(later);
+  assert.equal((await journal.list())[0].outcome, "unknown");
+  await assert.rejects(journal.claim(first.origin, first.sessionVersion, "different-request"), /CONTACT_RECOVERY_PENDING/);
+
+  const other = await journal.claim("http://localhost:3000", "other-session", "never-sent");
+  await journal.confirmNotSubmitted(other);
+  assert.equal((await journal.list()).find(item => item.requestKey === "never-sent").outcome, "not_submitted");
+  const retry = await journal.claim(other.origin, other.sessionVersion, other.requestKey);
+  assert.equal((await journal.list()).find(item => item.requestKey === "never-sent").outcome, "unknown");
+  await journal.confirmNotSubmitted(retry);
+  await journal.claim(other.origin, other.sessionVersion, "new-review");
+});
+
+test("storage failure cannot acknowledge no submission or start a dispatch without a durable marker", async () => {
+  const storage = memoryStorage(), journal = contactRecoveryJournal(storage);
+  const claim = await journal.claim("http://localhost:3000", "same-session", "unconfirmed-request");
+  storage.set = async () => { throw new Error("STORAGE_UNAVAILABLE"); };
+  await assert.rejects(journal.confirmNotSubmitted(claim), /STORAGE_UNAVAILABLE/);
+  assert.equal((await journal.list())[0].outcome, "unknown");
+  await assert.rejects(journal.claim(claim.origin, claim.sessionVersion, claim.requestKey), /STORAGE_UNAVAILABLE/);
+  assert.equal((await journal.list())[0].outcome, "unknown");
+});
+
 test("lost response recovery reads the original receipt without POST and denies replacement sessions", async () => {
   const oldFetch = globalThis.fetch, oldLocation = globalThis.location;
   const origin = "http://localhost:3000", task = "10000000-0000-4000-8000-000000000001", calls = [];
@@ -31,7 +62,7 @@ test("lost response recovery reads the original receipt without POST and denies 
   globalThis.location = { origin, pathname: "/contact-agent" };
   globalThis.fetch = async (url, options) => {
     calls.push({ url, options });
-    return { ok: true, json: async () => url.endsWith("session") ? { session_version: activeSession, contact_agent: true } : { task_id: task, status } };
+    return { ok: true, status: 200, json: async () => url.endsWith("session") ? { status: "ready", session_version: activeSession, contact_agent: true } : { task_id: task, status } };
   };
   try {
     const result = await recoverContactTaskInWeb(origin, "original-session", "original-reviewed-request");
@@ -40,7 +71,7 @@ test("lost response recovery reads the original receipt without POST and denies 
     assert.equal(calls[1].url, "/api/contact-agent/tasks?handoff_request_id=original-reviewed-request");
     assert.ok(calls.every(call => !call.options.method || call.options.method === "GET"));
     calls.length = 0; activeSession = "replacement";
-    assert.equal((await recoverContactTaskInWeb(origin, "original-session", "original-reviewed-request")).code, "session_stale");
+    assert.equal((await recoverContactTaskInWeb(origin, "original-session", "original-reviewed-request")).code, "session_changed");
     assert.equal(calls.length, 1);
     activeSession = "original-session"; status = "deleted";
     assert.equal((await recoverContactTaskInWeb(origin, "original-session", "original-reviewed-request")).state, "unavailable");
