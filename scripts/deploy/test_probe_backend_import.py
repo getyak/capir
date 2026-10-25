@@ -344,12 +344,11 @@ class ProbeTests(unittest.TestCase):
                 probe.validate_logs(log)
 
     def test_runtime_identity_rejects_wrong_source_and_config(self):
-        artifact = {'image_config_digest': 'sha256:' + 'b' * 64, 'source_revision': 'a' * 40}
-        image = {'Id': artifact['image_config_digest'], 'Os': 'linux', 'Architecture': 'arm64',
-                 'Config': {'Labels': {'org.opencontainers.image.revision': 'a' * 40}}}
+        fixture = ImageIdentityFixture()
+        artifact, image = fixture.artifact, fixture.image
         probe.validate_image(image, artifact)
         with self.assertRaises(probe.ProbeError):
-            probe.validate_image(dict(image, Id='sha256:' + 'c' * 64), artifact)
+            probe.validate_image(dict(image, Id=artifact['image_config_digest']), artifact)
         image['Config']['Labels']['org.opencontainers.image.revision'] = 'd' * 40
         with self.assertRaises(probe.ProbeError):
             probe.validate_image(image, artifact)
@@ -482,6 +481,200 @@ class RunnerObservationTests(unittest.TestCase):
                 self.assertEqual(runner.last_command['outcome'],
                                  {'timeout': 'timeout', 'output-limit': 'output-limit', 'launch': 'launch-error'}[case])
                 self.assertNotIn('PRIVATE', json.dumps(runner.last_command))
+
+
+class LoadedIdentityTests(unittest.TestCase):
+    def item(self, fixture):
+        item = probe.Probe(Path('/archive'), fixture.artifact['source_revision'], Path('/output'))
+        item.outer, item.cid, item.containerd_address = ['docker'], 'a' * 64, '/proof/containerd.sock'
+        item.runner = ImageIdentityRunner(fixture)
+        return item
+
+    def test_actual_identity_uses_manifest_target_and_binds_stored_config_and_diff_ids(self):
+        fixture = ImageIdentityFixture()
+        item = self.item(fixture)
+        self.assertEqual(item.check_loaded_image(fixture.artifact), fixture.manifest_digest)
+        observed = item.report['loaded_identity']
+        self.assertTrue(observed['validated'])
+        self.assertEqual(observed['docker']['image_id'], fixture.manifest_digest)
+        self.assertEqual(observed['manifest']['digest'], fixture.manifest_digest)
+        self.assertEqual(observed['config']['digest'], fixture.config_digest)
+        self.assertEqual(observed['config']['diff_ids'], ['sha256:' + 'd' * 64, 'sha256:' + 'e' * 64])
+        self.assertNotIn('PRIVATE', json.dumps(item.report))
+        self.assertNotIn('Env', json.dumps(item.report))
+
+    def test_actual_identity_rejects_missing_stale_ambiguous_and_multiple_images(self):
+        for mutation in ('missing', 'stale', 'duplicate-docker', 'multiple-containerd', 'wrong-target', 'multiple-inspect'):
+            with self.subTest(mutation=mutation):
+                fixture = ImageIdentityFixture()
+                if mutation == 'missing':
+                    fixture.docker_ids = []
+                elif mutation == 'stale':
+                    fixture.docker_ids = ['sha256:' + '9' * 64]
+                elif mutation == 'duplicate-docker':
+                    fixture.docker_ids *= 2
+                elif mutation == 'multiple-containerd':
+                    fixture.refs.append('PRIVATE_STALE_REFERENCE')
+                elif mutation == 'wrong-target':
+                    fixture.matching_refs = []
+                else:
+                    fixture.inspections *= 2
+                item = self.item(fixture)
+                with self.assertRaises(probe.ProbeError):
+                    item.check_loaded_image(fixture.artifact)
+                self.assertFalse(item.report['loaded_identity']['validated'])
+                self.assertNotIn('PRIVATE', json.dumps(item.report))
+
+    def test_actual_identity_rejects_broken_manifest_config_platform_source_and_diff_id_chain(self):
+        for mutation in ('config-as-id', 'descriptor', 'descriptor-platform', 'index', 'size', 'source', 'platform', 'diff-ids',
+                         'manifest-bytes', 'config-bytes', 'config-link', 'oversized'):
+            with self.subTest(mutation=mutation):
+                fixture = ImageIdentityFixture()
+                if mutation == 'config-as-id':
+                    fixture.image['Id'] = fixture.config_digest
+                elif mutation == 'descriptor':
+                    fixture.image['Descriptor']['digest'] = 'sha256:' + '9' * 64
+                elif mutation == 'descriptor-platform':
+                    fixture.image['Descriptor']['platform'] = {'os': 'linux', 'architecture': 'amd64'}
+                elif mutation == 'index':
+                    fixture.image['Descriptor']['mediaType'] = 'application/vnd.oci.image.index.v1+json'
+                elif mutation == 'size':
+                    fixture.image['Descriptor']['size'] += 1
+                elif mutation == 'source':
+                    fixture.image['Config']['Labels']['org.opencontainers.image.revision'] = 'b' * 40
+                elif mutation == 'platform':
+                    fixture.image['Architecture'] = 'amd64'
+                elif mutation == 'diff-ids':
+                    fixture.image['RootFS']['Layers'].reverse()
+                elif mutation == 'config-link':
+                    fixture.artifact['image_config_digest'] = 'sha256:' + '9' * 64
+                elif mutation == 'oversized':
+                    fixture.blobs[fixture.manifest_digest] = b'x' * (4 * 1024**2)
+                else:
+                    digest = fixture.manifest_digest if mutation == 'manifest-bytes' else fixture.config_digest
+                    fixture.blobs[digest] += b'\n'
+                item = self.item(fixture)
+                with self.assertRaises(probe.ProbeError):
+                    item.check_loaded_image(fixture.artifact)
+                self.assertFalse(item.report['loaded_identity']['validated'])
+                self.assertNotIn('PRIVATE', json.dumps(item.report))
+
+    def test_unpack_cannot_credit_another_complete_manifest(self):
+        target = 'sha256:' + 'b' * 64
+        output = ('REF TYPE DIGEST STATUS SIZE UNPACKED\n'
+                  'ref application/vnd.oci.image.manifest.v1+json ' + target + ' complete (4/4) 1kB/1kB true\n')
+        probe.validate_unpack(output, 1, target)
+        with self.assertRaises(probe.ProbeError):
+            probe.validate_unpack(output.replace(target, 'sha256:' + 'c' * 64), 1, target)
+
+    def test_actual_version_probes_use_manifest_id_and_reject_a_different_running_image(self):
+        target = 'sha256:' + 'b' * 64
+        for wrong_image in (False, True):
+            with self.subTest(wrong_image=wrong_image):
+                item = probe.Probe(Path('/archive'), 'a' * 40, Path('/output'))
+                item.outer, item.cid, item.owner = ['docker'], 'a' * 64, 'backend-import-123-1-abc'
+                item.runner = VersionIdentityRunner(target, wrong_image)
+                if wrong_image:
+                    with self.assertRaises(probe.ProbeError):
+                        item.check_version_runtimes(target)
+                    self.assertNotIn('node_version_probe_passed', item.report)
+                else:
+                    item.check_version_runtimes(target)
+                    self.assertTrue(item.report['node_version_probe_passed'])
+                    self.assertTrue(item.report['native_version_probe_passed'])
+                    self.assertEqual(item.report['runtime_image_ids'], {'node': target, 'native': target})
+                self.assertNotIn('PRIVATE', json.dumps(item.report))
+
+    def test_actual_runner_returns_exact_content_bytes_for_hash_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = probe.Runner(Path(tmp))
+            def raw(argv, **kwargs):
+                kwargs['stdout'].write(b'\xff\x00\xe7\xa7\x98')
+                return subprocess.CompletedProcess(argv, 0)
+            with patch.object(probe.subprocess, 'run', side_effect=raw):
+                self.assertEqual(runner.run(['docker'], binary=True), b'\xff\x00\xe7\xa7\x98')
+
+
+class ImageIdentityFixture:
+    def __init__(self):
+        media = 'application/vnd.oci.image.'
+        self.config = {'os': 'linux', 'architecture': 'arm64',
+            'config': {'Labels': {'org.opencontainers.image.revision': 'a' * 40}, 'Env': ['PRIVATE=秘密']},
+            'rootfs': {'type': 'layers', 'diff_ids': ['sha256:' + 'd' * 64, 'sha256:' + 'e' * 64]}}
+        config_bytes = json.dumps(self.config, ensure_ascii=False, separators=(',', ':')).encode()
+        self.config_digest = 'sha256:' + hashlib.sha256(config_bytes).hexdigest()
+        manifest = {'schemaVersion': 2, 'mediaType': media + 'manifest.v1+json',
+            'config': {'digest': self.config_digest, 'mediaType': media + 'config.v1+json', 'size': len(config_bytes)},
+            'layers': [{'digest': 'sha256:' + x * 64, 'mediaType': media + 'layer.v1.tar+gzip', 'size': 123}
+                       for x in ('1', '2')]}
+        manifest_bytes = json.dumps(manifest, separators=(',', ':')).encode()
+        self.manifest_digest = 'sha256:' + hashlib.sha256(manifest_bytes).hexdigest()
+        self.artifact = {'image_config_digest': self.config_digest, 'image_manifest_digest': self.manifest_digest,
+                         'source_revision': 'a' * 40, 'layer_count': 2, 'platform': 'linux/arm64'}
+        self.image = {'Id': self.manifest_digest, 'Descriptor': {'digest': self.manifest_digest,
+                       'mediaType': media + 'manifest.v1+json', 'size': len(manifest_bytes)},
+                      'Os': 'linux', 'Architecture': 'arm64', 'Config': copy.deepcopy(self.config['config']),
+                      'RootFS': {'Type': 'layers', 'Layers': self.config['rootfs']['diff_ids'][:]}}
+        self.inspections = [self.image]
+        self.docker_ids = [self.manifest_digest]
+        self.refs = ['moby-dangling@' + self.manifest_digest]
+        self.matching_refs = self.refs[:]
+        self.blobs = {self.manifest_digest: manifest_bytes, self.config_digest: config_bytes}
+
+
+class ImageIdentityRunner:
+    """Moby 29 resolves target digests, never config digests; no real commands."""
+    def __init__(self, fixture):
+        self.fixture = fixture
+
+    def run(self, argv, **kwargs):
+        prefix = ['docker', 'exec', 'a' * 64]
+        docker = prefix + ['docker', '--host=unix:///proof/docker.sock']
+        ctr = prefix + ['ctr', '--address', '/proof/containerd.sock', '--namespace', 'moby']
+        fixture = self.fixture
+        if argv == docker + ['image', 'inspect', fixture.config_digest]:
+            raise probe.ProbeError('bounded command failed')
+        if argv == docker + ['image', 'inspect', fixture.manifest_digest]:
+            return json.dumps(fixture.inspections)
+        if argv == docker + ['image', 'ls', '--quiet', '--all', '--no-trunc']:
+            return '\n'.join(fixture.docker_ids)
+        if argv == ctr + ['images', 'ls', '--quiet']:
+            return '\n'.join(fixture.refs)
+        if argv == ctr + ['images', 'ls', '--quiet', 'target.digest==' + fixture.manifest_digest]:
+            return '\n'.join(fixture.matching_refs)
+        if argv[:len(ctr) + 2] == ctr + ['content', 'get'] and argv[-1] in fixture.blobs:
+            if kwargs != {'binary': True}:
+                raise AssertionError('content hash input must remain raw bytes')
+            return fixture.blobs[argv[-1]]
+        raise AssertionError('unexpected identity command')
+
+
+class VersionIdentityRunner:
+    def __init__(self, target, wrong_image):
+        self.target, self.wrong_image = target, wrong_image
+        self.containers = {}
+
+    def run(self, argv, **kwargs):
+        prefix = ['docker', 'exec', 'a' * 64, 'docker', '--host=unix:///proof/docker.sock']
+        if argv[:len(prefix)] != prefix:
+            raise AssertionError('unexpected runtime prefix')
+        args = argv[len(prefix):]
+        if args[:1] == ['create']:
+            if args[args.index('--entrypoint=node') + 1] != self.target:
+                raise probe.ProbeError('bounded command failed')
+            if not {'--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges'} <= set(args):
+                raise AssertionError('runtime isolation lost')
+            name = args[args.index('--name') + 1].rsplit('-', 1)[-1]
+            cid = ('b' if name == 'node' else 'c') * 64
+            self.containers[cid] = name
+            return cid
+        if args[:2] == ['start', '--attach'] and args[2] in self.containers:
+            return ('node-arm64-ok v22.15.0\n' if self.containers[args[2]] == 'node' else
+                    'Native Agent runtime verified: linux-arm64; 0.1.73\n')
+        if args[:2] == ['container', 'inspect'] and args[2] in self.containers:
+            return json.dumps([{'Id': args[2], 'Image': 'sha256:' + '9' * 64 if self.wrong_image else self.target,
+                'Config': {'Env': ['PRIVATE']}, 'State': {'Status': 'exited', 'ExitCode': 0, 'OOMKilled': False}}])
+        raise AssertionError('unexpected runtime command')
 
 
 class PathRunner:

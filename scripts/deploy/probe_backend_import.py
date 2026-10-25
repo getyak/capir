@@ -24,7 +24,7 @@ import tempfile
 import threading
 import time
 
-from inspect_backend_oci import inspect_archive, bounded_tar_info
+from inspect_backend_oci import inspect_archive, bounded_tar_info, decode_json, OCI, SHA256, MAX_LAYERS
 
 CAP = 2 * 1024**3
 OUTPUT_LIMIT = 4 * 1024**2
@@ -225,10 +225,13 @@ def validate_loop(value, loop, backing):
             'loop device ownership mismatch')
 
 
-def validate_unpack(output, expected_count):
+def validate_unpack(output, expected_count, expected_digest=None):
     rows = [line.split() for line in output.splitlines()[1:] if line.strip()]
     require(expected_count > 0 and len(rows) == expected_count, 'missing image unpack evidence')
     for row in rows:
+        if expected_digest is not None:
+            require(len(row) > 3 and row[1] == OCI + 'manifest.v1+json' and row[2] == expected_digest,
+                    'unpack evidence belongs to another image')
         require('complete' in row and row[-1] == 'true' and 'incomplete' not in row,
                 'incomplete image content or unpack')
         counts = [re.fullmatch(r'\(([0-9]+)/([0-9]+)\)', token) for token in row]
@@ -270,11 +273,50 @@ def validate_delegation(host_namespace, worker_namespace, available, enabled, me
             membership.strip() == '0::/init', 'nested cgroup v2 delegation incomplete')
 
 
+def digest_observation(value):
+    return value if isinstance(value, str) and SHA256.fullmatch(value) else None
+
+
+def config_observation(config):
+    """Allowlisted runtime identity only; never retain Config.Env or other config."""
+    settings = config.get('config') if isinstance(config.get('config'), dict) else {}
+    labels = settings.get('Labels') if isinstance(settings.get('Labels'), dict) else {}
+    rootfs = config.get('rootfs') if isinstance(config.get('rootfs'), dict) else {}
+    revision, layers = labels.get('org.opencontainers.image.revision'), rootfs.get('diff_ids')
+    return {'os': config.get('os') if config.get('os') in ('linux', 'windows', 'darwin') else None,
+            'architecture': config.get('architecture') if config.get('architecture') in
+                ('arm64', 'amd64', 'arm', '386', 'riscv64', 's390x', 'ppc64le') else None,
+            'source_revision': revision if isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{40}', revision) else None,
+            'rootfs_type': 'layers' if rootfs.get('type') == 'layers' else None,
+            'diff_ids': [digest_observation(x) for x in layers]
+                if isinstance(layers, list) and len(layers) <= MAX_LAYERS else None}
+
+
+def image_observation(image):
+    descriptor = image.get('Descriptor') if isinstance(image.get('Descriptor'), dict) else {}
+    platform = config_observation(descriptor.get('platform') if isinstance(descriptor.get('platform'), dict) else {})
+    rootfs = image.get('RootFS') if isinstance(image.get('RootFS'), dict) else {}
+    result = config_observation({'os': image.get('Os'), 'architecture': image.get('Architecture'),
+        'config': image.get('Config'), 'rootfs': {'type': rootfs.get('Type'), 'diff_ids': rootfs.get('Layers')}})
+    size = descriptor.get('size')
+    result.update({'image_id': digest_observation(image.get('Id')), 'descriptor': {
+        'digest': digest_observation(descriptor.get('digest')),
+        'media_type': descriptor.get('mediaType') if descriptor.get('mediaType') in
+            (OCI + 'manifest.v1+json', OCI + 'index.v1+json', OCI + 'config.v1+json') else None,
+        'bytes': size if type(size) is int and 0 < size < OUTPUT_LIMIT else None,
+        'platform_present': 'platform' in descriptor, 'os': platform['os'], 'architecture': platform['architecture']}})
+    return result
+
+
 def validate_image(image, artifact):
-    require(image.get('Id') == artifact['image_config_digest'] and image.get('Os') == 'linux' and
-            image.get('Architecture') == 'arm64' and
-            image.get('Config', {}).get('Labels', {}).get('org.opencontainers.image.revision') ==
-            artifact['source_revision'], 'loaded image identity mismatch')
+    observed = image_observation(image)
+    require(observed['image_id'] == artifact['image_manifest_digest'] and
+            observed['descriptor']['digest'] == artifact['image_manifest_digest'] and
+            observed['descriptor']['media_type'] == OCI + 'manifest.v1+json' and
+            (not observed['descriptor']['platform_present'] or
+             (observed['descriptor']['os'] == 'linux' and observed['descriptor']['architecture'] == 'arm64')) and
+            observed['os'] == 'linux' and observed['architecture'] == 'arm64' and
+            observed['source_revision'] == artifact['source_revision'], 'loaded image identity mismatch')
 
 
 class Runner:
@@ -286,7 +328,7 @@ class Runner:
         self.env = {key: os.environ[key] for key in ('PATH', 'HOME') if key in os.environ}
         self.env.update({'LC_ALL': 'C', 'TMPDIR': str(temp)})
 
-    def run(self, argv, *, stdin=None, timeout=120):
+    def run(self, argv, *, stdin=None, timeout=120, binary=False):
         self.command_count += 1
         # Fixed-size, content-free provenance; never retain argv, env or output.
         observed = {'sequence': self.command_count,
@@ -313,9 +355,9 @@ class Runner:
             observed['outcome'] = 'nonzero-exit'
             require(result.returncode == 0, 'bounded command failed')
             output.seek(0)
-            text = output.read().decode('utf-8', errors='replace')
+            data = output.read()
             observed['outcome'] = 'passed'
-            return text
+            return data if binary else data.decode('utf-8', errors='replace')
 
 
 def remove_owned_container(runner, outer, cid, owner):
@@ -367,9 +409,9 @@ class Probe:
         return self.runner.run(self.outer + ['exec', self.cid, 'docker',
             '--host=unix:///proof/docker.sock', *args], **kwargs)
 
-    def ctr(self, *args):
+    def ctr(self, *args, **kwargs):
         return self.runner.run(self.outer + ['exec', self.cid, 'ctr',
-            '--address', self.containerd_address, '--namespace', 'moby', *args])
+            '--address', self.containerd_address, '--namespace', 'moby', *args], **kwargs)
 
     def capped_path(self, path, role='control'):
         self.report['substep'] = 'path-backing'
@@ -473,6 +515,96 @@ class Probe:
         self.report['engine'] = engine_observation(version, info)
         validate_engine(version, info)
         self.report['engine']['validated'] = True
+
+    def check_loaded_image(self, artifact):
+        observed = self.report['loaded_identity'] = {'validated': False}
+        target, config_digest = artifact['image_manifest_digest'], artifact['image_config_digest']
+        require(digest_observation(target) and digest_observation(config_digest), 'invalid expected image digest')
+        # Moby 29 resolves image IDs by containerd target.digest, not config digest.
+        # The inspected artifact has exactly one flat manifest, never an index target.
+        self.report['substep'] = 'loaded-image-inventory'
+        ids = self.inner('image', 'ls', '--quiet', '--all', '--no-trunc').splitlines()
+        observed.update(docker_image_count=len(ids), docker_image_ids=[digest_observation(x) for x in ids[:2]])
+        refs = self.ctr('images', 'ls', '--quiet').splitlines()
+        observed['containerd_image_count'] = len(refs)
+        matching = self.ctr('images', 'ls', '--quiet', 'target.digest==' + target).splitlines()
+        observed['matching_manifest_count'] = len(matching)
+        require(ids == [target] and len(refs) == 1 and refs == matching and refs[0],
+                'loaded image inventory is missing wrong or ambiguous')
+        self.report['substep'] = 'loaded-image-inspect'
+        loaded = json.loads(self.inner('image', 'inspect', target))
+        observed['inspect_count'] = len(loaded) if isinstance(loaded, list) else None
+        require(isinstance(loaded, list) and len(loaded) == 1 and isinstance(loaded[0], dict), 'missing loaded image')
+        observed['docker'] = image_observation(loaded[0])
+        validate_image(loaded[0], artifact)
+
+        manifest, manifest_bytes = self.stored_image_document(target, 'manifest', observed)
+        descriptor = manifest.get('config') if isinstance(manifest.get('config'), dict) else {}
+        layers = manifest.get('layers')
+        observed['manifest'].update(config_digest=digest_observation(descriptor.get('digest')),
+                                    layer_count=len(layers) if isinstance(layers, list) else None)
+        require(type(manifest.get('schemaVersion')) is int and manifest['schemaVersion'] == 2 and
+                manifest.get('mediaType', OCI + 'manifest.v1+json') == OCI + 'manifest.v1+json' and
+                descriptor.get('mediaType') == OCI + 'config.v1+json' and
+                descriptor.get('digest') == config_digest and isinstance(layers, list) and
+                len(layers) == artifact['layer_count'] and
+                observed['docker']['descriptor']['bytes'] == manifest_bytes,
+                'stored manifest descriptor mismatch')
+        config, config_bytes = self.stored_image_document(config_digest, 'config', observed)
+        metadata = config_observation(config)
+        observed['config'].update(metadata)
+        diff_ids = metadata['diff_ids']
+        require(descriptor.get('size') == config_bytes and metadata['os'] == 'linux' and
+                metadata['architecture'] == 'arm64' and metadata['source_revision'] == artifact['source_revision'] and
+                metadata['rootfs_type'] == 'layers' and isinstance(diff_ids, list) and
+                0 < len(diff_ids) == len(layers) <= MAX_LAYERS and all(diff_ids),
+                'stored config identity mismatch')
+        require(all(observed['docker'][key] == value for key, value in metadata.items()),
+                'Docker config or rootfs differs from stored config')
+        observed['validated'] = True
+        return target
+
+    def stored_image_document(self, digest, role, observed):
+        self.report['substep'] = 'stored-image-' + role
+        data = self.ctr('content', 'get', digest, binary=True)
+        require(isinstance(data, bytes) and 0 < len(data) < OUTPUT_LIMIT, 'stored image metadata exceeds bound')
+        actual = 'sha256:' + hashlib.sha256(data).hexdigest()
+        observed[role] = {'digest': actual, 'bytes': len(data)}
+        require(actual == digest, 'stored image metadata digest mismatch')
+        try:
+            return decode_json(data), len(data)
+        except ValueError:
+            raise ProbeError('invalid stored image metadata') from None
+
+    def check_version_runtimes(self, image_id):
+        require(digest_observation(image_id), 'invalid runtime image identity')
+        for name, command, expected in (
+            ('node', ['-e', 'if(process.platform!=="linux"||process.arch!=="arm64")process.exit(1);console.log("node-arm64-ok "+process.version)'], 'node-arm64-ok'),
+            ('native', ['/app/apps/agent/scripts/verify-native-runtime.cjs'], 'Native Agent runtime verified: linux-arm64;')):
+            self.report['substep'] = name + '-runtime-create'
+            runtime = self.inner('create', '--name', self.owner + '-' + name, '--network=none', '--read-only',
+                '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m',
+                '--cpus=1', '--log-driver=none', '--entrypoint=node', image_id, *command).strip()
+            require(re.fullmatch(r'[0-9a-f]{64}', runtime) is not None, 'unexpected runtime identifier')
+            self.report['substep'] = name + '-runtime-start'
+            result = self.inner('start', '--attach', runtime, timeout=90)
+            self.report['substep'] = name + '-runtime-result'
+            inspected = json.loads(self.inner('container', 'inspect', runtime))
+            require(isinstance(inspected, list) and len(inspected) == 1 and inspected[0].get('Id') == runtime,
+                    'missing version-only runtime container')
+            actual_image = digest_observation(inspected[0].get('Image'))
+            self.report.setdefault('runtime_image_ids', {})[name] = actual_image
+            require(actual_image == image_id, 'version-only runtime image mismatch')
+            state = inspected[0]['State']
+            require(state['Status'] == 'exited' and state['ExitCode'] == 0 and not state.get('OOMKilled') and
+                    expected in result, 'version-only runtime failed')
+            validate_logs(result)
+            # Retain stopped version-probe writable layers through stabilization.
+            self.report[name + '_version_probe_passed'] = True
+            pattern = r'node-arm64-ok v([0-9]+\.[0-9]+\.[0-9]+)' if name == 'node' else r'linux-arm64; ([0-9]+\.[0-9]+\.[0-9]+)'
+            version_match = re.search(pattern, result)
+            require(version_match is not None, 'version-only output not recognized')
+            self.report[name + '_version'] = version_match[1]
 
     def check_runtime_tools(self):
         observed = self.report.setdefault('runtime_tool_hashes', {})
@@ -646,35 +778,12 @@ class Probe:
         after = inspect_archive(self.archive, self.revision)
         validate_artifact(after, artifact, self.revision, (self.archive.parent / 'SHA256SUMS').read_text())
         self.report['substep'] = 'loaded-image-identity'
-        loaded = json.loads(self.inner('image', 'inspect', artifact['image_config_digest']))
-        require(len(loaded) == 1, 'missing loaded image')
-        validate_image(loaded[0], artifact)
+        runtime_image = self.check_loaded_image(artifact)
         self.report['substep'] = 'complete-unpack'
-        refs = self.ctr('images', 'ls', '--quiet').splitlines()
-        validate_unpack(self.ctr('images', 'check', '--snapshotter', 'overlayfs'), len(refs))
+        validate_unpack(self.ctr('images', 'check', '--snapshotter', 'overlayfs'), 1, runtime_image)
         self.report['complete_unpack_verified'] = True
         self.report['phase'] = 'version-only-runtime'
-        for name, command, expected in (
-            ('node', ['-e', 'if(process.platform!=="linux"||process.arch!=="arm64")process.exit(1);console.log("node-arm64-ok "+process.version)'], 'node-arm64-ok'),
-            ('native', ['/app/apps/agent/scripts/verify-native-runtime.cjs'], 'Native Agent runtime verified: linux-arm64;')):
-            self.report['substep'] = name + '-runtime-create'
-            runtime = self.inner('create', '--name', self.owner + '-' + name, '--network=none', '--read-only',
-                '--cap-drop=ALL', '--security-opt=no-new-privileges', '--pids-limit=64', '--memory=512m',
-                '--cpus=1', '--log-driver=none', '--entrypoint=node', artifact['image_config_digest'], *command).strip()
-            require(re.fullmatch(r'[0-9a-f]{64}', runtime) is not None, 'unexpected runtime identifier')
-            self.report['substep'] = name + '-runtime-start'
-            result = self.inner('start', '--attach', runtime, timeout=90)
-            self.report['substep'] = name + '-runtime-result'
-            state = json.loads(self.inner('container', 'inspect', runtime))[0]['State']
-            require(state['Status'] == 'exited' and state['ExitCode'] == 0 and not state.get('OOMKilled') and
-                    expected in result, 'version-only runtime failed')
-            validate_logs(result)
-            # Retain stopped version-probe writable layers through stabilization.
-            self.report[name + '_version_probe_passed'] = True
-            pattern = r'node-arm64-ok v([0-9]+\.[0-9]+\.[0-9]+)' if name == 'node' else r'linux-arm64; ([0-9]+\.[0-9]+\.[0-9]+)'
-            version_match = re.search(pattern, result)
-            require(version_match is not None, 'version-only output not recognized')
-            self.report[name + '_version'] = version_match[1]
+        self.check_version_runtimes(runtime_image)
         self.report['phase'] = 'idle-stabilization'
         self.report['substep'] = 'usage-stabilization'
         previous = None
@@ -689,8 +798,9 @@ class Probe:
                 break
             time.sleep(1)
         require(stable >= 5, 'filesystem did not stabilize')
+        require(self.check_loaded_image(artifact) == runtime_image, 'loaded image identity changed after runtime')
         self.report['substep'] = 'final-unpack'
-        validate_unpack(self.ctr('images', 'check', '--snapshotter', 'overlayfs'), len(refs))
+        validate_unpack(self.ctr('images', 'check', '--snapshotter', 'overlayfs'), 1, runtime_image)
         self.capped_path('/proof/daemon.log', 'daemon-log')
         self.report['substep'] = 'daemon-log-check'
         validate_logs(self.runner.run(self.outer + ['exec', self.cid, 'cat', '/proof/daemon.log']))

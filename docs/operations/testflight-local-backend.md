@@ -196,7 +196,12 @@ its runc shim and ctr as exact read-only files from the SHA256-pinned official
 actual binds and the running executable are checked; engine version and commit
 must match the required resident pair. Actual sanitized metadata is retained
 before acceptance checks, including on failure. These immutable bootstrap
-files remain outside the measured import filesystem and are disclosed. Fresh
+files remain outside the measured import filesystem and are disclosed.
+Loaded-image lookup and both
+version probes use the verified manifest digest required by this Docker store.
+The sole image target, stored manifest/config hashes, source, platform and ordered
+rootfs diff IDs must agree with the inspected archive and Docker readback; the
+identity check repeats after runtime stabilization. Fresh
 4 KiB ext4 storage has a fixed experimental 2 GiB cap for verified Docker,
 containerd content/ingest/snapshot/metadata, state and temporary paths. The known
 content directory may be absent before first ingest; its existing parent must
