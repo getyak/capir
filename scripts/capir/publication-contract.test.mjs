@@ -1,6 +1,6 @@
 import test,{after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,readFileSync,readdirSync,statSync} from 'node:fs';
+import {mkdtempSync,rmSync,readFileSync,readdirSync,openSync,fstatSync,closeSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {runContract,contractContext} from './publication-contract.mjs';
@@ -15,7 +15,7 @@ test('real contract orchestration exercises ID assets, fresh draft discovery and
  assert.equal(result.existing_draft_rediscovered,true);assert.equal(result.fixture.binary_verified,true);assert.equal(result.asset_delete_and_reupload_verified,true);
  assert.ok(mock.calls.some(args=>args[0]==='release'&&args[1]==='view'));assert.ok(mock.calls.some(args=>requestInfo(args)?.method==='DELETE'&&requestInfo(args)?.path.includes('/assets/')));
  for(const args of mock.calls){const req=requestInfo(args);assert.ok(!args.includes('auth'));assert.ok(!req?.path.includes('capir-stable'));}
- for(const filename of readdirSync(o.receiptDir).filter(x=>x.endsWith('.json'))){const path=join(o.receiptDir,filename);assert.equal(statSync(path).mode&0o777,0o600);assert.ok(!readFileSync(path,'utf8').includes('SYNTHETIC_JOB_TOKEN'));}
+ for(const filename of readdirSync(o.receiptDir).filter(x=>x.endsWith('.json'))){const fd=openSync(join(o.receiptDir,filename),'r');try{assert.equal(fstatSync(fd).mode&0o777,0o600);assert.ok(!readFileSync(fd,'utf8').includes('SYNTHETIC_JOB_TOKEN'));}finally{closeSync(fd);}}
  assert.equal(result.api_version,'2026-03-10');assert.equal(result.gh_version,'2.97.0');
 });
 for(const [key,value]of Object.entries({GITHUB_ACTIONS:'false',GITHUB_EVENT_NAME:'push',GITHUB_REPOSITORY:'other/repo',GITHUB_REF:'refs/heads/feature',GITHUB_WORKFLOW_REF:'other/path',GITHUB_RUN_ID:'0',GITHUB_RUN_ATTEMPT:'0',GITHUB_SHA:'not-a-sha',GH_TOKEN:''}))test(`invalid ${key} fails before IO`,async()=>{
@@ -30,7 +30,7 @@ test('unexpected pre-existing probe is not adopted or deleted',async()=>{
 test('failed fresh installation-token rediscovery stops writes and cleans only the response-owned draft',async()=>{
  const mock=githubFixture(sha),o=options(mock);o.gh=(args,init)=>args[0]==='release'&&mock.releases.size?{code:1,stdout:'',notFound:true}:mock.gh(args,init);
  const result=await runContract(o);assert.equal(result.result,'failed');assert.equal(result.failure_stage,'fresh-client-draft-rediscovery');assert.equal(result.cleanup,'response-bound-draft-deleted-and-404-verified');assert.equal(mock.releases.size,0);
- assert.ok(!mock.calls.some(args=>requestInfo(args)?.path.startsWith('https://uploads.github.com')));
+ assert.ok(!mock.calls.some(args=>{const path=requestInfo(args)?.path;return path!==undefined&&new URL(path,'https://api.github.com').origin==='https://uploads.github.com';}));
 });
 test('binary failure is never a passing contract even after confirmed cleanup',async()=>{
  const mock=githubFixture(sha),o=options(mock);o.downloadAsset=async()=>{throw new Error('synthetic');};const result=await runContract(o);assert.equal(result.result,'failed');assert.equal(result.failure_stage,'upload-download-fixture');assert.equal(result.cleanup,'response-bound-draft-deleted-and-404-verified');assert.equal(mock.releases.size,0);

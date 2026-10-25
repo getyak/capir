@@ -1,12 +1,13 @@
 import test,{after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,writeFileSync,readFileSync,existsSync,statSync} from 'node:fs';
+import {mkdtempSync,rmSync,writeFileSync,readFileSync,existsSync,statSync,openSync,fstatSync,closeSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {realDownloadAsset,durableReceipt,positiveId} from './github-release-provider.mjs';
 const work=mkdtempSync(join(tmpdir(),'capir-provider-tests-'));after(()=>rmSync(work,{recursive:true,force:true}));
 test('safe response receipts are atomically private JSON files',()=>{
- const path=join(work,'receipt.json');durableReceipt(path,{id:123,tag:'capir-v0.2.4'});assert.equal(statSync(path).mode&0o777,0o600);assert.deepEqual(JSON.parse(readFileSync(path)),{id:123,tag:'capir-v0.2.4'});
+ const path=join(work,'receipt.json');durableReceipt(path,{id:123,tag:'capir-v0.2.4'});const fd=openSync(path,'r');
+ try{assert.equal(fstatSync(fd).mode&0o777,0o600);assert.deepEqual(JSON.parse(readFileSync(fd)),{id:123,tag:'capir-v0.2.4'});}finally{closeSync(fd);}
 });
 for(const id of [0,-1,1.5,NaN,Infinity,'12','../../other',Number.MAX_SAFE_INTEGER+1])test(`invalid numeric ID ${id} cannot start a binary transport`,async()=>{
  const path=join(work,'invalid-'+String(id).replace(/\W/g,'x'));assert.equal(positiveId(id),false);await assert.rejects(realDownloadAsset(id,path,16),/bound/);assert.equal(existsSync(path),false);
