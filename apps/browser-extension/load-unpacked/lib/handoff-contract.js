@@ -132,13 +132,19 @@ export function classifyReceiptResponse(status, body = {}) {
     };
   }
 
-  if ([401, 403, 419].includes(status) || body.code === "session_stale") {
+  if (status === 401) {
     return {
       state: "failed",
       code: "session_stale",
+      authentication_required: true,
       message:
-        "The local sign-in session is missing or changed. Reconnect before retrying this same packet.",
+        "The Web session requires sign-in. Keep this review and check the original receipt after signing in.",
     };
+  }
+
+  if (status === 409 && ["session_stale", "session_changed"].includes(body.code)) {
+    return { state: "failed", code: "session_changed",
+      message: "The Web session changed. Recheck the original workspace before continuing this review." };
   }
 
   if (status >= 200 && status < 300 && body.status === "pending") {
@@ -173,7 +179,8 @@ export function classifyReceiptResponse(status, body = {}) {
     };
   }
 
-  if (body.code === "receipt_unknown" || status >= 500 || (status >= 200 && status < 300)) {
+  if (body.code === "receipt_unknown" || status === 0 || status >= 400 && ![400, 409, 413, 422].includes(status)
+      || status >= 200 && status < 300) {
     return {
       state: "unknown",
       code: "receipt_unknown",
@@ -192,26 +199,18 @@ export function classifyReceiptResponse(status, body = {}) {
   };
 }
 
-export function classifyTransportError(error) {
-  if (error?.name === "AbortError" || error?.code === "request_timeout") {
-    return {
-      state: "unknown",
-      code: "receipt_unknown",
-      message:
-        "The request may have reached the local service, but receipt could not be confirmed. Check the receipt before submitting again.",
-    };
-  }
-
+export function classifyTransportError() {
   return {
-    state: "failed",
-    code: "offline",
+    state: "unknown",
+    code: "receipt_unknown",
     message:
-      "The local service could not be reached. The reviewed packet remains here for a safe retry.",
+      "Connection interrupted. Your reviewed packet is kept; check its receipt before submitting another copy.",
   };
 }
 
-export function sessionCopy(status, body = {}) {
-  if (status >= 200 && status < 300 && body.status === "ready") {
+export function sessionCopy(status, body = {}, previous = {}) {
+  if (status >= 200 && status < 300 && body?.status === "ready" && body.contact_agent === true
+      && typeof body.session_version === "string" && body.session_version && body.session_version.length <= 256) {
     return {
       state: "ready",
       workspace_label:
@@ -219,17 +218,25 @@ export function sessionCopy(status, body = {}) {
           ? body.workspace_label
           : "Local capri",
       session_version:
-        typeof body.session_version === "string"
-          ? body.session_version
-          : null,
+        body.session_version,
       message: "Browser-managed local session is ready. No token is exposed to the extension.",
     };
   }
 
   return {
-    state: "not_ready",
-    workspace_label: null,
-    session_version: null,
-    message: "No ready local session was observed. Open sign-in, then check again.",
+    state: status === 401 ? "not_ready" : "unavailable",
+    workspace_label: typeof previous.workspace_label === "string" ? previous.workspace_label : null,
+    session_version: typeof previous.session_version === "string" ? previous.session_version : null,
+    ...(typeof previous.origin === "string" ? { origin: previous.origin } : {}),
+    ...(status === 401 ? { authentication_required: true } : { retryable: true }),
+    message: status === 401 ? "The Web session requires sign-in. Your review is kept; sign in and check the original task."
+      : "Connection is temporarily unavailable. Your Web login and reviewed capture are kept; retry the connection.",
   };
+}
+
+export function sessionAfterHandoff(previous, result) {
+  if (result.authentication_required === true) return sessionCopy(401, {}, previous);
+  if (result.code === "session_changed") return { ...sessionCopy(0, {}, previous), state: "changed", message: result.message };
+  if (result.code === "connection_unavailable") return sessionCopy(0, {}, previous);
+  return previous;
 }

@@ -56,8 +56,10 @@ export function submissionPresentation(submission = { state: "idle" }) {
       ? "Already received — duplicate avoided"
       : "Receipt confirmed",
     failed:
-      submission.code === "session_stale"
-        ? "Local session changed"
+      submission.authentication_required === true
+        ? "Sign-in required"
+        : submission.code === "session_changed" ? "Web session changed"
+        : submission.code === "connection_unavailable" ? "Connection unavailable"
         : "Upload failed",
     unknown: "Receipt is unknown",
   }[state] ?? "Receipt state unavailable";
@@ -88,6 +90,8 @@ export function sessionPresentation(session, synthetic = false) {
         ready: synthetic ? "Synthetic session" : "Session ready",
         checking: "Checking",
         not_ready: "Not connected",
+        unavailable: "Connection unavailable",
+        changed: "Session changed",
         not_checked: "Not checked",
       }[state] ?? "Not checked",
     chip_class:

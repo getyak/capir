@@ -168,18 +168,18 @@ test("classifies pending, received, duplicate, stale, and invalid responses trut
   assert.equal(duplicate.duplicate, true);
   assert.equal(
     classifyReceiptResponse(409, { code: "session_stale" }).code,
-    "session_stale",
+    "session_changed",
   );
   assert.equal(classifyReceiptResponse(500, {}).state, "unknown");
   assert.equal(classifyReceiptResponse(204, {}).state, "unknown");
 });
 
-test("treats a timeout as unknown and an unreachable service as failed", () => {
+test("keeps both timeout and unreachable-service outcomes unknown until receipt recovery", () => {
   assert.equal(
     classifyTransportError(new DOMException("timeout", "AbortError")).state,
     "unknown",
   );
-  assert.equal(classifyTransportError(new TypeError("offline")).state, "failed");
+  assert.equal(classifyTransportError(new TypeError("offline")).state, "unknown");
 });
 
 test("retries offline with the same idempotency key and prevents duplicate creation", async () => {
@@ -232,6 +232,7 @@ test("reconciles an unknown fixture receipt without resubmitting", async () => {
 test("requires an observable ready session and never exposes a credential", () => {
   const ready = sessionCopy(200, {
     status: "ready",
+    contact_agent: true,
     workspace_label: "Fixture workspace",
     session_version: "version-4",
     token: "must-not-be-copied",

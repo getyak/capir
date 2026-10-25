@@ -25,10 +25,10 @@ test("keeps credentials in Web, checks the intended account and reads back the e
  const oldFetch=globalThis.fetch,oldLocation=globalThis.location;const calls=[];
  globalThis.location={origin:envelope.handoff_target,pathname:"/contact-agent"};
  globalThis.fetch=async(url,options)=>{calls.push({url,options});return {ok:true,status:201,json:async()=>url.endsWith("session")
-  ?{session_version:"same-session",contact_agent:true}:{task_id:taskID}};};
+  ?{status:"ready",session_version:"same-session",contact_agent:true}:{task_id:taskID}};};
  try{
   const payload=await contactTaskFromReviewedImage(envelope);
-  assert.equal((await submitContactTaskInWeb(envelope.handoff_target,"other-session",payload)).code,"session_stale");
+  assert.equal((await submitContactTaskInWeb(envelope.handoff_target,"other-session",payload)).code,"session_changed");
   assert.equal(calls.length,1);calls.length=0;
   const receipt=await submitContactTaskInWeb(envelope.handoff_target,"same-session",payload);
   assert.equal(receipt.contact_task_id,taskID);assert.equal(calls.length,3);
