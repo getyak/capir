@@ -326,6 +326,20 @@ push:
    material P0/P1 fix, rerun it at most once on the new head; do not stream
    intermediate pushes into repeated reviews.
 
+For CodeQL acceptance, read the latest analyses and open alerts for the exact
+PR merge ref (`refs/pull/<number>/merge`), and bind the analysis commit to the
+current PR head and merge commit. Record each applicable language's result and
+any justified path skips. A successful workflow or an empty query against a
+different branch ref does not prove that the PR has no open alerts. For a main
+release, read analyses and alerts for the trusted main ref and exact release
+source commit; PR results do not substitute for main results. Record whether the
+workflow actually scans tag events. If a tag-specific scan exists, bind its
+actual tag ref and commit too; do not describe main-only analysis as a tag scan.
+Preserve existing open alerts
+and compare their paths and source against the trusted baseline rather than
+reporting a zero-alert result. Repair new findings or retain an independently
+reviewed, precise disposition before merge or publication.
+
 ## Failure and recovery
 
 - Use `gh run list`, `gh run view RUN_ID`, and `gh run rerun RUN_ID --failed`

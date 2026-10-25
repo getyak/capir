@@ -115,7 +115,7 @@ needed at runtime.
 ```bash
 curl -fsSL https://github.com/getyak/capir/releases/download/capir-stable/install.sh -o capir-install.sh
 sh capir-install.sh                    # newest verified stable
-sh capir-install.sh --version 0.2.2    # one signed immutable release
+sh capir-install.sh --version 0.2.4    # one signed immutable release
 sh capir-install.sh --replace-existing # back up an unrelated launcher first
 
 capir update --check [--json]   # current/latest/update_available/install_method/source
@@ -197,7 +197,15 @@ A custom launcher directory may be inside the managed root (for example
 `<root>/bin`). The `versions`, `current` and `staging` paths are reserved and
 rejected before replacement. Installer metadata and launcher content bind to
 one physical installation root, including when the requested path is a symlink.
-PR package smoke runs in a separate read-only workflow. Signed publication runs
-only for validated `capir-v*` tag events; retries use GitHub workflow rerun.
+PR package smoke runs in a separate read-only workflow. Before creating a new
+version tag, verify the exact trusted `main` revision has passed all applicable
+CI and Security gates. Dispatch `Release capir` on `main` with
+`mode=contract-only` for that same revision, then read back its response-bound
+draft/asset acknowledgements, binary checks, fresh-client rediscovery, and
+confirmed cleanup. The probe uses the workflow installation token without
+Infisical, signing material, or stable-channel publication. If `main` changes,
+repeat the gates and contract for the new revision before tagging. Signed
+publication runs only for validated `capir-v*` tag events; retries use GitHub
+workflow rerun.
 Builds install the exact pnpm JavaScript distribution from a committed npm lock
 with SHA512 integrity so Intel macOS needs no native pnpm binary.
