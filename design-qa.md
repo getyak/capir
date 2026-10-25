@@ -7,6 +7,10 @@
   width in a 222px panel and the rightmost pointer missed the button. Removing
   the negative margin restores the full 44px target. The focus outline now sits
   inside that target and remains visible at the top/right scroll boundaries.
+- Closed P2 on reinspection: fixed 18px heading line height clipped the 26px
+  text at 200% root size. The first QA incorrectly treated geometry collection
+  as visual acceptance. Unitless `1.4` now produces a 36.4px line box; the
+  screenshot was opened, compared and independently reviewed before release.
 - No actionable P0/P1/P2 findings remain in the changed header and action.
 
 ## Visual truth and normalization
@@ -33,23 +37,28 @@ native-app acceptance.
 
 Evidence root: `/Users/cubxxw/ops/runs/sidebar-contextual-compose-20261025/`.
 
-- Full-view comparison: `comparison-after.png`, source left / implementation
+- Full-view comparison: `comparison-final.png`, source left / implementation
   right, assembled together after normalization.
-- Focused header comparison: `comparison-detail-after.png`.
-- Exact implementation screenshot: `implementation-after-exact.png`.
+- Focused header comparison: `comparison-detail-final.png`.
+- Exact implementation screenshot: `heading-final-exact.png`.
 - Hover: `hover-after-exact.png`; keyboard: `focus-after.png`.
 - Responsive/accessibility: `layout-matrix.json`, `narrow-dark-en.png`,
-  `narrow-forced-focus.png`, `narrow-text200.png`, `collapsed.png`.
+  `narrow-forced-focus.png`, `text200-after-exact.png`, `collapsed.png`.
+  `text200-comparison.png` records the scale correction (before left, after
+  right); the older `narrow-text200.png` is retained as failed evidence.
 
 ## Required fidelity surfaces
 
 - Typography: existing system/PingFang fallback, 13px/500 metadata heading,
-  18px line height, and canonical 15px row reading role are preserved. The
+  unitless 1.4 line height (18.2px normally), and canonical 15px row reading role
+  are preserved. The
   generated concept has softer text rendering and lighter selected-row text;
   the product's existing 600 selected-row weight is intentional and unchanged.
   The heading truncates in English at 200px while its full accessible section
   name remains available. Other tested locales fit. At 200% root text size,
-  heading truncation preserves the separate 44px compose action.
+  heading is vertically complete and preserves the separate 44px compose
+  action. Existing brand/row text clipping outside this changed header remains;
+  this is not a whole-sidebar 200% accessibility acceptance claim.
 - Spacing: the heading and action share one 44px row, followed by 4px to the
   list. The action contains a 32px rounded hover field and an 18px NotePencil.
   Existing brand/navigation spacing, 40px row rhythm, 248px sidebar width and
@@ -77,20 +86,30 @@ Evidence root: `/Users/cubxxw/ops/runs/sidebar-contextual-compose-20261025/`.
    222px, and a successful right-edge hit. The combined full/focused comparisons
    show the intended grouped heading and unobtrusive compose action. Independent
    review rechecked the change and closed P2.
+3. Reopened `narrow-text200.png` after merge but before activation and found the
+   clipped-heading P2 missed in the first review. Result blocked; release owner
+   was told not to activate that revision alone.
+4. Replaced fixed heading line height with 1.4. At 150% the line is 27.3px; at
+   200% it is 36.4px for a 26px font. `text200-after.json` and the combined
+   before/after image confirm full vertical text with the unchanged 44px target.
+   Independent review closed this P2. Final full/focused normal-size comparisons
+   confirm the default layout remains consistent with the selected direction.
 
 ## Interaction verification
 
 - Mouse hover, keyboard focus and Enter activation; both existing cancelable
   in-place event and fresh-draft fallback routing remained intact.
-- 200/248/420px widths, five display languages, dark/light, 200% text, empty,
+- 200/248/420px widths, five display languages, dark/light, scaled heading, empty,
   loading, retry and collapsed presentations. One transient width-animation
   sample was 3px wider; settled samples and both button-edge hits passed.
 - Reduced motion disables both transitions; forced-colors focus remains visible.
 - Console inspection: one initial fixture-only `process.env` shim error was
   fixed before comparison. No new error/warning appeared during the final run.
-- Focused tests: 38/38 passed; changed-file ESLint and documentation/architecture
+- Focused tests: 38/38 passed for PR430; changed-file ESLint and documentation/architecture
   scripts passed. Current-head CI, clean-source build and live deployment are
   tracked separately in the active plan and are not claimed by this QA result.
+  PR430 current-head CI/security and both preview builds passed before merge;
+  this one-line CSS correction gets its own current-head checks.
 
 ## Implementation checklist
 

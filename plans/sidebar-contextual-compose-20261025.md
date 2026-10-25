@@ -24,7 +24,11 @@ This is shared Web/macOS Web presentation; no native build is required.
    action; unchanged dispatch/routing. Focused tests pass 38/38.
 2. Complete: actual-component visual QA and independent review. A P2 negative
    margin clipping the target was fixed and rechecked; no findings remain.
-   Current-head CI and PR delivery are next.
+   PR430 current-head checks passed and merged at 518fea00. A later screenshot
+   reinspection found fixed heading line-height clipping 200% text before any
+   activation. The one-line unitless fix passed actual 150/200% rendering and
+   independent re-review; its follow-up PR/CI is pending. Do not claim full
+   sidebar 200% acceptance: existing brand/row clipping is outside this change.
 3. Pending: coordinate the sole shared-service deployment owner, verify final
    live revision/behavior and complete owned-resource cleanup.
 
@@ -53,6 +57,9 @@ Verified 200/248/420px, five locales, dark/light, keyboard, 200% text, reduced
 motion, forced colors, empty/loading/retry and collapsed states. This is not
 live-service or native-app acceptance. The fixture server belongs only to this
 task: PID32576, started 2026-10-25 16:16:21, port8769; stop before cleanup.
+
+That first fixture server exited. Heading-fix verification uses a second owned
+server PID41761, started 2026-10-25 16:41:24 on the same port; stop it too.
 
 Changed-file ESLint and direct documentation/wiki/architecture checks pass.
 The pnpm wrapper attempted dependency synchronization and aborted before

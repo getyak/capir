@@ -1968,7 +1968,7 @@
   flex: 1;
   font-size: var(--workspace-meta-size, 0.8125rem);
   font-weight: 500;
-  line-height: 18px;
+  line-height: 1.4;
   margin: 0;
   min-width: 0;
   overflow: hidden;
