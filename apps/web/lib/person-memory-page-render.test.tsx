@@ -168,7 +168,7 @@ it("localizes an unavailable Person without presenting failed reads as empty mem
   language.locale = "en"; loadPersonMemory.mockRejectedValue(new Error("unavailable"));
   const html = await render();
   expect(html).toContain("Person memory unavailable");
-  expect(html).toContain("Cannot read this person's memory; cached or example content will not be substituted.".replace("'", "&#x27;"));
+  expect(html).toContain("Cannot read this person&#x27;s memory; cached or example content will not be substituted.");
   expect(html).toContain('role="alert"');
   expect(html).not.toContain("No confirmed memories yet");
 });
