@@ -1,3 +1,5 @@
+import { isWebSessionUnavailable } from "@/lib/server/web-persistent-session";
+import { SessionRetryButton } from "@/components/session-retry-button";
 import "@/components/workspace-theme.css";
 
 import Link from "next/link";
@@ -78,6 +80,9 @@ export default async function WorkspaceLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
   const session = await auth();
+  if ((session as (typeof session & { renewalStatus?: string }))?.renewalStatus === "unavailable") {
+    return <WorkspaceAccessRecovery unavailable><SessionRetryButton /></WorkspaceAccessRecovery>;
+  }
 
   // Child pages retain the exact callback URL when authentication is missing.
   // Rendering no product chrome here lets their redirect remain authoritative.
@@ -108,6 +113,7 @@ export default async function WorkspaceLayout({
   let pendingBinding: string | null = null;
   let pendingSessionDraftScope: string | null = null;
   let backendAccount: { name: string; slug: string } | null = null;
+  let sessionUnavailable = false;
   try {
     const claims = await readBackendSessionClaims();
     if (claims && !backendSessionIsExpired(claims.backendExpiresAt)) {
@@ -134,13 +140,17 @@ export default async function WorkspaceLayout({
       pendingBinding = workspaceSessionsBinding(claims);
       pendingSessionDraftScope = workspaceSessionDraftStorageScope(claims);
     }
-  } catch {
+  } catch (error) {
+    sessionUnavailable = isWebSessionUnavailable(error);
     /* Scope mismatch or unreadable test session: stay unbound. */
     scope = null;
     pendingBinding = null;
     pendingSessionDraftScope = null;
   }
   const hasTestWorkspace = (await cookies()).has(TEST_WORKSPACE_COOKIE);
+  if (!scope && sessionUnavailable) {
+    return <WorkspaceAccessRecovery unavailable><SessionRetryButton /></WorkspaceAccessRecovery>;
+  }
   if (!scope) {
     return (
       <>
@@ -183,7 +193,7 @@ export default async function WorkspaceLayout({
   return (
     <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
       <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
-      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope}>
+      <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope} binding={pendingBinding}>
       <WorkspaceBrowseProvider key={pendingSessionDraftScope} scope={pendingSessionDraftScope} binding={pendingBinding}>
       <PersonContextPanelProvider binding={pendingBinding}>
       <WorkspaceShellFrame sidebar={<>

@@ -100,6 +100,7 @@ export const AppleLoginRequestSchema = Type.Object(
 export const SessionResponseSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
+    session_id: Type.Optional(Id),
     access_token: Type.String({ minLength: 32 }),
     expires_at: Timestamp,
     account: Type.Object({
@@ -128,6 +129,7 @@ export const SessionResponseSchema = Type.Object(
 export const CurrentSessionResponseSchema = Type.Object(
   {
     contract_version: Type.Literal(CONTRACT_VERSION),
+    session_id: Type.Optional(Id),
     expires_at: Timestamp,
     account: Type.Object({
       id: Id,

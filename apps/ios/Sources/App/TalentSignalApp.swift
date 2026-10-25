@@ -268,6 +268,20 @@ struct TalentSignalApp: App {
                 .onChange(of: appSessionStore.phase) { _ in
                     Task { await labRuntimeStore.workspaceStore.reconcile() }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .iosSessionRenewed).receive(on: RunLoop.main)) { note in
+                    if let session = note.object as? TalentSignalSession { appSessionStore.adoptRenewedSession(session) }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .iosSessionRevoked).receive(on: RunLoop.main)) { note in
+                    if let identity = note.object as? String { Task { await appSessionStore.observeRevocation(identity) } }
+                }
+                .task(id: scenePhase) {
+                    guard scenePhase == .active else { return }
+                    await appSessionStore.refreshIfNeeded(force: true)
+                    while !Task.isCancelled {
+                        do { try await Task.sleep(nanoseconds: 60_000_000_000) } catch { return }
+                        await appSessionStore.refreshIfNeeded()
+                    }
+                }
                 .environmentObject(appSessionStore)
                 .onChange(of: scenePhase) { phase in
                     // Shared People + open-Session active refresh: foreground
@@ -317,7 +331,13 @@ struct TalentSignalApp: App {
         case .restoring:
             ZStack {
                 Color.tsSurface.ignoresSafeArea()
-                ProgressView()
+                VStack(spacing: 12) {
+                    ProgressView()
+                    if let notice = appSessionStore.notice {
+                        Text(appLanguage.text(notice))
+                        Button(appLanguage.text("Retry")) { Task { await appSessionStore.restore(allowOfflineWorkspace: false) } }
+                    }
+                }.padding()
             }
             .accessibilityIdentifier("authentication-restoring")
         case .signedOut:
@@ -370,7 +390,7 @@ struct TalentSignalApp: App {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .id(AccountOperationScope(baseURL: session.baseURL, accessToken: session.accessToken, accountID: session.account.id, userID: session.user.id))
+                .id(session.loginIdentity)
             } else {
                 LabWorkspaceRecoveryView(store: labRuntimeStore.workspaceStore,
                     sessionStore: appSessionStore)

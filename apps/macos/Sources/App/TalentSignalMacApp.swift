@@ -47,6 +47,9 @@ struct TalentSignalMacApp: App {
                     .environment(\.dynamicTypeSize, model.isAccessibilityZoomPreview ? .accessibility2 : .large)
                     .modifier(NativeAppearancePreview(enabled: model.isDarkAppearancePreview))
                     .task {
+                        // Drain explicit logout even on a login/connection
+                        // screen where no authenticated WK host is constructed.
+                        Task { await DesktopPersistentSessionCoordinator.shared.retryPendingRevocations() }
                         CaptureRuntime.shared.start()
                         updater.start()
                         _ = await model.ensureInitialized()

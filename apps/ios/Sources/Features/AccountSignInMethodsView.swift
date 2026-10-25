@@ -392,6 +392,11 @@ struct AccountSignInMethodsView: View {
                                 Text(language.text("Current session"))
                                     .font(.caption2).foregroundStyle(Color.tsMutedInk)
                             }
+                            if device.persistent == true {
+                                Text(language.text("Stays signed in"))
+                                    .font(.caption2).foregroundStyle(Color.tsMutedInk)
+                                    .accessibilityIdentifier(device.is_current ? "sign-in-method-current-device-persistent" : "sign-in-method-other-device-persistent")
+                            }
                         }
                         Spacer()
                         if !device.is_current {

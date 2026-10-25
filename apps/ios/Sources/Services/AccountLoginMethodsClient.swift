@@ -49,6 +49,7 @@ struct AccountDeviceSession: Decodable, Equatable, Sendable {
     let created_at: String
     let expires_at: String
     let is_current: Bool
+    var persistent: Bool? = nil
 }
 
 struct AccountSettingsProjection: Decodable {

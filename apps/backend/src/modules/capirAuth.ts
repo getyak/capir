@@ -1,10 +1,11 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 
 import {
   CAPIR_AUTH_CAPABILITY_NAMES,
   CAPIR_AUTH_SCOPES,
   CAPIR_AUTH_SCHEMA_VERSION,
   type CapirAuthScope,
+  type CapirAuthProtocol,
   type CapirAuthAuthorizeRequest,
   type CapirAuthAuthorizeResponse,
   type CapirAuthCapabilitiesResponse,
@@ -118,10 +119,11 @@ interface GrantRow {
   state: "active" | "revoked";
   created_at: Date;
   last_verified_at: Date | null;
-  absolute_expires_at: Date;
+  absolute_expires_at: Date | null;
   access_expires_at: Date | null;
   backing_session_id: string;
   test_entitlement_generation: number | null;
+  protocol_version: CapirAuthProtocol;
   backing_live: boolean;
   user_active: boolean;
   refresh_expires_at: Date | null;
@@ -129,10 +131,10 @@ interface GrantRow {
 
 const GRANT_COLUMNS = `g.id, g.account_id, a.slug AS account_slug, g.user_id, u.email AS user_email,
   g.client_label, g.web_origin, g.backend_origin, g.scopes, g.state, g.created_at,
-  g.last_verified_at, g.absolute_expires_at, g.access_expires_at, g.backing_session_id,
+  g.last_verified_at, g.absolute_expires_at, g.access_expires_at, g.backing_session_id, g.protocol_version,
   g.test_entitlement_generation,
-  (s.revoked_at IS NULL AND s.expires_at > clock_timestamp()) AS backing_live,
-  (u.status = 'active') AS user_active,
+  (s.revoked_at IS NULL AND (g.protocol_version='capir-auth.v3' OR s.expires_at > clock_timestamp())) AS backing_live,
+  (u.status = 'active' AND a.retired_at IS NULL) AS user_active,
   (SELECT min(f.expires_at) FROM capir_auth_refresh_tokens f
     WHERE f.grant_id = g.id AND f.consumed_at IS NULL AND f.revoked_at IS NULL) AS refresh_expires_at`;
 
@@ -143,7 +145,7 @@ const GRANT_FROM = `FROM capir_auth_grants g
 
 function grantState(row: GrantRow, now = Date.now()): CapirAuthGrant["state"] {
   if (row.state === "revoked" || !row.backing_live || !row.user_active) return "revoked";
-  if (row.absolute_expires_at.getTime() <= now) return "expired";
+  if (row.absolute_expires_at && row.absolute_expires_at.getTime() <= now) return "expired";
   return "active";
 }
 
@@ -157,8 +159,8 @@ function describeGrant(row: GrantRow): CapirAuthGrant {
     created_at: row.created_at.toISOString(),
     last_verified_at: row.last_verified_at ? row.last_verified_at.toISOString() : null,
     access_expires_at: (row.access_expires_at ?? row.created_at).toISOString(),
-    refresh_expires_at: (row.refresh_expires_at ?? row.absolute_expires_at).toISOString(),
-    absolute_expires_at: row.absolute_expires_at.toISOString(),
+    refresh_expires_at: (row.refresh_expires_at ?? row.absolute_expires_at)?.toISOString() ?? null,
+    absolute_expires_at: row.absolute_expires_at?.toISOString() ?? null,
     state: grantState(row),
     refresh_supported: true,
   };
@@ -176,7 +178,7 @@ function describeManagedGrant(row: GrantRow): CapirAuthManagedGrant {
     created_at: row.created_at.toISOString(),
     last_used_at: row.last_verified_at ? row.last_verified_at.toISOString() : null,
     access_expires_at: (row.access_expires_at ?? row.created_at).toISOString(),
-    absolute_expires_at: row.absolute_expires_at.toISOString(),
+    absolute_expires_at: row.absolute_expires_at?.toISOString() ?? null,
     state: grantState(row),
   };
 }
@@ -228,11 +230,11 @@ export class CapirAuthService {
     }
   }
 
-  capabilities(): CapirAuthCapabilitiesResponse {
+  capabilities(protocol: CapirAuthProtocol = CAPIR_AUTH_SCHEMA_VERSION): CapirAuthCapabilitiesResponse {
     const settings = this.settings;
     const supported = this.enabled;
     return {
-      schema_version: CAPIR_AUTH_SCHEMA_VERSION,
+      schema_version: protocol,
       enabled: supported,
       capabilities: Object.fromEntries(
         CAPIR_AUTH_CAPABILITY_NAMES.map((name) => [
@@ -247,8 +249,8 @@ export class CapirAuthService {
       lifetimes: {
         code_seconds: settings?.codeTtlSeconds ?? 60,
         access_seconds: settings?.accessTtlSeconds ?? 900,
-        refresh_idle_seconds: settings?.refreshIdleTtlSeconds ?? 604800,
-        refresh_absolute_seconds: settings?.refreshAbsoluteTtlSeconds ?? 2592000,
+        refresh_idle_seconds: protocol === "capir-auth.v3" ? null : settings?.refreshIdleTtlSeconds ?? 604800,
+        refresh_absolute_seconds: protocol === "capir-auth.v3" ? null : settings?.refreshAbsoluteTtlSeconds ?? 2592000,
       },
       unsupported: supported
         ? ["device_auth", "auth.device_code"]
@@ -353,8 +355,8 @@ export class CapirAuthService {
         `INSERT INTO capir_auth_codes(
            id, code_hash, account_id, user_id, browser_session_id,
            web_origin, backend_origin, redirect_uri, state_hash, code_challenge,
-           scopes, client_label, expires_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+           scopes, client_label, expires_at, protocol_version
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
         [
           randomUUID(),
           sha256(code),
@@ -369,10 +371,11 @@ export class CapirAuthService {
           [...request.scopes],
           request.client_label,
           expiresAt,
+          request.schema_version,
         ],
       );
       return {
-        schema_version: CAPIR_AUTH_SCHEMA_VERSION,
+        schema_version: request.schema_version,
         code,
         state: request.state,
         redirect_uri: request.redirect_uri,
@@ -414,11 +417,12 @@ export class CapirAuthService {
           code_challenge: string;
           scopes: string[];
           client_label: string;
+          protocol_version: CapirAuthProtocol;
         }>(
           `UPDATE capir_auth_codes SET consumed_at = now()
             WHERE code_hash = $1 AND consumed_at IS NULL AND expires_at > now()
             RETURNING id, account_id, user_id, browser_session_id, web_origin, backend_origin,
-                      redirect_uri, state_hash, code_challenge, scopes, client_label`,
+                      redirect_uri, state_hash, code_challenge, scopes, client_label, protocol_version`,
           [sha256(request.code)],
         )
       ).rows[0];
@@ -444,7 +448,8 @@ export class CapirAuthService {
         sameSecret(pkceChallenge(request.code_verifier), claimed.code_challenge) &&
         request.redirect_uri === claimed.redirect_uri &&
         request.web_origin === claimed.web_origin &&
-        request.backend_origin === claimed.backend_origin;
+        request.backend_origin === claimed.backend_origin &&
+        request.schema_version === claimed.protocol_version;
       if (!proofOk) {
         await client.query(
           `UPDATE capir_auth_codes SET failed_attempts = failed_attempts + 1 WHERE id = $1`,
@@ -480,6 +485,7 @@ export class CapirAuthService {
           backendOrigin: claimed.backend_origin,
           // Exactly the scopes frozen at the consent click; never broadened.
           scopes: claimed.scopes,
+          protocol: claimed.protocol_version,
           settings,
         }),
       };
@@ -498,16 +504,18 @@ export class CapirAuthService {
       backendOrigin: string;
       /** Scopes frozen at the consent click; never broadened afterwards. */
       scopes: string[];
+      protocol: CapirAuthProtocol;
       settings: NonNullable<BackendConfig["capirAuth"]>;
     },
   ): Promise<CapirAuthExchangeResponse> {
     const { settings } = input;
     const now = Date.now();
-    const absoluteExpiresAt = new Date(now + settings.refreshAbsoluteTtlSeconds * 1_000);
+    const persistent = input.protocol === "capir-auth.v3";
+    const absoluteExpiresAt = persistent ? null : new Date(now + settings.refreshAbsoluteTtlSeconds * 1_000);
     const accessExpiresAt = new Date(now + settings.accessTtlSeconds * 1_000);
-    const refreshIdleExpiresAt = new Date(
+    const refreshIdleExpiresAt = absoluteExpiresAt ? new Date(
       Math.min(now + settings.refreshIdleTtlSeconds * 1_000, absoluteExpiresAt.getTime()),
-    );
+    ) : null;
     // The backing session's generic token never leaves the backend; only its
     // digest is stored, exactly like every other credential.
     const backingSessionToken = secret();
@@ -521,7 +529,7 @@ export class CapirAuthService {
         input.userId,
         sha256(backingSessionToken),
         `capir-cli:${input.clientLabel}`,
-        absoluteExpiresAt,
+        absoluteExpiresAt ?? accessExpiresAt,
       ],
     );
     const accessToken = secret();
@@ -540,8 +548,8 @@ export class CapirAuthService {
          id, account_id, user_id, backing_session_id, client_label, web_origin,
          backend_origin, scopes, state, test_entitlement_generation,
          absolute_expires_at, access_token_hash,
-         access_expires_at, last_verified_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12, now())`,
+         access_expires_at, last_verified_at, protocol_version
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12, now(), $13)`,
       [
         grantId,
         input.accountId,
@@ -555,6 +563,7 @@ export class CapirAuthService {
         absoluteExpiresAt,
         sha256(accessToken),
         accessExpiresAt,
+        input.protocol,
       ],
     );
     await client.query(
@@ -578,167 +587,99 @@ export class CapirAuthService {
       ])
     ).rows[0]!;
     return {
-      schema_version: CAPIR_AUTH_SCHEMA_VERSION,
+      schema_version: input.protocol,
       access_token: accessToken,
       refresh_token: refreshToken,
       grant: describeGrant(row),
     };
   }
 
-  /**
-   * Rotation. The presented token row and the grant are locked and rechecked
-   * through commit. A consumed token is replay: the whole family and the grant
-   * are revoked INSIDE this transaction, which commits before the replay error
-   * is raised so the revocation can never be rolled back.
-   */
+  /** V3 persists an intent before dispatch. An exact retry re-derives the
+   * committed successor from the presented predecessor, never from a stored
+   * plaintext credential. A different intent is still replay and revokes the
+   * family. V2 retains its original one-use/finite-deadline contract. */
   async refresh(request: CapirAuthRefreshRequest): Promise<CapirAuthRefreshResponse> {
     const settings = this.requireEnabled();
     this.requireOrigins(request.web_origin, request.backend_origin);
-    type RefreshOutcome =
-      | { kind: "rotated"; response: CapirAuthRefreshResponse }
-      | { kind: "replay" };
-    const outcome = await inTransaction<RefreshOutcome>(this.pool, async (client) => {
-      const located = (await client.query<{grant_id:string}>('SELECT grant_id FROM capir_auth_refresh_tokens WHERE token_hash=$1', [sha256(request.refresh_token)])).rows[0];
-      if (!located) throw new ApiError(401, 'CAPIR_REFRESH_INVALID', 'Sign in again.');
-      await client.query('SELECT id FROM capir_auth_grants WHERE id=$1 FOR UPDATE', [located.grant_id]);
-      const token = (
-        await client.query<{
-          id: string;
-          grant_id: string;
-          family_id: string;
-          generation: number;
-          account_id: string;
-          expires_at: Date;
-          absolute_expires_at: Date;
-          consumed_at: Date | null;
-          revoked_at: Date | null;
-        }>(
-          `SELECT id, grant_id, family_id, generation, account_id, expires_at,
-                  absolute_expires_at, consumed_at, revoked_at
-             FROM capir_auth_refresh_tokens WHERE token_hash = $1 FOR UPDATE`,
-          [sha256(request.refresh_token)],
-        )
-      ).rows[0];
-      if (!token) {
-        throw new ApiError(
-          401,
-          "CAPIR_REFRESH_INVALID",
-          "This credential cannot be refreshed; sign in again.",
-        );
-      }
-      const grant = (
-        await client.query<{
-          id: string;
-          state: string;
-          absolute_expires_at: Date;
-          backing_session_id: string;
-          web_origin: string;
-          backend_origin: string;
-          account_id: string;
-          user_id: string;
-        }>(
-          `SELECT id, state, absolute_expires_at, backing_session_id, web_origin,
-                  backend_origin, account_id, user_id
-             FROM capir_auth_grants WHERE id = $1 FOR UPDATE`,
-          [token.grant_id],
-        )
-      ).rows[0]!;
+    if (request.schema_version === "capir-auth.v3" && !request.request_id)
+      throw new ApiError(400, "CAPIR_REFRESH_INTENT_REQUIRED", "A durable refresh request id is required.");
+    type Outcome = { kind: "rotated"; response: CapirAuthRefreshResponse } | { kind: "replay" };
+    const outcome = await inTransaction<Outcome>(this.pool, async client => {
+      const located = (await client.query<{grant_id:string;account_id:string;user_id:string}>(
+        `SELECT f.grant_id,g.account_id,g.user_id FROM capir_auth_refresh_tokens f
+         JOIN capir_auth_grants g ON g.id=f.grant_id WHERE f.token_hash=$1`,
+        [sha256(request.refresh_token)])).rows[0];
+      if (!located) throw new ApiError(401, "CAPIR_REFRESH_INVALID", "This credential cannot be refreshed.");
+      if (this.deploymentWorkspaceIds && !this.deploymentWorkspaceIds.includes(located.account_id))
+        throw new ApiError(403,"DEPLOYMENT_WORKSPACE_NOT_ADMITTED","This workspace is outside the deployment audience.");
+      // Match retirement's account -> user ordering, then serialize all grant
+      // refresh/revoke operations. No account or membership can change through commit.
+      await assertAccountActive(client, located.account_id);
+      const user = (await client.query<{status:string}>(
+        'SELECT status FROM users WHERE account_id=$1 AND id=$2 FOR SHARE',
+        [located.account_id, located.user_id])).rows[0];
+      const grant = (await client.query<{
+        id:string;state:string;absolute_expires_at:Date|null;backing_session_id:string;
+        web_origin:string;backend_origin:string;protocol_version:CapirAuthProtocol;
+        access_token_hash:string|null;
+      }>('SELECT * FROM capir_auth_grants WHERE id=$1 FOR UPDATE',[located.grant_id])).rows[0]!;
+      const backing = (await client.query<{live:boolean}>(
+        `SELECT (revoked_at IS NULL AND ($2::boolean OR expires_at>clock_timestamp())) AS live
+         FROM sessions WHERE id=$1 FOR SHARE`,
+        [grant.backing_session_id, grant.protocol_version === "capir-auth.v3"])).rows[0];
+      const token = (await client.query<{
+        id:string;family_id:string;generation:number;expires_at:Date|null;
+        absolute_expires_at:Date|null;consumed_at:Date|null;revoked_at:Date|null;
+        request_id_hash:string|null;
+      }>('SELECT * FROM capir_auth_refresh_tokens WHERE token_hash=$1 FOR UPDATE',
+        [sha256(request.refresh_token)])).rows[0]!;
+      if (grant.web_origin !== request.web_origin || grant.backend_origin !== request.backend_origin)
+        throw new ApiError(403,"CAPIR_ORIGIN_DENIED","The credential belongs to another origin pair.");
+      if (grant.state !== "active" || !backing?.live || user?.status !== "active" || token.revoked_at)
+        throw new ApiError(401,"CAPIR_GRANT_REVOKED","This CLI authorization is no longer active.");
+      if (grant.protocol_version === "capir-auth.v3" && request.schema_version !== "capir-auth.v3")
+        throw new ApiError(409,"CAPIR_PROTOCOL_UPGRADE_REQUIRED","Use a client supporting persistent authorization.");
+      const intentHash = request.request_id ? sha256(request.request_id) : null;
+      const derive = (kind:"access"|"refresh") => createHmac("sha256",request.refresh_token)
+        .update(`capir-auth.v3:${kind}:${token.family_id}:${token.generation+1}:${request.request_id}`)
+        .digest("base64url");
       if (token.consumed_at) {
-        // Replay of consumed history: revoke family + grant + backing session
-        // inside this transaction and let it commit before failing.
-        await this.revokeFamilyLocked(client, token.family_id, grant.id, "refresh_replay");
-        return { kind: "replay" };
+        if (request.schema_version === "capir-auth.v3" && intentHash === token.request_id_hash) {
+          const next = (await client.query<{token_hash:string;consumed_at:Date|null;revoked_at:Date|null}>(
+            'SELECT token_hash,consumed_at,revoked_at FROM capir_auth_refresh_tokens WHERE family_id=$1 AND generation=$2',
+            [token.family_id,token.generation+1])).rows[0];
+          const accessToken=derive("access"),refreshToken=derive("refresh");
+          if (!next || next.consumed_at || next.revoked_at || next.token_hash!==sha256(refreshToken) || grant.access_token_hash!==sha256(accessToken))
+            throw new ApiError(409,"CAPIR_REFRESH_SUPERSEDED","This refresh transaction has already been superseded; preserve the current keyring record.");
+          const row=(await client.query<GrantRow>(`SELECT ${GRANT_COLUMNS} ${GRANT_FROM} WHERE g.id=$1`,[grant.id])).rows[0]!;
+          return {kind:"rotated",response:{schema_version:"capir-auth.v3",access_token:accessToken,refresh_token:refreshToken,grant:describeGrant(row)}};
+        }
+        // Commit the revocation before raising a replay error.
+        await this.revokeFamilyLocked(client,token.family_id,grant.id,"refresh_replay");
+        return {kind:"replay"};
       }
-      if (
-        token.revoked_at ||
-        grant.state !== "active" ||
-        grant.web_origin !== request.web_origin ||
-        grant.backend_origin !== request.backend_origin ||
-        grant.absolute_expires_at.getTime() <= Date.now() ||
-        token.expires_at.getTime() <= Date.now() ||
-        token.absolute_expires_at.getTime() <= Date.now()
-      ) {
-        throw new ApiError(
-          401,
-          "CAPIR_REFRESH_EXPIRED",
-          "This credential can no longer be refreshed; sign in again.",
-        );
-      }
-      // Locked-write authority recheck through commit.
-      await assertAccountActive(client, grant.account_id);
-      const backing = await client.query<{ live: boolean }>(
-        `SELECT (revoked_at IS NULL AND expires_at > clock_timestamp()) AS live
-           FROM sessions WHERE id = $1 FOR SHARE`,
-        [grant.backing_session_id],
-      );
-      const user = await client.query<{ status: string }>(
-        `SELECT status FROM users WHERE account_id = $1 AND id = $2 FOR SHARE`,
-        [grant.account_id, grant.user_id],
-      );
-      if (!backing.rows[0]?.live || user.rows[0]?.status !== "active") {
-        throw new ApiError(
-          401,
-          "CAPIR_GRANT_REVOKED",
-          "This CLI authorization is no longer active; sign in again.",
-        );
-      }
-      const now = Date.now();
-      const accessExpiresAt = new Date(now + settings.accessTtlSeconds * 1_000);
-      const refreshIdleExpiresAt = new Date(
-        Math.min(now + settings.refreshIdleTtlSeconds * 1_000, token.absolute_expires_at.getTime()),
-      );
-      await client.query(
-        `UPDATE capir_auth_refresh_tokens SET consumed_at = now()
-          WHERE id = $1 AND consumed_at IS NULL`,
-        [token.id],
-      );
-      const accessToken = secret();
-      const refreshToken = secret();
-      await client.query(
-        `INSERT INTO capir_auth_refresh_tokens(
-           id, grant_id, family_id, generation, account_id, token_hash,
-           expires_at, absolute_expires_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [
-          randomUUID(),
-          grant.id,
-          token.family_id,
-          token.generation + 1,
-          grant.account_id,
-          sha256(refreshToken),
-          refreshIdleExpiresAt,
-          token.absolute_expires_at,
-        ],
-      );
-      await client.query(
-        `UPDATE capir_auth_grants
-            SET access_token_hash = $2, access_expires_at = $3, last_verified_at = now()
-          WHERE id = $1`,
-        [grant.id, sha256(accessToken), accessExpiresAt],
-      );
-      const row = (
-        await client.query<GrantRow>(`SELECT ${GRANT_COLUMNS} ${GRANT_FROM} WHERE g.id = $1`, [
-          grant.id,
-        ])
-      ).rows[0]!;
-      return {
-        kind: "rotated",
-        response: {
-          schema_version: CAPIR_AUTH_SCHEMA_VERSION,
-          access_token: accessToken,
-          refresh_token: refreshToken,
-          grant: describeGrant(row),
-        },
-      };
+      if ((grant.absolute_expires_at && grant.absolute_expires_at.getTime()<=Date.now()) ||
+          (token.expires_at && token.expires_at.getTime()<=Date.now()) ||
+          (token.absolute_expires_at && token.absolute_expires_at.getTime()<=Date.now()))
+        throw new ApiError(401,"CAPIR_REFRESH_EXPIRED","This credential can no longer be refreshed.");
+      const persistent=request.schema_version === "capir-auth.v3";
+      const accessToken=persistent ? derive("access") : secret();
+      const refreshToken=persistent ? derive("refresh") : secret();
+      const accessExpiresAt=new Date(Date.now()+settings.accessTtlSeconds*1000);
+      const absoluteExpiresAt=persistent ? null : grant.absolute_expires_at;
+      const refreshExpiresAt=absoluteExpiresAt ? new Date(Math.min(Date.now()+settings.refreshIdleTtlSeconds*1000,absoluteExpiresAt.getTime())) : null;
+      await client.query('UPDATE capir_auth_refresh_tokens SET consumed_at=now(),request_id_hash=$2 WHERE id=$1',
+        [token.id,persistent ? intentHash : null]);
+      await client.query(`INSERT INTO capir_auth_refresh_tokens(id,grant_id,family_id,generation,account_id,token_hash,expires_at,absolute_expires_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [randomUUID(),grant.id,token.family_id,token.generation+1,located.account_id,sha256(refreshToken),refreshExpiresAt,absoluteExpiresAt]);
+      await client.query(`UPDATE capir_auth_grants SET access_token_hash=$2,access_expires_at=$3,last_verified_at=now(),
+        protocol_version=$4,absolute_expires_at=$5 WHERE id=$1`,
+        [grant.id,sha256(accessToken),accessExpiresAt,request.schema_version,absoluteExpiresAt]);
+      const row=(await client.query<GrantRow>(`SELECT ${GRANT_COLUMNS} ${GRANT_FROM} WHERE g.id=$1`,[grant.id])).rows[0]!;
+      return {kind:"rotated",response:{schema_version:request.schema_version,access_token:accessToken,refresh_token:refreshToken,grant:describeGrant(row)}};
     });
-    if (outcome.kind === "replay") {
-      // Raised only after the revocation transaction committed.
-      throw new ApiError(
-        401,
-        "CAPIR_REFRESH_REPLAY",
-        "This refresh credential was already used; its credential family was revoked. Sign in again.",
-      );
-    }
+    if(outcome.kind === "replay") throw new ApiError(401,"CAPIR_REFRESH_REPLAY","This refresh credential was replayed; its credential family was revoked.");
     return outcome.response;
   }
 
@@ -765,7 +706,7 @@ export class CapirAuthService {
             ? "expired"
             : "active";
     return {
-      schema_version: CAPIR_AUTH_SCHEMA_VERSION,
+      schema_version: row.protocol_version,
       state,
       grant: describeGrant(row),
       identity: {
@@ -806,7 +747,7 @@ export class CapirAuthService {
       );
     }
     if (
-      row.absolute_expires_at.getTime() <= Date.now() ||
+      (row.absolute_expires_at !== null && row.absolute_expires_at.getTime() <= Date.now()) ||
       !row.access_expires_at ||
       row.access_expires_at.getTime() <= Date.now()
     ) {
@@ -975,13 +916,24 @@ export class CapirAuthService {
     reason: CapirRevokeReason,
     owner?: { accountId: string; userId: string },
   ): Promise<{ grantId: string; revokedAt: Date; alreadyRevoked: boolean }> {
+    // Resolve without a row lock, then acquire the same outer authority order
+    // as refresh and retirement. The retirement fence reacquires account SHARE
+    // during updates, so locking the grant first can form a three-way deadlock
+    // behind a queued account UPDATE even when both paths only need SHARE.
+    const scope=(await client.query<{account_id:string;user_id:string}>(
+      `SELECT account_id,user_id FROM capir_auth_grants WHERE id=$1 ${owner ? "AND account_id=$2 AND user_id=$3" : ""}`,
+      owner ? [grantId,owner.accountId,owner.userId] : [grantId])).rows[0];
+    if (!scope) throw new ApiError(404,"CAPIR_GRANT_NOT_FOUND","This CLI authorization is not available on your account.");
+    await client.query('SELECT id FROM accounts WHERE id=$1 FOR SHARE',[scope.account_id]);
+    await client.query('SELECT id FROM users WHERE account_id=$1 AND id=$2 FOR SHARE',[scope.account_id,scope.user_id]);
     const locked = (
       await client.query<{
         id: string;
         state: string;
         revoked_at: Date | null;
+        backing_session_id:string;
       }>(
-        `SELECT id, state, revoked_at FROM capir_auth_grants
+        `SELECT id, state, revoked_at, backing_session_id FROM capir_auth_grants
           WHERE id = $1 ${owner ? "AND account_id = $2 AND user_id = $3" : ""}
           FOR UPDATE`,
         owner ? [grantId, owner.accountId, owner.userId] : [grantId],
@@ -1001,6 +953,7 @@ export class CapirAuthService {
         alreadyRevoked: true,
       };
     }
+    await client.query('SELECT id FROM sessions WHERE id=$1 FOR UPDATE',[locked.backing_session_id]);
     const result = await client.query<{ revoked_at: Date }>(
       `WITH revoked AS (
          UPDATE capir_auth_grants
@@ -1071,13 +1024,14 @@ export async function assertUserTestAuthorityLocked(
   const grant = (
     await client.query<{
       state: string;
-      absolute_expires_at: Date;
+      protocol_version: CapirAuthProtocol;
+      absolute_expires_at: Date | null;
       scopes: string[];
       web_origin: string;
       backend_origin: string;
       test_entitlement_generation: number | null;
     }>(
-      `SELECT state, absolute_expires_at, scopes, web_origin, backend_origin,
+      `SELECT state, protocol_version, absolute_expires_at, scopes, web_origin, backend_origin,
               test_entitlement_generation
          FROM capir_auth_grants
         WHERE id = $1 AND account_id = $2 AND user_id = $3 AND backing_session_id = $4
@@ -1086,9 +1040,9 @@ export async function assertUserTestAuthorityLocked(
     )
   ).rows[0];
   const session = await client.query<{ live: boolean }>(
-    `SELECT (revoked_at IS NULL AND expires_at > clock_timestamp()) AS live
+    `SELECT (revoked_at IS NULL AND ($2::boolean OR expires_at > clock_timestamp())) AS live
        FROM sessions WHERE id = $1 FOR SHARE`,
-    [authority.backingSessionId],
+    [authority.backingSessionId, grant?.protocol_version === "capir-auth.v3"],
   );
   const user = await client.query<{ status: string }>(
     `SELECT status FROM users WHERE account_id = $1 AND id = $2 FOR SHARE`,
@@ -1104,7 +1058,7 @@ export async function assertUserTestAuthorityLocked(
   if (
     !grant ||
     grant.state !== "active" ||
-    grant.absolute_expires_at.getTime() <= Date.now() ||
+    (grant.absolute_expires_at !== null && grant.absolute_expires_at.getTime() <= Date.now()) ||
     !session.rows[0]?.live ||
     user.rows[0]?.status !== "active" ||
     !grant.scopes.includes(scope) ||

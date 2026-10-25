@@ -12,7 +12,9 @@ import {
   desktopPersistentPostFields,
   DesktopPersistentSessionError,
   readDesktopPersistentStatus,
+  revokeDesktopPersistentSession,
 } from "./desktop-persistent-session";
+import { sealDesktopRevocationProof } from "./desktop-revocation-seal";
 
 const account = "11111111-1111-4111-8111-111111111111";
 const user = "22222222-2222-4222-8222-222222222222";
@@ -124,4 +126,30 @@ it("uses live backend readback for status and returns no access credential", asy
   fetcher.mockResolvedValue(new Response(JSON.stringify({ ...status, access_token: "must-not-escape" })));
   expect(await readDesktopPersistentStatus("access-token")).toEqual(status);
   expect(fetcher.mock.calls[0][1]).toMatchObject({ method: "GET", cache: "no-store" });
+});
+
+it("opens destructive escrow only for exact tuple and forwards original access only to backend revoke", async () => {
+  const original = "a".repeat(43);
+  const revocation_proof = sealDesktopRevocationProof("https://web.test", { account_id: account, user_id: user, session_id: session }, original);
+  fetcher.mockResolvedValue(new Response(JSON.stringify({ revoked: true })));
+  await revokeDesktopPersistentSession({ ...fields, action: "revoke", session_id: session, revocation_proof });
+  const body = JSON.parse(fetcher.mock.calls[0][1].body);
+  expect(body).toEqual({ device_secret: secret, account_id: account, user_id: user, session_id: session,
+    web_origin: "https://web.test", original_access_token: original });
+  fetcher.mockClear();
+  await expect(revokeDesktopPersistentSession({ ...fields, action: "revoke", user_id: account, session_id: session, revocation_proof }))
+    .rejects.toMatchObject({ status: 503 });
+  expect(fetcher).not.toHaveBeenCalled();
+});
+it("does not expose original access or accept escrow on enrollment/renewal JSON", async () => {
+  for (const body of [
+    { ...fields, original_access_token: "a".repeat(43) },
+    { ...fields, session_id: session, revocation_proof: "v1.fake" },
+  ]) await expect(desktopPersistentPostFields(request({}, body))).rejects.toMatchObject({ status: 400 });
+});
+it("unknown pending revocation and malformed success remain recoverable", async () => {
+  fetcher.mockResolvedValue(new Response(JSON.stringify({ error: { code: "DESKTOP_SESSION_PROOF_INVALID" } }), { status: 401 }));
+  await expect(revokeDesktopPersistentSession({ ...fields, action: "revoke" })).rejects.toMatchObject({ status: 503 });
+  fetcher.mockResolvedValue(new Response(JSON.stringify({})));
+  await expect(revokeDesktopPersistentSession({ ...fields, action: "revoke" })).rejects.toMatchObject({ status: 503 });
 });

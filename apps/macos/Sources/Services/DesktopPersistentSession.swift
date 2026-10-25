@@ -16,6 +16,7 @@ struct DesktopDeviceCredential: Codable, Equatable {
     let sessionID: String
     let secret: String
     var enrolled: Bool
+    var revocationProof: String? = nil
 
     func matches(_ selection: LoginStoreSelection) -> Bool {
         origin == selection.origin && storeIdentifier == selection.storeIdentifier && epoch == selection.epoch
@@ -31,6 +32,42 @@ protocol DesktopDeviceCredentialStoring: AnyObject {
     func read(for selection: LoginStoreSelection) throws -> DesktopDeviceCredential?
     func write(_ credential: DesktopDeviceCredential, for selection: LoginStoreSelection) throws
     func remove(for selection: LoginStoreSelection) throws
+}
+
+/// This non-secret index references retired Keychain scopes; it contains no
+/// device proof, access token, revocation envelope or conversation metadata.
+struct DesktopRevocationScope: Codable, Equatable {
+    let origin: String
+    let storeIdentifier: UUID
+    let epoch: UInt64
+    init(_ selection: LoginStoreSelection) {
+        origin = selection.origin; storeIdentifier = selection.storeIdentifier; epoch = selection.epoch
+    }
+    var selection: LoginStoreSelection {
+        .init(origin: origin, storeIdentifier: storeIdentifier, epoch: epoch, unresolved: false, updatedAt: .distantPast)
+    }
+}
+
+@MainActor
+final class DesktopRevocationIndex {
+    private let persistence: LoginStoreRegistryPersisting
+    init(persistence: LoginStoreRegistryPersisting) { self.persistence = persistence }
+    func pending() throws -> [DesktopRevocationScope] {
+        guard let data = try persistence.read() else { return [] }
+        guard data.count <= 1_048_576,
+              let scopes = try? JSONDecoder().decode([DesktopRevocationScope].self, from: data),
+              scopes.allSatisfy({ WorkspaceOrigin($0.origin, allowLocalDevelopment: true)?.url.absoluteString == $0.origin })
+        else { throw LoginStoreRegistryError.corruptedRegistry }
+        return scopes
+    }
+    func enqueue(_ scope: DesktopRevocationScope) throws {
+        var scopes = try pending()
+        if !scopes.contains(scope) { scopes.append(scope) }
+        try persistence.write(JSONEncoder().encode(scopes))
+    }
+    func remove(_ scope: DesktopRevocationScope) throws {
+        try persistence.write(JSONEncoder().encode(try pending().filter { $0 != scope }))
+    }
 }
 
 /// This Developer-ID app uses the login Keychain with its stable designated
@@ -85,6 +122,16 @@ struct DesktopPersistentSessionReceipt: Decodable, Equatable {
     var user_id: String? = nil
     var session_id: String? = nil
     var session_expires_at: String? = nil
+    var revocation_proof: String? = nil
+    var revocation_confirmed: Bool? = nil
+
+    var confirmedRevoked: Bool { status == "revoked" && revocation_confirmed == true }
+
+    var boundedRevocationProof: String? {
+        guard let revocation_proof, revocation_proof.utf8.count <= 2048,
+              revocation_proof.range(of: #"^v1\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{1,1800}\.[A-Za-z0-9_-]{22}$"#, options: .regularExpression) != nil else { return nil }
+        return revocation_proof
+    }
 
     var authenticated: Bool {
         status == "authenticated" && UUID(uuidString: account_id ?? "") != nil
@@ -100,7 +147,11 @@ struct DesktopPersistentSessionReceipt: Decodable, Equatable {
 protocol DesktopPersistentSessionTransporting: AnyObject {
     func status(selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt
     func submit(_ action: String, credential: DesktopDeviceCredential, selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt
+    func revocationStatus(selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt
     func cancel()
+}
+extension DesktopPersistentSessionTransporting {
+    func revocationStatus(selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt { try await status(selection: selection) }
 }
 
 enum DesktopPersistentSessionOutcome: Equatable {
@@ -123,16 +174,41 @@ final class DesktopPersistentSessionCoordinator {
     private let transportFactory: (WorkspaceOrigin) -> DesktopPersistentSessionTransporting
     private var operations: [String: Operation] = [:]
     private var signedOutStores: Set<UUID> = []
+    private let revocations: DesktopRevocationIndex
+    private var revocationTask: Task<Void, Never>?
+    private var revocationGeneration: UInt64 = 0
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var workspaceLifecycleObservers: [NSObjectProtocol] = []
+    private let workspaceNotifications: NotificationCenter
 
     init(registry: LoginStoreRegistry? = nil, vault: DesktopDeviceCredentialStoring? = nil,
-         transportFactory: ((WorkspaceOrigin) -> DesktopPersistentSessionTransporting)? = nil) {
+         transportFactory: ((WorkspaceOrigin) -> DesktopPersistentSessionTransporting)? = nil,
+         revocations: DesktopRevocationIndex? = nil) {
         let owner = registry ?? .shared
         self.registry = owner
         self.vault = vault ?? KeychainDesktopDeviceCredentialStore()
         self.transportFactory = transportFactory ?? { DesktopPersistentSessionWKTransport(origin: $0, registry: owner) }
+        self.revocations = revocations ?? DesktopRevocationIndex(persistence: FileLoginStoreRegistryPersistence(fileURL: owner.revocationIndexURL))
+        self.workspaceNotifications = NSWorkspace.shared.notificationCenter
+        lifecycleObservers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.retryPendingRevocations() }
+        })
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            workspaceLifecycleObservers.append(workspaceNotifications.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in await self?.retryPendingRevocations() }
+            })
+        }
+        Task { [weak self] in await self?.retryPendingRevocations() }
+    }
+
+    deinit {
+        for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
+        for observer in workspaceLifecycleObservers { workspaceNotifications.removeObserver(observer) }
     }
 
     func restore(in origin: WorkspaceOrigin) async -> DesktopPersistentSessionOutcome {
+        do { try fencePendingRevocations() } catch { return .unavailable }
+        Task { [weak self] in await self?.retryPendingRevocations() }
         let key = origin.url.absoluteString
         guard let selection = try? registry.selection(for: key) else { return .unavailable }
         guard !selection.unresolved, !signedOutStores.contains(selection.storeIdentifier) else { return .needsLogin }
@@ -160,11 +236,11 @@ final class DesktopPersistentSessionCoordinator {
                 let live = try await transport.status(selection: selection)
                 guard current(selection, ticket) else { return .cancelled }
                 if live.status == "signed_out" || live.status == "revoked" { return .needsLogin }
-                guard live.authenticated else { return .unavailable }
+                guard live.authenticated, let revocationProof = live.boundedRevocationProof else { return .unavailable }
                 let secret = try DesktopBrowserLoginCoordinator.newSecrets().verifier
                 credential = DesktopDeviceCredential(origin: selection.origin, storeIdentifier: selection.storeIdentifier,
                     epoch: selection.epoch, accountID: live.account_id!, userID: live.user_id!, sessionID: live.session_id!,
-                    secret: secret, enrolled: false)
+                    secret: secret, enrolled: false, revocationProof: revocationProof)
                 try vault.write(credential!, for: selection)
                 newlyCreated = true
             }
@@ -181,6 +257,9 @@ final class DesktopPersistentSessionCoordinator {
                     if live.status == "signed_out" || live.status == "revoked" { try vault.remove(for: selection); return .needsLogin }
                     return .unavailable
                 }
+                guard let revocationProof = live.boundedRevocationProof else { return .unavailable }
+                capability.revocationProof = revocationProof
+                try vault.write(capability, for: selection)
                 response = try await transport.submit("enroll", credential: capability, selection: selection)
                 guard current(selection, ticket) else { return .cancelled }
             }
@@ -192,8 +271,8 @@ final class DesktopPersistentSessionCoordinator {
             let live = try await transport.status(selection: selection)
             guard current(selection, ticket) else { return .cancelled }
             guard live.matches(capability) else { return .unavailable }
-            if !capability.enrolled {
-                capability.enrolled = true
+            if !capability.enrolled || (live.boundedRevocationProof != nil && capability.revocationProof != live.boundedRevocationProof) {
+                capability.enrolled = true; capability.revocationProof = live.boundedRevocationProof ?? capability.revocationProof
                 try vault.write(capability, for: selection)
             }
             return .authenticated(live)
@@ -206,20 +285,76 @@ final class DesktopPersistentSessionCoordinator {
         }
     }
 
-    /// Commit a new empty store before any late response can write a cookie.
-    /// Even if a locked Keychain prevents deletion, its old scope is no longer
-    /// selected on this or a subsequent process launch.
+    /// Journal the retired scope BEFORE local fencing. Its Keychain capability
+    /// survives locked storage, process restart, lost responses and offline UI.
     func signOut(in origin: WorkspaceOrigin) throws {
         let selection = try registry.selection(for: origin.url.absoluteString)
+        // Even a failed durable write fences this process immediately. The UI
+        // retains a retryable error; it cannot keep renewing via another host.
         signedOutStores.insert(selection.storeIdentifier)
-        let credential = try? vault.read(for: selection)
         cancel(selection: selection)
+        try revocations.enqueue(DesktopRevocationScope(selection))
+        revocationGeneration &+= 1
         _ = try registry.endSession(for: selection.origin)
-        try? vault.remove(for: selection)
-        if let credential {
-            let transport = transportFactory(origin)
-            Task { _ = try? await transport.submit("revoke", credential: credential, selection: selection) }
+        Task { [weak self] in await self?.retryPendingRevocations() }
+    }
+
+    func isLocallySignedOut(_ selection: LoginStoreSelection) -> Bool { signedOutStores.contains(selection.storeIdentifier) }
+
+    private func fencePendingRevocations() throws {
+        for scope in try revocations.pending() {
+            // Acquiring registry ownership also prevents cross-process drains.
+            let current = try registry.selection(for: scope.origin)
+            if current.storeIdentifier == scope.storeIdentifier && current.epoch == scope.epoch {
+                signedOutStores.insert(scope.storeIdentifier); cancel(selection: scope.selection)
+                _ = try registry.endSession(for: scope.origin)
+            }
         }
+    }
+
+    func retryPendingRevocations() async {
+        if let revocationTask { await revocationTask.value; return }
+        let task = Task {
+            repeat {
+                let generation = self.revocationGeneration
+                await self.drainRevocations()
+                if generation == self.revocationGeneration { self.revocationTask = nil; return }
+            } while true
+        }
+        revocationTask = task
+        await task.value
+    }
+
+    private func drainRevocations() async {
+        do {
+            try fencePendingRevocations()
+            for scope in try revocations.pending() {
+                guard let origin = WorkspaceOrigin(scope.origin, allowLocalDevelopment: true) else { continue }
+                do {
+                    guard var credential = try vault.read(for: scope.selection) else {
+                        // No capability was persisted/dispatched; current guards
+                        // prevent canceled operations from writing it later.
+                        try revocations.remove(scope); continue
+                    }
+                    let transport = transportFactory(origin)
+                    if !credential.enrolled && credential.revocationProof == nil {
+                        // A legacy pending record may already have committed
+                        // server-side; try its existing capability first.
+                        if let ended = try? await transport.submit("revoke", credential: credential, selection: scope.selection), ended.confirmedRevoked {
+                            try vault.remove(for: scope.selection); try revocations.remove(scope); continue
+                        }
+                        let live = try await transport.revocationStatus(selection: scope.selection)
+                        guard live.matches(credential), let proof = live.boundedRevocationProof else { continue }
+                        credential.revocationProof = proof
+                        try vault.write(credential, for: scope.selection)
+                    }
+                    let response = try await transport.submit("revoke", credential: credential, selection: scope.selection)
+                    guard response.confirmedRevoked else { continue }
+                    try vault.remove(for: scope.selection)
+                    try revocations.remove(scope)
+                } catch { /* Unknown/protected-storage failure retains both recovery paths. */ }
+            }
+        } catch { /* A corrupt/unavailable journal cannot authorize disposal. */ }
     }
 
     func cancel(selection: LoginStoreSelection) {
@@ -271,6 +406,8 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
     private var navigation: WKNavigation?
     private var timeout: Task<Void, Never>?
     private var revoking = false
+    private var requiringRevokeReceipt = false
+    private var responseStatus: Int?
     private var endpoint: URL { origin.url.appendingPathComponent("api/desktop-auth/persistent") }
 #if DEBUG
     var diagnosticObserver: ((DesktopPersistentSessionWKDiagnosticEvent) -> Void)?
@@ -304,6 +441,7 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
             webView?.navigationDelegate = self
         }
         self.selection = selection
+        responseStatus = nil
         try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             navigation = webView?.load(request)
@@ -337,13 +475,20 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
         try validate(selection)
         guard let text = raw as? String, let data = text.data(using: .utf8), data.count <= 4096,
               let receipt = try? JSONDecoder().decode(DesktopPersistentSessionReceipt.self, from: data) else { throw URLError(.badServerResponse) }
+        if requiringRevokeReceipt && (responseStatus != 200 || !receipt.confirmedRevoked) { throw URLError(.badServerResponse) }
         return receipt
     }
     func status(selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt {
-        try await load(URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData), selection: selection)
+        revoking = false; requiringRevokeReceipt = false
+        return try await load(URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData), selection: selection)
+    }
+    func revocationStatus(selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt {
+        revoking = true; requiringRevokeReceipt = false
+        return try await load(URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData), selection: selection)
     }
     func submit(_ action: String, credential: DesktopDeviceCredential, selection: LoginStoreSelection) async throws -> DesktopPersistentSessionReceipt {
         revoking = action == "revoke"
+        requiringRevokeReceipt = revoking
         guard credential.matches(selection), ["enroll", "renew", "revoke"].contains(action) else { throw URLError(.badURL) }
         var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalCacheData)
         request.httpMethod = "POST"
@@ -352,8 +497,10 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
         // Native WK navigation is not a browser form; supply its exact
         // configured origin instead of relying on WebKit's opaque/null Origin.
         request.setValue(origin.url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")), forHTTPHeaderField: "Origin")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["action": action, "device_secret": credential.secret,
-            "account_id": credential.accountID, "user_id": credential.userID])
+        var body = ["action": action, "device_secret": credential.secret,
+            "account_id": credential.accountID, "user_id": credential.userID]
+        if revoking, let proof = credential.revocationProof { body["session_id"] = credential.sessionID; body["revocation_proof"] = proof }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return try await load(request, selection: selection)
     }
     private func finish(_ result: Result<Void, Error>) {
@@ -373,6 +520,7 @@ final class DesktopPersistentSessionWKTransport: NSObject, DesktopPersistentSess
         decisionHandler(.allow)
     }
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        responseStatus = (response.response as? HTTPURLResponse)?.statusCode
 #if DEBUG
         diagnose(.responsePolicy, statusCode: (response.response as? HTTPURLResponse)?.statusCode)
 #endif

@@ -51,7 +51,7 @@ final class KeychainAppSessionEndingStore: AppSessionEndingPersisting {
               }) else { throw AppSessionEndingError.unreadable }
         var records = value.records
         var changed = false
-        for index in records.indices where records[index].expiresAt <= Date() && (records[index].credential != nil || !records[index].remoteSettled) {
+        for index in records.indices where records[index].renewable != true && records[index].expiresAt <= Date() && (records[index].credential != nil || !records[index].remoteSettled) {
             records[index].credential = nil
             if !records[index].remoteSettled { records[index].remote = .expired }
             changed = true
@@ -68,7 +68,7 @@ final class KeychainAppSessionEndingStore: AppSessionEndingPersisting {
         // A failed journal write may leave a valid credential behind, so this
         // monotonic mirror is never rolled back or cleared by receipt pruning.
         if let endpoint {
-            try denyMirror.deny(endpoint: endpoint, fingerprints: records.map(\.credentialFingerprint))
+            try denyMirror.deny(endpoint: endpoint, fingerprints: records.flatMap { [$0.credentialFingerprint] + ($0.blockedCredentialFingerprints ?? []) })
         }
         let data = try JSONEncoder().encode(AppSessionEndingArchive(version: 1, records: records))
         guard data.count <= 262_144 else { throw AppSessionEndingError.unreadable }
@@ -106,6 +106,19 @@ struct CaptureLogoutDenyMirror {
         try locked(endpoint, writing: false) {
             let state = try read(endpoint)
             guard state.initialized, !state.denied.contains(fingerprint) else { throw AppSessionEndingError.unreadable }
+        }
+    }
+    /// Denial-only check for ordinary requests. A missing mirror grants no new
+    /// authority; their existing bearer still needs backend authorization.
+    /// Locked capture continuation keeps the stricter assertAllowed contract.
+    func assertNotDenied(endpoint: URL, fingerprint: String) throws {
+        guard try !isDenied(endpoint: endpoint, fingerprint: fingerprint) else { throw AppSessionEndingError.unreadable }
+    }
+    func isDenied(endpoint: URL, fingerprint: String) throws -> Bool {
+        guard FileManager.default.fileExists(atPath: file(endpoint).path) else { return false }
+        return try locked(endpoint, writing: false) {
+            let state = try read(endpoint)
+            return state.denied.contains(fingerprint)
         }
     }
     private func mutate(endpoint: URL, fingerprints: [String], initialize: Bool) throws {

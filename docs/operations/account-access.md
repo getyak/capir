@@ -9,6 +9,41 @@ Settings manages sign-in methods: connecting Apple/Google, setting or changing a
 password, and removing a method. Every change first proves the current identity,
 and at least one usable login method always remains.
 
+## Login continuity
+
+Real-user first-party login renews short-lived access automatically. Application
+updates and restarts preserve login by keeping the same protected-storage and
+service identities. Each device or CLI grant remains independently revocable
+through **Account and security**; signing out one client does not sign out the
+others. Account retirement and membership disablement also stop renewal.
+
+| Client | Renewal credential | Recovery boundary |
+| --- | --- | --- |
+| Web | Encrypted HttpOnly cookie | Server rendering/API resolve access before dispatch; active browser use rolls cookie retention. |
+| iOS | Existing device-only Keychain | Startup, foreground and ordinary requests resolve access; a locked Keychain preserves login and waits for unlock. |
+| macOS | Existing scoped device Keychain capability | Native primary-session proof remains required before workspace/capture admission. |
+| capir CLI | Origin-bound OS keyring record | Rotating refresh recovers its durable request after interruption under the cross-process lock. |
+
+Offline, timeout, upstream and protected-storage errors are recoverable
+unavailability. Keep the credential and retry; they do not prove that the user
+signed out. A business write is never automatically repeated to hide a renewal
+failure. Revocation and explicit sign-out end the canonical family, including
+access issued before a concurrent renewal completes.
+
+Browser storage can be removed by the user or browser, and browsers impose a
+maximum cookie retention period. Web rolls the cookie on active use within that
+limit; private-window closure or absence beyond the browser's retention still
+requires login. Device-only credentials do not transfer to another device.
+Clearing credentials, reinstalling with changed identities or losing the
+encryption key cannot preserve login.
+
+A live legacy session can enroll during the update. An expired legacy bearer
+without a renewal credential needs one normal login. This migration does not
+revive revoked sessions. Temporary Lab/run/test credentials and explicitly
+scoped machine/provider grants retain their own deadlines. See
+[ADR 0027](../decisions/0027-renewable-first-party-login.md) for the protocol
+decision and the linked execution plan for release evidence.
+
 ## macOS browser sign-in
 
 The Mac primary-login surface offers **Sign in in your browser**; it never collects account passwords, registration fields or provider credentials. The default browser can reuse its valid Web session, then asks the user to confirm the displayed account for this Mac request. Otherwise the ordinary Web login and onboarding flow returns to that confirmation. A matching request hint helps identify the operation being approved. Use the Mac cancel action to stop waiting; closing the browser tab does not notify the app, and pending requests expire after five minutes. Cancelling keeps a usable retry surface.
@@ -17,7 +52,7 @@ Browser confirmation distinguishes an invalid/expired or proof/origin-mismatched
 
 Browser approval creates a separate, revocable Mac backend session through a short-lived, one-use grant. It does not copy the browser cookie, attach a credential, change the account or grant local capture permission. Browser and Mac sign-outs remain independent. The Mac opens the workspace only after live backend identity readback in its selected WebKit store; seeing a callback or a browser success page alone is insufficient.
 
-Existing healthy Mac sessions reopen directly and enroll for persistent access without another browser login. The Mac keeps a separate origin/store/account-bound device capability in macOS Keychain. Its ordinary short access and HttpOnly cookie renew automatically on startup, foreground/wake, expiry and an active timer. The capability has no idle or absolute deadline: updates, app relaunch, reboot and long inactivity do not themselves require browser login. Deliberate sign-out, device-session revocation, disabled membership or account retirement stop renewal. Dormant renewable devices remain visible and revocable in **Account and security**. Web/iOS session duration is unchanged. An already expired legacy Mac session without the new capability needs one browser login. Locked Keychain or temporary network/service failure keeps the local credential and drafts for retry; it is not reported as revocation. [ADR 0026](../decisions/0026-persistent-macos-device-session.md) owns the capability boundary and [the execution plan](../../plans/2026-10-25-macos-persistent-login.md) records verification and delivery.
+Existing healthy Mac sessions reopen directly and enroll for persistent access without another browser login. The Mac keeps a separate origin/store/account-bound device capability in macOS Keychain. Its ordinary short access and HttpOnly cookie renew automatically on startup, foreground/wake, expiry and an active timer. The capability has no idle or absolute deadline: updates, app relaunch, reboot and long inactivity do not themselves require browser login. Deliberate sign-out, device-session revocation, disabled membership or account retirement stop renewal. Dormant renewable devices remain visible and revocable in **Account and security**. Other first-party clients follow the renewable-login policy above. Explicit sign-out retains only scoped, protected revocation recovery until the server confirms termination; that recovery cannot reopen the retired WebKit store. An already expired legacy Mac session without the new capability needs one browser login. Locked Keychain or temporary network/service failure keeps the local credential and drafts for retry; it is not reported as revocation. [ADR 0026](../decisions/0026-persistent-macos-device-session.md) owns the capability boundary and [the execution plan](../../plans/2026-10-25-macos-persistent-login.md) records verification and delivery.
 
 An uncertain primary exchange still offers **Check sign-in result** and deliberate **Sign in again**; recovery never replays a possibly consumed grant. A new primary login and explicit sign-out isolate late cookie responses in a separate persistent store and preserve quarantined local drafts. [ADR 0022](../decisions/0022-browser-owned-macos-login.md) continues to own browser primary authentication.
 
@@ -404,19 +439,28 @@ loopback callback, login deadline and Ctrl+C cancellation remain active; the
 link contains no access token, refresh token or PKCE verifier. A late opener
 failure after completed authorization does not print an expired link.
 
-A successful `capir-auth.v2` login stores one versioned record in the OS keyring
+A successful negotiated CLI login stores one versioned record in the OS keyring
 (service `talent-signal.capir`, account `capir:<backend-origin>|<web-origin>`).
 It includes origin pair, grant/scope/expiry, access and refresh credentials and
-last verified identity. There is no plaintext fallback. Access lasts 15 minutes,
-refresh idle lasts 7 days, absolute grant life is 30 days, and the one-use code
-lasts 60 seconds by default; discovery reports server-configured lifetimes.
-Ordinary authorized commands refresh when necessary. Refresh rotation cannot
-widen authority. A durable keyring intent is written before refresh dispatch;
-a lost response or interrupted rotation requires deliberate logout and re-login
-instead of replaying a possibly consumed token. The server retains consumed
-refresh hashes and revokes the whole family if one is replayed.
+last verified identity. There is no plaintext fallback. Access lasts 15 minutes
+and the one-use code lasts 60 seconds by default. With `capir-auth.v3`, a human
+grant and its rotating refresh credential have no idle or absolute deadline.
+Discovery explicitly negotiates the protocol. Compatible older v2 clients
+retain their existing 7-day refresh idle and 30-day absolute limits; a live v2
+record can upgrade through an authorized refresh. Expired or revoked v2 grants
+are not revived.
 
-Status distinguishes missing, active, expired, revoked and unverified. During a
+Ordinary authorized commands refresh before business dispatch. A durable
+keyring intent identifies the exact refresh transaction. If a response is lost
+or a process stops before the final keyring write, v3 retries that same intent
+and recovers the same committed successor. If its access has meanwhile expired,
+the client first saves the recovered credential, then rotates its successor to
+obtain usable access. A different request replay still revokes the family.
+This cannot widen scopes, change origins or extend a test run's own deadline.
+Legacy v2 interrupted refresh remains explicitly uncertain and needs one
+deliberate logout and login; it cannot safely manufacture a v3 transaction ID.
+
+Status distinguishes missing, active, renewable, expired, revoked and unverified. During a
 transport failure cached identity is explicitly **last verified**, never current.
 Legacy records report **reauth required** with a browser-login action rather
 than retrying v2 status. Invalid records also require reauthorization; logout
@@ -424,8 +468,9 @@ can remove the exact invalid local record without sending it to a server.
 Because it cannot prove remote revocation, the result explicitly directs the
 user to check the Web CLI authorization list. Concurrent newer logins are kept.
 Logout can prove the grant with refresh material after access expiry, without
-rotating first; an uncertain revoke preserves the exact record for retry and
-cannot erase a newer login. `CAPIR_TOKEN` is ephemeral: it is never persisted,
+rotating first. Its durable local sign-out intent blocks further renewal while
+remote revocation is retried; a late response cannot erase a newer login.
+`CAPIR_TOKEN` is ephemeral: it is never persisted,
 refreshed, combined with another identity or deleted by local logout.
 
 Personal test access is **deny by default**, including administrators. A server

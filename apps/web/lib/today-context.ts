@@ -1,6 +1,7 @@
-import { TimeActivityListResponseSchema, type TimeActivity, type TimeActivityListResponse, type TimeScope } from "@talent-signal/contracts";
+import { TimeActivityListResponseSchema, type LocaleTag, type TimeActivity, type TimeActivityListResponse, type TimeScope } from "@talent-signal/contracts";
 import { recentSessionRows, type RecentSession } from "./workspace-recent-sessions";
 import { addDays, dateInZone, formatDay, formatTime, validTimeZone } from "./time-workspace";
+import { translate } from "./i18n";
 import { matchesTypeBox } from "./typebox-validation";
 
 export type TodayProjection<T> = { item: T | null; coverage: "complete" | "partial" | "unavailable" };
@@ -12,16 +13,16 @@ export function todayScope(now: Date, timeZone: string): TimeScope {
 }
 
 /** All-day end instants are exclusive; overnight labels retain both dates. */
-export function formatTodayArrangement(row: TimeActivity): string {
+export function formatTodayArrangement(row: TimeActivity, locale: LocaleTag = "zh-CN"): string {
   const zone = row.time_zone;
   const startDay = dateInZone(row.occurred_at, zone);
-  const day = (value: string) => formatDay(value, { year: "numeric", month: "long", day: "numeric" });
+  const day = (value: string) => formatDay(value, { year: "numeric", month: "long", day: "numeric" }, locale);
   if (row.all_day) {
     const lastDay = dateInZone(new Date(Date.parse(row.ends_at!) - 1), zone);
-    return `${day(startDay)}${lastDay === startDay ? "" : ` – ${day(lastDay)}`} · 全天`;
+    return `${day(startDay)}${lastDay === startDay ? "" : ` – ${day(lastDay)}`} · ${translate(locale, "全天")}`;
   }
   const endDay = dateInZone(row.ends_at!, zone);
-  return `${day(startDay)} · ${formatTime(row.occurred_at, zone)} – ${endDay === startDay ? "" : `${day(endDay)} · `}${formatTime(row.ends_at!, zone)}`;
+  return `${day(startDay)} · ${formatTime(row.occurred_at, zone, locale)} – ${endDay === startDay ? "" : `${day(endDay)} · `}${formatTime(row.ends_at!, zone, locale)}`;
 }
 function sameScope(a: TimeScope, b: TimeScope) {
   return a.from === b.from && a.to === b.to && a.time_zone === b.time_zone && a.person_id === b.person_id && a.kind === b.kind;

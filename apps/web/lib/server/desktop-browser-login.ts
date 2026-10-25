@@ -1,3 +1,4 @@
+import { primarySessionFingerprint } from "./primary-session-binding";
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -398,7 +399,7 @@ export type DesktopAuthCsrfIssue = {
 export async function sealDesktopAuthCsrf(
   attemptId: string,
   state: string,
-  session: { backendAccessToken: string; backendAccountId: string; backendUserId: string },
+  session: { backendAccessToken: string; backendAccountId: string; backendUserId: string; backendSessionId?: string },
   now = Date.now(),
 ): Promise<DesktopAuthCsrfIssue> {
   const token = randomBytes(32).toString("base64url");
@@ -411,7 +412,7 @@ export async function sealDesktopAuthCsrf(
         attemptId,
         stateHash: createHash("sha256").update(state).digest("hex"),
         tokenHash: createHash("sha256").update(token).digest("hex"),
-        sessionHash: createHash("sha256").update(session.backendAccessToken).digest("hex"),
+        sessionHash: primarySessionFingerprint(session),
         accountId: session.backendAccountId,
         userId: session.backendUserId,
         issuedAt: now,
@@ -426,7 +427,7 @@ export async function verifyDesktopAuthCsrf(input: {
   state: string;
   token: string;
   sealed: string | undefined;
-  session: { backendAccessToken: string; backendAccountId: string; backendUserId: string };
+  session: { backendAccessToken: string; backendAccountId: string; backendUserId: string; backendSessionId?: string };
 }): Promise<boolean> {
   if (!input.sealed || !input.token) return false;
   let decoded: {
@@ -455,7 +456,7 @@ export async function verifyDesktopAuthCsrf(input: {
     record.stateHash === createHash("sha256").update(input.state).digest("hex") &&
     record.tokenHash === createHash("sha256").update(input.token).digest("hex") &&
     record.sessionHash ===
-      createHash("sha256").update(input.session.backendAccessToken).digest("hex") &&
+      primarySessionFingerprint(input.session) &&
     record.accountId === input.session.backendAccountId &&
     record.userId === input.session.backendUserId
   );
@@ -467,7 +468,7 @@ export type DesktopAuthApproveInput = {
   csrfToken: string;
   csrfSealed: string | undefined;
   /** The LIVE primary session the routes just decoded; the seal must match it. */
-  session: { backendAccessToken: string; backendAccountId: string; backendUserId: string };
+  session: { backendAccessToken: string; backendAccountId: string; backendUserId: string; backendSessionId?: string };
   /** Server-derived deployment origin; never body authority. */
   webOrigin: string;
   client?: TalentSignalClient;

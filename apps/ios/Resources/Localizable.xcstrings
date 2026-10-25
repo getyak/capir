@@ -33556,6 +33556,76 @@
           }
         }
       }
+    },
+    "Stays signed in": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "持续保持登录"
+          }
+        }
+      }
+    },
+    "A protected copy is retained only until server revocation is verified. Short access expiry does not end this renewable session. This copy cannot reopen account content; retry preserves any newer sign-in.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此受保护副本仅保留至服务端撤销得到确认。短期访问凭据到期不会结束这个可续期会话。该副本不能重新打开账号内容；重试会保留后续的新登录。"
+          }
+        }
+      }
+    },
+    "This older sign-in expired before automatic renewal was enabled. Sign in once to keep this device signed in.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个旧登录在启用自动续期前已过期。请登录一次，之后此设备会持续保持登录。"
+          }
+        }
+      }
+    },
+    "Saved sign-in kept on this device. Automatic renewal will retry when secure storage and the service are available.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已在此设备上保留登录。安全存储和服务恢复可用后会重试自动续期。"
+          }
+        }
+      }
+    },
+    "This device session was revoked. Sign in again to continue.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此设备会话已被撤销。请重新登录以继续。"
+          }
+        }
+      }
+    },
+    "Your sign-in is saved securely. Automatic renewal could not finish; retry when the service and secure storage are available.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "登录已安全保存。自动续期尚未完成；请在服务和安全存储恢复可用后重试。"
+          }
+        }
+      }
+    },
+    "Open capri to restore your secure sign-in before sending a screenshot.": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请打开 capri 恢复安全登录，然后再发送截图。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -14,6 +14,10 @@ vi.mock("@/lib/server/memoryEntryCapability", () => ({ mintMemoryEntryCapability
 vi.mock("@/components/memory-review/memory-review-card", () => ({
   MemoryReviewCard: (props: unknown) => { review(props); return createElement("div", { "data-review": "pending" }, "待审核的内容"); },
 }));
+vi.mock("@/lib/server/marketing-locale", () => ({ getMarketingLocale: async () => language.locale }));
+const language = { locale: "zh-CN" };
+import { LocaleProvider } from "@/components/locale-provider";
+import type { LocaleTag } from "@talent-signal/contracts";
 import PersonMemoryPage from "@/app/workspace/people/[id]/page";
 
 const personId = "11111111-1111-4111-8111-111111111111";
@@ -35,6 +39,7 @@ async function render(id = personId, session: string | undefined = sessionId, di
 
 beforeEach(() => {
   vi.clearAllMocks();
+  language.locale = "zh-CN";
   auth.mockResolvedValue({ user: { name: "Owner" } });
   claims.mockResolvedValue({ backendAccountId: "account" });
   mint.mockReturnValue("scoped-entry");
@@ -140,4 +145,30 @@ describe("saved Person destination", () => {
     const html = await render(); expect(html).toContain("还没有已核对的基础信息"); expect(html).toContain("对方提到在某公司工作");
     expect(html).not.toContain("<dt>公司</dt>"); expect(html).not.toContain("最近往来");
   });
+});
+
+
+it.each([
+  ["en", "Back to people directory", "Relationship context", "Basic information", "Biography"],
+  ["zh-TW", "返回人物目錄", "關係情境", "基本資訊", "簡介"],
+  ["ja", "人物一覧に戻る", "関係の文脈", "基本情報", "プロフィール"],
+  ["ko", "인물 목록으로 돌아가기", "관계 맥락", "기본 정보", "소개"],
+] as const)("localizes server Person chrome in %s without translating stored profile or authority", async (locale, back, contexts, basic, biography) => {
+  language.locale = locale;
+  const data = fixture();
+  loadPersonMemory.mockResolvedValue({ ...data, person: { ...data.person, profile: { headline: "用户的原始标题", summary: "用户补充的中文简介", provenance_kind: "user_authored", updated_at: "2026-10-12T00:00:00Z" } } });
+  const page = await PersonMemoryPage({ params: Promise.resolve({ id: personId }), searchParams: Promise.resolve({ session: sessionId, directory_query: "陈" }) });
+  const html = renderToStaticMarkup(<LocaleProvider locale={locale as LocaleTag}>{page}</LocaleProvider>);
+  for (const text of [back, contexts, basic, biography, "陈知远", "读书会认识", "用户的原始标题", "用户补充的中文简介", "我们通过读书会认识"]) expect(html).toContain(text);
+  expect(html).toContain(`/workspace?person=${personId}&amp;context=${contextId}&amp;session=${sessionId}`);
+  expect(mint).toHaveBeenCalledWith(expect.anything(), { purpose: "people", personId });
+});
+
+it("localizes an unavailable Person without presenting failed reads as empty memory", async () => {
+  language.locale = "en"; loadPersonMemory.mockRejectedValue(new Error("unavailable"));
+  const html = await render();
+  expect(html).toContain("Person memory unavailable");
+  expect(html).toContain("Cannot read this person&#x27;s memory; cached or example content will not be substituted.");
+  expect(html).toContain('role="alert"');
+  expect(html).not.toContain("No confirmed memories yet");
 });

@@ -325,7 +325,7 @@ function renderAuthHuman(envelope: SuccessEnvelope): string {
   const source=String(value.credential_source??value.credential_store??'keyring');
   if(value.command==='auth logout') return `CLI 授权撤销：${value.remote_revoked?'已确认':value.remote_status==='unverified'?'尚未确认':'已不可用'}\n环境：${environment}\n本机凭据：${value.local_credential_state==='preserved_newer'?'已保留较新的登录':value.local_credential_state==='unverified'?'移除尚未确认，请重试退出':value.credential_source==='CAPIR_TOKEN'?'来自 CAPIR_TOKEN；请在调用环境中移除':'已移除'}\n`+
     (value.remote_status==='unverified' ? `检查远端授权：${String(value.next_action)}\n` : '');
-  const labels:Record<string,string>={active:'已登录',expired:'凭据已到期',revoked:'授权已撤销',missing:'尚未登录',unverified:'暂时无法验证登录',reauth_required:'需要重新授权'};
+  const labels:Record<string,string>={active:'已登录',signed_out:'已退出（远端撤销待重试）',renewable:'已登录（访问凭据将自动续期）',expired:'凭据已到期',revoked:'授权已撤销',missing:'尚未登录',unverified:'暂时无法验证登录',reauth_required:'需要重新授权'};
   const state=String(value.state??'active');
   return `${labels[state]??state}${identity?.user_email ? ' '+identity.user_email : ''}${value.reused?'（已复用）':''}\n环境：${environment}${origin ? " · "+origin : ""}${identity?.account_slug?' / '+identity.account_slug:''}\n`+
     `凭据来源：${source==='CAPIR_TOKEN'?'CAPIR_TOKEN（环境变量）':'系统钥匙串'}\n`+
@@ -377,7 +377,7 @@ async function runTestCommand(
   const userStore = await dependencies.credentialStore(environment);
   const hasUser = !dependencies.env.CAPIR_TEST_OPERATOR_TOKEN?.trim() && await userStore.get();
   if (hasUser) {
-    const credential = await usableCredential(environment, userStore, dependencies.fetchImpl);
+    const credential = await usableCredential(environment, userStore, dependencies.fetchImpl, {negotiate:true});
     operatorStore = environmentTokenStore(credential.token);
     authority = credential.authority;
   } else operatorStore = (await dependencies.testOperatorStore?.(environment)) ?? missingCredentialStore();

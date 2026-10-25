@@ -28,6 +28,7 @@ import {
   coordinatorScopeIsCurrent,
   subscribeWorkspaceRefresh,
 } from "@/lib/workspace-refresh";
+import { useT } from "./locale-provider";
 import { WORKSPACE_SESSION_EXPIRED_EVENT, workspaceSessionFetch } from "./workspace-session-request";
 import { Button } from "./ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "./ui/dialog";
@@ -188,15 +189,16 @@ export function useWorkspaceDirectory(binding: string | null, enabled: boolean) 
 
 /** Real account-scoped People directory projection; never a fixture. */
 export function useWorkspaceSearchSources(binding: string | null, enabled: boolean) {
+  const t = useT();
   const { data, loading, failed, retry } = useWorkspaceDirectory(binding, enabled);
   const people: WorkspaceSearchPerson[] = (data?.people.people ?? []).flatMap(person => {
     const id = cleanLabel(person.id), label = cleanLabel(person.display_label);
-    return id && label ? [{ id, label, detail: cleanLabel(person.contexts?.[0]?.display_label) || "联系人",
+    return id && label ? [{ id, label, detail: cleanLabel(person.contexts?.[0]?.display_label) || t("联系人"),
       avatarUrl: cleanLabel(person.avatar?.url) || null }] : [];
   });
   const sessions: WorkspaceSearchSession[] = (data?.sessions.sessions ?? []).flatMap(row => {
     const id = cleanLabel(row.session_id), title = cleanLabel(row.title);
-    return id && title ? [{ id, title, detail: [cleanLabel(row.person_label), cleanLabel(row.context_label)].filter(Boolean).join(" · ") || "账号专属对话" }] : [];
+    return id && title ? [{ id, title, detail: [cleanLabel(row.person_label), cleanLabel(row.context_label)].filter(Boolean).join(" · ") || t("账号专属对话") }] : [];
   });
   return { people, sessions, loading, failed, retry };
 }
@@ -208,13 +210,15 @@ export function useWorkspaceSearchSources(binding: string | null, enabled: boole
  */
 export function WorkspaceGlobalSearchDialog({
   binding,
-  label = "搜索",
+  label,
   presentation = "icon",
 }: {
   binding: string | null;
   label?: string;
   presentation?: "icon" | "field" | "rail";
 }) {
+  const t = useT();
+  const triggerLabel = label ?? t("搜索");
   const dialog = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -269,7 +273,7 @@ export function WorkspaceGlobalSearchDialog({
     <Dialog open={open} onOpenChange={changeOpen}>
       <DialogTrigger asChild>
         <button
-          aria-label={label}
+          aria-label={triggerLabel}
           className={
             presentation === "field"
               ? styles.searchTrigger
@@ -278,11 +282,11 @@ export function WorkspaceGlobalSearchDialog({
                 : styles.iconButton
           }
           ref={trigger}
-          title={`${label} · ⌘K / Ctrl+K`}
+          title={`${triggerLabel} · ⌘K / Ctrl+K`}
           type="button"
         >
           <MagnifyingGlass aria-hidden="true" size={17} />
-          {presentation === "field" && <><span>搜索人物或对话</span><kbd>⌘K</kbd></>}
+          {presentation === "field" && <><span>{t("搜索人物或对话")}</span><kbd>⌘K</kbd></>}
         </button>
       </DialogTrigger>
       <DialogContent
@@ -307,27 +311,27 @@ export function WorkspaceGlobalSearchDialog({
           links[next]?.scrollIntoView({ block: "nearest" });
         }}
       >
-        <DialogTitle className="sr-only">搜索人物与对话</DialogTitle>
-        <DialogDescription className="sr-only">搜索当前账号的人物和对话；使用方向键选择，Enter 打开，Esc 关闭。</DialogDescription>
+        <DialogTitle className="sr-only">{t("搜索人物与对话")}</DialogTitle>
+        <DialogDescription className="sr-only">{t("搜索当前账号的人物和对话；使用方向键选择，Enter 打开，Esc 关闭。")}</DialogDescription>
         <div className={styles.searchDialogHeader}>
           <MagnifyingGlass aria-hidden="true" size={17} />
           <input
-            aria-label="搜索人物与对话"
+            aria-label={t("搜索人物与对话")}
             autoComplete="off"
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索人物与对话"
+            placeholder={t("搜索人物与对话")}
             ref={input}
             type="search"
             value={query}
           />
           <DialogClose asChild>
-            <Button aria-label="关闭搜索" variant="ghost" size="icon">
+            <Button aria-label={t("关闭搜索")} variant="ghost" size="icon">
               <X aria-hidden="true" size={16} />
             </Button>
           </DialogClose>
         </div>
         <WorkspaceSearchResults binding={binding} query={query} close={close} />
-        <p className={styles.searchHint}>↑ ↓ 选择 · Enter 打开 · Esc 关闭</p>
+        <p className={styles.searchHint}>{t("↑ ↓ 选择 · Enter 打开 · Esc 关闭")}</p>
       </DialogContent>
     </Dialog>
   );
@@ -341,6 +345,7 @@ function WorkspaceSearchResults({ binding, query, close }: {
   query: string;
   close: () => void;
 }) {
+  const t = useT();
   const { people, sessions, loading, failed, retry } = useWorkspaceSearchSources(binding, true);
   const results = searchWorkspaceResults({ people, sessions, query });
   const hasQuery = query.normalize("NFKC").trim().length > 0;
@@ -348,24 +353,24 @@ function WorkspaceSearchResults({ binding, query, close }: {
         <div className={styles.searchResults}>
           {!hasQuery ? (
             <p className={styles.searchEmpty}>
-              输入姓名、机构或对话标题。
+              {t("输入姓名、机构或对话标题。")}
             </p>
           ) : loading ? (
             <p className={styles.searchEmpty} role="status">
-              正在读取当前账号的目录…
+              {t("正在读取当前账号的目录…")}
             </p>
           ) : failed ? (
             <div className={styles.searchEmpty} role="alert">
-              <p>暂时无法读取人物与对话。请重试，已保存的内容不会丢失。</p>
-              <Button variant="outline" className="mt-3" onClick={retry}>重新载入</Button>
+              <p>{t("暂时无法读取人物与对话。请重试，已保存的内容不会丢失。")}</p>
+              <Button variant="outline" className="mt-3" onClick={retry}>{t("重新载入")}</Button>
             </div>
           ) : results.total === 0 ? (
-            <p className={styles.searchEmpty} role="status">没有找到“{query.trim()}”。试试姓名的一部分或机构名称。</p>
+            <p className={styles.searchEmpty} role="status">{t("没有找到“{query}”。试试姓名的一部分或机构名称。", { query: query.trim() })}</p>
           ) : (
             <>
               {results.people.length ? (
                 <>
-                  <p className={styles.searchSection}>人物</p>
+                  <p className={styles.searchSection}>{t("人物")}</p>
                   {results.people.map((person) => (
                     <Link
                       className={styles.searchResult}
@@ -385,7 +390,7 @@ function WorkspaceSearchResults({ binding, query, close }: {
               ) : null}
               {results.sessions.length ? (
                 <>
-                  <p className={styles.searchSection}>对话</p>
+                  <p className={styles.searchSection}>{t("对话")}</p>
                   {results.sessions.map((session) => (
                     <Link
                       className={styles.searchResult}

@@ -79,11 +79,33 @@ export type WorkspaceNavigationSnapshot = {
   readonly hrefs: Readonly<Partial<Record<WorkspaceNavigationDestination, string>>>;
 };
 
-/** At most three vetted locators live only for this mounted authenticated scope. */
+export type WorkspaceComposerView = {
+  readonly start: number;
+  readonly end: number;
+  readonly direction: "forward" | "backward" | "none";
+  readonly scrollTop: number;
+};
+
+// A non-authoritative UI stamp avoids retaining another copy of private draft
+// text. It can match a clamped presentation state, never identity or an action.
+function composerViewStamp(draft: string): string {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < draft.length; index++) {
+    const unit = draft.charCodeAt(index);
+    first = Math.imul(first ^ unit, 0x01000193);
+    second = Math.imul(second ^ unit, 0x85ebca6b);
+  }
+  return `${draft.length}:${first >>> 0}:${second >>> 0}`;
+}
+
+/** Locators and bounded editor presentation live only in this authenticated mount. */
 export function createWorkspaceNavigationMemory(scope: string | null) {
   let expired = typeof scope !== "string" || !/^[0-9a-f]{64}$/u.test(scope);
   let snapshot: WorkspaceNavigationSnapshot = { hrefs: {} };
   const listeners = new Set<() => void>();
+  // No text, storage record, render output or second draft authority is kept.
+  const composerViews = new Map<string, { stamp: string; view: WorkspaceComposerView }>();
   function publish(hrefs: WorkspaceNavigationSnapshot["hrefs"]) {
     snapshot = { hrefs }; for (const listener of listeners) listener();
   }
@@ -96,7 +118,24 @@ export function createWorkspaceNavigationMemory(scope: string | null) {
       if (!locator || snapshot.hrefs[locator.destination] === locator.href) return;
       publish({ ...snapshot.hrefs, [locator.destination]: locator.href });
     },
-    expire() { expired = true; publish({}); },
+    rememberComposerView(key: string, draft: string, view: WorkspaceComposerView) {
+      if (expired || !isSessionId(key) || draft.length > 64_000) return;
+      if (!draft) return;
+      if (!Number.isInteger(view.start) || !Number.isInteger(view.end) ||
+          view.start < 0 || view.end < view.start || view.end > draft.length ||
+          !["forward", "backward", "none"].includes(view.direction) ||
+          !Number.isFinite(view.scrollTop) || view.scrollTop < 0) return;
+      composerViews.delete(key);
+      composerViews.set(key, { stamp: composerViewStamp(draft), view: { ...view } });
+      if (composerViews.size > 16) composerViews.delete(composerViews.keys().next().value!);
+    },
+    readComposerView(key: string, draft: string): WorkspaceComposerView | null {
+      if (expired) return null;
+      const entry = composerViews.get(key);
+      return entry?.stamp === composerViewStamp(draft) ? { ...entry.view } : null;
+    },
+    forgetComposerView(key: string) { composerViews.delete(key); },
+    expire() { expired = true; composerViews.clear(); publish({}); },
   };
 }
 

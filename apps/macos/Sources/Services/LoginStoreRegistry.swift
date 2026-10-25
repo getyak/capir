@@ -77,6 +77,8 @@ final class LoginStoreRegistry {
             fileURL: url.deletingPathExtension().appendingPathExtension("json"))
     }
 
+    var revocationIndexURL: URL { lockURL.deletingPathExtension().appendingPathExtension("pending-revocations.json") }
+
     deinit { try? lockHandle?.close() }
 
     private func own() throws {

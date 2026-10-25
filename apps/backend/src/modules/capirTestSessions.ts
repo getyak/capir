@@ -125,11 +125,11 @@ export async function lockLabRunForAdmission(
       FROM capir_auth_grants g JOIN capir_user_test_entitlements t ON t.account_id=g.account_id AND t.user_id=g.user_id
       JOIN sessions s ON s.id=g.backing_session_id
       WHERE g.account_id=$1 AND g.user_id=$2 AND ($3::uuid IS NULL OR g.id=$3)
-        AND g.state='active' AND g.absolute_expires_at>clock_timestamp()
+        AND g.state='active' AND (g.absolute_expires_at IS NULL OR g.absolute_expires_at>clock_timestamp())
         AND g.web_origin=$4 AND g.backend_origin=$5
         AND t.state='active' AND t.generation=g.test_entitlement_generation
         AND 'test.handoff'=ANY(g.scopes) AND 'test.handoff'=ANY(t.scopes)
-        AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()
+        AND s.revoked_at IS NULL AND (g.protocol_version='capir-auth.v3' OR s.expires_at>clock_timestamp())
       ORDER BY g.created_at DESC LIMIT 1`,[located.owner_account_id,located.owner_user_id,authorizingGrantId??null,settings.webOrigin,settings.backendOrigin])).rows[0];
     if (!candidate) throw new ApiError(401,'LAB_TEST_SESSION_ADMISSION_DENIED','The username, email, or password is not recognized.');
     userAuthority={grantId:candidate.id,accountId:located.owner_account_id,userId:located.owner_user_id,
@@ -175,7 +175,7 @@ export async function lockLabRunForAdmission(
                   AND te.state = 'active'
                 WHERE ag.id = r.owner_grant_id
                   AND ag.state = 'active'
-                  AND ag.absolute_expires_at > clock_timestamp()
+                  AND (ag.absolute_expires_at IS NULL OR ag.absolute_expires_at > clock_timestamp())
                   AND ag.backing_session_id IS NOT NULL)) AS owner_authority_live,
               p.state AS principal_state, p.generation AS principal_generation_current,
               p.web_origin AS principal_web_origin, p.backend_origin AS principal_backend_origin

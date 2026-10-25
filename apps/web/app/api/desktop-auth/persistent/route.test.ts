@@ -94,8 +94,11 @@ it("can renew after the access cookie is completely gone without requiring a pri
   expect(mocks.rebind).not.toHaveBeenCalled();
 });
 it("GET reads the live session without any auth refresh or cookie write", async () => {
+  mocks.claims.mockResolvedValue({ backendAccessToken: "a".repeat(43), backendAccountId: account, backendUserId: user });
   const response = await GET();
-  expect(await response.json()).toEqual(live);
+  const body = await response.json();
+  expect(body).toMatchObject({ ...live, revocation_proof: expect.stringMatching(/^v1\./) });
+  expect(JSON.stringify(body)).not.toContain("a".repeat(43));
   expect(mocks.signIn).not.toHaveBeenCalled();
   expect(mocks.cookies).not.toHaveBeenCalled();
   expect(response.headers.has("set-cookie")).toBe(false);
@@ -104,7 +107,14 @@ it("GET reads the live session without any auth refresh or cookie write", async 
 });
 it("revocation uses proof directly, including after an access cookie expired", async () => {
   mocks.claims.mockResolvedValue(null);
-  expect(await (await POST(request("revoke"))).json()).toEqual({ status: "revoked" });
+  expect(await (await POST(request("revoke"))).json()).toEqual({ status: "revoked", revocation_confirmed: true });
   expect(mocks.revoke).toHaveBeenCalled();
+  expect(mocks.signIn).not.toHaveBeenCalled();
+});
+it("a legacy backend's canonical 401 cannot acknowledge pending revocation", async () => {
+  mocks.revoke.mockRejectedValue(new DesktopPersistentSessionError(401));
+  const response = await POST(request("revoke"));
+  expect(response.status).toBe(503);
+  expect(await response.json()).toEqual({ status: "unavailable" });
   expect(mocks.signIn).not.toHaveBeenCalled();
 });
