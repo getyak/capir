@@ -1,0 +1,18 @@
+Scope: all 10 workspace projects
+✓ Lockfile passes supply-chain policies (verified 2d ago)
+Lockfile is up to date, resolution step is skipped
+Already up to date
+
+Done in 581ms using pnpm v11.18.0
+Documentation check passed.
+Wiki check passed: 4 published page(s).
+Architecture boundaries passed: contract 2026-08-24.10; 112 migrations; 10 workspace manifests; 9 hotspot baselines.
+product architecture: PASS · 79 elements · 47 texts · 76 solid · 3 dashed · 2562x1439
+system architecture: PASS · 123 elements · 64 texts · 118 solid · 5 dashed · 2574x1732
+Agent module blueprint: PASS · 117 elements · 62 texts · 108 solid · 9 dashed · 2830x1548
+Agent control plane: PASS · 112 elements · 62 texts · 92 solid · 20 dashed · 2582x1470
+Agent runtime flow: PASS · 88 elements · 46 texts · 81 solid · 7 dashed · 2588x1374
+$ node scripts/check-docs.mjs && node scripts/wiki.mjs check && pnpm architecture:check
+$ pnpm architecture:boundaries && pnpm architecture:diagrams:check
+$ node scripts/check-architecture-boundaries.mjs
+$ node scripts/check-architecture-diagrams.mjs

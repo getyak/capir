@@ -56,6 +56,7 @@ async function emit(value: ConversationQueueSnapshot, emitter = emitters.at(-1)!
 function capsule() { return host.querySelector<HTMLElement>("[data-session-task-capsule]"); }
 async function open() { expect(capsule(), "observed task must expose a capsule").not.toBeNull(); const trigger = capsule()!.querySelector<HTMLButtonElement>("button")!; await act(async () => trigger.click()); await flush(); return trigger; }
 function actions() { return fetcher.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => JSON.parse(init.body)); }
+function stopButtons() { return [...host.querySelectorAll<HTMLButtonElement>("button")].filter(button => button.textContent === "Stop"); }
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -104,12 +105,43 @@ it("anchors header inspection to the current message execution record inside the
 });
 it("stops only through the deliberate control and never continues the stopped queue", async () => {
   await render(); await emit(snapshot(2, entry())); await open();
-  const stop = [...document.querySelectorAll<HTMLButtonElement>("[data-session-task-record] button")].find(button => button.textContent === "Stop");
+  const stop = [...document.querySelectorAll<HTMLButtonElement>("[data-session-task-capsule] button")].find(button => button.textContent === "Stop");
   expect(stop).toBeDefined(); await act(async () => stop!.click()); await flush();
   expect(actions().map(action => action.kind)).toEqual(["stop"]);
   expect(actions()[0].run_id).toBe(RUN); expect(capsule()?.textContent ?? "").toContain("Stopping");
   await emit(snapshot(11, null, [entry({ message_id: "77777777-7777-4777-8777-777777777777", queue_entry_id: "77777777-7777-4777-8777-777777777777", status: "queued", run_id: null, started_at: null })], true)); expect(capsule()?.textContent ?? "").toContain("Stopped");
   expect(actions().map(action => action.kind)).toEqual(["stop"]);
+});
+it("keeps one Stop beside the only current status even when execution details are open", async () => {
+  await render(); await emit(snapshot(2, entry({ stage: "thinking" })));
+  expect(stopButtons()).toHaveLength(1);
+  expect(capsule()?.contains(stopButtons()[0])).toBe(true);
+  const record = host.querySelector<HTMLDetailsElement>('details[data-live="true"]')!;
+  expect(record.open).toBe(false);
+  expect(record.querySelector("summary")?.textContent).not.toContain("Working");
+  expect(host.querySelector('[class*="footer"]')?.textContent).not.toContain("Working");
+  await open();
+  expect(stopButtons()).toHaveLength(1);
+  expect(record.open).toBe(true);
+  expect(record.querySelector('[data-elapsed-ms]')).not.toBeNull();
+});
+it("does not let Escape on a closed historical receipt stop the replacement run", async () => {
+  await render(); detail = completed();
+  await emit(snapshot(3, entry({ message_id: "77777777-7777-4777-8777-777777777777", queue_entry_id: "77777777-7777-4777-8777-777777777777", run_id: "88888888-8888-4888-8888-888888888888" })));
+  const older = host.querySelector<HTMLDetailsElement>('details[data-phase="completed"]')!;
+  expect(older.open).toBe(false);
+  const summary = older.querySelector("summary")!;
+  summary.focus();
+  await act(async () => summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(actions()).toEqual([]);
+});
+it("retains current-run Stop until the active queue actually settles after history readback", async () => {
+  await render(); await emit(snapshot(2, entry())); detail = completed();
+  await emit(snapshot(3, entry()));
+  expect(stopButtons()).toHaveLength(1);
+  expect(capsule()?.contains(stopButtons()[0])).toBe(true);
+  await act(async () => stopButtons()[0].click()); await flush();
+  expect(actions().map(action => [action.kind, action.run_id])).toEqual([["stop", RUN]]);
 });
 it("closes an older execution record during a new run without stopping that run", async () => {
   await render(); await emit(snapshot(2, entry())); await open();
@@ -152,7 +184,7 @@ it("waits for canonical readback instead of claiming success from a completed qu
 });
 it("does not resurrect old active work or callbacks across binding ABA", async () => {
   await render(); await emit(snapshot(2, entry())); await open();
-  const oldStop = [...document.querySelectorAll<HTMLButtonElement>("[data-session-task-record] button")].find(button => button.textContent === "Stop")!;
+  const oldStop = [...document.querySelectorAll<HTMLButtonElement>("[data-session-task-capsule] button")].find(button => button.textContent === "Stop")!;
   expect(oldStop).toBeDefined();
   await render("chat-b"); expect(capsule()).toBeNull();
   await render("chat-a"); expect(capsule()).toBeNull();

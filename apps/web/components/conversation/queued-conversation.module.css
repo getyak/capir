@@ -277,3 +277,9 @@
 }
 
 .queueWithdrawalNote { margin: 6px 0; color: var(--muted); font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }
+
+/* Keep Stop fully reachable when the centered title leaves little side space. */
+@container (max-width:600px) {
+  .taskSlot { grid-column:1 / -1; grid-row:2; justify-self:center; width:auto; max-width:100%; }
+  .taskSlot:empty { display:none; }
+}

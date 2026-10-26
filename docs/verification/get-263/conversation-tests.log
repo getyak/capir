@@ -1,0 +1,13 @@
+
+ RUN  v5.0.5 /Users/cubxxw/ops/symphony/runtime/workspaces/GET-263/apps/web
+
+
+ Test Files  32 passed (32)
+      Tests  368 passed (368)
+   Start at  03:33:15
+   Duration  42.40s (import 59%, tests 32%, environment 8%, transform 1%)
+
+     Import  213 modules were evaluated 561 times · 24.04s total, 59% of tracked time
+             ~14.92s faster with isolate: false — shared modules are evaluated once per worker instead of once per file
+             learn more: https://vitest.dev/guide/improving-performance#test-isolation
+
