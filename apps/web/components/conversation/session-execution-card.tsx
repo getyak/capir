@@ -80,10 +80,10 @@ export function SessionExecutionCard({
       <summary className={styles.executionSummary} title={live ? stageLabel ?? undefined : undefined}>
         {live ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
         <span className={styles.executionState} role={live ? "status" : undefined}><ProcessingLabel animated={phase === "running" && live}>{phase === "running" && live ? t("正在处理") : conversationExecutionPhaseLabel(phase, locale)}</ProcessingLabel></span>
-        {completedTools.length > 0 ? <span className={styles.executionStage}>{t("execution.tools.count", { count: completedTools.length })}</span> : null}
-        <span className={styles.executionElapsed} data-elapsed-ms={elapsedMs}>{t(phase === "queued" ? "已等待" : timingBasis === "receipt" ? "记录跨度" : "用时")} {conversationElapsedLabel(elapsedMs, locale)}</span>
       </summary>
       <div className={styles.executionDetail}>
+        {completedTools.length > 0 ? <p>{t("execution.tools.count", { count: completedTools.length })}</p> : null}
+        <p className={styles.executionElapsed} data-elapsed-ms={elapsedMs}>{t(phase === "queued" ? "已等待" : timingBasis === "receipt" ? "记录跨度" : "用时")} {conversationElapsedLabel(elapsedMs, locale)}</p>
         {stageLabel && live ? <p>{stageLabel}</p> : null}
         {failureCode ? <p className={styles.executionFailure}>{t("execution.failureCode", { code: failureCode })}</p> : null}
         {completedTools.length > 0 ? <ol className={styles.executionMilestones} aria-label={t("工具完成记录")}>

@@ -164,8 +164,7 @@ when the compact decision lacks enough governed distinguishing evidence.
 
 Prioritize identity and current context, then meaningful change or dependency,
 exact supporting evidence, and the smallest next action. History, alternatives,
-and deeper analysis follow.
-
+and deeper analysis follow. The conversation record names processing, review, failure, interruption and unknown state in ordinary language. Keep tool counts, durations and diagnostic identifiers inside its inline disclosure in every phase, preserving decision, permission, risk and recovery state.
 AI provenance stays secondary. Attachments and sending show selected images and meaningful progress; omit routine footnotes and success notices. Disclose sources
 on demand and highlight actionable errors or identity questions. Conversation evidence uses aligned thumbnails and inline originals within its message or review card; header work status opens the corresponding inline execution record, preserving observed state, recovery and decision boundaries.
 

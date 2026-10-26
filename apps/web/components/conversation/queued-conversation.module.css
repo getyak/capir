@@ -37,7 +37,7 @@
 .answer h3 { font-size:var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-heading, 1.4); font-weight:500; margin:0 0 12px; }
 /* Milestone-only dialogue update while a run forms its result. */
 .milestone { max-width:620px; background:var(--surface-muted,#f4f3ef); border-radius:14px; padding:12px; margin-bottom:8px; }
-/* In-place collapsible execution record: state and elapsed time only. */
+/* State stays on the reading axis; diagnostics live inside the disclosure. */
 .execution { max-width:620px; margin:0 0 8px; color:var(--muted); }
 .executionSummary { align-items:center; border-radius:8px; cursor:pointer; display:flex; font-size: var(--ts-type-nav, 0.875rem); gap:8px; line-height: var(--ts-leading-meta, 1.5); list-style:none; min-height: 44px; padding:5px 12px; }
 .executionSummary::-webkit-details-marker { display:none; }
@@ -45,7 +45,7 @@
 .execution[open] .executionSummary::after { transform:rotate(90deg); }
 .executionSummary:hover { background:var(--surface-muted); color:var(--ink); }
 .executionState { color:var(--muted-strong,var(--ink)); font-weight:500; }
-.executionElapsed { font-variant-numeric:tabular-nums; margin-left:auto; }
+.executionElapsed { font-variant-numeric:tabular-nums; }
 .execution[data-phase="failed"] .executionState,
 .execution[data-phase="interrupted"] .executionState { color:var(--accent-strong,var(--accent)); }
 .executionDetail { font-size:var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); padding:2px 12px 10px; }
@@ -203,8 +203,6 @@
 /* Live work is one presence row; detailed evidence stays behind disclosure. */
 .execution[data-live="true"] .executionSummary { font-size: var(--ts-type-meta, 0.8125rem); gap:6px; min-height:44px; padding:0; }
 .workingName { font-weight:400; }
-.execution[data-live="true"]:not([open]) .executionElapsed,
-.execution[data-live="true"]:not([open]) .executionStage { display:none; }
 .answer:has(.execution[data-live="true"]) > .identity { margin-top:12px; }
 .answer:has(.execution[data-live="true"][data-phase="running"]) > .identity .mark { animation:breathe 1.8s ease-in-out infinite; }
 .answer:has(.workRow[data-animate="true"]) > .identity .mark { animation:breathe 1.8s ease-in-out infinite; }
@@ -253,9 +251,7 @@
 .executionSummary { padding-inline: 0; flex-wrap: wrap; column-gap: 8px; row-gap: 0; }
 .execution[data-phase="completed"] .executionSummary { font-size:var(--ts-type-meta,0.8125rem); }
 .executionDetail { padding-inline: 0; }
-.executionElapsed { margin-left: 0; }
 .executionSummary::after { margin-left: auto; }
-.executionStage { min-width:0; overflow-wrap:anywhere; }
 .turn { margin-bottom: 28px; }
 .turn.userTurn { margin-bottom: 16px; }
 /* An empty adapter-generated part must not reserve a whole blank turn. */

@@ -202,7 +202,7 @@ it("leaves a pending calendar decision in its governed card after canonical repl
   expect(capsule()).toBeNull();
   expect(host.textContent).toContain("Synthetic meeting review");
   expect(host.textContent).toContain("Download calendar draft");
-  expect(host.textContent).toContain("Execution complete, awaiting your decision");
+  expect(host.textContent).toContain("Ready for your review");
   expect(actions()).toEqual([]);
 });
 it("keeps the actual started timestamp in the single inline execution record", async () => {
