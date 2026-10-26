@@ -62,6 +62,8 @@ resident Web deployment revision, real-account isolated-space acceptance and
 test-space cleanup are separate gates. None is established by the host results
 above. Linear remains In Progress until all required acceptance is verified.
 
-The task's private `.symphony/evidence/` records delivery readbacks; credentials
+Raw host logs are retained in private `.symphony/evidence/host/`, outside the
+tracked tree as required by repository hygiene. The task's private
+`.symphony/evidence/` records delivery readbacks; credentials
 and browser storage remain only in the registered temporary artifact and are
 excluded from this document and Git.
