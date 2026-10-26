@@ -1,3 +1,4 @@
+import { clearAllListOrder } from "./workspace-list-order";
 /**
  * Reversible local list organization (Archive / Pin) for workspace Session
  * rows.
@@ -346,6 +347,7 @@ export function createSessionOrganizationStore(
 
 /** Logout / account-change boundary: mirrors the other local session intents. */
 export function clearAllSessionOrganization(): void {
+  clearAllListOrder();
   for (const store of stores.values()) store.clear();
   stores.clear();
   try {

@@ -130,7 +130,7 @@
   font-size: var(--workspace-meta-size);
   grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr) 62px;
   column-gap: 16px;
-  padding: 0 12px 12px;
+  padding: 0 56px 12px 12px;
 }
 
 .tableHeader > span:last-child {
@@ -467,8 +467,12 @@
 }
 
 .peopleList > li {
+  align-items: center;
+  display: flex;
+  min-width: 0;
   position: relative;
 }
+.peopleList > li > .personRow { flex: 1 1 auto; min-width: 0; }
 
 .rowAvatar {
   left: 12px;

@@ -15,6 +15,7 @@ import { useWorkspaceBrowse } from "./workspace-browse";
 import { useT } from "./locale-provider";
 import { useWorkspaceDirectory } from "./workspace-search";
 import styles from "./workspace-sidebar-people.module.css";
+import { ListOrderMenu, useWorkspaceListReorder } from "./workspace-list-order";
 
 const DIRECTORY_LIMIT = 200;
 
@@ -80,6 +81,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
   const matches = people.filter(person => !filter ||
     [person.label, ...person.contexts.map(context => context.label)]
       .join(" ").normalize("NFKC").toLocaleLowerCase().includes(filter));
+  const order = useWorkspaceListReorder(matches, "people", { disabled: Boolean(normalizedDraft) });
   const bounded = (data?.people.people?.length ?? 0) >= DIRECTORY_LIMIT;
 
   return (
@@ -175,6 +177,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
         <p className={styles.scope}>{t("侧栏仅显示目录前 200 位人物。")}</p>
       ) : null}
 
+      {order.notice}
       {!binding ? (
         <p className={styles.state} role="alert">{t("请重新登录以读取人物目录。")}</p>
       ) : loading ? (
@@ -187,8 +190,8 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
       ) : matches.length ? (
         <nav aria-label={t("侧栏人物")}>
           <ul className={styles.list}>
-            {matches.map(person => (
-              <li key={person.id}>
+            {order.ordered.map(person => (
+              <li {...order.rowProps(person.id)} className={`${order.rowProps(person.id).className} ${styles.orderedPerson}`} key={person.id}>
                 <Link
                   aria-current={selectedId === person.id ? "page" : undefined}
                   className={styles.person}
@@ -203,6 +206,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
                     <small>{person.contexts[0]?.label ?? t("联系人")}</small>
                   </span>
                 </Link>
+                <ListOrderMenu control={order.control(person.id)} label={person.label} />
               </li>
             ))}
           </ul>

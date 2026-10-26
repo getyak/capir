@@ -276,16 +276,7 @@
   --session-row-surface: var(--background);
 }
 
-.pinnedChip {
-  align-items: center;
-  color: var(--muted-strong);
-  display: inline-flex;
-  flex: 0 0 auto;
-  font-size: var(--ts-type-meta, 0.8125rem);
-  font-weight: 560;
-  gap: 3px;
-  padding: 2px 6px;
-}
+
 
 .orgNotice {
   color: var(--muted);
