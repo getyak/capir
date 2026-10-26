@@ -102,6 +102,14 @@ A session only controls the device it selected:
   already booted is borrowed, produces a clear warning, and is left running.
 - It never runs `simctl shutdown all` and never shuts down another device.
 
+A device gate blocks native execution, not independent source implementation,
+host checks or read-only review. Continue those authorized steps while preserving
+the other project's devices and tasks. Recheck occupancy only after new evidence
+or an explicit user resume. Report local installation, native acceptance and
+processed TestFlight distribution separately; a macOS client or syntax check
+cannot establish an iOS layout result. Keep any required native gate incomplete
+until the guarded session or an explicitly selected real device is available.
+
 The child runs in its own process group. `SIGINT` and `SIGTERM` are handled from
 the start of the run, including while waiting for the lock, and are forwarded to
 the group while a child is active. The session keeps the lock until every live

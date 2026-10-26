@@ -155,6 +155,29 @@ struct PursuitWorkspaceSnapshot: Equatable {
         )
     }()
 
+    static let previewRetrievalContentExtremes: PursuitWorkspaceSnapshot = {
+        let base = previewLongPeople
+        let people = base.people.enumerated().map { index, person in
+            guard index < 2 else { return person }
+            return WorkspacePerson(
+                id: person.id,
+                displayLabel: index == 0 ? "陈晓雨 Alexandra Chen 🌏 产品与合作" : "Alexandria-Marguerite Williams — 国际协作",
+                contextCount: person.contextCount,
+                captureCount: person.captureCount,
+                confirmedIdentityCount: person.confirmedIdentityCount,
+                lastActivityAt: person.lastActivityAt,
+                profile: person.profile,
+                contexts: person.contexts,
+                identityMatches: person.identityMatches
+            )
+        }
+        return PursuitWorkspaceSnapshot(
+            workspaceID: base.workspaceID, currentUserID: base.currentUserID,
+            currentUserName: base.currentUserName, pursuits: base.pursuits,
+            people: people, proposals: base.proposals, loadedAt: base.loadedAt
+        )
+    }()
+
     static let previewLongPeople: PursuitWorkspaceSnapshot = {
         let additionalPeople = (3...50).map { sequence in
             WorkspacePerson(

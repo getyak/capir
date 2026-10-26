@@ -223,7 +223,7 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
 
   // Four contact handbook journeys retain attribution, accessible disclosure,
   // scoped unsent chat, and a source statement's temporal boundary.
-  const tierBudgets = { quick: 23, smoke: 20 };
+  const tierBudgets = { quick: 25, smoke: 23 };
   const conversationPrefix = "TalentSignalUITests/ConversationExperienceUITests/";
   const criticalConversationTests = [
     "testProcessingStatusBelongsToItsImageAndHasNoEmptyMessageBubble",
@@ -269,6 +269,13 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
       .filter((line) => line && !line.startsWith("#"));
     assert.equal(smokeTests.length, budget, `${scope} must keep its explicitly reviewed bounded scope`);
     assert.equal(new Set(smokeTests).size, smokeTests.length, `${scope} must not duplicate journeys`);
+    for (const method of ["testOrdinaryRetrievalGeometry", "testLongMixedScriptDarkAccessibilityRetrievalGeometry"]) {
+      assert.ok(smokeTests.includes(`TalentSignalUITests/RetrievalDensityUITests/${method}`), `${scope} must retain retrieval ${method}`);
+      assert.ok(contactEvidence[1].includes(`*-${method}.xcresult`), `CI must retain retrieval evidence for ${method}`);
+    }
+    if (scope === "smoke") {
+      assert.ok(smokeTests.includes("TalentSignalUITests/RetrievalDensityUITests/testExplicitComfortablePreferencesRemainAvailable"));
+    }
     for (const method of criticalConversationTests) {
       assert.ok(smokeTests.includes(conversationPrefix + method), `${scope} must retain ${method}`);
     }
