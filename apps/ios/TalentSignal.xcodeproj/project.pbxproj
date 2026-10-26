@@ -280,7 +280,6 @@
 		D0A27182CBC7B809B9E99260 /* LabClientDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A32DF7502592C73D42007EAB /* LabClientDiagnostics.swift */; };
 		D12D1593E3ED2481FEC190E1 /* ProductRunFeedbackClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1701C7E0486A536D7D6E42E /* ProductRunFeedbackClient.swift */; };
 		D232A19CB53AF4F95547908A /* GoogleSignInFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6215CA433BAEDC5DB807D7D3 /* GoogleSignInFlow.swift */; };
-		D253F33853F3E0F6528B9C74 /* RetrievalDensityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7C8C5384D70F58EA77793D3 /* RetrievalDensityUITests.swift */; };
 		D2D82942CCD916156DBE1562 /* AgentAskLiveActivityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DCF08378478F3EB4965310B /* AgentAskLiveActivityUITests.swift */; };
 		D306611F0568E757D077AFB7 /* LiveImageFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AB70753475329E6FF6D25ED /* LiveImageFlowUITests.swift */; };
 		D3873CA0595F191A0F3D7AD6 /* LabRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFB3E02683C96CA56520CB12 /* LabRegressionTests.swift */; };
@@ -576,7 +575,6 @@
 		A529998BE8981323162D3C6B /* RelationshipArchiveSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelationshipArchiveSheets.swift; sourceTree = "<group>"; };
 		A551BFD6547CCDF5B612E66D /* AppSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSessionTests.swift; sourceTree = "<group>"; };
 		A6033B9D88E886443433BE75 /* LabResetExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabResetExecutor.swift; sourceTree = "<group>"; };
-		A7C8C5384D70F58EA77793D3 /* RetrievalDensityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetrievalDensityUITests.swift; sourceTree = "<group>"; };
 		A80C665A25854FF38B8EEB05 /* AuthenticationPortraitScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticationPortraitScene.swift; sourceTree = "<group>"; };
 		A896028CDDC552313898D914 /* TodayScheduleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayScheduleView.swift; sourceTree = "<group>"; };
 		A9161D0F10C35A2F93579D36 /* AgentTaskProjectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTaskProjectionStoreTests.swift; sourceTree = "<group>"; };
@@ -883,7 +881,6 @@
 				32026C689AEC61DA656EF0CC /* ProductLabUITests.swift */,
 				99C33BCBBCF93DB2F7826EB5 /* RelationshipScrollContinuityUITests.swift */,
 				31807D07BD9324DED4296DA1 /* ResearchShowcaseUITests.swift */,
-				A7C8C5384D70F58EA77793D3 /* RetrievalDensityUITests.swift */,
 				53BCE51454FF92655D32B728 /* StandaloneOnboardingUITests.swift */,
 				4D0D17A850F270F01F6334DB /* TalentSignalLabUITests.swift */,
 				B094FF34C3A2B12DC269364A /* WorkspaceSettingsTestSupport.swift */,
@@ -1443,7 +1440,6 @@
 				BE1192A4538E648C5C0DF9D6 /* ProductLabUITests.swift in Sources */,
 				7FD7C5E0BFE68289B8B1F55A /* RelationshipScrollContinuityUITests.swift in Sources */,
 				0F8D18B808D421BAE3C3FB49 /* ResearchShowcaseUITests.swift in Sources */,
-				D253F33853F3E0F6528B9C74 /* RetrievalDensityUITests.swift in Sources */,
 				AA99245C7C678EA2D4C35023 /* StandaloneOnboardingUITests.swift in Sources */,
 				C8D79CCADC370EF59FC0F395 /* TalentSignalLabUITests.swift in Sources */,
 				9F94A5867738548F950A8BA7 /* WorkspaceSettingsTestSupport.swift in Sources */,

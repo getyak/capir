@@ -3294,7 +3294,6 @@ extension AgentSessionStore {
     static func preview(
         snapshot: PursuitWorkspaceSnapshot,
         sessionCount: Int = 2,
-        contentExtremes: Bool = false,
         now: @escaping () -> Date = Date.init
     ) -> AgentSessionStore {
         let people = snapshot.people
@@ -3361,7 +3360,7 @@ extension AgentSessionStore {
                 personDisplayLabel: first.displayLabel,
                 contextDisplayLabel: firstContext.displayLabel
             ),
-            title: contentExtremes ? "讨论上海与新加坡协作计划 🌏 Research / Design follow-up" : "What changed with the location model?",
+            title: "What changed with the location model?",
             turns: [
                 AgentSessionTurn(
                     id: UUID(uuidString: "91000000-0000-4000-8000-000000000001")!,
@@ -3388,7 +3387,7 @@ extension AgentSessionStore {
                 personDisplayLabel: people[1].displayLabel,
                 contextDisplayLabel: secondContext.displayLabel
             ),
-            title: contentExtremes ? "Review cross-border collaboration & multilingual next steps" : "Prepare the next conversation",
+            title: "Prepare the next conversation",
             turns: [],
             contactReceipts: [],
             updatedAt: previewDate.addingTimeInterval(-7_200),

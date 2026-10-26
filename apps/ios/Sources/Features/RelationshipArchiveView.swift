@@ -62,9 +62,7 @@ struct RelationshipArchiveView: View {
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
         let previewSnapshot: PursuitWorkspaceSnapshot
-        if arguments.contains("--preview-retrieval-content-extremes") {
-            previewSnapshot = .previewRetrievalContentExtremes
-        } else if arguments.contains("--preview-long-people-list") {
+        if arguments.contains("--preview-long-people-list") {
             previewSnapshot = .previewLongPeople
         } else if arguments.contains("--preview-multi-context-person") {
             previewSnapshot = .previewMultiContextPerson
@@ -131,8 +129,7 @@ struct RelationshipArchiveView: View {
             } else if resolvedService == nil {
                 resolvedSessionStore = AgentSessionStore.preview(
                     snapshot: previewSnapshot,
-                    sessionCount: previewSessionCount,
-                    contentExtremes: arguments.contains("--preview-retrieval-content-extremes")
+                    sessionCount: previewSessionCount
                 )
             } else {
                 let canonicalStore = AgentSessionStore(

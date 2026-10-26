@@ -569,10 +569,7 @@ jobs:
             build/ios/TestResults.parts/*-testGlobalAgentInputOpensRichNewSessionComposer.xcresult \
             build/ios/TestResults.parts/*-testContinuousSessionMarkdownControlsForkAndNativeBack.xcresult \
             build/ios/TestResults.parts/*-testMarkdownChineseDarkAX5ReducedMotionRemainsReachable.xcresult \
-            build/ios/TestResults.parts/*-testAskUsesOneColumnAtAX5WithoutLosingComposerOrCapture.xcresult \
-            build/ios/TestResults.parts/*-testOrdinaryRetrievalGeometry.xcresult \
-            build/ios/TestResults.parts/*-testLongMixedScriptDarkAccessibilityRetrievalGeometry.xcresult \
-            build/ios/TestResults.parts/*-testExplicitComfortablePreferencesRemainAvailable.xcresult; do
+            build/ios/TestResults.parts/*-testAskUsesOneColumnAtAX5WithoutLosingComposerOrCapture.xcresult; do
             [ -d "$bundle" ] || continue
             label="$(basename "$bundle" .xcresult)"
             xcrun xcresulttool export attachments \

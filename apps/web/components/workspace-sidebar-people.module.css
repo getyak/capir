@@ -1,7 +1,7 @@
 .directory {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -45,7 +45,7 @@
   color: var(--ink);
   flex: 1 1 auto;
   font: inherit;
-  font-size: var(--workspace-body-size, 0.9375rem);
+  font-size: var(--ts-type-nav, 0.875rem);
   min-width: 0;
   outline: none;
   padding: 10px 0;
@@ -99,7 +99,7 @@
 
 .list {
   display: grid;
-  gap: 3px;
+  gap: 1px;
   list-style: none;
   margin: 0;
   padding: 0;
@@ -111,9 +111,9 @@
   color: var(--ink);
   display: flex;
   gap: 9px;
-  min-height: 48px;
+  min-height: 44px;
   min-width: 0;
-  padding: 7px 8px;
+  padding: 3px 8px;
   text-decoration: none;
   transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out);
 }
@@ -135,10 +135,9 @@
   white-space: nowrap;
 }
 
-/* Person names step up to workspace body while context stays metadata;
-   tighter line boxes keep the directory row pitch unchanged. */
+/* Short retrieval labels use navigation type; context remains metadata. */
 .identity strong {
-  font-size: var(--workspace-body-size, 0.9375rem);
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 500;
   line-height: 1.3;
 }
