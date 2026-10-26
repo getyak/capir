@@ -1,3 +1,5 @@
+"use client";
+
 import { useT, useLocale, type TFunction } from "@/components/locale-provider";
 import type { MarketingLocale } from "@/lib/marketing-locale";
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
@@ -7,6 +9,7 @@ import { AvatarEditor } from "./avatar-editor";
 import { personDirectoryEntryId, personMemoryHref } from "./people-directory-navigation";
 import styles from "./people-directory-app.module.css";
 import { PeopleDirectoryReturnList } from "./people-directory-return-list";
+import { ListOrderMenu, useWorkspaceListReorder } from "./workspace-list-order";
 
 type ListProps = { people: PersonDirectoryItem[]; query: string; returnSessionId: string | null };
 
@@ -96,7 +99,8 @@ function PersonRow({ person, query, returnSessionId }: { person: PersonDirectory
 }
 
 export function PeopleDirectoryList(props: ListProps) {
-  return <PeopleDirectoryReturnList className={styles.peopleList}>
-    {props.people.map(person => <li key={person.id}><PersonRow person={person} query={props.query} returnSessionId={props.returnSessionId} /></li>)}
-  </PeopleDirectoryReturnList>;
+  const order = useWorkspaceListReorder(props.people, "people", { disabled: Boolean(props.query) });
+  return <>{order.notice}<PeopleDirectoryReturnList className={styles.peopleList}>
+    {order.ordered.map(person => <li {...order.rowProps(person.id)} key={person.id}><PersonRow person={person} query={props.query} returnSessionId={props.returnSessionId} /><ListOrderMenu control={order.control(person.id)} label={person.display_label} /></li>)}
+  </PeopleDirectoryReturnList></>;
 }
