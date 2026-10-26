@@ -6,7 +6,6 @@ import {
   CaretRight,
   ChatCircleDots,
   Plus,
-  PushPin,
   Spinner,
 } from "@phosphor-icons/react";
 import Link from "next/link";
@@ -32,6 +31,8 @@ import {
   type SessionState,
 } from "./session-view";
 import styles from "./session-directory.module.css";
+import { useWorkspaceListReorder } from "../workspace-list-order";
+import { WorkspacePinIndicator } from "../workspace-pin-indicator";
 
 export type SessionSummary = {
   session_id: string;
@@ -184,6 +185,10 @@ export function SessionDirectory({
     snapshot.entries,
   );
 
+  const order = useWorkspaceListReorder(organized.visible, "sessions", {
+    scope: storageScope, group: row => snapshot.entries[row.id]?.pinned ? "pinned" : "regular",
+  });
+
   function organizationFor(session: SessionSummary): SessionRowOrganization {
     const entry = snapshot.entries[session.session_id];
     return {
@@ -191,6 +196,7 @@ export function SessionDirectory({
       pinned: entry?.pinned ?? false,
       onToggle: (flag, value) => setFlag(session.session_id, flag, value),
       rowLabel: sessionDisplayTitle(session.title),
+      reorder: order.control(session.session_id),
     };
   }
 
@@ -210,10 +216,7 @@ export function SessionDirectory({
                 {sessionDisplayTitle(session.title)}
               </span>
               {snapshot.entries[session.session_id]?.pinned ? (
-                <span className={styles.pinnedChip}>
-                  <PushPin aria-hidden="true" size={11} weight="fill" />
-                  置顶
-                </span>
+                <WorkspacePinIndicator />
               ) : null}
               {session.is_unread ? (
                 <span className={styles.unread}>未读</span>
@@ -287,7 +290,8 @@ export function SessionDirectory({
         </p>
       ) : null}
 
-      {organized.visible.length === 0 ? (
+      {order.notice}
+      {order.visible.length === 0 ? (
         error ? null : organized.archived.length ? null : <div className={styles.empty} role="status">
           <ChatCircleDots aria-hidden="true" size={26} weight="light" />
           <h2>{complete ? "每段思路，都可以从这里继续" : "对话还未读取完整"}</h2>
@@ -295,9 +299,9 @@ export function SessionDirectory({
         </div>
       ) : (
         <ul className={styles.list}>
-          {organized.visible.map(({ id, session }) => (
+          {order.visible.map(({ id, session }) => (
             <WorkspaceListRow arrival={arrival.isArrival(id)} key={id}>
-              {renderRow(session, false)}
+              <div {...order.rowProps(id)}>{renderRow(session, false)}</div>
             </WorkspaceListRow>
           ))}
         </ul>

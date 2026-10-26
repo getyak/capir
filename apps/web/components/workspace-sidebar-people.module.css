@@ -207,3 +207,6 @@
     outline-color: Highlight;
   }
 }
+
+.orderedPerson { align-items: center; display: flex; min-width: 0; position: relative; }
+.orderedPerson .person { flex: 1 1 auto; min-width: 0; }

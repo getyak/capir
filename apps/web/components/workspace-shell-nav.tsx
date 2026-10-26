@@ -30,6 +30,7 @@ import {
   workspaceRailSelection,
 } from "@/lib/workspace-navigation";
 import { recentSessionRows, type RecentSession } from "@/lib/workspace-recent-sessions";
+import { useListOrder, projectListOrder } from "@/lib/workspace-list-order";
 import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-session-organization";
 import { useWorkspaceSidebarLayout, WorkspaceSidebarPresentation } from "@/lib/workspace-sidebar-layout";
 
@@ -190,7 +191,8 @@ function RailSessionShortcuts({ binding, storageScope }: { binding: string | nul
   const { data, loading, failed, retry } = useWorkspaceDirectory(binding, true);
   const { snapshot } = useSessionOrganization(storageScope);
   const projected = binding && data ? recentSessionRows(data.sessions, binding, undefined, 200) : null;
-  const rows = projected ? organizeSessionRows(projected, snapshot.entries).visible : null;
+  const { snapshot: order } = useListOrder(storageScope, "sessions");
+  const rows = projected ? organizeSessionRows(projectListOrder(projected, order.ids, row => row.id), snapshot.entries).visible : null;
   // The directory remains the sole cache owner and fences binding/401/expiry.
   if (!binding || loading || (!rows?.length && !failed)) return null;
   return (

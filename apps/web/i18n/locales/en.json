@@ -2548,5 +2548,19 @@
   "这批图片未添加，原有图片和文字已保留。请恢复本机存储后重新选择。": "These images were not added. Your existing images and text are unchanged. Restore device storage, then select the images again.",
   "这批图片未添加。无法确认原有图片有完整的本机副本，离开或刷新可能丢失。请保留此页并重试保存。": "These images were not added. A complete local copy of your existing images could not be verified; leaving or reloading may lose them. Keep this page open and retry saving.",
   "使用本机已保存的图片": "Use images saved on this device",
-  "这会放弃当前页的图片预览并载入本机草稿，文字不变。继续吗？": "This will discard the current image previews and load the draft saved on this device. Your text stays unchanged. Continue?"
+  "这会放弃当前页的图片预览并载入本机草稿，文字不变。继续吗？": "This will discard the current image previews and load the draft saved on this device. Your text stays unchanged. Continue?",
+  "listOrder.handle": "Drag to arrange or open actions",
+  "listOrder.instructions": "Drag vertically to arrange, or open this menu and choose Move up or Move down.",
+  "listOrder.clearSearch": "Clear search to arrange the full loaded list.",
+  "listOrder.cancelled": "Move cancelled.",
+  "listOrder.saved": "Order saved on this device.",
+  "listOrder.dragging": "Moving. Drop at the insertion line; Escape cancels.",
+  "listOrder.saving": "Saving order…",
+  "listOrder.failed": "Could not confirm the saved order. Check the list, then retry or reset manual order from a row menu.",
+  "listOrder.up": "Move up",
+  "listOrder.down": "Move down",
+  "listOrder.forTitle": "Arrange {title}",
+  "listOrder.local": "Drag to arrange. Saved on this device for this workspace and account.",
+  "listOrder.sessionLocal": "Drag to arrange within a group. Pinned conversations stay first. Saved on this device for this workspace and account.",
+  "listOrder.reset": "Reset manual order"
 }

@@ -117,7 +117,7 @@
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  height: 30px;
+  height: 44px;
   justify-content: center;
   padding: 0;
   text-decoration: none;
@@ -357,7 +357,7 @@
   display: flex;
   font-size: var(--workspace-body-size, 0.9375rem);
   gap: 10px;
-  min-height: 40px;
+  min-height: 44px;
   min-width: 0;
   padding: 0 10px;
   position: relative;
@@ -399,7 +399,7 @@
   font-weight: 500;
 }
 .sessionRow[aria-current="page"]:not(:has(.selectionHighlight)) { background: var(--workspace-row-selected); }
-.sessionRow .selectionHighlight { right: -34px; }
+.sessionRow .selectionHighlight { right: -46px; }
 .sessionRow:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .sessionRow:active { background: color-mix(in srgb, var(--ink) 13%, transparent); }
 .sessionRowShell:hover .sessionRowSlide { background: var(--workspace-row-hover); }
@@ -1701,7 +1701,7 @@
   align-items: center;
   background: var(--session-row-surface, var(--ts-chrome-surface, var(--surface)));
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) 44px;
   gap: 2px;
   min-width: 0;
   position: relative;
@@ -1717,12 +1717,12 @@
   color: var(--muted);
   cursor: pointer;
   display: inline-flex;
-  height: 30px;
+  height: 44px;
   justify-content: center;
   transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out), color var(--workspace-transition-duration, 180ms) var(--ease-out);
-  opacity: 0;
+  opacity: 1;
   padding: 0;
-  width: 30px;
+  width: 44px;
 }
 .sessionRowShell:hover .sessionRowMenuTrigger,
 .sessionRowShell:focus-within .sessionRowMenuTrigger,
@@ -1762,12 +1762,13 @@
   font: inherit;
   font-size: var(--workspace-meta-size, 0.8125rem);
   gap: 9px;
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px 10px;
   text-align: left;
   width: 100%;
 }
-.sessionRowMenuPopover button:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
+.sessionRowMenuPopover button:disabled { cursor: default; opacity: 0.45; }
+.sessionRowMenuPopover button:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
 .sessionRowMenuNote { color: var(--muted); font-size: var(--workspace-meta-size, 0.8125rem); padding: 4px 10px 6px; }
 
 /* One short truthful line; the archive is local organization, nothing more. */
@@ -2111,5 +2112,6 @@
   .railRetry:focus-visible, .railSessionTitle a:focus-visible { outline-color:Highlight; }
   .sessionRowMenuPopover, .railSessionTitle,
   :global(html[data-desktop-surface="workspace"]) .sessionRowMenuPopover { background:Canvas; color:CanvasText; border:1px solid CanvasText; backdrop-filter:none; -webkit-backdrop-filter:none; }
-  .sessionRowMenuPopover button:hover { background:Highlight; color:HighlightText; }
+  .sessionRowMenuPopover button:disabled { cursor: default; opacity: 0.45; }
+.sessionRowMenuPopover button:hover:not(:disabled) { background:Highlight; color:HighlightText; }
 }
