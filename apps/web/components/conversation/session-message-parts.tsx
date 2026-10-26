@@ -22,6 +22,7 @@ import { ConversationProvenance, ConversationResponse } from "../conversation-re
 import { MemoryReviewCard } from "../memory-review/memory-review-card";
 import { sessionBlockTitle } from "../session-workbench/session-presentation";
 import { ConversationImageStrip } from "./conversation-images";
+import { SessionTaskRecord } from "./session-task-capsule";
 import { SessionCalendarDraftCard } from "./session-calendar-draft-card";
 import { McpRequestCard } from "../mcp/mcp-request-card";
 import { sessionHumanMessages } from "@/lib/session-human-messages";
@@ -179,6 +180,7 @@ export function sessionMessages(input: {
     const executionPart: SessionDataPart = {
       type: "data", name: "talent-signal.execution",
       data: {
+        messageId: turn.id,
         phase: conversationExecutionPhase({ entry: null, readbackComplete: true, awaitingDecision: awaiting, interrupted }),
         stage: null,
         startedAt: execution?.started_at ?? turn.createdAt,
@@ -217,6 +219,7 @@ export function sessionMessages(input: {
         ...(active.host_result ? [{ type: "data" as const, name: "talent-signal.mcp-human-result", data: { version: 1, messageId: active.message_id, result: active.host_result } }] : []),
         // In-flight state is a status record, never a fabricated reply.
         { type: "data", name: "talent-signal.execution", data: {
+          messageId: active.message_id,
           phase: conversationExecutionPhase({ entry: active, readbackComplete: false, awaitingDecision: false }),
           stage: preview?.stage ?? active.stage ?? null,
           startedAt: active.started_at ?? active.created_at,
@@ -243,6 +246,7 @@ export function sessionMessages(input: {
     pair.push({ id: `${entry.message_id}:assistant`, role: "assistant", content: [
       ...(entry.host_result ? [{ type: "data" as const, name: "talent-signal.mcp-human-result", data: { version: 1, messageId: entry.message_id, result: entry.host_result } }] : []),
       { type: "data", name: "talent-signal.execution", data: {
+      messageId: entry.message_id,
       phase: conversationExecutionPhase({ entry, readbackComplete: false, awaitingDecision: false }),
       stage: entry.stage, startedAt: entry.started_at ?? entry.created_at,
       timingBasis: entry.started_at ? "run" : "receipt",
@@ -366,7 +370,7 @@ function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
   const unknown = keys.some(key => !decisions.states[key] || decisions.states[key] === "unknown");
   const pending = keys.some(key => decisions.states[key] === "pending");
   const phase = execution.phase === "completed" ? (unknown ? "review-unknown" : pending ? "waiting-review" : "completed") : execution.phase;
-  return <SessionExecutionCard {...execution} phase={phase}/>;
+  return <SessionExecutionCard {...execution} phase={phase}><SessionTaskRecord messageId={typeof data.messageId === "string" ? data.messageId : ""}/></SessionExecutionCard>;
 }
 
 function renderSessionData(name: string, raw: unknown, context: RenderContext, t: TFunction) {
@@ -399,9 +403,9 @@ function renderSessionData(name: string, raw: unknown, context: RenderContext, t
     const actions = context.recoveryActions?.(data.messageId);
     // Streamed text that has not been read back keeps its own readable form;
     // otherwise one compact truthful work row carries the observed state.
-    return preview
+    return <>{preview
       ? <div className={styles.forming}><ConversationResponse>{preview}</ConversationResponse>{work.animate && <span className={styles.cursor} aria-hidden="true"/>}<small className={styles.formingStatus} role="status">{t(work.text)}</small>{actions}</div>
-      : <ConversationWorkRow status={work}>{actions}</ConversationWorkRow>;
+      : <ConversationWorkRow status={work}>{actions}</ConversationWorkRow>}<SessionTaskRecord messageId={data.messageId} standalone/></>;
   }
   if (name === "talent-signal.memory" && data.version === 1 && typeof data.proposalId === "string"
     && typeof data.revision === "number") {

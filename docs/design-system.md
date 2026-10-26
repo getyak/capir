@@ -167,7 +167,7 @@ exact supporting evidence, and the smallest next action. History, alternatives,
 and deeper analysis follow.
 
 AI provenance stays secondary. Attachments and sending show selected images and meaningful progress; omit routine footnotes and success notices. Disclose sources
-on demand and highlight actionable errors or identity questions.
+on demand and highlight actionable errors or identity questions. Conversation evidence uses aligned thumbnails and inline originals within its message or review card; header work status opens the corresponding inline execution record, preserving observed state, recovery and decision boundaries.
 
 ## Visual character
 
