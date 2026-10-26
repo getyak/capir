@@ -83,7 +83,10 @@ describe("persistent workspace shell", () => {
     expect(accountMenu).toContain('"ArrowDown", "ArrowUp", "Home", "End"');
     expect(accountMenu).toContain("moveFocus(event.key");
     expect(accountMenu).toContain("signOutAction");
-    expect(accountMenu).toContain("onSubmit={clearPendingLocalIntents}");
+    expect(accountMenu).not.toContain("onSubmit={clearPendingLocalIntents}");
+    expect(accountMenu).toContain("confirmedWorkspaceSignOut(result, binding, hosted)");
+    // Actual stale-action preservation and confirmed cleanup are exercised by
+    // account-menu-signout-recovery.test.tsx and the real Auth.js producer test.
     expect(accountMenu).toContain("clearAllPendingMeetingDraftIntents()");
     expect(accountMenu).toContain("clearAllPendingSessionDrafts()");
     expect(accountMenu).toContain("退出登录");

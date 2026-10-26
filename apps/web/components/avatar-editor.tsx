@@ -42,16 +42,16 @@ export function AvatarDefaultSettings() {
   async function select(value: AvatarStyle) {
     if (!store || busy) return;
     setBusy(true); setStatus("");
-    try { await withAvatarStorageLock(store, () => store.setDefault(value)); setError(""); setStatus("默认头像风格已保存"); }
-    catch { setError("默认风格未保存，请检查浏览器存储后重试。"); }
+    try { await withAvatarStorageLock(store, () => store.setDefault(value)); setError(""); setStatus(t("默认头像风格已保存")); }
+    catch { setError(t("默认风格未保存，请检查浏览器存储后重试。")); }
     finally { setBusy(false); }
   }
   async function clear() {
     if (!store || !clearing || busy) return;
     setBusy(true); setStatus("");
-    try { await withAvatarStorageLock(store, () => store.clear(clearing)); setClearing(null); setError(""); setStatus("本机头像设置已清除"); }
+    try { await withAvatarStorageLock(store, () => store.clear(clearing)); setClearing(null); setError(""); setStatus(t("本机头像设置已清除")); }
     catch (reason) {
-      setError(reason instanceof AvatarPreferenceConflictError ? "头像设置已在其他位置更新，请重新确认要清除的设置。" : "未能清除本机头像数据，请检查浏览器存储后重试。");
+      setError(reason instanceof AvatarPreferenceConflictError ? t("头像设置已在其他位置更新，请重新确认要清除的设置。") : t("未能清除本机头像数据，请检查浏览器存储后重试。"));
       setClearing(null);
     } finally { setBusy(false); }
   }
@@ -64,7 +64,7 @@ export function AvatarDefaultSettings() {
           <IdentityAvatar id="example-2" label="John Smith" size={40} preference={{ style: choice.value }} />
           <IdentityAvatar id="example-3" label={t("陈曦")} size={40} preference={{ style: choice.value }} />
         </span>
-        <span>{choice.label}{defaultStyle === choice.value ? <Check size={14} aria-hidden="true" /> : null}</span>
+        <span>{t(choice.label)}{defaultStyle === choice.value ? <Check size={14} aria-hidden="true" /> : null}</span>
       </button>)}
     </div>
     <p className={styles.hint}>{t("没有姓名时，使用稳定的抽象图案。")}</p>

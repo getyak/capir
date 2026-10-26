@@ -94,8 +94,8 @@ function RailControl({
   const rememberedHref = !mobile && browse ? browse.href(route.href) : rememberedRouteHref;
   const isNew = !compact && mobile && control === "conversation";
   const label = t(isNew ? "conversation.new" : RAIL_LABEL_KEYS[control]);
-  const visibleLabel = !isNew && control === "conversation" ? t("nav.rail.chat") : label;
-  const accessibleLabel = visibleLabel === label || compact ? label : `${visibleLabel} (${label})`;
+  const visibleLabel = isNew ? t("nav.rail.new") : control === "conversation" ? t("nav.rail.chat") : label;
+  const accessibleLabel = isNew || visibleLabel === label || compact ? label : `${visibleLabel} (${label})`;
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
     <Link

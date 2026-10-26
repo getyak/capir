@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
+import { translate } from "@/lib/i18n";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
+
 import { auth } from "@/auth";
 import { settingsReturnPath, settingsSectionFrom } from "@/lib/settings-return-path";
 import { settingsConnectHints, settingsConnectPath } from "@/lib/login-continuity";
@@ -13,11 +16,14 @@ import { readWebReleaseIdentity } from "@/lib/web-release";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  title: "设置",
-  description: "账号、空间与界面偏好。",
-  robots: { index: false, follow: false },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMarketingLocale();
+  return {
+    title: translate(locale, "设置"),
+    description: translate(locale, "账号、空间与界面偏好。"),
+    robots: { index: false, follow: false },
+  };
+}
 
 export default async function SettingsPage({
   searchParams,

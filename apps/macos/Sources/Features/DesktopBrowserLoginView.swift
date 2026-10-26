@@ -39,11 +39,11 @@ struct DesktopBrowserLoginSurface: View {
                     }
                     .padding(.bottom, 36)
 
-                    Text("这台 Mac 的工作区")
+                    Text(String(localized: "Workspace on this Mac", bundle: .main))
                         .font(.system(size: 12))
                         .foregroundStyle(TSBrand.secondaryInk)
                         .padding(.bottom, 8)
-                    Text("登录 capri")
+                    Text(String(localized: "Sign in to capri", bundle: .main))
                         .font(.system(size: 28, weight: .medium))
                         .accessibilityAddTraits(.isHeader)
                         .accessibilityIdentifier("desktop.login.title")
@@ -55,12 +55,12 @@ struct DesktopBrowserLoginSurface: View {
                     VStack(alignment: .leading, spacing: 16) {
                         Divider().overlay(TSBrand.hairline)
                         HStack(spacing: 12) {
-                            Text("浏览器确认账号")
+                            Text(String(localized: "Confirm your account in the browser", bundle: .main))
                                 .foregroundStyle(TSBrand.ink)
                             Image(systemName: "arrow.right")
                                 .imageScale(.small)
                                 .accessibilityHidden(true)
-                            Text("回到这台 Mac")
+                            Text(String(localized: "Return to this Mac", bundle: .main))
                         }
                         .font(.system(size: 12))
                         .foregroundStyle(TSBrand.secondaryInk)
@@ -84,13 +84,13 @@ struct DesktopBrowserLoginSurface: View {
         VStack(alignment: .leading, spacing: 16) {
             switch phase {
             case .preparing:
-                progress("正在准备登录…")
+                progress(String(localized: "Preparing sign-in…", bundle: .main))
                 cancelButton
             case .waiting:
-                message("请在浏览器中确认账号，然后回到这台 Mac。")
+                message(String(localized: "Confirm your account in the browser, then return to this Mac.", bundle: .main))
                 if let matchingHint {
                     HStack(alignment: .firstTextBaseline, spacing: 20) {
-                        Text("匹配码").foregroundStyle(TSBrand.secondaryInk)
+                        Text(String(localized: "Matching code", bundle: .main)).foregroundStyle(TSBrand.secondaryInk)
                         Spacer(minLength: 0)
                         Text(matchingHint)
                             .font(.system(size: 22, design: .monospaced))
@@ -99,25 +99,25 @@ struct DesktopBrowserLoginSurface: View {
                     }
                     .padding(.vertical, 8)
                 }
-                progress("等待浏览器确认…")
+                progress(String(localized: "Waiting for browser confirmation…", bundle: .main))
                 cancelButton
             case .exchanging:
-                progress("正在验证这台 Mac 的登录…")
+                progress(String(localized: "Verifying sign-in on this Mac…", bundle: .main))
                 cancelButton
             case .completed:
-                progress("正在打开工作区…")
+                progress(String(localized: "Opening your workspace…", bundle: .main))
             case .idle, .cancelled:
-                message(phase == .cancelled ? "登录已取消。可以随时重新开始。" : "在浏览器中选择账号。登录后会自动打开工作区。")
+                message(phase == .cancelled ? String(localized: "Sign-in was cancelled. You can start again at any time.", bundle: .main) : String(localized: "Choose an account in the browser. Your workspace opens after sign-in.", bundle: .main))
                 primaryLoginButton
             case .failed(let text):
                 message(text)
                 primaryLoginButton
             case .unresolved:
                 message(canCheckResult
-                    ? "还不能确认这台 Mac 是否已完成登录。可以先检查结果，或重新开始。"
-                    : "还不能确认这台 Mac 是否已完成登录。请重新开始登录。")
+                    ? String(localized: "We cannot confirm whether this Mac finished signing in. Check the result or start again.", bundle: .main)
+                    : String(localized: "We cannot confirm whether this Mac finished signing in. Start sign-in again.", bundle: .main))
                 if canCheckResult {
-                    Button("检查登录结果", action: onCheckResult)
+                    Button(String(localized: "Check sign-in result", bundle: .main), action: onCheckResult)
                         .buttonStyle(TSPrimaryButtonStyle())
                         .controlSize(.large)
                         .keyboardShortcut(.defaultAction)
@@ -125,7 +125,7 @@ struct DesktopBrowserLoginSurface: View {
                     loginButton
                         .buttonStyle(.link)
                         .keyboardShortcut(.return, modifiers: [.option])
-                        .help("重新开始登录（⌥↩）")
+                        .help(String(localized: "Restart sign-in (⌥↩)", bundle: .main))
                 } else {
                     primaryLoginButton
                 }
@@ -136,13 +136,13 @@ struct DesktopBrowserLoginSurface: View {
     private var loginButton: some View {
         Button(action: onStart) {
             HStack(spacing: 12) {
-                Text("在浏览器中登录")
+                Text(String(localized: "Sign in with browser", bundle: .main))
                 Image(systemName: "arrow.up.right")
                     .imageScale(.small)
                     .accessibilityHidden(true)
             }
         }
-        .accessibilityLabel("在浏览器中登录")
+        .accessibilityLabel(String(localized: "Sign in with browser", bundle: .main))
         .accessibilityIdentifier("desktop.login.start")
     }
 
@@ -154,7 +154,7 @@ struct DesktopBrowserLoginSurface: View {
     }
 
     private var cancelButton: some View {
-        Button("取消登录", action: onCancel)
+        Button(String(localized: "Cancel sign-in", bundle: .main), action: onCancel)
             .buttonStyle(.link)
             .keyboardShortcut(.cancelAction)
             .accessibilityIdentifier("desktop.login.cancel")

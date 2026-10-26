@@ -10,6 +10,7 @@ vi.mock("@/lib/server/backendAuth", () => ({
   authenticatedBackendClient: vi.fn().mockResolvedValue(null),
   backendAuthBaseUrl: () => "http://127.0.0.1:4317",
   readPrimaryBackendSessionClaims: vi.fn().mockResolvedValue(null),
+  readRawPrimaryBackendSessionClaims: vi.fn().mockResolvedValue(null),
   registerBackendAccount: registerBackendAccountMock,
 }));
 vi.mock("@/lib/server/testWorkspaceSession", () => ({

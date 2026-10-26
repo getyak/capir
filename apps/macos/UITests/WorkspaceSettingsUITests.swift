@@ -9,6 +9,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
             "-desktopPet.visible", "NO",
             "-ApplePersistenceIgnoreState", "YES"
         ]
+        app.launchArguments += ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         app.typeKey(",", modifierFlags: [.command])
@@ -39,6 +40,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
             "-desktopPet.visible", "NO",
             "-ApplePersistenceIgnoreState", "YES"
         ]
+        app.launchArguments += ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         let main = app.windows.firstMatch
@@ -77,6 +79,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
             "-desktopPet.visible", "NO",
             "-ApplePersistenceIgnoreState", "YES"
         ]
+        app.launchArguments += ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
         app.typeKey(",", modifierFlags: [.command])
@@ -117,6 +120,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
             "-desktopPet.visible", "NO",
             "-ApplePersistenceIgnoreState", "YES"
         ]
+        app.launchArguments += ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
         if !app.windows.firstMatch.waitForExistence(timeout: 30) {
             let state = app.state.rawValue
@@ -170,6 +174,7 @@ final class WorkspaceSettingsUITests: XCTestCase {
         ]
         app.launchEnvironment["TS_TEST_SESSION_COOKIE"] =
             "name=talent-signal.session-v2;value=\(cookie);domain=127.0.0.1;path=/"
+        app.launchArguments += ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch()
 
         // WebKit exposes this textarea as a TextView titled “消息”; its HTML id

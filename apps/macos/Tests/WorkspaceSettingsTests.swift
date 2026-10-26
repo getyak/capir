@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 import WebKit
 @testable import TalentSignalMac
@@ -114,7 +115,7 @@ final class WorkspaceSettingsTests: XCTestCase {
         for removed in ["profile", "account", "appearance", "connections", "workspace", "versions", "advanced", "testing"] {
             XCTAssertFalse(rawValues.contains(removed), "\(removed) must not be a native settings row")
         }
-        XCTAssertEqual(WorkspaceSettingsSection.groups.map(\.title), ["此 Mac", "支持"])
+        XCTAssertEqual(WorkspaceSettingsSection.groups.map(\.title), [String(localized: "This Mac", bundle: .main), String(localized: "Support", bundle: .main)])
         XCTAssertEqual(WorkspaceSettingsSection.groups.first?.sections, [.general, .companion, .permissions, .updates])
         XCTAssertEqual(WorkspaceSettingsSection.groups.last?.sections, [.connection])
     }
@@ -126,7 +127,7 @@ final class WorkspaceSettingsTests: XCTestCase {
             XCTAssertEqual(pane.title, section.title)
         }
         // The local updater keeps a distinct title from any Web version pane.
-        XCTAssertEqual(WorkspaceSettingsSection.updates.title, "软件更新")
+        XCTAssertEqual(WorkspaceSettingsSection.updates.title, String(localized: "Software Updates", bundle: .main))
     }
 
     func testDesktopChromePayloadCarriesAppVersionAndUpdateState() {
@@ -546,14 +547,13 @@ final class WorkspaceSettingsTests: XCTestCase {
             return XCTFail("expected a load fallback when there is no back item")
         }
         XCTAssertEqual(url, workbench)
-        XCTAssertTrue(notice.contains("未保存的输入可能未保留"))
+        XCTAssertEqual(notice, String(localized: "Account settings opened in the default browser.", bundle: .main) + " " + String(localized: "Back history was unavailable. The last workspace address was reloaded; unsaved input may not have been retained.", bundle: .main))
         guard case .load(_, let refusedNotice) = WorkspaceSurfacePolicy.workbenchRestorePlan(
             for: transition, canGoBack: false, backItemURL: nil,
             entryURL: origin.entryURL, browserOpened: false) else {
             return XCTFail("expected a load fallback after browser launch refusal")
         }
-        XCTAssertTrue(refusedNotice.contains("未能在默认浏览器中打开"))
-        XCTAssertFalse(refusedNotice.contains("已在默认浏览器中打开"))
+        XCTAssertEqual(refusedNotice, String(localized: "Account settings could not be opened in the default browser.", bundle: .main) + " " + String(localized: "Back history was unavailable. The last workspace address was reloaded; unsaved input may not have been retained.", bundle: .main))
         guard case .load(let mismatched, _) = WorkspaceSurfacePolicy.workbenchRestorePlan(
             for: transition, canGoBack: true,
             backItemURL: origin.url.appending(path: "/workspace/people/1"), entryURL: origin.entryURL) else {
@@ -568,8 +568,7 @@ final class WorkspaceSettingsTests: XCTestCase {
             return XCTFail("expected the entry-URL fallback with no prior state")
         }
         XCTAssertEqual(entry, origin.entryURL)
-        XCTAssertTrue(entryNotice.contains("无法确认先前的对话位置"))
-        XCTAssertTrue(entryNotice.contains("未保存的输入可能未保留"))
+        XCTAssertEqual(entryNotice, String(localized: "Account settings opened in the default browser.", bundle: .main) + " " + String(localized: "The previous conversation location could not be confirmed. The main window returned to the workspace home; unsaved input may not have been retained.", bundle: .main))
     }
 
     @MainActor

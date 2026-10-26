@@ -176,6 +176,70 @@ invalid cached content fails the builder. Keep this cache selection out
 of resident runtime configuration and retain its provenance in deployment proof.
 Content-address verification does not authenticate package-to-index mappings;
 trusted, immutable cache provenance remains necessary.
+When the resident data disk cannot safely hold build temporaries, a same-repository
+PR may opt into `.github/workflows/build-backend-image.yml` with the exact
+`backend-image` label. The disposable Linux/arm64 runner checks out the recorded
+head, cold-builds the unchanged canonical Dockerfile through the complete frozen
+install and native execution gates, and retains a source-bound OCI archive plus
+checksums and measurements. It neither uses production secrets nor pushes to a
+registry, imports an image, or changes a resident service with this label alone.
+The CI-only preventive space floor does not replace the resident host's independent storage policy.
+
+A second exact label, `backend-import-probe`, on the same-repository PR opts
+into a separate disposable import job after that build succeeds. Manual dispatch
+and `backend-image` alone remain build-only. The new job downloads the immutable
+artifact ID from its own run, reinspects source/hash/config/platform, and streams
+it into the pinned Docker 29.5.2 / containerd 2.2.4 ARM64 nested engine. The
+Docker image bundles containerd 2.2.3, so the CI probe overlays only containerd,
+its runc shim and ctr as exact read-only files from the SHA256-pinned official
+2.2.4 static ARM64 release. Archive/binary hashes, static ELF architecture,
+actual binds and the running executable are checked; engine version and commit
+must match the required resident pair. Actual sanitized metadata is retained
+before acceptance checks, including on failure. These immutable bootstrap
+files remain outside the measured import filesystem and are disclosed.
+Loaded-image lookup and both
+version probes use the verified manifest digest required by this Docker store.
+The sole image target, stored manifest/config hashes, source, platform and ordered
+rootfs diff IDs must agree with the inspected archive and Docker readback; the
+identity check repeats after runtime stabilization. Fresh
+4 KiB ext4 storage has a fixed experimental 2 GiB cap for verified Docker,
+containerd content/ingest/snapshot/metadata, state and temporary paths. The known
+content directory may be absent before first ingest; its existing parent must
+pass the backing check, and the directory itself must pass after import before
+receiving allocation credit. Other missing paths, insufficient space, incomplete
+unpack, errors and failed version-only runtime probes fail closed; the cap never
+grows automatically. The worker has no network
+or published ports and receives no production socket or credentials.
+
+The three-day sanitized proof records filesystem/engine identity, the enforced
+cap, observed usage, complete unpack, network-disabled read-only Node/native
+version probes and cleanup status. Failure records retain the substep, fixed
+path role, command sequence, exit status and output byte count without command
+arguments, environment or raw output. Samples alone are not a peak upper bound.
+Outer runner image/control/log costs are explicit exceptions outside the cap;
+the archive is streamed from outside it. This proves only a successful disposable
+import experiment for that archive, not resident capacity, database/WAL growth,
+API/worker startup, activation, rollback or failure-cleanup guarantees. The
+resident capacity STOP and independent reserve/activation approval remain in
+force. Review the implementation independently before enabling the new label.
+
+A rejected archive-load, version-probe or daemon-log event also retains its first
+one-based line index, fixed rejection/parse/duplicate/severity/plugin/message/error
+classes and limited booleans. Unknown values are omitted into fixed categories;
+classification parses only events of at most 8,192 characters and never retains
+raw text, unknown fields or a raw-event hash. Evidence survives failure publication and
+cleanup without changing the log gate, its fixed errors or the capacity STOP.
+
+Use `scripts/deploy/inspect_backend_oci.py` to verify a downloaded archive's
+expected revision label, platform, blob sizes/digests and expanded layer diff IDs.
+The narrow producer disables provenance/SBOM; unsupported extra or nested
+manifests fail closed. These checks bind recorded source and byte integrity,
+not a signature, import peak, runtime capacity or deployment permission. Before
+any import, verify the actual Docker context/Engine ID, data-filesystem capacity
+and required temporary/snapshot/database-WAL reserve independently. Never turn
+compressed image size or a passing small archive fixture into that capacity
+proof. Retain the trusted CI run/source/hash and actual native-gate log evidence.
+
 After the complete image passes, select and verify the approved image/revision
 pair, then use the verified-image restart command above with
 `TS_TESTFLIGHT_REBUILD=false`.
@@ -313,6 +377,17 @@ Keep the prior checkout available for recovery. Before building or deploying,
 require `git status --porcelain` to be empty, require detached HEAD, and verify
 HEAD matches the intended approved revision. Never build or deploy from a dirty
 checkout: the backend revision records HEAD, while Docker builds the working tree.
+
+Before stopping the current Web job, the installer runs `web-local.sh check`
+through the same Infisical producer used at startup. This verifies fresh runtime
+configuration without building or opening a listener; caller-injected secrets
+cannot stand in for the launchd job's own login. Revoked or unavailable credentials
+leave the existing service, symlink and LaunchAgent unchanged. The private
+`web/preflight-last.json` contains bounded status/exit categories, never secret
+values or provider error bodies. A preflight success does not replace the final
+45-probe authentication and listener-ownership gate or guarantee later credential
+availability. Refresh the normal Keychain-backed Infisical login when required;
+do not export secrets to recover an invalid session.
 
 The build writes a revision/build-ID receipt from clean source. The installer
 checks that receipt and the listener process ownership, replaces the

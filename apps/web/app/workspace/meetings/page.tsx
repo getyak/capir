@@ -9,13 +9,20 @@ import { loadPeopleDirectory } from "@/lib/server/localBackend";
 import { readMeetingDraft } from "@/lib/server/meetingDrafts";
 import { isWorkspaceSessionId, workspaceSessionsBinding } from "@/lib/server/workspaceSessions";
 
+import { translate } from "@/lib/i18n";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
+
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { description: "回看联系与对话，为下一次沟通留出时间。", robots: { follow: false, index: false }, title: "时间 · capri" };
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMarketingLocale();
+  return { description: translate(locale, "回看联系与对话，为下一次沟通留出时间。"), robots: { follow: false, index: false }, title: translate(locale, "时间") };
+}
 export default async function MeetingsPage({ searchParams }: { searchParams: Promise<{ draft?: string }> }) {
   if (!(await auth())?.user) redirect("/login?callbackUrl=%2Fworkspace%2Fmeetings");
   const claims = await readBackendSessionClaims();
   if (!claims) redirect(backendSessionRecoveryHref("/workspace/meetings"));
   const requested = await searchParams;
+  const locale = await getMarketingLocale();
   let people: TimePerson[] = [], peopleError: string | null = null;
   let legacyDraft: { id: string; day: string; zone: string; revision: number; unavailable: boolean } | null = null;
   try {
@@ -23,7 +30,7 @@ export default async function MeetingsPage({ searchParams }: { searchParams: Pro
     people = directory.people.map((person) => ({ id: person.id, label: person.display_label, context: person.contexts.map((c) => c.display_label).join(" / "), contextId: person.contexts.length === 1 ? person.contexts[0]!.id : null }));
   } catch (error) {
     if (isBackendSessionExpiredError(error)) redirect(backendSessionRecoveryHref("/workspace/meetings"));
-    peopleError = "人物筛选暂时无法读取，可继续查看时间记录。";
+    peopleError = translate(locale, "人物筛选暂时无法读取，可继续查看时间记录。");
   }
   if (requested.draft && isWorkspaceSessionId(requested.draft)) {
     try {

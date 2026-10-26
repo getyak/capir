@@ -10,23 +10,23 @@ enum DesktopPet: String, CaseIterable, Identifiable {
 
     var name: String {
         switch self {
-        case .pigeon: "信鸽"
-        case .stone: "小石头"
-        case .owl: "猫头鹰"
-        case .cat: "小猫"
-        case .sprout: "嫩芽"
-        case .robot: "小机器人"
+        case .pigeon: String(localized: "Pigeon", bundle: .main)
+        case .stone: String(localized: "Little Stone", bundle: .main)
+        case .owl: String(localized: "Owl", bundle: .main)
+        case .cat: String(localized: "Cat", bundle: .main)
+        case .sprout: String(localized: "Sprout", bundle: .main)
+        case .robot: String(localized: "Little Robot", bundle: .main)
         }
     }
 
     var note: String {
         switch self {
-        case .pigeon: "安静地陪你等一封回信"
-        case .stone: "稳稳地待在桌面一角"
-        case .owl: "适合需要专注的时刻"
-        case .cat: "轻巧又有自己的节奏"
-        case .sprout: "一点温柔的生长感"
-        case .robot: "清晰、简洁的小伙伴"
+        case .pigeon: String(localized: "Quiet company while you wait for a reply", bundle: .main)
+        case .stone: String(localized: "Steady in a corner of your desktop", bundle: .main)
+        case .owl: String(localized: "For moments that need focus", bundle: .main)
+        case .cat: String(localized: "Light, with a rhythm of its own", bundle: .main)
+        case .sprout: String(localized: "A little gentle growth", bundle: .main)
+        case .robot: String(localized: "A clear, simple companion", bundle: .main)
         }
     }
 
@@ -85,17 +85,19 @@ final class DesktopPetController: ObservableObject {
         static let motion = "desktopPet.motion"
     }
 
+    private let defaults: UserDefaults
+
     @Published var selectedPet: DesktopPet {
-        didSet { UserDefaults.standard.set(selectedPet.rawValue, forKey: Key.pet) }
+        didSet { defaults.set(selectedPet.rawValue, forKey: Key.pet) }
     }
     @Published var isVisible: Bool {
         didSet {
-            UserDefaults.standard.set(isVisible, forKey: Key.visible)
+            defaults.set(isVisible, forKey: Key.visible)
             updateVisibility()
         }
     }
     @Published var motionEnabled: Bool {
-        didSet { UserDefaults.standard.set(motionEnabled, forKey: Key.motion) }
+        didSet { defaults.set(motionEnabled, forKey: Key.motion) }
     }
 
     private let artworkSize = NSSize(width: 100, height: 100)
@@ -104,8 +106,8 @@ final class DesktopPetController: ObservableObject {
     private var captureNodTask: Task<Void, Never>?
     var openWorkspaceWindow: (() -> Void)?
 
-    private init() {
-        let defaults = UserDefaults.standard
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         selectedPet = DesktopPet(rawValue: defaults.string(forKey: Key.pet) ?? "") ?? .pigeon
         isVisible = defaults.object(forKey: Key.visible) as? Bool ?? false
         motionEnabled = defaults.object(forKey: Key.motion) as? Bool ?? true
@@ -157,7 +159,6 @@ final class DesktopPetController: ObservableObject {
 
     private func positionPanel() {
         guard let artworkPanel else { return }
-        let defaults = UserDefaults.standard
         let savedDisplay = (defaults.object(forKey: Key.display) as? NSNumber)?.uint32Value
         let screen = NSScreen.screens.first { $0.displayID == savedDisplay }
             ?? NSScreen.main ?? NSScreen.screens.first
@@ -194,7 +195,6 @@ final class DesktopPetController: ObservableObject {
         guard let screen else { return }
         let point = DesktopPetPlacement.relative(artworkPanel.frame.origin,
                                                   in: screen.visibleFrame, size: artworkSize)
-        let defaults = UserDefaults.standard
         defaults.set(Double(point.x), forKey: Key.x)
         defaults.set(Double(point.y), forKey: Key.y)
         if let displayID = screen.displayID { defaults.set(displayID, forKey: Key.display) }
@@ -303,9 +303,9 @@ private final class DesktopPetInteractionView: NSHostingView<DesktopPetArtworkVi
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let menu = NSMenu()
-        let capture = NSMenuItem(title: "截图交给 Agent", action: #selector(captureFromPet), keyEquivalent: "")
+        let capture = NSMenuItem(title: String(localized: "Send a screenshot to Agent", bundle: .main), action: #selector(captureFromPet), keyEquivalent: "")
         capture.target = self; menu.addItem(capture)
-        let open = NSMenuItem(title: "打开工作区", action: #selector(openFromPet), keyEquivalent: "")
+        let open = NSMenuItem(title: String(localized: "Open workspace", bundle: .main), action: #selector(openFromPet), keyEquivalent: "")
         open.target = self; menu.addItem(open)
         return menu
     }
@@ -346,11 +346,11 @@ private struct PetArtwork: View {
             .scaleEffect(1.015 + 0.015 * wave)
             .offset(y: -0.5 - 1.5 * wave)
         }
-        .accessibilityLabel("\(pet.name)桌面伙伴")
+        .accessibilityLabel(String(format: String(localized: "%@ companion", bundle: .main), pet.name))
     }
 }
 
-private struct DesktopPetArtworkView: View {
+struct DesktopPetArtworkView: View {
     @ObservedObject var controller: DesktopPetController
 
     var body: some View {
@@ -359,10 +359,12 @@ private struct DesktopPetArtworkView: View {
             .rotationEffect(.degrees(controller.captureNod), anchor: .bottom)
             .frame(width: 100, height: 100)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(controller.selectedPet.name)桌面伙伴")
-            .accessibilityHint("点击打开工作区，拖动调整桌面位置")
+            .accessibilityLabel(String(format: String(localized: "%@ companion", bundle: .main), controller.selectedPet.name))
+            .accessibilityHint(String(localized: "Click to open the workspace; drag to reposition", bundle: .main))
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction(named: Text("截图交给 Agent")) { CaptureRuntime.shared.startCaptureFromPet() }
+            .accessibilityIdentifier("desktopPet.openWorkspace")
+            .accessibilityAction { controller.openWorkspace() }
+            .accessibilityAction(named: Text(String(localized: "Send a screenshot to Agent", bundle: .main))) { CaptureRuntime.shared.startCaptureFromPet() }
     }
 }
 
@@ -401,14 +403,14 @@ struct DesktopPetSettingsView: View {
 
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("桌面伙伴").font(.title2.weight(.semibold))
-            Text("轻轻陪在桌面一角。拖动调整位置，点击打开主窗口。")
+            Text(String(localized: "Companion", bundle: .main)).font(.title2.weight(.semibold))
+            Text(String(localized: "A quiet companion in a corner of your desktop. Drag to move it; click to open the main window.", bundle: .main))
                 .font(.callout).foregroundStyle(.secondary)
         }
     }
 
     private var visibilityButton: some View {
-        Button(pet.isVisible ? "隐藏伙伴" : "显示伙伴") {
+        Button(pet.isVisible ? String(localized: "Hide companion", bundle: .main) : String(localized: "Show companion", bundle: .main)) {
             pet.isVisible.toggle()
         }
         .buttonStyle(.bordered)
@@ -418,7 +420,7 @@ struct DesktopPetSettingsView: View {
 
     private var choices: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("选择伙伴").font(.headline).padding(.bottom, 2)
+            Text(String(localized: "Choose a companion", bundle: .main)).font(.headline).padding(.bottom, 2)
             ForEach(DesktopPet.allCases) { option in
                 Button {
                     pet.selectedPet = option
@@ -453,7 +455,7 @@ struct DesktopPetSettingsView: View {
 
     private var preview: some View {
         VStack(alignment: .leading, spacing: 13) {
-            Text("在桌面上的样子").font(.headline)
+            Text(String(localized: "Desktop preview", bundle: .main)).font(.headline)
             ZStack(alignment: .bottomTrailing) {
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Color(red: 0.90, green: 0.92, blue: 0.88))
@@ -461,7 +463,7 @@ struct DesktopPetSettingsView: View {
                     .fill(Color.white.opacity(0.88))
                     .frame(width: 160, height: 78)
                     .overlay(alignment: .topLeading) {
-                        Text("给正在做的事留空间。")
+                        Text(String(localized: "Leave room for what you are doing.", bundle: .main))
                             .font(.system(size: 10, weight: .medium))
                             .padding(11)
                     }
@@ -471,17 +473,17 @@ struct DesktopPetSettingsView: View {
             }
             .frame(height: 180)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(pet.selectedPet.name)桌面伙伴预览")
+            .accessibilityLabel(String(format: String(localized: "%@ companion preview", bundle: .main), pet.selectedPet.name))
 
             Text(pet.selectedPet.name).font(.title3.weight(.semibold))
             Text(pet.selectedPet.note).font(.callout).foregroundStyle(.secondary)
-            Text(pet.isVisible ? "可拖动 · 点击打开工作区 · 不展示私人文字" : "已隐藏 · 选择和位置已保留")
+            Text(pet.isVisible ? String(localized: "Drag to move · Click to open workspace · No private text", bundle: .main) : String(localized: "Hidden · Selection and position are kept", bundle: .main))
                 .font(.caption).foregroundStyle(.secondary)
 
             Divider()
-            Toggle("轻微浮动动画", isOn: $pet.motionEnabled)
+            Toggle(String(localized: "Gentle floating animation", bundle: .main), isOn: $pet.motionEnabled)
                 .toggleStyle(.switch)
-            Text("事项状态只来自已验证的工作区数据；没有可靠来源时不会显示进度或数量。")
+            Text(String(localized: "Work status comes only from verified workspace data. Without a reliable source, progress and counts are not shown.", bundle: .main))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

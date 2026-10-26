@@ -16,7 +16,7 @@ vi.mock("next/headers", () => ({
 }));
 vi.mock("@/lib/server/accountBackend", () => ({ loadAccountSettings: async () => { throw new Error("offline"); } }));
 vi.mock("@/auth", () => ({ auth }));
-vi.mock("@/app/login/actions", () => ({ signOutOfWorkspace: vi.fn() }));
+vi.mock("@/app/login/actions", () => ({ signOutOfWorkspace: vi.fn(), signOutFromAccountMenu: vi.fn() }));
 vi.mock("@/app/workspace/settings/testing/actions", () => ({
   leaveTestWorkspace: vi.fn(),
 }));

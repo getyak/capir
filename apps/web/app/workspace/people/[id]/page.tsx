@@ -32,7 +32,7 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getMarketingLocale();
-  return { robots: { follow: false, index: false }, title: translate(locale, "人物 · capri") };
+  return { robots: { follow: false, index: false }, title: translate(locale, "人物") };
 }
 
 const FIELD_LABELS: Record<string, string> = {
