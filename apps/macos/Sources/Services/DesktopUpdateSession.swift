@@ -7,7 +7,7 @@ struct DesktopUpdatePresentation: Equatable {
     var version: String?
     var offerID: UUID?
     var progress: Int?
-    var status = "此预览版尚未启用签名更新"
+    var status = String(localized: "Signed updates are not enabled in this preview", bundle: .main)
     var lastChecked: Date?
     var canInstall: Bool { phase == .available }
     var busy: Bool { phase == .checking || phase == .downloading || phase == .installing }
@@ -26,42 +26,42 @@ final class DesktopUpdateSession {
     private var repliedToReady = false
     private var offeredStage: SPUUserUpdateStage = .notDownloaded
 
-    func configure() { state.phase = .idle; state.status = "新版本会在左下角提醒你" }
+    func configure() { state.phase = .idle; state.status = String(localized: "New versions appear at the lower left", bundle: .main) }
     func checking() {
         guard pending == nil, !authorized else { return }
-        state.phase = .checking; state.status = "正在检查更新…"
+        state.phase = .checking; state.status = String(localized: "Checking for updates…", bundle: .main)
     }
     func offer(version: String, verified: Bool, informationOnly: Bool, stage: SPUUserUpdateStage = .notDownloaded,
                reply: @escaping (SPUUserUpdateChoice) -> Void) {
         guard pending == nil, !authorized else { reply(.dismiss); return }
-        guard verified else { fail("更新信息未通过签名校验。当前版本仍可使用。"); reply(.dismiss); return }
+        guard verified else { fail(String(localized: "Update information failed signature verification. Your current version remains usable.", bundle: .main)); reply(.dismiss); return }
         state.lastChecked = Date()
         guard !informationOnly else {
             state.phase = .information; state.version = nil
-            state.status = "有版本公告，请查看版本记录；此公告没有可安装的更新。"
+            state.status = String(localized: "A release announcement is available in the release history. It contains no installable update.", bundle: .main)
             reply(.dismiss); return
         }
         pending = reply; offeredStage = stage
         state.offerID = UUID()
         state.version = version; state.progress = nil
-        state.phase = .available; state.status = "\(version) 可用，点击后更新并重启"
+        state.phase = .available; state.status = String(format: String(localized: "%@ is available. Click to update and restart", bundle: .main), version)
     }
     func install(offerID: UUID?) {
         guard let offerID, offerID == state.offerID, state.canInstall, let reply = pending else { return }
         pending = nil; authorized = true; repliedToReady = false
         state.offerID = nil
         state.phase = offeredStage == .notDownloaded ? .downloading : .installing
-        state.status = offeredStage == .notDownloaded ? "正在下载更新…" : "正在更新并重启…"
+        state.status = offeredStage == .notDownloaded ? String(localized: "Downloading update…", bundle: .main) : String(localized: "Updating and restarting…", bundle: .main)
         reply(.install)
     }
     func downloadProgress(_ percent: Int?) {
         guard authorized, state.phase == .downloading else { return }
         state.progress = percent.map { max(0, min(100, $0)) }
-        state.status = state.progress.map { "正在下载更新 \($0)%" } ?? "正在下载更新…"
+        state.status = state.progress.map { String(format: String(localized: "Downloading update %lld%%", bundle: .main), Int64($0)) } ?? String(localized: "Downloading update…", bundle: .main)
     }
     func extracting() {
         guard authorized else { return }
-        state.phase = .installing; state.progress = nil; state.status = "正在校验并准备更新…"
+        state.phase = .installing; state.progress = nil; state.status = String(localized: "Verifying and preparing the update…", bundle: .main)
     }
     func ready(reply: (SPUUserUpdateChoice) -> Void) {
         guard authorized, !repliedToReady, state.phase == .downloading || state.phase == .installing else {
@@ -69,21 +69,21 @@ final class DesktopUpdateSession {
             reply(.skip); return
         }
         repliedToReady = true
-        state.phase = .installing; state.progress = nil; state.status = "正在更新并重启…"
+        state.phase = .installing; state.progress = nil; state.status = String(localized: "Updating and restarting…", bundle: .main)
         reply(.install)
     }
     func waitingForQuit() {
         guard authorized else { return }
-        state.status = "正在等待应用退出；若退出被取消，可再次尝试重启。"
+        state.status = String(localized: "Waiting for the app to quit. If quitting was cancelled, try restarting again.", bundle: .main)
     }
     func noUpdate(status: String, verified: Bool) {
-        guard verified else { fail("未能验证更新信息。当前版本仍可使用，请稍后重试。"); return }
+        guard verified else { fail(String(localized: "Update information could not be verified. Your current version remains usable. Try again later.", bundle: .main)); return }
         pending = nil; authorized = false; repliedToReady = false
         state.offerID = nil
         state.phase = .idle; state.version = nil; state.progress = nil
         state.lastChecked = Date(); state.status = status
     }
-    func fail(_ message: String = "未能完成更新。当前版本仍可使用，请重试检查更新。") {
+    func fail(_ message: String = String(localized: "The update could not be completed. Your current version remains usable. Check for updates again.", bundle: .main)) {
         let reply = pending
         pending = nil; authorized = false; repliedToReady = false
         state.offerID = nil
@@ -95,7 +95,7 @@ final class DesktopUpdateSession {
         state.offerID = nil
         if state.phase == .available || state.phase == .downloading || state.phase == .installing {
             state.phase = .idle; state.version = nil; state.progress = nil
-            state.status = "更新已结束；可重新检查更新"
+            state.status = String(localized: "Update ended. You can check for updates again", bundle: .main)
         }
     }
 }

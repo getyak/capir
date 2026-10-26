@@ -118,7 +118,48 @@ final class NativeCommandLocalizationTests: XCTestCase {
         "Drag to move · Click to open workspace · No private text",
         "Hidden · Selection and position are kept",
         "Gentle floating animation",
-        "Work status comes only from verified workspace data. Without a reliable source, progress and counts are not shown."
+        "Work status comes only from verified workspace data. Without a reliable source, progress and counts are not shown.",
+        "Menu Bar and Screenshots",
+        "Select an area of your screen and send it directly to the Agent in your current workspace.",
+        "Show capri in the menu bar",
+        "Screenshot Shortcut",
+        "Press a shortcut · Esc to cancel",
+        "Record screenshot shortcut, currently %@",
+        "After Selection",
+        "Send directly to Agent",
+        "Always preview first",
+        "Press P while taking a screenshot to preview, crop or redact it first.",
+        "Top Activity Hint",
+        "Off",
+        "On",
+        "Briefly shows general processing status without names or messages.",
+        "Start at Login",
+        "macOS has not finished setting up the login item. Check System Settings.",
+        "Screenshot Processing and Retention",
+        "Only the area you explicitly select is uploaded. Processors follow the current workspace settings shown when first enabled; changes require another review.",
+        "Screenshots not yet uploaded are encrypted on this Mac for up to 24 hours. Delivered screenshots follow workspace session retention and source deletion rules.",
+        "This key does not support global screenshots yet. Choose another shortcut.",
+        "This shortcut is already used by the system or another app. Choose another shortcut.",
+        "The screenshot shortcut is temporarily unavailable.",
+        "Signed updates are not enabled in this preview",
+        "New versions appear at the lower left",
+        "Checking for updates…",
+        "Update information failed signature verification. Your current version remains usable.",
+        "A release announcement is available in the release history. It contains no installable update.",
+        "%@ is available. Click to update and restart",
+        "Downloading update…",
+        "Updating and restarting…",
+        "Downloading update %lld%%",
+        "Verifying and preparing the update…",
+        "Waiting for the app to quit. If quitting was cancelled, try restarting again.",
+        "Update information could not be verified. Your current version remains usable. Try again later.",
+        "The update could not be completed. Your current version remains usable. Check for updates again.",
+        "Update ended. You can check for updates again",
+        "Update checking could not start. Your current version remains usable. Reopen the app and try again.",
+        "You are up to date",
+        "Your version is newer than the update source",
+        "The new version does not support this Mac yet. Your current version remains usable",
+        "No applicable update was found"
 
     ]
     private let languages = ["en", "zh-Hans", "zh-Hant", "ja", "ko"]
@@ -182,7 +223,7 @@ final class NativeCommandLocalizationTests: XCTestCase {
 
     func testBuiltNativeSurfaceFormatsPreserveEveryPlaceholderType() throws {
         let app = try applicationBundle()
-        let pattern = try NSRegularExpression(pattern: "%(@|lld|d)")
+        let pattern = try NSRegularExpression(pattern: "%(@|lld|d|%)")
         func placeholders(_ value: String) -> [String] {
             pattern.matches(in: value, range: NSRange(value.startIndex..., in: value)).map {
                 String(value[Range($0.range, in: value)!])
@@ -247,4 +288,27 @@ final class NativeCommandLocalizationTests: XCTestCase {
         XCTAssertTrue(WorkspaceRecoveryText.httpFailure(503).contains("503"))
         XCTAssertFalse(WorkspaceRecoveryText.httpFailure(503).contains("%lld"))
     }
+    func testCaptureShortcutErrorsUseTheCompiledApplicationLanguage() throws {
+        let app = try applicationBundle()
+        let localized = try languageBundle(try XCTUnwrap(app.preferredLocalizations.first), in: app)
+        for (error, key) in [
+            (CaptureShortcutRegistrationError.unsupportedKey, "This key does not support global screenshots yet. Choose another shortcut."),
+            (.conflict, "This shortcut is already used by the system or another app. Choose another shortcut.")
+        ] {
+            XCTAssertEqual(error.errorDescription, localized.localizedString(forKey: key, value: "__missing__", table: nil))
+        }
+    }
+
+    func testBuiltCaptureShortcutAccessibilityFormatKeepsTheRecordedChord() throws {
+        let app = try applicationBundle()
+        for language in languages {
+            let localized = try languageBundle(language, in: app)
+            let format = localized.localizedString(forKey: "Record screenshot shortcut, currently %@", value: "__missing__", table: nil)
+            let label = String(format: format, "⌃⌥S")
+            XCTAssertTrue(label.contains("⌃⌥S"), language)
+            XCTAssertFalse(label.contains("%@"), language)
+            XCTAssertNotEqual(label, "__missing__", language)
+        }
+    }
+
 }
