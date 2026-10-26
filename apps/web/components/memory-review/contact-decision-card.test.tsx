@@ -74,6 +74,24 @@ describe("Session contact decision card", () => {
     expect(add).toHaveBeenCalledWith("陈宇", "试点合作");
   });
 
+  it("preserves edited relationship fields when a rejected write is retried", async () => {
+    await act(async () => render());
+    await act(async () => button("更多操作").click());
+    await act(async () => button("改资料").click());
+    const relationship = mount.querySelectorAll("input")[1]!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(relationship, "产品合作");
+      relationship.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => button("添加联系人").click());
+    await act(async () => render("pending", { busy: true }));
+    await act(async () => render()); // Definitive rejection: no receipt, same review.
+    expect(mount.querySelectorAll("input")[1]?.value).toBe("产品合作");
+    await act(async () => button("添加联系人").click());
+    expect(add).toHaveBeenNthCalledWith(1, "陈宇", "产品合作");
+    expect(add).toHaveBeenNthCalledWith(2, "陈宇", "产品合作");
+  });
+
   it("declines only after choosing Not now in the secondary actions", async () => {
     await act(async () => render());
     await act(async () => button("更多操作").click());

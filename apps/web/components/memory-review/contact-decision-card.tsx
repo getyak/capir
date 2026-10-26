@@ -67,7 +67,8 @@ export function ContactDecisionCard({ displayLabel, relationshipContext, sourceE
         return;
       }
       onAdd(name.trim(), context.trim());
-      setEditing(false);
+      // Keep reviewed edits visible for a rejected write; a verified outcome
+      // replaces the form through the controller's canonical receipt.
     }}>
       <label>{t("姓名")}<input ref={nameInput} disabled={busy} value={name} maxLength={200} onChange={(event) => setName(event.target.value)}/></label>
       <label>{t("关系")}<input disabled={busy} value={context} maxLength={200} onChange={(event) => setContext(event.target.value)}/></label>
