@@ -200,7 +200,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
                   // Living pages may read Memory; only an explicit open owns that read.
                   prefetch={false}
                 >
-                  <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} size={28} />
+                  <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} size={18} />
                   <span className={styles.identity}>
                     <strong>{person.label}</strong>
                     <small>{person.contexts[0]?.label ?? t("联系人")}</small>

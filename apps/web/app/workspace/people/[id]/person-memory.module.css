@@ -3,10 +3,10 @@
 .pageNavigation { margin-bottom: 14px; }
 .backLink { align-items: center; color: var(--muted-strong); display: inline-flex; font-size: var(--workspace-meta-size); gap: 7px; min-height: 44px; padding: 0 4px; text-decoration: none; }
 .backLink:hover { color: var(--ink); }
-.identity { align-items: center; border-bottom: 1px solid var(--line-soft); display: flex; gap: 14px; padding: 0 0 22px; }
+.identity { align-items: center; display: flex; gap: 4px; min-height: 44px; padding: 0 0 12px; }
 .identityText { min-width: 0; }
-.identityText h1 { font-size: var(--workspace-title-size); font-weight: 600; line-height: 1.4; margin: 0; overflow-wrap: anywhere; }
-.identityNote { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.6; margin: 4px 0 0; overflow-wrap: anywhere; }
+.identityText h1 { font-size: var(--workspace-object-size); font-weight: 500; line-height: 1.4; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.identityNote { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.6; margin: 0 0 20px; overflow-wrap: anywhere; }
 .columns { display: grid; gap: 44px; grid-template-columns: minmax(0, 1fr) minmax(200px, 256px); margin-top: 26px; }
 .contextColumn, .memoryColumn { min-width: 0; }
 .contextColumn { border-left: 1px solid var(--line-soft); padding-left: 28px; }
@@ -115,7 +115,7 @@
 @media (max-width: 560px) {
   .main { padding: 12px 20px 72px; }
   .pageNavigation { margin-bottom: 10px; }
-  .identity { gap: 12px; padding-bottom: 20px; }
+  .identity { padding-bottom: 12px; }
   .basicFields { grid-template-columns: minmax(0, 1fr); }
   .layers { gap: 18px; }
   .editButton { min-width: 44px; }
