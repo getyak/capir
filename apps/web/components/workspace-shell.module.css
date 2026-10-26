@@ -1,10 +1,10 @@
 /*
  * Quiet Workspace shell.
  *
- * 248 px expanded sidebar / 72 px rail, 58 px route header, near-white canvas
+ * 236 px default sidebar / 72 px rail, 58 px route header, near-white canvas
  * with a warm-neutral chrome sidebar. Structure comes from page grouping and
  * typography; borders stay hairline and material stays flat. Session rows are
- * one line at 40px with a 24px identity avatar and a full accessible title.
+ * one line with an 18px identity avatar and a full accessible title.
  * Reduced motion, dark theme and mobile collapse are handled structurally, not
  * recomposed.
  *
@@ -15,7 +15,7 @@
  */
 
 .shell {
-  --workspace-sidebar-width: 248px;
+  --workspace-sidebar-width: 236px;
   --workspace-row-hover: color-mix(in srgb, var(--ink) 4%, transparent);
   --workspace-row-selected: color-mix(in srgb, var(--ink) 9%, transparent);
   background: var(--background);
@@ -37,6 +37,8 @@
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 
 .sidebar {
+  /* Retrieval chrome is secondary to the unchanged conversation reading size. */
+  --ts-type-nav: 0.8125rem;
   background: var(--ts-chrome-surface, var(--surface-muted));
   border-right: 1px solid var(--line-soft);
   display: flex;
@@ -372,9 +374,9 @@
 }
 
 .sessionRow .sessionMark {
-  flex: 0 0 24px;
-  height: 24px;
-  width: 24px;
+  flex: 0 0 18px;
+  height: 18px;
+  width: 18px;
 }
 
 /* A conversation symbol does not imply a person or an Agent running state. */
