@@ -57,6 +57,17 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it("relays only bound raster receipt images and rejects invalid indices", async () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  upstream.mockResolvedValue(new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } }));
+  const response = await GET(request("GET", `/tool-calls/${id}/images/0`), context(["tool-calls", id, "images", "0"]));
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("image/png");
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([137, 80, 78, 71]));
+  expect((await GET(request("GET", `/tool-calls/${id}/images/4`), context(["tool-calls", id, "images", "4"]))).status).toBe(404);
+  expect((await GET(request("GET", `/tool-calls/${id}/images/0`, { binding: "stale" }), context(["tool-calls", id, "images", "0"]))).status).toBe(409);
+});
+
 it("requires authenticated workspace identity before any read or write", async () => {
   claims.mockResolvedValue(null);
   expect((await GET(request("GET", ""), context([]))).status).toBe(401);

@@ -95,7 +95,7 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
   assert(runtime?.runClaudeHarness && query && z && ChatProvider, 'Pass the real production harness, SDK query, Zod and ClaudeChatProvider.');
   const catalog = expect === 'discovery' ? [...CATALOG.filter(name => name !== 'memory_review'), ...CORE, 'stage_calendar_draft'] : CATALOG;
   const essential = expect === 'discovery' ? ['read_response_preference'] : ESSENTIAL;
-  const deferred = catalog.filter(name => !CORE.includes(name));
+  const deferred = catalog.filter(name => !CORE.includes(name) && name !== 'mcp_connections');
   const started = performance.now();
   const events = [];
   const record = (event, metadata = {}) => events.push({ afterMs: Math.round(performance.now() - started), event, ...metadata });
@@ -392,6 +392,8 @@ export async function runToolContextCase({ mode, expect, runtime, sdkQuery: quer
       const coreTools = catalogTools.filter(tool => CORE.includes(originalName(tool)));
       assert.deepEqual(coreTools.map(originalName).sort(), [...CORE].sort(), 'core Memory must be present without discovery');
       for (const tool of coreTools) assert(tool.schemaBytes > 0, `${tool.name} must stay visible upfront`);
+      assert(catalogTools.find(tool => originalName(tool) === 'mcp_connections')?.schemaBytes > 0,
+        'the account MCP discovery entry must remain visible before any ToolSearch');
       for (const tool of essentialTools) assert(tool.schemaBytes > 0, `${tool.name} must stay visible upfront`);
       // Discoverability by actual original names and operation semantics,
       // resolved only over this Run's registered MCP catalog.

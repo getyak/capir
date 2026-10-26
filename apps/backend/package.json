@@ -48,11 +48,12 @@
     "@sinclair/typebox": "^0.34.41",
     "@talent-signal/agent": "workspace:*",
     "@talent-signal/contracts": "workspace:*",
+    "@talent-signal/evaluation": "workspace:*",
     "fastify": "^5.12.7",
     "htmlparser2": "^12.0.0",
     "jose": "6.2.12",
     "pg": "^8.23.1",
-    "@talent-signal/evaluation": "workspace:*"
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

@@ -40,6 +40,7 @@ const ROUTES: Array<{ methods: string[]; path: string[] }> = [
   { methods: ["POST"], path: ["interactions", "propose-call"] },
   { methods: ["POST"], path: ["interactions", "propose-connection"] },
   { methods: ["GET"], path: ["interactions", ":id"] },
+  { methods: ["GET"], path: ["tool-calls", ":id", "images", ":index"] },
   { methods: ["POST"], path: ["interactions", ":id", "resolve"] },
 ];
 
@@ -53,6 +54,7 @@ function matches(path: string[], method: string): string[] | null {
       const value = path[index] ?? "";
       if (segment === ":id") return UUID.test(value);
       if (segment === ":token") return TOKEN.test(value);
+      if (segment === ":index") return /^[0-3]$/u.test(value);
       return segment === value;
     });
     if (ok) return route.path;
@@ -81,13 +83,30 @@ async function boundedJson(request: NextRequest): Promise<unknown | null> {
   return JSON.parse(text) as unknown;
 }
 
-async function relayFetch(url: string, init: RequestInit): Promise<NextResponse> {
+async function relayFetch(url: string, init: RequestInit, image = false): Promise<NextResponse> {
   // A bounded upstream call: the timer aborts both the fetch and the body read
   // so a stalled backend cannot pin the route handler open.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MCP_MANAGEMENT_TIMEOUT_MS);
   try {
     const upstream = await fetch(url, { ...init, signal: controller.signal });
+    if (image && upstream.ok) {
+      const mediaType = upstream.headers.get("content-type") ?? "";
+      if (!["image/png", "image/jpeg", "image/webp"].includes(mediaType) || !upstream.body) return response({ message: "图片格式无效。" }, 502);
+      const reader = upstream.body.getReader();
+      const chunks: Uint8Array[] = []; let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break;
+          size += value.byteLength;
+          if (size > 750_000) { controller.abort(); return response({ message: "图片内容过大。" }, 502); }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+      const bytes = new Uint8Array(size); let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+      return new NextResponse(bytes, { headers: { "content-type": mediaType, "cache-control": "no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox" } });
+    }
     const text = await upstream.text();
     let body: unknown = null;
     try {
@@ -146,7 +165,7 @@ async function handle(
     }
     const upstreamPath = route
       .map((segment, index) =>
-        segment === ":id" || segment === ":token" ? normalized[index] : segment,
+        segment === ":id" || segment === ":token" || segment === ":index" ? normalized[index] : segment,
       )
       .join("/");
     const url = `${backendAuthBaseUrl()}/v1/mcp/${upstreamPath}`;
@@ -159,7 +178,7 @@ async function handle(
           authorization: `Bearer ${claims.backendAccessToken}`,
         },
         method: "GET",
-      });
+      }, route.includes("images"));
     }
 
     let body: string | undefined;

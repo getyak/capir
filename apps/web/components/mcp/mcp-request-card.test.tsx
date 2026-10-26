@@ -88,6 +88,23 @@ afterEach(async () => {
 });
 
 describe("McpRequestCard", () => {
+  it("loads a receipt image with the current session binding and keeps failed loads recoverable", async () => {
+    const raw = JSON.stringify({ content: [{ type: "image", status: "ready", image_index: 0, media_type: "image/png", byte_size: 100, content_hash: "a".repeat(64) }] });
+    const receipt = { call_id: CALL_ID, request_id: REQUEST_ID, connection_id: null, server_origin: "https://synthetic.example", tool_name: "generate_image",
+      outcome: "succeeded", is_error: false, error_code: null, result_summary: null, result_json: raw, executed_at: "2026-10-26T00:00:00Z",
+      source: { kind: "mcp_tool_result", connection_id: null, server_origin: "https://synthetic.example", tool_name: "generate_image", protocol_version: "2025-11-25" } } as McpToolCallReceipt;
+    fetcher.mockImplementation(async (input: RequestInfo | URL) => String(input).includes("/images/")
+      ? new Response("unavailable", { status: 503 })
+      : Response.json({ request: request({ state: "submitted", receipt }) }));
+    await act(async () => root.render(createElement(McpRequestCard, { requestId: REQUEST_ID, sessionVersion: SESSION_VERSION })));
+    await flush();
+    expect(text()).toContain("图片暂时无法读取");
+    expect(button("重新读取图片")).toBeDefined();
+    const imageCall = fetcher.mock.calls.find(call => String(call[0]).includes("/images/"));
+    expect(imageCall?.[0]).toBe(`/api/extensions/tool-calls/${CALL_ID}/images/0`);
+    expect(sessionHeaderOf(imageCall!)).toBe(SESSION_VERSION);
+    expect(fetcher.mock.calls.some(call => String(call[0]).includes("/resolve"))).toBe(false);
+  });
   it("sends the canonical workspace session header on read and resolve", async () => {
     fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

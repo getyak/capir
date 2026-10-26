@@ -342,7 +342,7 @@ export class ClaudeChatProvider implements RemoteChatAnswerProviding, AgentProvi
       return variants.map(variant => ({ name: variant.name, description: variant.description,
         // Core Memory must be usable without a discovery hop or a contact.
         // Secondary capabilities defer; legacy contexts retain eager loading.
-        schema: variant.schema, readOnly: variant.readOnly, alwaysLoad: name === "memory_review" || !boundedDiscovery,
+        schema: variant.schema, readOnly: variant.readOnly, alwaysLoad: name === "memory_review" || name === "mcp_connections" || !boundedDiscovery,
         execute: async (input, executionSignal) => {
           executionSignal.throwIfAborted();
           if (name === "contact_workspace") {

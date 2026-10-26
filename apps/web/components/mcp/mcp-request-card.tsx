@@ -10,6 +10,7 @@ import type {
 
 import { workspaceSessionFetch } from "../workspace-session-request";
 import { mcpIntentIdentity, workspaceIntentScope } from "./mcp-intent";
+import { McpReceiptImages } from "./mcp-receipt-images";
 import styles from "./mcp.module.css";
 
 /**
@@ -209,6 +210,7 @@ function displayArguments(request: McpInteractionRequest): Record<string, unknow
 }
 
 interface RendererContext {
+  sessionVersion: string;
   state: McpRequestState;
   secret: string;
   setSecret: (value: string) => void;
@@ -234,6 +236,8 @@ function receiptPreview(receipt: McpToolCallReceipt): string {
         return block.type === "text" && typeof block.text === "string" ? [block.text] : [];
       }).join("\n\n");
       if (text) return text.length > 1_200 ? `${text.slice(0, 1_200)}…` : text;
+      if ((parsed as { content: unknown[] }).content.some(item => item && typeof item === "object" && (item as { type?: unknown }).type === "image"))
+        return "工具已返回图片结果。";
     } catch {
       // Plain text, errors and incomplete JSON keep their original display.
     }
@@ -242,7 +246,7 @@ function receiptPreview(receipt: McpToolCallReceipt): string {
   return fallback.length > 1_200 ? `${fallback.slice(0, 1_200)}…` : fallback;
 }
 
-const ApprovalRenderer: KindRenderer = (request) => (
+const ApprovalRenderer: KindRenderer = (request, context) => (
   <>
     <pre className={styles.args}>{request.arguments_display.slice(0, 2_000)}</pre>
     {request.receipt ? (
@@ -251,6 +255,7 @@ const ApprovalRenderer: KindRenderer = (request) => (
           结果（{request.receipt.outcome === "succeeded" ? "成功" : request.receipt.outcome === "outcome_unknown" ? "结果未知" : "失败"}）
         </strong>
         <pre className={styles.receiptPreview}>{receiptPreview(request.receipt)}</pre>
+        <McpReceiptImages receipt={request.receipt} sessionVersion={context.sessionVersion} />
         <details><summary>查看结果与来源</summary>
           <p className={styles.hint}>{request.receipt.server_origin} · {request.receipt.tool_name} · {request.receipt.executed_at ?? "尚未执行"}</p>
           <p className={styles.hint}>call_id · {request.receipt.call_id}</p>
@@ -455,7 +460,7 @@ function McpRequestCardContent({
           {state.error ?? "正在读取最新状态……"}
         </p>
       ) : (
-        request && renderer(request, { friendlyName, secret, setFriendlyName, setSecret, state: { ...state, loaded: state.loaded && !disabled, busy: state.busy || disabled } })
+        request && renderer(request, { sessionVersion, friendlyName, secret, setFriendlyName, setSecret, state: { ...state, loaded: state.loaded && !disabled, busy: state.busy || disabled } })
       )}
       {state.loaded && state.error ? (
         <p className={styles.notice} role="alert">
