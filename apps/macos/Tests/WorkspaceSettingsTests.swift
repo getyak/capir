@@ -193,12 +193,12 @@ final class WorkspaceSettingsTests: XCTestCase {
         XCTAssertTrue(results.contains { $0.id == "screen-recording" })
 
         let screenRecording = results.first { $0.id == "screen-recording" }!
-        XCTAssertEqual(screenRecording.scope, "此设备")
-        XCTAssertEqual(screenRecording.destination, "设置 · 权限 · 打开 macOS 系统设置")
+        XCTAssertEqual(screenRecording.scope, String(localized: "This device", bundle: .main))
+        XCTAssertEqual(screenRecording.destination, String(localized: "Settings · Permissions · Open macOS System Settings", bundle: .main))
 
         let captures = WorkspaceSettingsSearchEntry.search("截屏").first { $0.id == "captures" }!
-        XCTAssertEqual(captures.scope, "当前空间")
-        XCTAssertEqual(captures.destination, "资料 · 截图与文档")
+        XCTAssertEqual(captures.scope, String(localized: "Current workspace", bundle: .main))
+        XCTAssertEqual(captures.destination, String(localized: "Sources · Screenshots and Documents", bundle: .main))
     }
 
     func testSearchFindsNativeSectionsAndDestinations() {
@@ -220,7 +220,7 @@ final class WorkspaceSettingsTests: XCTestCase {
         let account = try XCTUnwrap(WorkspaceSettingsSearchEntry.search("账号与偏好").first { $0.id == "account" })
         XCTAssertEqual(account.action, .accountBrowser(.overview))
         XCTAssertNil(account.resolvedURL(in: origin))
-        XCTAssertEqual(account.scope, "账号 · 浏览器")
+        XCTAssertEqual(account.scope, String(localized: "Account · Browser", bundle: .main))
         XCTAssertEqual(AccountSettingsDestination.overview.url(in: origin).path, "/workspace/settings")
         XCTAssertEqual(AccountSettingsDestination.connections.url(in: origin).query, "section=connections")
     }
