@@ -22,7 +22,7 @@ import { ConversationProvenance, ConversationResponse } from "../conversation-re
 import { MemoryReviewCard } from "../memory-review/memory-review-card";
 import { sessionBlockTitle } from "../session-workbench/session-presentation";
 import { ConversationImageStrip } from "./conversation-images";
-import { SessionTaskRecord } from "./session-task-capsule";
+import { SessionTaskRecord, useSessionTaskInHeader } from "./session-task-capsule";
 import { SessionCalendarDraftCard } from "./session-calendar-draft-card";
 import { McpRequestCard } from "../mcp/mcp-request-card";
 import { sessionHumanMessages } from "@/lib/session-human-messages";
@@ -364,13 +364,15 @@ const DecisionContext = createContext<{ states: Record<string, DecisionState>; u
 function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
   const t = useT();
   const decisions = useContext(DecisionContext);
+  const messageId = typeof data.messageId === "string" ? data.messageId : "";
+  const statusInHeader = useSessionTaskInHeader(messageId);
   const execution = executionData(data);
   if (!execution) return <span>{t("这项执行记录暂时无法显示。")}</span>;
   const keys = Array.isArray(data.decisionKeys) ? data.decisionKeys.filter((key): key is string => typeof key === "string") : [];
   const unknown = keys.some(key => !decisions.states[key] || decisions.states[key] === "unknown");
   const pending = keys.some(key => decisions.states[key] === "pending");
   const phase = execution.phase === "completed" ? (unknown ? "review-unknown" : pending ? "waiting-review" : "completed") : execution.phase;
-  return <SessionExecutionCard {...execution} phase={phase}><SessionTaskRecord messageId={typeof data.messageId === "string" ? data.messageId : ""}/></SessionExecutionCard>;
+  return <SessionExecutionCard {...execution} phase={phase} statusInHeader={statusInHeader}><SessionTaskRecord messageId={messageId}/></SessionExecutionCard>;
 }
 
 function renderSessionData(name: string, raw: unknown, context: RenderContext, t: TFunction) {

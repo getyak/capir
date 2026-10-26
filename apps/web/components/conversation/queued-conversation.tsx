@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Stop, Trash, X } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
@@ -535,7 +535,7 @@ export function QueuedConversation(props: Props) {
   // Escape pauses the queue while a run is live. IME composition owns Enter
   // and Escape: a composing key event is never an action.
   function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.defaultPrevented) return;
+    if (event.defaultPrevented || chat.mutating) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[role="dialog"]')) return;
     const run = active && !active.cancel_requested && active.run_id ? active : null;
@@ -608,10 +608,10 @@ export function QueuedConversation(props: Props) {
       {chat.submitting && <p className={styles.composerImageHint} role="status">{t("conversation.images.sending")}</p>}
       <div className={styles.composer}>
         <WorkspaceComposer key={composerScope} id="queued-conversation-composer" viewKey={id} label={t("conversation.composer.label")} value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? t("conversation.composer.steerPlaceholder") : t("conversation.composer.queuePlaceholder") : paused ? t("conversation.composer.pausedPlaceholder") : imageCount ? t("conversation.composer.imagesPlaceholder") : t("conversation.composer.defaultPlaceholder")} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onComposingChange={composingChanged} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
-          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label={t("conversation.stop.action")} title={t("conversation.stop.title")} disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>{t("conversation.stop.label")}</span></button>}<button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? t("conversation.send.steerAction") : active || queued.length || paused ? t("conversation.send.queueAction") : t("conversation.send.label")} title={acceptsSteering ? t("conversation.send.steerAction") : active || paused ? t("conversation.send.queueAction") : t("conversation.send.title")} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? t("conversation.send.steer") : t("conversation.send.queue")}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
+          footerEnd={<div className={styles.sendActions}><button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? t("conversation.send.steerAction") : active || queued.length || paused ? t("conversation.send.queueAction") : t("conversation.send.label")} title={acceptsSteering ? t("conversation.send.steerAction") : active || paused ? t("conversation.send.queueAction") : t("conversation.send.title")} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? t("conversation.send.steer") : t("conversation.send.queue")}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
       {!hasContent && <div className={styles.starters} aria-label={t("conversation.starters.label")}>{[t("conversation.starters.help"), t("conversation.starters.prepare")].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
-      <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>{t("conversation.footer.keys")}</span></div>
+      <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{chat.unavailable ? t("conversation.status.unavailable") : chat.connection === "reconnecting" && hasContent && !active && !queued.length ? t("conversation.status.reconnecting") : ""}</span><span>{t("conversation.footer.keys")}</span></div>
     </div>
   </main></SessionTaskProvider>;
 }

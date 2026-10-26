@@ -42,6 +42,7 @@ export function SessionExecutionCard({
   draft,
   completedTools = [],
   timingBasis = "run",
+  statusInHeader = false,
   children,
 }: {
   phase: ConversationExecutionPhase;
@@ -54,6 +55,7 @@ export function SessionExecutionCard({
   draft?: string;
   completedTools?: readonly { name: string; completed_at: string }[];
   timingBasis?: "run" | "receipt";
+  statusInHeader?: boolean;
   children?: ReactNode;
 }) {
   const t = useT();
@@ -70,7 +72,7 @@ export function SessionExecutionCard({
   const stageLabel = conversationStageLabel(stage, locale);
   return (
     <details className={styles.execution} data-phase={phase} data-run-stage={stage ?? undefined} data-live={live ? "true" : undefined} open={defaultOpen} onKeyDown={event => {
-      if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || !event.currentTarget.open) return;
+      if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
       // An older inspected record can remain open after a new run takes over.
       // Closing that record must never reach the canvas shortcut for Stop.
       event.preventDefault(); event.stopPropagation();
@@ -78,8 +80,8 @@ export function SessionExecutionCard({
       event.currentTarget.querySelector("summary")?.focus({ preventScroll: true });
     }}>
       <summary className={styles.executionSummary} title={live ? stageLabel ?? undefined : undefined}>
-        {live ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
-        <span className={styles.executionState} role={live ? "status" : undefined}><ProcessingLabel animated={phase === "running" && live}>{phase === "running" && live ? t("正在处理") : conversationExecutionPhaseLabel(phase, locale)}</ProcessingLabel></span>
+        {live && !statusInHeader ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
+        {live && statusInHeader ? <span>{t("conversation.task.record")}</span> : <span className={styles.executionState} role={live ? "status" : undefined}><ProcessingLabel animated={phase === "running" && live}>{phase === "running" && live ? t("正在处理") : conversationExecutionPhaseLabel(phase, locale)}</ProcessingLabel></span>}
       </summary>
       <div className={styles.executionDetail}>
         {completedTools.length > 0 ? <p>{t("execution.tools.count", { count: completedTools.length })}</p> : null}
