@@ -4,7 +4,7 @@
  * The durable detail lives in `session-workbench.module.css`; this module owns
  * only the list surface so the two can evolve without one restyling the other.
  * Page geometry matches the People/Today directory pages; rows stay quiet: a
- * 15px title, 13px real scope/turn/time metadata, and one link. The unread
+ * navigation-size title, 13px real scope/turn/time metadata, and one link. The unread
  * badge never pushes a long title out of its row.
  */
 
@@ -113,10 +113,10 @@
   border-radius: 8px;
   color: var(--ink);
   display: grid;
-  gap: 12px;
+  gap: 10px;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  min-height: 72px;
-  padding: 14px;
+  min-height: 60px;
+  padding: 10px;
   text-decoration: none;
   transition: background 140ms var(--ease-out);
 }
@@ -138,22 +138,22 @@
   color: var(--muted-strong);
   display: inline-flex;
   flex: 0 0 auto;
-  height: 28px;
+  height: 24px;
   justify-content: center;
-  width: 28px;
+  width: 24px;
 }
 
 .rowBody {
   display: grid;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
 }
 
 .rowTitle {
   align-items: center;
   display: flex;
-  font-size: var(--ts-type-body, 0.9375rem);
-  font-weight: 600;
+  font-size: var(--ts-type-nav, 0.875rem);
+  font-weight: 550;
   gap: 8px;
   min-width: 0;
 }

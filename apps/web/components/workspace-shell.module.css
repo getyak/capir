@@ -355,7 +355,7 @@
   border-radius: 8px;
   color: var(--muted-strong);
   display: flex;
-  font-size: var(--workspace-body-size, 0.9375rem);
+  font-size: var(--ts-type-nav, 0.875rem);
   gap: 10px;
   min-height: 40px;
   min-width: 0;
