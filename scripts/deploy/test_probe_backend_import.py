@@ -483,6 +483,285 @@ class RunnerObservationTests(unittest.TestCase):
                 self.assertNotIn('PRIVATE', json.dumps(runner.last_command))
 
 
+class LogDiagnosisTests(unittest.TestCase):
+    # These tests catch missing evidence, changed gate decisions, or untrusted
+    # values escaping through classification; expectations are hand-derived.
+    def reject(self, log, message='import or daemon error observed'):
+        report = {}
+        with self.assertRaises(probe.ProbeError) as raised:
+            probe.validate_logs(log, report)
+        self.assertEqual(str(raised.exception), message)
+        observed = report['log_rejection']
+        self.assertEqual(set(observed), {'line_index', 'line_index_clamped', 'branch', 'parse_state',
+            'duplicate_fields', 'severity', 'plugin_class', 'message_class', 'error_class',
+            'plugin_type_matches', 'skip_plugin_suffix'})
+        allowed = {'hard-error-pattern', 'error-event', 'parse-error', 'duplicate-fields',
+            'parsed', 'unparseable', 'omitted-bound', 'present', 'absent', 'unavailable',
+            'trace', 'debug', 'info', 'warn', 'warning', 'error', 'fatal', 'panic', 'unknown',
+            'optional', 'required', 'other-omitted', 'skip-loading-plugin', 'disk-full',
+            'permission-denied', 'unpack-failure', 'unexpected-eof', 'context-cancelled', 'closed-file'}
+        for value in observed.values():
+            if isinstance(value, str):
+                self.assertIn(value, allowed)
+            else:
+                self.assertIsInstance(value, (int, bool))
+        return observed
+
+    def test_first_rejected_event_retains_branch_and_one_based_line_index(self):
+        cases = [
+            ('notice ready\nlevel=error msg=failed', 'error-event', 'parsed', 'absent',
+             'import or daemon error observed'),
+            ('notice ready\nENOSPC', 'hard-error-pattern', 'parsed', 'absent',
+             'import or daemon error observed'),
+            ('notice ready\nerror="unterminated', 'parse-error', 'unparseable', 'unavailable',
+             'unparseable error-bearing daemon log'),
+            ('notice ready\nlevel=info error=x error=y', 'duplicate-fields', 'parsed', 'present',
+             'ambiguous error-bearing daemon log'),
+        ]
+        for log, branch, parsing, duplicate, message in cases:
+            with self.subTest(branch=branch):
+                observed = self.reject(log + '\nlevel=error msg=second', message)
+                self.assertEqual(observed['line_index'], 2)
+                self.assertEqual(observed['branch'], branch)
+                self.assertEqual(observed['parse_state'], parsing)
+                self.assertEqual(observed['duplicate_fields'], duplicate)
+
+    def test_line_index_is_bounded_and_existing_first_rejection_is_not_overwritten(self):
+        with patch.object(probe, 'OUTPUT_LIMIT', 2):
+            observed = self.reject('ready\nready\nlevel=error msg=failed')
+        self.assertEqual(observed['line_index'], 2)
+        self.assertTrue(observed['line_index_clamped'])
+        report = {'log_rejection': observed}
+        with self.assertRaises(probe.ProbeError):
+            probe.validate_logs('ENOSPC', report)
+        self.assertIs(report['log_rejection'], observed)
+
+    def test_known_classes_do_not_change_error_severity_or_optional_plugin_gate(self):
+        optional = ('level=info msg="skip loading plugin" error="unsupported: skip plugin" '
+                    'id=io.containerd.snapshotter.v1.blockfile type=io.containerd.snapshotter.v1')
+        for name in ('blockfile', 'btrfs', 'devmapper', 'erofs', 'zfs'):
+            report = {}
+            self.assertIsNone(probe.validate_logs(optional.replace('blockfile', name), report))
+            self.assertEqual(report, {})
+        for plugin in ('io.containerd.tracing.processor.v1.otlp', 'io.containerd.internal.v1.tracing'):
+            report = {}
+            probe.validate_logs(optional.replace('io.containerd.snapshotter.v1.blockfile', plugin)
+                .replace('type=io.containerd.snapshotter.v1', 'type=' + plugin.rsplit('.', 1)[0]), report)
+            self.assertEqual(report, {})
+        for level in ('debug', 'trace', 'warning', 'warn', 'error', 'fatal', 'panic', 'PRIVATE_LEVEL'):
+            with self.subTest(level=level):
+                observed = self.reject(optional.replace('level=info', 'level=' + level))
+                self.assertEqual(observed['severity'], 'unknown' if level == 'PRIVATE_LEVEL' else level)
+                self.assertEqual(observed['plugin_class'], 'optional')
+                self.assertEqual(observed['message_class'], 'skip-loading-plugin')
+        observed = self.reject(optional.replace('blockfile', 'overlayfs'))
+        self.assertEqual(observed['plugin_class'], 'required')
+        observed = self.reject(optional.replace('blockfile', 'PRIVATE_COMPONENT'))
+        self.assertEqual(observed['plugin_class'], 'other-omitted')
+        observed = self.reject('Error processing tar file: unexpected EOF')
+        self.assertEqual(observed['severity'], 'absent')
+        self.assertEqual(observed['plugin_class'], 'absent')
+        self.assertEqual(observed['message_class'], 'absent')
+
+    def test_error_classes_are_allowlisted_without_waiving_rejections(self):
+        for error, expected in (
+            ('no space left on device', 'disk-full'), ('ENOSPC', 'disk-full'),
+            ('permission denied', 'permission-denied'), ('EACCES', 'permission-denied'),
+            ('failed to unpack', 'unpack-failure'), ('unpacking failed', 'unpack-failure'),
+            ('unexpected EOF', 'unexpected-eof'), ('context canceled', 'context-cancelled'),
+            ('context cancelled', 'context-cancelled'), ('file already closed', 'closed-file'),
+            ('use of closed file', 'closed-file'), ('PRIVATE_UNKNOWN', 'unknown')):
+            with self.subTest(expected=expected, error=error):
+                observed = self.reject('level=error msg="PRIVATE_MESSAGE" error="' + error + '"')
+                self.assertEqual(observed['error_class'], expected)
+                self.assertEqual(observed['message_class'], 'other-omitted')
+
+    def test_optional_event_reports_type_and_suffix_mismatches_without_acceptance(self):
+        base = ('level=info msg="skip loading plugin" error="unsupported: skip plugin" '
+                'id=io.containerd.snapshotter.v1.blockfile type=io.containerd.snapshotter.v1')
+        wrong_type = self.reject(base.replace('type=io.containerd.snapshotter.v1', 'type=PRIVATE_TYPE'))
+        self.assertFalse(wrong_type['plugin_type_matches'])
+        self.assertTrue(wrong_type['skip_plugin_suffix'])
+        wrong_suffix = self.reject(base.replace(': skip plugin', ': PRIVATE_SUFFIX'))
+        self.assertTrue(wrong_suffix['plugin_type_matches'])
+        self.assertFalse(wrong_suffix['skip_plugin_suffix'])
+        observed = self.reject('level=info msg="ENOSPC" error="PRIVATE_UNKNOWN"')
+        self.assertEqual(observed['error_class'], 'disk-full')
+
+    def test_duplicate_fields_never_credit_last_value_as_known_identity(self):
+        observed = self.reject('level=PRIVATE_LEVEL level=info msg="skip loading plugin" '
+            'id=PRIVATE_COMPONENT id=io.containerd.snapshotter.v1.blockfile error=x',
+            'ambiguous error-bearing daemon log')
+        self.assertEqual(observed['duplicate_fields'], 'present')
+        self.assertEqual(observed['severity'], 'unknown')
+        self.assertEqual(observed['plugin_class'], 'other-omitted')
+
+    def test_serialized_diagnosis_omits_secrets_unknown_fields_controls_and_large_lines(self):
+        secret = 'PRIVATE_TOKEN_7b2 https://user:password@private.invalid/key /Users/private/key'
+        cases = [
+            ('level=error msg="' + secret + '" error="' + secret + '" '
+             'PRIVATE_FIELD="' + secret + '" id="' + secret + '"'),
+            'error="' + secret + '\x00\x1b[31m',
+            'level=error msg="' + secret + '\x00\x1b[31m"',
+            'level=error msg="' + secret + 'x' * (1024 * 1024),
+            'ENOSPC ' + secret + 'x' * (1024 * 1024),
+        ]
+        for log in cases:
+            report = {}
+            with self.subTest(length=len(log)), self.assertRaises(probe.ProbeError):
+                probe.validate_logs(log, report)
+            serialized = json.dumps(report)
+            self.assertLess(len(serialized), 1000)
+            for forbidden in ('PRIVATE', 'https', 'password', '/Users', '\\u0000', '\\u001b',
+                              hashlib.sha256(log.encode()).hexdigest()):
+                self.assertNotIn(forbidden, serialized)
+        observed = self.reject('ENOSPC ' + 'x' * 9000)
+        self.assertEqual(observed['parse_state'], 'omitted-bound')
+        self.assertEqual(observed['duplicate_fields'], 'unavailable')
+        self.assertEqual(observed['error_class'], 'unknown')
+
+    def test_execute_main_and_cleanup_publish_both_log_gate_failures(self):
+        # Keep the real execute/main/cleanup orchestration. Only external resource,
+        # identity, and unrelated runtime probes are synthetic; no commands run.
+        for source in ('archive-load', 'daemon-log-check'):
+            for cleanup_failure in (False, True):
+                with self.subTest(source=source, cleanup_failure=cleanup_failure), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    archive = root / 'backend.oci.tar'
+                    archive.write_bytes(b'synthetic')
+                    artifact = dict(ImageIdentityFixture().artifact, oci_archive_sha256='b' * 64)
+                    (root / 'inspection.json').write_text(json.dumps(artifact))
+                    (root / 'source-revision.txt').write_text('a' * 40 + '\n')
+                    (root / 'SHA256SUMS').write_text('b' * 64 + '  backend.oci.tar\n')
+                    item = probe.Probe(archive, 'a' * 40, root / 'output')
+                    item.containerd_address = '/proof/containerd.sock'
+                    runner = LogGateRunner(item, source, cleanup_failure)
+                    with ExitStack() as stack:
+                        stack.enter_context(patch.object(probe, 'Probe', return_value=item))
+                        stack.enter_context(patch.object(probe, 'Runner', return_value=runner))
+                        stack.enter_context(patch.object(probe, 'inspect_archive', return_value=artifact))
+                        stack.enter_context(patch.object(probe, 'prepare_runtime_tools', return_value={'binary_bytes': 0}))
+                        stack.enter_context(patch.object(probe, 'validate_worker'))
+                        # Small fixture disk only; production CAP and allocation code stay unchanged.
+                        stack.enter_context(patch.object(probe, 'CAP', 4096))
+                        stack.enter_context(patch.object(probe.os, 'posix_fallocate',
+                            side_effect=lambda fd, offset, size: os.ftruncate(fd, size), create=True))
+                        stack.enter_context(patch.object(probe.threading, 'Thread'))
+                        stack.enter_context(patch.object(probe.time, 'sleep'))
+                        stack.enter_context(patch.object(probe.signal, 'signal'))
+                        stack.enter_context(patch.object(probe.platform, 'system', return_value='Linux'))
+                        stack.enter_context(patch.object(probe.platform, 'machine', return_value='aarch64'))
+                        stack.enter_context(patch.dict(probe.os.environ, {'GITHUB_ACTIONS': 'true',
+                            'RUNNER_ENVIRONMENT': 'github-hosted', 'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'ARM64',
+                            'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1', 'RUNNER_TEMP': tmp}))
+                        stack.enter_context(patch.object(sys, 'argv', ['probe', str(archive), '--revision', 'a' * 40,
+                            '--output', str(item.output), '--disposable-ci-opt-in']))
+                        stack.enter_context(patch.object(probe.subprocess, 'run', side_effect=AssertionError('no commands')))
+                        stack.enter_context(patch.object(probe.urllib.request, 'urlopen', side_effect=AssertionError('no network')))
+                        for method in ('check_loop', 'check_runtime_tools', 'check_delegation', 'check_engine',
+                                       'check_paths', 'check_version_runtimes', 'capped_path'):
+                            stack.enter_context(patch.object(item, method))
+                        stack.enter_context(patch.object(item, 'check_loaded_image', return_value=artifact['image_manifest_digest']))
+                        stack.enter_context(patch.object(item, 'sample', side_effect=lambda:
+                            item.report['samples'].append({'used_bytes': 100})))
+                        stack.enter_context(patch.object(item, 'mount_info', side_effect=lambda: {
+                            'target': str(item.fs), 'source': '/dev/loop7', 'fstype': 'ext4', 'options': 'rw,relatime'}))
+                        self.assertEqual(probe.main(), 1)
+                    published = json.loads((item.output / 'proof.json').read_text())
+                    self.assertEqual(published['status'], 'failed')
+                    self.assertEqual(published['failure'], 'import or daemon error observed', published)
+                    self.assertEqual(published['failure_context']['substep'], source)
+                    self.assertEqual(published['log_rejection']['branch'], 'error-event')
+                    self.assertEqual(published['log_rejection']['severity'], 'error')
+                    self.assertEqual(published['log_rejection']['error_class'], 'permission-denied')
+                    self.assertEqual(published['log_rejection']['line_index'], 2)
+                    self.assertEqual(published['cleanup'], 'failed; unknown resources left for ephemeral runner teardown'
+                                     if cleanup_failure else 'passed')
+                    self.assertNotIn('PRIVATE', json.dumps(published))
+                    self.assertNotIn('PRIVATE', (item.output / 'probe.log').read_text())
+
+    def test_actual_version_output_gate_retains_diagnosis_before_probe_credit(self):
+        target = 'sha256:' + 'b' * 64
+        for name in ('node', 'native'):
+            with self.subTest(name=name):
+                item = probe.Probe(Path('/archive'), 'a' * 40, Path('/output'))
+                item.outer, item.cid, item.owner = ['docker'], 'a' * 64, 'backend-import-123-1-abc'
+                item.runner = VersionIdentityRunner(target, False)
+                run = item.runner.run
+                def output(argv, **kwargs):
+                    result = run(argv, **kwargs)
+                    if 'start' in argv and item.runner.containers.get(argv[-1]) == name:
+                        result += 'level=error msg="PRIVATE_MESSAGE" error="unexpected EOF PRIVATE_TOKEN"\n'
+                    return result
+                with patch.object(item.runner, 'run', side_effect=output), self.assertRaises(probe.ProbeError) as raised:
+                    item.check_version_runtimes(target)
+                self.assertEqual(str(raised.exception), 'import or daemon error observed')
+                self.assertEqual(item.report['substep'], name + '-runtime-result')
+                self.assertNotIn(name + '_version_probe_passed', item.report)
+                self.assertEqual(item.report['log_rejection']['line_index'], 2)
+                self.assertEqual(item.report['log_rejection']['error_class'], 'unexpected-eof')
+                self.assertNotIn('PRIVATE', json.dumps(item.report))
+
+    def test_diagnostic_fault_never_replaces_primary_gate_failure(self):
+        with patch.object(probe, 'log_rejection_observation', side_effect=RuntimeError('PRIVATE_FAILURE')):
+            report = {}
+            with self.assertRaises(probe.ProbeError) as raised:
+                probe.validate_logs('level=error msg=failed', report)
+            self.assertEqual(str(raised.exception), 'import or daemon error observed')
+            self.assertEqual(report['log_rejection'], {'line_index': 1, 'line_index_clamped': False,
+                'branch': 'error-event', 'parse_state': 'unavailable'})
+            self.assertNotIn('PRIVATE', json.dumps(report))
+
+
+class LogGateRunner:
+    """Synthetic external boundary for real log-gate failure publication."""
+    def __init__(self, item, source, cleanup_failure):
+        self.item, self.source, self.cleanup_failure = item, source, cleanup_failure
+
+    def run(self, argv, **kwargs):
+        item = self.item
+        if argv[:4] == ['sudo', '-n', 'losetup', '--find']:
+            return '/dev/loop7'
+        if argv[:4] == ['sudo', '-n', 'dumpe2fs', '-h']:
+            return 'Block count: 1\nBlock size: 4096\n'
+        if argv[:2] == ['sudo', '-n'] or argv[:2] == ['sync', '-f']:
+            return ''
+        if argv[:len(item.outer)] != item.outer:
+            raise AssertionError('unexpected synthetic control command')
+        args = argv[len(item.outer):]
+        if args[:2] == ['container', 'rm'] and self.cleanup_failure:
+            raise probe.ProbeError('bounded command failed')
+        if args[:2] == ['container', 'inspect']:
+            return json.dumps([{'Id': item.cid, 'Config': {'Labels': {probe.OWNER_LABEL: item.owner}}}])
+        if args[:2] == ['image', 'inspect']:
+            return json.dumps([{'Id': 'sha256:' + 'c' * 64, 'Architecture': 'arm64', 'Os': 'linux', 'Size': 1}])
+        if args[:1] == ['create']:
+            return 'd' * 64
+        rejected = ('ready\nlevel=error msg="PRIVATE_MESSAGE" error="permission denied PRIVATE_TOKEN" '
+                    'path="/PRIVATE_PATH" url="https://PRIVATE.invalid"')
+        if args[:2] == ['exec', '-i']:
+            return rejected if self.source == 'archive-load' else 'Loaded image'
+        if args[:1] == ['exec']:
+            command = args[2:]
+            if command == ['cat', '/proof/daemon.log']:
+                return rejected
+            if command[:2] == ['docker', '--host=unix:///proof/docker.sock']:
+                if command[2:3] in (['version'], ['info']):
+                    return '{}'
+                if command[2:] == ['image', 'ls', '--quiet', '--all']:
+                    return ''
+            if command[:1] == ['ctr']:
+                if command[-4:] == ['images', 'check', '--snapshotter', 'overlayfs']:
+                    return ('REF TYPE DIGEST STATUS SIZE UNPACKED\nref application/vnd.oci.image.manifest.v1+json ' +
+                            ImageIdentityFixture().manifest_digest + ' complete (2/2) 1kB true\n')
+                if command[-2:] in (['ls', '--quiet'], ['overlayfs', 'ls']):
+                    return ''
+        if args[:2] == ['image', 'ls'] or args[:1] in (['pull'], ['start']) or args[:2] in (
+                ['container', 'rm'], ['image', 'rm']):
+            return ''
+        raise AssertionError('unexpected synthetic import command')
+
+
 class LoadedIdentityTests(unittest.TestCase):
     def item(self, fixture):
         item = probe.Probe(Path('/archive'), fixture.artifact['source_revision'], Path('/output'))

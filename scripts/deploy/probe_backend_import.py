@@ -239,29 +239,98 @@ def validate_unpack(output, expected_count, expected_digest=None):
                 'incomplete content count')
 
 
-def validate_logs(output):
+def log_rejection_observation(line, index, branch, optional):
+    """Content-free classification only; bounded independently of gate parsing."""
+    observed = {'line_index': min(index, OUTPUT_LIMIT), 'line_index_clamped': index > OUTPUT_LIMIT,
+                'branch': branch, 'parse_state': 'omitted-bound', 'duplicate_fields': 'unavailable',
+                'severity': 'unknown', 'plugin_class': 'other-omitted',
+                'message_class': 'other-omitted', 'error_class': 'unknown',
+                'plugin_type_matches': False, 'skip_plugin_suffix': False}
+    # Never parse a second unbounded line or retain raw input (including hashes).
+    # The gate below still checks the complete line with its original predicates.
+    if len(line) > 8192:
+        return observed
+    try:
+        pairs = [token.split('=', 1) for token in shlex.split(line) if '=' in token]
+    except ValueError:
+        observed['parse_state'] = 'unparseable'
+        return observed
+    observed['parse_state'] = 'parsed'
+    fields = dict(pairs)
+    duplicate = len(fields) != len(pairs)
+    observed['duplicate_fields'] = 'present' if duplicate else 'absent'
+    # A duplicate event has no trustworthy last-value identity, even when one
+    # repeated value happens to be known. Classify its shape, never its values.
+    if duplicate:
+        return observed
+    severity, plugin, message = fields.get('level'), fields.get('id'), fields.get('msg')
+    observed['severity'] = ('absent' if severity is None else severity if severity in
+        ('trace', 'debug', 'info', 'warn', 'warning', 'error', 'fatal', 'panic') else 'unknown')
+    observed['plugin_class'] = ('absent' if plugin is None else 'optional' if plugin in optional else
+        'required' if plugin == 'io.containerd.snapshotter.v1.overlayfs' else 'other-omitted')
+    observed['message_class'] = ('absent' if message is None else 'skip-loading-plugin' if
+        message == 'skip loading plugin' else 'other-omitted')
+    observed['plugin_type_matches'] = bool(plugin) and fields.get('type') == plugin.rsplit('.', 1)[0]
+    observed['skip_plugin_suffix'] = fields.get('error', '').endswith(': skip plugin')
+    error = line if branch == 'hard-error-pattern' else fields.get('error', line)
+    for pattern, classification in (
+            (r'\bENOSPC\b|no space left on device', 'disk-full'),
+            (r'\bEACCES\b|permission denied', 'permission-denied'),
+            (r'failed to unpack|unpack(?:ing)? failed', 'unpack-failure'),
+            (r'unexpected EOF', 'unexpected-eof'),
+            (r'context cancel(?:l)?ed', 'context-cancelled'),
+            (r'file already closed|use of closed file', 'closed-file')):
+        if re.search(pattern, error, re.IGNORECASE):
+            observed['error_class'] = classification
+            break
+    return observed
+
+
+def validate_logs(output, report=None):
     # containerd 2.2.4 emits ErrSkipPlugin at INFO with an error= field.
     # Only known optional plugin skips are benign; overlayfs is required here.
     optional = {f'io.containerd.snapshotter.v1.{name}' for name in
                 ('blockfile', 'btrfs', 'devmapper', 'erofs', 'zfs')}
     optional |= {'io.containerd.tracing.processor.v1.otlp', 'io.containerd.internal.v1.tracing'}
-    for line in output.splitlines():
-        require(not re.search(r'\b(fatal|panic|ENOSPC)\b|no space left on device|'
-                              r'failed to unpack|unpack(?:ing)? failed', line, re.IGNORECASE),
-                'import or daemon error observed')
+
+    def retain_rejection(line, index, branch):
+        if report is not None:
+            try:
+                # First rejection only. Diagnostics cannot replace the failure.
+                if 'log_rejection' not in report:
+                    report['log_rejection'] = log_rejection_observation(line, index, branch, optional)
+            except Exception:
+                try:
+                    # Even a classifier fault can retain the fixed gate branch.
+                    report.setdefault('log_rejection', {'line_index': min(index, OUTPUT_LIMIT),
+                        'line_index_clamped': index > OUTPUT_LIMIT, 'branch': branch, 'parse_state': 'unavailable'})
+                except Exception:
+                    pass
+
+    for index, line in enumerate(output.splitlines(), 1):
+        hard_error = re.search(r'\b(fatal|panic|ENOSPC)\b|no space left on device|'
+                               r'failed to unpack|unpack(?:ing)? failed', line, re.IGNORECASE)
+        if hard_error:
+            retain_rejection(line, index, 'hard-error-pattern')
+        require(not hard_error, 'import or daemon error observed')
         if not re.search(r'\berror\b', line, re.IGNORECASE):
             continue
         try:
             pairs = [token.split('=', 1) for token in shlex.split(line) if '=' in token]
         except ValueError:
+            retain_rejection(line, index, 'parse-error')
             raise ProbeError('unparseable error-bearing daemon log') from None
         fields = dict(pairs)
+        if len(fields) != len(pairs):
+            retain_rejection(line, index, 'duplicate-fields')
         require(len(fields) == len(pairs), 'ambiguous error-bearing daemon log')
         plugin_id = fields.get('id', '')
-        require(fields.get('level') == 'info' and fields.get('msg') == 'skip loading plugin' and
-                plugin_id in optional and fields.get('type') == plugin_id.rsplit('.', 1)[0] and
-                fields.get('error', '').endswith(': skip plugin'),
-                'import or daemon error observed')
+        accepted = (fields.get('level') == 'info' and fields.get('msg') == 'skip loading plugin' and
+                    plugin_id in optional and fields.get('type') == plugin_id.rsplit('.', 1)[0] and
+                    fields.get('error', '').endswith(': skip plugin'))
+        if not accepted:
+            retain_rejection(line, index, 'error-event')
+        require(accepted, 'import or daemon error observed')
 
 
 def validate_delegation(host_namespace, worker_namespace, available, enabled, membership):
@@ -598,7 +667,7 @@ class Probe:
             state = inspected[0]['State']
             require(state['Status'] == 'exited' and state['ExitCode'] == 0 and not state.get('OOMKilled') and
                     expected in result, 'version-only runtime failed')
-            validate_logs(result)
+            validate_logs(result, self.report)
             # Retain stopped version-probe writable layers through stabilization.
             self.report[name + '_version_probe_passed'] = True
             pattern = r'node-arm64-ok v([0-9]+\.[0-9]+\.[0-9]+)' if name == 'node' else r'linux-arm64; ([0-9]+\.[0-9]+\.[0-9]+)'
@@ -772,7 +841,7 @@ class Probe:
         with self.archive.open('rb') as stream:
             result = self.runner.run(self.outer + ['exec', '-i', self.cid, 'docker',
                 '--host=unix:///proof/docker.sock', 'load', '--platform=linux/arm64'], stdin=stream, timeout=900)
-        validate_logs(result)
+        validate_logs(result, self.report)
         # Repeat integrity after streaming; never accept changed input by accident.
         self.report['substep'] = 'archive-reinspection-after-load'
         after = inspect_archive(self.archive, self.revision)
@@ -803,7 +872,7 @@ class Probe:
         validate_unpack(self.ctr('images', 'check', '--snapshotter', 'overlayfs'), 1, runtime_image)
         self.capped_path('/proof/daemon.log', 'daemon-log')
         self.report['substep'] = 'daemon-log-check'
-        validate_logs(self.runner.run(self.outer + ['exec', self.cid, 'cat', '/proof/daemon.log']))
+        validate_logs(self.runner.run(self.outer + ['exec', self.cid, 'cat', '/proof/daemon.log']), self.report)
         self.check_paths()
         self.report['substep'] = 'allocation-sampling'
         require(not self.sample_error, 'allocation sampling failed')

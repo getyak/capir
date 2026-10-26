@@ -223,6 +223,13 @@ API/worker startup, activation, rollback or failure-cleanup guarantees. The
 resident capacity STOP and independent reserve/activation approval remain in
 force. Review the implementation independently before enabling the new label.
 
+A rejected archive-load, version-probe or daemon-log event also retains its first
+one-based line index, fixed rejection/parse/duplicate/severity/plugin/message/error
+classes and limited booleans. Unknown values are omitted into fixed categories;
+classification parses only events of at most 8,192 characters and never retains
+raw text, unknown fields or a raw-event hash. Evidence survives failure publication and
+cleanup without changing the log gate, its fixed errors or the capacity STOP.
+
 Use `scripts/deploy/inspect_backend_oci.py` to verify a downloaded archive's
 expected revision label, platform, blob sizes/digests and expanded layer diff IDs.
 The narrow producer disables provenance/SBOM; unsupported extra or nested
