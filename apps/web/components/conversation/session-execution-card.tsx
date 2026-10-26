@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import {
   conversationElapsedLabel,
@@ -42,6 +42,7 @@ export function SessionExecutionCard({
   draft,
   completedTools = [],
   timingBasis = "run",
+  children,
 }: {
   phase: ConversationExecutionPhase;
   stage: string | null;
@@ -53,6 +54,7 @@ export function SessionExecutionCard({
   draft?: string;
   completedTools?: readonly { name: string; completed_at: string }[];
   timingBasis?: "run" | "receipt";
+  children?: ReactNode;
 }) {
   const t = useT();
   const locale = useLocale();
@@ -67,7 +69,14 @@ export function SessionExecutionCard({
   const elapsedMs = conversationElapsedMs({ startedAt, nowMs, endedAt });
   const stageLabel = conversationStageLabel(stage, locale);
   return (
-    <details className={styles.execution} data-phase={phase} data-run-stage={stage ?? undefined} data-live={live ? "true" : undefined} open={defaultOpen}>
+    <details className={styles.execution} data-phase={phase} data-run-stage={stage ?? undefined} data-live={live ? "true" : undefined} open={defaultOpen} onKeyDown={event => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || !event.currentTarget.open) return;
+      // An older inspected record can remain open after a new run takes over.
+      // Closing that record must never reach the canvas shortcut for Stop.
+      event.preventDefault(); event.stopPropagation();
+      event.currentTarget.open = false;
+      event.currentTarget.querySelector("summary")?.focus({ preventScroll: true });
+    }}>
       <summary className={styles.executionSummary} title={live ? stageLabel ?? undefined : undefined}>
         {live ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
         <span className={styles.executionState} role={live ? "status" : undefined}><ProcessingLabel animated={phase === "running" && live}>{phase === "running" && live ? t("正在处理") : conversationExecutionPhaseLabel(phase, locale)}</ProcessingLabel></span>
@@ -97,6 +106,7 @@ export function SessionExecutionCard({
           {t(timingBasis === "receipt" ? "消息接收" : "开始")} {clock(startedAt, locale) || t("未记录")}
           {endedAt ? ` · ${t(timingBasis === "receipt" ? "结果记录" : "结束")} ${clock(endedAt, locale) || t("未记录")}` : live ? ` · ${t("仍在进行")}` : ""}
         </p>
+        {children}
       </div>
     </details>
   );

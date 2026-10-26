@@ -5,12 +5,15 @@
 .label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 .dot { flex:none; width:5px; height:5px; border-radius:50%; background:currentColor; }
 .trigger svg { flex:none; }
-.panel { box-sizing:border-box; width:min(320px,calc(100vw - 32px)); max-height:min(440px,var(--radix-popover-content-available-height)); overflow:auto; font-size:var(--ts-type-meta,0.8125rem); color:var(--muted-strong,var(--ink)); line-height:var(--ts-leading-meta,1.5); }
+.panel { box-sizing:border-box; min-width:0; max-width:100%; margin-top:12px; font-size:var(--ts-type-meta,0.8125rem); color:var(--muted-strong,var(--ink)); line-height:var(--ts-leading-meta,1.5); }
 .panel p { margin:0 0 10px; overflow-wrap:anywhere; }
 .panel .state { font-weight:500; color:var(--ink); }
 .actions { display:flex; flex-wrap:wrap; gap:4px 12px; }
 .actions button { min-height:44px; padding:4px 8px; border:0; border-radius:8px; background:var(--surface-muted); color:var(--ink); cursor:pointer; font:inherit; }
 .actions button:disabled { opacity:.5; cursor:default; }
+.standalone { margin-top:8px; }
+.standalone summary { cursor:pointer; min-height:44px; display:flex; align-items:center; font-size:var(--ts-type-meta,0.8125rem); }
+.standalone summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 @media(prefers-reduced-motion:reduce) { .trigger { transition:none; } }
 @media(forced-colors:active) { .trigger,.panel,.actions button { border:1px solid ButtonText; background:Canvas; color:CanvasText; } .panel .state { color:CanvasText; } .trigger:focus-visible,.actions button:focus-visible { outline-color:Highlight; } .actions button:disabled { color:GrayText; opacity:1; } }
 

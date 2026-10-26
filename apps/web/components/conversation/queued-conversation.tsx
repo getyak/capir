@@ -28,7 +28,7 @@ import { useRunMilestones } from "./use-run-milestones";
 import { sessionHumanMessages, sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
 import { createAnswerSeamRegistry } from "./answer-seam";
 import { conversationWorkStatus, unresolvedConversationCount, type ConversationWorkStatus } from "./conversation-feedback";
-import { SessionTaskCapsule } from "./session-task-capsule";
+import { SessionTaskCapsule, SessionTaskProvider } from "./session-task-capsule";
 import { SessionRuntime } from "./session-runtime";
 import { usePersonContextPanel } from "../person-context-panel";
 import styles from "./queued-conversation.module.css";
@@ -554,13 +554,14 @@ export function QueuedConversation(props: Props) {
     await chat.mutate({ kind: "prioritize", queue_entry_id: queueEntryId });
   }
 
-  return <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
+  return <SessionTaskProvider observation={chat.taskObservation} connection={chat.connection} mutating={chat.mutating}
+    onStop={runId => void chat.mutate({ kind: "stop", run_id: runId })} onContinue={() => void chat.mutate({ kind: "continue" })}
+    onRetry={queueEntryId => void retryEntry(queueEntryId)} recoveryActions={renderContext.recoveryActions}>
+  <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
     {admitted && <header className={styles.header}>
       <div className={styles.headingText}><h1 title={chat.detail?.title || t("conversation.new")}>{chat.detail?.title || t("conversation.new")}</h1></div>
       {personId && !chat.unavailable && <button className={styles.personContext} aria-label={t("conversation.person.view", { person: personLabel || t("conversation.person.fallback") })} onClick={event => personContextPanel.open(personId,event.currentTarget)}>{t("conversation.person.context")}</button>}
-      <div className={styles.taskSlot}>{!chat.unavailable && <SessionTaskCapsule observation={chat.taskObservation} connection={chat.connection} mutating={chat.mutating}
-        onStop={runId => void chat.mutate({ kind: "stop", run_id: runId })} onContinue={() => void chat.mutate({ kind: "continue" })}
-        onRetry={queueEntryId => void retryEntry(queueEntryId)} recoveryActions={renderContext.recoveryActions}/>}</div>
+      <div className={styles.taskSlot}>{!chat.unavailable && <SessionTaskCapsule/>}</div>
       <details className={styles.details}><summary aria-label={t("conversation.detail.label")}><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>{t("conversation.detail.label")}</span></summary><div className={styles.detailPanel}>
       <p>{chat.detail?.title || t("conversation.new")}</p>
       <p className={styles.detailScope}>{scopeLabel}</p>
@@ -612,5 +613,5 @@ export function QueuedConversation(props: Props) {
       {!hasContent && <div className={styles.starters} aria-label={t("conversation.starters.label")}>{[t("conversation.starters.help"), t("conversation.starters.prepare")].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
       <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>{t("conversation.footer.keys")}</span></div>
     </div>
-  </main>;
+  </main></SessionTaskProvider>;
 }
