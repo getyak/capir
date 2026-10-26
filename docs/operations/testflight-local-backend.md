@@ -413,6 +413,9 @@ read-only Web subscription follows the process termination signal so Next can
 drain; closing that transport does not cancel an Agent task or settle a write
 outcome. If a client refresh is needed to let the old process exit, retain that
 attempt as a recovery failure and investigate the open-stream lifecycle.
+Conversation subscriptions close their HTTP/1 connection after a successful or
+rejected observation. A reverse proxy must not keep reusing a draining connection
+for retries; aborting only the upstream stream does not prove process exit.
 
 The Mac must be awake and the owning user logged in; clients must
 join the authorized tailnet. Physical Wi-Fi/LAN address changes do not change
