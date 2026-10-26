@@ -29,7 +29,8 @@ Baseline: fresh `origin/main` at
 | Changed TS/TSX ESLint | Passed |
 | Web TypeScript | Passed after contract/Agent/workspace UI builds |
 | `pnpm docs:check` | Passed |
-| Independent native review of working diff | No confirmed P0/P1; exact commit binding pending |
+| Independent native review | No confirmed P0/P1 at `4c968c9577f7d4d626db3852f86437358fec8eda`; responsive correction follow-up pending |
+| Header component geometry fixture | 14 viewport/text-size cases passed after reproducing 601–800px clipping |
 
 Two adjacent legacy tests initially required duplicate transcript processing
 status. They were updated to assert the real header stage and absence of a
@@ -52,10 +53,20 @@ fallback was added. This is authorization preflight, not product acceptance.
 
 ## Remaining delivery evidence
 
-Browser render proof must cover desktop, 601–850px, narrow viewport, 200% text,
+A browser fixture using the actual header components and CSS reproduced a
+0px Working label at 601px and clipped labels at 700/800px and 200% text.
+The responsive boundary now uses root-relative units, gives the status and Stop
+a shared second row when space is limited, and keeps 44px Stop targets. All
+14 checked combinations passed: 1440/850/800/700/601/600/390/320px at ordinary
+text and 1920/1440/1000/800/390/320px at 200% text, without page overflow or
+JavaScript page errors. This is geometry proof with synthetic observed state;
+it does not establish real product execution or real Stop. Private screenshots
+and measurements live in `.symphony/evidence/layout/`.
+
+Full product browser proof must still cover desktop, narrow viewport, 200% text,
 reduced motion, running/stopping/failed/history, keyboard focus and owner/task
-switches. In particular, verify that the symmetric header tracks leave status
-text readable beside Stop before calling layout accepted.
+switches. The real authenticated page must confirm the fixture result before rendered
+acceptance is complete.
 
 Exact-head review, the canonical PR and current-head CI, actual merge, clean
 resident Web deployment revision, real-account isolated-space acceptance and

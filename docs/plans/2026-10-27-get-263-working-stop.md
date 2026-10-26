@@ -36,8 +36,10 @@ panels; moving all errors/decisions into optional details.
 
 ## Milestones
 
-1. Active: add failing single-owner/cancellation/history tests, then implement.
-2. Run focused Web tests, lint, typecheck and rendered desktop/narrow checks
+1. Completed: three new tests reproduced the ownership bugs, then passed;
+   conversation tests (368), lint and Web types passed.
+2. Active: host checks and a 14-case actual-component geometry fixture pass.
+   Complete full-product rendered desktop/narrow checks
    including keyboard, reduced motion, task/session switches and recovery.
 3. Independent native subagent review; fix confirmed P0/P1 and bind closure
    to the current head. Create/reuse one PR, link to Linear, wait for current
@@ -55,3 +57,11 @@ Never report a green layer as proof of an unverified layer. Preserve source
 and unique evidence while incomplete; reclaim only this task's rebuildable
 artifacts after formal evidence is saved. Record the original Symphony
 generation/thread result through `project_sessions.py event` at handoff.
+
+## Evidence updates
+
+- The repository hygiene gate rejected raw `.log` files; logs were preserved
+  privately and removed from the tracked tree. The 21 policy tests pass.
+- Geometry reproduced a 0px status label at 601px before the responsive fix.
+  Root-relative layout now passes 14 ordinary/200% text-size combinations;
+  this fixture does not replace authenticated runtime acceptance.

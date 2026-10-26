@@ -268,7 +268,7 @@
    Empty and active states reserve the same space; status targets the transcript. */
 .header { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,50%) minmax(0,1fr); column-gap:8px; padding-inline:60px; box-sizing:border-box; }
 .headingText { grid-column:2; grid-row:1; min-width:0; width:100%; max-width:none; text-align:center; }
-.taskSlot { grid-column:3; grid-row:1; min-width:0; min-height:44px; width:100%; max-width:220px; justify-self:end; }
+.taskSlot { grid-column:3; grid-row:1; min-width:0; min-height:44px; width:100%; max-width:14rem; justify-self:end; }
 .header .personContext { grid-column:1; grid-row:1; justify-self:start; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .canvas { container-type:inline-size; }
 @container (max-width:440px) {
@@ -279,7 +279,8 @@
 .queueWithdrawalNote { margin: 6px 0; color: var(--muted); font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }
 
 /* Keep Stop fully reachable when the centered title leaves little side space. */
-@container (max-width:600px) {
+@container (max-width:53.125rem) {
+  .header { padding-inline:16px; }
   .taskSlot { grid-column:1 / -1; grid-row:2; justify-self:center; width:auto; max-width:100%; }
   .taskSlot:empty { display:none; }
 }
