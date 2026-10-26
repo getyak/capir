@@ -34,10 +34,16 @@ import { useT, type TFunction } from "../locale-provider";
 import styles from "./queued-conversation.module.css";
 
 export type SessionDataPart = {
+  id?: string;
   type: "data";
   name: string;
   data: Record<string, unknown>;
 };
+function queueControlsPart(messageId: string): SessionDataPart {
+  // assistant-ui preserves data-part IDs and keys by this identity rather
+  // than its array slot when steering adds or removes an execution record.
+  return { id: `queue-controls:${messageId}`, type: "data", name: "talent-signal.queue-controls", data: { messageId } };
+}
 export type SessionTextPart = { type: "text"; text: string };
 export type SessionProjectedMessage = {
   id: string;
@@ -126,6 +132,12 @@ export function sessionMessages(input: {
       data: { messageId: human.id, images: human.images, local: false },
     });
     messages.push({ id: `${human.id}:user`, role: "user", content: userContent, createdAt: new Date(human.createdAt) });
+    // A committed steered member can still have a failed queue finalization.
+    // Keep its own assistant identity so recovery or an open editor cannot
+    // disappear or migrate into the parent turn's different message owner.
+    if (human.id !== turn.id && input.queued?.some(entry => entry.message_id === human.id)) {
+      messages.push({ id: `${human.id}:assistant`, role: "assistant", content: [queueControlsPart(human.id)], createdAt: new Date(human.createdAt) });
+    }
     }
     const content: SessionProjectedMessage["content"] = sessionTurnBlocks(turn.response).map((block) => ({
       type: "data", name: "talent-signal.answer-block", data: { block, messageId: turn.id },
@@ -194,6 +206,9 @@ export function sessionMessages(input: {
     // answer and all governed decisions lead with their semantic content.
     if (interrupted) content.unshift(executionPart);
     else content.push(executionPart);
+    // Canonical answer persistence and queue finalization are distinct writes.
+    // An outstanding failed/paused queue row still owns same-ID recovery.
+    if (input.queued?.some(entry => entry.message_id === turn.id)) content.push(queueControlsPart(turn.id));
     messages.push({ id: `${turn.id}:assistant`, role: "assistant", content, createdAt: new Date(turn.response.createdAt) });
   }
   const active = input.active;
@@ -239,7 +254,13 @@ export function sessionMessages(input: {
     if (entry.images?.length) content.push({ type: "data", name: "talent-signal.user-images", data: { messageId: entry.message_id, images: entry.images, local: false } });
     const pair: SessionProjectedMessage[] = [];
     if (!entry.host_result) pair.push({ id: `${entry.message_id}:user`, role: "user", content, createdAt: new Date(entry.created_at) });
-    if (active?.run_id && entry.steers_run_id === active.run_id && entry.steer_state !== "unsupported") { groups.push({ at: Date.parse(entry.created_at) || 0, messages: pair }); continue; }
+    const controls = queueControlsPart(entry.message_id);
+    if (active?.run_id && entry.steers_run_id === active.run_id && entry.steer_state !== "unsupported") {
+      // A supplement belongs to the active run, not a fabricated second run.
+      // Its own stable message still owns the observed delivery controls.
+      pair.push({ id: `${entry.message_id}:assistant`, role: "assistant", content: [controls], createdAt: new Date(entry.updated_at) });
+      groups.push({ at: Date.parse(entry.created_at) || 0, messages: pair }); continue;
+    }
     pair.push({ id: `${entry.message_id}:assistant`, role: "assistant", content: [
       ...(entry.host_result ? [{ type: "data" as const, name: "talent-signal.mcp-human-result", data: { version: 1, messageId: entry.message_id, result: entry.host_result } }] : []),
       { type: "data", name: "talent-signal.execution", data: {
@@ -248,7 +269,7 @@ export function sessionMessages(input: {
       timingBasis: entry.started_at ? "run" : "receipt",
       endedAt: entry.status === "queued" || entry.status === "running" ? null : entry.updated_at,
       failureCode: entry.failure_code, milestones: input.milestonesByMessage?.[entry.message_id] ?? [],
-    } }], createdAt: new Date(entry.updated_at) });
+    } }, controls], createdAt: new Date(entry.updated_at) });
     groups.push({ at: Date.parse(entry.created_at) || 0, messages: pair });
   }
   for (const row of input.handoff ?? []) {
@@ -285,6 +306,7 @@ type RenderContext = {
   /** Observed work state per message, for the readback/handoff rows. */
   workByMessageId?: Record<string, ConversationWorkStatus>;
   recoveryActions?: (messageId: string) => ReactNode;
+  queueActions?: (messageId: string) => ReactNode;
   onDecisionState?: (key: string, state: DecisionState) => void;
   onCardComment?: (item: MemoryProposalItem) => void;
 };
@@ -372,6 +394,7 @@ function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
 function renderSessionData(name: string, raw: unknown, context: RenderContext, t: TFunction) {
   const data = dataRecord(raw);
   if (!data) return <span>{t("这项内容暂时无法显示。")}</span>;
+  if (name === "talent-signal.queue-controls" && typeof data.messageId === "string") return context.queueActions?.(data.messageId) ?? null;
   if (name === "talent-signal.user-images" && Array.isArray(data.images) && typeof data.messageId === "string") {
     // A local outbox row reads its bytes from the local store; canonical rows
     // use the server-manifest path.
