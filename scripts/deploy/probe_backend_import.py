@@ -267,9 +267,11 @@ def log_rejection_observation(line, index, branch, optional):
     observed['severity'] = ('absent' if severity is None else severity if severity in
         ('trace', 'debug', 'info', 'warn', 'warning', 'error', 'fatal', 'panic') else 'unknown')
     observed['plugin_class'] = ('absent' if plugin is None else 'optional' if plugin in optional else
-        'required' if plugin == 'io.containerd.snapshotter.v1.overlayfs' else 'other-omitted')
+        'required' if plugin == 'io.containerd.snapshotter.v1.overlayfs' else
+        'opt-manager' if plugin == 'io.containerd.internal.v1.opt' else 'other-omitted')
     observed['message_class'] = ('absent' if message is None else 'skip-loading-plugin' if
-        message == 'skip loading plugin' else 'other-omitted')
+        message == 'skip loading plugin' else 'plugin-load-failure' if
+        message == 'failed to load plugin' else 'other-omitted')
     observed['plugin_type_matches'] = bool(plugin) and fields.get('type') == plugin.rsplit('.', 1)[0]
     observed['skip_plugin_suffix'] = fields.get('error', '').endswith(': skip plugin')
     error = line if branch == 'hard-error-pattern' else fields.get('error', line)
@@ -279,7 +281,8 @@ def log_rejection_observation(line, index, branch, optional):
             (r'failed to unpack|unpack(?:ing)? failed', 'unpack-failure'),
             (r'unexpected EOF', 'unexpected-eof'),
             (r'context cancel(?:l)?ed', 'context-cancelled'),
-            (r'file already closed|use of closed file', 'closed-file')):
+            (r'file already closed|use of closed file', 'closed-file'),
+            (r'\bEROFS\b|read-only file system', 'read-only-filesystem')):
         if re.search(pattern, error, re.IGNORECASE):
             observed['error_class'] = classification
             break

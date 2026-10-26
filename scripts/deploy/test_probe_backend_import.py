@@ -499,7 +499,8 @@ class LogDiagnosisTests(unittest.TestCase):
             'parsed', 'unparseable', 'omitted-bound', 'present', 'absent', 'unavailable',
             'trace', 'debug', 'info', 'warn', 'warning', 'error', 'fatal', 'panic', 'unknown',
             'optional', 'required', 'other-omitted', 'skip-loading-plugin', 'disk-full',
-            'permission-denied', 'unpack-failure', 'unexpected-eof', 'context-cancelled', 'closed-file'}
+            'permission-denied', 'unpack-failure', 'unexpected-eof', 'context-cancelled', 'closed-file',
+            'opt-manager', 'plugin-load-failure', 'read-only-filesystem'}
         for value in observed.values():
             if isinstance(value, str):
                 self.assertIn(value, allowed)
@@ -618,6 +619,77 @@ class LogDiagnosisTests(unittest.TestCase):
         observed = self.reject('ENOSPC ' + 'x' * 9000)
         self.assertEqual(observed['parse_state'], 'omitted-bound')
         self.assertEqual(observed['duplicate_fields'], 'unavailable')
+        self.assertEqual(observed['error_class'], 'unknown')
+
+    def test_opt_warning_retains_only_fixed_diagnosis_and_still_rejects(self):
+        log = ('level=warning msg="failed to load plugin" id=io.containerd.internal.v1.opt '
+               'type=io.containerd.internal.v1 error="mkdir /PRIVATE_PATH/bin: read-only file system" '
+               'token=PRIVATE_TOKEN url="https://user:PRIVATE_PASSWORD@private.invalid/key"')
+        observed = self.reject(log)
+        for field, expected in (('plugin_class', 'opt-manager'),
+                                ('message_class', 'plugin-load-failure'),
+                                ('error_class', 'read-only-filesystem')):
+            with self.subTest(field=field):
+                self.assertEqual(observed[field], expected)
+        self.assertEqual(observed['severity'], 'warning')
+        self.assertTrue(observed['plugin_type_matches'])
+        serialized = json.dumps(observed)
+        for forbidden in ('PRIVATE', '/bin', 'https', 'private.invalid',
+                          'io.containerd', 'failed to load plugin',
+                          hashlib.sha256(log.encode()).hexdigest()):
+            self.assertNotIn(forbidden, serialized)
+
+    def test_opt_identity_and_load_message_require_exact_values(self):
+        for plugin in ('io.containerd.internal.v1.opt.extra', 'IO.containerd.internal.v1.opt',
+                       'io.containerd.internal.v1.optX', 'PRIVATE_PLUGIN'):
+            with self.subTest(plugin=plugin):
+                observed = self.reject('level=warning id=' + plugin + ' error=PRIVATE_ERROR')
+                self.assertEqual(observed['plugin_class'], 'other-omitted')
+        for message in ('failed to load plugin extra', 'Failed to load plugin',
+                        'failed to load plugins', 'PRIVATE_MESSAGE'):
+            with self.subTest(message=message):
+                observed = self.reject('level=warning msg="' + message + '" error=PRIVATE_ERROR')
+                self.assertEqual(observed['message_class'], 'other-omitted')
+
+    def test_read_only_errors_accept_word_or_phrase_without_waiving_gate(self):
+        for error in ('EROFS', 'mkdir: erofs', '(ErOfS)', 'READ-ONLY FILE SYSTEM',
+                      'mkdir /PRIVATE_PATH: read-only file system'):
+            with self.subTest(error=error):
+                self.assertEqual(self.reject('level=warning error="' + error + '"')['error_class'],
+                                 'read-only-filesystem')
+        for error in ('XEROFS', 'EROFSX', 'EROFS_private', 'read only file system', 'PRIVATE_ERROR'):
+            with self.subTest(error=error):
+                self.assertEqual(self.reject('level=warning error="' + error + '"')['error_class'],
+                                 'unknown')
+
+    def test_existing_error_priority_precedes_read_only_class(self):
+        for error, expected in (('ENOSPC EROFS', 'disk-full'),
+                                ('permission denied EROFS', 'permission-denied'),
+                                ('failed to unpack EROFS', 'unpack-failure'),
+                                ('unexpected EOF EROFS', 'unexpected-eof'),
+                                ('context canceled EROFS', 'context-cancelled'),
+                                ('file already closed EROFS', 'closed-file')):
+            with self.subTest(error=error):
+                self.assertEqual(self.reject('level=warning error="' + error + '"')['error_class'],
+                                 expected)
+
+    def test_opt_duplicate_identity_and_over_bound_events_stay_unclassified(self):
+        base = ('level=warning id=io.containerd.internal.v1.opt msg="failed to load plugin" '
+                'error="EROFS PRIVATE_PATH"')
+        for suffix in (' id=PRIVATE_PLUGIN', ' id=io.containerd.internal.v1.opt',
+                       ' msg="failed to load plugin"', ' error=EROFS'):
+            with self.subTest(suffix=suffix):
+                observed = self.reject(base + suffix, 'ambiguous error-bearing daemon log')
+                self.assertEqual(observed['duplicate_fields'], 'present')
+                self.assertEqual(observed['plugin_class'], 'other-omitted')
+                self.assertEqual(observed['message_class'], 'other-omitted')
+                self.assertEqual(observed['error_class'], 'unknown')
+        exact = base + ' padding=' + 'x' * (8192 - len(base) - len(' padding='))
+        self.assertEqual(self.reject(exact)['plugin_class'], 'opt-manager')
+        observed = self.reject(exact + 'x')
+        self.assertEqual(observed['parse_state'], 'omitted-bound')
+        self.assertEqual(observed['plugin_class'], 'other-omitted')
+        self.assertEqual(observed['message_class'], 'other-omitted')
         self.assertEqual(observed['error_class'], 'unknown')
 
     def test_execute_main_and_cleanup_publish_both_log_gate_failures(self):
