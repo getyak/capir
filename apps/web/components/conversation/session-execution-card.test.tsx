@@ -5,6 +5,20 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SessionExecutionCard, SessionRunUpdate, SessionSendTime } from "./session-execution-card";
 
 describe("in-place execution card", () => {
+  it.each(["queued", "running", "stopping", "waiting-review", "review-unknown", "completed", "failed", "interrupted"] as const)("keeps %s diagnostics behind the inline disclosure", phase => {
+    const html = renderToStaticMarkup(<LocaleProvider locale="en"><SessionExecutionCard
+      phase={phase} stage={null} startedAt="2026-10-01T01:00:00Z"
+      endedAt="2026-10-01T01:00:08Z" milestones={[]}
+      completedTools={[{ name: "contact_read", completed_at: "2026-10-01T01:00:03Z" }]}
+    /></LocaleProvider>);
+    const summary = html.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/u)![1];
+    expect(summary).not.toMatch(/completion|elapsed|tool|contact_read/iu);
+    expect(summary).not.toContain("data-elapsed-ms");
+    expect(html).toContain("Recorded tool completions: 1");
+    expect(html).toContain('data-elapsed-ms="8000"');
+    expect(html).toContain("contact_read");
+    expect(html).not.toContain('open=""');
+  });
   it("counts only recorded tool completions and keeps stage observations separate", () => {
     const html = renderToStaticMarkup(createElement(SessionExecutionCard, {
       phase: "completed", stage: null,
@@ -46,7 +60,7 @@ describe("in-place execution card", () => {
       endedAt: "2026-09-30T01:00:08.000Z",
       milestones: [],
     }));
-    expect(html).toContain("执行完成，待你确认");
+    expect(html).toContain("已整理好，请你确认");
     expect(html).toContain("结束");
     // A pinned terminal duration never grows while the transcript is reopened.
     expect(html).toContain("用时 8 秒");
@@ -61,7 +75,7 @@ describe("in-place execution card", () => {
       milestones: [],
       failureCode: "MODEL_RUN_TIMEOUT",
     }));
-    expect(failed).toContain("执行未完成");
+    expect(failed).toContain("未能完成");
     expect(failed).toContain("MODEL_RUN_TIMEOUT");
     const interrupted = renderToStaticMarkup(createElement(SessionExecutionCard, {
       phase: "interrupted",
@@ -70,7 +84,7 @@ describe("in-place execution card", () => {
       endedAt: "2026-09-30T01:00:03.000Z",
       milestones: [],
     }));
-    expect(interrupted).toContain("执行已中断");
+    expect(interrupted).toContain("处理已中断");
     expect(interrupted).toContain('data-phase="interrupted"');
   });
 });
@@ -151,10 +165,10 @@ it("uses the active English locale for execution, observed stages and times with
     completedTools: [{ name: "contact_read", completed_at: "2026-10-01T01:00:02Z" }],
     draft: "保留原文",
   })}</LocaleProvider>);
-  expect(html).toContain("Running");
+  expect(html).toContain("Working");
   expect(html).toContain("Recorded tool completions: 1");
   expect(html).toContain("Looking up the people involved");
-  expect(html).toContain("Elapsed 8 sec");
+  expect(html).toContain('data-elapsed-ms="8000"');
   expect(html).toContain("Reply draft, not complete");
   expect(html).toContain("保留原文");
   expect(html).toContain("contact_read");

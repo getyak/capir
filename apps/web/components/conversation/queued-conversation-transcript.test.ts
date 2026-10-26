@@ -188,8 +188,8 @@ it("composes the transcript: send time, user objective, observed status, executi
   // The session title floats as the single centered heading.
   expect(document.querySelector("h1")?.textContent).toBe("试点合作 · 下一步");
   // Historical readback carries the collapsed execution record for its turn.
-  expect(text).toContain("执行完成");
-  expect(text).not.toContain("待你确认");
+  expect(text).toContain("确认状态待核对");
+  expect(text).not.toContain("已整理好，请你确认");
 });
 
 it("clears waiting-review on this execution card after canonical calendar dismissal", async () => {

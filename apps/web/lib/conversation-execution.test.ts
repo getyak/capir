@@ -62,8 +62,8 @@ describe("conversation execution phase projection", () => {
     for (const phase of ["queued", "running", "stopping", "waiting-review", "completed", "failed", "interrupted"] as const) {
       expect(conversationExecutionPhaseLabel(phase).length).toBeGreaterThan(0);
     }
-    expect(conversationExecutionPhaseLabel("waiting-review")).toContain("待你确认");
-    expect(conversationExecutionPhaseLabel("completed")).toBe("执行完成");
+    expect(conversationExecutionPhaseLabel("waiting-review")).toContain("请你确认");
+    expect(conversationExecutionPhaseLabel("completed")).toBe("处理完成");
     expect(conversationExecutionPhaseLabel("interrupted")).toContain("中断");
   });
 });
