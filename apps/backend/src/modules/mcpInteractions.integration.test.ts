@@ -350,6 +350,41 @@ afterAll(async () => {
 });
 
 suite("durable MCP human interactions", () => {
+  it("does not retain orphan image bytes for a standalone inspector call", async () => {
+    const fixture = await createMcpFixture("standalone-image");
+    try {
+      const { dependencies, calls } = dependenciesWith(async () => ({ ...successResult,
+        resultText: JSON.stringify({ truncated: true, text_preview: "Retained tool text", text_preview_kind: "text_only", content: [{ type: "image", status: "ready", image_index: 0 }] }),
+        images: [{ image_index: 0, media_type: "image/png", content_hash: "a".repeat(64), content: new Uint8Array([1, 2, 3]) }],
+      }));
+      const { session_id: _session, ...input } = callPropose(fixture);
+      const staged = await proposeMcpToolCall(pool!, fixture.auth, input, dependencies);
+      const resolution = { action: "approve" as const, expected_revision: staged.request.revision, idempotency_key: `standalone-${randomUUID()}` };
+      const resolved = await resolveMcpInteraction(pool!, fixture.auth, staged.request.id, resolution, dependencies);
+      expect(resolved.request.receipt?.outcome).toBe("succeeded");
+      expect(JSON.parse(resolved.request.receipt!.result_json!).content[0]).toMatchObject({ status: "unavailable", error_code: "MCP_IMAGE_CONVERSATION_REQUIRED" });
+      expect(JSON.parse(resolved.request.receipt!.result_json!).text_preview).toBe("Retained tool text");
+      expect((await pool!.query("SELECT 1 FROM mcp_tool_result_images WHERE account_id=$1", [fixture.accountId])).rowCount).toBe(0);
+      await resolveMcpInteraction(pool!, fixture.auth, staged.request.id, resolution, dependencies);
+      expect(calls).toHaveLength(1);
+    } finally { await removeAccount(fixture.accountId); }
+  });
+  it("keeps the final image receipt parseable when secret redaction expands the text", async () => {
+    const fixture = await createMcpFixture("redaction-expanded-image");
+    try {
+      const { dependencies } = dependenciesWith(async () => ({ ...successResult,
+        resultText: JSON.stringify({ content: [{ type: "text", text: "token=x ".repeat(2100) }, { type: "image", status: "ready", image_index: 0 }] }),
+        images: [{ image_index: 0, media_type: "image/png", content_hash: "a".repeat(64), content: new Uint8Array([1, 2, 3]) }],
+      }));
+      const staged = await proposeMcpToolCall(pool!, fixture.auth, callPropose(fixture), dependencies);
+      const resolved = await resolveMcpInteraction(pool!, fixture.auth, staged.request.id, { action: "approve", expected_revision: staged.request.revision, idempotency_key: `expand-${randomUUID()}` }, dependencies);
+      const raw = resolved.request.receipt!.result_json!;
+      expect(raw.length).toBeLessThanOrEqual(24000);
+      const parsed = JSON.parse(raw);
+      expect(parsed).toMatchObject({ truncated: true, content: [{ type: "image", status: "ready", image_index: 0 }] });
+      expect(raw).not.toContain("token=x");
+    } finally { await removeAccount(fixture.accountId); }
+  });
   it("stages a canonical request that a reload reads from current state", async () => {
     const fixture = await createMcpFixture("canonical");
     try {

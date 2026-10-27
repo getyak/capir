@@ -112,6 +112,9 @@ importers:
       pg:
         specifier: ^8.23.1
         version: 8.23.1
+      sharp:
+        specifier: 0.35.5
+        version: 0.35.5(@types/node@26.6.5)
     devDependencies:
       '@types/node':
         specifier: ^26.6.5

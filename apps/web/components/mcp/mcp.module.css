@@ -306,3 +306,11 @@
   .directoryGrid .entry > .primary { background: ButtonFace; border-color: ButtonText; color: ButtonText; }
   .directoryGrid .entry > .primary:disabled { border-color: GrayText; color: GrayText; opacity: 1; }
 }
+.receiptImage {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 28rem;
+  object-fit: contain;
+  border-radius: 0.75rem;
+}

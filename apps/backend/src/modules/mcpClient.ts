@@ -1,4 +1,5 @@
 import type { McpConnectionErrorCode } from "@talent-signal/contracts";
+import { boundedMcpResultJson, normalizeMcpResultImages, type McpResultImage } from "./mcpResultImages.js";
 
 import {
   mcpPinnedExchange,
@@ -313,9 +314,11 @@ export interface McpToolCallResult {
   effectSent: boolean;
   /** Raw tool result content as bounded JSON text; caller redacts before use. */
   resultText: string | null;
+  /** Validated tool evidence, persisted separately from model-visible text. */
+  images?: McpResultImage[];
 }
 
-const MCP_TOOL_CALL_RESULT_MAX_CHARS = 64_000;
+const MCP_TOOL_CALL_RESULT_MAX_CHARS = 22_000;
 
 function toolCallFailure(
   errorCode: McpConnectionErrorCode,
@@ -335,16 +338,11 @@ function toolCallFailure(
 
 function toolResultText(result: unknown): string | null {
   if (result === undefined || result === null) return null;
-  let text: string;
   try {
-    text = JSON.stringify(result);
+    return boundedMcpResultJson(result, MCP_TOOL_CALL_RESULT_MAX_CHARS);
   } catch {
     return null;
   }
-  if (text.length > MCP_TOOL_CALL_RESULT_MAX_CHARS) {
-    text = `${text.slice(0, MCP_TOOL_CALL_RESULT_MAX_CHARS - 1)}…`;
-  }
-  return text;
 }
 
 /**
@@ -529,13 +527,15 @@ export async function performMcpToolCall(
     }
     const toolResult = decoded.result as { isError?: unknown; content?: unknown } | undefined;
     const isError = toolResult?.isError === true;
+    const normalized = await normalizeMcpResultImages(decoded.result);
     return {
       effectSent,
       errorCode: isError ? "MCP_HANDSHAKE_FAILED" : null,
       isError,
       jsonrpcError: false,
       protocolVersion,
-      resultText: toolResultText(decoded.result),
+      resultText: toolResultText(normalized.result),
+      ...(normalized.images.length ? { images: normalized.images } : {}),
       status: isError ? "failed" : "succeeded",
     };
   } catch (error) {

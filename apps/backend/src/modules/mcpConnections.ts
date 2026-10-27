@@ -163,13 +163,14 @@ async function readConnection(
 export async function listMcpConnections(
   pool: Pool,
   auth: AuthContext,
+  page: { connectionID?: string; offset?: number; limit?: number } = {},
 ): Promise<McpConnectionListResponse> {
   const result = await pool.query<McpConnectionRow>(
     `SELECT ${CONNECTION_COLUMNS} FROM mcp_connections
-     WHERE account_id = $1
+     WHERE account_id = $1 AND ($2::uuid IS NULL OR id = $2)
      ORDER BY created_at DESC, id DESC
-     LIMIT 100`,
-    [auth.accountId],
+     LIMIT $3 OFFSET $4`,
+    [auth.accountId, page.connectionID ?? null, Math.max(1, Math.min(100, page.limit ?? 100)), Math.max(0, Math.min(10_000, page.offset ?? 0))],
   );
   return {
     connections: result.rows.map(record),

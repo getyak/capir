@@ -10,7 +10,9 @@ import { z } from "zod";
  */
 export const MCP_CONNECTIONS_TOOL_DESCRIPTION = [
   "Work with the user's own remote MCP connections through durable human requests.",
-  "operations: list shows account-owned connections, discovered tools with their input schemas, pending human requests and recent receipts;",
+  "Check this capability before answering questions about available tools, MCP, connected apps or image generation. Your companion role does not limit these admitted capabilities. Local developer tools are not product connections.",
+  "operations: list shows account-owned connections, tool summaries, coverage, pending requests and recent receipts; page connections with connection_offset/connection_limit, then use connection_id, query (tool name or description), tool_offset and tool_limit to discover omitted tools. A partial page never proves absence;",
+  "read_tool needs connection_id and tool_name and returns one complete input_schema at the current connection revision; read it before propose_call, never guess arguments from a summary;",
   "connect runs the real handshake and tool discovery for one existing connection_id so it becomes verified and usable;",
   "propose_add stages a connection request (auth_mode anonymous|bearer|oauth) with friendly_name and server_url; the user approves in a card, the server verifies it with a real handshake, and a bearer secret is only ever typed by the user, never by you;",
   "propose_choice stages a small decision (2-6 options as a JSON array of {id,label,description?} in options) whose selection returns to this conversation;",
@@ -24,6 +26,7 @@ export const McpConnectionsToolInputSchema = z
   .object({
     operation: z.enum([
       "list",
+      "read_tool",
       "connect",
       "propose_add",
       "propose_call",
@@ -31,6 +34,11 @@ export const McpConnectionsToolInputSchema = z
       "read_receipt",
     ]),
     connection_id: z.string().uuid().optional(),
+    connection_offset: z.number().int().min(0).max(10_000).optional(),
+    connection_limit: z.number().int().min(1).max(10).optional(),
+    query: z.string().min(1).max(160).optional(),
+    tool_offset: z.number().int().min(0).max(100).optional(),
+    tool_limit: z.number().int().min(1).max(30).optional(),
     tool_name: z.string().min(1).max(128).optional(),
     arguments: z.string().min(2).max(20_000).optional(),
     friendly_name: z.string().min(1).max(80).optional(),

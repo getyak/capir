@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { boundedMcpResultJson, unavailableMcpResultImages } from "./mcpResultImages.js";
 
 import type {
   McpAuthMode,
@@ -1240,6 +1241,23 @@ export async function readMcpToolCallReceipt(
   };
 }
 
+/** Same owner and live parent as the receipt. Tool evidence never becomes a
+ * user image source or a relationship asset merely because it was returned. */
+export async function readMcpToolResultImage(pool: Pool, auth: AuthContext, callId: string, imageIndex: number) {
+  const result = await pool.query<{ content: Buffer; media_type: string }>(
+    `SELECT i.content, i.media_type FROM mcp_tool_result_images i
+     JOIN mcp_tool_calls c ON c.account_id=i.account_id AND c.id=i.call_id
+     JOIN mcp_interaction_requests r ON r.account_id=c.account_id AND r.id=c.request_id
+     JOIN agent_sessions s ON s.account_id=r.account_id AND s.id=r.session_id
+     WHERE i.account_id=$1 AND i.call_id=$2 AND i.image_index=$3
+       AND r.created_by_user_id=$4 AND s.created_by_user_id=$4
+       AND c.state='succeeded' AND r.state='submitted'
+       AND s.deleted_at IS NULL AND s.expires_at>clock_timestamp()`,
+    [auth.accountId, callId, imageIndex, auth.userId],
+  );
+  return result.rows[0] ?? null;
+}
+
 interface ResolvedAction {
   body: McpInteractionResponse | null;
   execution: {
@@ -2212,12 +2230,9 @@ async function settleToolCall(
   let parsedRedacted: string | null = null;
   if (redactedText) {
     try {
-      parsedRedacted = JSON.stringify(redactSecrets(JSON.parse(redactedText)));
+      parsedRedacted = boundedMcpResultJson(redactSecrets(JSON.parse(redactedText)));
     } catch {
-      parsedRedacted = JSON.stringify(redactSecrets(redactedText));
-    }
-    if (parsedRedacted.length > 24_000) {
-      parsedRedacted = `${parsedRedacted.slice(0, 23_999)}…`;
+      parsedRedacted = boundedMcpResultJson(redactSecrets(redactedText));
     }
   }
   const outcome: McpCallOutcome =
@@ -2226,7 +2241,7 @@ async function settleToolCall(
       : result.status === "outcome_unknown"
         ? "outcome_unknown"
         : "failed";
-  const summary = parsedRedacted
+  let summary = parsedRedacted
     ? parsedRedacted.length > 4_000
       ? `${parsedRedacted.slice(0, 3_999)}…`
       : parsedRedacted
@@ -2242,6 +2257,28 @@ async function settleToolCall(
     const keepPayloads = scoped
       ? await lockParentSessionForSettlement(client, auth.accountId, scoped.session_id)
       : false;
+    if (result.images?.length && (!scoped?.session_id || result.status !== "succeeded")) {
+      parsedRedacted = unavailableMcpResultImages(parsedRedacted, !scoped?.session_id ? "MCP_IMAGE_CONVERSATION_REQUIRED" : "MCP_TOOL_FAILED");
+      summary = parsedRedacted?.slice(0, 4_000) ?? "The image result is unavailable; do not repeat the remote call.";
+    }
+    if (keepPayloads && scoped?.session_id && result.status === "succeeded" && result.images?.length) {
+      // A storage failure must not erase the known remote outcome or replay
+      // a possibly paid tool. Save the honest receipt with unavailable images.
+      await client.query("SAVEPOINT mcp_result_images");
+      try {
+        for (const image of result.images) await client.query(
+          `INSERT INTO mcp_tool_result_images(account_id,call_id,image_index,media_type,content_hash,content)
+           VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+          [auth.accountId, callId, image.image_index, image.media_type, image.content_hash, Buffer.from(image.content)],
+        );
+        await client.query("RELEASE SAVEPOINT mcp_result_images");
+      } catch {
+        await client.query("ROLLBACK TO SAVEPOINT mcp_result_images");
+        await client.query("RELEASE SAVEPOINT mcp_result_images");
+        parsedRedacted = unavailableMcpResultImages(parsedRedacted);
+        summary = parsedRedacted?.slice(0, 4_000) ?? "The remote tool completed; its image could not be stored. Do not retry the tool.";
+      }
+    }
     await client.query(
       `UPDATE mcp_tool_calls
        SET state = $3, executed_at = clock_timestamp(), is_error = $4,
@@ -2501,6 +2538,13 @@ export async function invalidateMcpInteractionsForSession(
          SELECT id FROM mcp_interaction_requests
          WHERE account_id = $1 AND session_id = $2)
        AND metadata ? 'choice_id'`,
+    [accountId, sessionId],
+  );
+  await client.query(
+    `DELETE FROM mcp_tool_result_images WHERE account_id=$1 AND call_id IN (
+       SELECT c.id FROM mcp_tool_calls c JOIN mcp_interaction_requests r
+         ON r.account_id=c.account_id AND r.id=c.request_id
+       WHERE r.account_id=$1 AND r.session_id=$2)`,
     [accountId, sessionId],
   );
   await client.query(

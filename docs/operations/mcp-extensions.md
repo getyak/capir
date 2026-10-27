@@ -165,6 +165,29 @@ their exact verified domain (Context7 `mcp.context7.com`, DeepWiki
 stage the same durable requests; the connected tool inspector stages the same
 exact call approvals and shows receipts. The host continuation reads the already approved, owner-scoped canonical receipt before dispatching the Agent. Its bounded redacted payload stays tool data rather than human evidence; the source fence is rechecked after readback. The short conversation excerpt never substitutes for the complete retained result, and this local read cannot rerun the remote tool.
 
+### Capability questions and image results
+
+Ordinary workspace chat receives a fresh, account-scoped connection snapshot
+before model dispatch. The MCP discovery entry remains visible when other SDK
+tools are deferred. Discovery failure is unknown availability, not an empty
+connection list. The Agent pages connections and tool summaries, searches the
+selected connection, and uses `read_tool` for its complete bounded schema before
+staging a call. Discovery metadata never proves execution or grants authority.
+Connect apps (`/workspace/extensions`) remains the connection and recovery entry.
+
+Approved raster image results use the same durable call receipt and conversation
+ownership as text results. The backend validates PNG/JPEG/WebP bytes and stores
+them separately from model-visible manifests; generated images never become
+user-authored sources or relationship assets. Reads require the current owner
+and an unexpired, undeleted parent conversation, and deletion scrubs the bytes.
+Invalid images and image-storage failures remain visible as unavailable images.
+A standalone inspector call has no conversation retention owner: it retains no
+image bytes and reports `MCP_IMAGE_CONVERSATION_REQUIRED`; use a conversation
+for retained image results. A known successful remote call stays successful if only image storage fails;
+reading again never reruns the tool. SVG, remote image URL fetching and paid
+provider setup are outside this path. Synthetic MCP image fixtures establish
+protocol and display behavior, not a paid image provider's acceptance.
+
 ## Nango-mediated OAuth (optional)
 
 OAuth is mediated by a Nango deployment and is optional authorization
