@@ -1,10 +1,10 @@
 /*
  * Quiet Workspace shell.
  *
- * 248 px expanded sidebar / 72 px rail, 58 px route header, near-white canvas
+ * 236 px default sidebar / 72 px rail, 58 px route header, near-white canvas
  * with a warm-neutral chrome sidebar. Structure comes from page grouping and
  * typography; borders stay hairline and material stays flat. Session rows are
- * one line at 40px with a 24px identity avatar and a full accessible title.
+ * one line with an 18px identity avatar and a full accessible title.
  * Reduced motion, dark theme and mobile collapse are handled structurally, not
  * recomposed.
  *
@@ -15,7 +15,7 @@
  */
 
 .shell {
-  --workspace-sidebar-width: 248px;
+  --workspace-sidebar-width: 236px;
   --workspace-row-hover: color-mix(in srgb, var(--ink) 4%, transparent);
   --workspace-row-selected: color-mix(in srgb, var(--ink) 9%, transparent);
   background: var(--background);
@@ -37,6 +37,8 @@
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 
 .sidebar {
+  /* Retrieval chrome is secondary to the unchanged conversation reading size. */
+  --ts-type-nav: 0.8125rem;
   background: var(--ts-chrome-surface, var(--surface-muted));
   border-right: 1px solid var(--line-soft);
   display: flex;
@@ -117,7 +119,7 @@
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  height: 30px;
+  height: 44px;
   justify-content: center;
   padding: 0;
   text-decoration: none;
@@ -355,9 +357,9 @@
   border-radius: 8px;
   color: var(--muted-strong);
   display: flex;
-  font-size: var(--workspace-body-size, 0.9375rem);
+  font-size: var(--ts-type-nav, 0.875rem);
   gap: 10px;
-  min-height: 40px;
+  min-height: 44px;
   min-width: 0;
   padding: 0 10px;
   position: relative;
@@ -372,9 +374,9 @@
 }
 
 .sessionRow .sessionMark {
-  flex: 0 0 24px;
-  height: 24px;
-  width: 24px;
+  flex: 0 0 18px;
+  height: 18px;
+  width: 18px;
 }
 
 /* A conversation symbol does not imply a person or an Agent running state. */
@@ -399,7 +401,7 @@
   font-weight: 500;
 }
 .sessionRow[aria-current="page"]:not(:has(.selectionHighlight)) { background: var(--workspace-row-selected); }
-.sessionRow .selectionHighlight { right: -34px; }
+.sessionRow .selectionHighlight { right: -46px; }
 .sessionRow:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .sessionRow:active { background: color-mix(in srgb, var(--ink) 13%, transparent); }
 .sessionRowShell:hover .sessionRowSlide { background: var(--workspace-row-hover); }
@@ -1724,7 +1726,7 @@
   align-items: center;
   background: var(--session-row-surface, var(--ts-chrome-surface, var(--surface)));
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) 44px;
   gap: 2px;
   min-width: 0;
   position: relative;
@@ -1740,12 +1742,12 @@
   color: var(--muted);
   cursor: pointer;
   display: inline-flex;
-  height: 30px;
+  height: 44px;
   justify-content: center;
   transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out), color var(--workspace-transition-duration, 180ms) var(--ease-out);
-  opacity: 0;
+  opacity: 1;
   padding: 0;
-  width: 30px;
+  width: 44px;
 }
 .sessionRowShell:hover .sessionRowMenuTrigger,
 .sessionRowShell:focus-within .sessionRowMenuTrigger,
@@ -1785,12 +1787,13 @@
   font: inherit;
   font-size: var(--workspace-meta-size, 0.8125rem);
   gap: 9px;
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px 10px;
   text-align: left;
   width: 100%;
 }
-.sessionRowMenuPopover button:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
+.sessionRowMenuPopover button:disabled { cursor: default; opacity: 0.45; }
+.sessionRowMenuPopover button:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
 .sessionRowMenuNote { color: var(--muted); font-size: var(--workspace-meta-size, 0.8125rem); padding: 4px 10px 6px; }
 
 /* One short truthful line; the archive is local organization, nothing more. */
@@ -2134,5 +2137,6 @@
   .railRetry:focus-visible, .railSessionTitle a:focus-visible { outline-color:Highlight; }
   .sessionRowMenuPopover, .railSessionTitle,
   :global(html[data-desktop-surface="workspace"]) .sessionRowMenuPopover { background:Canvas; color:CanvasText; border:1px solid CanvasText; backdrop-filter:none; -webkit-backdrop-filter:none; }
-  .sessionRowMenuPopover button:hover { background:Highlight; color:HighlightText; }
+  .sessionRowMenuPopover button:disabled { cursor: default; opacity: 0.45; }
+.sessionRowMenuPopover button:hover:not(:disabled) { background:Highlight; color:HighlightText; }
 }

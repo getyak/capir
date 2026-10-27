@@ -9,7 +9,11 @@ import {
   Lifebuoy,
   SignOut,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { flushSync } from "react-dom";
+import { beginWorkspaceSignOut, completeWorkspaceSignOut, observeWorkspaceSignOutBinding, releaseWorkspaceSignOut, workspaceSignOutAttemptIsCurrent } from "./workspace-signout-state";
+import { unstable_isUnrecognizedActionError } from "next/navigation";
+import { confirmedWorkspaceSignOut, type WorkspaceSignOutResult } from "@/lib/workspace-signout";
 import { LOCALE_ENDONYMS } from "@talent-signal/contracts";
 import { useAccountLanguage, useLocale, useT } from "./locale-provider";
 
@@ -36,6 +40,10 @@ import { PersonDirectoryAvatar } from "./person-directory-avatar";
 import { AvatarEditor } from "./avatar-editor";
 import { Popover, PopoverTrigger, PopoverContent } from "./ui/popover";
 import styles from "./workspace-shell.module.css";
+
+type SignOutIssue =
+  | { binding: string | null; kind: "stale_action" | "unconfirmed" | "scope_changed" }
+  | { binding: string; kind: "confirmed_local"; redirectTo: Extract<WorkspaceSignOutResult, { status: "signed_out" }>["redirectTo"] };
 
 const noopSubscribe = () => () => {};
 const loadingView: WeeklyUsageView = { status: "loading" };
@@ -156,13 +164,18 @@ export function WorkspaceAccountMenu({
   workspaceName: string | null;
   avatarUrl?: string | null;
   fixtureWorkspace?: boolean;
-  signOutAction: (formData: FormData) => void | Promise<void>;
+  signOutAction: (formData: FormData) => unknown | Promise<unknown>;
   /** Synthetic usage store for previews and tests; production loads the API. */
   usage?: WeeklyUsageStore | null;
   /** Opaque binding to the rendered account, member and session. */
   usageBinding?: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutIssue, setSignOutIssue] = useState<SignOutIssue | null>(null);
+  const activeSignOutIssue = signOutIssue?.binding === usageBinding ? signOutIssue : null;
+  const signOutBusy = useRef(false);
+  useLayoutEffect(() => observeWorkspaceSignOutBinding(usageBinding), [usageBinding]);
   const hosted = useDesktopChrome() !== null;
   const locale = useLocale();
   const language = useAccountLanguage();
@@ -193,6 +206,47 @@ export function WorkspaceAccountMenu({
     // Local list organization (archive/pin) leaves with the same boundary, so
     // no account can inherit another's local projection on this browser.
     clearAllSessionOrganization();
+  }
+
+  async function submitSignOut(formData: FormData) {
+    if (signOutBusy.current || activeSignOutIssue?.kind === "confirmed_local") return;
+    const binding = usageBinding;
+    if (!binding) { setSignOutIssue({ binding, kind: "scope_changed" }); return; }
+    const attempt = beginWorkspaceSignOut(binding);
+    if (!attempt) return;
+    signOutBusy.current = true;
+    setSigningOut(true);
+    setSignOutIssue(null);
+    formData.set("workspaceBinding", binding);
+    let result: unknown;
+    try {
+      result = await signOutAction(formData);
+    } catch (error) {
+      if (workspaceSignOutAttemptIsCurrent(attempt)) {
+        setSignOutIssue({ binding, kind: unstable_isUnrecognizedActionError(error) ? "stale_action" : "unconfirmed" });
+      }
+      return;
+    } finally {
+      releaseWorkspaceSignOut(attempt);
+      signOutBusy.current = false;
+      setSigningOut(false);
+    }
+    if (!workspaceSignOutAttemptIsCurrent(attempt)) return;
+    if (!confirmedWorkspaceSignOut(result, binding, hosted)) {
+      setSignOutIssue({ binding, kind: result && typeof result === "object" && "status" in result && result.status === "scope_changed" ? "scope_changed" : "unconfirmed" });
+      return;
+    }
+    let fenced = false;
+    flushSync(() => { fenced = completeWorkspaceSignOut(result, attempt, hosted); });
+    if (!fenced) return;
+    // Local sign-out is already verified. Cleanup may have partially completed
+    // if storage or navigation throws; never describe that as a preserved draft.
+    try {
+      clearPendingLocalIntents();
+      window.location.assign(result.redirectTo);
+    } catch {
+      setSignOutIssue({ binding, kind: "confirmed_local", redirectTo: result.redirectTo });
+    }
   }
 
   function close() {
@@ -334,12 +388,25 @@ export function WorkspaceAccountMenu({
                 <strong>{t("合成测试空间")}</strong>
               </span>
             ) : null}
-            <form action={signOutAction} onSubmit={clearPendingLocalIntents}>
+            <form action={submitSignOut}>
               <input type="hidden" name="desktopHost" value={String(hosted)} />
-              <button type="submit">
+              <button type="submit" disabled={signingOut || activeSignOutIssue?.kind === "confirmed_local"}>
                 <SignOut aria-hidden="true" size={16} />
-                <span>{t("退出登录")}</span>
+                <span>{t(signingOut ? "正在退出登录…" : "退出登录")}</span>
               </button>
+              {activeSignOutIssue ? <div role="alert">
+                {activeSignOutIssue.kind === "confirmed_local" ? <>
+                  <p>{t("页面登录已确认退出，但本地清理或页面跳转未完成。请打开退出后的页面继续。")}</p>
+                  <a href={activeSignOutIssue.redirectTo}>{t("打开退出后的页面")}</a>
+                </> : <>
+                  <p>{t(activeSignOutIssue.kind === "stale_action"
+                    ? "页面已更新。请重新载入后，再选择退出登录。本地草稿仍保留。"
+                    : activeSignOutIssue.kind === "scope_changed"
+                      ? "无法核验当前登录空间，未执行这次退出请求。请重新载入后核对当前账号。"
+                      : "无法确认退出结果。本地草稿仍保留。请重新载入并核对当前账号，再决定是否重试。")}</p>
+                  <button type="button" onClick={() => window.location.reload()}>{t("重新载入页面")}</button>
+                </>}
+              </div> : null}
             </form>
           </PopoverContent>
         </Popover>

@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, DotsThreeVertical, PushPin, Tray } from "@phosphor-icons/react";
+import { Archive, DotsSixVertical, DotsThreeVertical, PushPin, Tray } from "@phosphor-icons/react";
 import {
   Children,
   cloneElement,
@@ -20,6 +20,7 @@ import type { SessionOrganizationFlag } from "@/lib/workspace-session-organizati
 import { useT } from "./locale-provider";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import styles from "./workspace-shell.module.css";
+import { ListOrderActions, type OrderControl } from "./workspace-list-order";
 
 /**
  * Swipeable local-organization row.
@@ -40,6 +41,7 @@ export type SessionRowOrganization = {
   onToggle: (flag: SessionOrganizationFlag, value: boolean) => void;
   /** Row title used to name the accessible buttons. */
   rowLabel: string;
+  reorder?: OrderControl;
 };
 
 type SwipeState = {
@@ -64,6 +66,7 @@ export function SessionRowActionTray({
   return (
     <div className={styles.sessionRowTray}>
       <button
+        aria-pressed={pinned}
         aria-label={t("sessionRow.actionForTitle", { action: pinLabel, title: rowLabel })}
         className={styles.sessionRowTrayButton}
         data-action="pin"
@@ -109,17 +112,20 @@ export function SessionRowMenu({
       <Popover open={open} onOpenChange={value => { setOpen(value); onOpenChange?.(value); if (value) onOpen?.(); }}>
         <PopoverTrigger asChild>
           <button
+            {...organization.reorder?.handleProps}
+            title={open ? undefined : organization.reorder?.handleProps.title}
             aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}
-            className={styles.sessionRowMenuTrigger}
+            className={`${styles.sessionRowMenuTrigger} ${organization.reorder?.handleProps.className ?? ""}`}
             type="button"
           >
-            <DotsThreeVertical aria-hidden="true" size={15} />
+            {organization.reorder ? <DotsSixVertical aria-hidden="true" size={16} /> : <DotsThreeVertical aria-hidden="true" size={15} />}
           </button>
         </PopoverTrigger>
       <PopoverContent aria-label={t("sessionRow.moreForTitle", { title: rowLabel })}
         align="end" sideOffset={4} className={styles.sessionRowMenuPopover}>
         <span className={styles.sessionRowMenuTitle}>{rowLabel}</span>
         <button
+          aria-pressed={pinned}
           onClick={() => {
             onToggle("pinned", !pinned);
             setOpen(false);
@@ -145,7 +151,8 @@ export function SessionRowMenu({
           )}
           <span>{t(archived ? "sessionRow.restore" : "sessionRow.archive")}</span>
         </button>
-        <span className={styles.sessionRowMenuNote}>{t("sessionRow.localOrganization")}</span>
+        {organization.reorder ? <ListOrderActions control={organization.reorder} onMove={() => { setOpen(false); onOpenChange?.(false); }} /> : null}
+        <span className={styles.sessionRowMenuNote}>{t(organization.reorder ? "listOrder.sessionLocal" : "sessionRow.localOrganization")}</span>
       </PopoverContent>
       </Popover>
     </div>

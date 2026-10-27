@@ -198,7 +198,7 @@ final class CaptureRuntime: ObservableObject {
             registeredShortcut = choice
             shortcutError = nil
         } catch {
-            shortcutError = (error as? LocalizedError)?.errorDescription ?? "截图快捷键暂时不可用。"
+            shortcutError = (error as? LocalizedError)?.errorDescription ?? String(localized: "The screenshot shortcut is temporarily unavailable.", bundle: .main)
             if let previous = registeredShortcut {
                 restoringShortcut = true
                 try? preferences.setShortcut(previous)

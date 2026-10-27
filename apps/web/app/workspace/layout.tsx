@@ -1,3 +1,4 @@
+import { WorkspaceListOrderScope } from "@/components/workspace-list-order";
 import { isWebSessionUnavailable } from "@/lib/server/web-persistent-session";
 import { SessionRetryButton } from "@/components/session-retry-button";
 import "@/components/workspace-theme.css";
@@ -11,7 +12,7 @@ import { auth } from "@/auth";
 import { getMarketingLocale } from "@/lib/server/marketing-locale";
 import { translate, type TranslateVars } from "@/lib/i18n";
 import { loadAccountSettings } from "@/lib/server/accountBackend";
-import { signOutOfWorkspace } from "@/app/login/actions";
+import { signOutFromAccountMenu } from "@/app/login/actions";
 import { TalentSignalLabShell } from "@/components/talent-signal-lab/lab-shell";
 import {
   WorkspaceMobileSourcesLink,
@@ -70,7 +71,7 @@ function AccountControls({
       key={usageBinding}
       usageBinding={usageBinding}
       fixtureWorkspace={fixtureWorkspace}
-      signOutAction={signOutOfWorkspace}
+      signOutAction={signOutFromAccountMenu}
       workspaceName={workspaceName}
     />
   );
@@ -81,19 +82,19 @@ export default async function WorkspaceLayout({
 }: Readonly<{ children: ReactNode }>) {
   const session = await auth();
   if ((session as (typeof session & { renewalStatus?: string }))?.renewalStatus === "unavailable") {
-    return <WorkspaceAccessRecovery unavailable><SessionRetryButton /></WorkspaceAccessRecovery>;
+    return <WorkspaceSessionBoundary binding={null}><WorkspaceAccessRecovery unavailable><SessionRetryButton /></WorkspaceAccessRecovery></WorkspaceSessionBoundary>;
   }
 
   // Child pages retain the exact callback URL when authentication is missing.
   // Rendering no product chrome here lets their redirect remain authoritative.
   if (!session?.user) {
     return (
-      <>
+      <WorkspaceSessionBoundary binding={null}>
         <MeetingDraftSessionBoundary sessionVersion={null} />
         <SessionDraftSessionBoundary storageScope={null} />
         <WorkspaceDirectoryScope binding={null} />
         {children}
-      </>
+      </WorkspaceSessionBoundary>
     );
   }
 
@@ -149,11 +150,11 @@ export default async function WorkspaceLayout({
   }
   const hasTestWorkspace = (await cookies()).has(TEST_WORKSPACE_COOKIE);
   if (!scope && sessionUnavailable) {
-    return <WorkspaceAccessRecovery unavailable><SessionRetryButton /></WorkspaceAccessRecovery>;
+    return <WorkspaceSessionBoundary binding={null}><WorkspaceAccessRecovery unavailable><SessionRetryButton /></WorkspaceAccessRecovery></WorkspaceSessionBoundary>;
   }
   if (!scope) {
     return (
-      <>
+      <WorkspaceSessionBoundary binding={null}>
         <MeetingDraftSessionBoundary sessionVersion={null} />
         <SessionDraftSessionBoundary storageScope={null} />
         <WorkspaceDirectoryScope binding={null} />
@@ -166,7 +167,7 @@ export default async function WorkspaceLayout({
             <WorkspaceReauthenticationLink>{t("重新登录")}<ArrowRight size={16} aria-hidden="true" /></WorkspaceReauthenticationLink>
           )}
         </WorkspaceAccessRecovery>
-      </>
+      </WorkspaceSessionBoundary>
     );
   }
   const accountName = currentDisplayName ?? session.user.name ?? session.user.email ?? t("工作区成员");
@@ -191,8 +192,8 @@ export default async function WorkspaceLayout({
 
 
   return (
-    <WorkspaceSessionBoundary><WorkspacePrivacyBoundary privateContent={children}>
-      <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
+    <WorkspaceSessionBoundary binding={pendingBinding}><WorkspacePrivacyBoundary privateContent={children}>
+      <WorkspaceListOrderScope scope={pendingSessionDraftScope}><AvatarPreferencesProvider scope={pendingSessionDraftScope}>
       <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope} binding={pendingBinding}>
       <WorkspaceBrowseProvider key={pendingSessionDraftScope} scope={pendingSessionDraftScope} binding={pendingBinding}>
       <PersonContextPanelProvider binding={pendingBinding}>
@@ -269,7 +270,7 @@ export default async function WorkspaceLayout({
       </PersonContextPanelProvider>
       </WorkspaceBrowseProvider>
       </WorkspaceNavigationContinuityProvider>
-      </AvatarPreferencesProvider>
+      </AvatarPreferencesProvider></WorkspaceListOrderScope>
     </WorkspacePrivacyBoundary></WorkspaceSessionBoundary>
   );
 }

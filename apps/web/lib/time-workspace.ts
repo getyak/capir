@@ -1,4 +1,5 @@
 import type { LocaleTag, TimeActivity, TimeActivityKind, TimeScope } from "@talent-signal/contracts";
+import { translate } from "./i18n";
 import { validMeetingDay } from "./meeting-calendar";
 
 export type TimeView = "timeline" | "week" | "month";
@@ -10,6 +11,25 @@ export const TIME_KINDS: Record<TimeActivityKind, string> = {
 export const TIME_STATUSES: Record<TimeActivity["status"], string> = {
   recorded: "已记录", needs_review: "待核对", planned: "内部安排", completed: "已记录结果", cancelled: "已取消",
 };
+/** Exact database-owned summaries from 074/099; authored summaries stay intact. */
+export function timeActivitySummary(activity: TimeActivity, locale: LocaleTag): string {
+  if (activity.kind === "person_created" && activity.summary === "新建人物") return translate(locale, "新建人物");
+  if (activity.kind === "meeting_draft" && activity.summary === "未经确认的日程草稿") return translate(locale, "未经确认的日程草稿");
+  if (activity.kind === "public_source_update" && activity.summary === "定时公开来源读取产生新的拟议依据，等待你审阅。") return translate(locale, "定时公开来源读取产生新的拟议依据，等待你审阅。");
+  const count = activity.kind === "session_activity" ? /^(\d+) 条当日会话记录$/u.exec(activity.summary) : null;
+  return count ? translate(locale, "{count} 条当日会话记录", { count: count[1]! }) : activity.summary;
+}
+const TIME_COVERAGE_NOTE = "会话活动仅覆盖保留期内的会话（最多 30 天）。设备日历与其他应用不会被导入；此处显示的日程均在 capri 内创建。";
+/** Exact system templates from timeWorkspaceShared and timeReview, never model prose. */
+export function timeCoverageNote(note: string, locale: LocaleTag): string {
+  if (note === TIME_COVERAGE_NOTE) return translate(locale, TIME_COVERAGE_NOTE);
+  if (note.endsWith(TIME_COVERAGE_NOTE)) {
+    const prefix = note.slice(0, -TIME_COVERAGE_NOTE.length);
+    const match = /^本次仅回顾该范围内前 (\d+) 条活动；受记录数量或上下文长度限制，范围不完整。$/u.exec(prefix);
+    if (match) return `${translate(locale, "本次仅回顾该范围内前 {count} 条活动；受记录数量或上下文长度限制，范围不完整。", { count: match[1]! })}${locale === "zh-CN" || locale === "zh-TW" || locale === "ja" ? "" : " "}${translate(locale, TIME_COVERAGE_NOTE)}`;
+  }
+  return note;
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 export function validTimeZone(value: string): boolean {
   try { new Intl.DateTimeFormat("en", { timeZone: value }).format(); return value.length <= 100; }

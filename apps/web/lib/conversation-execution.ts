@@ -57,13 +57,13 @@ export type ConversationExecutionPhase =
 
 export const CONVERSATION_PHASE_LABELS: Readonly<Record<ConversationExecutionPhase, string>> = {
   queued: "已排队，等待处理",
-  running: "执行中",
+  running: "正在处理",
   stopping: "正在停止",
-  "waiting-review": "执行完成，待你确认",
-  "review-unknown": "执行完成，确认状态待核对",
-  completed: "执行完成",
-  failed: "执行未完成",
-  interrupted: "执行已中断",
+  "waiting-review": "已整理好，请你确认",
+  "review-unknown": "确认状态待核对",
+  completed: "处理完成",
+  failed: "未能完成",
+  interrupted: "处理已中断",
 };
 
 export function conversationExecutionPhaseLabel(phase: ConversationExecutionPhase, locale: LocaleTag = "zh-CN"): string {

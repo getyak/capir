@@ -32,7 +32,7 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await getMarketingLocale();
-  return { robots: { follow: false, index: false }, title: translate(locale, "人物 · capri") };
+  return { robots: { follow: false, index: false }, title: translate(locale, "人物") };
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -159,18 +159,13 @@ export default async function PersonMemoryPage({
       <header className={styles.identity}>
         <AvatarEditor
           id={person?.id ?? id}
-          size={48}
+          size={18}
           shape="circle"
           label={person?.display_label ?? t("人物")}
           url={person?.avatar?.url ?? null}
         />
         <div className={styles.identityText}>
-          <h1>{person?.display_label ?? t("人物")}</h1>
-          {person?.profile?.headline ? (
-            <p className={styles.identityNote}>{person.profile.headline}</p>
-          ) : confirmedIdentity ? (
-            <p className={styles.identityNote}>{t("已确认的联系方式")}</p>
-          ) : null}
+          <h1 title={person?.display_label ?? t("人物")}>{person?.display_label ?? t("人物")}</h1>
         </div>
       </header>
 
@@ -240,6 +235,11 @@ export default async function PersonMemoryPage({
         </div>
 
         <aside className={styles.contextColumn} aria-label={t("人物资料")}>
+          {person?.profile?.headline ? (
+            <p className={styles.identityNote}>{person.profile.headline}</p>
+          ) : confirmedIdentity ? (
+            <p className={styles.identityNote}>{t("已确认的联系方式")}</p>
+          ) : null}
           <section aria-labelledby="person-basic-fields">
             <h2 className={styles.sectionTitle} id="person-basic-fields">{t("基本信息")}</h2>
             {fields.size || contactPoints.length ? <dl className={styles.basicFields}>

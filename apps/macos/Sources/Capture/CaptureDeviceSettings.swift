@@ -8,14 +8,14 @@ struct CaptureDeviceSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("菜单栏与截图").font(.headline)
-            Text("从正在使用的屏幕选择一块内容，直接交给当前工作区的 Agent。")
+            Text("Menu Bar and Screenshots").font(.headline)
+            Text("Select an area of your screen and send it directly to the Agent in your current workspace.")
                 .font(.callout).foregroundStyle(.secondary)
 
-            Toggle("在菜单栏显示 capri", isOn: $preferences.showMenuBar)
+            Toggle("Show capri in the menu bar", isOn: $preferences.showMenuBar)
                 .accessibilityIdentifier("capture.settings.menuBar")
             HStack {
-                Text("截图快捷键")
+                Text("Screenshot Shortcut")
                 Spacer()
                 if recordingShortcut {
                     CaptureShortcutRecorder(recorded: { choice in
@@ -25,38 +25,38 @@ struct CaptureDeviceSettings: View {
                     }, cancelled: { recordingShortcut = false })
                     .frame(width: 180, height: 28)
                     .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(.secondary) }
-                    .overlay { Text("按下组合键 · Esc 取消").font(.caption).allowsHitTesting(false) }
+                    .overlay { Text("Press a shortcut · Esc to cancel").font(.caption).allowsHitTesting(false) }
                 } else {
                     Button(preferences.shortcut.displayString) { recordingShortcut = true }
-                        .accessibilityLabel("录入截图快捷键，当前 \(preferences.shortcut.displayString)")
+                        .accessibilityLabel(String(format: String(localized: "Record screenshot shortcut, currently %@", bundle: .main), preferences.shortcut.displayString))
                 }
             }
             .accessibilityIdentifier("capture.settings.shortcut")
             if let issue = runtime.shortcutError { Text(issue).font(.caption).foregroundStyle(.orange) }
 
-            Picker("框选后", selection: $preferences.afterSelection) {
-                Text("自动交给 Agent").tag(CaptureAfterSelection.direct)
-                Text("总是先预览").tag(CaptureAfterSelection.preview)
+            Picker("After Selection", selection: $preferences.afterSelection) {
+                Text("Send directly to Agent").tag(CaptureAfterSelection.direct)
+                Text("Always preview first").tag(CaptureAfterSelection.preview)
             }
-            Text("截图时按 P 也可以临时先预览、裁剪或遮挡。")
+            Text("Press P while taking a screenshot to preview, crop or redact it first.")
                 .font(.caption).foregroundStyle(.secondary)
 
-            Picker("顶部活动提示", selection: $preferences.topActivityHint) {
-                Text("关闭").tag(CaptureTopActivityHint.off)
-                Text("开启").tag(CaptureTopActivityHint.on)
+            Picker("Top Activity Hint", selection: $preferences.topActivityHint) {
+                Text("Off").tag(CaptureTopActivityHint.off)
+                Text("On").tag(CaptureTopActivityHint.on)
             }
-            Text("仅短暂显示通用处理状态，不显示人名或消息。")
+            Text("Briefly shows general processing status without names or messages.")
                 .font(.caption).foregroundStyle(.secondary)
 
-            Toggle("登录时启动", isOn: Binding(get: { preferences.isStartAtLoginEnabled }, set: { next in
+            Toggle("Start at Login", isOn: Binding(get: { preferences.isStartAtLoginEnabled }, set: { next in
                 do { _ = try preferences.setStartAtLogin(next); loginError = nil }
-                catch { loginError = "macOS 尚未完成登录项设置，请在系统设置中检查。" }
+                catch { loginError = String(localized: "macOS has not finished setting up the login item. Check System Settings.", bundle: .main) }
             }))
             if let loginError { Text(loginError).font(.caption).foregroundStyle(.orange) }
-            DisclosureGroup("截图处理与保留") {
+            DisclosureGroup("Screenshot Processing and Retention") {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("每次只上传明确框选的区域。处理方以首次启用时显示的当前工作区设置为准；设置改变会要求重新查看。")
-                    Text("未上传的本机截图加密保留最多 24 小时；已送达的截图遵循工作区会话保留和来源删除规则。")
+                    Text("Only the area you explicitly select is uploaded. Processors follow the current workspace settings shown when first enabled; changes require another review.")
+                    Text("Screenshots not yet uploaded are encrypted on this Mac for up to 24 hours. Delivered screenshots follow workspace session retention and source deletion rules.")
                 }.font(.caption).foregroundStyle(.secondary).padding(.top, 7)
             }
         }

@@ -18,15 +18,21 @@ import { acceptConversationPreview, acceptConversationSnapshot, ConversationFram
 import { clearConversationLocal, conversationExpiry, readConversationDraft, readConversationMessages, removeConversationMessage, writeConversationDraft, writeConversationMessage, type LocalMessage } from "@/lib/conversation-local";
 import {
   base64FromBlob,
+  conversationImageGeneration,
+  loadConversationImageDraft,
+  persistConversationImageDraft,
   loadConversationImages,
   persistConversationImages,
   removeConversationImages,
   sha256Hex,
   type DurableConversationImage,
+  type ConversationImageDraftRevision,
 } from "@/lib/conversation-image-store";
 import { clearConversationImageStore } from "@/lib/conversation-image-lifecycle";
 import { forgetSessionOrganization } from "@/lib/workspace-session-organization";
 import { sameConversationImages, unresolvedConversationCount } from "./conversation-feedback";
+
+const UNVERIFIED_IMAGE_DRAFT = "这批图片未添加。无法确认原有图片有完整的本机副本，离开或刷新可能丢失。请保留此页并重试保存。";
 
 type Options = { entryCapability?: string | null; bootstrap?: string | null; id: string | null; scope: string; chatBinding: string; detailBinding: string; initial?: SessionDetail; onAdmitted?: (id: string) => void };
 class RequestError extends Error { constructor(message: string, readonly status: number, readonly code?: string) { super(message); } }
@@ -40,6 +46,7 @@ export type ConversationAttachment = {
   file: File;
   url: string;
   manifest: ConversationImageManifest;
+  expiresAt: number;
 };
 
 export function useConversation(options: Options) {
@@ -65,6 +72,15 @@ export function useConversation(options: Options) {
   const [draft, setDraft] = useState(initial?.composer_draft ?? "");
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [attachments, setAttachments] = useState<ConversationAttachment[]>([]);
+  const [attachmentDraftUnsafe, setAttachmentDraftUnsafe] = useState(false);
+  const [attachmentDraftRecoveryNeeded, setAttachmentDraftRecoveryNeeded] = useState(false);
+  const draftWriteRevision = useRef(0);
+  const attachmentRevision = useRef<ConversationImageDraftRevision>({ ids: [] });
+  const pendingAttachmentRemovals = useRef<{ owner: AbortController | null; count: number }>({ owner: null, count: 0 });
+  const restoringAttachments = useRef(false);
+  const attachmentReadFailed = useRef(false);
+  const retryAttachmentRead = useRef<() => Promise<void>>(async () => {});
+  const attachmentRestore = useRef<Promise<void>>(Promise.resolve());
   const [preparing, setPreparing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [checkingDeliveries, setCheckingDeliveries] = useState<string[]>([]);
@@ -100,15 +116,21 @@ export function useConversation(options: Options) {
   const remoteDraftBaseline = useRef(initial?.composer_draft ?? "");
   const mutationBusy = useRef<{ controller: AbortController } | null>(null); const pendingHandoff = useRef<string | null>(null);
   const writer = useRef(""); const draftStamp = useRef(""); const loaded = useRef(false);
+  const submissionCompletion = useRef<Promise<void>>(Promise.resolve());
   const submitLock = useRef(false); const preparingRef = useRef(false); const prepareGeneration = useRef(0);
   const pendingPreparations = useRef(0);
+  const pendingSelectionSizes = useRef(new Map<symbol, Array<{ type: string; size: number }>>());
   const prepareChain = useRef<Promise<void>>(Promise.resolve());
   const admitted = useRef(options.onAdmitted);
   useEffect(() => { admitted.current = options.onAdmitted; }, [options.onAdmitted]);
   // A validated deleted or expired Session retracts its local organization
   // flags: no archived/pinned projection survives its own record.
   useEffect(() => {
-    if (options.initial?.session_id === id && options.initial.state !== "active" && id) forgetSessionOrganization(scope, id);
+    if (options.initial?.session_id === id && options.initial.state !== "active" && id) {
+      forgetSessionOrganization(scope, id);
+      clearConversationLocal(scope, id);
+      clearConversationImageStore(scope, id);
+    }
   }, [options.initial?.session_id, options.initial?.state, id, scope]);
   const expiry = () => conversationExpiry(detailRef.current?.expires_at);
   const queueUrl = `/api/workspace-sessions/${id}/conversation-queue`;
@@ -160,7 +182,7 @@ export function useConversation(options: Options) {
     const settled = new Set(next.turns.map(turn => turn.id));
     setHandoffEntries(previous => Object.fromEntries(Object.entries(previous).filter(([messageId]) => !settled.has(messageId))));
     setHandoffPreviews(previous => Object.fromEntries(Object.entries(previous).filter(([messageId]) => !settled.has(messageId))));
-    if (next.state !== "active") { forgetSessionOrganization(scope, id!); clearConversationLocal(scope, id!); clearConversationImageStore(scope, id!); storeMessages([]); setPreview(null); previewRef.current = null; setHandoffEntries({}); setHandoffPreviews({}); setUnavailable(true); }
+    if (next.state !== "active") { forgetSessionOrganization(scope, id!); clearConversationLocal(scope, id!); clearConversationImageStore(scope, id!); prepareGeneration.current += 1; clearAttachments(); storeMessages([]); setPreview(null); previewRef.current = null; setHandoffEntries({}); setHandoffPreviews({}); setUnavailable(true); }
   }
   async function refreshDetail(generation?: number) {
     if (!id) return;
@@ -203,6 +225,42 @@ export function useConversation(options: Options) {
   function clearAttachments() {
     for (const attachment of attachmentsRef.current) URL.revokeObjectURL(attachment.url);
     setAttachmentState([]);
+    setAttachmentDraftRecoveryNeeded(false);
+  }
+  function saveAttachmentDraft(next: ConversationAttachment[], handedOff = false) {
+    if (!id) return Promise.resolve(false);
+    const controller = lifecycle.current;
+    const revision = ++draftWriteRevision.current;
+    setAttachmentDraftUnsafe(!handedOff);
+    return persistConversationImageDraft(scope, id, next.map((attachment, position) => ({
+      ...attachment.manifest, position, blob: attachment.file, expiresAt: attachment.expiresAt,
+    })), conversationImageGeneration(), attachmentRevision.current).then(saved => {
+      if (stillCurrent(controller) && revision === draftWriteRevision.current) {
+        setAttachmentDraftUnsafe(!saved && !handedOff);
+        if (!saved && !handedOff) setError(attachmentDraftRecoveryNeeded ? UNVERIFIED_IMAGE_DRAFT : "图片无法安全保存在本机，草稿和图片仍在输入框中。请恢复存储后重试。");
+        else {
+          setAttachmentDraftRecoveryNeeded(false);
+          setError(current => current === UNVERIFIED_IMAGE_DRAFT || current === "图片无法安全保存在本机，草稿和图片仍在输入框中。请恢复存储后重试。" ? "" : current);
+        }
+      }
+      return saved;
+    });
+  }
+  async function priorAttachmentsStillStored(prior: ConversationAttachment[]): Promise<boolean> {
+    if (!prior.length) return true;
+    try {
+      const records = (await loadConversationImageDraft(scope, id!)).slice().sort((a, b) => a.position - b.position);
+      if (!sameConversationImages(prior.map(attachment => attachment.manifest), records)) return false;
+      for (const [position, record] of records.entries()) {
+        if (record.position !== position || record.expiresAt !== prior[position]!.expiresAt || record.expiresAt <= Date.now() ||
+            record.blob.size !== record.byte_size || await sha256Hex(await record.blob.arrayBuffer()) !== record.content_hash) return false;
+      }
+      return true;
+    } catch { return false; }
+  }
+  function useStoredAttachmentDraft() {
+    if (preparingRef.current || restoringAttachments.current) return Promise.resolve();
+    return attachmentRestore.current = retryAttachmentRead.current();
   }
   function refuse(error: unknown) {
     // Entry expiry is recoverable with a fresh SSR entry. Preserve every
@@ -363,12 +421,59 @@ export function useConversation(options: Options) {
   useEffect(() => {
     if (!id) return;
     const controller = new AbortController(); lifecycle.current = controller; writer.current = crypto.randomUUID();
+    const selections = pendingSelectionSizes.current;
     // A new protected lifecycle owns a fresh lock even while an old JSON body
     // remains unresolved. Old operations retain their distinct lock identity.
     mutationBusy.current = null;
     deliveryChecks.current.clear();
+    const imageGeneration = conversationImageGeneration();
+    attachmentRevision.current = { ids: [] };
+    const restore = async () => {
+      const restored: ConversationAttachment[] = [];
+      restoringAttachments.current = true;
+      try {
+        const records = await loadConversationImageDraft(scope, id);
+        if (!stillCurrent(controller) || imageGeneration !== conversationImageGeneration()) return;
+        const handedOff = new Set(readConversationMessages(scope, id).flatMap(message => message.images?.map(image => image.attachment_id) ?? []));
+        for (const human of (initial?.turns ?? []).flatMap(sessionHumanMessages)) for (const image of human.images ?? []) handedOff.add(image.attachment_id);
+        const ordered = records.slice().sort((a, b) => a.position - b.position);
+        if (!validateAttachmentBatch([], ordered.map(image => ({ type: image.media_type, size: image.byte_size }))).ok) throw new Error("INVALID_DRAFT");
+        for (const [position, record] of ordered.entries()) {
+          if (record.position !== position || record.blob.size !== record.byte_size || await sha256Hex(await record.blob.arrayBuffer()) !== record.content_hash) throw new Error("INVALID_DRAFT");
+          if (!stillCurrent(controller) || imageGeneration !== conversationImageGeneration()) return;
+          if (record.expiresAt <= Date.now()) throw new Error("EXPIRED_DRAFT");
+          if (handedOff.has(record.attachment_id)) continue;
+          const { attachment_id, file_name, media_type, byte_size, content_hash, blob, expiresAt } = record;
+          const manifest = { attachment_id, file_name, media_type, byte_size, content_hash };
+          const file = blob instanceof File ? blob : new File([blob], manifest.file_name, { type: manifest.media_type });
+          restored.push({ id: manifest.attachment_id, manifest, file, url: URL.createObjectURL(file), expiresAt });
+        }
+        // Do not advance the comparison revision or release visible originals
+        // until the explicitly chosen stored draft has been fully verified.
+        attachmentRevision.current.ids = records.map(image => image.attachment_id);
+        const previous = attachmentsRef.current;
+        setAttachmentState(restored);
+        for (const attachment of previous) URL.revokeObjectURL(attachment.url);
+        setAttachmentDraftRecoveryNeeded(false);
+        if (attachmentReadFailed.current || previous.length) setError("");
+        else setError(current => current === "图片草稿仍在读取，所选图片尚未添加。请稍后重新选择。" ? "" : current);
+        attachmentReadFailed.current = false;
+        setAttachmentDraftUnsafe(false);
+        if (restored.length !== records.length) void saveAttachmentDraft(restored, restored.length === 0);
+      } catch {
+        if (stillCurrent(controller)) { attachmentReadFailed.current = attachmentsRef.current.length === 0; setAttachmentDraftRecoveryNeeded(attachmentsRef.current.length > 0); setAttachmentDraftUnsafe(true); setError(attachmentsRef.current.length ? UNVERIFIED_IMAGE_DRAFT : "本机图片草稿无法读取，请保留此页并重试。"); }
+      } finally {
+        if (stillCurrent(controller)) restoringAttachments.current = false;
+        const committed = new Set(attachmentsRef.current.map(image => image.url));
+        for (const image of restored) if (!committed.has(image.url)) URL.revokeObjectURL(image.url);
+      }
+    };
+    retryAttachmentRead.current = restore;
+    attachmentRestore.current = restore();
     queueMicrotask(() => {
     if (controller.signal.aborted) return;
+    setError("");
+    if (!pendingPreparations.current) setPreparing(false);
     setCheckingDeliveries([]);
     if (!mutationBusy.current) setMutating(false);
     const recoveredDraft = readConversationDraft(scope, id);
@@ -388,7 +493,7 @@ export function useConversation(options: Options) {
       storeMessages([...own.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
     }
     window.addEventListener("storage", changed);
-    return () => { loaded.current = false; controller.abort(); for (const timer of readbackTimers.current) window.clearTimeout(timer); readbackTimers.current = []; prepareGeneration.current += 1; pendingPreparations.current = 0; preparingRef.current = false; clearAttachments(); window.removeEventListener("storage", changed); };
+    return () => { loaded.current = false; controller.abort(); for (const timer of readbackTimers.current) window.clearTimeout(timer); readbackTimers.current = []; prepareGeneration.current += 1; selections.clear(); pendingPreparations.current = 0; preparingRef.current = false; clearAttachments(); window.removeEventListener("storage", changed); };
     // The binding identifies this entire mounted conversation. Never migrate live state between accounts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, scope, chatBinding, detailBinding]);
@@ -464,15 +569,30 @@ export function useConversation(options: Options) {
 
   function addFiles(files: File[]): Promise<void> {
     if (!files.length) return Promise.resolve();
+    if (restoringAttachments.current) {
+      setError("图片草稿仍在读取，所选图片尚未添加。请稍后重新选择。");
+      return Promise.resolve();
+    }
+    if (attachmentReadFailed.current) return Promise.resolve();
+    const submission = submissionCompletion.current;
     const generation = prepareGeneration.current;
+    const imageGeneration = conversationImageGeneration();
     const controller = lifecycle.current;
     if (!id || unavailable || !controller || controller.signal.aborted) return Promise.resolve();
+    // Include not-yet-acknowledged selections in the existing count/byte
+    // budget, so a slow store cannot retain an unbounded queue of File batches.
+    const pendingSizes = [...pendingSelectionSizes.current.values()].flat();
+    const intake = validateAttachmentBatch([...attachmentsRef.current.map(attachment => attachment.file), ...pendingSizes], files);
+    if (!intake.ok) { setError(intake.error); return Promise.resolve(); }
+    const selection = Symbol("selection");
+    pendingSelectionSizes.current.set(selection, files.map(file => ({ type: file.type, size: file.size })));
     pendingPreparations.current += 1;
     preparingRef.current = true; setPreparing(true);
     prepareChain.current = prepareChain.current
-      .then(() => prepareFiles(files, generation, controller))
+      .then(async () => { await submission; await attachmentRestore.current; if (!attachmentReadFailed.current && imageGeneration === conversationImageGeneration()) await prepareFiles(files, generation, controller, imageGeneration); })
       .catch(() => undefined)
       .finally(() => {
+        pendingSelectionSizes.current.delete(selection);
         if (generation !== prepareGeneration.current || !stillCurrent(controller)) return;
         pendingPreparations.current -= 1;
         preparingRef.current = pendingPreparations.current > 0;
@@ -480,24 +600,26 @@ export function useConversation(options: Options) {
       });
     return prepareChain.current;
   }
-  async function prepareFiles(files: File[], generation: number, controller: AbortController): Promise<void> {
-    if (generation !== prepareGeneration.current || !stillCurrent(controller)) return;
+  async function prepareFiles(files: File[], generation: number, controller: AbortController, imageGeneration: number): Promise<void> {
+    if (generation !== prepareGeneration.current || imageGeneration !== conversationImageGeneration() || !stillCurrent(controller)) return;
     const current = attachmentsRef.current;
     const result = validateAttachmentBatch(current.map(attachment => attachment.file), files);
     if (!result.ok) { if (generation === prepareGeneration.current) setError(result.error); return; }
-    if (generation !== prepareGeneration.current || !stillCurrent(controller)) return;
+    if (generation !== prepareGeneration.current || imageGeneration !== conversationImageGeneration() || !stillCurrent(controller)) return;
     const added: ConversationAttachment[] = [];
     try {
       for (const file of result.accepted) {
         const contentHash = await sha256Hex(await file.arrayBuffer());
-        if (generation !== prepareGeneration.current || !stillCurrent(controller)) return;
+        if (generation !== prepareGeneration.current || imageGeneration !== conversationImageGeneration() || !stillCurrent(controller)) return;
         if (!/^[a-f0-9]{64}$/u.test(contentHash)) throw new Error("HASH");
+        const attachmentId = crypto.randomUUID();
         added.push({
-          id: crypto.randomUUID(),
+          id: attachmentId,
+          expiresAt: expiry(),
           file,
-          url: URL.createObjectURL(file),
+          url: "",
           manifest: {
-            attachment_id: crypto.randomUUID(),
+            attachment_id: attachmentId,
             file_name: file.name.slice(0, 200) || "image",
             media_type: file.type as ConversationImageManifest["media_type"],
             byte_size: file.size,
@@ -505,28 +627,63 @@ export function useConversation(options: Options) {
           },
         });
       }
-      if (generation !== prepareGeneration.current || !stillCurrent(controller)) return;
+      if (generation !== prepareGeneration.current || imageGeneration !== conversationImageGeneration() || !stillCurrent(controller)) return;
       // Revalidate the committed batch as the single transaction: a concurrent
       // removal or a stale preparation may never push the set over its limits.
       const latest = attachmentsRef.current;
       const recheck = validateAttachmentBatch(latest.map(attachment => attachment.file), added.map(attachment => attachment.file));
       if (!recheck.ok) { setError(recheck.error); return; }
-      setAttachmentState([...latest, ...added]);
+      const next = [...latest, ...added];
+      // A browser may not offer a cancelable pre-commit Back event. Do not
+      // accept a new batch until its original files are durable on this device.
+      const saved = await saveAttachmentDraft(next);
+      if (generation !== prepareGeneration.current || imageGeneration !== conversationImageGeneration() || !stillCurrent(controller)) return;
+      if (!saved) {
+        // Refusing this new batch says nothing about the older previews: a
+        // different writer may already have replaced their durable record.
+        const backed = await priorAttachmentsStillStored(latest);
+        if (generation !== prepareGeneration.current || imageGeneration !== conversationImageGeneration() || !stillCurrent(controller)) return;
+        setAttachmentDraftUnsafe(!backed);
+        setAttachmentDraftRecoveryNeeded(!backed);
+        setError(backed ? "这批图片未添加，原有图片和文字已保留。请恢复本机存储后重新选择。" : UNVERIFIED_IMAGE_DRAFT);
+        return;
+      }
+      for (const attachment of added) attachment.url = URL.createObjectURL(attachment.file);
+      setAttachmentState(next);
+      setError(current => current === "这批图片未添加，原有图片和文字已保留。请恢复本机存储后重新选择。" ? "" : current);
     } catch {
       if (generation === prepareGeneration.current) setError("图片无法读取，未添加。请重试或换一张图片。");
     } finally {
       const committed = new Set(attachmentsRef.current.map(attachment => attachment.url));
-      for (const attachment of added) if (!committed.has(attachment.url)) URL.revokeObjectURL(attachment.url);
+      for (const attachment of added) if (attachment.url && !committed.has(attachment.url)) URL.revokeObjectURL(attachment.url);
     }
   }
-  function removeAttachment(attachmentId: string) {
-    const target = attachmentsRef.current.find(attachment => attachment.id === attachmentId);
-    if (target) URL.revokeObjectURL(target.url);
-    setAttachmentState(attachmentsRef.current.filter(attachment => attachment.id !== attachmentId));
+  async function removeAttachment(attachmentId: string) {
+    const controller = lifecycle.current;
+    if (preparingRef.current || restoringAttachments.current) return;
+    const before = attachmentsRef.current;
+    const target = before.find(attachment => attachment.id === attachmentId);
+    if (!target) return;
+    if (pendingAttachmentRemovals.current.owner !== controller) pendingAttachmentRemovals.current = { owner: controller, count: 0 };
+    const removal = pendingAttachmentRemovals.current;
+    removal.count += 1;
+    try {
+      const savingRemoval = saveAttachmentDraft(before.filter(attachment => attachment.id !== attachmentId));
+      // A later selection waits for this existing input mutation before
+      // capturing its full ordered draft snapshot.
+      prepareChain.current = savingRemoval.then(() => undefined);
+      const saved = await savingRemoval;
+      if (!saved || !stillCurrent(controller)) return;
+      const latest = attachmentsRef.current;
+      const next = latest.filter(attachment => attachment.id !== attachmentId);
+      URL.revokeObjectURL(target.url);
+      setAttachmentState(next);
+      if (latest !== before) void saveAttachmentDraft(next);
+    } finally { removal.count -= 1; }
   }
 
   async function submit(): Promise<boolean> {
-    if (submitLock.current) return false;
+    if (attachmentReadFailed.current || submitLock.current || restoringAttachments.current || (pendingAttachmentRemovals.current.owner === lifecycle.current && pendingAttachmentRemovals.current.count > 0)) return false;
     const objective = draftRef.current.trim();
     const capturedDraftValue = draftRef.current;
     const capturedAttachments = attachmentsRef.current.slice();
@@ -536,6 +693,8 @@ export function useConversation(options: Options) {
     // Single-flight from before the first await: a second Enter cannot create
     // a second message while the durable put or admission is still in flight.
     submitLock.current = true; setSubmitting(true); setError("");
+    let finishSubmission!: () => void;
+    submissionCompletion.current = new Promise(resolve => { finishSubmission = resolve; });
     try {
       const messageId = crypto.randomUUID();
       const manifests = capturedAttachments.map(attachment => attachment.manifest);
@@ -561,9 +720,11 @@ export function useConversation(options: Options) {
       const remaining = attachmentsRef.current.filter(attachment => !capturedIds.has(attachment.id));
       for (const attachment of capturedAttachments) if (!remaining.some(candidate => candidate.id === attachment.id)) URL.revokeObjectURL(attachment.url);
       setAttachmentState(remaining);
+      if (capturedAttachments.length) void saveAttachmentDraft(remaining, remaining.length === 0);
       storeMessages([...local.current, message]); setError(""); return true;
     } finally {
       submitLock.current = false;
+      finishSubmission();
       setSubmitting(false);
     }
   }
@@ -750,5 +911,5 @@ export function useConversation(options: Options) {
     runOutcome: Object.fromEntries(Object.entries(runOutcome).filter(([messageId]) => taskHandoffOwners[messageId] === taskOwner)),
     readbackStalled: readbackStalled.filter(messageId => taskHandoffOwners[messageId] === taskOwner),
   };
-  return { taskObservation, entryCapability, detail, draft, messages, attachments, preparing, submitting, checkingDeliveries, snapshot, preview, connection, error, ready, unavailable, draftConflict, mutating, handoffEntries, handoffPreviews, runOutcome, readbackStalled, addFiles, removeAttachment, changeDraft, submit, retryDelivery, discardRejectedDelivery, mutate, keepDraft, remove, refreshDetail };
+  return { attachmentDraftRecoveryNeeded, useStoredAttachmentDraft, retryAttachmentDraft: () => attachmentReadFailed.current ? (attachmentRestore.current = retryAttachmentRead.current()) : saveAttachmentDraft(attachmentsRef.current), attachmentDraftUnsafe: attachmentDraftUnsafe || preparing, taskObservation, entryCapability, detail, draft, messages, attachments, preparing, submitting, checkingDeliveries, snapshot, preview, connection, error, ready, unavailable, draftConflict, mutating, handoffEntries, handoffPreviews, runOutcome, readbackStalled, addFiles, removeAttachment, changeDraft, submit, retryDelivery, discardRejectedDelivery, mutate, keepDraft, remove, refreshDetail };
 }
