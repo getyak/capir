@@ -12,6 +12,7 @@ export default defineConfig({
     },
   },
   test: {
+    server: { deps: { inline: ["next-auth"] } },
     environment: "node",
     include: ["**/*.test.ts", "**/*.test.tsx"],
   },

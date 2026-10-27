@@ -1,11 +1,13 @@
 "use server";
 
 import { TalentSignalClient, TalentSignalHttpError } from "@talent-signal/contracts";
-import { clearTestWorkspaceSession } from "@/lib/server/testWorkspaceSession";
-import { readPrimaryBackendSessionClaims, backendAuthBaseUrl, registerBackendAccount } from "@/lib/server/backendAuth";
-import { readRawPrimaryBackendSessionClaims } from "@/lib/server/backendAuth";
+import { cookies } from "next/headers";
+import { workspaceSessionsBinding } from "@/lib/server/workspaceSessions";
+import { workspaceSignOutDestination, type WorkspaceSignOutResult } from "@/lib/workspace-signout";
+import { clearTestWorkspaceSession, testWorkspaceSession, TEST_WORKSPACE_COOKIE } from "@/lib/server/testWorkspaceSession";
+import { AUTH_SESSION_COOKIE, readRawPrimaryBackendSessionClaims, readPrimaryBackendSessionClaims, backendAuthBaseUrl, registerBackendAccount, type BackendSessionClaims } from "@/lib/server/backendAuth";
 import { markWebSessionSignedOut } from "@/lib/server/web-persistent-session";
-import { queueWebRevocation, retryWebRevocations } from "@/lib/server/web-session-cookies";
+import { queueWebRevocation, retryWebRevocations, selectWebFamilyToken } from "@/lib/server/web-session-cookies";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { prepareGoogleSignIn, bindGoogleNonce } from "@/lib/server/google-session";
@@ -267,11 +269,11 @@ export async function signInWithDefaultAccount(formData: FormData) {
   });
 }
 
-export async function signOutOfWorkspace(formData?: FormData) {
+async function logoutWorkspaceBackendSessions(rawPrimary?: BackendSessionClaims) {
   // The capability can revoke even when bounded access expired or renewal is
   // unavailable. Canonical revocation fences any late cookie-renewal response.
   try {
-    const raw = await readRawPrimaryBackendSessionClaims();
+    const raw = rawPrimary ?? await readRawPrimaryBackendSessionClaims();
     if (raw?.backendRenewalSecret && raw.backendSessionId) {
       await markWebSessionSignedOut(raw.backendSessionId);
       await queueWebRevocation(raw);
@@ -292,10 +294,45 @@ export async function signOutOfWorkspace(formData?: FormData) {
     if (primary) await logoutBackendWithinDeadline(() => new TalentSignalClient(backendAuthBaseUrl(), primary.backendAccessToken).logout());
   } catch { /* Local sign-out remains available during an outage. */ }
   await clearTestWorkspaceSession();
+}
+
+export async function signOutOfWorkspace(formData?: FormData) {
+  await logoutWorkspaceBackendSessions();
   // Presentation hint only: both destinations are fixed first-party paths.
   // A real /login navigation lets the native host own its signed-out surface.
   await signOut({ redirectTo: formData?.get("desktopHost") === "true"
     ? "/login?callbackUrl=%2Fworkspace&intent=sign-out" : "/" });
+}
+
+
+/** Account menu completion confirms local cookie clearing, not remote revocation. */
+export async function signOutFromAccountMenu(formData: FormData): Promise<WorkspaceSignOutResult> {
+  const binding = formString(formData, "workspaceBinding");
+  if (!/^[a-f0-9]{64}$/.test(binding)) return { status: "scope_changed" };
+  let raw: BackendSessionClaims;
+  try {
+    const primary = await readRawPrimaryBackendSessionClaims();
+    if (!primary) return { status: "scope_changed" };
+    // Destructive-only scope verification must not require a successful access
+    // renewal. The same signed test selection still owns its parent/origin fence.
+    const selected = await testWorkspaceSession(primary);
+    if (workspaceSessionsBinding(selected?.claims ?? primary) !== binding) return { status: "scope_changed" };
+    raw = primary;
+  } catch { return { status: "scope_changed" }; }
+
+  await logoutWorkspaceBackendSessions(raw);
+  const redirectTo = workspaceSignOutDestination(formData.get("desktopHost") === "true");
+  // Auth.js applies its actual session-cookie patches before returning when
+  // redirect is false. A redirect rejection cannot serve as a completion receipt.
+  await signOut({ redirect: false, redirectTo });
+  const jar = await cookies();
+  const retained = jar.getAll().some(({ name, value }) => value && (
+    name === AUTH_SESSION_COOKIE || name.startsWith(`${AUTH_SESSION_COOKIE}.`) || name === TEST_WORKSPACE_COOKIE
+  ));
+  // Family/barrier/debt cookies intentionally survive. The actual selector
+  // must nevertheless find no eligible renewable login after local logout.
+  if (retained || await selectWebFamilyToken(null)) throw new Error("Local sign-out could not be confirmed.");
+  return { status: "signed_out", binding, redirectTo };
 }
 
 /** Intentional completion of the emailed verification link/code. */

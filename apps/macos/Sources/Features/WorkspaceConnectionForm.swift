@@ -32,7 +32,7 @@ struct WorkspaceConnectionForm: View {
             header
                 .padding(.bottom, isFirstRun ? 32 : 24)
 
-            Text("工作区地址")
+            Text(String(localized: "Workspace Address", bundle: .main))
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(TSBrand.ink)
 
@@ -53,13 +53,13 @@ struct WorkspaceConnectionForm: View {
                 .padding(.top, 8)
 
             if let parsed, parsed.url.absoluteString != trimmedAddress {
-                Text("将使用：\(parsed.url.absoluteString)")
+                Text(String(format: String(localized: "Will use: %@", bundle: .main), parsed.url.absoluteString))
                     .font(.caption)
                     .foregroundStyle(TSBrand.secondaryInk)
                     .textSelection(.enabled)
                     .padding(.top, 8)
             } else if isFirstRun {
-                Text("可粘贴完整工作区链接。仅 HTTPS，不含账号或密码。")
+                Text(String(localized: "Paste a full workspace link. HTTPS only, without an account or password.", bundle: .main))
                     .font(.caption)
                     .foregroundStyle(TSBrand.secondaryInk)
                     .padding(.top, 8)
@@ -70,9 +70,9 @@ struct WorkspaceConnectionForm: View {
                     HStack(spacing: 5) {
                         if probing {
                             ProgressView().controlSize(.mini)
-                                .accessibilityLabel("正在检查连接")
+                                .accessibilityLabel(String(localized: "Checking connection", bundle: .main))
                         }
-                        Text(probing ? "检查中…" : (isFirstRun ? "先测试连接" : "测试连接"))
+                        Text(probing ? String(localized: "Checking…", bundle: .main) : (isFirstRun ? String(localized: "Test Connection First", bundle: .main) : String(localized: "Test Connection", bundle: .main)))
                             .underline(!probing, color: TSBrand.hairline)
                     }
                     .font(.subheadline.weight(.medium))
@@ -82,7 +82,7 @@ struct WorkspaceConnectionForm: View {
                 .disabled(probing)
                 .padding(.top, 6)
                 .accessibilityIdentifier("connection.test")
-                .accessibilityHint("可选：先检查服务是否可访问，再打开工作区。")
+                .accessibilityHint(String(localized: "Optional: check whether the service is reachable before opening the workspace.", bundle: .main))
             }
 
             if let error {
@@ -92,7 +92,7 @@ struct WorkspaceConnectionForm: View {
                     .padding(.top, 14)
                     .fixedSize(horizontal: false, vertical: true)
             } else if !trimmedAddress.isEmpty && parsed == nil {
-                Text(isFirstRun ? "需要 HTTPS 工作区地址。" : "请输入 HTTPS 工作区地址。")
+                Text(isFirstRun ? String(localized: "An HTTPS workspace address is required.", bundle: .main) : String(localized: "Enter an HTTPS workspace address.", bundle: .main))
                     .font(.caption)
                     .foregroundStyle(TSBrand.secondaryInk)
                     .padding(.top, 12)
@@ -112,7 +112,7 @@ struct WorkspaceConnectionForm: View {
             .padding(.top, 22)
 
             if isFirstRun {
-                Text("私有工作区需先连接 Tailscale。向工作区所有者获取地址。")
+                Text(String(localized: "Private workspaces require Tailscale first. Get the address from the workspace owner.", bundle: .main))
                     .font(.caption)
                     .foregroundStyle(TSBrand.secondaryInk)
                     .padding(.top, 18)
@@ -137,20 +137,20 @@ struct WorkspaceConnectionForm: View {
             }
         }
         .onDisappear { invalidateProbe() }
-        .confirmationDialog("切换工作区服务？", isPresented: $confirmSwitch, titleVisibility: .visible) {
-            Button("切换并重新载入") { save() }
-            Button("取消", role: .cancel) {}
+        .confirmationDialog(String(localized: "Switch workspace service?", bundle: .main), isPresented: $confirmSwitch, titleVisibility: .visible) {
+            Button(String(localized: "Switch and Reload", bundle: .main)) { save() }
+            Button(String(localized: "Cancel", bundle: .main), role: .cancel) {}
         } message: {
-            Text("请先完成当前输入或上传。将打开 \(parsed?.url.absoluteString ?? "")，现有服务的登录状态会保留。")
+            Text(String(format: String(localized: "Finish current input or uploads first. %@ will open; sign-in to the existing service will be kept.", bundle: .main), parsed?.url.absoluteString ?? ""))
         }
     }
 
     @ViewBuilder private var saveButton: some View {
         if isFirstRun {
-            Button("打开工作区", action: requestSave)
+            Button(String(localized: "Open workspace", bundle: .main), action: requestSave)
                 .buttonStyle(FirstRunPrimaryButtonStyle())
         } else {
-            Button("保存连接", action: requestSave)
+            Button(String(localized: "Save Connection", bundle: .main), action: requestSave)
                 .buttonStyle(TSPrimaryButtonStyle())
         }
     }
@@ -162,18 +162,18 @@ struct WorkspaceConnectionForm: View {
                     TSBrandMark(size: 28)
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("capri")
-                    Text("连接你的工作区")
+                    Text(String(localized: "Connect to your workspace", bundle: .main))
                         .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(TSBrand.ink)
                         .tracking(-0.3)
                 }
             } else {
-                Text("连接与调试")
+                Text(String(localized: "Connection and Debugging", bundle: .main))
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(TSBrand.ink)
                     .tracking(-0.25)
             }
-            Text(isFirstRun ? "同一份对话、人物和日程，在这台 Mac 上继续。" : "查看或更改本机连接到的工作区服务。")
+            Text(isFirstRun ? String(localized: "Continue the same conversations, people, and schedule on this Mac.", bundle: .main) : String(localized: "View or change the workspace service connected to this Mac.", bundle: .main))
                 .font(.body)
                 .foregroundStyle(TSBrand.secondaryInk)
                 .fixedSize(horizontal: false, vertical: true)
@@ -211,24 +211,24 @@ struct WorkspaceConnectionForm: View {
     private var advancedBlock: some View {
         DisclosureGroup(isExpanded: $advanced) {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle("允许本机开发服务", isOn: $localDevelopment)
-                Text("仅允许 localhost、127.0.0.1 或 ::1 使用 HTTP；远端始终使用 HTTPS。")
+                Toggle(String(localized: "Allow local development services", bundle: .main), isOn: $localDevelopment)
+                Text(String(localized: "HTTP is allowed only for localhost, 127.0.0.1, or ::1; remote services always use HTTPS.", bundle: .main))
                     .font(.caption)
                     .foregroundStyle(TSBrand.secondaryInk)
-                Button("填入本机开发地址") {
+                Button(String(localized: "Fill Local Development Address", bundle: .main)) {
                     localDevelopment = true
                     address = "http://127.0.0.1:3000"
                 }
-                Toggle("启用网页检查器", isOn: $connection.inspectorEnabled)
-                Text("开启后，可通过 Safari 的开发菜单检查此窗口。仅在调试时开启。")
+                Toggle(String(localized: "Enable Web Inspector", bundle: .main), isOn: $connection.inspectorEnabled)
+                Text(String(localized: "When enabled, inspect this window from Safari’s Develop menu. Enable only for debugging.", bundle: .main))
                     .font(.caption)
                     .foregroundStyle(TSBrand.secondaryInk)
                 HStack {
-                    Text("客户端 \(DesktopUpdater.shared.appVersion)")
+                    Text(String(format: String(localized: "Client %@", bundle: .main), DesktopUpdater.shared.appVersion))
                         .font(.caption)
                         .foregroundStyle(TSBrand.secondaryInk)
                     Spacer()
-                    Button("复制诊断摘要") {
+                    Button(String(localized: "Copy Diagnostic Summary", bundle: .main)) {
                         let summary = "capri \(DesktopUpdater.shared.appVersion)\nmacOS \(ProcessInfo.processInfo.operatingSystemVersionString)\nConnection: \(result?.summary ?? "Not checked")\n\(result?.detail ?? "")\nLocal development: \(localDevelopment)\nInspector: \(connection.inspectorEnabled)\nWorkspace address, cookies and content omitted."
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(summary, forType: .string)
@@ -236,18 +236,18 @@ struct WorkspaceConnectionForm: View {
                     }
                 }
                 if copied {
-                    Text("已复制 · 摘要不含服务地址、账号、凭据或对话内容。")
+                    Text(String(localized: "Copied · The summary omits service addresses, accounts, credentials, and conversation content.", bundle: .main))
                         .font(.caption)
                         .foregroundStyle(TSBrand.secondaryInk)
                 }
-                Text("切换服务后会重新载入页面。不同服务的登录状态单独保存。")
+                Text(String(localized: "Switching services reloads the page. Sign-in states are saved separately for each service.", bundle: .main))
                     .font(.caption)
                     .foregroundStyle(TSBrand.secondaryInk)
             }
             .padding(.top, 14)
             .padding(.horizontal, 4)
         } label: {
-            Text("开发与诊断")
+            Text(String(localized: "Development and Diagnostics", bundle: .main))
                 .font(.callout.weight(.medium))
                 .foregroundStyle(TSBrand.secondaryInk)
         }
@@ -275,7 +275,7 @@ struct WorkspaceConnectionForm: View {
     private func requestSave() {
         guard isActive else { return }
         guard parsed != nil else {
-            error = "请输入 HTTPS 工作区地址。"
+            error = String(localized: "Enter an HTTPS workspace address.", bundle: .main)
             return
         }
         if let current = connection.origin, let parsed, current != parsed { confirmSwitch = true }

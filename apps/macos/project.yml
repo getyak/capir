@@ -70,3 +70,41 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.talentsignal.macos.uitests
         TEST_TARGET_NAME: TalentSignalMac
+
+  # A separate entry point hosts real presentation components without the
+  # product App/delegate, account initialization, capture or updater startup.
+  TalentSignalAXFixture:
+    type: application
+    platform: macOS
+    dependencies:
+      - package: Sparkle
+    sources:
+      - path: Sources
+        excludes:
+          - App/TalentSignalMacApp.swift
+      - path: Resources
+      - path: AXFixtures
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.getyak.acceptance.native-ax
+        PRODUCT_NAME: TalentSignalAXFixture
+        INFOPLIST_KEY_CFBundleDisplayName: Native AX Fixture
+        CODE_SIGNING_ALLOWED: NO
+    scheme:
+      testTargets:
+        - TalentSignalAXFixtureTests
+
+  TalentSignalAXFixtureTests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: AXFixtureTests
+    dependencies:
+      - target: TalentSignalAXFixture
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.getyak.acceptance.native-ax.tests
+        TEST_TARGET_NAME: TalentSignalAXFixture
+        CODE_SIGNING_ALLOWED: NO

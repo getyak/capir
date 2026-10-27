@@ -20,9 +20,10 @@ export type DurableConversationImage = ConversationImageManifest & {
 };
 
 export interface ConversationImageStore {
-  put(key: string, images: readonly DurableConversationImage[]): Promise<boolean>;
+  put(key: string, images: readonly DurableConversationImage[], expectedIds?: readonly string[]): Promise<boolean>;
   get(key: string): Promise<DurableConversationImage[]>;
-  delete(key: string): Promise<void>;
+  /** Optional cutoff is checked atomically against the current record. Explicit clears omit it. */
+  delete(key: string, expiredBefore?: number): Promise<void>;
   deletePrefix(prefix: string): Promise<void>;
   inventory(): Promise<Array<{ key: string; expiresAt: number }>>;
 }
@@ -77,12 +78,21 @@ export function createIndexedDbConversationImageStore(
     return database;
   };
   return {
-    async put(key, images) {
+    async put(key, images, expectedIds) {
       try {
         const db = await open();
         const transaction = db.transaction(STORE_NAME, "readwrite");
-        transaction.objectStore(STORE_NAME).put({ key, images: [...images] });
-        await transactionDone(transaction);
+        const done = transactionDone(transaction);
+        void done.catch(() => undefined);
+        const objectStore = transaction.objectStore(STORE_NAME);
+        if (expectedIds) {
+          const previous = await requestResult<{ images?: DurableConversationImage[] } | undefined>(objectStore.get(key));
+          const actual = previous?.images?.map(image => image.attachment_id) ?? [];
+          if (JSON.stringify(actual) !== JSON.stringify(expectedIds)) { await done; return false; }
+        }
+        if (images.length) objectStore.put({ key, images: [...images] });
+        else objectStore.delete(key);
+        await done;
         return true;
       } catch {
         return false;
@@ -97,15 +107,25 @@ export function createIndexedDbConversationImageStore(
         );
         return Array.isArray(record?.images) ? record!.images : [];
       } catch {
-        return [];
+        throw new Error("IDB_READ_FAILED");
       }
     },
-    async delete(key) {
+    async delete(key, expiredBefore) {
       try {
         const db = await open();
         const transaction = db.transaction(STORE_NAME, "readwrite");
-        transaction.objectStore(STORE_NAME).delete(key);
-        await transactionDone(transaction);
+        const done = transactionDone(transaction);
+        void done.catch(() => undefined);
+        const objectStore = transaction.objectStore(STORE_NAME);
+        if (expiredBefore !== undefined) {
+          const current = await requestResult<{ images?: DurableConversationImage[] } | undefined>(objectStore.get(key));
+          const expiry = recordExpiry(current?.images);
+          // Inventory is only a candidate list: another tab may have replaced
+          // this key. Read and conditional delete share this write transaction.
+          if (Number.isFinite(expiry) && expiry > expiredBefore) { await done; return; }
+        }
+        objectStore.delete(key);
+        await done;
       } catch {
         /* Best effort; an accepted message is already durable on the server. */
       }
@@ -176,6 +196,7 @@ function recordExpiry(images: readonly DurableConversationImage[] | undefined): 
 let override: ConversationImageStore | null | undefined;
 let cached: ConversationImageStore | null | undefined;
 let epoch = 0;
+let clearing: Promise<void> = Promise.resolve();
 
 /** Test seam; `undefined` restores the real browser resolution. */
 export function setConversationImageStoreForTest(
@@ -201,21 +222,83 @@ export function conversationImageStore(): ConversationImageStore | null {
   return cached;
 }
 
+/** Captured before file preparation, so account A-B-A cannot revive old input. */
+export function conversationImageGeneration(): number { return epoch; }
+
+export type ConversationImageDraftRevision = { ids: string[] };
+
+export const CONVERSATION_IMAGE_DRAFT = "composer-draft";
+const draftWrites = new Map<string, { tail: Promise<boolean>; pending: number }>();
+
+/** Reuse the byte store for this bounded local composing purpose. Serializing
+ * a key also keeps a late old write/delete from overwriting its replacement. */
+export function persistConversationImageDraft(
+  scope: string, session: string, images: readonly DurableConversationImage[], generation: number, revision?: ConversationImageDraftRevision,
+): Promise<boolean> {
+  const key = conversationImageKey(scope, session, CONVERSATION_IMAGE_DRAFT);
+  let queue = draftWrites.get(key);
+  // At most two bounded snapshots may retain files while storage is slow.
+  // Refusing another write leaves its originals/guard in the mounted composer.
+  if (queue && queue.pending >= 2) return Promise.resolve(false);
+  if (!queue) { queue = { tail: Promise.resolve(true), pending: 0 }; draftWrites.set(key, queue); }
+  const owner = queue;
+  owner.pending += 1;
+  const write = owner.tail.catch(() => false).then(async () => {
+    if (generation !== epoch) return false;
+    const store = conversationImageStore();
+    if (!store) return false;
+    // The guarded put atomically removes an empty draft. A separate
+    // best-effort delete could erase another tab's newer draft.
+    if (images.some(image => image.expiresAt <= Date.now())) return false;
+    const saved = await persistConversationImages(scope, session, CONVERSATION_IMAGE_DRAFT, images, revision?.ids);
+    if (images.some(image => image.expiresAt <= Date.now())) {
+      if (saved) await store.put(key, [], images.map(image => image.attachment_id));
+      return false;
+    }
+    if (saved && revision) revision.ids = images.map(image => image.attachment_id);
+    return saved;
+  }).catch(() => false);
+  owner.tail = write;
+  void write.finally(() => { owner.pending -= 1; if (!owner.pending && draftWrites.get(key) === owner) draftWrites.delete(key); });
+  return write;
+}
+
+export async function loadConversationImageDraft(scope: string, session: string): Promise<DurableConversationImage[]> {
+  await draftWrites.get(conversationImageKey(scope, session, CONVERSATION_IMAGE_DRAFT))?.tail;
+  const generation = epoch;
+  await clearing;
+  if (generation !== epoch) return [];
+  const records = await conversationImageStore()?.get(conversationImageKey(scope, session, CONVERSATION_IMAGE_DRAFT)) ?? [];
+  if (generation !== epoch) return [];
+  if (records.some(image => !Number.isFinite(image.expiresAt) || image.expiresAt <= Date.now())) {
+    const removed = await conversationImageStore()?.put(conversationImageKey(scope, session, CONVERSATION_IMAGE_DRAFT), [], records.map(image => image.attachment_id));
+    if (!removed) throw new Error("DRAFT_CHANGED");
+    return [];
+  }
+  return records;
+}
+
 /** Durable write that must succeed before any network admission is attempted. */
 export async function persistConversationImages(
   scope: string,
   session: string,
   messageId: string,
   images: readonly DurableConversationImage[],
+  expectedIds?: readonly string[],
 ): Promise<boolean> {
   const store = conversationImageStore();
   if (!store) return false;
   const capturedEpoch = epoch;
   const key = conversationImageKey(scope, session, messageId);
   try {
-    const stored = await store.put(key, images);
+    await clearing;
+    if (capturedEpoch !== epoch) return false;
+    const stored = await store.put(key, images, expectedIds);
     if (capturedEpoch !== epoch) {
-      await store.delete(key);
+      if (stored) {
+        if (messageId === CONVERSATION_IMAGE_DRAFT) await store.put(key, [], images.map(image => image.attachment_id));
+        else await store.delete(key);
+      }
       return false;
     }
     return stored;
@@ -246,21 +329,16 @@ export async function removeConversationImages(
   await conversationImageStore()?.delete(conversationImageKey(scope, session, messageId));
 }
 
-export async function clearConversationImages(
+export function clearConversationImages(
   scope?: string,
   session?: string,
 ): Promise<void> {
   const store = conversationImageStore();
-  if (!store) return;
-  if (scope && session) {
-    await store.deletePrefix(`${scope}:${session}:`);
-    return;
-  }
-  if (scope) {
-    await store.deletePrefix(`${scope}:`);
-    return;
-  }
-  await store.deletePrefix("");
+  if (!store) return Promise.resolve();
+  const prefix = scope ? `${scope}:${session ? `${session}:` : ""}` : "";
+  // A new generation must not be written ahead of a slow previous deletion.
+  clearing = clearing.then(() => store.deletePrefix(prefix)).catch(() => undefined);
+  return clearing;
 }
 
 /** Remove every record whose bounded retention already elapsed. */
@@ -271,7 +349,7 @@ export async function purgeExpiredConversationImages(
   if (!store) return;
   for (const entry of await store.inventory()) {
     if (!Number.isFinite(entry.expiresAt) || entry.expiresAt <= now) {
-      await store.delete(entry.key);
+      await store.delete(entry.key, now);
     }
   }
 }
@@ -290,6 +368,12 @@ export async function pruneConversationImages(
   if (!store) return;
   for (const entry of await store.inventory()) {
     if (!entry.key.startsWith(scopePrefix)) continue;
+    if (entry.key.endsWith(`:${CONVERSATION_IMAGE_DRAFT}`)) {
+      // A composing record has no outbox key. Only its current expiry can
+      // authorize pruning it; a stale inventory cannot delete a new draft.
+      await store.delete(entry.key, Date.now());
+      continue;
+    }
     if (!validKeys.has(entry.key)) await store.delete(entry.key);
   }
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { GearSix, Globe } from "@phosphor-icons/react";
-import { useSyncExternalStore } from "react";
+import { useId, useSyncExternalStore } from "react";
 import { useT } from "./locale-provider";
 import styles from "./workspace-shell.module.css";
 
@@ -105,28 +105,31 @@ function settingsHrefFor(hosted: boolean, scheme: string, fallback: string) {
 /** Native account management opens the browser; Web stays in its workspace. */
 export function DesktopAccountLink({ onClick }: { onClick: () => void }) {
   const t = useT();
+  const noticeId = useId();
   const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   return (
     <a
       aria-label={t(state ? "账号与偏好（在默认浏览器中打开）" : "账号与偏好")}
+      aria-describedby={state ? noticeId : undefined}
       href={settingsHrefFor(Boolean(state), "talentsignal-desktop://account-settings", "/workspace/settings")}
       onClick={onClick}
     >
       <Globe aria-hidden="true" size={16} />
-      <span>{t("账号与偏好")}{state ? " ↗" : ""}</span>
+      <span className={styles.accountLinkLabel}>
+        <span>{t("账号与偏好")}{state ? " ↗" : ""}</span>
+        <DesktopAccountNotice id={noticeId} />
+      </span>
     </a>
   );
 }
 
-export function DesktopAccountNotice() {
+export function DesktopAccountNotice({ id }: { id: string }) {
   const t = useT();
   const state = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   if (!state) return null;
-  return <span className={styles.accountMetaRow}>
-    <span aria-label={t("账号与偏好会在此账号的默认浏览器中打开；浏览器的登录状态可能与本应用不同。")}>
-      {t("在此账号的默认浏览器中打开 · 浏览器登录状态可能与本应用不同")}
-    </span>
-  </span>;
+  return <small id={id} className={styles.accountLinkNotice}>
+    {t("在此账号的默认浏览器中打开 · 浏览器登录状态可能与本应用不同")}
+  </small>;
 }
 
 /** The native window owns device settings only, so it is offered only where a

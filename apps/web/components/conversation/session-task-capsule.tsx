@@ -1,12 +1,11 @@
 "use client";
 
-import { CaretDown } from "@phosphor-icons/react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { CaretDown, Stop } from "@phosphor-icons/react";
+import { createContext, useContext, useId, useLayoutEffect, useRef, type ReactNode, type RefCallback } from "react";
 import type { ConversationQueueEntry } from "@talent-signal/contracts";
-import { conversationElapsedLabel, conversationElapsedMs, conversationStageLabel } from "@/lib/conversation-execution";
+import { conversationStageLabel } from "@/lib/conversation-execution";
 import { sessionHumanMessages } from "@/lib/session-human-messages";
 import { useLocale, useT } from "../locale-provider";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { conversationWorkStatus, type ConversationWorkStatus } from "./conversation-feedback";
 import type { useConversation } from "./use-conversation";
 import styles from "./session-task-capsule.module.css";
@@ -20,7 +19,10 @@ function observedTask(observation: Observation, connection: "connecting" | "live
   const settled = new Set((observation.detail?.turns ?? []).flatMap(sessionHumanMessages).map(message => message.id));
   const entries = [snapshot?.active, ...Object.values(observation.handoffEntries), ...(snapshot?.queued ?? [])].filter((entry): entry is ConversationQueueEntry => Boolean(entry));
   const messages = observation.messages.filter(message => !settled.has(message.id));
-  const selected = entries.find(entry => !settled.has(entry.message_id));
+  // Persisted reply readback can precede removal of the live queue slot. The
+  // current run retains its Stop until the queue actually settles it.
+  const active = snapshot?.active;
+  const selected = active?.status === "running" ? active : entries.find(entry => !settled.has(entry.message_id));
   const message = selected ? messages.find(message => message.id === selected.message_id) : messages.at(-1);
   if (!selected && !message) return null;
   const messageId = selected?.message_id ?? message!.id;
@@ -42,7 +44,7 @@ const phaseKey: Record<ConversationWorkStatus["phase"], string> = {
   stopped: "stopped", readback: "readback", reconnecting: "reconnecting", failed: "failed",
 };
 
-export function SessionTaskCapsule({ observation, connection, mutating, onStop, onContinue, onRetry, recoveryActions }: {
+type Props = {
   observation: Observation;
   connection: "connecting" | "live" | "reconnecting";
   mutating: boolean;
@@ -50,52 +52,104 @@ export function SessionTaskCapsule({ observation, connection, mutating, onStop, 
   onContinue: () => void;
   onRetry: (queueEntryId: string) => void;
   recoveryActions: (messageId: string) => ReactNode;
-}) {
+};
+type TaskContext = Props & {
+  task: Task | null;
+  label: string;
+  recordId: string;
+  bindRecord: RefCallback<HTMLDivElement>;
+  bindTrigger: RefCallback<HTMLButtonElement>;
+  inspect: () => void;
+  owned: (action: () => void) => void;
+};
+const TaskContext = createContext<TaskContext | null>(null);
+
+export function useSessionTaskInHeader(messageId: string) {
+  return useContext(TaskContext)?.task?.messageId === messageId;
+}
+
+/** Header and transcript share one observed task; neither grants authority. */
+export function SessionTaskProvider({ children, ...props }: Props & { children: ReactNode }) {
+  const { observation, connection } = props;
   const t = useT();
   const locale = useLocale();
   const task = observedTask(observation, connection);
   const taskKey = task?.key ?? null;
   const phase = task?.work.phase;
-  const [disclosure, setDisclosure] = useState<{ owner: symbol; open: boolean }>({ owner: observation.owner, open: false });
-  const open = disclosure.owner === observation.owner && disclosure.open && Boolean(task);
+  const recordId = useId();
+  const record = useRef<HTMLDivElement | null>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
   const current = useRef<{ owner: symbol; key: string } | null>(null);
   useLayoutEffect(() => {
     current.current = taskKey ? { owner: observation.owner, key: taskKey } : null;
     return () => { current.current = null; };
   }, [observation.owner, taskKey]);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!open || !phase || !["running", "stopping", "queued", "paused"].includes(phase)) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [open, phase]);
-  if (!task || !phase) return null;
   const owned = (action: () => void) => {
-    if (current.current?.owner === observation.owner && current.current.key === task.key) action();
+    if (task && current.current?.owner === observation.owner && current.current.key === task.key) action();
   };
-  const label = phase === "running" ? conversationStageLabel(task.stage, locale) ?? t("conversation.task.running") : t(`conversation.task.${phaseKey[phase]}`);
-  const startedAt = task.entry?.started_at ?? task.entry?.created_at;
-  const elapsed = startedAt ? conversationElapsedMs({ startedAt, nowMs: now,
-    endedAt: ["running", "stopping", "queued", "paused"].includes(phase) ? null : task.entry?.updated_at }) : null;
-  return <div className={styles.capsule} data-session-task-capsule data-phase={phase}>
-    <Popover open={open} onOpenChange={value => { if (value) setNow(Date.now()); setDisclosure({ owner: observation.owner, open: value }); }}>
-      <PopoverTrigger asChild><button type="button" className={styles.trigger} aria-label={t("conversation.task.details", { status: label })}>
+  const label = !task || !phase ? "" : phase === "running" ? conversationStageLabel(task.stage, locale) ?? t("conversation.task.running") : t(`conversation.task.${phaseKey[phase]}`);
+  const inspect = () => owned(() => {
+    const details = record.current?.closest("details");
+    if (!details) return;
+    details.open = true;
+    details.querySelector("summary")?.focus({ preventScroll: true });
+    details.scrollIntoView?.({ block: "nearest", behavior: "instant" });
+  });
+  const bindRecord: RefCallback<HTMLDivElement> = node => {
+    record.current = node;
+    const details = node?.closest("details");
+    if (!details) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      owned(() => {
+        event.preventDefault(); event.stopPropagation();
+        details.open = false;
+        trigger.current?.focus({ preventScroll: true });
+      });
+    };
+    details.addEventListener("keydown", onKey);
+    return () => {
+      details.removeEventListener("keydown", onKey);
+      if (record.current === node) record.current = null;
+    };
+  };
+  return <TaskContext.Provider value={{ ...props, task, label, recordId, bindRecord, bindTrigger: node => { trigger.current = node; }, inspect, owned }}>{children}</TaskContext.Provider>;
+}
+
+export function SessionTaskCapsule() {
+  const context = useContext(TaskContext);
+  const t = useT();
+  if (!context?.task) return null;
+  const { task, label, recordId, bindTrigger, inspect, observation, mutating, owned, onStop } = context;
+  const active = observation.snapshot?.active;
+  const stoppable = active?.status === "running" && active.run_id && task.entry === active;
+  return <div className={styles.capsule} data-session-task-capsule data-phase={task.work.phase}>
+      <button ref={bindTrigger} type="button" className={styles.trigger} aria-controls={recordId} aria-label={t("conversation.task.details", { status: label })} onClick={inspect}>
         <span className={styles.dot} aria-hidden="true"/><span className={styles.label} role="status" aria-live="polite">{label}</span><CaretDown size={12} aria-hidden="true"/>
-      </button></PopoverTrigger>
-      <PopoverContent align="end" className={styles.panel} aria-label={t("conversation.task.record")} onCloseAutoFocus={event => { if (current.current?.owner !== observation.owner) event.preventDefault(); }}>
-        <p className={styles.state}>{label}</p>
+      </button>
+      {stoppable && <button type="button" className={styles.stop} aria-label={t("conversation.stop.action")} title={t("conversation.stop.title")} disabled={mutating || active.cancel_requested} onClick={() => owned(() => {
+        if (!mutating && !active.cancel_requested) onStop(active.run_id!);
+      })}><Stop size={16} weight="fill" aria-hidden="true"/><span>{t("conversation.stop.label")}</span></button>}
+  </div>;
+}
+
+/** Recovery stays in the execution disclosure belonging to this exact message. */
+export function SessionTaskRecord({ messageId, standalone = false }: { messageId: string; standalone?: boolean }) {
+  const context = useContext(TaskContext);
+  const t = useT();
+  if (!context?.task || context.task.messageId !== messageId) return null;
+  const { task, recordId, bindRecord, observation, mutating, onContinue, onRetry, recoveryActions, owned } = context;
+  const phase = task.work.phase;
+  const content = <div ref={bindRecord} id={recordId} className={styles.panel} data-session-task-record={messageId}>
         <p>{t(task.work.text)}</p>
-        {elapsed !== null && <p>{t("conversation.task.elapsed")} {conversationElapsedLabel(elapsed, locale)}</p>}
         <p>{t("conversation.task.boundary")}</p>
         <div className={styles.actions}>
-          {phase === "running" && task.entry?.run_id && <button type="button" disabled={mutating} onClick={() => owned(() => onStop(task.entry!.run_id!))}>{t("conversation.stop.label")}</button>}
           {phase === "paused" && !observation.snapshot?.active && observation.snapshot?.queued.every(entry => entry.status === "queued") && <button type="button" disabled={mutating} onClick={() => owned(onContinue)}>{t("conversation.queue.continue")}</button>}
           {phase === "failed" && task.entry && <button type="button" disabled={mutating} onClick={() => owned(() => onRetry(task.entry!.queue_entry_id))}>{t("conversation.queue.retry")}</button>}
           {/* Existing controls retain their same-ID checks, loading feedback and
               explicit readback semantics. This disclosure grants no consent. */}
           {task.work.recover ? recoveryActions(task.messageId) : null}
         </div>
-      </PopoverContent>
-    </Popover>
-  </div>;
+      </div>;
+  return standalone ? <details className={styles.standalone}><summary>{t("conversation.task.record")}</summary>{content}</details> : content;
 }

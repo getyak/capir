@@ -7,7 +7,7 @@ import {
 } from "./workspace-navigation";
 
 export const SIDEBAR_LAYOUT_KEY = "talent-signal:workspace-sidebar-layout:v1";
-export const SIDEBAR_DEFAULT_WIDTH = 248;
+export const SIDEBAR_DEFAULT_WIDTH = 236;
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
 export const SIDEBAR_HIDE_THRESHOLD = 160;

@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ConversationQueueEntry, ConversationQueueSnapshot } from "@talent-signal/contracts";
 import { useConversation } from "./use-conversation";
+import { setConversationImageStoreForTest, type DurableConversationImage } from "@/lib/conversation-image-store";
 import { readConversationMessages, writeConversationMessage } from "@/lib/conversation-local";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 const fetcher = vi.hoisted(() => vi.fn());
@@ -16,7 +17,7 @@ const entry: ConversationQueueEntry = { queue_entry_id: MESSAGE, message_id: MES
   objective: "Synthetic", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", revision: 1,
   run_id: "44444444-4444-4444-8444-444444444444", stage: "thinking", cancel_requested: false, failure_code: null };
 function detail(id: string): SessionDetail { return { session_id: id, revision: 1, updated_at: entry.created_at,
-  expires_at: "2026-10-25T00:00:00Z", state: "active", title: "Synthetic", turn_count: 0, is_unread: false,
+  expires_at: new Date(Date.now() + 3_600_000).toISOString(), state: "active", title: "Synthetic", turn_count: 0, is_unread: false,
   scope_kind: "unresolved_intent", person_id: null, relationship_context_id: null, person_label: "", context_label: "",
   deleted_at: null, display_authority: "stale_unconfirmed", composer_draft: null, composer_draft_updated_at: null, turns: [] }; }
 let state: ReturnType<typeof useConversation>;
@@ -35,6 +36,18 @@ async function snapshot(revision: number, active: ConversationQueueEntry | null)
   await act(async () => stream.emit({ contract_version: "2026-08-24.10", session_id: stream.id, revision, paused: false, active, queued: [], preview: null })); await flush();
 }
 beforeEach(() => {
+  const images = new Map<string, DurableConversationImage[]>();
+  setConversationImageStoreForTest({
+    async put(key, next, expected) {
+      if (expected && JSON.stringify((images.get(key) ?? []).map(image => image.attachment_id)) !== JSON.stringify(expected)) return false;
+      if (next.length) images.set(key, [...next]); else images.delete(key);
+      return true;
+    },
+    async get(key) { return images.get(key) ?? []; },
+    async delete(key) { images.delete(key); },
+    async deletePrefix(prefix) { for (const key of images.keys()) if (key.startsWith(prefix)) images.delete(key); },
+    async inventory() { return [...images].map(([key, records]) => ({ key, expiresAt: Math.min(...records.map(image => image.expiresAt)) })); },
+  });
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true); localStorage.clear(); streams = [];
   host = document.createElement("div"); document.body.append(host); root = createRoot(host); fetcher.mockReset();
   fetcher.mockImplementation((url: string) => {
@@ -45,7 +58,7 @@ beforeEach(() => {
     return Promise.resolve(Response.json({ detail: detail(id) }));
   });
 });
-afterEach(async () => { await act(async () => root.unmount()); host.remove(); localStorage.clear(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); host.remove(); localStorage.clear(); setConversationImageStoreForTest(undefined); vi.unstubAllGlobals(); });
 
 it.each(["binding", "scope", "session"])("fences real observations through %s ABA while preserving the composer node", async change => {
   await render(); await snapshot(1, entry); const oldOwner = state.taskObservation.owner;

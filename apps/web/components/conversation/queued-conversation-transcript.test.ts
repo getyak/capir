@@ -164,9 +164,8 @@ it("composes the transcript: send time, user objective, observed status, executi
   expect(document.querySelectorAll("[data-run-update]")).toHaveLength(0);
   const transcript = document.querySelector('[role="region"][aria-label="对话记录"]');
   expect(transcript).not.toBeNull();
-  expect(transcript?.querySelector('details[data-phase="running"] summary [role="status"]')?.textContent).toBe("正在处理");
-  // The independently projected header capsule reports the real current stage;
-  // it must not replace or satisfy the transcript's execution-status assertion.
+  expect(transcript?.querySelector('details[data-phase="running"] summary [role="status"]')).toBeNull();
+  // The header owns the actual current stage; inline details do not repeat it.
   expect(document.querySelector('header [data-session-task-capsule] [role="status"]')?.textContent).toBe("正在查找相关人物");
   expect(text).not.toContain("收到，我先理清这件事。");
   expect(document.querySelector('[aria-label="回复草稿，尚未完成"]')?.textContent).toContain("我先核对两人的沟通记录。");
@@ -188,8 +187,8 @@ it("composes the transcript: send time, user objective, observed status, executi
   // The session title floats as the single centered heading.
   expect(document.querySelector("h1")?.textContent).toBe("试点合作 · 下一步");
   // Historical readback carries the collapsed execution record for its turn.
-  expect(text).toContain("执行完成");
-  expect(text).not.toContain("待你确认");
+  expect(text).toContain("确认状态待核对");
+  expect(text).not.toContain("已整理好，请你确认");
 });
 
 it("clears waiting-review on this execution card after canonical calendar dismissal", async () => {

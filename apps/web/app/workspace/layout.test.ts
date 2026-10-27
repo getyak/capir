@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, expect, it, vi } from "vitest";
-import { act, cloneElement, createElement, isValidElement, type ReactElement, type ReactNode } from "react";
+import { act, Children, cloneElement, createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 const {claims,settings,testCookie,auth} = vi.hoisted(()=>({claims:vi.fn(),settings:vi.fn(),testCookie:{present:true},auth:vi.fn()}));
@@ -8,7 +8,7 @@ vi.mock("@/lib/server/marketing-locale",()=>({getMarketingLocale:async()=>"zh-CN
 vi.mock("@/auth",()=>({auth}));
 vi.mock("next/navigation",()=>({useRouter:()=>({refresh:vi.fn()})}));
 vi.mock("next/headers",()=>({cookies:async()=>({has:()=>testCookie.present})}));
-vi.mock("@/app/login/actions",()=>({signOutOfWorkspace:vi.fn()}));
+vi.mock("@/app/login/actions",()=>({signOutFromAccountMenu:vi.fn()}));
 vi.mock("@/app/workspace/settings/testing/actions",()=>({leaveTestWorkspace:vi.fn()}));
 vi.mock("@/lib/server/accountBackend",()=>({loadAccountSettings:settings}));
 vi.mock("@/lib/server/backendAuth",()=>({authSecret:()=>"synthetic-layout-test-secret",readBackendSessionClaims:claims,readPrimaryBackendSessionClaims:async()=>null}));
@@ -17,6 +17,7 @@ vi.mock("@/components/talent-signal-lab/lab-shell",()=>({TalentSignalLabShell:()
 vi.mock("@/components/workspace-shell-nav",()=>({WorkspaceCaptureLink:()=>null,WorkspaceMobileSourcesLink:()=>null,WorkspaceShellNav:()=>null}));
 vi.mock("@/components/theme-toggle",()=>({ThemeToggle:()=>null}));
 import WorkspaceLayout from "./layout";
+import { WorkspaceSessionBoundary } from "@/components/workspace-session-boundary";
 import { WorkspaceAccessRecovery } from "@/components/workspace-access-recovery";
 import { WorkspaceNavigationContinuityProvider } from "@/components/workspace-navigation-continuity";
 import { workspaceSessionsBinding, workspaceSessionDraftStorageScope } from "@/lib/server/workspaceSessions";
@@ -25,9 +26,12 @@ import { workspaceSessionsBinding, workspaceSessionDraftStorageScope } from "@/l
 // Resolve this real server boundary without asking React DOM to run it as a
 // Client Component; the returned UI and supplied recovery action stay real.
 async function resolveRecovery(node: ReactNode): Promise<ReactNode> {
-  if (Array.isArray(node)) return Promise.all(node.map(resolveRecovery));
+  if (Array.isArray(node)) return Promise.all(Children.toArray(node).map(resolveRecovery));
   if (!isValidElement(node)) return node;
-  if (node.type === WorkspaceAccessRecovery) return WorkspaceAccessRecovery(node.props as Parameters<typeof WorkspaceAccessRecovery>[0]);
+  if (node.type === WorkspaceAccessRecovery) {
+    const resolved = await WorkspaceAccessRecovery(node.props as Parameters<typeof WorkspaceAccessRecovery>[0]);
+    return cloneElement(resolved, { key: node.key });
+  }
   const element = node as ReactElement<{children?: ReactNode}>;
   return element.props.children === undefined ? element : cloneElement(element, {}, await resolveRecovery(element.props.children));
 }
@@ -38,13 +42,20 @@ function findNavigation(node: ReactNode): ReactElement<{scope: string; binding: 
   return findNavigation((node as ReactElement<{children?: ReactNode}>).props.children);
 }
 
+async function resolvedWorkspaceLayout(props: Parameters<typeof WorkspaceLayout>[0]) {
+  return await resolveRecovery(await WorkspaceLayout(props)) as Awaited<ReturnType<typeof WorkspaceLayout>>;
+}
+
 function snapshot(value: unknown): string {
  return JSON.stringify(value, (key,item) => key === "type" || key.startsWith("_") ? undefined : item);
 }
 beforeEach(()=>{vi.clearAllMocks();auth.mockResolvedValue({user:{name:"Owner"}});testCookie.present=true;settings.mockRejectedValue(new Error("Settings unavailable"));});
 it("retains effective workspace scope when optional settings fail",async()=>{
  claims.mockResolvedValue({backendAccessToken:"synthetic-owned-session",backendRole:"member",backendUsername:"owner",backendAccountId:"rendered-test",backendUserId:"user-1",backendAccountName:"Test",backendAccountSlug:"lab-test",backendExpiresAt:new Date(Date.now()+60000).toISOString()});
- const rendered=snapshot(await WorkspaceLayout({children:"operational-child"}));
+ const layout=await resolvedWorkspaceLayout({children:"operational-child"});
+ expect(layout.type).toBe(WorkspaceSessionBoundary);
+ expect(layout.props.binding).toMatch(/^[a-f0-9]{64}$/);
+ const rendered=snapshot(layout);
  expect(rendered).toContain('"data-workspace-scope":"rendered-test"');
  expect(rendered).toContain("operational-child");
  expect(settings).toHaveBeenCalledOnce();
@@ -129,6 +140,7 @@ it.each(["public-session", "backend-claims"])("keeps %s transient failure retrya
   if (source === "public-session") auth.mockResolvedValue({user:{name:"Owner"},renewalStatus:"unavailable"});
   else claims.mockRejectedValue(Object.assign(new Error("temporary auth service failure"), {code:"session_temporarily_unavailable"}));
   const layout = await WorkspaceLayout({children:"private-operational-child"});
+  expect(layout.type).toBe(WorkspaceSessionBoundary); expect(layout.props.binding).toBeNull();
   const rendered = snapshot(layout);
   expect(rendered).toContain('"unavailable":true');
   expect(rendered).not.toContain('"sessionVersion":null');
@@ -137,4 +149,13 @@ it.each(["public-session", "backend-claims"])("keeps %s transient failure retrya
   const html = renderToStaticMarkup(await resolveRecovery(layout));
   expect(html).toContain("重试连接"); expect(html).toContain("无需重新登录");
   expect(html).not.toContain("/login?");
+});
+
+it("retains a null-scope completion observer when authentication disappears without taking over the child redirect", async () => {
+  auth.mockResolvedValue(null);
+  const layout = await resolvedWorkspaceLayout({ children: "callback-owned-child" });
+  expect(layout.type).toBe(WorkspaceSessionBoundary); expect(layout.props.binding).toBeNull();
+  const rendered = snapshot(layout); expect(rendered).toContain("callback-owned-child");
+  expect(rendered).toContain('"sessionVersion":null'); expect(rendered).toContain('"storageScope":null');
+  expect(claims).not.toHaveBeenCalled(); expect(settings).not.toHaveBeenCalled();
 });

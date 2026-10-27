@@ -148,6 +148,11 @@ describe("native desktop chrome", () => {
     expect(account()).toHaveLength(1);
     expect(account()[0].textContent).toContain("账号与偏好 ↗");
     expect(host.textContent).toContain("浏览器登录状态可能与本应用不同");
+    // The browser boundary belongs to its action, not a separate menu row.
+    const boundary = account()[0].querySelector("small");
+    expect(boundary?.textContent).toContain("浏览器登录状态可能与本应用不同");
+    expect(boundary?.id).toBeTruthy();
+    expect(account()[0].getAttribute("aria-describedby")).toBe(boundary?.id);
     expect(deviceLinks()).toHaveLength(2);
     expect(Array.from(deviceLinks(), link => link.textContent)).toContain("此 Mac 设置与检测");
     // The support shortcut stays an ordinary Web route; only the account

@@ -61,17 +61,17 @@ afterEach(async () => {
 describe("desktop sidebar split", () => {
   it.each([140, 320])("restores the starting width when a drag returns from %s", async destination => {
     await render();
-    await pointer("pointerdown", 248);
+    await pointer("pointerdown", 236);
     await pointer("pointermove", destination);
-    await pointer("pointermove", 248);
-    await pointer("pointerup", 248);
-    expect(width()).toBe(248);
-    expect(saved()).toEqual({ width: 248, hidden: false, collapsed: false });
+    await pointer("pointermove", 236);
+    await pointer("pointerup", 236);
+    expect(width()).toBe(236);
+    expect(saved()).toEqual({ width: 236, hidden: false, collapsed: false });
   });
 
   it("previews a drag and only persists its final width, including reload", async () => {
     await render();
-    await pointer("pointerdown", 248);
+    await pointer("pointerdown", 236);
     await pointer("pointermove", 320);
     expect(width()).toBe(320);
     expect(window.localStorage.getItem(SIDEBAR_LAYOUT_KEY)).toBeNull();
@@ -86,14 +86,14 @@ describe("desktop sidebar split", () => {
 
   it("hides at the threshold and restores by dragging from the same left edge", async () => {
     await render();
-    await pointer("pointerdown", 248);
+    await pointer("pointerdown", 236);
     await pointer("pointermove", 140);
     expect(width()).toBe(0);
     expect(sidebar().hasAttribute("inert")).toBe(true);
     expect(sidebar().getAttribute("aria-hidden")).toBe("true");
     expect(document.activeElement).toBe(edge());
     await pointer("pointerup", 140);
-    expect(saved().width).toBe(248);
+    expect(saved().width).toBe(236);
     await pointer("pointerdown", 0);
     await pointer("pointermove", 300);
     await pointer("pointerup", 300);
@@ -104,22 +104,22 @@ describe("desktop sidebar split", () => {
 
   it.each(["pointercancel", "lostpointercapture", "Escape"])("cancels a resize on %s without saving it", async cancellation => {
     await render();
-    await pointer("pointerdown", 248);
+    await pointer("pointerdown", 236);
     await pointer("pointermove", 350);
     if (cancellation === "Escape") await key("Escape");
     else await pointer(cancellation, 350);
-    expect(width()).toBe(248);
+    expect(width()).toBe(236);
     expect(window.localStorage.getItem(SIDEBAR_LAYOUT_KEY)).toBeNull();
     expect(captures.size).toBe(0);
     await pointer("pointerup", 350);
-    expect(width()).toBe(248);
+    expect(width()).toBe(236);
   });
 
   it("supports keyboard resizing, hiding and restoring the last useful width", async () => {
     await render();
-    await key("ArrowRight"); expect(width()).toBe(264);
+    await key("ArrowRight"); expect(width()).toBe(252);
     await key("Home"); expect(width()).toBe(0);
-    await key("Enter"); expect(width()).toBe(264);
+    await key("Enter"); expect(width()).toBe(252);
     await key("End"); expect(width()).toBeLessThanOrEqual(420);
     await key("Home");
     await act(async () => edge().dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
@@ -136,6 +136,16 @@ describe("desktop sidebar split", () => {
     expect(window.localStorage.getItem(WORKSPACE_RAIL_COLLAPSED_KEY)).toBe("false");
   });
 
+  it.each([224, 248, 320])("retains a saved %spx width with navigation labels available", async savedWidth => {
+    window.localStorage.setItem(SIDEBAR_LAYOUT_KEY, JSON.stringify({ width: savedWidth, hidden: false }));
+    await render();
+    expect(width()).toBe(savedWidth);
+    expect(host.firstElementChild?.getAttribute("data-sidebar-compact")).toBe("false");
+    await key("Home");
+    await key("Enter");
+    expect(width()).toBe(savedWidth);
+  });
+
   it("keeps mobile navigation available after a desktop hide, including viewport changes", async () => {
     await render(); await key("Home");
     mobile = true;
@@ -150,12 +160,12 @@ describe("desktop sidebar split", () => {
 
   it("ignores non-primary pointers and clamps width to leave room for the conversation", async () => {
     await render();
-    await pointer("pointerdown", 248, { button: 2 }); await pointer("pointermove", 400); await pointer("pointerup", 400);
-    expect(width()).toBe(248);
-    await pointer("pointerdown", 248, { isPrimary: false }); await pointer("pointermove", 400); await pointer("pointerup", 400);
-    expect(width()).toBe(248);
+    await pointer("pointerdown", 236, { button: 2 }); await pointer("pointermove", 400); await pointer("pointerup", 400);
+    expect(width()).toBe(236);
+    await pointer("pointerdown", 236, { isPrimary: false }); await pointer("pointermove", 400); await pointer("pointerup", 400);
+    expect(width()).toBe(236);
     Object.defineProperty(host.firstElementChild, "clientWidth", { value: 761 });
-    await pointer("pointerdown", 248); await pointer("pointermove", 1000); await pointer("pointerup", 1000);
+    await pointer("pointerdown", 236); await pointer("pointermove", 1000); await pointer("pointerup", 1000);
     expect(width()).toBe(401);
   });
 
@@ -171,7 +181,7 @@ describe("desktop sidebar split", () => {
 
   it("rejects corrupt stored sizes and follows cross-window preferences", async () => {
     window.localStorage.setItem(SIDEBAR_LAYOUT_KEY, '{"width":"9999","hidden":"true"}');
-    await render(); expect(width()).toBe(248);
+    await render(); expect(width()).toBe(236);
     window.localStorage.setItem(SIDEBAR_LAYOUT_KEY, '{"width":9999,"hidden":false}');
     await act(async () => window.dispatchEvent(new StorageEvent("storage")));
     expect(width()).toBe(420);
@@ -181,8 +191,8 @@ describe("desktop sidebar split", () => {
     await render();
     vi.spyOn(window, "localStorage", "get").mockImplementation(() => { throw new Error("denied"); });
     await key("Home"); expect(width()).toBe(0);
-    await key("Enter"); expect(width()).toBe(248);
-    await key("ArrowRight"); expect(width()).toBe(264);
+    await key("Enter"); expect(width()).toBe(236);
+    await key("ArrowRight"); expect(width()).toBe(252);
   });
 
   it("preserves in-memory sizing across unrelated storage events when writes fail", async () => {
@@ -193,6 +203,6 @@ describe("desktop sidebar split", () => {
     expect(width()).toBe(0);
     await key("Enter"); await key("ArrowRight");
     await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: "locale" })));
-    expect(width()).toBe(264);
+    expect(width()).toBe(252);
   });
 });
