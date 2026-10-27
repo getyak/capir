@@ -29,6 +29,7 @@ vi.mock("next/navigation", () => ({
 import { QueuedConversation } from "./queued-conversation";
 import { conversationHome } from "@/lib/conversation-local";
 import * as conversationModule from "./use-conversation";
+import styles from "./queued-conversation.module.css";
 
 const SCOPE = "e".repeat(64);
 const SESSION = "11111111-1111-4111-8111-111111111111";
@@ -206,6 +207,192 @@ it("returns focus to the same row's Edit button after an explicit cancel", async
   await act(async () => { control("取消")!.click(); });
   expect(editForm()).toBeNull();
   expect(document.activeElement).toBe(editButton());
+});
+
+it("keeps the first accepted waiting message once in the transcript and its management out of the composer dock", async () => {
+  await renderWithQueuedEntry();
+  expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
+  const controls = document.querySelector<HTMLElement>('[aria-label="可控补充"]')!;
+  expect(controls.closest('[role="region"]')?.getAttribute("aria-label")).toBe("对话记录");
+  expect(controls.textContent).not.toContain("接下来");
+  expect(mount!.querySelector(`.${styles.dock} [aria-label="可控补充"]`)).toBeNull();
+  expect(mount!.querySelector('[data-session-task-capsule][data-phase="queued"]')).not.toBeNull();
+  expect(mount!.textContent).toContain("排队等待处理");
+  expect(mount!.textContent).toContain("已等待");
+  expect(editButton()).not.toBeNull();
+  expect(document.querySelector('[aria-label="移除第 1 条待处理消息"]')).not.toBeNull();
+});
+
+it("keeps the same user message and composer through a queued-to-running transition without repeating the text", async () => {
+  await renderWithQueuedEntry();
+  const bubble = document.querySelector("[data-user-message]");
+  const composer = document.getElementById("queued-conversation-composer");
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [], queuedEntry("待编辑的原位消息", {
+    status: "running", run_id: "55555555-5555-4555-8555-555555555555", started_at: "2026-09-24T00:00:01.000Z", stage: "preparing",
+  })))));
+  await flush();
+  expect(document.querySelector("[data-user-message]")).toBe(bubble);
+  expect(document.getElementById("queued-conversation-composer")).toBe(composer);
+  expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
+  expect(editButton()).toBeNull();
+});
+
+it("keeps subsequent waiting and failed messages once with inline controls and the original queue order", async () => {
+  await renderConversation();
+  const second = "66666666-6666-4666-8666-666666666666";
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [queuedEntry(), queuedEntry("后续失败原文", {
+    message_id: second, queue_entry_id: second, sequence: 2, status: "failed", failure_code: "MODEL_RUN_TIMEOUT", created_at: "2026-09-24T00:00:02.000Z",
+  })]))));
+  await flush();
+  expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
+  expect(mount!.textContent!.split("后续失败原文").length - 1).toBe(1);
+  const groups = [...mount!.querySelectorAll('[aria-label="可控补充"]')];
+  expect(groups).toHaveLength(2);
+  expect(groups.every(group => group.closest('[role="region"]'))).toBe(true);
+  expect(groups[0]!.querySelector('[aria-label="编辑第 1 条待处理消息"]')).not.toBeNull();
+  expect(groups[1]!.textContent).toContain("超时");
+  expect(groups[1]!.textContent).toContain("重试");
+});
+
+function postedMutations() {
+  return fetcher.mock.calls.filter(([url, init]) => String(url).endsWith("/conversation-queue/mutations") && init?.method === "POST")
+    .map(([, init]) => JSON.parse(init.body));
+}
+
+it("keeps paused continuation deliberate and attached to the waiting message", async () => {
+  await renderWithQueuedEntry();
+  await act(async () => emit?.(frame("snapshot", { ...snapshot(6, [queuedEntry()]), paused: true })));
+  await flush();
+  const resume = control("继续处理")!;
+  expect(resume.closest('[role="region"]')).not.toBeNull();
+  expect(postedMutations()).toEqual([]);
+  mutations = () => Response.json({ snapshot: snapshot(7, [queuedEntry()]) });
+  await act(async () => resume.click()); await flush();
+  expect(postedMutations().map(input => input.kind)).toEqual(["continue"]);
+});
+
+it("retries the exact failed queue entry through its inline control without hiding the failure early", async () => {
+  await renderWithQueuedEntry();
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [queuedEntry("待编辑的原位消息", { status: "failed", failure_code: "MODEL_RUN_TIMEOUT" })]))));
+  await flush();
+  const retry = control("重试")!;
+  expect(retry.closest('[role="region"]')).not.toBeNull();
+  expect(mount!.textContent).toContain("超时"); expect(postedMutations()).toEqual([]);
+  mutations = () => Response.json({ snapshot: snapshot(7, [queuedEntry()]) });
+  await act(async () => retry.click()); await flush();
+  expect(postedMutations().map(input => input.kind)).toEqual(["retry", "continue"]);
+  expect(postedMutations()[0].queue_entry_id).toBe(MID);
+});
+
+it("withdraws only the selected message after the same-ID receipt confirms removal", async () => {
+  await renderWithQueuedEntry();
+  mutations = () => Response.json({ applied: { kind: "withdraw", queue_entry_id: MID, status: null }, snapshot: snapshot(6, []) });
+  const remove = document.querySelector<HTMLButtonElement>('[aria-label="移除第 1 条待处理消息"]')!;
+  expect(remove.closest('[role="region"]')).not.toBeNull();
+  await act(async () => remove.click()); await flush();
+  expect(postedMutations()).toHaveLength(1);
+  expect(postedMutations()[0]).toMatchObject({ kind: "withdraw", queue_entry_id: MID, expected_revision: 5 });
+  expect(mount!.textContent).not.toContain("待编辑的原位消息");
+});
+
+it("keeps supported steering delivery visible with locked controls and no invented separate run", async () => {
+  await renderConversation();
+  const run = "77777777-7777-4777-8777-777777777777";
+  const active = queuedEntry("当前运行原文", { queue_entry_id: "active", message_id: "active-message", status: "running", run_id: run });
+  const steer = (overrides = {}) => queuedEntry("待编辑的原位消息", { sequence: 2, steers_run_id: run, steer_state: "dispatching", ...overrides });
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [steer()], active)))); await flush();
+  expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
+  const controls = document.querySelector<HTMLElement>('[aria-label="可控补充"]')!;
+  expect(controls.closest('[role="region"]')).not.toBeNull();
+  expect(controls.closest('[role="article"]')).not.toBeNull();
+  expect(controls.closest('[role="article"]')!.querySelector('details[data-phase]')).toBeNull();
+  expect(controls.textContent).toContain("补充");
+  expect(controls.textContent).toContain("移除任务消息时，也会移除仍待处理的补充。");
+  expect(editButton()?.disabled).toBe(true);
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="移除第 1 条待处理消息"]')?.disabled).toBe(true);
+  await act(async () => emit?.(frame("snapshot", snapshot(7, [steer({ steer_state: "delivered", steer_delivered: true })], active)))); await flush();
+  expect(document.querySelector('[aria-label="可控补充"]')).toBe(controls);
+  expect(editButton()?.disabled).toBe(true);
+  expect(postedMutations()).toEqual([]);
+});
+
+it.each([true, false])("preserves editor focus ownership when the waiting message starts running (moved: %s)", async moved => {
+  await renderWithQueuedEntry(); await act(async () => editButton()!.click());
+  const elsewhere = document.querySelector<HTMLElement>("main summary")!;
+  if (moved) await act(async () => elsewhere.focus());
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [], queuedEntry("待编辑的原位消息", { status: "running", run_id: "77777777-7777-4777-8777-777777777777" })))));
+  await flush();
+  expect(editForm()).toBeNull();
+  expect(document.activeElement).toBe(moved ? elsewhere : document.getElementById("queued-conversation-composer"));
+});
+
+it.each([true, false])("hands off a disappearing queue button only while it owns focus (moved: %s)", async moved => {
+  await renderWithQueuedEntry();
+  await act(async () => editButton()!.focus());
+  const elsewhere = document.querySelector<HTMLElement>("main summary")!;
+  if (moved) await act(async () => elsewhere.focus());
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [], queuedEntry("待编辑的原位消息", { status: "running", run_id: "77777777-7777-4777-8777-777777777777" })))));
+  await flush();
+  expect(document.activeElement).toBe(moved ? elsewhere : document.getElementById("queued-conversation-composer"));
+});
+
+it("does not hand off a queue button after a pointer moved to nonfocusable space", async () => {
+  await renderWithQueuedEntry(); await act(async () => editButton()!.focus());
+  const blank = document.createElement("div"); document.querySelector("main")!.append(blank);
+  await act(async () => blank.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" })));
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [], queuedEntry("待编辑的原位消息", { status: "running", run_id: "77777777-7777-4777-8777-777777777777" })))));
+  await flush(); expect(document.activeElement).toBe(document.body);
+});
+
+it("does not hand off a queue button into a replacement account owner", async () => {
+  await renderWithQueuedEntry(); await act(async () => editButton()!.focus());
+  await rerenderConversation({ chatBinding: "replacement-account" });
+  await act(async () => emit?.(frame("snapshot", snapshot(7, [])))); await flush();
+  expect(document.activeElement).toBe(document.body);
+});
+
+it.each(["unsupported", "detached"])("preserves the same queue editor, draft and IME ownership when steering becomes %s", async mode => {
+  await renderConversation();
+  const run = "77777777-7777-4777-8777-777777777777";
+  const active = queuedEntry("当前运行原文", { queue_entry_id: "active", message_id: "active-message", status: "running", run_id: run });
+  const waiting = queuedEntry("待编辑的原位消息", { sequence: 2, steers_run_id: run, steer_state: "awaiting" });
+  await act(async () => emit?.(frame("snapshot", snapshot(6, [waiting], active)))); await flush();
+  await act(async () => editButton()!.click()); await typeInEditor("尚未结束的拼音输入");
+  const field = editField()!; let ended = 0;
+  field.addEventListener("compositionend", () => { ended += 1; });
+  await act(async () => field.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "pin" })));
+  const next: Record<string, unknown> = { ...waiting, steer_state: "unsupported" };
+  if (mode === "detached") { delete next.steers_run_id; delete next.steer_state; }
+  await act(async () => emit?.(frame("snapshot", snapshot(7, [next], active))));
+  await flush();
+  expect(editField()).toBe(field); expect(document.activeElement).toBe(field);
+  expect(field.value).toBe("尚未结束的拼音输入"); expect(ended).toBe(0);
+  await act(async () => field.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "拼" })));
+  expect(ended).toBe(1);
+});
+
+it.each([false, true])("keeps persistence-pending recovery on a canonical message without repeating it (steered member: %s)", async member => {
+  const rootId = member ? "88888888-8888-4888-8888-888888888888" : MID;
+  const recovered = { ...initialDetail, revision: 8, turn_count: 1, turns: [{
+    id: rootId, objective: member ? "原任务正文" : "待编辑的原位消息", createdAt: initialDetail.updated_at,
+    ...(member ? { steeredMessages: [{ id: MID, objective: "待编辑的原位消息", createdAt: initialDetail.updated_at }] } : {}),
+    response: { taskID: "synthetic-task", contractVersion: "2026-08-24.10", createdAt: initialDetail.updated_at,
+      contextManifestID: "", knowledgeSnapshotID: "", disposition: "answer", savedBlocks: [] },
+  }] };
+  await renderConversation({ initialDetail: recovered });
+  await act(async () => emit?.(frame("snapshot", { ...snapshot(9, [queuedEntry("待编辑的原位消息", {
+    status: "failed", failure_code: "PERSISTENCE_PENDING", ...(member ? { steers_run_id: "original-run", steer_delivered: true } : {}),
+  })]), paused: true }))); await flush();
+  expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
+  const retry = control("重试")!; expect(retry).toBeDefined(); expect(retry.closest('[role="region"]')).not.toBeNull();
+  mutations = () => Response.json({ snapshot: snapshot(10, [queuedEntry()]) });
+  await act(async () => retry.click()); await flush();
+  expect(postedMutations().map(input => input.kind)).toEqual(["retry", "continue"]);
+  expect(postedMutations()[0].queue_entry_id).toBe(MID);
+  mutations = () => Response.json({ applied: { kind: "withdraw", queue_entry_id: MID, status: null }, snapshot: snapshot(11, []) });
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="移除第 1 条待处理消息"]')!.click()); await flush();
+  expect(postedMutations().at(-1)).toMatchObject({ kind: "withdraw", queue_entry_id: MID, expected_revision: 10 });
+  expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
 });
 
 it("returns focus to the same row's Edit button after a successful save", async () => {

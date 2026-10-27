@@ -2,7 +2,7 @@
 
 import {
   invalidateWorkspaceDirectory,
-  workspaceDirectoryMutationInvalidates,
+  workspaceDirectoryMutationInvalidationMode,
 } from "@/lib/workspace-directory-cache";
 import { WORKSPACE_SESSION_STATUS_HEADER, workspaceSessionExpired } from "@/lib/backend-session";
 
@@ -36,14 +36,10 @@ export async function workspaceSessionFetch(
     // A successful private-data mutation must not leave a pre-mutation
     // snapshot in the shared in-memory cache. Reads and unrelated endpoints
     // are untouched.
-    if (
-      response.ok &&
-      local &&
-      target &&
-      workspaceDirectoryMutationInvalidates(method, target.pathname)
-    ) {
-      invalidateWorkspaceDirectory(undefined, "revalidate");
-    }
+    const mode = response.ok && local && target
+      ? workspaceDirectoryMutationInvalidationMode(method, target.pathname)
+      : null;
+    if (mode) invalidateWorkspaceDirectory(undefined, mode);
     return response;
   }
   // Any 401 on the scoped workspace API must not leave a cached private

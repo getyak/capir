@@ -263,7 +263,9 @@ it("keeps the queued supplement state and its existing queue controls", async ()
   expect(document.querySelectorAll("[data-user-message]")).toHaveLength(2);
   const queue = document.querySelector("[aria-label='可控补充']");
   expect(queue).not.toBeNull();
-  expect(queue?.textContent).toContain("可控补充的下一条");
+  expect(queue?.closest('[role="region"]')).not.toBeNull();
+  expect(queue?.textContent).not.toContain("可控补充的下一条");
+  expect(document.body.textContent!.split("可控补充的下一条").length - 1).toBe(1);
   expect(document.querySelector("button[aria-label='优先处理第 1 条待处理消息']")).not.toBeNull();
 });
 
