@@ -278,3 +278,13 @@ it("uses the exact existing context as the empty-state next action", async () =>
   expect(host.querySelector("a")?.getAttribute("href")).toBe(`/workspace?person=${personId}&context=${sessionId}&session=${sessionId}`);
   expect(host.querySelector("a")?.textContent).toContain("去相关对话");
 });
+
+it("returns focus to the empty-state action when the last page has no ordinary memory", async () => {
+  await mount([], true);
+  button("继续加载记忆").focus();
+  fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [], has_more: false, next_cursor: null }));
+  await click("继续加载记忆");
+  expect(host.querySelector("[data-memory-load-more]")).toBeNull();
+  expect(host.querySelector("nav")).toBeNull();
+  expect(document.activeElement).toBe(host.querySelector("[data-memory-empty-action]"));
+});

@@ -113,17 +113,18 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
     handledFocus.current = focusRequest;
     if (focusRequest.binding !== binding || focusRequest.personId !== personId) return;
     const modeButton = root.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
+    const emptyAction = root.current?.querySelector<HTMLAnchorElement>("[data-memory-empty-action]");
     if (focusRequest.kind === "edit") {
       const button = Array.from(root.current?.querySelectorAll<HTMLButtonElement>("[data-memory-edit]") ?? [])
         .find(element => element.dataset.memoryEdit === focusRequest.id);
-      (button ?? modeButton)?.focus();
+      (button ?? modeButton ?? emptyAction)?.focus();
       return;
     }
     const active = document.activeElement;
     if (active !== focusRequest.button && active !== document.body && active?.isConnected) return;
     const firstNew = Array.from(root.current?.querySelectorAll<HTMLElement>("[data-memory-item]") ?? [])
       .find(element => !focusRequest.previous.has(element.dataset.memoryItem));
-    (firstNew ?? root.current?.querySelector<HTMLElement>("[data-memory-load-more]") ?? modeButton)?.focus();
+    (firstNew ?? root.current?.querySelector<HTMLElement>("[data-memory-load-more]") ?? modeButton ?? emptyAction)?.focus();
   }, [focusRequest, controller.edit, controller.loadingMore, controller.items, controller.hasMore, binding, personId]);
 
   function restoreFocus(id: string) {
@@ -195,7 +196,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
       {controller.hasMore ? <div className={styles.pagination}><Button data-memory-load-more variant="ghost" disabled={controller.loadingMore || Boolean(edit)} onClick={() => void loadMore()}>{controller.loadingMore ? t("正在加载…") : t("继续加载记忆")}</Button><span>{t("还有已保存内容")}</span></div> : null}
     </section> : <div className={styles.emptyMemory}>
       <p>{t("还没有关于这个人的记忆。")}</p>
-      <Link className={styles.emptyAction} href={emptyHref}>{contexts.length ? t("去相关对话") : t("开始记录")} <ArrowSquareOut size={14} aria-hidden="true" /></Link>
+      <Link data-memory-empty-action className={styles.emptyAction} href={emptyHref}>{contexts.length ? t("去相关对话") : t("开始记录")} <ArrowSquareOut size={14} aria-hidden="true" /></Link>
     </div>}
     {research.length ? <details className={styles.researchDisclosure}><summary>{t("研究笔记")} <span>{t("AI 整理 · 待复核")}</span><CaretDown size={14} aria-hidden="true" /></summary><ResearchNotebook items={research} /></details> : null}
   </div>;
