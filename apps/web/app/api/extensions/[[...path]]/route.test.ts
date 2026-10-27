@@ -57,6 +57,42 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+it("relays only bound raster receipt images and rejects invalid indices", async () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  upstream.mockResolvedValue(new Response(new Uint8Array([137, 80, 78, 71]), { headers: { "content-type": "image/png" } }));
+  const response = await GET(request("GET", `/tool-calls/${id}/images/0`), context(["tool-calls", id, "images", "0"]));
+  expect(response.status).toBe(200);
+  expect(response.headers.get("content-type")).toBe("image/png");
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([137, 80, 78, 71]));
+  expect((await GET(request("GET", `/tool-calls/${id}/images/4`), context(["tool-calls", id, "images", "4"]))).status).toBe(404);
+  expect((await GET(request("GET", `/tool-calls/${id}/images/0`, { binding: "stale" }), context(["tool-calls", id, "images", "0"]))).status).toBe(409);
+});
+
+it.each([["en", "Invalid image format."], ["zh-CN", "图片格式无效。"]])("localizes invalid-image diagnostics without widening the proxy: %s", async (locale, message) => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const input = request("GET", `/tool-calls/${id}/images/0`);
+  input.headers.set("accept-language", locale);
+  upstream.mockResolvedValue(new Response("not-raster", { headers: { "content-type": "image/svg+xml" } }));
+  const result = await GET(input, context(["tool-calls", id, "images", "0"]));
+  expect(result.status).toBe(502);
+  expect(result.headers.get("cache-control")).toBe("no-store");
+  expect(await result.json()).toEqual({ message });
+  expect(upstream).toHaveBeenCalledOnce();
+  expect(upstream.mock.calls[0]?.[0]).toBe(`http://127.0.0.1:4317/v1/mcp/tool-calls/${id}/images/0`);
+});
+
+it.each([["en", "The image is too large."], ["ja", "画像が大きすぎます。"]])("retains the raster byte cap with localized diagnostics: %s", async (locale, message) => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const input = request("GET", `/tool-calls/${id}/images/0`);
+  input.headers.set("accept-language", locale);
+  upstream.mockResolvedValue(new Response(new Uint8Array(750_001), { headers: { "content-type": "image/png" } }));
+  const result = await GET(input, context(["tool-calls", id, "images", "0"]));
+  expect(result.status).toBe(502);
+  expect(await result.json()).toEqual({ message });
+  expect(upstream).toHaveBeenCalledOnce();
+  expect(upstream.mock.calls[0]?.[1].signal.aborted).toBe(true);
+});
+
 it("requires authenticated workspace identity before any read or write", async () => {
   claims.mockResolvedValue(null);
   expect((await GET(request("GET", ""), context([]))).status).toBe(401);

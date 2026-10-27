@@ -1,5 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { randomBytes } from "node:crypto";
+import sharp from "sharp";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -124,6 +126,26 @@ afterAll(async () => {
 });
 
 describe("real MCP tools/call transport", () => {
+  it("preserves a validated image beyond the text cap and sends only its manifest to model context", async () => {
+    const pixels = await sharp(randomBytes(256 * 256 * 3), { raw: { width: 256, height: 256, channels: 3 } }).png().toBuffer();
+    expect(pixels.length).toBeGreaterThan(64_000);
+    const server = await syntheticServer(standardHandler({ content: [{ type: "image", mimeType: "image/png", data: pixels.toString("base64") }] }));
+    const result = await performMcpToolCall({ arguments: { query: "synthetic" }, target: await targetFor(server.origin), timeoutMs: 4000, toolName: "lookup" });
+    expect(result.status).toBe("succeeded");
+    expect(result.images).toHaveLength(1);
+    expect(Buffer.from(result.images![0]!.content)).toEqual(pixels);
+    const manifest = JSON.parse(result.resultText!);
+    expect(manifest.content[0]).toMatchObject({ type: "image", image_index: 0, byte_size: pixels.length, media_type: "image/png" });
+    expect(manifest.content[0].data).toBeUndefined();
+  });
+
+  it.each(["image/svg+xml", "image/png"])("does not expose invalid remote image bytes (%s) as a usable asset", async mimeType => {
+    const server = await syntheticServer(standardHandler({ content: [{ type: "image", mimeType, data: Buffer.from("<svg onload='private'>").toString("base64") }] }));
+    const result = await performMcpToolCall({ arguments: { query: "synthetic" }, target: await targetFor(server.origin), timeoutMs: 4000, toolName: "lookup" });
+    expect(result.images ?? []).toHaveLength(0);
+    expect(JSON.parse(result.resultText!).content[0]).toMatchObject({ type: "image", status: "unavailable", error_code: "MCP_IMAGE_INVALID" });
+    expect(result.resultText).not.toContain("PHN2Z");
+  });
   it("runs initialize, initialized, tools/list and tools/call with session headers", async () => {
     const server = await syntheticServer(
       standardHandler({ content: [{ text: "found 1", type: "text" }], isError: false }),

@@ -190,7 +190,9 @@ it("offers prioritize as an explicit control on a waiting supplement and posts t
 
   const queue = document.querySelector("[aria-label='可控补充']");
   expect(queue).not.toBeNull();
-  expect(queue?.textContent).toContain("可控补充的下一条");
+  expect(queue?.closest('[role="region"]')).not.toBeNull();
+  expect(queue?.textContent).not.toContain("可控补充的下一条");
+  expect(document.body.textContent!.split("可控补充的下一条").length - 1).toBe(1);
   expect(queue?.textContent).toContain("完成或停止当前回复后处理");
 
   const prioritize = document.querySelector<HTMLButtonElement>("button[aria-label='优先处理第 1 条待处理消息']");

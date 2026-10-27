@@ -102,12 +102,14 @@ export function workspaceDirectoryAbortError(): Error {
 }
 
 /**
- * `revalidate` drops the snapshot so live readers may re-read (a successful
- * private mutation). `discard` drops it and tells live readers to fail closed
- * instead of re-reading with the same credential (scope change, logout, any
- * 401, session expiry).
+ * All modes drop the shared cache and fence its in-flight reads. `refresh`
+ * allows a mounted reader to keep its same-binding projection while reading
+ * again after an additive send admission. `revalidate` also clears rendered
+ * projections (a potentially destructive private mutation). `discard` clears
+ * them and fails closed instead of re-reading with the same credential
+ * (scope change, logout, any 401, session expiry).
  */
-export type WorkspaceDirectoryInvalidationMode = "revalidate" | "discard";
+export type WorkspaceDirectoryInvalidationMode = "refresh" | "revalidate" | "discard";
 
 export type WorkspaceDirectoryScopeTransition =
   | { kind: "none" }
@@ -367,4 +369,18 @@ export function workspaceDirectoryMutationInvalidates(
   return PRIVATE_DATA_MUTATION_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
+}
+
+/** Only additive queue admission may retain an already authorized projection.
+ * Queue mutations (including Withdraw), identity changes and deletion retain
+ * the conservative clear-before-readback policy. This never preserves cache
+ * entries or grants new readers access to stale data. */
+export function workspaceDirectoryMutationInvalidationMode(
+  method: string,
+  pathname: string,
+): Exclude<WorkspaceDirectoryInvalidationMode, "discard"> | null {
+  if (!workspaceDirectoryMutationInvalidates(method, pathname)) return null;
+  return method.toUpperCase() === "POST" && /^\/api\/workspace-sessions\/[^/]+\/conversation-queue$/.test(pathname)
+    ? "refresh"
+    : "revalidate";
 }

@@ -112,6 +112,7 @@
     "105_conversation_queue_session_expiry",
     "106_desktop_persistent_sessions",
     "107_persistent_user_sessions",
-    "108_capir_persistent_login"
+    "108_capir_persistent_login",
+    "109_mcp_tool_result_images"
   ]
 }

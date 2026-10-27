@@ -8,6 +8,7 @@ import {
   readCachedWorkspaceDirectory,
   subscribeWorkspaceDirectoryInvalidation,
   workspaceDirectoryMutationInvalidates,
+  workspaceDirectoryMutationInvalidationMode,
   workspaceDirectoryScopeTransition,
   type WorkspaceDirectorySnapshot,
 } from "@/lib/workspace-directory-cache";
@@ -76,6 +77,26 @@ describe("disposable workspace directory", () => {
 });
 
 describe("bounded directory continuity cache", () => {
+  it("retains mounted projections only for the exact additive send admission", () => {
+    const admission = "/api/workspace-sessions/11111111-1111-4111-8111-111111111111/conversation-queue";
+    expect(workspaceDirectoryMutationInvalidationMode("POST", admission)).toBe("refresh");
+    expect(workspaceDirectoryMutationInvalidationMode("post", admission)).toBe("refresh");
+    for (const [method, pathname] of [
+      ["POST", `${admission}/mutations`],
+      ["POST", `${admission}/stream`],
+      ["DELETE", admission],
+      ["PATCH", admission],
+      ["POST", "/api/workspace-sessions"],
+      ["DELETE", "/api/workspace-sessions/session-a"],
+      ["POST", "/api/workspace-chat"],
+      ["POST", "/api/local-integration/people"],
+      ["POST", "/api/local-integration/person-merges"],
+    ]) expect(workspaceDirectoryMutationInvalidationMode(method, pathname)).toBe("revalidate");
+    expect(workspaceDirectoryMutationInvalidationMode("GET", admission)).toBeNull();
+    expect(workspaceDirectoryMutationInvalidationMode("PUT", "/api/workspace-sessions/session-a")).toBeNull();
+    expect(workspaceDirectoryMutationInvalidationMode("POST", "/api/telemetry/traces")).toBeNull();
+  });
+
   it("invalidates sent conversations but leaves composer-only saves quiet", () => {
     expect(workspaceDirectoryMutationInvalidates("POST", "/api/workspace-chat")).toBe(true);
     expect(workspaceDirectoryMutationInvalidates("PUT", "/api/workspace-sessions/session-a")).toBe(false);

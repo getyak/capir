@@ -68,6 +68,7 @@ import {
   proposeMcpConnection,
   proposeMcpToolCall,
   readMcpInteraction,
+  readMcpToolResultImage,
   recoverAbandonedMcpClaims,
   recoverAbandonedMcpConnectionWork,
   recoverMcpContinuations,
@@ -360,6 +361,16 @@ export function registerMcpInteractionRoutes(
     ...dependencies,
     continueConversation,
   };
+
+  app.get<{ Params: { id: string; index: string } }>("/v1/mcp/tool-calls/:id/images/:index", {
+    preHandler: [authenticate, noStore],
+    schema: { security, params: Type.Object({ id: Type.String({ format: "uuid" }), index: Type.String({ pattern: "^[0-3]$" }) }) },
+  }, async (request, reply) => {
+    const image = await readMcpToolResultImage(pool, request.auth, request.params.id, Number(request.params.index));
+    if (!image) throw new ApiError(404, "MCP_IMAGE_UNAVAILABLE", "This tool image is no longer available in this conversation.");
+    return reply.header("x-content-type-options", "nosniff").header("content-security-policy", "default-src 'none'; sandbox")
+      .type(image.media_type).send(image.content);
+  });
 
   app.get(
     "/v1/mcp/directory",

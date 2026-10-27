@@ -16,6 +16,11 @@ const json = (body: unknown, status = 200) => Response.json(body, { status, head
 
 /** Every observation and mutation remains bound to the rendered login, including SSE. */
 export async function conversationQueueRoute(request: Request, id: string, action: "read" | "admit" | "mutate" | "stream") {
+  // A proxy can reuse a draining HTTP/1 connection for subscription retries.
+  // Close that transport after both successful and rejected observations so
+  // those retries cannot keep Next's server.close() waiting indefinitely.
+  const responseHeaders = action === "stream" ? { ...headers, Connection: "close" } : headers;
+  const json = (body: unknown, status = 200) => Response.json(body, { status, headers: responseHeaders });
   try {
     if (!uuid.test(id)) return json({ message: "对话标识无效。" }, 400);
     if (action === "admit" || action === "mutate") {
@@ -46,7 +51,7 @@ export async function conversationQueueRoute(request: Request, id: string, actio
       signal.throwIfAborted();
       const upstream = await client.openConversationQueueStream(id, signal);
       if (!upstream.ok) return json({ code: "queue_unavailable", message: "暂时无法连接回复。" }, upstream.status);
-      return new Response(upstream.body, { headers: { ...headers, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" } });
+      return new Response(upstream.body, { headers: { ...responseHeaders, "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" } });
     }
     let body: unknown;
     const declared = Number(request.headers.get("content-length") ?? "");
