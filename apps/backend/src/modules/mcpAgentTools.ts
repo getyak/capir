@@ -27,6 +27,7 @@ import {
   listMcpConnections,
   type McpInboundDependencies,
 } from "./mcpConnections.js";
+import { mcpDirectoryCatalog } from "./mcpDirectory.js";
 import type { AuthContext } from "./auth.js";
 
 /**
@@ -127,6 +128,11 @@ export function createWorkspaceMcpConnections(
         connections: connections.slice(0, 20).map(connection => ({
           id: connection.id, friendly_name: connection.friendly_name,
           status: connection.status, revision: connection.revision, tools_count: connection.tools_count,
+        })),
+        directory: mcpDirectoryCatalog().map(entry => ({
+          id: entry.id, name: entry.name,
+          verified_domain: entry.verified_domain,
+          auth_mode: entry.auth_mode, oauth_available: entry.oauth_available,
         })),
         approval: "exact_single_use", settings_path: "/workspace/extensions",
       };
