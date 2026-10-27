@@ -23,10 +23,15 @@ review, privacy, loading, editing, draft or recovery authority changes.
 ## Milestones
 
 1. Complete: focused render/interaction/locale regressions and minimal UI change.
-2. Active: sync current main and independently review committed changes; resolve confirmed P0/P1 findings.
-3. One main PR, latest-head CI/protection readback and normal merge.
-4. Clean-source resident Web deployment and real default-account acceptance;
-   only then Linear Done readback and ownership/resource handoff.
+2. Complete: synced main, independent review, focus fix and re-review; 136 tests passed.
+3. Complete: PR #462 passed its latest-head gates and merged as `dfb7dbe`.
+4. Complete: clean-source resident Web deployed; actual isolated-account
+   desktop/mobile, localization, context navigation, profile provenance, avatar
+   focus, restart recovery and test cleanup verified. Merged-main CI and Security
+   passed. The reference was found in capir-evals and inspected.
+5. Active: repair the automatic downstream iOS release DNS failure, independently
+   review the repair, follow its checks and release to completion, then record
+   Linear Done and resource handoff.
 
 ## Verification
 
@@ -53,3 +58,21 @@ deployment or account-access blockers explicit and leave Linear In Progress.
   rendered-product acceptance is still required.
 - Runtime build/deployment, independent review, PR, CI and Linear Done remain
   outstanding. No Simulator or product model request has been started.
+
+## Delivery deviation: downstream release DNS
+
+The dated pre-review notes above describe the initial state. Final Web evidence
+is in the GET-258 directory under this chat's permanent visualization artifacts.
+The isolated run is now deleted and its local credential was removed.
+
+After the merged-main CI passed, automatic Release iOS run `40528257635` failed
+twice in `Compute release version`: `git fetch` could not resolve `github.com`.
+Earlier release `40505045946` failed at the same boundary. The private backend
+probe succeeded immediately before each failure. The pinned Tailscale Action
+sets macOS Ethernet DNS to `100.100.100.100` and resets it to DHCP only in its
+post-action hook. The repair moves that exact DNS reset to immediately after
+private API verification, before public GitHub, RubyGems and Apple traffic.
+It does not change tailnet policy, TLS, backend authorization or signing.
+
+The policy regression first fails on the missing restoration step. Independent
+review and actual downstream success remain required. Linear stays In Progress.

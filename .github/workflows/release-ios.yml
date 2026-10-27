@@ -236,6 +236,15 @@ jobs:
             sleep "$((attempt * 5))"
           done
 
+      # The pinned action sends all macOS DNS through MagicDNS until its post
+      # hook. Private verification is complete; restore its hosted-runner DNS
+      # now so GitHub, RubyGems and Apple use the runner's public resolvers.
+      - name: Restore runner DNS after the private API probe
+        if: always()
+        run: |
+          networksetup -setdnsservers Ethernet Empty
+          networksetup -setsearchdomains Ethernet Empty
+
       - name: Compute release version
         id: version
         env:

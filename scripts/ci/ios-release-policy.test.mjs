@@ -293,6 +293,30 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
   }
 });
 
+test("iOS packaging restores public DNS after the private backend probe", () => {
+  const workflow = readFileSync(
+    join(repositoryRoot, ".github/workflows/release-ios.yml"),
+    "utf8",
+  );
+  const packageJob = workflow.match(/  package:\n([\s\S]*?)(?=\n  testflight:)/);
+  assert.ok(packageJob, "expected the TestFlight archive job");
+  const job = packageJob[1];
+  const restore = job.match(
+    /      - name: Restore runner DNS after the private API probe\n([\s\S]*?)(?=\n      - name:)/,
+  );
+  assert.ok(restore, "public release traffic must not retain tailnet-wide DNS");
+  assert.match(restore[1], /if: always\(\)/);
+  assert.match(restore[1], /networksetup -setdnsservers Ethernet Empty/);
+  assert.match(restore[1], /networksetup -setsearchdomains Ethernet Empty/);
+  assert.doesNotMatch(restore[1], /continue-on-error|\|\| true/);
+  const probeAt = job.indexOf("node scripts/ios/probe-auth-backend.mjs");
+  const restoreAt = job.indexOf("Restore runner DNS after the private API probe");
+  const publicFetchAt = job.indexOf("Compute release version");
+  assert.ok(probeAt >= 0 && probeAt < restoreAt && restoreAt < publicFetchAt);
+  assert.ok(restoreAt < job.indexOf("Set up Ruby"));
+  assert.ok(restoreAt < job.indexOf("Verify isolated signing repository access"));
+});
+
 test("automatic releases classify all changes since the last trusted receipt", () => {
   const releaseWorkflow = readFileSync(
     join(repositoryRoot, ".github/workflows/release-ios.yml"),
