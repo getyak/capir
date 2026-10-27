@@ -17,6 +17,7 @@ import {
 } from "@/lib/workspace-search";
 import {
   isWorkspaceDirectoryAbort,
+  invalidateWorkspaceDirectory,
   loadWorkspaceDirectory,
   readCachedWorkspaceDirectory,
   subscribeWorkspaceDirectoryInvalidation,
@@ -39,6 +40,10 @@ function cleanLabel(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+/** Loss of directory authority retracts a retained projection; a transport
+ * failure only makes that same authorized projection temporarily stale. */
+class WorkspaceDirectoryAuthorityError extends Error {}
+
 /** A directory response is publishable only after both bodies are decoded and
  * the exact credential binding has been verified. Abort also covers body reads. */
 export async function readWorkspaceDirectory(
@@ -46,19 +51,38 @@ export async function readWorkspaceDirectory(
   signal: AbortSignal,
   request: typeof workspaceSessionFetch = workspaceSessionFetch,
 ): Promise<WorkspaceDirectorySnapshot | null> {
-  const responses = await Promise.all([
-    request("/api/local-integration/people", { cache: "no-store", signal }),
-    request("/api/workspace-sessions", { cache: "no-store", signal }),
-  ]);
-  if (signal.aborted) return null;
-  if (responses.some(response => !response.ok)) throw new Error("Directory unavailable");
-  const [people, sessions] = await Promise.all(responses.map(response => response.json()));
-  if (signal.aborted) return null;
-  if (!binding || sessions?.session_version !== binding ||
-      !Array.isArray(people?.people) || !Array.isArray(sessions?.sessions)) {
-    throw new Error("Directory binding unavailable");
+  const readController = new AbortController();
+  const readSignal = AbortSignal.any([signal, readController.signal]);
+  async function read(source: "people" | "sessions") {
+    const url = source === "people" ? "/api/local-integration/people" : "/api/workspace-sessions";
+    const response = await request(url, { cache: "no-store", signal: readSignal });
+    // Denial from either source retracts immediately, even while its sibling
+    // request is still waiting. A late denied reply from an aborted owner has
+    // no authority over a replacement reader.
+    if (readSignal.aborted) return null;
+    if (response.status === 401 || response.status === 403) {
+      throw new WorkspaceDirectoryAuthorityError("Directory access unavailable");
+    }
+    if (!response.ok) throw new Error("Directory unavailable");
+    const body = await response.json();
+    if (readSignal.aborted) return null;
+    // Validate each decoded source before joining its sibling. A known
+    // credential mismatch cannot wait behind a hung People body or be
+    // downgraded to that sibling's ordinary read timeout.
+    if (source === "sessions" && (!binding || body?.session_version !== binding)) throw new WorkspaceDirectoryAuthorityError("Directory binding unavailable");
+    if (!Array.isArray(source === "people" ? body?.people : body?.sessions)) throw new Error("Directory unavailable");
+    return body;
   }
-  return { people, sessions };
+  try {
+    const [people, sessions] = await Promise.all([read("people"), read("sessions")]);
+    return signal.aborted || !people || !sessions ? null : { people, sessions };
+  } catch (error) {
+    // Once this combined read fails, its sibling has no later publication or
+    // authority over a replacement read, even if it ignores cancellation.
+    readController.abort();
+    if (signal.aborted) return null;
+    throw error;
+  }
 }
 
 export function activeDirectorySessions(payload: WorkspaceDirectorySessionResponse, now = Date.now()): WorkspaceDirectorySessionResponse {
@@ -125,6 +149,14 @@ export function useWorkspaceDirectory(binding: string | null, enabled: boolean) 
       )
         .then(publish)
         .catch((error: unknown) => {
+          if (disposed || expired) return;
+          if (error instanceof WorkspaceDirectoryAuthorityError) {
+            // Every mounted reader of this credential loses its projection.
+            // This fences late bodies without claiming that a generic 403
+            // logged the user out or revoking an unrelated binding.
+            invalidateWorkspaceDirectory(key, "discard");
+            return;
+          }
           // An abort means the entry was invalidated. The invalidator either
           // reloads (a successful mutation) or marks the session expired.
           if (isWorkspaceDirectoryAbort(error)) return;
@@ -137,8 +169,12 @@ export function useWorkspaceDirectory(binding: string | null, enabled: boolean) 
     ) {
       if (disposed || expired) return;
       if (!(keys === null || keys.includes(key))) return;
-      if (mode === "revalidate") {
-        setResult(null);
+      if (mode === "revalidate" || mode === "refresh") {
+        // Additive send admission changes the directory without retracting
+        // existing rows. Keep this mounted, same-binding projection while the
+        // invalidated cache is read again; destructive mutations still clear
+        // it immediately. Scope/401/expiry below always fail closed.
+        if (mode === "revalidate") setResult(null);
         load(true);
         return;
       }

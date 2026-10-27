@@ -277,6 +277,12 @@
 }
 
 .queueWithdrawalNote { margin: 6px 0; color: var(--muted); font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); }
+.inlineQueue { margin-top: 4px; min-width: 0; }
+.inlineQueueRow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.inlineQueue .queueText { white-space: normal; overflow: visible; }
+.inlineQueue .queueActions { flex: 0 1 auto; flex-wrap: wrap; max-width: 100%; min-width: 0; }
+.inlineQueue .prioritize { max-width: 100%; white-space: normal; }
+.inlineQueue .edit textarea { max-width: 100%; }
 
 /* Keep Stop fully reachable when the centered title leaves little side space. */
 @container (max-width:53.125rem) {

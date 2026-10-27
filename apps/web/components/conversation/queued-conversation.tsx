@@ -18,7 +18,6 @@ import { useLocale, useT, type TFunction } from "../locale-provider";
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { conversationNearBottom } from "../session-workbench/session-presentation";
 import { LegacyRecoveryNotice } from "./legacy-recovery-notice";
-import { ConversationImageStrip } from "./conversation-images";
 import { SessionSendTime } from "./session-execution-card";
 import { useConversation } from "./use-conversation";
 import { useConversationAxis } from "./use-conversation-axis";
@@ -207,6 +206,7 @@ export function QueuedConversation(props: Props) {
   const editingRef = useRef<string | null>(null);
   const editOwner = useRef<QueueEditOperation | null>(null);
   const editReturn = useRef<QueueEditOperation | null>(null);
+  const queueFocus = useRef<{ owner: symbol; messageId: string; section: HTMLElement; focusOwned: boolean } | null>(null);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
   useConversationAxis(viewport);
   const reading = useConversationReadingPosition({ viewportRef: viewport, contentRef: content, followsLatestRef: follows, onAwayChange: setAway,
@@ -255,6 +255,7 @@ export function QueuedConversation(props: Props) {
     editOwner.current = null;
     editingRef.current = null;
     editReturn.current = null;
+    queueFocus.current = null;
   }, [readbackOwner, id]);
   function beginEdit(entryId: string, objective: string) {
     const operation: QueueEditOperation = { entry: entryId, owner: readbackOwner, sessionId: id,
@@ -266,17 +267,20 @@ export function QueuedConversation(props: Props) {
     setEditing({ entry: operation.entry, owner: operation.owner, sessionId: operation.sessionId, token: operation.token });
   }
   // A pointer on nonfocusable space can leave document.activeElement at body.
-  // Record that user intent before native blur, only while an editor is open.
+  // Record that intent before native blur while queue controls or an editor
+  // can disappear; a later handoff must not override the user's chosen focus.
   useLayoutEffect(() => {
-    if (!editing || editing.owner !== readbackOwner || editing.sessionId !== id) return;
+    if (!queued.length && (!editing || editing.owner !== readbackOwner || editing.sessionId !== id)) return;
     const moved = (event: PointerEvent) => {
+      const focused = queueFocus.current;
+      if (focused?.owner === readbackOwner) focused.focusOwned = Boolean(event.target instanceof Node && focused.section.contains(event.target));
       const operation = editOwner.current;
-      if (operation?.token !== editing.token) return;
+      if (!editing || operation?.token !== editing.token) return;
       operation.focusOwned = Boolean(event.target instanceof Node && editForm.current?.contains(event.target));
     };
     document.addEventListener("pointerdown", moved, true);
     return () => document.removeEventListener("pointerdown", moved, true);
-  }, [editing, readbackOwner, id]);
+  }, [editing, readbackOwner, id, queued.length]);
   function finishEditing(entryId: string, restore: boolean, operation = editOwner.current) {
     if (!operation || editOwner.current?.token !== operation.token || editingRef.current !== entryId
       || operation.entry !== entryId || operation.owner !== readbackOwner || operation.sessionId !== id) return;
@@ -308,6 +312,15 @@ export function QueuedConversation(props: Props) {
     restoreEditFocus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queued]);
+  useLayoutEffect(() => {
+    const focused = queueFocus.current;
+    if (!focused || focused.owner !== readbackOwner || queued.some(entry => entry.message_id === focused.messageId)) return;
+    queueFocus.current = null;
+    const activeElement = document.activeElement;
+    if (!focused.focusOwned || (activeElement && activeElement !== document.body && !focused.section.contains(activeElement))) return;
+    const composer = document.getElementById("queued-conversation-composer");
+    if (composer instanceof HTMLTextAreaElement && composer.isConnected && !composer.disabled) composer.focus({ preventScroll: true });
+  }, [queued, readbackOwner]);
   const imageCount = chat.attachments.length;
   const canSend = !composing && chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && unresolvedConversationCount(chat.messages, chat.snapshot) < 50;
   const acceptsSteering = Boolean(active?.accepts_steering && !active.cancel_requested);
@@ -457,7 +470,65 @@ export function QueuedConversation(props: Props) {
   const sourceTextByMessageId = useMemo(() => Object.fromEntries(
     turns.flatMap(sessionHumanMessages).map((turn) => [turn.id, turn.objective ?? ""]),
   ), [turns]);
+  // Queue management lives with the same message identity in the transcript.
+  // Admission must not mount a second copy of its text above the composer.
+  function renderQueueActions(messageId: string) {
+    const index = queued.findIndex(entry => entry.message_id === messageId);
+    const entry = queued[index];
+    if (!entry || chat.unavailable) return null;
+    const owned = (action: () => void) => { if (refreshScope.current === readbackOwner) action(); };
+    const editingEntry = editing?.entry === entry.queue_entry_id && editing.owner === readbackOwner && editing.sessionId === id;
+    const supplement = entry.steers_run_id && entry.steer_state !== "unsupported";
+    const showOrder = queued.length > 1 || paused || Boolean(entry.steers_run_id);
+    return <section className={styles.inlineQueue} aria-label={t("conversation.queue.label")} data-queued-message={messageId} data-status={entry.status}
+      onFocusCapture={event => { queueFocus.current = { owner: readbackOwner, messageId, section: event.currentTarget, focusOwned: true }; }}
+      onBlurCapture={event => {
+        const focused = queueFocus.current;
+        if (!focused || focused.owner !== readbackOwner || focused.messageId !== messageId || event.currentTarget.contains(event.relatedTarget)) return;
+        const target = event.target;
+        if (!target.isConnected || (target instanceof HTMLButtonElement && target.disabled && !event.relatedTarget)) return;
+        focused.focusOwned = false;
+      }}>
+      {showOrder && <div className={styles.queueHeading}>
+        <span>{paused ? t("conversation.queue.paused") : supplement ? t("conversation.queue.thisSupplement") : t("conversation.queue.upNext")}<small>{index + 1}</small></span>
+        {paused && index === 0 && <button disabled={chat.mutating || Boolean(active) || queued.some(item => item.status !== "queued")} onClick={() => owned(() => { void chat.mutate({ kind: "continue" }); })}>{t("conversation.queue.continue")}<ArrowUp size={13}/></button>}
+      </div>}
+      {editingEntry ? <form className={styles.edit} ref={editForm}
+        onFocusCapture={() => { const operation = editOwner.current; if (operation?.token === editing.token) operation.focusOwned = true; }}
+        onBlurCapture={event => {
+          const operation = editOwner.current;
+          if (operation?.token !== editing.token || event.currentTarget.contains(event.relatedTarget)) return;
+          const target = event.target;
+          if (!target.isConnected || (target instanceof HTMLButtonElement && target.disabled && !event.relatedTarget)) return;
+          operation.focusOwned = false;
+        }} onSubmit={event => { event.preventDefault(); owned(() => { void applyEdit(entry.queue_entry_id); }); }}>
+        <label htmlFor={`edit-${entry.queue_entry_id}`}>{t("conversation.queue.editLabel")}</label>
+        <textarea autoFocus id={`edit-${entry.queue_entry_id}`} value={editValue} maxLength={1000} onChange={event => setEditValue(event.target.value)}/>
+        <div><button type="button" onClick={() => finishEditing(entry.queue_entry_id, true)}>{t("conversation.queue.cancel")}</button>
+          <button type="submit" disabled={!editValue.trim() || chat.mutating}>{t("conversation.queue.save")}</button></div>
+      </form> : <div className={styles.inlineQueueRow}>
+        <span className={styles.queueText}>
+          {entry.status === "queued" && (active || paused || entry.steers_run_id) && <small>{entry.steer_state === "unsupported" ? t("conversation.queue.steerUnsupported") : entry.steers_run_id ? entry.steer_delivered ? t("conversation.queue.steerDelivered") : entry.steer_state === "dispatching" ? t("conversation.queue.steerDispatching") : t("conversation.queue.steerPending") : active ? t("conversation.queue.afterRun") : t("conversation.queue.afterResume")}</small>}
+          {["failed", "interrupted"].includes(entry.status) && <small>{queueFailureText(entry.failure_code, Boolean(entry.images?.length), t)}</small>}
+        </span>
+        <div className={styles.queueActions}>
+          {entry.status === "queued" && entry.objective.trim() && !entry.host_result ? <button
+            ref={node => { if (node) editButtons.current.set(entry.queue_entry_id, node); else editButtons.current.delete(entry.queue_entry_id); }}
+            aria-label={t("conversation.queue.editItem", { position: index + 1 })} disabled={entry.steer_state === "dispatching" || entry.steer_delivered}
+            onClick={() => owned(() => beginEdit(entry.queue_entry_id, entry.objective))}><PencilSimple size={16}/></button>
+            : entry.status === "queued" ? null : <button disabled={chat.mutating} onClick={() => owned(() => { void retryEntry(entry.queue_entry_id); })}>{t("conversation.queue.retry")}</button>}
+          {entry.status === "queued" && !entry.steers_run_id && (active || paused || index > 0) && <button className={styles.prioritize} disabled={chat.mutating}
+            title={active ? t("conversation.queue.prioritizeStopTitle") : t("conversation.queue.prioritizeTitle")}
+            aria-label={t("conversation.queue.prioritizeItem", { position: index + 1 })} onClick={() => owned(() => { void prioritize(entry.queue_entry_id, index + 1); })}><ArrowUp size={14}/>{t("conversation.queue.prioritize")}</button>}
+          <button aria-label={t("conversation.queue.removeItem", { position: index + 1 })} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered}
+            onClick={() => owned(() => { void chat.mutate({ kind: "withdraw", queue_entry_id: entry.queue_entry_id }); })}><X size={16}/></button>
+        </div>
+      </div>}
+      {index === 0 && queued.some(item => item.steers_run_id) && <p className={styles.queueWithdrawalNote}>{t("conversation.queue.withdrawGroupHint")}</p>}
+    </section>;
+  }
   const renderContext = {
+    queueActions: renderQueueActions,
     binding: props.chatBinding,
     meetingBinding: props.detailBinding,
     entryCapability: chat.entryCapability ?? props.entryCapability ?? null,
@@ -587,10 +658,6 @@ export function QueuedConversation(props: Props) {
     <div className={styles.dock}>
       {away && <button className={styles.latest} onClick={latest}><ArrowDown size={15}/>{t("conversation.latest")}</button>}
       {props.legacyRecovery && <LegacyRecoveryNotice key={props.legacyRecovery.sessionId} recovery={props.legacyRecovery}/>}
-      {queued.length > 0 && <section className={styles.queue} aria-label={t("conversation.queue.label")}><div className={styles.queueHeading}><span>{paused ? t("conversation.queue.paused") : queued.some(entry => entry.steers_run_id && entry.steer_state !== "unsupported") ? t("conversation.queue.thisSupplement") : t("conversation.queue.upNext")}<small>{queued.length}</small></span>{paused && <button disabled={chat.mutating || Boolean(active) || queued.some(entry => entry.status !== "queued")} onClick={() => void chat.mutate({kind:"continue"})}>{t("conversation.queue.continue")}<ArrowUp size={13}/></button>}</div>
-        <ol>{queued.map((entry, index) => <li key={entry.queue_entry_id} data-status={entry.status}>{editing?.entry === entry.queue_entry_id && editing.owner === readbackOwner && editing.sessionId === id ? <form className={styles.edit} ref={editForm} onFocusCapture={() => { const operation = editOwner.current; if (operation?.token === editing.token) operation.focusOwned = true; }} onBlurCapture={event => { const operation = editOwner.current; if (operation?.token !== editing.token || event.currentTarget.contains(event.relatedTarget)) return; const target = event.target; if (!target.isConnected || (target instanceof HTMLButtonElement && target.disabled && !event.relatedTarget)) return; operation.focusOwned = false; }} onSubmit={event => { event.preventDefault(); void applyEdit(entry.queue_entry_id); }}><label htmlFor={`edit-${entry.queue_entry_id}`}>{t("conversation.queue.editLabel")}</label><textarea autoFocus id={`edit-${entry.queue_entry_id}`} value={editValue} maxLength={1000} onChange={event => setEditValue(event.target.value)}/><div><button type="button" onClick={() => finishEditing(entry.queue_entry_id, true)}>{t("conversation.queue.cancel")}</button><button type="submit" disabled={!editValue.trim() || chat.mutating}>{t("conversation.queue.save")}</button></div></form> : <><span className={styles.number}>{index + 1}</span><span className={styles.queueText}>{entry.host_result ? t("conversation.queue.hostResult") : displayText(entry.objective, entry.images)}{entry.images?.length ? <ConversationImageStrip binding={props.chatBinding} compact images={entry.images} local={false} messageId={entry.message_id} scope={props.scope} sessionId={id ?? ""}/> : null}{entry.status === "queued" && (active || paused) && <small>{entry.steer_state === "unsupported" ? t("conversation.queue.steerUnsupported") : entry.steers_run_id ? entry.steer_delivered ? t("conversation.queue.steerDelivered") : entry.steer_state === "dispatching" ? t("conversation.queue.steerDispatching") : t("conversation.queue.steerPending") : active ? t("conversation.queue.afterRun") : t("conversation.queue.afterResume")}</small>}{["failed", "interrupted"].includes(entry.status) && <small>{queueFailureText(entry.failure_code, Boolean(entry.images?.length), t)}</small>}</span><div className={styles.queueActions}>{entry.status === "queued" && entry.objective.trim() && !entry.host_result ? <button ref={node => { if (node) editButtons.current.set(entry.queue_entry_id, node); else editButtons.current.delete(entry.queue_entry_id); }} aria-label={t("conversation.queue.editItem", { position: index + 1 })} disabled={entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => beginEdit(entry.queue_entry_id, entry.objective)}><PencilSimple size={16}/></button> : entry.status === "queued" ? null : <button disabled={chat.mutating} onClick={() => void retryEntry(entry.queue_entry_id)}>{t("conversation.queue.retry")}</button>}{entry.status === "queued" && !entry.steers_run_id && (active || paused || index > 0) && <button className={styles.prioritize} disabled={chat.mutating} title={active ? t("conversation.queue.prioritizeStopTitle") : t("conversation.queue.prioritizeTitle")} aria-label={t("conversation.queue.prioritizeItem", { position: index + 1 })} onClick={() => void prioritize(entry.queue_entry_id, index + 1)}><ArrowUp size={14}/>{t("conversation.queue.prioritize")}</button>}<button aria-label={t("conversation.queue.removeItem", { position: index + 1 })} disabled={chat.mutating || entry.steer_state === "dispatching" || entry.steer_delivered} onClick={() => void chat.mutate({kind:"withdraw",queue_entry_id:entry.queue_entry_id})}><X size={16}/></button></div></>}</li>)}</ol>
-        {queued.some(entry => entry.steers_run_id) && <p className={styles.queueWithdrawalNote}>{t("conversation.queue.withdrawGroupHint")}</p>}
-      </section>}
       {(chat.error || chat.draftConflict || chat.unavailable) && <div className={styles.notice} role="status">{chat.unavailable ? t("conversation.notice.unavailable") : chat.draftConflict ? <>{t("conversation.notice.draftConflict")}<button onClick={() => void chat.keepDraft()}>{t("conversation.notice.keepDraft")}</button></> : t(chat.error)}</div>}
       {imageCount > 0 && <div className={styles.composerImages} aria-label={t("conversation.images.label")}>
         {chat.attachments.map((attachment, index) => <span className={styles.composerImage} key={attachment.id}>
