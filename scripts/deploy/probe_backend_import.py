@@ -175,7 +175,8 @@ def validate_artifact(actual, prior, revision, sums):
 def validate_worker(worker, filesystem):
     expected = {dest: filesystem + suffix for suffix, dest in
                 [('', '/proof'), ('/run', '/run'), ('/tmp', '/tmp'),
-                 ('/unused-docker', '/var/lib/docker'), ('/unused-containerd', '/var/lib/containerd')]}
+                 ('/unused-docker', '/var/lib/docker'), ('/unused-containerd', '/var/lib/containerd'),
+                 ('/opt', '/opt/containerd')]}
     expected = {dest: (source, True) for dest, source in expected.items()}
     tools = Path(filesystem).parent / 'runtime-tools'
     expected.update({'/usr/local/bin/' + name: (str(tools / name), False) for name in RUNTIME_BINARIES})
@@ -267,9 +268,11 @@ def log_rejection_observation(line, index, branch, optional):
     observed['severity'] = ('absent' if severity is None else severity if severity in
         ('trace', 'debug', 'info', 'warn', 'warning', 'error', 'fatal', 'panic') else 'unknown')
     observed['plugin_class'] = ('absent' if plugin is None else 'optional' if plugin in optional else
-        'required' if plugin == 'io.containerd.snapshotter.v1.overlayfs' else 'other-omitted')
+        'required' if plugin == 'io.containerd.snapshotter.v1.overlayfs' else
+        'opt-manager' if plugin == 'io.containerd.internal.v1.opt' else 'other-omitted')
     observed['message_class'] = ('absent' if message is None else 'skip-loading-plugin' if
-        message == 'skip loading plugin' else 'other-omitted')
+        message == 'skip loading plugin' else 'plugin-load-failure' if
+        message == 'failed to load plugin' else 'other-omitted')
     observed['plugin_type_matches'] = bool(plugin) and fields.get('type') == plugin.rsplit('.', 1)[0]
     observed['skip_plugin_suffix'] = fields.get('error', '').endswith(': skip plugin')
     error = line if branch == 'hard-error-pattern' else fields.get('error', line)
@@ -279,7 +282,8 @@ def log_rejection_observation(line, index, branch, optional):
             (r'failed to unpack|unpack(?:ing)? failed', 'unpack-failure'),
             (r'unexpected EOF', 'unexpected-eof'),
             (r'context cancel(?:l)?ed', 'context-cancelled'),
-            (r'file already closed|use of closed file', 'closed-file')):
+            (r'file already closed|use of closed file', 'closed-file'),
+            (r'\bEROFS\b|read-only file system', 'read-only-filesystem')):
         if re.search(pattern, error, re.IGNORECASE):
             observed['error_class'] = classification
             break
@@ -497,6 +501,9 @@ class Probe:
 
     def check_paths(self):
         import tomllib  # Ubuntu 24.04 supplies Python 3.12; guards/tests work on 3.10.
+        # Repeated checks cannot leave startup credit behind after a final failure.
+        self.report.pop('credited_paths', None)
+        self.report['opt_plugin_verified'] = False
         # Read the running process's actual argv, then the exact generated config.
         self.report['substep'] = 'containerd-config-argv'
         argv = self.runner.run(self.outer + ['exec', self.cid, 'sh', '-c',
@@ -507,7 +514,17 @@ class Probe:
         config_path = argv[argv.index('--config') + 1]
         self.capped_path(config_path, 'containerd-config')
         self.report['substep'] = 'containerd-config-read'
-        config = tomllib.loads(self.runner.run(self.outer + ['exec', self.cid, 'cat', config_path]))
+        try:
+            config = tomllib.loads(self.runner.run(self.outer + ['exec', self.cid, 'cat', config_path]))
+        except tomllib.TOMLDecodeError:
+            raise ProbeError('invalid managed containerd config') from None
+        plugins = config.get('plugins', {})
+        require(isinstance(plugins, dict), 'invalid managed containerd plugins config')
+        opt = plugins.get('io.containerd.internal.v1.opt', {})
+        # The hash-pinned v2.2.4 opt manager defaults to /opt/containerd.
+        # An explicit path must select that same measured bind, never a redirect.
+        require(isinstance(opt, dict) and opt.get('path', '/opt/containerd') == '/opt/containerd',
+                'unexpected opt plugin path')
         root, state = config.get('root'), config.get('state')
         for role, path in (('containerd-root', root), ('containerd-state', state),
                            ('docker-root', '/proof/docker'), ('temporary', '/proof/tmp'), ('control', '/proof/run')):
@@ -555,9 +572,36 @@ class Probe:
             device = int(self.runner.run(self.outer + ['exec', self.cid, 'stat', '-c', '%d', alias]).strip())
             require(device == os.stat(self.fs).st_dev, 'uncapped writable daemon alias')
             self.capped_path(target, role + '-target')
+        # Only prepare the empty capped root. The pinned opt manager must create
+        # bin/lib itself; both sides of this exact bind must resolve and be backed.
+        for role, alias, target in (('opt-root', '/opt/containerd', '/proof/opt'),
+                                   ('opt-bin', '/opt/containerd/bin', '/proof/opt/bin'),
+                                   ('opt-lib', '/opt/containerd/lib', '/proof/opt/lib')):
+            self.report['substep'] = 'path-presence'
+            self.report['path_check'] = {'role': role, 'operation': 'presence', 'verified': False}
+            presence_opt = self.runner.run(self.outer + ['exec', self.cid, 'sh', '-c',
+                'if [ -L "$1" ]; then exit 1; elif [ -d "$1" ]; then printf present; '
+                'elif [ ! -e "$1" ]; then printf absent; else exit 1; fi', 'probe-path', alias]).strip()
+            require(presence_opt == 'present', 'opt plugin directory missing')
+            self.report['substep'] = 'path-backing'
+            self.report['path_check']['operation'] = 'resolve'
+            resolved = self.runner.run(self.outer + ['exec', self.cid, 'readlink', '-f', alias]).strip()
+            require(resolved == alias, 'opt plugin alias resolution mismatch')
+            self.report['path_check']['operation'] = 'device'
+            device = int(self.runner.run(self.outer + ['exec', self.cid, 'stat', '-c', '%d', alias]).strip())
+            require(device == os.stat(self.fs).st_dev, 'uncapped writable daemon alias')
+            self.capped_path(target, role + '-source')
+        self.report['substep'] = 'opt-plugin-table'
+        rows = [line.split() for line in self.ctr('plugins', 'list').splitlines() if line.strip()]
+        require(rows and rows[0] == ['TYPE', 'ID', 'PLATFORMS', 'STATUS'] and
+                all(len(row) == 4 for row in rows[1:]), 'invalid containerd plugin table')
+        opt_rows = [row for row in rows[1:] if row[:2] == ['io.containerd.internal.v1', 'opt']]
+        require(len(opt_rows) == 1 and opt_rows[0][3] == 'ok', 'opt plugin is not ready')
+        self.report['opt_plugin_verified'] = True
         self.report['credited_paths'] = {'docker_root': '/proof/docker', 'containerd_root': root,
             'containerd_state': state, 'content_and_ingest': content if presence == 'present' else None, 'snapshots': snapshots,
-            'metadata': metadata, 'temporary': '/proof/tmp', 'control': '/proof/run'}
+            'metadata': metadata, 'temporary': '/proof/tmp', 'control': '/proof/run',
+            'opt_root': '/proof/opt', 'opt_bin': '/proof/opt/bin', 'opt_lib': '/proof/opt/lib'}
 
     def worker_command(self):
         # Invoke the pinned image's official initializer before dockerd. Explicit
@@ -570,6 +614,7 @@ class Probe:
             '--mount', 'type=bind,src=' + str(self.fs / 'tmp') + ',dst=/tmp',
             '--mount', 'type=bind,src=' + str(self.fs / 'unused-docker') + ',dst=/var/lib/docker',
             '--mount', 'type=bind,src=' + str(self.fs / 'unused-containerd') + ',dst=/var/lib/containerd',
+            '--mount', 'type=bind,src=' + str(self.fs / 'opt') + ',dst=/opt/containerd',
             '--env', 'DOCKER_TMPDIR=/proof/tmp', '--env', 'TMPDIR=/proof/tmp',
             *[argument for name in RUNTIME_BINARIES for argument in
               ('--mount', 'type=bind,src=' + str(self.fs.parent / 'runtime-tools' / name) +
@@ -778,7 +823,7 @@ class Probe:
         self.sampler = threading.Thread(target=self.sampling, daemon=True)
         self.sampler.start()
         self.runner.run(['sudo', '-n', 'chown', str(os.getuid()) + ':' + str(os.getgid()), str(self.fs)])
-        for path in ('docker', 'run', 'tmp', 'unused-docker', 'unused-containerd'):
+        for path in ('docker', 'run', 'tmp', 'unused-docker', 'unused-containerd', 'opt'):
             (self.fs / path).mkdir()
         (self.fs / 'daemon.json').write_text(json.dumps({'features': {'containerd-snapshotter': True}}))
         self.report['phase'] = 'nested-engine-startup'

@@ -1,10 +1,10 @@
 /*
  * Quiet Workspace shell.
  *
- * 248 px expanded sidebar / 72 px rail, 58 px route header, near-white canvas
+ * 236 px default sidebar / 72 px rail, 58 px route header, near-white canvas
  * with a warm-neutral chrome sidebar. Structure comes from page grouping and
  * typography; borders stay hairline and material stays flat. Session rows are
- * one line at 40px with a 24px identity avatar and a full accessible title.
+ * one line with an 18px identity avatar and a full accessible title.
  * Reduced motion, dark theme and mobile collapse are handled structurally, not
  * recomposed.
  *
@@ -15,7 +15,7 @@
  */
 
 .shell {
-  --workspace-sidebar-width: 248px;
+  --workspace-sidebar-width: 236px;
   --workspace-row-hover: color-mix(in srgb, var(--ink) 4%, transparent);
   --workspace-row-selected: color-mix(in srgb, var(--ink) 9%, transparent);
   background: var(--background);
@@ -37,6 +37,8 @@
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 
 .sidebar {
+  /* Retrieval chrome is secondary to the unchanged conversation reading size. */
+  --ts-type-nav: 0.8125rem;
   background: var(--ts-chrome-surface, var(--surface-muted));
   border-right: 1px solid var(--line-soft);
   display: flex;
@@ -117,7 +119,7 @@
   cursor: pointer;
   display: inline-flex;
   font: inherit;
-  height: 30px;
+  height: 44px;
   justify-content: center;
   padding: 0;
   text-decoration: none;
@@ -355,9 +357,9 @@
   border-radius: 8px;
   color: var(--muted-strong);
   display: flex;
-  font-size: var(--workspace-body-size, 0.9375rem);
+  font-size: var(--ts-type-nav, 0.875rem);
   gap: 10px;
-  min-height: 40px;
+  min-height: 44px;
   min-width: 0;
   padding: 0 10px;
   position: relative;
@@ -372,9 +374,9 @@
 }
 
 .sessionRow .sessionMark {
-  flex: 0 0 24px;
-  height: 24px;
-  width: 24px;
+  flex: 0 0 18px;
+  height: 18px;
+  width: 18px;
 }
 
 /* A conversation symbol does not imply a person or an Agent running state. */
@@ -399,7 +401,7 @@
   font-weight: 500;
 }
 .sessionRow[aria-current="page"]:not(:has(.selectionHighlight)) { background: var(--workspace-row-selected); }
-.sessionRow .selectionHighlight { right: -34px; }
+.sessionRow .selectionHighlight { right: -46px; }
 .sessionRow:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .sessionRow:active { background: color-mix(in srgb, var(--ink) 13%, transparent); }
 .sessionRowShell:hover .sessionRowSlide { background: var(--workspace-row-hover); }
@@ -659,15 +661,11 @@
 /* Radix owns anchor positioning and collision avoidance in the body portal. */
 .accountPopover {
   grid-template-columns: minmax(0, 1fr);
-  /* Restrained material: elevation and translucency over hard borders. */
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
-  border: 0;
-  border-radius: 13px;
-  box-shadow:
-    0 18px 48px color-mix(in srgb, var(--ink) 16%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--surface) 85%, transparent);
+  /* Reading account actions must not depend on the host's backing material. */
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--ink) 12%, transparent);
   display: grid;
   gap: 2px;
   max-height: min(680px, var(--radix-popover-content-available-height));
@@ -675,7 +673,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 6px;
-  width: 316px;
+  width: 288px;
 }
 .accountTrigger:focus-visible,
 .accountPopover a:focus-visible,
@@ -702,9 +700,7 @@
   font-size: var(--workspace-body-size, 0.9375rem);
   font-weight: 600;
   line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .accountSummary small {
@@ -712,9 +708,7 @@
   display: block;
   font-size: var(--workspace-meta-size, 0.8125rem);
   line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .accountPopover a,
@@ -747,9 +741,14 @@
 .accountPopover a > span:first-of-type {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.accountLinkLabel { display: grid; gap: 3px; }
+.accountLinkNotice {
+  color: var(--muted-strong);
+  font-size: inherit;
+  line-height: 1.4;
 }
 
 .accountPopover > .accountMetaRow,
@@ -762,6 +761,9 @@
 .accountPopover > .accountMetaRow > strong {
   color: var(--muted);
   font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 /* Only text labels flex; an avatar keeps its square footprint no matter how
@@ -802,6 +804,8 @@
   color: var(--muted);
   flex: 1;
   text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .accountPopover > span > strong {
@@ -814,7 +818,24 @@
 .accountPopover hr {
   border: 0;
   border-top: 1px solid var(--line-soft);
-  margin: 5px 2px;
+  margin: 3px 4px;
+}
+
+/* Pointer menus keep a quiet row rhythm; narrow and touch surfaces retain 44px. */
+@media (hover: hover) and (pointer: fine) and (min-width: 761px) {
+  .accountPopover a,
+  .accountPopover form button,
+  .accountPopover :global(.theme-toggle--row),
+  .accountPopover > .accountMetaRow,
+  .accountPopover .usageRow,
+  .accountPopover .usageDisclosure,
+  .accountPopover .usageRetry,
+  .accountPopover .updateBanner a,
+  .accountPopover .accountSubmenu > summary {
+    min-height: 36px;
+    padding-block: 6px;
+  }
+  .accountPopover .usageRow { padding-block: 0; }
 }
 
 .accountPopover svg {
@@ -1501,7 +1522,7 @@
   flex: 0 0 auto;
   font-size: var(--workspace-meta-size, 0.8125rem);
   font-weight: 500;
-  min-height: 32px;
+  min-height: 44px;
   padding: 0 12px;
   text-decoration: none;
   white-space: nowrap;
@@ -1522,7 +1543,7 @@
   padding: 0;
   width: 100%;
 }
-.usageRow { align-items: center; display: flex; gap: 8px; min-height: 44px; }
+.usageRow { align-items: center; display: flex; flex-wrap: wrap; gap: 4px 8px; min-height: 44px; min-width: 0; }
 .usageDisclosure {
   align-items: center;
   background: transparent;
@@ -1543,7 +1564,11 @@
 }
 .usageDisclosure:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
 .usageDisclosure:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.usageRow > strong { color: var(--ink); flex: 0 0 auto; font-size: var(--workspace-meta-size, 0.8125rem); font-weight: 600; }
+.usageDisclosure > span { min-width: 0; overflow-wrap: anywhere; }
+.usageRow > strong { color: var(--ink); flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; font-size: var(--workspace-meta-size, 0.8125rem); font-weight: 600; }
+/* Keep failure and recovery together on a second line, including at text zoom. */
+.usageRow:has(.usageRetry) .usageDisclosure { flex-basis: 100%; }
+.usageRow:has(.usageRetry) > strong { flex: 1 1 0; padding-left: 10px; }
 .usageRow > strong[data-usage-state="loading"],
 .usageRow > strong[data-usage-state="error"] {
   color: var(--muted);
@@ -1701,7 +1726,7 @@
   align-items: center;
   background: var(--session-row-surface, var(--ts-chrome-surface, var(--surface)));
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px;
+  grid-template-columns: minmax(0, 1fr) 44px;
   gap: 2px;
   min-width: 0;
   position: relative;
@@ -1717,12 +1742,12 @@
   color: var(--muted);
   cursor: pointer;
   display: inline-flex;
-  height: 30px;
+  height: 44px;
   justify-content: center;
   transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out), color var(--workspace-transition-duration, 180ms) var(--ease-out);
-  opacity: 0;
+  opacity: 1;
   padding: 0;
-  width: 30px;
+  width: 44px;
 }
 .sessionRowShell:hover .sessionRowMenuTrigger,
 .sessionRowShell:focus-within .sessionRowMenuTrigger,
@@ -1762,12 +1787,13 @@
   font: inherit;
   font-size: var(--workspace-meta-size, 0.8125rem);
   gap: 9px;
-  min-height: 36px;
+  min-height: 44px;
   padding: 6px 10px;
   text-align: left;
   width: 100%;
 }
-.sessionRowMenuPopover button:hover { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
+.sessionRowMenuPopover button:disabled { cursor: default; opacity: 0.45; }
+.sessionRowMenuPopover button:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 6%, var(--surface)); color: var(--ink); }
 .sessionRowMenuNote { color: var(--muted); font-size: var(--workspace-meta-size, 0.8125rem); padding: 4px 10px 6px; }
 
 /* One short truthful line; the archive is local organization, nothing more. */
@@ -1914,7 +1940,7 @@
 :global(html[data-desktop-surface="workspace"]) .shell:has(.searchDialog[open]) > .workspace {
   background: color-mix(in srgb, var(--background) 74%, transparent);
 }
-:global(html[data-desktop-surface="workspace"]) :is(.searchDialog, .accountPopover) {
+:global(html[data-desktop-surface="workspace"]) .searchDialog {
   background: color-mix(in srgb, var(--surface) 62%, transparent);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -2111,5 +2137,6 @@
   .railRetry:focus-visible, .railSessionTitle a:focus-visible { outline-color:Highlight; }
   .sessionRowMenuPopover, .railSessionTitle,
   :global(html[data-desktop-surface="workspace"]) .sessionRowMenuPopover { background:Canvas; color:CanvasText; border:1px solid CanvasText; backdrop-filter:none; -webkit-backdrop-filter:none; }
-  .sessionRowMenuPopover button:hover { background:Highlight; color:HighlightText; }
+  .sessionRowMenuPopover button:disabled { cursor: default; opacity: 0.45; }
+.sessionRowMenuPopover button:hover:not(:disabled) { background:Highlight; color:HighlightText; }
 }

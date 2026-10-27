@@ -88,7 +88,8 @@ describe("people directory return location", () => {
     const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, {
       ...props, people: [person], query: "林", returnSessionId: "session-a",
     }));
-    expect(html).not.toContain('id="person-');
+    // Match an actual anchor id, not the list's inert data-order-id hint.
+    expect(html).not.toMatch(/\sid="person-/u);
     expect(html).not.toContain("#person-");
     expect(html).toContain('href="/workspace/people/person-a?directory_query=%E6%9E%97&amp;session=session-a"');
   });

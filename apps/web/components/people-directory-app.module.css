@@ -3,7 +3,7 @@
  *
  * A 1040px reading page with 40px padding, one bounded search field, and a
  * three-column directory row (person / relationship context & material /
- * update) on an 83px row rhythm with hairline dividers. Search uses client
+ * update) on a compact 64px minimum rhythm with hairline dividers. Search uses client
  * navigation with GET URLs so a query is shareable; nothing here owns or
  * reinterprets identity. Column labels describe what the row shows; the update
  * column is an update time, never "last contact".
@@ -130,7 +130,7 @@
   font-size: var(--workspace-meta-size);
   grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr) 62px;
   column-gap: 16px;
-  padding: 0 12px 12px;
+  padding: 0 56px 12px 12px;
 }
 
 .tableHeader > span:last-child {
@@ -152,11 +152,11 @@
   align-items: center;
   color: var(--ink);
   display: grid;
-  font-size: var(--workspace-body-size);
+  font-size: var(--ts-type-nav, 0.875rem);
   grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr) 62px;
   column-gap: 16px;
-  min-height: 83px;
-  padding: 15px 12px;
+  min-height: 64px;
+  padding: 10px 12px;
   scroll-margin-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
   scroll-margin-top: 24px;
   text-decoration: none;
@@ -186,9 +186,9 @@
 
 .personName strong {
   display: block;
-  font-size: var(--workspace-body-size);
+  font-size: var(--ts-type-nav, 0.875rem);
   font-weight: 600;
-  line-height: 1.55;
+  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -198,22 +198,22 @@
   color: var(--muted);
   display: block;
   font-size: var(--workspace-meta-size);
-  line-height: 1.55;
-  margin-top: 4px;
+  line-height: 1.4;
+  margin-top: 3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .personChange {
-  line-height: 1.55;
+  line-height: 1.4;
   min-width: 0;
   padding-right: 16px;
 }
 
 .contextLabel {
   display: block;
-  font-size: var(--workspace-body-size);
+  font-size: var(--ts-type-nav, 0.875rem);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -223,8 +223,8 @@
   color: var(--muted);
   display: block;
   font-size: var(--workspace-meta-size);
-  line-height: 1.55;
-  margin-top: 4px;
+  line-height: 1.4;
+  margin-top: 3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -467,8 +467,12 @@
 }
 
 .peopleList > li {
+  align-items: center;
+  display: flex;
+  min-width: 0;
   position: relative;
 }
+.peopleList > li > .personRow { flex: 1 1 auto; min-width: 0; }
 
 .rowAvatar {
   left: 12px;

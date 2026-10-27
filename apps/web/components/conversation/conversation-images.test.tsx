@@ -88,19 +88,21 @@ async function flush(times = 8): Promise<void> {
 async function renderStrip(props: {
   images: ConversationImageManifest[];
   local?: boolean;
+  onKeyDown?: () => void;
 }): Promise<void> {
   mount = document.createElement("div");
   document.body.append(mount);
   root = createRoot(mount);
   await act(async () => {
-    root?.render(createElement(ConversationImageStrip, {
+    const strip = createElement(ConversationImageStrip, {
       binding: "chat-binding",
       images: props.images,
       local: props.local ?? false,
       messageId: MESSAGE,
       scope: "a".repeat(64),
       sessionId: SESSION,
-    }));
+    });
+    root?.render(props.onKeyDown ? createElement("div", { onKeyDown: props.onKeyDown }, strip) : strip);
   });
   await flush();
 }
@@ -113,8 +115,8 @@ function button(label: string): HTMLButtonElement {
 }
 
 function dialog(): HTMLElement {
-  const found = document.querySelector<HTMLElement>("[role='dialog']");
-  expect(found, "viewer dialog is not open").toBeTruthy();
+  const found = document.querySelector<HTMLElement>("[data-evidence-preview]");
+  expect(found, "inline evidence preview is not open").toBeTruthy();
   return found!;
 }
 
@@ -176,7 +178,21 @@ it("renders one sent image directly and reads its bytes only through the protect
   expect(fetcher.mock.calls.every(([url]) => String(url).includes("/api/workspace-sessions/"))).toBe(true);
 });
 
-it("folds multiple sent images into overlapping cards with a count and explicit expand/collapse", async () => {
+it("keeps original inspection inside its exact message without a modal or detached overlay", async () => {
+  await renderStrip({ images: [imageManifest(0, "source.png")] });
+  const trigger = mount!.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!;
+  await act(async () => trigger.click());
+  await flush();
+  const evidence = mount!.querySelector(`[data-message-evidence='${MESSAGE}']`)!;
+  const preview = evidence?.querySelector("[data-evidence-preview]");
+  expect(preview).toBeTruthy();
+  expect(preview?.textContent).toContain("source.png");
+  expect(document.querySelector("[role='dialog']")).toBeNull();
+  expect(preview?.parentElement).toBe(evidence);
+  expect(trigger.getAttribute("aria-controls")).toBe(preview?.id);
+});
+
+it("folds multiple sent images into aligned cells with a count and explicit expand/collapse", async () => {
   setConversationImageStoreForTest(storeWith(records(pngBytes(), pngBytes(), pngBytes())));
   await renderStrip({ images: [imageManifest(0), imageManifest(1), imageManifest(2)], local: true });
 
@@ -224,21 +240,31 @@ it("opens only the clicked image and navigates in the original manifest order", 
   expect(dialogImage().alt).toBe("photo-2.png");
 });
 
-it("closes on blank dialog space only, never on image or control clicks", async () => {
+it("returns focus to the visible expand control when collapsing hides the exact source thumbnail", async () => {
+  await renderStrip({ images: [imageManifest(0), imageManifest(1), imageManifest(2), imageManifest(3)] });
+  await act(async () => button("展开图片").click());
+  await act(async () => document.querySelector<HTMLButtonElement>("button[title='查看原图 4']")!.click());
+  await act(async () => button("收起图片").click());
+  await act(async () => button("关闭原图").click());
+  expect(document.querySelector("[data-evidence-preview]")).toBeNull();
+  expect(document.activeElement).toBe(button("展开图片"));
+});
+
+it("keeps inline inspection open on image, control and surrounding-space clicks", async () => {
   setConversationImageStoreForTest(storeWith(records(pngBytes(), pngBytes())));
   await renderStrip({ images: [imageManifest(0), imageManifest(1)], local: true });
   await act(async () => { document.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!.click(); });
   await flush();
 
   await act(async () => { dialogImage().click(); });
-  expect(document.querySelector("[role='dialog']")).not.toBeNull();
+  expect(document.querySelector("[data-evidence-preview]")).not.toBeNull();
   await act(async () => { button("下载原图").click(); });
-  expect(document.querySelector("[role='dialog']")).not.toBeNull();
+  expect(document.querySelector("[data-evidence-preview]")).not.toBeNull();
 
-  // Blank space closes gracefully.
+  // Inline space remains part of the message; only explicit close dismisses it.
   await act(async () => { dialog().click(); });
   await flush();
-  expect(document.querySelector("[role='dialog']")).toBeNull();
+  expect(document.querySelector("[data-evidence-preview]")).not.toBeNull();
 });
 
 it("keeps zoom as a compact fit/100% percentage toggle", async () => {
@@ -376,7 +402,7 @@ it("restores keyboard focus to the exact clicked thumbnail after Escape", async 
     document.activeElement?.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
   });
   await flush();
-  expect(document.querySelector("[role='dialog']")).toBeNull();
+  expect(document.querySelector("[data-evidence-preview]")).toBeNull();
   expect(document.activeElement).toBe(trigger);
 });
 
@@ -387,6 +413,33 @@ it("ends a rejected local durable read in a retryable state instead of endless l
   expect(document.body.textContent).not.toContain("正在读取图片");
   expect(document.body.textContent).toContain("图片暂时无法读取");
   expect(document.body.textContent).toContain("重新读取图片");
+});
+
+it("leaves IME Escape to composition and consumes deliberate close before the canvas Stop shortcut", async () => {
+  const canvasKey = vi.fn();
+  await renderStrip({ images: [imageManifest(0)], onKeyDown: canvasKey });
+  await act(async () => { document.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!.click(); });
+  await act(async () => dialog().dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true })));
+  expect(document.querySelector("[data-evidence-preview]")).not.toBeNull();
+  expect(canvasKey).toHaveBeenCalledTimes(1);
+  canvasKey.mockClear();
+  await act(async () => dialog().dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(document.querySelector("[data-evidence-preview]")).toBeNull();
+  expect(canvasKey).not.toHaveBeenCalled();
+});
+
+it("retires an open preview and its bytes when the account binding changes", async () => {
+  await renderStrip({ images: [imageManifest(0)] });
+  await act(async () => { document.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!.click(); });
+  const original = dialogImage().src;
+  await act(async () => root!.render(createElement(ConversationImageStrip, {
+    binding: "different-account-binding", scope: "b".repeat(64), sessionId: SESSION,
+    messageId: MESSAGE, local: false, images: [imageManifest(0)],
+  })));
+  await flush();
+  expect(document.querySelector("[data-evidence-preview]")).toBeNull();
+  expect(revokedUrls).toContain(original);
+  expect((fetcher.mock.calls.at(-1)![1].headers as Record<string, string>)["x-workspace-session"]).toBe("different-account-binding");
 });
 
 it("stops sequential protected reads and creates no URL after the strip unmounts", async () => {

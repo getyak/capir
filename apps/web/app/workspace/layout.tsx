@@ -1,3 +1,4 @@
+import { WorkspaceListOrderScope } from "@/components/workspace-list-order";
 import { isWebSessionUnavailable } from "@/lib/server/web-persistent-session";
 import { SessionRetryButton } from "@/components/session-retry-button";
 import "@/components/workspace-theme.css";
@@ -192,7 +193,7 @@ export default async function WorkspaceLayout({
 
   return (
     <WorkspaceSessionBoundary binding={pendingBinding}><WorkspacePrivacyBoundary privateContent={children}>
-      <AvatarPreferencesProvider scope={pendingSessionDraftScope}>
+      <WorkspaceListOrderScope scope={pendingSessionDraftScope}><AvatarPreferencesProvider scope={pendingSessionDraftScope}>
       <WorkspaceNavigationContinuityProvider scope={pendingSessionDraftScope} binding={pendingBinding}>
       <WorkspaceBrowseProvider key={pendingSessionDraftScope} scope={pendingSessionDraftScope} binding={pendingBinding}>
       <PersonContextPanelProvider binding={pendingBinding}>
@@ -269,7 +270,7 @@ export default async function WorkspaceLayout({
       </PersonContextPanelProvider>
       </WorkspaceBrowseProvider>
       </WorkspaceNavigationContinuityProvider>
-      </AvatarPreferencesProvider>
+      </AvatarPreferencesProvider></WorkspaceListOrderScope>
     </WorkspacePrivacyBoundary></WorkspaceSessionBoundary>
   );
 }

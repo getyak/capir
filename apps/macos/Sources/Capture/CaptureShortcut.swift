@@ -7,8 +7,8 @@ enum CaptureShortcutRegistrationError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedKey: "这个按键暂时不支持全局截图，请选择其他快捷键。"
-        case .conflict: "这个快捷键已被系统或其他应用占用，请更换。"
+        case .unsupportedKey: String(localized: "This key does not support global screenshots yet. Choose another shortcut.", bundle: .main)
+        case .conflict: String(localized: "This shortcut is already used by the system or another app. Choose another shortcut.", bundle: .main)
         }
     }
 }

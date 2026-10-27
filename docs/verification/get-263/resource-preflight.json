@@ -1,0 +1,53 @@
+{
+  "issue": "GET-263",
+  "recorded_at": "2026-10-26T19:28:40.532615+00:00",
+  "branch": "codex/get-263-working-stop",
+  "base": "525bb5fb4a3f98690076c40d4b6da650d21a4f20",
+  "lockfile_sha256": "7dd9e9cd42c6b976a5cea81b755323e151cb7519ac2b3ddd23854d686f4f1c7c",
+  "minimum_bytes": 32212254720,
+  "dependency_copies": [
+    {
+      "path": "/Users/cubxxw/ops/symphony/runtime/workspaces/GET-263/node_modules",
+      "allocated_or_shared_bytes": 1199620096,
+      "tracked_files": 0,
+      "open_file_refs": [],
+      "source": "GET-266 exact lockfile copy-on-write dependency preparation; no tests or builds started"
+    },
+    {
+      "path": "/Users/cubxxw/ops/symphony/runtime/workspaces/GET-263/apps/web/node_modules",
+      "allocated_or_shared_bytes": 32768,
+      "tracked_files": 0,
+      "open_file_refs": [],
+      "source": "GET-266 exact lockfile copy-on-write dependency preparation; no tests or builds started"
+    },
+    {
+      "path": "/Users/cubxxw/ops/symphony/runtime/workspaces/GET-263/apps/agent/node_modules",
+      "allocated_or_shared_bytes": 8192,
+      "tracked_files": 0,
+      "open_file_refs": [],
+      "source": "GET-266 exact lockfile copy-on-write dependency preparation; no tests or builds started"
+    },
+    {
+      "path": "/Users/cubxxw/ops/symphony/runtime/workspaces/GET-263/packages/contracts/node_modules",
+      "allocated_or_shared_bytes": 4096,
+      "tracked_files": 0,
+      "open_file_refs": [],
+      "source": "GET-266 exact lockfile copy-on-write dependency preparation; no tests or builds started"
+    },
+    {
+      "path": "/Users/cubxxw/ops/symphony/runtime/workspaces/GET-263/packages/workspace-ui/node_modules",
+      "allocated_or_shared_bytes": 8192,
+      "tracked_files": 0,
+      "open_file_refs": [],
+      "source": "GET-266 exact lockfile copy-on-write dependency preparation; no tests or builds started"
+    }
+  ],
+  "task_started_services": [],
+  "task_started_browsers": [],
+  "task_started_devices": [],
+  "task_started_mcp": [],
+  "measured_physical_reclaimed_bytes": null,
+  "credited_reclaimed_bytes": 0,
+  "note": "One earlier sample was 29.55 GiB. A fresh staging sample recovered to 30.56 GiB without task cleanup; no recovery credit claimed. Dependency copies retained for narrow single-worker checks. No heavy production build authorized by this snapshot alone.",
+  "safe_staging_available_bytes": 32812077056
+}

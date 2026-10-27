@@ -1,0 +1,20 @@
+.row { min-width: 0; position: relative; }
+.row[data-order-dragging="true"] { opacity: 0.55; }
+.row[data-order-edge]::after { background: var(--ink); border-radius: 1px; content: ""; height: 2px; inset-inline: 8px; pointer-events: none; position: absolute; z-index: 3; }
+.row[data-order-edge="before"]::after { top: -2px; }
+.row[data-order-edge="after"]::after { bottom: -2px; }
+.handle { align-items: center; background: transparent; border: 0; border-radius: 8px; color: var(--muted-strong); cursor: grab; display: inline-flex; flex: 0 0 44px; height: 44px; justify-content: center; padding: 0; touch-action: none; user-select: none; -webkit-user-select: none; width: 44px; }
+.handle:hover { background: var(--workspace-row-hover, var(--surface-muted)); color: var(--ink); }
+.handle:active { cursor: grabbing; }
+.handle:focus-visible { outline: 2px solid var(--focus, var(--ink)); outline-offset: -2px; }
+.notice { color: var(--muted-strong); font-size: var(--workspace-meta-size, 0.8125rem); line-height: 1.6; margin: 4px 8px; overflow-wrap: anywhere; }
+.menu[data-slot="popover-content"] { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 10px; display: grid; gap: 2px; max-width: min(280px, calc(100vw - 24px)); padding: 6px; z-index: 65; }
+.menu button { align-items: center; background: transparent; border: 0; border-radius: 6px; color: var(--ink); cursor: pointer; display: flex; font: inherit; gap: 8px; min-height: 44px; padding: 8px 12px; text-align: start; }
+.menu button:disabled { cursor: default; opacity: 0.45; }
+.menu button:hover:not(:disabled) { background: var(--surface-muted); }
+.menu button:focus-visible { outline: 2px solid var(--focus, var(--ink)); outline-offset: -2px; }
+.menu small { color: var(--muted); font-size: var(--workspace-meta-size, 0.8125rem); line-height: 1.5; padding: 6px 12px; }
+@media (forced-colors: active) {
+  .row[data-order-edge]::after { background: Highlight; forced-color-adjust: none; }
+  .handle:focus-visible { outline-color: Highlight; }
+}
