@@ -2563,5 +2563,9 @@
   "listOrder.forTitle": "Arrange {title}",
   "listOrder.local": "Drag to arrange. Saved on this device for this workspace and account.",
   "listOrder.sessionLocal": "Drag to arrange within a group. Pinned conversations stay first. Saved on this device for this workspace and account.",
-  "listOrder.reset": "Reset manual order"
+  "listOrder.reset": "Reset manual order",
+  "还没有关于这个人的记忆。": "No memories about this person yet.",
+  "开始记录": "Start a note",
+  "去相关对话": "Go to related conversation",
+  "编辑头像": "Edit avatar"
 }

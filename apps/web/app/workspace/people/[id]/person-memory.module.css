@@ -3,7 +3,7 @@
 .pageNavigation { margin-bottom: 14px; }
 .backLink { align-items: center; color: var(--muted-strong); display: inline-flex; font-size: var(--workspace-meta-size); gap: 7px; min-height: 44px; padding: 0 4px; text-decoration: none; }
 .backLink:hover { color: var(--ink); }
-.identity { align-items: center; display: flex; gap: 4px; min-height: 44px; padding: 0 0 12px; }
+.identity { align-items: center; display: flex; gap: 8px; min-height: 44px; padding: 0 0 12px; }
 .identityText { min-width: 0; }
 .identityText h1 { font-size: var(--workspace-object-size); font-weight: 500; line-height: 1.4; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .identityNote { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.6; margin: 0 0 20px; overflow-wrap: anywhere; }
@@ -132,3 +132,6 @@
   .layer[aria-pressed='true'] { border-bottom-color: Highlight; color: ButtonText; }
 }
 .conflictNote { color: var(--muted-strong); font-size: var(--workspace-body-size); font-weight: 500; line-height: 1.6; margin: 3px 0 12px; }
+
+.columns[data-reference="false"] { grid-template-columns: minmax(0, 1fr); }
+.emptyAction { align-items: center; color: var(--ink); display: inline-flex; font-size: var(--workspace-body-size); gap: 7px; min-height: 44px; margin-top: 8px; text-decoration: underline; text-underline-offset: 4px; }

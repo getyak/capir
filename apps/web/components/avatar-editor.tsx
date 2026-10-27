@@ -16,19 +16,21 @@ const choices: { value: AvatarStyle; label: string }[] = [
   { value: "initials", label: "姓名" }, { value: "shapes", label: "几何" }, { value: "glass", label: "柔光" },
 ];
 
-export function AvatarEditor({ id, label, url, self = false, size = 72, shape, className, triggerLabel }: {
+export function AvatarEditor({ id, label, url, self = false, size = 72, shape, className, triggerLabel, appearance = "avatar" }: {
   id: string; label: string; url?: string | null; self?: boolean; size?: number;
-  shape?: "circle" | "squircle"; className?: string; triggerLabel?: string;
+  shape?: "circle" | "squircle"; className?: string; triggerLabel?: string; appearance?: "avatar" | "text";
 }) {
   const t = useT();
   const openEditor = useAvatarEditor();
   const ready = useClientReady();
   return <button type="button" className={`${styles.trigger} ${className ?? ""}`} disabled={!openEditor || !ready}
-    data-compact={size <= 40} data-labelled={Boolean(triggerLabel)} aria-haspopup="dialog" aria-label={self ? t("编辑我的头像") : t("编辑 {name} 的头像", { name: label })}
+    data-appearance={appearance} data-compact={size <= 40} data-labelled={Boolean(triggerLabel)} aria-haspopup="dialog" aria-label={self ? t("编辑我的头像") : t("编辑 {name} 的头像", { name: label })}
     onClick={event => openEditor?.({ id, label, url, self, shape }, event.currentTarget)}>
-    <PersonDirectoryAvatar id={id} label={label} url={url} self={self} size={size} shape={shape} />
-    <span className={styles.camera}><Camera size={13} aria-hidden="true" /></span>
-    {triggerLabel && <span className={styles.triggerLabel}>{triggerLabel}</span>}
+    {appearance === "text" ? t("编辑头像") : <>
+      <PersonDirectoryAvatar id={id} label={label} url={url} self={self} size={size} shape={shape} />
+      <span className={styles.camera}><Camera size={13} aria-hidden="true" /></span>
+      {triggerLabel && <span className={styles.triggerLabel}>{triggerLabel}</span>}
+    </>}
   </button>;
 }
 

@@ -99,6 +99,13 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
   const groups = memoryGroups(ordinary);
   const raw = ordinary.filter(item => memorySources(item).length > 0);
   const edit = controller.edit;
+  // A complete, successful read owns the empty state. Keep pagination,
+  // failures and orphan drafts on their existing recovery surface.
+  const showMemory = Boolean(ordinary.length || controller.hasMore || controller.loadError || edit);
+  const onlyContext = contexts.length === 1 ? contexts[0] : null;
+  const emptyHref = onlyContext
+    ? withReturnSession(`/workspace?person=${encodeURIComponent(personId)}&context=${encodeURIComponent(onlyContext.id)}`, returnSessionId)
+    : contexts.length ? "#person-contexts" : "/workspace";
 
   useLayoutEffect(() => {
     if (!focusRequest || handledFocus.current === focusRequest) return;
@@ -143,7 +150,7 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
     onCancel={() => { controller.cancel(); restoreFocus(edit.itemId); }} onRefresh={controller.refreshConflict} /> : null;
 
   return <div ref={root}>
-    <section className={styles.section} aria-labelledby="person-memory-accepted">
+    {showMemory ? <section className={styles.section} aria-labelledby="person-memory-accepted">
       <div className={styles.sectionHeading}><h2 className={styles.sectionTitle} id="person-memory-accepted">{t("已确认记忆")}</h2>
         <span className={styles.sectionCount}>{controller.loadError && !ordinary.length ? t("暂不可读取") : t("{count} 条", { count: `${ordinary.length}${controller.hasMore ? "+" : ""}` })}</span></div>
       <nav className={styles.layers} aria-label={t("记忆阅读方式")}>
@@ -186,7 +193,10 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
         {!raw.length ? !controller.loadError && <p className={styles.quiet}>{controller.hasMore ? t("当前已加载内容中没有可读取的摘录，可继续加载查看。") : t("暂无可读取的原始摘录。未保留、已删除或不可用的来源不会显示。")}</p> : raw.map(item => <article className={styles.rawItem} data-memory-item={item.id} tabIndex={-1} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}><h3>{item.display_text}</h3>{item.conflict_group_id ? <p className={styles.conflictNote}>{t("存在冲突 · 待核对")}</p> : null}<SourceExcerpts item={item} /></article>)}
       </div>}
       {controller.hasMore ? <div className={styles.pagination}><Button data-memory-load-more variant="ghost" disabled={controller.loadingMore || Boolean(edit)} onClick={() => void loadMore()}>{controller.loadingMore ? t("正在加载…") : t("继续加载记忆")}</Button><span>{t("还有已保存内容")}</span></div> : null}
-    </section>
+    </section> : <div className={styles.emptyMemory}>
+      <p>{t("还没有关于这个人的记忆。")}</p>
+      <Link className={styles.emptyAction} href={emptyHref}>{contexts.length ? t("去相关对话") : t("开始记录")} <ArrowSquareOut size={14} aria-hidden="true" /></Link>
+    </div>}
     {research.length ? <details className={styles.researchDisclosure}><summary>{t("研究笔记")} <span>{t("AI 整理 · 待复核")}</span><CaretDown size={14} aria-hidden="true" /></summary><ResearchNotebook items={research} /></details> : null}
   </div>;
 }
