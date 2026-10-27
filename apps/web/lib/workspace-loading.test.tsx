@@ -30,7 +30,7 @@ vi.mock("@/app/workspace/settings/testing/actions",()=>({leaveTestWorkspace:vi.f
 // of the intentionally pending Lab request. Never call a real backend here.
 vi.mock("@/lib/server/accountBackend", () => ({ loadAccountSettings: async () => { throw new Error("settings unavailable"); } }));
 vi.mock("@/auth", () => ({ auth }));
-vi.mock("@/app/login/actions", () => ({ signOutOfWorkspace: vi.fn() }));
+vi.mock("@/app/login/actions", () => ({ signOutOfWorkspace: vi.fn(), signOutFromAccountMenu: vi.fn() }));
 vi.mock("@/lib/server/labBackend", () => ({ loadLabManifest }));
 vi.mock("@/components/workspace-shell-nav", () => ({
   WorkspaceShellNav: () => null,

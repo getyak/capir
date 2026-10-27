@@ -54,6 +54,24 @@ organization Identity EditAuth authority. An OIDC attach denied for that action
 requires an eligible organization principal; do not widen the workload role or
 substitute human credentials in Actions.
 
+## Authorization write receipts
+
+When a provider write creates or changes authorization, capture its
+acknowledgement immediately after the response and before dependent verification. A bounded private audit receipt
+may retain allowlisted resource IDs and non-secret scope bindings; never save
+credentials, headers, or entire response bodies. A successful status followed
+by a later lookup does not by itself establish a response-bound resource ID for retry or
+rollback. Preserve that uncertainty rather than reconstructing a receipt.
+
+Verify an existing policy through documented, explicitly scoped reads and
+exact permissions. A response projection may omit binding fields; accept that
+omission only when the documented query scope and independent matching resource
+IDs establish the binding. Explicit wrong or null IDs, extra actions, and
+broader resource conditions must still fail. Review compatibility changes and
+their counterexamples independently; do not repeat creation or broaden access
+to make a verifier pass. See the
+[completion evidence standard](../../REVIEW.md#evidence-of-completion).
+
 ## Workload identities
 
 Use a separate least-privilege Machine Identity for each workload and

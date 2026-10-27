@@ -1,4 +1,8 @@
-import { CONVERSATION_RETENTION_RULE, SESSION_TITLE_RULE } from "./assistant-conversation.js";
+import { SESSION_TITLE_RULE } from "./assistant-conversation.js";
+
+// Frozen relationship task profiles keep their reviewed prompt digest.
+// Ordinary-conversation wording changes must not implicitly re-freeze them.
+const FROZEN_RELATIONSHIP_RETENTION_RULE = `When explaining no_action or a request not to save changes, distinguish domain actions from conversation retention. No contact, Memory, or calendar change does not mean no persistence: Session history and run/audit receipts have separate retention. Do not promise that a conversation is unsaved, unlogged, deleted, or private merely because no action or tool was used; only explicit host-provided retention state can establish that. Mention this distinction when relevant to the user's question, not as a disclaimer on every reply.`;
 
 export const JSON_OUTPUT_PROTOCOL = `Return JSON {"kind":"answer"|"question_set"|"clarification","title":string,"body":string,"citation_ids":string[],"session_title"?:string}. ${SESSION_TITLE_RULE}`;
 
@@ -11,7 +15,7 @@ Available context is not automatically relevant to the current request. Include 
 
 Previous dialogue is conversation-only working context for follow-ups and earlier options. It supplies no evidence citations, confirmed facts, identity authority, or permission to act. Re-ground relationship claims in the current supplied blocks and allowed citations; earlier assistant statements remain unconfirmed generated text.
 
-${CONVERSATION_RETENTION_RULE}
+${FROZEN_RELATIONSHIP_RETENTION_RULE}
 
 Only blocks with status=confirmed support confirmed facts. All other blocks are unconfirmed source reports: attribute them as such, including in headings. Give useful partial answers. Unclear actors remain 'the contact'; unknown draft terms/dates use placeholders. Images are provisional. This answer cannot save accepted state or execute external actions; a supplied Memory review capability only prepares a proposal for human confirmation.
 

@@ -138,24 +138,24 @@ final class WorkspaceConnectionProbe: NSObject, URLSessionTaskDelegate, @uncheck
         do {
             let (_, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
-                return .init(reachable: false, summary: "未收到网页响应", detail: "请确认这是工作区的网页入口。")
+                return .init(reachable: false, summary: String(localized: "No web response received", bundle: .main), detail: String(localized: "Confirm that this is the workspace web entry point.", bundle: .main))
             }
             let ok = (200...299).contains(http.statusCode) || [401, 403].contains(http.statusCode)
-            return .init(reachable: ok, summary: ok ? "服务可以访问" : "服务尚未就绪",
-                         detail: "HTTP \(http.statusCode) · 连通性检查不代表已登录或后端业务正常。")
+            return .init(reachable: ok, summary: ok ? String(localized: "Service is reachable", bundle: .main) : String(localized: "Service is not ready", bundle: .main),
+                         detail: String(format: String(localized: "HTTP %lld · Reachability does not mean you are signed in or that backend business services are healthy.", bundle: .main), Int64(http.statusCode)))
         } catch {
             let code = (error as NSError).code
             let detail: String
             switch code {
-            case NSURLErrorTimedOut: detail = "连接超时。请检查 Tailscale、代理和服务端口。"
-            case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed: detail = "无法解析地址。请检查拼写和 Tailscale 连接。"
+            case NSURLErrorTimedOut: detail = String(localized: "Connection timed out. Check Tailscale, the proxy, and service ports.", bundle: .main)
+            case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed: detail = String(localized: "Unable to resolve the address. Check the spelling and Tailscale connection.", bundle: .main)
             case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted,
                  NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateHasUnknownRoot:
-                detail = "安全连接未通过验证。请检查服务证书。"
-            case NSURLErrorCancelled: detail = "检查已取消。"
-            default: detail = "请检查网络与工作区服务，然后重试。"
+                detail = String(localized: "Secure connection verification failed. Check the service certificate.", bundle: .main)
+            case NSURLErrorCancelled: detail = String(localized: "Check cancelled.", bundle: .main)
+            default: detail = String(localized: "Check the network and workspace service, then retry.", bundle: .main)
             }
-            return .init(reachable: false, summary: "暂时无法连接", detail: detail)
+            return .init(reachable: false, summary: String(localized: "Unable to connect right now", bundle: .main), detail: detail)
         }
     }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Stop, Trash, X } from "@phosphor-icons/react";
+import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Trash, X } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
@@ -28,7 +28,7 @@ import { useRunMilestones } from "./use-run-milestones";
 import { sessionHumanMessages, sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
 import { createAnswerSeamRegistry } from "./answer-seam";
 import { conversationWorkStatus, unresolvedConversationCount, type ConversationWorkStatus } from "./conversation-feedback";
-import { SessionTaskCapsule } from "./session-task-capsule";
+import { SessionTaskCapsule, SessionTaskProvider } from "./session-task-capsule";
 import { SessionRuntime } from "./session-runtime";
 import { usePersonContextPanel } from "../person-context-panel";
 import styles from "./queued-conversation.module.css";
@@ -156,6 +156,43 @@ export function QueuedConversation(props: Props) {
       window.history.replaceState(null, "", `/workspace/sessions/${sessionId}${anchor}`);
     }
   } });
+  useEffect(() => {
+    if (!chat.attachmentDraftUnsafe || chat.unavailable) return;
+    const route = window.location.href;
+    const navigation = (window as Window & { navigation?: EventTarget }).navigation;
+    const warning = t("图片尚未保存在本机，离开可能丢失。仍要离开吗？");
+    const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const link = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (!anchor || anchor.hasAttribute("download") || (anchor.target && anchor.target !== "_self")) return;
+      const target = new URL(anchor.href, route);
+      const current = new URL(route);
+      if (target.origin === current.origin && target.pathname === current.pathname && target.search === current.search) return;
+      if (!window.confirm(warning)) { event.preventDefault(); event.stopImmediatePropagation(); }
+    };
+    const beforeTraversal = (event: Event) => {
+      const traversal = event as Event & { navigationType: string; destination: { url: string; sameDocument: boolean } };
+      if (traversal.navigationType !== "traverse" || !traversal.destination.sameDocument || !event.cancelable) return;
+      const destination = new URL(traversal.destination.url);
+      const current = new URL(route);
+      if (destination.origin === current.origin && destination.pathname === current.pathname && destination.search === current.search) return;
+      // This event precedes URL/history commitment and App Router's popstate
+      // restore. Cancelling it keeps the actual entry, subtree and original
+      // files in place; a post-popstate push cannot restore unmounted files.
+      if (!window.confirm(warning)) event.preventDefault();
+    };
+    window.addEventListener("beforeunload", unload);
+    // Link capture precedes the delegated Link handler. History traversal
+    // needs the browser's pre-commit event, not listener order on popstate.
+    window.addEventListener("click", link, true);
+    if (navigation) navigation.addEventListener("navigate", beforeTraversal);
+    return () => {
+      window.removeEventListener("beforeunload", unload);
+      window.removeEventListener("click", link, true);
+      if (navigation) navigation.removeEventListener("navigate", beforeTraversal);
+    };
+  }, [chat.attachmentDraftUnsafe, chat.unavailable, t]);
   const [editing, setEditing] = useState<Pick<QueueEditOperation, "entry" | "owner" | "sessionId" | "token"> | null>(null);
   const [editValue, setEditValue] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -465,7 +502,10 @@ export function QueuedConversation(props: Props) {
   }, [chat.ready, chat.unavailable, props.initialDetail]);
   function latest() { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
   async function send() { if (composingRef.current.owner === composerOwner && composingRef.current.value) return; if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
-  function navigate(href: string) { navigating.current = true; router.push(href); }
+  function navigate(href: string) {
+    if (chat.attachmentDraftUnsafe && !window.confirm(t("图片尚未保存在本机，离开可能丢失。仍要离开吗？"))) return;
+    navigating.current = true; router.push(href);
+  }
   async function remove() {
     if (await chat.remove()) {
       reading.forget();
@@ -495,7 +535,7 @@ export function QueuedConversation(props: Props) {
   // Escape pauses the queue while a run is live. IME composition owns Enter
   // and Escape: a composing key event is never an action.
   function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.defaultPrevented) return;
+    if (event.defaultPrevented || chat.mutating) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('[role="dialog"]')) return;
     const run = active && !active.cancel_requested && active.run_id ? active : null;
@@ -514,13 +554,14 @@ export function QueuedConversation(props: Props) {
     await chat.mutate({ kind: "prioritize", queue_entry_id: queueEntryId });
   }
 
-  return <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
+  return <SessionTaskProvider observation={chat.taskObservation} connection={chat.connection} mutating={chat.mutating}
+    onStop={runId => void chat.mutate({ kind: "stop", run_id: runId })} onContinue={() => void chat.mutate({ kind: "continue" })}
+    onRetry={queueEntryId => void retryEntry(queueEntryId)} recoveryActions={renderContext.recoveryActions}>
+  <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
     {admitted && <header className={styles.header}>
       <div className={styles.headingText}><h1 title={chat.detail?.title || t("conversation.new")}>{chat.detail?.title || t("conversation.new")}</h1></div>
       {personId && !chat.unavailable && <button className={styles.personContext} aria-label={t("conversation.person.view", { person: personLabel || t("conversation.person.fallback") })} onClick={event => personContextPanel.open(personId,event.currentTarget)}>{t("conversation.person.context")}</button>}
-      <div className={styles.taskSlot}>{!chat.unavailable && <SessionTaskCapsule observation={chat.taskObservation} connection={chat.connection} mutating={chat.mutating}
-        onStop={runId => void chat.mutate({ kind: "stop", run_id: runId })} onContinue={() => void chat.mutate({ kind: "continue" })}
-        onRetry={queueEntryId => void retryEntry(queueEntryId)} recoveryActions={renderContext.recoveryActions}/>}</div>
+      <div className={styles.taskSlot}>{!chat.unavailable && <SessionTaskCapsule/>}</div>
       <details className={styles.details}><summary aria-label={t("conversation.detail.label")}><DotsThree aria-hidden="true" size={18}/><span className={styles.detailsLabel}>{t("conversation.detail.label")}</span></summary><div className={styles.detailPanel}>
       <p>{chat.detail?.title || t("conversation.new")}</p>
       <p className={styles.detailScope}>{scopeLabel}</p>
@@ -555,18 +596,22 @@ export function QueuedConversation(props: Props) {
         {chat.attachments.map((attachment, index) => <span className={styles.composerImage} key={attachment.id}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img alt={attachment.manifest.file_name} src={attachment.url} />
-          <button aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable} onClick={() => chat.removeAttachment(attachment.id)} type="button"><X size={12} weight="bold"/></button>
+          <button aria-label={t("conversation.images.removeItem", { position: index + 1 })} className={styles.composerImageRemove} disabled={!chat.ready || chat.unavailable || chat.preparing} onClick={() => chat.removeAttachment(attachment.id)} type="button"><X size={12} weight="bold"/></button>
         </span>)}
       </div>}
       {imageCount >= 10 && <p className={styles.composerImageHint} role="status">{t("conversation.images.limit")}</p>}
+      {chat.attachmentDraftUnsafe && !chat.preparing && !chat.unavailable && <button type="button" onClick={() => void chat.retryAttachmentDraft()}>{t("重试保存图片")}</button>}
+      {chat.attachmentDraftRecoveryNeeded && !chat.preparing && !chat.unavailable && <button type="button" onClick={() => {
+        if (window.confirm(t("这会放弃当前页的图片预览并载入本机草稿，文字不变。继续吗？"))) void chat.useStoredAttachmentDraft();
+      }}>{t("使用本机已保存的图片")}</button>}
       {chat.preparing && <p className={styles.composerImageHint} role="status">{t("conversation.images.preparing")}</p>}
       {chat.submitting && <p className={styles.composerImageHint} role="status">{t("conversation.images.sending")}</p>}
       <div className={styles.composer}>
         <WorkspaceComposer key={composerScope} id="queued-conversation-composer" viewKey={id} label={t("conversation.composer.label")} value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? t("conversation.composer.steerPlaceholder") : t("conversation.composer.queuePlaceholder") : paused ? t("conversation.composer.pausedPlaceholder") : imageCount ? t("conversation.composer.imagesPlaceholder") : t("conversation.composer.defaultPlaceholder")} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onComposingChange={composingChanged} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
-          footerEnd={<div className={styles.sendActions}>{active && <button type="button" className={styles.stop} aria-label={t("conversation.stop.action")} title={t("conversation.stop.title")} disabled={chat.mutating || active.cancel_requested} onClick={() => void chat.mutate({kind:"stop",run_id:active.run_id!})}><Stop size={16} weight="fill"/><span>{t("conversation.stop.label")}</span></button>}<button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? t("conversation.send.steerAction") : active || queued.length || paused ? t("conversation.send.queueAction") : t("conversation.send.label")} title={acceptsSteering ? t("conversation.send.steerAction") : active || paused ? t("conversation.send.queueAction") : t("conversation.send.title")} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? t("conversation.send.steer") : t("conversation.send.queue")}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
+          footerEnd={<div className={styles.sendActions}><button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? t("conversation.send.steerAction") : active || queued.length || paused ? t("conversation.send.queueAction") : t("conversation.send.label")} title={acceptsSteering ? t("conversation.send.steerAction") : active || paused ? t("conversation.send.queueAction") : t("conversation.send.title")} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? t("conversation.send.steer") : t("conversation.send.queue")}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
       {!hasContent && <div className={styles.starters} aria-label={t("conversation.starters.label")}>{[t("conversation.starters.help"), t("conversation.starters.prepare")].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
-      <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{status || ""}</span><span>{t("conversation.footer.keys")}</span></div>
+      <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{chat.unavailable ? t("conversation.status.unavailable") : chat.connection === "reconnecting" && hasContent && !active && !queued.length ? t("conversation.status.reconnecting") : ""}</span><span>{t("conversation.footer.keys")}</span></div>
     </div>
-  </main>;
+  </main></SessionTaskProvider>;
 }

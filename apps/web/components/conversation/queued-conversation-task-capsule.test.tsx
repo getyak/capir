@@ -56,6 +56,7 @@ async function emit(value: ConversationQueueSnapshot, emitter = emitters.at(-1)!
 function capsule() { return host.querySelector<HTMLElement>("[data-session-task-capsule]"); }
 async function open() { expect(capsule(), "observed task must expose a capsule").not.toBeNull(); const trigger = capsule()!.querySelector<HTMLButtonElement>("button")!; await act(async () => trigger.click()); await flush(); return trigger; }
 function actions() { return fetcher.mock.calls.filter(([, init]) => init?.method === "POST").map(([, init]) => JSON.parse(init.body)); }
+function stopButtons() { return [...host.querySelectorAll<HTMLButtonElement>("button")].filter(button => button.textContent === "Stop"); }
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -85,20 +86,79 @@ it("discloses an actual stage and elapsed record without sending or stopping on 
   expect(capsule()?.textContent ?? "").toContain("Reading the related records");
   expect(document.body.textContent).not.toContain("Observed time");
   const trigger = await open();
-  expect(document.body.textContent).toContain("Observed time");
+  expect(host.querySelector("[data-session-task-record]")?.closest("details")?.open).toBe(true);
   expect(actions()).toEqual([]);
   await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-  await flush(); expect(trigger.getAttribute("aria-expanded")).toBe("false"); expect(document.activeElement).toBe(trigger);
+  await flush(); expect(host.querySelector("[data-session-task-record]")?.closest("details")?.open).toBe(false); expect(document.activeElement).toBe(trigger);
+  expect(actions()).toEqual([]);
+});
+it("anchors header inspection to the current message execution record inside the transcript", async () => {
+  await render(); await emit(snapshot(2, entry()));
+  const trigger = await open();
+  const record = host.querySelector<HTMLElement>(`[data-session-task-record='${MESSAGE}']`);
+  expect(record).not.toBeNull();
+  expect(host.querySelector("[data-session-runtime]")?.contains(record)).toBe(true);
+  expect(record?.closest("details")?.open).toBe(true);
+  expect(trigger.getAttribute("aria-controls")).toBe(record?.id);
+  expect(document.querySelector("[data-slot='popover-content']")).toBeNull();
   expect(actions()).toEqual([]);
 });
 it("stops only through the deliberate control and never continues the stopped queue", async () => {
   await render(); await emit(snapshot(2, entry())); await open();
-  const stop = [...document.querySelectorAll<HTMLButtonElement>("[data-slot='popover-content'] button")].find(button => button.textContent === "Stop");
+  const stop = [...document.querySelectorAll<HTMLButtonElement>("[data-session-task-capsule] button")].find(button => button.textContent === "Stop");
   expect(stop).toBeDefined(); await act(async () => stop!.click()); await flush();
   expect(actions().map(action => action.kind)).toEqual(["stop"]);
   expect(actions()[0].run_id).toBe(RUN); expect(capsule()?.textContent ?? "").toContain("Stopping");
   await emit(snapshot(11, null, [entry({ message_id: "77777777-7777-4777-8777-777777777777", queue_entry_id: "77777777-7777-4777-8777-777777777777", status: "queued", run_id: null, started_at: null })], true)); expect(capsule()?.textContent ?? "").toContain("Stopped");
   expect(actions().map(action => action.kind)).toEqual(["stop"]);
+});
+it("keeps one Stop beside the only current status even when execution details are open", async () => {
+  await render(); await emit(snapshot(2, entry({ stage: "thinking" })));
+  expect(stopButtons()).toHaveLength(1);
+  expect(capsule()?.contains(stopButtons()[0])).toBe(true);
+  const record = host.querySelector<HTMLDetailsElement>('details[data-live="true"]')!;
+  expect(record.open).toBe(false);
+  expect(record.querySelector("summary")?.textContent).not.toContain("Working");
+  expect(host.querySelector('[class*="footer"]')?.textContent).not.toContain("Working");
+  await open();
+  expect(stopButtons()).toHaveLength(1);
+  expect(record.open).toBe(true);
+  expect(record.querySelector('[data-elapsed-ms]')).not.toBeNull();
+});
+it("does not let Escape on a closed historical receipt stop the replacement run", async () => {
+  await render(); detail = completed();
+  await emit(snapshot(3, entry({ message_id: "77777777-7777-4777-8777-777777777777", queue_entry_id: "77777777-7777-4777-8777-777777777777", run_id: "88888888-8888-4888-8888-888888888888" })));
+  const older = host.querySelector<HTMLDetailsElement>('details[data-phase="completed"]')!;
+  expect(older.open).toBe(false);
+  const summary = older.querySelector("summary")!;
+  summary.focus();
+  await act(async () => summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(actions()).toEqual([]);
+});
+it("retains current-run Stop until the active queue actually settles after history readback", async () => {
+  await render(); await emit(snapshot(2, entry())); detail = completed();
+  await emit(snapshot(3, entry()));
+  expect(stopButtons()).toHaveLength(1);
+  expect(capsule()?.contains(stopButtons()[0])).toBe(true);
+  await act(async () => stopButtons()[0].click()); await flush();
+  expect(actions().map(action => [action.kind, action.run_id])).toEqual([["stop", RUN]]);
+});
+it("closes an older execution record during a new run without stopping that run", async () => {
+  await render(); await emit(snapshot(2, entry())); await open();
+  detail = completed();
+  await emit(snapshot(3, entry({ message_id: "77777777-7777-4777-8777-777777777777", queue_entry_id: "77777777-7777-4777-8777-777777777777", run_id: "88888888-8888-4888-8888-888888888888" })));
+  // Canonical readback can replace the original node. Inspecting its actual
+  // older receipt while B runs still owns a local close, never Stop B.
+  const older = host.querySelector<HTMLDetailsElement>('details[data-phase="completed"]')!;
+  expect(older).not.toBeNull(); older.open = true;
+  const summary = older.querySelector("summary")!;
+  summary.focus();
+  await act(async () => summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true })));
+  expect(older.open).toBe(true); expect(actions()).toEqual([]);
+  await act(async () => summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 229, bubbles: true, cancelable: true })));
+  expect(older.open).toBe(true); expect(actions()).toEqual([]);
+  await act(async () => summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(older.open).toBe(false); expect(actions()).toEqual([]);
 });
 it("shows queued and paused work from the real queue without approving or continuing on disclosure", async () => {
   await render(); await emit(snapshot(2, null, [entry({ status: "queued", run_id: null, stage: null, started_at: null })]));
@@ -124,7 +184,7 @@ it("waits for canonical readback instead of claiming success from a completed qu
 });
 it("does not resurrect old active work or callbacks across binding ABA", async () => {
   await render(); await emit(snapshot(2, entry())); await open();
-  const oldStop = [...document.querySelectorAll<HTMLButtonElement>("[data-slot='popover-content'] button")].find(button => button.textContent === "Stop")!;
+  const oldStop = [...document.querySelectorAll<HTMLButtonElement>("[data-session-task-capsule] button")].find(button => button.textContent === "Stop")!;
   expect(oldStop).toBeDefined();
   await render("chat-b"); expect(capsule()).toBeNull();
   await render("chat-a"); expect(capsule()).toBeNull();
@@ -139,7 +199,7 @@ it("does not continue a new binding when an old deliberate retry finishes late",
   const pending = new Promise<Response>(res => { resolve = res; });
   const base = fetcher.getMockImplementation()!;
   fetcher.mockImplementation((url: string, init?: RequestInit) => init?.method === "POST" ? pending : base(url, init));
-  const retry = [...document.querySelectorAll<HTMLButtonElement>("[data-slot='popover-content'] button")].find(button => button.textContent === "Retry")!;
+  const retry = [...document.querySelectorAll<HTMLButtonElement>("[data-session-task-record] button")].find(button => button.textContent === "Retry")!;
   expect(retry).toBeDefined(); await act(async () => retry.click()); await flush();
   expect(actions().map(action => action.kind)).toEqual(["retry"]);
   await render("chat-b"); await render("chat-a");
@@ -174,17 +234,18 @@ it("leaves a pending calendar decision in its governed card after canonical repl
   expect(capsule()).toBeNull();
   expect(host.textContent).toContain("Synthetic meeting review");
   expect(host.textContent).toContain("Download calendar draft");
-  expect(host.textContent).toContain("Execution complete, awaiting your decision");
+  expect(host.textContent).toContain("Ready for your review");
   expect(actions()).toEqual([]);
 });
-it("measures live elapsed time from its actual started timestamp only inside disclosure", async () => {
+it("keeps the actual started timestamp in the single inline execution record", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-24T00:00:12Z"));
   try {
     await render(); await emit(snapshot(2, entry()));
     expect(host.textContent).not.toContain("Observed time"); await open();
-    expect(document.querySelector("[data-slot='popover-content']")?.textContent).toContain("Observed time 10 sec");
-    expect(document.querySelector("[data-slot='popover-content']")?.textContent).not.toContain("%");
+    const record = host.querySelector("[data-session-task-record]")?.closest("details");
+    expect(record?.querySelector("[data-elapsed-ms]")?.getAttribute("data-elapsed-ms")).toBe("10000");
+    expect(record?.textContent).not.toContain("%");
   } finally { vi.useRealTimers(); }
 });
 

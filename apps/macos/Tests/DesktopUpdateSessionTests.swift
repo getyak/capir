@@ -108,4 +108,59 @@ final class DesktopUpdateSessionTests: XCTestCase {
         XCTAssertNotNil(session.state.lastChecked)
         XCTAssertEqual(session.state.status, "新版本暂不支持这台 Mac")
     }
+    func testStatusProducersUseTheMainBundleLanguageAndKeepDynamicValues() throws {
+        func text(_ key: String) -> String { Bundle.main.localizedString(forKey: key, value: key, table: nil) }
+        let session = DesktopUpdateSession()
+        XCTAssertEqual(session.state.status, text("Signed updates are not enabled in this preview"))
+        session.configure()
+        XCTAssertEqual(session.state.status, text("New versions appear at the lower left"))
+        session.checking()
+        XCTAssertEqual(session.state.status, text("Checking for updates…"))
+        var choices: [SPUUserUpdateChoice] = []
+        session.offer(version: "0.2.41 (212)", verified: true, informationOnly: false) { choices.append($0) }
+        XCTAssertEqual(session.state.status, String(format: text("%@ is available. Click to update and restart"), "0.2.41 (212)"))
+        XCTAssertTrue(choices.isEmpty)
+        session.install(offerID: UUID())
+        XCTAssertTrue(choices.isEmpty)
+        session.install(offerID: session.state.offerID)
+        XCTAssertEqual(choices, [.install])
+        XCTAssertEqual(session.state.status, text("Downloading update…"))
+        for (input, expected) in [(-1, 0), (37, 37), (140, 100)] {
+            session.downloadProgress(input)
+            XCTAssertEqual(session.state.status, String(format: text("Downloading update %lld%%"), Int64(expected)))
+        }
+        session.downloadProgress(nil)
+        XCTAssertEqual(session.state.status, text("Downloading update…"))
+        session.extracting()
+        XCTAssertEqual(session.state.status, text("Verifying and preparing the update…"))
+        session.ready { choices.append($0) }
+        XCTAssertEqual(session.state.status, text("Updating and restarting…"))
+        session.waitingForQuit()
+        XCTAssertEqual(session.state.status, text("Waiting for the app to quit. If quitting was cancelled, try restarting again."))
+        session.dismiss()
+        XCTAssertEqual(session.state.status, text("Update ended. You can check for updates again"))
+        session.fail()
+        XCTAssertEqual(session.state.status, text("The update could not be completed. Your current version remains usable. Check for updates again."))
+        session.ready { choices.append($0) }
+        XCTAssertEqual(choices, [.install, .install, .skip])
+    }
+
+    func testVerificationAndInformationStatusesRemainLocalizedWithoutGrantingConsent() {
+        func text(_ key: String) -> String { Bundle.main.localizedString(forKey: key, value: key, table: nil) }
+        let session = DesktopUpdateSession()
+        session.offer(version: "2", verified: false, informationOnly: false) { XCTAssertEqual($0, .dismiss) }
+        XCTAssertEqual(session.state.status, text("Update information failed signature verification. Your current version remains usable."))
+        session.noUpdate(status: "synthetic status", verified: false)
+        XCTAssertEqual(session.state.status, text("Update information could not be verified. Your current version remains usable. Try again later."))
+        XCTAssertNil(session.state.lastChecked)
+        session.offer(version: "2", verified: true, informationOnly: true) { XCTAssertEqual($0, .dismiss) }
+        XCTAssertEqual(session.state.status, text("A release announcement is available in the release history. It contains no installable update."))
+        XCTAssertNil(session.state.offerID)
+        XCTAssertFalse(session.state.canInstall)
+        let downloaded = DesktopUpdateSession()
+        downloaded.offer(version: "2", verified: true, informationOnly: false, stage: .downloaded) { XCTAssertEqual($0, .install) }
+        downloaded.install(offerID: downloaded.state.offerID)
+        XCTAssertEqual(downloaded.state.status, text("Updating and restarting…"))
+    }
+
 }

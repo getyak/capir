@@ -103,11 +103,11 @@ enum WorkspaceSettingsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .general: "通用"
-        case .companion: "桌面伙伴"
-        case .permissions: "权限"
-        case .connection: "连接与诊断"
-        case .updates: "软件更新"
+        case .general: String(localized: "General", bundle: .main)
+        case .companion: String(localized: "Companion", bundle: .main)
+        case .permissions: String(localized: "Permissions", bundle: .main)
+        case .connection: String(localized: "Connection and Diagnostics", bundle: .main)
+        case .updates: String(localized: "Software Updates", bundle: .main)
         }
     }
 
@@ -130,8 +130,8 @@ struct WorkspaceSettingsSectionGroup: Identifiable {
 
 extension WorkspaceSettingsSection {
     static let groups: [WorkspaceSettingsSectionGroup] = [
-        .init(title: "此 Mac", sections: [.general, .companion, .permissions, .updates]),
-        .init(title: "支持", sections: [.connection]),
+        .init(title: String(localized: "This Mac", bundle: .main), sections: [.general, .companion, .permissions, .updates]),
+        .init(title: String(localized: "Support", bundle: .main), sections: [.connection]),
     ]
 
     func moved(by offset: Int) -> WorkspaceSettingsSection {
@@ -285,12 +285,12 @@ enum WorkspaceSurfacePolicy {
         // draft was preserved; be explicit about what the user should check.
         let safe = transition.restoreURL ?? entryURL
         let browserStatus = browserOpened
-            ? "账号设置已在默认浏览器中打开。"
-            : "账号设置未能在默认浏览器中打开。"
+            ? String(localized: "Account settings opened in the default browser.", bundle: .main)
+            : String(localized: "Account settings could not be opened in the default browser.", bundle: .main)
         let restoreStatus = transition.restoreURL == nil
-            ? "无法确认先前的对话位置，主窗口已回到工作区首页；未保存的输入可能未保留。"
-            : "返回历史不可用，已重新载入上次工作区地址；未保存的输入可能未保留。"
-        let notice = browserStatus + restoreStatus
+            ? String(localized: "The previous conversation location could not be confirmed. The main window returned to the workspace home; unsaved input may not have been retained.", bundle: .main)
+            : String(localized: "Back history was unavailable. The last workspace address was reloaded; unsaved input may not have been retained.", bundle: .main)
+        let notice = "\(browserStatus) \(restoreStatus)"
         return .load(safe, notice: notice)
     }
 }
@@ -331,7 +331,7 @@ struct WorkspaceDesktopSettings: View {
         .frame(minWidth: 820,
                idealWidth: navigation.selection == .companion ? 1040 : 900,
                maxWidth: .infinity, minHeight: 600, idealHeight: 680, maxHeight: .infinity)
-        .background(SettingsWindowTitle(title: "此 Mac 设置"))
+        .background(SettingsWindowTitle(title: String(localized: "This Mac Settings", bundle: .main)))
         .task { updater.start() }
         .onAppear { connectionProbe.reset(for: connection.origin) }
         .onChange(of: connection.origin) { _, origin in connectionProbe.reset(for: origin) }
@@ -340,7 +340,7 @@ struct WorkspaceDesktopSettings: View {
 
     private var rail: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("此 Mac 设置")
+            Text(String(localized: "This Mac Settings", bundle: .main))
                 .font(.title3.weight(.semibold))
                 .padding(.horizontal, 18).padding(.top, 20).padding(.bottom, 12)
 
@@ -372,16 +372,16 @@ struct WorkspaceDesktopSettings: View {
             accountRow.padding(.horizontal, 12).padding(.vertical, 12)
             Divider().padding(.horizontal, 16)
             VStack(alignment: .leading, spacing: 3) {
-                Text("此 Mac · \(updater.appVersion)")
+                Text(String(format: String(localized: "This Mac · %@", bundle: .main), updater.appVersion))
                     .font(.caption2).foregroundStyle(.secondary)
                 if updater.presentation.offerID != nil {
-                    Text("有可用更新").font(.caption2).foregroundStyle(.primary)
+                    Text(String(localized: "Update available", bundle: .main)).font(.caption2).foregroundStyle(.primary)
                 }
             }
             .padding(.horizontal, 18).padding(.vertical, 12)
             .accessibilityIdentifier("settings.installedVersion")
 
-            Button("搜索设置") { searchFocused = true }
+            Button(String(localized: "Search settings", bundle: .main)) { searchFocused = true }
                 .keyboardShortcut("f", modifiers: [.command])
                 .frame(width: 0, height: 0)
                 .opacity(0)
@@ -412,7 +412,7 @@ struct WorkspaceDesktopSettings: View {
             Button { openAccountSettings(.overview) } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "arrow.up.right.square")
-                    Text("账号与偏好 ↗")
+                    Text(String(localized: "Account and Preferences ↗", bundle: .main))
                     Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -420,20 +420,20 @@ struct WorkspaceDesktopSettings: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("settings.account.browser")
-            .accessibilityHint("在默认浏览器中打开，浏览器使用它自己登录的账号")
+            .accessibilityHint(String(localized: "Opens in the default browser using the account signed in there", bundle: .main))
             Text(connection.origin == nil
-                 ? "需要先连接工作区，浏览器才能打开账号设置。"
-                 : "浏览器使用它自己登录的账号，可能与应用内的账号不同。")
+                 ? String(localized: "Connect to a workspace before opening account settings in the browser.", bundle: .main)
+                 : String(localized: "The browser uses its own signed-in account, which may differ from this app's account.", bundle: .main))
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if accountLaunchFailed {
                 Text(connection.origin == nil
-                     ? "尚未连接工作区，暂时无法打开账号设置。"
-                     : "无法打开默认浏览器。请检查默认浏览器，然后重试。")
+                     ? String(localized: "No workspace is connected, so account settings cannot be opened yet.", bundle: .main)
+                     : String(localized: "The default browser could not be opened. Check your default browser and try again.", bundle: .main))
                     .font(.caption2).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
                 if connection.origin != nil {
-                    Button("重试") { openAccountSettings(.overview) }
+                    Button(String(localized: "Retry", bundle: .main)) { openAccountSettings(.overview) }
                         .controlSize(.small)
                         .accessibilityIdentifier("settings.account.retry")
                 }
@@ -449,13 +449,13 @@ struct WorkspaceDesktopSettings: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
-            TextField("搜索设置", text: Binding(
+            TextField(String(localized: "Search settings", bundle: .main), text: Binding(
                 get: { search.query },
                 set: { search.update($0); searchMessage = nil }
             ))
             .textFieldStyle(.plain)
             .focused($searchFocused)
-            .accessibilityLabel("搜索设置")
+            .accessibilityLabel(String(localized: "Search settings", bundle: .main))
             .accessibilityIdentifier("settings.search.field")
             .onSubmit { activate(search.activeEntry) }
             .onKeyPress(.downArrow) { search.moveDown(); return .handled }
@@ -474,7 +474,7 @@ struct WorkspaceDesktopSettings: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(.tertiary)
-                .accessibilityLabel("清除搜索")
+                .accessibilityLabel(String(localized: "Clear search", bundle: .main))
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
@@ -528,27 +528,27 @@ struct WorkspaceDesktopSettings: View {
     private var generalPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("通用").font(.title2.weight(.semibold))
-                Text("这些控制只影响这台 Mac，断线时仍然可用。")
+                Text(String(localized: "General", bundle: .main)).font(.title2.weight(.semibold))
+                Text(String(localized: "These controls affect only this Mac and remain available offline.", bundle: .main))
                     .font(.callout).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 16) {
-                    Picker("内容大小", selection: $zoom) {
+                    Picker(String(localized: "Content Size", bundle: .main), selection: $zoom) {
                         ForEach(WorkspaceContentZoom.steps, id: \.self) { value in
                             Text("\(Int((value * 100).rounded()))%").tag(value)
                         }
                     }
-                    Toggle("工作窗口保持在最前", isOn: $floating)
+                    Toggle(String(localized: "Keep the workspace window on top", bundle: .main), isOn: $floating)
                 }
                 Divider()
                 CaptureDeviceSettings()
                 Divider()
-                DisclosureGroup("键盘快捷键") {
+                DisclosureGroup(String(localized: "Keyboard Shortcuts", bundle: .main)) {
                     VStack(spacing: 12) {
-                        LabeledContent("新对话", value: "⌘ N")
-                        LabeledContent("放大 / 缩小 / 实际大小", value: "⌘ + / ⌘ − / ⌘ 0")
-                        LabeledContent("人物 / 日程", value: "⌘ 1 / ⌘ 2")
-                        LabeledContent("此 Mac 设置", value: "⌘ ,")
-                        LabeledContent("重新载入", value: "⌘ R")
+                        LabeledContent(String(localized: "New Chat", bundle: .main), value: "⌘ N")
+                        LabeledContent(String(localized: "Zoom In / Zoom Out / Actual Size", bundle: .main), value: "⌘ + / ⌘ − / ⌘ 0")
+                        LabeledContent(String(localized: "People / Time", bundle: .main), value: "⌘ 1 / ⌘ 2")
+                        LabeledContent(String(localized: "This Mac Settings", bundle: .main), value: "⌘ ,")
+                        LabeledContent(String(localized: "Reload", bundle: .main), value: "⌘ R")
                     }.padding(.top, 12)
                 }
             }.padding(32).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
@@ -560,32 +560,32 @@ struct WorkspaceDesktopSettings: View {
     private var permissionsPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("权限").font(.title2.weight(.semibold))
-                Text("截图与文档功能需要由 macOS 管理的屏幕录制权限。这里显示真实状态，授权只能在系统设置中完成。")
+                Text(String(localized: "Permissions", bundle: .main)).font(.title2.weight(.semibold))
+                Text(String(localized: "Screenshots and documents require Screen Recording permission managed by macOS. The status shown is current; permission can only be granted in System Settings.", bundle: .main))
                     .font(.callout).foregroundStyle(.secondary)
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
-                        LabeledContent("屏幕录制") {
-                            Label(screenRecordingAllowed ? "已允许" : "未允许",
+                        LabeledContent(String(localized: "Screen Recording", bundle: .main)) {
+                            Label(screenRecordingAllowed ? String(localized: "Allowed", bundle: .main) : String(localized: "Not Allowed", bundle: .main),
                                   systemImage: screenRecordingAllowed ? "checkmark.circle" : "exclamationmark.circle")
                                 .foregroundStyle(screenRecordingAllowed ? Color.secondary : Color.orange)
                         }
                         HStack(spacing: 12) {
-                            Button("打开系统设置") {
+                            Button(String(localized: "Open System Settings", bundle: .main)) {
                                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                                     _ = NSWorkspace.shared.open(url)
                                 }
                             }
                             .accessibilityIdentifier("permissions.systemSettings")
-                            Button("重新检查") { screenRecordingAllowed = CGPreflightScreenCaptureAccess() }
+                            Button(String(localized: "Check Again", bundle: .main)) { screenRecordingAllowed = CGPreflightScreenCaptureAccess() }
                                 .accessibilityIdentifier("permissions.recheck")
                         }
-                        Text("点击“打开系统设置”只会打开 macOS 面板，不代表权限已更改。返回后请重新检查。")
+                        Text(String(localized: "Opening System Settings only opens the macOS pane; it does not change permission. Check again after returning.", bundle: .main))
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }.padding(6)
                 } label: {
-                    Text("由 macOS 管理").font(.callout.weight(.medium))
+                    Text(String(localized: "Managed by macOS", bundle: .main)).font(.callout.weight(.medium))
                 }
             }.padding(32).frame(maxWidth: 640, alignment: .leading).frame(maxWidth: .infinity)
         }.background(.background)
@@ -596,14 +596,14 @@ struct WorkspaceDesktopSettings: View {
     private var connectionPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text("连接与诊断").font(.title2.weight(.semibold))
-                Text("本机控制不依赖连接；需要读取或保存账号设置时，请在浏览器中打开。")
+                Text(String(localized: "Connection and Diagnostics", bundle: .main)).font(.title2.weight(.semibold))
+                Text(String(localized: "Local controls do not require a connection. Open the browser to read or save account settings.", bundle: .main))
                     .font(.callout).foregroundStyle(.secondary)
                 WorkspaceConnectionForm(mode: .settings) { openWindow(id: "workspace") }
-                DisclosureGroup("高级诊断") {
+                DisclosureGroup(String(localized: "Advanced Diagnostics", bundle: .main)) {
                     VStack(alignment: .leading, spacing: 12) {
-                        LabeledContent("当前工作区", value: connection.origin?.url.host ?? "尚未连接")
-                        Button(connectionProbe.isChecking(for: connection.origin) ? "正在检查…" : "测试连接") {
+                        LabeledContent(String(localized: "Current Workspace", bundle: .main), value: connection.origin?.url.host ?? String(localized: "Not Connected", bundle: .main))
+                        Button(connectionProbe.isChecking(for: connection.origin) ? String(localized: "Checking…", bundle: .main) : String(localized: "Test Connection", bundle: .main)) {
                             connectionProbe.check(connection.origin)
                         }
                             .disabled(connection.origin == nil || connectionProbe.isChecking(for: connection.origin))
@@ -615,7 +615,7 @@ struct WorkspaceDesktopSettings: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        Text("诊断只检查本机到工作区的连接，不包含凭据、令牌或账号标识。")
+                        Text(String(localized: "Diagnostics check only this Mac's connection to the workspace. They contain no credentials, tokens or account identifiers.", bundle: .main))
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }.padding(.top, 12)
@@ -627,32 +627,32 @@ struct WorkspaceDesktopSettings: View {
     private var updatesPane: some View {
         Form {
             Section {
-                LabeledContent("当前版本", value: updater.appVersion)
+                LabeledContent(String(localized: "Current Version", bundle: .main), value: updater.appVersion)
                 Text(updater.status).foregroundStyle(.secondary)
                 if let checked = updater.presentation.lastChecked {
-                    LabeledContent("上次验证更新源", value: checked.formatted(date: .abbreviated, time: .shortened))
+                    LabeledContent(String(localized: "Last Verified Update Source", bundle: .main), value: checked.formatted(date: .abbreviated, time: .shortened))
                 }
                 if let offerID = updater.presentation.offerID {
-                    Button("更新并重启") { updater.installUpdate(offerID: offerID) }
+                    Button(String(localized: "Update and Restart", bundle: .main)) { updater.installUpdate(offerID: offerID) }
                         .accessibilityIdentifier("updates.install")
                 } else {
-                    Button("检查更新") { updater.checkForUpdates() }
+                    Button(String(localized: "Check for Updates", bundle: .main)) { updater.checkForUpdates() }
                         .disabled(!updater.isConfigured || !updater.canCheck || updater.presentation.busy)
                         .accessibilityIdentifier("updates.check")
                 }
-                if updater.canRetryRelaunch { Button("再次尝试重启") { updater.retryRelaunch() } }
+                if updater.canRetryRelaunch { Button(String(localized: "Retry Relaunch", bundle: .main)) { updater.retryRelaunch() } }
             }
             Section {
-                Toggle("自动检查更新", isOn: $updater.automaticChecks).disabled(!updater.isConfigured)
-                Toggle("接收预览版本", isOn: $updater.includesPreview)
+                Toggle(String(localized: "Automatically check for updates", bundle: .main), isOn: $updater.automaticChecks).disabled(!updater.isConfigured)
+                Toggle(String(localized: "Receive preview releases", bundle: .main), isOn: $updater.includesPreview)
                     .disabled(!updater.isConfigured || updater.sessionInProgress)
             } footer: {
-                Text("新版本会在左下角提醒。点击“更新并重启”后，会下载、校验并重新打开应用，不再弹出确认。未点击时不会安装或重启。")
+                Text(String(localized: "New versions appear at the lower left. Update and Restart downloads, verifies and reopens the app without another confirmation. Nothing is installed or restarted until you click it.", bundle: .main))
             }
             Section {
-                Link("版本记录与安装帮助", destination: URL(string: "https://github.com/getyak/talent-signal/releases")!)
+                Link(String(localized: "Release History and Installation Help", bundle: .main), destination: URL(string: "https://github.com/getyak/talent-signal/releases")!)
                 if !updater.isConfigured {
-                    Text("正式签名更新尚未配置。可从版本记录下载已发布的安装包。")
+                    Text(String(localized: "Signed updates are not configured yet. Published installers are available in the release history.", bundle: .main))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -662,17 +662,17 @@ struct WorkspaceDesktopSettings: View {
     private var searchOverlay: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("搜索设置").font(.headline)
+                Text(String(localized: "Search settings", bundle: .main)).font(.headline)
                 Spacer()
-                Text("Esc 关闭").font(.caption).foregroundStyle(.secondary)
+                Text(String(localized: "Esc Close", bundle: .main)).font(.caption).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 10)
 
             if search.results.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("没有找到与“\(search.query.trimmingCharacters(in: .whitespacesAndNewlines))”匹配的设置。")
+                    Text(String(format: String(localized: "No settings match “%@”.", bundle: .main), search.query.trimmingCharacters(in: .whitespacesAndNewlines)))
                         .font(.callout)
-                    Text("可以试试通用、权限、连接、软件更新、账号，或截图与文档。关系资料不会出现在设置搜索中。")
+                    Text(String(localized: "Try General, Permissions, Connection, Software Updates, Account, or Screenshots and Documents. Relationship records are not included in settings search.", bundle: .main))
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -740,12 +740,12 @@ struct WorkspaceDesktopSettings: View {
             accountLaunchFailed = false
             if !AccountSettingsBrowser.shared.open(destination, in: connection.origin) {
                 searchMessage = connection.origin == nil
-                    ? "需要先连接工作区，浏览器才能打开账号设置。"
-                    : "无法打开默认浏览器，账号设置未打开。"
+                    ? String(localized: "Connect to a workspace before opening account settings in the browser.", bundle: .main)
+                    : String(localized: "The default browser could not be opened. Account settings were not opened.", bundle: .main)
             }
         case .workspacePath:
             guard let url = entry.resolvedURL(in: connection.origin) else {
-                searchMessage = "需要先连接工作区，才能打开这个工作区页面。"
+                searchMessage = String(localized: "Connect to a workspace before opening this workspace page.", bundle: .main)
                 return
             }
             WorkspaceNavigation.shared.pendingURL = url
@@ -753,10 +753,10 @@ struct WorkspaceDesktopSettings: View {
             searchMessage = nil
         case .systemSettings(let value):
             guard let url = URL(string: value), NSWorkspace.shared.open(url) else {
-                searchMessage = "无法打开 macOS 系统设置，请手动打开“隐私与安全性 → 屏幕录制”。"
+                searchMessage = String(localized: "macOS System Settings could not be opened. Open Privacy & Security → Screen Recording manually.", bundle: .main)
                 return
             }
-            searchMessage = "已请求打开 macOS 系统设置。权限状态返回后请重新检查。"
+            searchMessage = String(localized: "Requested macOS System Settings. Check permission again after returning.", bundle: .main)
         }
     }
 

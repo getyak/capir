@@ -231,9 +231,9 @@ it("replaces the work row with the persisted final answer exactly once", async (
   await renderConversation();
   await act(async () => { emit?.(frame("snapshot", snapshot(5, entry(MID)))); });
   await flush();
-  // While the run is live its execution record owns the status; the compact
-  // work row stays reserved for the unrepresented send and readback states.
-  expect(document.body.textContent).toContain("正在处理");
+  // The header owns the actual current stage; the compact work row remains
+  // reserved for unrepresented sends and readback.
+  expect(document.querySelector("[data-session-task-capsule]")?.textContent).toContain("正在回复");
   expect(workRows()).toHaveLength(0);
 
   detailBody = () => Response.json({ detail: { ...initialDetail, revision: 5, turns: [turn(MID, "已接收的原位消息")] } });

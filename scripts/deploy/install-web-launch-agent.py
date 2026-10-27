@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import signal
 import shutil
 import socket
 import subprocess
@@ -107,6 +108,55 @@ def wait_auth_readiness(opener, target, attempts=45):
             "counts": counts, "last": last}
 
 
+def process_group_exists(group):
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def check_runtime_configuration(release, path, timeout_seconds=30, cleanup_timeout_seconds=5):
+    """Fetch through the real launcher producer before changing the live job.
+
+    Caller-injected secrets must not mask a revoked Keychain login: launchd
+    receives PATH, not the installer's AUTH/INFISICAL/TALENT_SIGNAL values.
+    Discard all child output rather than retaining credentials or error bodies.
+    """
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("AUTH_", "INFISICAL_", "TALENT_SIGNAL_"))
+                   and key != "TS_WEB_INFISICAL_INJECTED"}
+    environment["PATH"] = path
+    started = time.monotonic()
+    try:
+        process = subprocess.Popen([str(release / "scripts/deploy/web-local.sh"), "check"],
+                                   cwd=release, env=environment,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        return {"ready": False, "state": "configuration_unavailable"}
+    try:
+        code = process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + cleanup_timeout_seconds
+        while True:
+            process.poll()  # Reap the leader, but do not mistake it for all descendants.
+            if not process_group_exists(process.pid):
+                return {"ready": False, "state": "configuration_timeout"}
+            if time.monotonic() >= deadline:
+                return {"ready": False, "state": "configuration_timeout", "cleanup_pending": True,
+                        "owned_process_group": process.pid}
+            time.sleep(0.05)
+    return {"ready": code == 0, "state": "ready" if code == 0 else "configuration_unavailable",
+            "exit_code": code, "elapsed_seconds": round(time.monotonic() - started, 3)}
+
+
 def main():
     if sys.platform != "darwin" or len(sys.argv) != 2:
         raise SystemExit("Usage on macOS: install-web-launch-agent.py BUILT_RELEASE_ROOT")
@@ -148,6 +198,21 @@ def main():
                    for name in ("node", "pnpm", "infisical")]
     path = ":".join(dict.fromkeys(binary_dirs + [str(home / ".local/bin"),
                      "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]))
+    preflight_path = state / "preflight-last.json"
+    if preflight_path.exists():
+        previous_preflight = json.loads(preflight_path.read_text())
+        if previous_preflight.get("cleanup_pending"):
+            group = previous_preflight.get("owned_process_group")
+            if type(group) is not int or group <= 1 or process_group_exists(group):
+                lock.close()
+                raise RuntimeError("Previous runtime configuration probe cleanup is pending; existing service was left unchanged")
+    preflight = check_runtime_configuration(release, path)
+    preflight_path.write_text(json.dumps({"revision": revision, "buildID": build_id,
+                                          **preflight}, indent=2) + "\n")
+    preflight_path.chmod(0o600)
+    if not preflight["ready"]:
+        lock.close()
+        raise RuntimeError("Web runtime configuration is unavailable; existing service and release were left unchanged")
     config = {
         "Label": label,
         "ProgramArguments": [str(current / "scripts/deploy/web-local.sh"), "start"],
@@ -203,6 +268,7 @@ def main():
         raise
     finally:
         temporary.unlink(missing_ok=True)
+        lock.close()
 
 
 if __name__ == "__main__":

@@ -82,7 +82,7 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
     <div
       className={`ts-workspace-theme quiet-workspace ${styles.shell}`}
       data-sidebar-collapsed={current.collapsed}
-      data-sidebar-compact={width < 248}
+      data-sidebar-compact={width < 224}
       data-sidebar-hidden={hidden}
       data-sidebar-resizing={preview !== null}
       lang={locale}

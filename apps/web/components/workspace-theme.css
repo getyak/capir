@@ -34,7 +34,7 @@ html:has(.quiet-workspace) body {
   --card-radius: 12px;
   --object-radius: 8px;
   --focus-radius: 12px;
-  --ts-sidebar-width: 248px;
+  --ts-sidebar-width: 236px;
   --ts-rail-width: 72px;
   --workspace-agent-bubble: var(--ts-chrome-surface);
   --workspace-user-bubble: #eceae4;

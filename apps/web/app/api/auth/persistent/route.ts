@@ -28,11 +28,14 @@ export async function POST(request: Request) {
     if (!before.backendRenewalSecret) {
       await prepareWebEnrollment();
       const original = await readLegacyWebSession(before);
-      const loginAt = typeof token.backendLoginAt === "number" ? token.backendLoginAt : Number(token.iat ?? Math.floor(Date.now()/1000)) * 1000 + 1;
       if (!original.eligible) {
+        // Match the signed primary's immutable time so the primary wins ties.
+        // After it expires, the barrier still blocks older families.
+        const loginAt = typeof token.backendLoginAt === "number" ? token.backendLoginAt : Number(token.iat ?? 0) * 1000;
         await writeWebLoginBarrier({ ...token, backendLoginAt: loginAt });
         return response("authenticated", 200);
       }
+      const loginAt = typeof token.backendLoginAt === "number" ? token.backendLoginAt : Number(token.iat ?? Math.floor(Date.now()/1000)) * 1000 + 1;
       // Phase one is read-only at the backend. The browser must RECEIVE this
       // protected pending cookie before any enrollment can commit in phase two.
       const pending = { ...before, backendSessionId: original.session_id, backendRenewalSecret: legacyWebRenewalSecret(before),

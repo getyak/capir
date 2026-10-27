@@ -30,6 +30,7 @@ import {
   workspaceRailSelection,
 } from "@/lib/workspace-navigation";
 import { recentSessionRows, type RecentSession } from "@/lib/workspace-recent-sessions";
+import { useListOrder, projectListOrder } from "@/lib/workspace-list-order";
 import { organizeSessionRows, useSessionOrganization } from "@/lib/workspace-session-organization";
 import { useWorkspaceSidebarLayout, WorkspaceSidebarPresentation } from "@/lib/workspace-sidebar-layout";
 
@@ -42,7 +43,7 @@ import { WorkspaceGlobalSearchDialog, useWorkspaceDirectory } from "./workspace-
 import styles from "./workspace-shell.module.css";
 
 /**
- * Compact shared sidebar (settled GET-129): 248px expanded / 72px collapsed.
+ * Shared sidebar: 236px by default / 72px collapsed; saved widths remain local.
  *
  * The expanded rail is one horizontal row of five controls — today,
  * conversation, people, meetings, scoped global search. The selected control
@@ -94,8 +95,8 @@ function RailControl({
   const rememberedHref = !mobile && browse ? browse.href(route.href) : rememberedRouteHref;
   const isNew = !compact && mobile && control === "conversation";
   const label = t(isNew ? "conversation.new" : RAIL_LABEL_KEYS[control]);
-  const visibleLabel = !isNew && control === "conversation" ? t("nav.rail.chat") : label;
-  const accessibleLabel = visibleLabel === label || compact ? label : `${visibleLabel} (${label})`;
+  const visibleLabel = isNew ? t("nav.rail.new") : control === "conversation" ? t("nav.rail.chat") : label;
+  const accessibleLabel = isNew || visibleLabel === label || compact ? label : `${visibleLabel} (${label})`;
   const NavigationIcon = isNew ? Plus : RAIL_ICONS[control];
   return (
     <Link
@@ -190,7 +191,8 @@ function RailSessionShortcuts({ binding, storageScope }: { binding: string | nul
   const { data, loading, failed, retry } = useWorkspaceDirectory(binding, true);
   const { snapshot } = useSessionOrganization(storageScope);
   const projected = binding && data ? recentSessionRows(data.sessions, binding, undefined, 200) : null;
-  const rows = projected ? organizeSessionRows(projected, snapshot.entries).visible : null;
+  const { snapshot: order } = useListOrder(storageScope, "sessions");
+  const rows = projected ? organizeSessionRows(projectListOrder(projected, order.ids, row => row.id), snapshot.entries).visible : null;
   // The directory remains the sole cache owner and fences binding/401/expiry.
   if (!binding || loading || (!rows?.length && !failed)) return null;
   return (

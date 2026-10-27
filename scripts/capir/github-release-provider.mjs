@@ -101,9 +101,14 @@ export class GitHubReleaseProvider{
   return this.byId(response.id,tag,true);
  }
  edit(release,body,{channel=false}={}){
+  if(Object.hasOwn(body,'tag_name')||Object.hasOwn(body,'target_commitish'))throw new Error('GitHub edit caller cannot change release identity');
   const current=this.byId(release.id,release.tag_name);
   if(!current.draft&&!(channel&&release.tag_name==='capir-stable'))throw new Error('Published version release edits are forbidden');
-  const response=this.request('PATCH',`${BASE}/${release.id}`,{...body,make_latest:'false'});validateRelease(response,release.tag_name,release.id,body.draft);
+  if(typeof current.target_commitish!=='string'||!/^[0-9a-f]{40}$/.test(current.target_commitish))throw new Error('GitHub edit source binding is invalid');
+  // Bind every edit, including a draft checkpoint, to the independently read
+  // identity. An omitted tag produced an untagged alias in CI run 40236765053.
+  // https://docs.github.com/en/rest/releases/releases?apiVersion=2026-03-10#update-a-release
+  const response=this.request('PATCH',`${BASE}/${release.id}`,{...body,tag_name:current.tag_name,target_commitish:current.target_commitish,make_latest:'false'});validateRelease(response,release.tag_name,release.id,body.draft);
   const checked=this.byId(release.id,release.tag_name,body.draft);
   if(response.target_commitish!==current.target_commitish||checked.target_commitish!==current.target_commitish)throw new Error('GitHub edited release source binding mismatch');
   return checked;

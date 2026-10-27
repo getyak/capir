@@ -82,6 +82,20 @@ describe("saved Person destination", () => {
     expect(html.indexOf('id="person-memory-accepted"')).toBeLessThan(html.indexOf('id="person-basic-fields"'));
   });
 
+  it("keeps one complete name in the header and retains the profile in the reference column", async () => {
+    const data = fixture();
+    const name = "陈知远 · 跨团队合作与产品研究的长期联系人";
+    const headline = "用户补充的职位与机构";
+    loadPersonMemory.mockResolvedValue({ ...data, person: { ...data.person, display_label: name,
+      profile: { headline, summary: null, provenance_kind: "user_authored", updated_at: "2026-10-12T00:00:00Z" } } });
+    const html = await render();
+    const header = html.match(/<header[\s\S]*?<\/header>/)?.[0];
+    expect(header).toContain(`<h1 title="${name}">${name}</h1>`);
+    expect(header).toContain(`编辑 ${name} 的头像`);
+    expect(header).not.toContain(headline);
+    expect(html.slice(html.indexOf("<aside"))).toContain(headline);
+  });
+
   it.each(["name", "expired_handle", "confirmed_handle"])("does not promote a %s identity clue beyond its authority", async (kind) => {
     const data = fixture();
     loadPersonMemory.mockResolvedValue({ ...data, person: { ...data.person, identity_matches: [{ kind }] } });

@@ -52,6 +52,12 @@ jobs:
           scripts/macos/package-version.test.sh
           scripts/macos/publish-versioned-release.test.sh
           scripts/macos/check.sh
+      - name: Verify real component accessibility through an isolated app
+        env:
+          MACOS_DERIVED_DATA: ${{ runner.temp }}/talent-signal-macos-check
+          MACOS_NATIVE_AX_RESULT: ${{ runner.temp }}/macos-native-ax-pr.xcresult
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: scripts/macos/native-accessibility-acceptance.sh
       - name: Verify first-run keyboard and hidden-input boundaries
         env:
           MACOS_DERIVED_DATA: ${{ runner.temp }}/talent-signal-macos-check
@@ -87,6 +93,8 @@ jobs:
           name: macos-first-run-pr-${{ github.sha }}
           path: |
             ${{ runner.temp }}/macos-native-test-diagnostics
+            ${{ runner.temp }}/macos-native-ax-pr.xcresult
+            ${{ runner.temp }}/macos-native-ax-pr-summary.json
             ${{ runner.temp }}/macos-first-run-pr.xcresult
             ${{ runner.temp }}/macos-first-run-pr-summary.json
             ${{ runner.temp }}/macos-installer-drag-pr.xcresult

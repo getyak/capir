@@ -40,7 +40,11 @@ function memoryStore() {
   const store: ConversationImageStore = {
     async put(key, images) { map.set(key, [...images]); return true; },
     async get(key) { return map.get(key) ?? []; },
-    async delete(key) { map.delete(key); },
+    async delete(key, expiredBefore) {
+      const expiry = (map.get(key) ?? []).reduce((min, image) => Math.min(min, image.expiresAt), Number.POSITIVE_INFINITY);
+      if (expiredBefore !== undefined && Number.isFinite(expiry) && expiry > expiredBefore) return;
+      map.delete(key);
+    },
     async deletePrefix(prefix) { for (const key of [...map.keys()]) if (key.startsWith(prefix)) map.delete(key); },
     async inventory() {
       return [...map.entries()].map(([key, images]) => ({
@@ -154,4 +158,44 @@ it("logout clears IndexedDB while localStorage access is denied", async () => {
   clearAllPendingSessionDrafts(null);
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(map.size).toBe(0);
+});
+
+it("outbox orphan pruning leaves the separate unexpired composing purpose intact", async () => {
+  const { CONVERSATION_IMAGE_DRAFT } = await import("./conversation-image-store");
+  const { map, store } = memoryStore(); setConversationImageStoreForTest(store);
+  await persistConversationImages(scope, session, CONVERSATION_IMAGE_DRAFT, [record(Date.now() + 60_000)]);
+  await persistConversationImages(scope, session, "orphan", [record(Date.now() + 60_000)]);
+  await pruneConversationImages(new Set(), `${scope}:`);
+  expect(map.has(`${scope}:${session}:${CONVERSATION_IMAGE_DRAFT}`)).toBe(true);
+  expect(map.has(`${scope}:${session}:orphan`)).toBe(false);
+});
+
+it("waits for a slow session clear before saving a newly selected replacement", async () => {
+  const { clearConversationImageStore } = await import("./conversation-image-lifecycle");
+  const { persistConversationImageDraft, conversationImageGeneration, CONVERSATION_IMAGE_DRAFT } = await import("./conversation-image-store");
+  const { map, store } = memoryStore();
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  setConversationImageStoreForTest({ ...store, deletePrefix: async prefix => { await gate; await store.deletePrefix(prefix); } });
+  clearConversationImageStore(scope, session);
+  const replacement = persistConversationImageDraft(scope, session, [record(Date.now() + 60_000)], conversationImageGeneration());
+  await new Promise(resolve => setTimeout(resolve, 0));
+  release(); await expect(replacement).resolves.toBe(true);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(map.has(`${scope}:${session}:${CONVERSATION_IMAGE_DRAFT}`)).toBe(true);
+});
+
+it.each(["purge", "prune"] as const)("%s rechecks current expiry when stale inventory races another tab's fresh composer draft", async operation => {
+  const { CONVERSATION_IMAGE_DRAFT } = await import("./conversation-image-store");
+  const { map, store } = memoryStore();
+  const key = `${scope}:${session}:${CONVERSATION_IMAGE_DRAFT}`;
+  map.set(key, [record(Date.now() - 1)]);
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  setConversationImageStoreForTest({ ...store, inventory: async () => { const stale = await store.inventory(); await gate; return stale; } });
+  const cleanup = operation === "purge" ? purgeExpiredConversationImages() : pruneConversationImages(new Set(), `${scope}:`);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await store.delete(key);
+  const fresh = [{ ...record(Date.now() + 60_000), attachment_id: "20000000-0000-4000-8000-000000000002", file_name: "fresh.png" }];
+  await store.put(key, fresh);
+  release(); await cleanup;
+  expect(map.get(key)).toEqual(fresh);
 });

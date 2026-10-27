@@ -14,12 +14,14 @@ import { coordinatorScopeIsCurrent, requestWorkspaceRefresh, subscribeWorkspaceR
 import { WORKSPACE_SESSION_EXPIRED_EVENT } from "./workspace-session-request";
 import { useRememberWorkspaceNavigationHref } from "./workspace-navigation-continuity";
 import { useWorkspaceBrowse } from "./workspace-browse";
+import { useLocale, useT } from "./locale-provider";
 import styles from "./workspace-sidebar-calendar.module.css";
 
 const subscribeHydration = () => () => {};
 const clientHydration = () => true;
 const serverHydration = () => false;
-const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
+// Fixed Monday-first dates supply localized weekday names; the date remains the key.
+const weekdays = ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-06", "2024-01-07"];
 const visibleScheduleLimit = 4;
 
 type Preview = { anchor: string; month: string; focusedDay: string };
@@ -40,6 +42,7 @@ function sameScope(actual: TimeScope, expected: TimeScope) {
 
 /** A read-only projection of the existing calendar URL and authorized schedules. */
 export function WorkspaceSidebarCalendar({ binding, browseHref }: { binding: string | null; browseHref?: string }) {
+  const t = useT(), locale = useLocale();
   const search = useSearchParams(), queryText = browseHref === undefined ? search.toString() : browseHref.split("?")[1] ?? "";
   const rememberRouteHref = useRememberWorkspaceNavigationHref();
   const browse = useWorkspaceBrowse();
@@ -196,36 +199,36 @@ export function WorkspaceSidebarCalendar({ binding, browseHref }: { binding: str
   const rangeHref = timeHref(query, {
     day, tz: timeZone, view: "timeline", range: "custom", from: day, to, kind: "schedule", item: null, draft: null,
   });
-  return <section className={styles.calendar} aria-label="日历导航">
+  return <section className={styles.calendar} aria-label={t("日历导航")}>
     <header className={styles.monthHeader}>
-      <h2>{formatDay(month, { year: "numeric", month: "long" })}</h2>
-      <button type="button" aria-label="小月历上个月" disabled={!previousMonth} onClick={() => previousMonth && browseMonth(previousMonth)}><CaretLeft size={14} aria-hidden="true" /></button>
-      <button type="button" aria-label="小月历下个月" disabled={!nextMonth} onClick={() => nextMonth && browseMonth(nextMonth)}><CaretRight size={14} aria-hidden="true" /></button>
+      <h2>{formatDay(month, { year: "numeric", month: "long" }, locale)}</h2>
+      <button type="button" aria-label={t("小月历上个月")} disabled={!previousMonth} onClick={() => previousMonth && browseMonth(previousMonth)}><CaretLeft size={14} aria-hidden="true" /></button>
+      <button type="button" aria-label={t("小月历下个月")} disabled={!nextMonth} onClick={() => nextMonth && browseMonth(nextMonth)}><CaretRight size={14} aria-hidden="true" /></button>
     </header>
-    <p id={keyboardHint} className={styles.srOnly}>方向键移动日期，Home 和 End 移动到周首或周末，Page Up 和 Page Down 切换月份，Enter 打开日期。</p>
-    <table ref={grid} className={styles.monthGrid} role="grid" aria-label={`${formatDay(month, { year: "numeric", month: "long" })}小月历`} aria-describedby={keyboardHint} onKeyDown={moveFocus}>
-      <thead><tr>{weekdays.map((label) => <th key={label} scope="col" aria-label={`星期${label}`}>{label}</th>)}</tr></thead>
+    <p id={keyboardHint} className={styles.srOnly}>{t("方向键移动日期，Home 和 End 移动到周首或周末，Page Up 和 Page Down 切换月份，Enter 打开日期。")}</p>
+    <table ref={grid} className={styles.monthGrid} role="grid" aria-label={t("{month}小月历", { month: formatDay(month, { year: "numeric", month: "long" }, locale) })} aria-describedby={keyboardHint} onKeyDown={moveFocus}>
+      <thead><tr>{weekdays.map((date) => <th key={date} scope="col" aria-label={formatDay(date, { weekday: "long" }, locale)}>{formatDay(date, { weekday: "narrow" }, locale)}</th>)}</tr></thead>
       <tbody>{Array.from({ length: 6 }, (_, week) => <tr key={week}>{days.slice(week * 7, week * 7 + 7).map((date, index) => {
         const valid = validMeetingDay(date), selected = date === day;
         return <td key={week * 7 + index} role="gridcell" aria-selected={selected}>{valid ? <Link href={dateHref(date)} data-calendar-day={date} prefetch={false} onClick={event => browseDate(event, date)}
           data-selected={selected} data-today={date === today} data-outside={!date.startsWith(month.slice(0, 7))}
           tabIndex={date === focusedDay ? 0 : -1} aria-current={selected ? "date" : undefined}
-          aria-label={`${formatDay(date, { year: "numeric", month: "long", day: "numeric", weekday: "long" })}${selected ? "，已选中" : ""}${date === today ? "，今天" : ""}`}>
+          aria-label={`${formatDay(date, { year: "numeric", month: "long", day: "numeric", weekday: "long" }, locale)}${selected ? t("，已选中") : ""}${date === today ? t("，今天") : ""}`}>
           {Number(date.slice(8))}
         </Link> : <span aria-hidden="true" />}</td>;
       })}</tr>)}</tbody>
     </table>
-    <div className={styles.calendarActions}><Link href={dateHref(today)} prefetch={false} onClick={event => browseDate(event, today)}>今天</Link>{!day.startsWith(month.slice(0, 7)) ? <button type="button" onClick={() => browseMonth(`${day.slice(0, 7)}-01`)}>返回选中日期</button> : <span>已选 {formatDay(day, { month: "numeric", day: "numeric" })}</span>}</div>
-    <section className={styles.upcoming} aria-label="近期内部安排">
-      <header className={styles.upcomingHeader}><h2>近期安排</h2><label className={styles.srOnly} htmlFor={horizonId}>近期安排范围</label><select id={horizonId} value={horizon} onChange={(event) => changeHorizon(event.target.value)}><option value="7">7 天</option><option value="30">30 天</option></select></header>
-      <p className={styles.scope}>{formatDay(day, { month: "numeric", day: "numeric" })}起 · 内部安排{personId ? " · 已按人物筛选" : ""}</p>
-      {!binding ? <p className={styles.state}>登录后查看安排</p> : expired ? <p className={styles.state} role="status">登录已失效，恢复登录后查看安排。</p> : !scope ? <p className={styles.state} role="status">此日期超出可读取范围。</p> : failed ? <p className={styles.state} role="status">安排暂时无法读取。<button type="button" onClick={() => requestWorkspaceRefresh(binding)}>重试</button></p> : !value ? <p className={styles.state} role="status">正在读取安排…</p> : <>
-        {schedules.length ? <ol className={styles.scheduleList}>{schedules.slice(0, visibleScheduleLimit).map((activity) => <li key={activity.id}><Link className={styles.schedule} href={scheduleHref(activity)} prefetch={false} aria-label={`${activity.title}，${formatDay(dateInZone(activity.occurred_at, timeZone), { month: "long", day: "numeric" })}，${activity.all_day ? "全天" : formatTime(activity.occurred_at, timeZone)}${activity.person_label ? `，${activity.person_label}` : ""}，内部安排`}>
-          <time dateTime={activity.occurred_at}>{formatDay(dateInZone(activity.occurred_at, timeZone), { month: "numeric", day: "numeric" })} · {activity.all_day ? "全天" : formatTime(activity.occurred_at, timeZone)}</time>
+    <div className={styles.calendarActions}><Link href={dateHref(today)} prefetch={false} onClick={event => browseDate(event, today)}>{t("今天")}</Link>{!day.startsWith(month.slice(0, 7)) ? <button type="button" onClick={() => browseMonth(`${day.slice(0, 7)}-01`)}>{t("返回选中日期")}</button> : <span>{t("已选 {day}", { day: formatDay(day, { month: "numeric", day: "numeric" }, locale) })}</span>}</div>
+    <section className={styles.upcoming} aria-label={t("近期内部安排")}>
+      <header className={styles.upcomingHeader}><h2>{t("近期安排")}</h2><label className={styles.srOnly} htmlFor={horizonId}>{t("近期安排范围")}</label><select id={horizonId} value={horizon} onChange={(event) => changeHorizon(event.target.value)}><option value="7">{t("{count} 天", { count: 7 })}</option><option value="30">{t("{count} 天", { count: 30 })}</option></select></header>
+      <p className={styles.scope}>{t("{day}起 · 内部安排", { day: formatDay(day, { month: "numeric", day: "numeric" }, locale) })}{personId ? ` · ${t("已按人物筛选")}` : ""}</p>
+      {!binding ? <p className={styles.state}>{t("登录后查看安排")}</p> : expired ? <p className={styles.state} role="status">{t("登录已失效，恢复登录后查看安排。")}</p> : !scope ? <p className={styles.state} role="status">{t("此日期超出可读取范围。")}</p> : failed ? <p className={styles.state} role="status">{t("安排暂时无法读取。")}<button type="button" onClick={() => requestWorkspaceRefresh(binding)}>{t("重试")}</button></p> : !value ? <p className={styles.state} role="status">{t("正在读取安排…")}</p> : <>
+        {schedules.length ? <ol className={styles.scheduleList}>{schedules.slice(0, visibleScheduleLimit).map((activity) => <li key={activity.id}><Link className={styles.schedule} href={scheduleHref(activity)} prefetch={false} aria-label={t("{title}，{day}，{time}{person}，内部安排", { title: activity.title, day: formatDay(dateInZone(activity.occurred_at, timeZone), { month: "long", day: "numeric" }, locale), time: activity.all_day ? t("全天") : formatTime(activity.occurred_at, timeZone, locale), person: activity.person_label ? ` · ${activity.person_label}` : "" })}>
+          <time dateTime={activity.occurred_at}>{formatDay(dateInZone(activity.occurred_at, timeZone), { month: "numeric", day: "numeric" }, locale)} · {activity.all_day ? t("全天") : formatTime(activity.occurred_at, timeZone, locale)}</time>
           <strong>{activity.title}</strong>{activity.person_label ? <span>{activity.person_label}</span> : null}
-        </Link></li>)}</ol> : <p className={styles.state}>{incomplete ? "已读取记录中没有待进行的内部安排。" : "这段时间没有待进行的内部安排。"}</p>}
-        {incomplete ? <p className={styles.coverage}>范围尚未读完，打开日历继续查看。</p> : null}
-        <Link className={styles.rangeLink} href={rangeHref} prefetch={false}>{schedules.length > visibleScheduleLimit ? `查看范围内安排（已读取 ${schedules.length} 条）` : "查看这段时间"}</Link>
+        </Link></li>)}</ol> : <p className={styles.state}>{incomplete ? t("已读取记录中没有待进行的内部安排。") : t("这段时间没有待进行的内部安排。")}</p>}
+        {incomplete ? <p className={styles.coverage}>{t("范围尚未读完，打开日历继续查看。")}</p> : null}
+        <Link className={styles.rangeLink} href={rangeHref} prefetch={false}>{schedules.length > visibleScheduleLimit ? t("查看范围内安排（已读取 {count} 条）", { count: schedules.length }) : t("查看这段时间")}</Link>
       </>}
     </section>
   </section>;
