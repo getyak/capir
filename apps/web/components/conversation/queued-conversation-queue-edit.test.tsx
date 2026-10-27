@@ -216,7 +216,8 @@ it("keeps the first accepted waiting message once in the transcript and its mana
   expect(controls.closest('[role="region"]')?.getAttribute("aria-label")).toBe("对话记录");
   expect(controls.textContent).not.toContain("接下来");
   expect(mount!.querySelector(`.${styles.dock} [aria-label="可控补充"]`)).toBeNull();
-  expect(mount!.textContent).toContain("已排队，等待处理");
+  expect(mount!.querySelector('[data-session-task-capsule][data-phase="queued"]')).not.toBeNull();
+  expect(mount!.textContent).toContain("排队等待处理");
   expect(mount!.textContent).toContain("已等待");
   expect(editButton()).not.toBeNull();
   expect(document.querySelector('[aria-label="移除第 1 条待处理消息"]')).not.toBeNull();
