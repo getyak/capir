@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpInteractionRequest, McpToolCallReceipt } from "@talent-signal/contracts";
 
 import { McpRequestCard } from "./mcp-request-card";
+import { LocaleProvider } from "../locale-provider";
 
 const REQUEST_ID = "11111111-1111-4111-8111-111111111111";
 const CALL_ID = "22222222-2222-4222-8222-222222222222";
@@ -88,6 +89,23 @@ afterEach(async () => {
 });
 
 describe("McpRequestCard", () => {
+  it("localizes an image-only receipt preview in the active display locale", async () => {
+    const receipt = {
+      call_id: CALL_ID, outcome: "succeeded", result_summary: null,
+      result_json: JSON.stringify({ content: [{ type: "image", status: "unavailable" }] }),
+    } as McpToolCallReceipt;
+    fetcher.mockResolvedValue(Response.json({ request: request({ state: "submitted", receipt }) }));
+    await act(async () => root.render(
+      <LocaleProvider locale="en">
+        <McpRequestCard requestId={REQUEST_ID} sessionVersion={SESSION_VERSION} />
+      </LocaleProvider>,
+    ));
+    await flush();
+    expect(text()).toContain("The tool returned an image.");
+    expect(text()).not.toContain("工具已返回图片结果。");
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0]?.[0]).toBe(`/api/extensions/interactions/${REQUEST_ID}`);
+  });
   it("loads a receipt image with the current session binding and keeps failed loads recoverable", async () => {
     const raw = JSON.stringify({ content: [{ type: "image", status: "ready", image_index: 0, media_type: "image/png", byte_size: 100, content_hash: "a".repeat(64) }] });
     const receipt = { call_id: CALL_ID, request_id: REQUEST_ID, connection_id: null, server_origin: "https://synthetic.example", tool_name: "generate_image",

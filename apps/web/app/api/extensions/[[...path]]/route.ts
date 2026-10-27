@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { LocaleTag } from "@talent-signal/contracts";
+import { translate } from "@/lib/i18n";
+import { resolveMarketingLocale } from "@/lib/marketing-locale";
 
 import {
   backendSessionIsExpired,
@@ -83,7 +86,7 @@ async function boundedJson(request: NextRequest): Promise<unknown | null> {
   return JSON.parse(text) as unknown;
 }
 
-async function relayFetch(url: string, init: RequestInit, image = false): Promise<NextResponse> {
+async function relayFetch(url: string, init: RequestInit, image = false, imageLocale: LocaleTag = "en"): Promise<NextResponse> {
   // A bounded upstream call: the timer aborts both the fetch and the body read
   // so a stalled backend cannot pin the route handler open.
   const controller = new AbortController();
@@ -92,14 +95,14 @@ async function relayFetch(url: string, init: RequestInit, image = false): Promis
     const upstream = await fetch(url, { ...init, signal: controller.signal });
     if (image && upstream.ok) {
       const mediaType = upstream.headers.get("content-type") ?? "";
-      if (!["image/png", "image/jpeg", "image/webp"].includes(mediaType) || !upstream.body) return response({ message: "图片格式无效。" }, 502);
+      if (!["image/png", "image/jpeg", "image/webp"].includes(mediaType) || !upstream.body) return response({ message: translate(imageLocale, "图片格式无效。") }, 502);
       const reader = upstream.body.getReader();
       const chunks: Uint8Array[] = []; let size = 0;
       try {
         while (true) {
           const { done, value } = await reader.read(); if (done) break;
           size += value.byteLength;
-          if (size > 750_000) { controller.abort(); return response({ message: "图片内容过大。" }, 502); }
+          if (size > 750_000) { controller.abort(); return response({ message: translate(imageLocale, "图片内容过大。") }, 502); }
           chunks.push(value);
         }
       } finally { reader.releaseLock(); }
@@ -178,7 +181,7 @@ async function handle(
           authorization: `Bearer ${claims.backendAccessToken}`,
         },
         method: "GET",
-      }, route.includes("images"));
+      }, route.includes("images"), resolveMarketingLocale(undefined, request.headers.get("accept-language") ?? ""));
     }
 
     let body: string | undefined;

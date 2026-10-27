@@ -9,6 +9,7 @@ import type {
 } from "@talent-signal/contracts";
 
 import { workspaceSessionFetch } from "../workspace-session-request";
+import { useT, type TFunction } from "../locale-provider";
 import { mcpIntentIdentity, workspaceIntentScope } from "./mcp-intent";
 import { McpReceiptImages } from "./mcp-receipt-images";
 import styles from "./mcp.module.css";
@@ -210,6 +211,7 @@ function displayArguments(request: McpInteractionRequest): Record<string, unknow
 }
 
 interface RendererContext {
+  t: TFunction;
   sessionVersion: string;
   state: McpRequestState;
   secret: string;
@@ -224,7 +226,7 @@ type KindRenderer = (
 ) => React.ReactNode;
 
 /** Decode only the bounded MCP text envelope. Remote text remains inert React text. */
-function receiptPreview(receipt: McpToolCallReceipt): string {
+function receiptPreview(receipt: McpToolCallReceipt, t: TFunction): string {
   for (const candidate of [receipt.result_json, receipt.result_summary]) {
     if (!candidate || candidate.length > 24_000) continue;
     try {
@@ -237,7 +239,7 @@ function receiptPreview(receipt: McpToolCallReceipt): string {
       }).join("\n\n");
       if (text) return text.length > 1_200 ? `${text.slice(0, 1_200)}…` : text;
       if ((parsed as { content: unknown[] }).content.some(item => item && typeof item === "object" && (item as { type?: unknown }).type === "image"))
-        return "工具已返回图片结果。";
+        return t("工具已返回图片结果。");
     } catch {
       // Plain text, errors and incomplete JSON keep their original display.
     }
@@ -254,7 +256,7 @@ const ApprovalRenderer: KindRenderer = (request, context) => (
         <strong>
           结果（{request.receipt.outcome === "succeeded" ? "成功" : request.receipt.outcome === "outcome_unknown" ? "结果未知" : "失败"}）
         </strong>
-        <pre className={styles.receiptPreview}>{receiptPreview(request.receipt)}</pre>
+        <pre className={styles.receiptPreview}>{receiptPreview(request.receipt, context.t)}</pre>
         <McpReceiptImages receipt={request.receipt} sessionVersion={context.sessionVersion} />
         <details><summary>查看结果与来源</summary>
           <p className={styles.hint}>{request.receipt.server_origin} · {request.receipt.tool_name} · {request.receipt.executed_at ?? "尚未执行"}</p>
@@ -368,6 +370,7 @@ function McpRequestCardContent({
   onDecisionState,
   disabled = false,
 }: McpRequestCardProps) {
+  const t = useT();
   const [secret, setSecret] = useState("");
   const [friendlyName, setFriendlyName] = useState("");
   const state = useMcpRequest(requestId, sessionVersion, onDecisionState);
@@ -460,7 +463,7 @@ function McpRequestCardContent({
           {state.error ?? "正在读取最新状态……"}
         </p>
       ) : (
-        request && renderer(request, { sessionVersion, friendlyName, secret, setFriendlyName, setSecret, state: { ...state, loaded: state.loaded && !disabled, busy: state.busy || disabled } })
+        request && renderer(request, { t, sessionVersion, friendlyName, secret, setFriendlyName, setSecret, state: { ...state, loaded: state.loaded && !disabled, busy: state.busy || disabled } })
       )}
       {state.loaded && state.error ? (
         <p className={styles.notice} role="alert">

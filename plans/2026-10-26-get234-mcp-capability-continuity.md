@@ -97,3 +97,49 @@ error. Browser/renderer processes and the disposable Compose stack were closed.
   and installed macOS acceptance, then Linear Done readback. Linear remains
   In Progress. The quota blocker requires an explicit human takeover to resume;
   this chat schedules no retry or new issue.
+
+
+## 2026-10-27 current-main integration repair
+
+The original PR head `f00e8e1` failed current CI in two Web i18n checks and
+thirteen conversation Agent fixtures. Normal merges preserve the full main
+security/dependency baseline and GET-233 send continuity: integration `7e2f611`
+has parents `6d82e5d` and merged main `44ef42f7`. The original issue checkout is
+unchanged; this repair stays in the audit integration branch.
+
+The parent reproduced the exact two Web and thirteen backend failures on this
+new integration before editing. New receipt loading/error/retry/alt text, the
+image-only preview and BFF image diagnostics now use the existing catalogs.
+All five locales retain the distinction between rereading a retained image and
+executing the remote tool again. The BFF negotiates only diagnostic language
+from Accept-Language without another account/service read; the visible image
+renderer follows the active account display locale. Catalog checks are not
+native-speaker approval.
+
+Fourteen conversation fixtures now separately admit only the exact MCP
+metadata SELECT and require its account/limit parameters. Every existing
+private People/relationship query spy, call-count assertion, tool budget and
+no-write assertion remains intact. Unexpected SQL still reaches those original
+spies; an altered or wrong-account metadata query fails the separate guard.
+Production authority, migrations, dependency versions and lock policies are
+unchanged by this repair.
+
+The existing Pi task first failed before model startup on four missing pinned
+public package archives. The parent verified their original SHA512 and package
+identities, imported them through normal pnpm with all 991 supply-chain entries
+verified, then proved the unchanged offline frozen install reused all 807
+packages without downloads. Its one same-task model startup then returned a
+real 401 Invalid API Key, with no tokens or code changes. The failure and
+cumulative task history are retained; no repeat authentication request, key
+change, provider switch or billing expansion was attempted. The current Codex
+parent performs this bounded source repair.
+
+Initial parent validation caught two repair-introduced translation-hook/type
+wiring errors; both were corrected before review or any push. Focused Web and
+backend checks and both Web/backend TypeScript checks pass in the second
+validation. The existing extraction guard measured the two remaining counts as
+35 and 9, so their ratchet entries shrink from 36 and 10. No ratchet grows.
+Final lint/docs checks, independent review, current-head remote CI and normal
+merge remain required.
+Resident deployments, actual changed model behavior and installed macOS
+acceptance remain separate open delivery requirements. GET-234 stays In Progress.

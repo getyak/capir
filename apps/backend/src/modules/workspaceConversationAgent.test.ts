@@ -9,7 +9,7 @@ import {
 } from "@talent-signal/agent";
 import { createHash } from "node:crypto";
 import type { DatabaseClient } from "../database/pool.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthContext } from "./auth.js";
 import {
@@ -29,6 +29,45 @@ const auth: AuthContext = {
 
 const personID = "44444444-4444-4444-8444-444444444444";
 const contextID = "55555555-5555-4555-8555-555555555555";
+
+const metadataReads: Array<ReturnType<typeof vi.fn>> = [];
+const mcpMetadataSQL = `SELECT id, friendly_name, server_url, credential_ciphertext,
+      status, last_checked_at, last_error_code, last_error_message,
+      discovered_tools, tools_count, revision, created_at, updated_at,
+      auth_mode, nango_connection_id, nango_provider FROM mcp_connections
+         WHERE account_id = $1 AND ($2::uuid IS NULL OR id = $2)
+         ORDER BY created_at DESC, id DESC
+         LIMIT $3 OFFSET $4`;
+const normalizedSQL = (sql: string) => sql.replace(/\s+/gu, " ").trim();
+
+// Account MCP discovery is distinct from opening private People/context data.
+// Keep every existing private-query spy and assertion intact, while separately
+// requiring exactly the admitted metadata read and its account/limit binding.
+function databaseWithMcpMetadata(query: unknown): DatabaseClient {
+  if (typeof query !== "function") throw new Error("Private-data query spy must be callable");
+  const metadata = vi.fn();
+  metadataReads.push(metadata);
+  return {
+    query: async (sql: string, values?: unknown[]) => {
+      if (normalizedSQL(sql) === normalizedSQL(mcpMetadataSQL)) {
+        metadata(sql, values);
+        return { rows: [], rowCount: 0 };
+      }
+      return query(sql, values);
+    },
+  } as unknown as DatabaseClient;
+}
+
+afterEach(() => {
+  try {
+    for (const metadata of metadataReads) {
+      expect(metadata).toHaveBeenCalledOnce();
+      expect(metadata.mock.calls[0]?.[1]).toEqual([auth.accountId, null, 21, 0]);
+    }
+  } finally {
+    metadataReads.length = 0;
+  }
+});
 
 function personRow(options: {
   label?: string;
@@ -247,7 +286,7 @@ describe("workspace conversation Agent", () => {
   it("can reply without opening the contact workspace", async () => {
     const query = vi.fn();
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "你好",
       provider: new ScriptedAgentProvider([], {
@@ -277,7 +316,7 @@ describe("workspace conversation Agent", () => {
       body: '<contact_workspace>{"action":"search","query":"Chen Yu"}</contact_workspace>',
     });
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "帮我找陈宇",
       provider,
@@ -296,7 +335,7 @@ describe("workspace conversation Agent", () => {
       body: "我会先用 contact_workspace 查一下，但这次先回答你的问题：结论是可行的。",
     });
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "这件事可行吗？",
       provider,
@@ -363,7 +402,7 @@ describe("workspace conversation Agent", () => {
     } satisfies AgentProvider;
 
     await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "What changed with Leila?",
       provider,
@@ -376,7 +415,7 @@ describe("workspace conversation Agent", () => {
   it("rejects wildcard enumeration without querying the account", async () => {
     const query = vi.fn();
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "Show me all contacts",
       provider: new ScriptedAgentProvider(
@@ -401,7 +440,7 @@ describe("workspace conversation Agent", () => {
   it("keeps a no-match search as a clarification without a fabricated event", async () => {
     const query = vi.fn().mockResolvedValueOnce({ rows: [] });
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "What changed with Noor?",
       provider: new ScriptedAgentProvider(
@@ -446,7 +485,7 @@ describe("workspace conversation Agent", () => {
         ],
       });
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "What is happening with Maya?",
       provider: new ScriptedAgentProvider(
@@ -486,7 +525,7 @@ describe("workspace conversation Agent", () => {
   it("stages a grounded create card without applying a contact write", async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "Create Maya Chen as a contact for the CPO search",
       provider: new ScriptedAgentProvider(
@@ -539,7 +578,7 @@ describe("workspace conversation Agent", () => {
       ],
     });
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "What is happening with Maya Chen?",
       provider: new ScriptedAgentProvider(
@@ -584,7 +623,7 @@ describe("workspace conversation Agent", () => {
   it("rejects a create proposal whose contact fields were invented", async () => {
     const query = vi.fn();
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "Please create a contact from this message",
       provider: new ScriptedAgentProvider(
@@ -625,7 +664,7 @@ describe("workspace conversation Agent", () => {
       rows: [personRow({ profileRevision: 3 })],
     });
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "Update Maya Chen in the CPO search",
       provider: new ScriptedAgentProvider(
@@ -672,7 +711,7 @@ describe("workspace conversation Agent", () => {
       rows: [personRow({ profileRevision: 3 })],
     });
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "Update Maya Chen in the CPO search with maya@example.com",
       provider: new ScriptedAgentProvider(
@@ -728,7 +767,7 @@ describe("workspace conversation Agent", () => {
       input: { operation: "search", query: "*", maximum_results: 4 },
     }));
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "Find Maya",
       provider: new ScriptedAgentProvider(calls, (results) => {
@@ -752,7 +791,7 @@ describe("workspace conversation Agent", () => {
     const query = vi.fn().mockResolvedValueOnce({ rows: [personRow()] });
 
     const execution = await executeWorkspaceConversationAgent({
-      database: { query } as unknown as DatabaseClient,
+      database: databaseWithMcpMetadata(query),
       auth,
       objective: "Tell me about Maya Chen",
       provider: new ScriptedAgentProvider(
