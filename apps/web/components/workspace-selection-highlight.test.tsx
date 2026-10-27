@@ -11,6 +11,7 @@ vi.mock("next/navigation", () => ({
 
 import { WorkspaceRecentSessions } from "./workspace-recent-sessions";
 import { resetSessionOrganizationStores, sessionOrganizationStore } from "@/lib/workspace-session-organization";
+import { installAnimationCancelCompatibility } from "@/lib/test/animation-cancel-compat";
 
 const SESSION_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SESSION_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -28,8 +29,10 @@ vi.mock("./workspace-search", () => ({
 
 let root: Root | undefined;
 let host: HTMLDivElement | undefined;
+let restoreAnimationCompatibility: (() => void) | undefined;
 
 beforeEach(() => {
+  restoreAnimationCompatibility = installAnimationCancelCompatibility(window.Element.prototype, window.DOMException, window.document);
   window.localStorage.clear();
   resetSessionOrganizationStores();
   route.pathname = "/workspace";
@@ -47,10 +50,15 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  host?.remove();
-  root = undefined;
-  host = undefined;
+  try {
+    if (root) await act(async () => root!.unmount());
+  } finally {
+    restoreAnimationCompatibility?.();
+    restoreAnimationCompatibility = undefined;
+    host?.remove();
+    root = undefined;
+    host = undefined;
+  }
 });
 
 function row(id: string, title: string) {

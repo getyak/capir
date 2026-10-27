@@ -31,75 +31,49 @@ and user data remain outside the public repository.
   publish only confirmed readback, and retain an honest recoverable error on
   storage/capability failure. No remote writes, Agent calls or polling.
 
-## Milestones
+## Delivery checkpoint
 
-1. Complete: fresh main `7bd5b0a`, affected paths and source ownership verified.
-2. Complete: scoped local order, shared pointer/menu control, compact pin indicator
-   wired through People sidebar/directory and all Session projections.
-3. Active: focused persistence/interaction/isolation tests and browser acceptance.
-4. Independent sub-agent review, fix confirmed P0/P1, then linked PR and CI.
-5. Merge, deploy affected resident Web from clean committed source, verify the
-   actual Web/macOS surface, then mark Linear Done with destination readback.
+- PR #450 merged at `0d46b810b07b8a68a0c31861dda4bc1eff4cf54d` after
+  independent review closed all five confirmed P2 findings with no P0/P1.
+- Web suite: 371 files / 3269 tests passed; lint, typecheck, docs, repository
+  policy and secret-contract checks passed. Exact PR-head applicable CI and
+  Vercel passed. Post-merge push CI/security passed; a later scheduled Swift
+  scan was cancelled by a higher-priority main run, not reported as green.
+- Clean resident Web build/activation succeeded at that merge, build ID
+  `l8rZ5JtC5qs-XSkKCubiM`. The successor preserves concurrent GET-237 density.
+- Chromium covered pointer/reload in both lists, keyboard/focus, filtered
+  commands, scrolling/outside drops, storage refusal/retry, queued locks,
+  offline moves, touch, dark/reduced motion and 200% text with 44px controls.
+  Real WebKit on resident HTTPS passed both drag/reload cases without page
+  errors. Pin geometry at the same 248px sidebar: 41.61px to 12px, with title
+  space 82.39px to 100px and the 44px interaction target retained.
+- Installed macOS client is 0.2.36 (202), on the default test workspace. It
+  renders the new controls; final native interaction/restoration remains active.
+  Earlier native attempts overlapped another task's navigation and are not
+  counted as passing interaction evidence.
+- Graceful child-process termination recovered automatically, but terminating
+  the launchd parent reproducibly left one connection accepting subscription
+  retries with 503 while the listener was closed. Bounded diagnostics confirmed
+  the same HTTP connection was reused. Closing only idle connections released
+  the process and launchd restored it. Follow-up hardening closes subscription
+  connections on both live and rejected responses; focused tests were first
+  observed failing. Final parent-termination acceptance remains mandatory.
 
-## Verification and delivery gates
+## Remaining gates
 
-Retain controlled equal-size before/after captures outside the repository.
-Cover pointer activation/cancellation/drop, keyboard alternatives, touch target,
-pin boundaries, selection/focus/scroll, search, partial inventories, additions
-and deletion, reload, account/workspace isolation, storage failures and concurrent
-queued writes. Check long multilingual/Emoji titles, light/dark, 200% text,
-reduced motion and accessibility semantics. Unit tests do not establish live
-persistence or installed-client acceptance.
+1. Review, CI and merge the subscription-transport hardening from fresh main.
+2. Deploy clean committed source and repeat parent-termination recovery with
+   an authenticated subscription open, unchanged turns and no manual refresh.
+3. Finish installed-client drag/pin/reload checks, restore original preferences,
+   stop the owned expiring run, and verify deletion before Linear Done.
 
-Run applicable Web tests, lint, typecheck/build, docs and security gates. Record
-CI, merge, resident revision and product acceptance separately. Existing Vercel
-quota and native resource constraints are unverified historical clues; do not
-probe them through duplicate deployments or take over unrelated simulators.
+## Evidence and ownership
 
-## Current operational state
-
-- Workspace: `/Users/cubxxw/ops/symphony/runtime/workspaces/GET-236`.
-- Branch: `codex/get-236-pinned`; initial HEAD `fa01bb1c`.
-- Remote main API readback: `7bd5b0a35d8ee2fdfa54a0dfae02c26b9738b35c`;
-  bounded Git fetch diagnosis ongoing before implementation.
-- Frozen offline dependency installation succeeded using the existing pnpm
-  content-addressed cache. No simulator was started. The task's development
-  server was stopped before the production-build checkpoint.
-- Resource sample: 49.33 GiB free, 11.82 GiB swap, 147 Node/npm processes.
-  Reuse one browser and run heavy validation serially; preserve other jobs.
-- Linear agent-context discovery advertises a method the connector rejects as
-  missing; issue/team/comments reads work. Do not confuse that with a full
-  Linear connection failure.
-
-- First independent review found no P0/P1 and four P2 issues: clipped drop
-  targets, a replaced feedback class, full-preference recovery and repeated
-  relative moves while saving. All four have source fixes and focused tests;
-  final review closed all five findings with no P0/P1. Real hit testing owns
-  drop admission.
-- The existing CLI browser cache lacks its expected Chromium build. The owned
-  test run remains `697b7f0b-f43a-4e6d-b6e0-834cb761ec3e`; no new run was
-  allocated. Reused installed Chromium in one automated context after the
-  failed launcher. Operator identity and target run/account/user were verified.
-
-## Verified implementation checkpoint
-
-- Web suite: 371 files / 3269 tests passed; focused suites, typecheck, full
-  Web lint, docs/architecture, secret-contract and repository-policy tests
-  passed. Production build and remote gates remain pending.
-- Independent review: no P0/P1; all five confirmed P2 findings fixed and
-  re-reviewed, including unknown reset readback.
-- Real Chromium in the owned run: pointer rearrangement and reload in both
-  lists; keyboard Tab/Enter and settled focus return; filtered moves disabled;
-  scroller moved 130px and footer drop rejected; storage refusal retained
-  order and retry recovered; delayed lock disabled relative commands; offline
-  local moves succeeded. Touch drag passed for both directories at 390px;
-  200% text retained 44px controls. WebKit acceptance remains active.
-- Pin geometry at the same 248px sidebar: indicator 41.61px to 12px; title
-  82.39px to 100px, retaining the 44px interaction target.
-- Private evidence: `/Users/cubxxw/ops/runs/get-236-20261026`.
-- Main API readback remains `7bd5b0a`; both main Vercel contexts succeeded.
-  This does not establish this branch's forthcoming CI/deployment results.
-- The Webpack development harness exposed authentication-cycle/HMR errors and
-  a navigation-load timeout. The affected authentication sources are unchanged;
-  completed cases bound to the correct run and had no browser page errors.
-  Clean production runtime acceptance remains mandatory.
+- Task source: `/Users/cubxxw/ops/symphony/runtime/workspaces/GET-236`.
+- Private formal evidence: `/Users/cubxxw/ops/runs/get-236-20261026`.
+- Owned test run: `697b7f0b-f43a-4e6d-b6e0-834cb761ec3e`; only synthetic
+  data, no model send. Credentials stay in registered private temporary output.
+- No simulator or backend restart. Preserve other tasks and the live/rollback
+  releases. Retain the source checkout while release worktrees reference its
+  common Git directory. Development auth/HMR and unsettled captures remain
+  harness diagnostics, separate from clean production acceptance.
