@@ -6,8 +6,8 @@ if [[ "${TS_WEB_INFISICAL_INJECTED:-false}" != "true" ]]; then
     env TS_WEB_INFISICAL_INJECTED=true "$0" "$@"
 fi
 command_name="${1:-start}"
-if [[ "$command_name" != "build" && "$command_name" != "start" ]]; then
-  echo "Usage: $0 [build|start]" >&2
+if [[ "$command_name" != "build" && "$command_name" != "start" && "$command_name" != "check" ]]; then
+  echo "Usage: $0 [build|start|check]" >&2
   exit 2
 fi
 # Only the server process talks to the backend. Never expose its credentials to clients.
@@ -33,6 +33,11 @@ if (status.BackendState !== "Running" || !hostname || origin.hostname !== hostna
   throw new Error("Resident Web AUTH_URL must match this running Tailscale node's MagicDNS name");
 }
 NODE
+# Activation checks the actual configuration producer before stopping the
+# current listener. This mode neither builds nor opens a listening socket.
+if [[ "$command_name" == "check" ]]; then
+  exit 0
+fi
 cd "$repository_root"
 if [[ "$command_name" == "build" ]]; then
   if [[ -n "$(git status --porcelain)" ]]; then

@@ -33,7 +33,6 @@
 
 .muted {
   color: var(--ts-chrome-muted, inherit);
-  opacity: 0.85;
 }
 
 .entryPage {

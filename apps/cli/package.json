@@ -18,7 +18,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@napi-rs/keyring": "2.1.1",
+    "@napi-rs/keyring": "2.1.2",
     "@sinclair/typebox": "^0.34.41",
     "@talent-signal/contracts": "workspace:*",
     "playwright": "1.64.1"

@@ -388,7 +388,7 @@ test("automatic releases classify all changes since the last trusted receipt", (
   assert.match(releaseWorkflow, /failed three bounded probes/);
   assert.match(
     releaseWorkflow,
-    /tailscale\/github-action@[0-9a-f]{40} # v4\.2\.0/,
+    /tailscale\/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf # v4\.3\.0/,
   );
   assert.match(
     releaseWorkflow,

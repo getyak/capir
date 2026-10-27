@@ -23,6 +23,7 @@ it("aborts an open read-only upstream subscription on process shutdown without c
   f.stream.mockResolvedValue(new Response(new ReadableStream()));
   const response=await conversationQueueRoute(request(),sid,"stream");
   expect(response.status).toBe(200);
+  expect(response.headers.get("connection")).toBe("close");
   const signal=f.stream.mock.calls[0][1] as AbortSignal;
   expect(signal.aborted).toBe(false);
   shutdown.source!.emit("SIGTERM");
@@ -35,7 +36,9 @@ it("does not open another subscription once shutdown has begun, while ordinary r
   readOnlyStreamShutdownSignal();
   shutdown.source!.emit("SIGTERM");
   f.stream.mockResolvedValue(new Response("synthetic"));
-  expect((await conversationQueueRoute(request(),sid,"stream")).status).toBe(503);
+  const retry=await conversationQueueRoute(request(),sid,"stream");
+  expect(retry.status).toBe(503);
+  expect(retry.headers.get("connection")).toBe("close");
   expect(f.stream).not.toHaveBeenCalled();
   f.read.mockResolvedValue({session_id:sid,active:null,queued:[]});
   f.mutate.mockResolvedValue({session_id:sid,revision:1});
@@ -43,6 +46,14 @@ it("does not open another subscription once shutdown has begun, while ordinary r
   expect((await conversationQueueRoute(request({kind:"stop"}),sid,"mutate")).status).toBe(200);
   expect((f.read.mock.calls[0][1] as AbortSignal).aborted).toBe(false);
   expect((f.mutate.mock.calls[0][2] as AbortSignal).aborted).toBe(false);
+});
+
+it("closes rejected subscription connections but preserves ordinary read pooling",async()=>{
+  const rejected=await conversationQueueRoute(request(undefined,"old-login"),sid,"stream");
+  expect(rejected.status).toBe(409);
+  expect(rejected.headers.get("connection")).toBe("close");
+  f.read.mockResolvedValue({session_id:sid,active:null,queued:[]});
+  expect((await conversationQueueRoute(request(),sid,"read")).headers.get("connection")).toBeNull();
 });
 
 it("registers a first subscription before awaiting auth, so shutdown during that await cannot open a new infinite stream",async()=>{

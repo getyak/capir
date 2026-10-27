@@ -1,6 +1,6 @@
 "use client";
 
-import { CaretRight, NotePencil, PushPin } from "@phosphor-icons/react";
+import { CaretRight, NotePencil } from "@phosphor-icons/react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useId, useState } from "react";
@@ -29,6 +29,8 @@ import {
   type SessionRowOrganization,
 } from "./workspace-session-row";
 import styles from "./workspace-shell.module.css";
+import { useWorkspaceListReorder } from "./workspace-list-order";
+import { WorkspacePinIndicator } from "./workspace-pin-indicator";
 
 /** A disposable directory projection, never a second Session store. */
 export function WorkspaceRecentSessions({
@@ -57,7 +59,10 @@ export function WorkspaceRecentSessions({
   const current = !loading && organized
     ? { rows: { visible: organized.visible.slice(0, 8), archived: organized.archived.slice(0, 8) }, state: "ready" as const }
     : failed ? { rows: { visible: [], archived: [] }, state: "error" as const } : null;
-  const visibleRows = current?.state === "ready" ? current.rows.visible : [];
+  const order = useWorkspaceListReorder(current?.state === "ready" ? organized?.visible ?? [] : [], "sessions", {
+    scope: storageScope, limit: 8, group: row => snapshot.entries[row.id]?.pinned ? "pinned" : "regular",
+  });
+  const visibleRows = order.visible;
   const archivedRows = current?.state === "ready" ? current.rows.archived : [];
   const arrival = useArrivalRegistry(projected?.map((row) => row.id) ?? [], current?.state === "ready");
 
@@ -68,6 +73,7 @@ export function WorkspaceRecentSessions({
       pinned: entry?.pinned ?? false,
       onToggle: (flag, value) => setFlag(row.id, flag, value),
       rowLabel: row.title,
+      reorder: order.control(row.id),
     };
   }
 
@@ -101,6 +107,7 @@ export function WorkspaceRecentSessions({
           {t("sessions.storageUnavailable")}
         </p>
       ) : null}
+      {order.notice}
       <div>
         {current?.state === "ready" ? (
           visibleRows.length ? (
@@ -108,7 +115,7 @@ export function WorkspaceRecentSessions({
               <ul className={styles.rowList}>
                 {visibleRows.map((row) => (
                   <WorkspaceListRow arrival={arrival.isArrival(row.id)} key={row.id}>
-                    <WorkspaceSessionRow organization={organizationFor(row)}>
+                    <div {...order.rowProps(row.id)}><WorkspaceSessionRow organization={organizationFor(row)}>
                       <Link
                         aria-current={
                           pathname === `/workspace/sessions/${row.id}`
@@ -125,17 +132,14 @@ export function WorkspaceRecentSessions({
                         <WorkspaceSessionAvatar personId={row.personId} label={row.personLabel || row.title} />
                         <span className={styles.sessionTitle}>{row.title}</span>
                         {snapshot.entries[row.id]?.pinned ? (
-                          <small>
-                            <PushPin aria-hidden="true" size={10} weight="fill" />
-                            {t("sessions.pinned")}
-                          </small>
+                          <WorkspacePinIndicator />
                         ) : null}
                         {row.unread ? <small>{t("未读")}</small> : null}
                         <WorkspaceSelectionHighlight
                           selected={pathname === `/workspace/sessions/${row.id}`}
                         />
                       </Link>
-                    </WorkspaceSessionRow>
+                    </WorkspaceSessionRow></div>
                   </WorkspaceListRow>
                 ))}
               </ul>

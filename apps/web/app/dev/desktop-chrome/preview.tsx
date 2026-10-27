@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { WorkspaceAccountMenu } from "@/components/workspace-account-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import type { DesktopChromeState } from "@/lib/desktop-release";
-import { createWeeklyUsageStore, type WeeklyUsageStore } from "@/lib/weekly-usage";
+import { type WeeklyUsageView, type WeeklyUsageStore } from "@/lib/weekly-usage";
+import { LocaleProvider } from "@/components/locale-provider";
+import { LOCALE_ENDONYMS, type LocaleTag } from "@talent-signal/contracts";
 import styles from "@/components/workspace-shell.module.css";
 
 /**
@@ -52,14 +54,17 @@ type HostState = keyof typeof HOST_STATES;
 type UsageMode = "real" | "ready" | "loading" | "error";
 
 function syntheticUsageStore(mode: Exclude<UsageMode, "real">): WeeklyUsageStore {
+  // Static presentation states have no request, timer or disposable resource.
+  const fixed = (view: WeeklyUsageView): WeeklyUsageStore => ({
+    subscribe: () => () => {}, getSnapshot: () => view, refresh() {}, dispose() {},
+  });
   if (mode === "ready") {
     const now = new Date();
     const monday = new Date(now.getTime() + 8 * 3_600_000);
     monday.setUTCHours(0, 0, 0, 0);
     monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
     const start = monday.getTime() - 8 * 3_600_000;
-    return createWeeklyUsageStore(() =>
-      Promise.resolve({
+    return fixed({ status: "ready", usage: {
         contract_version: "2026-08-24.10",
         schema_version: "workspace-weekly-usage.v1",
         window: {
@@ -70,19 +75,21 @@ function syntheticUsageStore(mode: Exclude<UsageMode, "real">): WeeklyUsageStore
         count: 260,
         allowance: 1000,
         computed_at: now.toISOString(),
-      }),
-    );
+      },
+    });
   }
   if (mode === "loading") {
-    return createWeeklyUsageStore(() => new Promise(() => {}));
+    return fixed({ status: "loading" });
   }
-  return createWeeklyUsageStore(() => Promise.reject(new Error("synthetic")));
+  return fixed({ status: "error" });
 }
 
 export function DesktopChromeFixture() {
   const [collapsed, setCollapsed] = useState(false);
   const [hostState, setHostState] = useState<HostState>("available");
   const [usageMode, setUsageMode] = useState<UsageMode>("ready");
+  const [locale, setLocale] = useState<LocaleTag>("en");
+  const [longIdentity, setLongIdentity] = useState(false);
 
   useEffect(() => {
     const state = HOST_STATES[hostState];
@@ -95,12 +102,18 @@ export function DesktopChromeFixture() {
   }, [hostState]);
 
   const usage = useMemo<WeeklyUsageStore | null>(
-    () => (usageMode === "real" ? null : syntheticUsageStore(usageMode)),
-    [usageMode],
+    () => usageMode === "real" ? null : syntheticUsageStore(usageMode), [usageMode],
   );
+  const accountMenu = <WorkspaceAccountMenu
+    accountName={longIdentity ? "Synthetic Alexandertheverylongunbrokennamenotarealperson" : "Lin"}
+    usage={usage}
+    signOutAction={() => {}}
+    workspaceName={longIdentity ? "Synthetic workspace with a deliberately long name" : "合成测试工作区"}
+  />;
 
   return (
-    <div className={styles.shell}>
+    <LocaleProvider locale={locale} accountLocale accountLanguage="system">
+    <div lang={locale} className={`ts-workspace-theme quiet-workspace ${styles.shell}`}>
       <aside className={styles.sidebar}>
         <div className={styles.sidebarState} data-collapsed={collapsed}>
           <div className={styles.brandRow}>
@@ -113,14 +126,11 @@ export function DesktopChromeFixture() {
           <span>新对话</span><span>今天</span><span>人物</span><span>日程</span>
         </nav>
         <div className={styles.account}>
-          <WorkspaceAccountMenu
-            accountName="Lin"
-            usage={usage}
-            signOutAction={() => {}}
-            workspaceName="合成测试工作区"
-          />
+          {accountMenu}
         </div>
       </aside>
+      <div className={styles.workspace}>
+      <header className={styles.mobileHeader}>{accountMenu}</header>
       <main style={{ padding: "15vh 8vw" }}>
         <p style={{ color: "var(--muted)", fontSize: 12 }}>桌面页脚与账号菜单 · 合成演练（不是真实数据）</p>
         <h1 style={{ fontSize: 26, fontWeight: 500, margin: "12px 0" }}>继续你的工作。</h1>
@@ -158,9 +168,18 @@ export function DesktopChromeFixture() {
             </select>
           </label>
           <ThemeToggle label="切换演练明暗主题" />
+          <label>
+            Language{" "}
+            <select aria-label="Synthetic display language" value={locale} onChange={event => setLocale(event.target.value as LocaleTag)}>
+              {(["en", "zh-CN", "zh-TW", "ja", "ko"] as const).map(value => <option key={value} value={value}>{LOCALE_ENDONYMS[value]}</option>)}
+            </select>
+          </label>
+          <label><input aria-label="Synthetic long identity" type="checkbox" checked={longIdentity} onChange={event => setLongIdentity(event.target.checked)} />Long identity</label>
         </div>
         <textarea aria-label="演练草稿" placeholder="留下一段草稿，检查更新时不会重载页面。" style={{ width: "100%", marginTop: 36, padding: 18, border: "1px solid var(--line-soft)", borderRadius: 12 }} />
       </main>
+      </div>
     </div>
+    </LocaleProvider>
   );
 }

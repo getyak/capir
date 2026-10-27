@@ -73,7 +73,7 @@ final class DesktopUpdater: NSObject, ObservableObject, SPUUpdaterDelegate, SPUU
             updater.automaticallyDownloadsUpdates = false
             session.configure()
             if automaticChecks { updater.checkForUpdatesInBackground() }
-        } catch { session.fail("无法启动更新检查。当前版本仍可使用，请重新打开应用后重试。") }
+        } catch { session.fail(String(localized: "Update checking could not start. Your current version remains usable. Reopen the app and try again.", bundle: .main)) }
     }
     /// A generic check never consents to a version that has not been shown yet.
     func checkForUpdates() {
@@ -96,11 +96,11 @@ final class DesktopUpdater: NSObject, ObservableObject, SPUUpdaterDelegate, SPUU
             let reason = (value.userInfo[SPUNoUpdateFoundReasonKey] as? NSNumber)?.intValue
             let message: String
             switch reason {
-            case Int(SPUNoUpdateFoundReason.onLatestVersion.rawValue): message = "当前已是最新版本"
-            case Int(SPUNoUpdateFoundReason.onNewerThanLatestVersion.rawValue): message = "当前版本比更新源中的版本更新"
+            case Int(SPUNoUpdateFoundReason.onLatestVersion.rawValue): message = String(localized: "You are up to date", bundle: .main)
+            case Int(SPUNoUpdateFoundReason.onNewerThanLatestVersion.rawValue): message = String(localized: "Your version is newer than the update source", bundle: .main)
             case Int(SPUNoUpdateFoundReason.systemIsTooOld.rawValue), Int(SPUNoUpdateFoundReason.systemIsTooNew.rawValue), Int(SPUNoUpdateFoundReason.hardwareDoesNotSupportARM64.rawValue):
-                message = "新版本暂不支持这台 Mac；当前版本仍可使用"
-            default: message = "本次没有找到适用的更新"
+                message = String(localized: "The new version does not support this Mac yet. Your current version remains usable", bundle: .main)
+            default: message = String(localized: "No applicable update was found", bundle: .main)
             }
             session.noUpdate(status: message, verified: verifiedFeed)
         } else { session.fail() }

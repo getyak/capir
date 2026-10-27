@@ -1,8 +1,7 @@
 "use client";
 
-import * as Dialog from "@radix-ui/react-dialog";
 import { ArrowSquareOut, CaretLeft, CaretRight, DownloadSimple, X } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import type { ConversationImageManifest } from "@talent-signal/contracts";
 
@@ -33,8 +32,8 @@ function imageKey(images: readonly ConversationImageManifest[]): string {
  * Bytes always arrive through the scoped proxy or the local durable store,
  * never through a bare `<img src>` pointing at a sensitive URL. Object URLs are
  * created per mounted strip and revoked when the strip unmounts or the account
- * binding changes. One sent image renders directly; several render as folded
- * overlapping cards with a count and explicit expand/collapse. Clicking an
+ * binding changes. Sent images share aligned cells with a count and explicit
+ * expand/collapse. Clicking an
  * exact thumbnail opens only that image in the viewer, with previous/next
  * navigation in the original manifest order. The viewer opens or downloads
  * the original bytes only from the object URL and only on an explicit user
@@ -72,7 +71,11 @@ function LoadedConversationImageStrip({
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const triggerPosition = useRef(0);
+  const expandRef = useRef<HTMLButtonElement | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
+  const previewRef = useRef<HTMLElement | null>(null);
+  const previewId = useId();
   const keys = imageKey(images);
 
   const markFailed = (position: number) => {
@@ -172,23 +175,35 @@ function LoadedConversationImageStrip({
     return () => window.removeEventListener("resize", measure);
   }, [open, index, measure]);
 
+  useLayoutEffect(() => {
+    if (open) previewRef.current?.focus({ preventScroll: true });
+  }, [open]);
+
   if (images.length === 0) return null;
   const anyFailed = failed.some(Boolean);
   const layout = images.length === 1 ? "single" : expanded ? "expanded" : "folded";
 
   const openAt = (position: number, trigger: HTMLButtonElement) => {
     triggerRef.current = trigger;
+    triggerPosition.current = position;
     setIndex(position);
     setZoom("fit");
     setFitPercent(null);
     setOpen(true);
   };
   const step = (delta: number) => setIndex((current) => (current + delta + images.length) % images.length);
-  /** Only blank dialog space closes; the image and every control keep it open. */
-  const onBlankClose = (event: React.MouseEvent) => {
-    if (event.target === event.currentTarget) setOpen(false);
+  const close = () => {
+    setOpen(false);
+    const trigger = triggerRef.current;
+    // Collapsing the grid can hide the original trigger while preview remains
+    // open; a decode failure can remove it. Return to a visible owned control.
+    const visible = trigger?.isConnected && (expanded || images.length === 1 || triggerPosition.current < 3);
+    (visible ? trigger : expandRef.current ?? stripRef.current?.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true });
   };
   const onKeyDown = (event: React.KeyboardEvent) => {
+    if (event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+    // Close only this inspection; Escape must not reach the run's Stop shortcut.
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
     // The actual-size scroll region keeps native keyboard panning.
     if (zoom === "actual" && event.target === stageRef.current) return;
     if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
@@ -228,13 +243,16 @@ function LoadedConversationImageStrip({
   const shown = images[index];
 
   return (
-    <div className={styles.images} data-compact={compact ? "true" : undefined} data-layout={layout} ref={stripRef}>
+    <div className={styles.images} data-message-evidence={messageId} data-compact={compact ? "true" : undefined} data-layout={layout} data-preview-open={open || undefined} ref={stripRef}>
+      {images.length === 1 && <div className={styles.imageSourceLabel}>{images[0].file_name}</div>}
       <ul className={styles.imageList} aria-label={`消息中的 ${images.length} 张图片`}>
         {images.map((image, position) => (
           <li className={styles.imageItem} key={image.attachment_id}>
             {urls[position] ? (
               <button
                 className={styles.imageButton}
+                aria-controls={open ? previewId : undefined}
+                aria-expanded={open && index === position}
                 onClick={(event) => openAt(position, event.currentTarget)}
                 title={`查看原图 ${position + 1}`}
                 type="button"
@@ -258,6 +276,7 @@ function LoadedConversationImageStrip({
         <div className={styles.imageStripActions}>
           <span className={styles.imageTotal}>{images.length} 张图片</span>
           <button
+            ref={expandRef}
             aria-expanded={expanded}
             className={styles.imageExpand}
             onClick={() => setExpanded((value) => !value)}
@@ -272,22 +291,24 @@ function LoadedConversationImageStrip({
           重新读取图片
         </button>
       ) : null}
-      <Dialog.Root open={open} onOpenChange={setOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className={styles.imageBackdrop} />
-          <Dialog.Content
-            aria-describedby={undefined}
+      {open && <section
+            aria-labelledby={`${previewId}-name`}
+            id={previewId}
+            data-evidence-preview
+            ref={previewRef}
+            tabIndex={-1}
             className={styles.imageDialog}
-            onClick={onBlankClose}
             onKeyDown={onKeyDown}
-            onCloseAutoFocus={(event) => {
-              event.preventDefault();
-              const trigger = triggerRef.current;
-              // A decode failure can remove the original thumbnail button.
-              (trigger?.isConnected ? trigger : stripRef.current?.querySelector<HTMLButtonElement>("button"))?.focus();
-            }}
           >
+            <div className={styles.imageMeta}>
+              <h3 id={`${previewId}-name`} className={styles.imageFileName}>{shown?.file_name ?? "原图"}</h3>
+              <span className={styles.imagePosition}>{index + 1} / {images.length}</span>
+            </div>
             <div className={styles.imageToolbar}>
+              {images.length > 1 && <>
+                <button aria-label="上一张图片" className={styles.imageNav} onClick={() => step(-1)} type="button"><CaretLeft aria-hidden size={18}/></button>
+                <button aria-label="下一张图片" className={styles.imageNav} onClick={() => step(1)} type="button"><CaretRight aria-hidden size={18}/></button>
+              </>}
               <button aria-label={zoomDescription} className={styles.imageZoom} onClick={() => setZoom((value) => (value === "actual" ? "fit" : "actual"))} type="button">
                 {zoomLabel}
               </button>
@@ -297,18 +318,11 @@ function LoadedConversationImageStrip({
               <button aria-label="下载原图" className={styles.imageControl} disabled={!urls[index]} onClick={downloadOriginal} type="button">
                 <DownloadSimple aria-hidden size={16} />
               </button>
-              <Dialog.Close asChild>
-                <button aria-label="关闭原图" className={styles.imageClose} type="button">
+                <button aria-label="关闭原图" className={styles.imageClose} onClick={close} type="button">
                   <X aria-hidden size={17} />
                 </button>
-              </Dialog.Close>
             </div>
-            <div aria-label={zoom === "actual" ? "原图预览，使用方向键滚动" : "原图预览"} className={styles.imageStage} data-zoom={zoom} onClick={onBlankClose} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
-              {images.length > 1 ? (
-                <button aria-label="上一张图片" className={styles.imageNav} data-side="previous" onClick={() => step(-1)} type="button">
-                  <CaretLeft aria-hidden size={18} />
-                </button>
-              ) : null}
+            <div aria-label={zoom === "actual" ? "原图预览，使用方向键滚动" : "原图预览"} className={styles.imageStage} data-zoom={zoom} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
               {urls[index] ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
@@ -329,19 +343,8 @@ function LoadedConversationImageStrip({
                   ) : null}
                 </div>
               )}
-              {images.length > 1 ? (
-                <button aria-label="下一张图片" className={styles.imageNav} data-side="next" onClick={() => step(1)} type="button">
-                  <CaretRight aria-hidden size={18} />
-                </button>
-              ) : null}
             </div>
-            <div className={styles.imageMeta}>
-              <Dialog.Title className={styles.imageFileName}>{shown?.file_name ?? "原图"}</Dialog.Title>
-              <span className={styles.imagePosition}>{index + 1} / {images.length}</span>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
+          </section>}
     </div>
   );
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { useT } from "./locale-provider";
+
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createAvatarStore, emptyAvatarPreferences, type AvatarStore } from "@/lib/avatar-preferences";
 import type { AvatarPreference, AvatarStyle } from "@/lib/avatar";
@@ -17,6 +19,7 @@ export function AvatarPreferencesProvider({ scope, children }: { scope: string |
 }
 
 function BoundAvatarPreferences({ scope, children }: { scope: string; children: ReactNode }) {
+  const t = useT();
   const [store] = useState(() => createAvatarStore(scope, () => window.localStorage));
   const [editing, setEditing] = useState<AvatarEditorRequest | null>(null);
   const openEditor = useCallback((target: AvatarEditorTarget, trigger: HTMLButtonElement) => {
@@ -49,7 +52,7 @@ function BoundAvatarPreferences({ scope, children }: { scope: string; children: 
   }, [store]);
   return <Context.Provider value={store}><EditorContext.Provider value={openEditor}>
     {children}
-    {editing ? <Suspense fallback={<span role="status" className="sr-only">正在打开头像设置…</span>}>
+    {editing ? <Suspense fallback={<span role="status" className="sr-only">{t("正在打开头像设置…")}</span>}>
       <AvatarEditorDialog key={`${editing.self ? "self" : editing.id}`} request={editing} onClose={() => setEditing(null)} />
     </Suspense> : null}
   </EditorContext.Provider></Context.Provider>;
