@@ -107,7 +107,7 @@ describe("Session message projection", () => {
     expect(partsOf(pending[1]!)).toEqual(["talent-signal.execution"]);
     expect(JSON.stringify(pending[1]!.content)).not.toContain("收到，我先理清这件事。");
     const execution = (pending[1]!.content as Array<{ name?: string; data?: unknown }>)[0]!.data as Record<string, unknown>;
-    expect(execution).toMatchObject({ phase: "running", stage: "answer", endedAt: null, draft: "正在整理" });
+    expect(execution).toMatchObject({ messageId: MESSAGE, phase: "running", stage: "answer", endedAt: null, draft: "正在整理" });
     expect(execution.milestones).toEqual([{ stage: "contact_lookup", label: "正在查找相关人物", observedAt: "2026-09-29T01:00:00.500Z" }]);
     // The ephemeral run update never becomes semantic result content.
     expect(partsOf(pending[1]!)).not.toContain("talent-signal.answer-block");

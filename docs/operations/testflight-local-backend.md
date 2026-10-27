@@ -203,7 +203,11 @@ The sole image target, stored manifest/config hashes, source, platform and order
 rootfs diff IDs must agree with the inspected archive and Docker readback; the
 identity check repeats after runtime stabilization. Fresh
 4 KiB ext4 storage has a fixed experimental 2 GiB cap for verified Docker,
-containerd content/ingest/snapshot/metadata, state and temporary paths. The known
+containerd content/ingest/snapshot/metadata, state and temporary paths. An empty
+capped directory is bound at `/opt/containerd` for the pinned opt manager; its
+actual config must use that exact alias or the pinned default, its plugin must
+be present and `ok`, and its own `bin`/`lib` directories must pass alias/source
+resolution and device checks at startup and after import before receiving credit. The known
 content directory may be absent before first ingest; its existing parent must
 pass the backing check, and the directory itself must pass after import before
 receiving allocation credit. Other missing paths, insufficient space, incomplete

@@ -383,18 +383,64 @@ it("does not claim a removal when storage refuses its durable update", async () 
 it("recovers a slow draft put after unmount and keeps a newer removal ordered after it", async () => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
+  let signalPutStarted!: () => void;
+  const putStarted = new Promise<void>(resolve => { signalPutStarted = resolve; });
+  let releasePreparation!: () => void;
+  const preparationGate = new Promise<void>(resolve => { releasePreparation = resolve; });
+  let signalPreparationStarted!: () => void;
+  const preparationStarted = new Promise<void>(resolve => { signalPreparationStarted = resolve; });
+  let releaseHydration!: () => void;
+  const hydrationGate = new Promise<void>(resolve => { releaseHydration = resolve; });
+  let signalHydrationStarted!: () => void;
+  const hydrationStarted = new Promise<void>(resolve => { signalHydrationStarted = resolve; });
+  const file = imageFile("slow.png");
+  const readBytes = file.arrayBuffer.bind(file);
+  const read = vi.spyOn(file, "arrayBuffer").mockImplementationOnce(async () => {
+    signalPreparationStarted();
+    await preparationGate;
+    return readBytes();
+  }).mockImplementationOnce(async () => {
+    signalHydrationStarted();
+    await hydrationGate;
+    return readBytes();
+  });
   const base = memory.store;
-  setConversationImageStoreForTest({ ...base, put: async (key, images) => { await gate; return base.put(key, images); } });
+  setConversationImageStoreForTest({ ...base, put: async (...args) => {
+    signalPutStarted();
+    await gate;
+    return base.put(...args);
+  } });
   let adding!: Promise<void>;
-  await act(async () => { adding = chat.addFiles([imageFile("slow.png")]); }); await flush(1);
-  expect(chat.attachments).toEqual([]);
-  expect(chat.attachmentDraftUnsafe).toBe(true);
-  await act(async () => { root.unmount(); }); root = createRoot(mount);
-  await act(async () => { root.render(createElement(Probe)); });
-  await act(async () => { release(); await adding; }); await flush();
-  expect(chat.attachments.map(a => a.file.name)).toEqual(["slow.png"]);
-  await act(async () => { await chat.removeAttachment(chat.attachments[0]!.id); });
-  await remount(); expect(chat.attachments).toEqual([]); expect(queuePosts()).toHaveLength(0);
+  try {
+    await act(async () => { adding = chat.addFiles([file]); await preparationStarted; });
+    // Preparation alone also reports unsafe: it does not prove a put exists.
+    expect(chat.preparing).toBe(true);
+    expect(chat.attachments).toEqual([]);
+    expect(memory.map.size).toBe(0);
+    // Exercise real reading and hashing after a controlled delay, then wait
+    // for the queued write itself before unmounting its original owner.
+    await act(async () => { releasePreparation(); await putStarted; });
+    expect(chat.attachments).toEqual([]);
+    expect(chat.attachmentDraftUnsafe).toBe(true);
+    expect(memory.map.size).toBe(0);
+    await act(async () => { root.unmount(); }); root = createRoot(mount);
+    await act(async () => { root.render(createElement(Probe)); });
+    await act(async () => { release(); await adding; await hydrationStarted; });
+    expect(memory.map.size).toBe(1);
+    expect(chat.attachments).toEqual([]);
+    // The old addition has settled, but the new root still has to read and
+    // hash the stored file. Wait for its committed preview, not a timer.
+    await vi.waitFor(async () => {
+      await act(async () => { releaseHydration(); });
+      expect(chat.attachments.map(a => a.file.name)).toEqual(["slow.png"]);
+    });
+    await act(async () => { await chat.removeAttachment(chat.attachments[0]!.id); });
+    expect(memory.map.has(conversationImageKey("owner", sid, CONVERSATION_IMAGE_DRAFT))).toBe(false);
+    await remount(); expect(chat.attachments).toEqual([]); expect(queuePosts()).toHaveLength(0);
+  } finally {
+    await act(async () => { releasePreparation(); release(); releaseHydration(); await adding; });
+    read.mockRestore();
+  }
 });
 
 it("does not revive old preparation across the existing account A-B-A fence", async () => {

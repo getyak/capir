@@ -1,5 +1,6 @@
 """Synthetic safety boundaries only: never invoke Docker, sudo, or mounts."""
 import copy
+import ast
 import hashlib
 import io
 import struct
@@ -27,6 +28,13 @@ class ProbeTests(unittest.TestCase):
         self.env = {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
                     'RUNNER_OS': 'Linux', 'RUNNER_ARCH': 'ARM64',
                     'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1'}
+
+    def test_log_gate_ast_stays_identical_to_immutable_task27_baseline(self):
+        source = Path(probe.__file__).read_text()
+        function = next(node for node in ast.parse(source).body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'validate_logs')
+        self.assertEqual(hashlib.sha256(ast.dump(function, include_attributes=False).encode()).hexdigest(),
+                         '5759bd7e2f3f225b6d313b56a8fd091fe6fe7ad57395618ef1582488ed8e9eb4')
 
     def test_official_runtime_staging_checks_archive_before_extracting(self):
         raw, specs = runtime_fixture()
@@ -168,7 +176,8 @@ class ProbeTests(unittest.TestCase):
     def test_worker_cannot_add_a_host_socket_uncapped_volume_or_network(self):
         mounts = [{'Type': 'bind', 'Source': '/owned/fs' + suffix, 'Destination': dest, 'RW': True}
                   for suffix, dest in [('', '/proof'), ('/run', '/run'), ('/tmp', '/tmp'),
-                                       ('/unused-docker', '/var/lib/docker'), ('/unused-containerd', '/var/lib/containerd')]]
+                                       ('/unused-docker', '/var/lib/docker'), ('/unused-containerd', '/var/lib/containerd'),
+                                       ('/opt', '/opt/containerd')]]
         mounts += [{'Type': 'bind', 'Source': '/owned/runtime-tools/' + name,
                     'Destination': '/usr/local/bin/' + name, 'RW': False}
                    for name in ('containerd', 'containerd-shim-runc-v2', 'ctr')]
@@ -176,6 +185,23 @@ class ProbeTests(unittest.TestCase):
                   'PortBindings': {}, 'LogConfig': {'Type': 'none'}, 'CgroupnsMode': 'private'},
                   'Config': {'Env': ['DOCKER_TMPDIR=/proof/tmp', 'TMPDIR=/proof/tmp']}}
         probe.validate_worker(worker, '/owned/fs')
+        for mutation in ('missing', 'duplicate', 'source', 'readonly', 'type', 'other-alias'):
+            bad = copy.deepcopy(worker)
+            alias = next(mount for mount in bad['Mounts'] if mount['Destination'] == '/opt/containerd')
+            if mutation == 'missing':
+                bad['Mounts'].remove(alias)
+            elif mutation == 'duplicate':
+                bad['Mounts'].append(dict(alias))
+            elif mutation == 'source':
+                alias['Source'] = '/uncapped/opt'
+            elif mutation == 'readonly':
+                alias['RW'] = False
+            elif mutation == 'type':
+                alias['Type'] = 'volume'
+            else:
+                alias['Destination'] = '/other/opt'
+            with self.subTest(opt_alias=mutation), self.assertRaises(probe.ProbeError):
+                probe.validate_worker(bad, '/owned/fs')
         for mutation in ('socket', 'network', 'writable-root', 'cgroup', 'runtime-write', 'runtime-source', 'temp'):
             bad = copy.deepcopy(worker)
             if mutation == 'socket':
@@ -280,6 +306,8 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual([x for x in command if x.startswith('--host=')],
                          ['--host=unix:///proof/docker.sock'])
         self.assertIn('--network=none', command)
+        self.assertEqual([value for value in command if ',dst=/opt/containerd' in value],
+                         ['type=bind,src=/owned/fs/opt,dst=/opt/containerd'])
         runtime_mounts = [value for value in command if ',dst=/usr/local/bin/' in value]
         self.assertEqual(set(runtime_mounts), {
             'type=bind,src=/owned/runtime-tools/containerd,dst=/usr/local/bin/containerd,readonly',
@@ -381,6 +409,91 @@ class PathProbeTests(unittest.TestCase):
         self.item.outer, self.item.cid = ['docker'], 'a' * 64
         self.item.report['phase'] = 'nested-engine-startup'
         self.item.runner = PathRunner(self.item.fs)
+
+    def test_opt_defaults_and_exact_explicit_path_receive_credit_only_after_checks(self):
+        for explicit in ('', '[plugins."io.containerd.internal.v1.opt"]\npath = "/opt/containerd"\n'):
+            with self.subTest(explicit=bool(explicit)):
+                self.item.runner.config += explicit
+                self.item.check_paths()
+                self.assertEqual({key: self.item.report['credited_paths'][key] for key in
+                                  ('opt_root', 'opt_bin', 'opt_lib')},
+                                 {'opt_root': '/proof/opt', 'opt_bin': '/proof/opt/bin', 'opt_lib': '/proof/opt/lib'})
+                self.assertTrue(self.item.report['opt_plugin_verified'])
+                for path in ('/opt/containerd', '/opt/containerd/bin', '/opt/containerd/lib',
+                             '/proof/opt', '/proof/opt/bin', '/proof/opt/lib'):
+                    self.assertIn(['stat', '-c', '%d', path], self.item.runner.commands)
+                    self.assertIn(['readlink', '-f', path], self.item.runner.commands)
+                self.item.runner.local(PathRunner.CONTENT).mkdir(exist_ok=True)
+                self.item.report['phase'] = 'idle-stabilization'
+                before = len(self.item.runner.commands)
+                self.item.check_paths()
+                self.assertIn(['stat', '-c', '%d', '/opt/containerd/bin'], self.item.runner.commands[before:])
+                self.assertIn(['stat', '-c', '%d', '/proof/opt/lib'], self.item.runner.commands[before:])
+                self.item.report['phase'] = 'nested-engine-startup'
+
+    def test_opt_wrong_or_malformed_config_fails_without_retaining_raw_values(self):
+        for extra in ('[plugins."io.containerd.internal.v1.opt"]\npath = "/PRIVATE_OUTSIDE"\n',
+                      '[plugins."io.containerd.internal.v1.opt"]\npath = "/proof/opt"\n',
+                      '[plugins."io.containerd.internal.v1.opt"]\npath = ""\n',
+                      '[plugins."io.containerd.internal.v1.opt"]\npath = 17\n',
+                      '[plugins]\n"io.containerd.internal.v1.opt" = []\n',
+                      '[plugins."io.containerd.internal.v1.opt"]\npath = "PRIVATE_UNTERMINATED\n'):
+            with self.subTest(config=extra):
+                self.item.runner.config = self.item.runner.base_config + extra
+                with self.assertRaises(probe.ProbeError):
+                    self.item.check_paths()
+                self.assertNotIn('credited_paths', self.item.report)
+                self.assertNotIn('PRIVATE', json.dumps(self.item.report))
+
+    def test_opt_plugin_must_be_exact_unique_and_ok(self):
+        for table in ('TYPE ID PLATFORMS STATUS\n',
+                      'TYPE ID PLATFORMS STATUS\nio.containerd.internal.v1 opt - error\n',
+                      'TYPE ID PLATFORMS STATUS\nio.containerd.internal.v1 opt - skip\n',
+                      'TYPE ID PLATFORMS STATUS\nio.containerd.internal.v1 opt - ok\nio.containerd.internal.v1 opt - ok\n',
+                      'TYPE ID PLATFORMS STATUS\nio.containerd.internal.v1 opt - ok PRIVATE\n',
+                      'TYPE ID PLATFORMS STATUS\nio.containerd.internal.v1.opt opt - ok\n',
+                      'PRIVATE_HEADER\nio.containerd.internal.v1 opt - ok\n'):
+            with self.subTest(table=table):
+                self.item.runner.plugin_table = table
+                with self.assertRaises(probe.ProbeError):
+                    self.item.check_paths()
+                self.assertNotIn('credited_paths', self.item.report)
+                self.assertNotIn('PRIVATE', json.dumps(self.item.report))
+
+    def test_opt_absent_linked_wrong_device_or_escaping_paths_never_receive_credit(self):
+        for phase in ('nested-engine-startup', 'idle-stabilization'):
+            for target in ('/proof/opt', '/proof/opt/bin', '/proof/opt/lib'):
+                for mutation in ('absent', 'link', 'file', 'source-device', 'alias-device', 'alias-escape'):
+                    with self.subTest(phase=phase, target=target, mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                        item = probe.Probe(Path('/archive'), 'a' * 40, Path(tmp) / 'output')
+                        item.fs, item.outer, item.cid = Path(tmp) / 'fs', ['docker'], 'a' * 64
+                        item.runner = PathRunner(item.fs)
+                        item.report['phase'] = 'nested-engine-startup'
+                        item.check_paths()
+                        item.runner.local(PathRunner.CONTENT).mkdir()
+                        item.report['phase'] = phase
+                        local = item.runner.local(target)
+                        alias = target.replace('/proof/opt', '/opt/containerd', 1)
+                        if mutation in ('source-device', 'alias-device'):
+                            item.runner.foreign_device = target if mutation == 'source-device' else alias
+                        elif mutation == 'alias-escape':
+                            item.runner.escape_alias = alias
+                        else:
+                            if target == '/proof/opt':
+                                (local / 'bin').rmdir()
+                                (local / 'lib').rmdir()
+                            local.rmdir()
+                            if mutation == 'link':
+                                local.symlink_to(item.fs / 'tmp', target_is_directory=True)
+                            elif mutation == 'file':
+                                local.touch()
+                        with self.assertRaises(probe.ProbeError):
+                            item.check_paths()
+                        self.assertNotIn('credited_paths', item.report)
+                        self.assertFalse(item.report.get('opt_plugin_verified', False))
+                        self.assertIn(item.report['path_check']['role'],
+                                      ('opt-root', 'opt-bin', 'opt-lib', 'opt-root-source', 'opt-bin-source', 'opt-lib-source'))
+                        self.assertFalse(item.report['path_check']['verified'])
 
     def test_actual_startup_defers_only_lazy_content_then_requires_post_import_backing(self):
         # Pinned containerd's NewStore has not created this directory yet.
@@ -751,6 +864,7 @@ class LogDiagnosisTests(unittest.TestCase):
                                      if cleanup_failure else 'passed')
                     self.assertNotIn('PRIVATE', json.dumps(published))
                     self.assertNotIn('PRIVATE', (item.output / 'probe.log').read_text())
+                    self.assertEqual(runner.prepared_opt, [])
 
     def test_actual_version_output_gate_retains_diagnosis_before_probe_credit(self):
         target = 'sha256:' + 'b' * 64
@@ -808,6 +922,8 @@ class LogGateRunner:
         if args[:2] == ['image', 'inspect']:
             return json.dumps([{'Id': 'sha256:' + 'c' * 64, 'Architecture': 'arm64', 'Os': 'linux', 'Size': 1}])
         if args[:1] == ['create']:
+            opt = item.fs / 'opt'
+            self.prepared_opt = sorted(path.name for path in opt.iterdir()) if opt.is_dir() else None
             return 'd' * 64
         rejected = ('ready\nlevel=error msg="PRIVATE_MESSAGE" error="permission denied PRIVATE_TOKEN" '
                     'path="/PRIVATE_PATH" url="https://PRIVATE.invalid"')
@@ -1039,17 +1155,23 @@ class PathRunner:
 
     def __init__(self, root):
         self.root, self.foreign_device = root.resolve(), None
+        self.commands, self.escape_alias = [], None
         self.config = ('version = 2\nroot = "' + self.ROOT + '"\nstate = "' + self.STATE +
                        '"\n[grpc]\naddress = "' + self.ADDRESS + '"\n')
+        self.base_config = self.config
+        self.plugin_table = ('TYPE ID PLATFORMS STATUS\n'
+                             'io.containerd.internal.v1 opt - ok\n')
         for path in (self.ROOT, self.STATE, self.OVERLAY, self.ROOT + '/io.containerd.metadata.v1.bolt',
-                     '/proof/tmp', '/proof/unused-docker', '/proof/unused-containerd'):
+                     '/proof/tmp', '/proof/unused-docker', '/proof/unused-containerd',
+                     '/proof/opt/bin', '/proof/opt/lib'):
             self.local(path).mkdir(parents=True, exist_ok=True)
         self.local(self.CONFIG).touch()
         self.local(self.ADDRESS).touch()
 
     def local(self, path):
         aliases = {'/tmp': '/proof/tmp', '/run': '/proof/run', '/var/lib/docker': '/proof/unused-docker',
-                   '/var/lib/containerd': '/proof/unused-containerd'}
+                   '/var/lib/containerd': '/proof/unused-containerd', '/opt/containerd': '/proof/opt',
+                   '/opt/containerd/bin': '/proof/opt/bin', '/opt/containerd/lib': '/proof/opt/lib'}
         path = aliases.get(path, path)
         if not path.startswith('/proof/'):
             raise AssertionError('unexpected synthetic path')
@@ -1060,6 +1182,9 @@ class PathRunner:
         if argv[:3] != prefix:
             raise AssertionError('unexpected synthetic command prefix')
         args = argv[3:]
+        self.commands.append(args)
+        if args == ['ctr', '--address', self.ADDRESS, '--namespace', 'moby', 'plugins', 'list']:
+            return self.plugin_table
         if args == ['cat', self.CONFIG]:
             return self.config
         if args[:2] == ['sh', '-c'] and len(args) == 3:
@@ -1070,7 +1195,13 @@ class PathRunner:
                 raise probe.ProbeError('bounded command failed')
             return 'present' if path.is_dir() else 'absent'
         if args[:2] == ['readlink', '-f']:
+            if args[2] == self.escape_alias:
+                return '/PRIVATE_OUTSIDE\n'
             path = self.local(args[2]).resolve()
+            if args[2].startswith('/opt/containerd') and not self.local(args[2]).is_symlink():
+                return args[2] + '\n'
+            if not path.is_relative_to(self.root):
+                return str(path) + '\n'
             return '/proof/' + str(path.relative_to(self.root)) + '\n'
         if args[:3] == ['stat', '-c', '%d']:
             try:

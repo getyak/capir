@@ -43,7 +43,7 @@ import { WorkspaceGlobalSearchDialog, useWorkspaceDirectory } from "./workspace-
 import styles from "./workspace-shell.module.css";
 
 /**
- * Compact shared sidebar (settled GET-129): 248px expanded / 72px collapsed.
+ * Shared sidebar: 236px by default / 72px collapsed; saved widths remain local.
  *
  * The expanded rail is one horizontal row of five controls — today,
  * conversation, people, meetings, scoped global search. The selected control

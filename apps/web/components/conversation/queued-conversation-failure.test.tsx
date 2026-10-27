@@ -12,6 +12,8 @@ vi.mock("./use-conversation", () => ({ useConversation: () => ({
   preview: null, connection: "connected", error: null, entryCapability: null,
   unavailable: false, preparing: false, submitting: false, mutating: false,
   handoffEntries: {}, handoffPreviews: {}, runOutcome: {}, readbackStalled: [],
+  taskObservation: { owner: Symbol("failure-fixture"), sessionId: "session", snapshot: null, detail: null,
+    messages: [], handoffEntries: {}, runOutcome: {}, readbackStalled: [], preview: null },
   snapshot: { active: null, paused: true, queued: [{ queue_entry_id: "entry", message_id: "message",
     objective: "", status: "failed", failure_code: state.code, run_id: "run",
     images: [{ attachment_id: "image", file_name: "synthetic.png", media_type: "image/png", byte_size: 12, content_hash: "a".repeat(64) }] }, { queue_entry_id: "member", message_id: "member-message", objective: "保留的补充", status: "failed", failure_code: state.code, steers_run_id: "run", steer_delivered: true }] },

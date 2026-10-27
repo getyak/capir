@@ -633,9 +633,20 @@
 .actionStack > .actionHint { margin:5px 0 8px; }
 .actionMore { border:0; background:none; color:var(--muted); font:inherit; font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; padding:5px 2px; cursor:pointer; }
 .actionMore:hover { color:var(--ink); }
-.contactDecisionIdentity { display:flex; align-items:center; gap:10px; margin:14px 0 12px; }
-.contactDecisionIdentity strong { display:block; font-size: var(--ts-type-body, 0.9375rem); line-height:1.4; font-weight:600; }
-.contactDecisionIdentity small { display:block; margin-top:3px; color:var(--muted); font-size: var(--ts-type-meta, 0.8125rem); }
+.contactDecisionCard { min-width:0; }
+.contactDecisionIdentity { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.contactDecisionIdentity strong { min-width:0; overflow-wrap:anywhere; font-size:var(--ts-type-body, 0.9375rem); line-height:1.4; font-weight:600; }
+.contactDecisionIdentity > span { color:var(--muted); font-size:var(--ts-type-meta, 0.8125rem); }
+.contactDecisionContext { margin:5px 0 0; overflow-wrap:anywhere; font-size:var(--ts-type-body, 0.9375rem); line-height:var(--ts-leading-body, 1.667); }
+.contactDecisionSource { margin:12px 0; color:var(--muted); }
+.contactDecisionSource blockquote { margin:0; padding-left:10px; border-left:1px solid var(--line-soft); font-size:var(--ts-type-body, 0.9375rem); line-height:var(--ts-leading-body, 1.667); white-space:pre-wrap; overflow-wrap:anywhere; }
+.contactDecisionSource button { min-height:44px; padding:4px 0; border:0; background:none; color:var(--muted); font:inherit; font-size:var(--ts-type-nav, 0.875rem); text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+.contactDecisionActions { margin-top:12px; }
+.contactDecisionActions .contactDecisionMore { display:inline-flex; align-items:center; gap:5px; margin-left:auto; border-color:transparent; background:none; color:var(--muted); }
+.contactDecisionMenu { display:grid; width:max-content; max-width:calc(100vw - 32px); padding:4px; }
+.contactDecisionMenu button { min-height:44px; padding:8px 12px; border:0; border-radius:6px; background:none; color:var(--ink); text-align:start; font:inherit; font-size:var(--ts-type-nav, 0.875rem); cursor:pointer; }
+.contactDecisionMenu button:hover,.contactDecisionMenu button:focus-visible { background:var(--surface-muted); }
+.contactDecisionCard button:focus-visible,.contactDecisionCard input:focus-visible,.contactDecisionMenu button:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
 .contactDecisionEdit { display:grid; gap:9px; }
 .contactDecisionEdit label { display:grid; gap:4px; color:var(--muted); font-size: var(--ts-type-meta, 0.8125rem); }
 .contactDecisionEdit input { width:100%; box-sizing:border-box; padding:9px 10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface); color:var(--ink); font:inherit; font-size: var(--ts-type-body, 0.9375rem); }
