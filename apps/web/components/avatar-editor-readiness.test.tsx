@@ -47,3 +47,18 @@ it("keeps an avatar without an authorized provider disabled after hydration", as
   await act(async () => trigger.click());
   expect(document.querySelector("[data-avatar-editor][role='dialog']")).toBeNull();
 });
+
+it("keeps the text avatar action discoverable and opens the same authorized editor", async () => {
+  const content = <AvatarPreferencesProvider scope="avatar-readiness"><AvatarEditor id="person-one" label="张伟" appearance="text" /></AvatarPreferencesProvider>;
+  const host = document.createElement("div");
+  host.innerHTML = renderToString(content); document.body.append(host);
+  const trigger = host.querySelector("button")!;
+  expect(trigger.textContent).toBe("编辑头像");
+  expect(trigger.getAttribute("aria-label")).toBe("编辑 张伟 的头像");
+  expect(trigger.querySelector("svg")).toBeNull();
+  expect(trigger.disabled).toBe(true);
+  await act(async () => { root = hydrateRoot(host, content); });
+  expect(trigger.disabled).toBe(false);
+  await act(async () => { trigger.click(); await import("./avatar-editor-dialog"); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(document.querySelector("[data-avatar-editor][role='dialog']")?.textContent).toContain("联系人头像");
+});

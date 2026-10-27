@@ -8,6 +8,7 @@ import { MemoryReviewCard } from "@/components/memory-review/memory-review-card"
 import { safeResearchLink } from "@/components/research-notebook";
 import { PersonMemoryContent } from "@/components/person-memory-content";
 import { AvatarEditor } from "@/components/avatar-editor";
+import { PersonDirectoryAvatar } from "@/components/person-directory-avatar";
 import { memoryDate } from "@/lib/person-memory-projection";
 import { peopleDirectoryHref, personDirectoryEntryId, personMemoryHref, readPeopleDirectoryQuery } from "@/components/people-directory-navigation";
 import {
@@ -149,6 +150,9 @@ export default async function PersonMemoryPage({
     (match) => match.kind === "confirmed_handle",
   );
 
+  const hasBasicInformation = fields.size > 0 || contactPoints.length > 0;
+  const hasReference = Boolean(hasBasicInformation || person?.profile?.headline || confirmedIdentity || person?.profile?.summary);
+
   return (
     <main className={styles.main} id="main-content" tabIndex={-1}>
       <div className={styles.pageNavigation}>
@@ -157,26 +161,22 @@ export default async function PersonMemoryPage({
         </Link>
       </div>
       <header className={styles.identity}>
-        <AvatarEditor
-          id={person?.id ?? id}
-          size={18}
-          shape="circle"
-          label={person?.display_label ?? t("人物")}
-          url={person?.avatar?.url ?? null}
-        />
+        <PersonDirectoryAvatar id={person?.id ?? id} size={18} shape="circle"
+          label={person?.display_label ?? t("人物")} url={person?.avatar?.url ?? null} />
         <div className={styles.identityText}>
           <h1 title={person?.display_label ?? t("人物")}>{person?.display_label ?? t("人物")}</h1>
         </div>
+        {person ? <AvatarEditor id={person.id} label={person.display_label} url={person.avatar?.url ?? null}
+          shape="circle" appearance="text" /> : null}
       </header>
 
-      <div className={styles.columns}>
+      <div className={styles.columns} data-reference={hasReference}>
         <div className={styles.memoryColumn}>
           {person && person.contexts.length > 0 ? (
             <nav className={styles.contexts} aria-labelledby="person-contexts">
               <h2 className={styles.sectionTitle} id="person-contexts">
                 {t("关系情境")}
               </h2>
-              <p className={styles.contextHint}>{t("选择已有情境，继续相关对话。")}</p>
               <ul className={styles.contextList}>
                 {person.contexts.map((context) => (
                   <li key={context.id}>
@@ -196,13 +196,7 @@ export default async function PersonMemoryPage({
                 ))}
               </ul>
             </nav>
-          ) : (
-            <p className={`${styles.quiet} ${styles.contextsEmpty}`}>
-              {person
-                ? t("还没有关系情境，可直接查看人物记忆。")
-                : t("人物目录暂时没有这个人的条目。")}
-            </p>
-          )}
+          ) : null}
           {proposals.length > 0 ? (
             <section
               className={styles.section}
@@ -230,19 +224,20 @@ export default async function PersonMemoryPage({
               </ul>
             </section>
           ) : null}
-          <PersonMemoryContent key={`${binding}:${person?.id ?? id}`} personId={person?.id ?? id} binding={binding} entryCapability={entryCapability}
+          {person || items.length || proposals.length || hasMore ? <PersonMemoryContent key={`${binding}:${person?.id ?? id}`} personId={person?.id ?? id} binding={binding} entryCapability={entryCapability}
             initialItems={items} hasMore={hasMore} nextCursor={nextCursor} contexts={person?.contexts ?? []} returnSessionId={returnSessionId} />
+            : <p className={styles.quiet}>{t("人物目录暂时没有这个人的条目。")}</p>}
         </div>
 
-        <aside className={styles.contextColumn} aria-label={t("人物资料")}>
+        {hasReference ? <aside className={styles.contextColumn} aria-label={t("人物资料")}>
           {person?.profile?.headline ? (
             <p className={styles.identityNote}>{person.profile.headline}</p>
           ) : confirmedIdentity ? (
             <p className={styles.identityNote}>{t("已确认的联系方式")}</p>
           ) : null}
-          <section aria-labelledby="person-basic-fields">
+          {hasBasicInformation ? <section aria-labelledby="person-basic-fields">
             <h2 className={styles.sectionTitle} id="person-basic-fields">{t("基本信息")}</h2>
-            {fields.size || contactPoints.length ? <dl className={styles.basicFields}>
+            <dl className={styles.basicFields}>
               {Array.from(fields.entries()).map(([field, entries]) => <div className={styles.basicField} key={field}>
                 <dt>{FIELD_LABELS[field] ? t(FIELD_LABELS[field]) : field}</dt>
                 <dd>{entries.map(entry => {
@@ -261,13 +256,13 @@ export default async function PersonMemoryPage({
                 <span>{point.display_hint}</span>
                 <details className={styles.fieldSource}><summary>{t("已确认联系方式")}</summary><p>{point.source_display_name ?? t("已确认身份线索")} · {memoryDate(point.valid_from, locale)}</p>{point.valid_until ? <p>{translate(locale, "有效至 {date}", { date: memoryDate(point.valid_until, locale) })}</p> : null}</details>
               </dd></div>)}
-            </dl> : <p className={styles.quiet}>{person ? t("还没有已核对的基础信息。") : t("人物目录暂时没有这个人的条目。")}</p>}
-          </section>
+            </dl>
+          </section> : null}
           {person?.profile?.summary ? <section className={styles.profileSummary} aria-labelledby="person-profile-summary">
             <h2 className={styles.scopeTitle} id="person-profile-summary">{t("简介")}</h2><p>{person.profile.summary}</p>
             <small>{person.profile.provenance_kind === "user_authored" ? t("你补充的") : t("已复核公开资料")} · {memoryDate(person.profile.updated_at, locale)}</small>
           </section> : null}
-        </aside>
+        </aside> : null}
       </div>
     </main>
   );

@@ -260,3 +260,31 @@ describe("person document interactions", () => {
     await click("阅读概览"); expect(host.textContent).toContain("来源中的计划 · 2026年1月12日（结果待核对）");
   });
 });
+
+it("offers one short empty state and a working unscoped new-conversation entry", async () => {
+  await mount([]);
+  expect(host.querySelector("p")?.textContent).toBe("还没有关于这个人的记忆。");
+  expect(host.querySelectorAll("p")).toHaveLength(1);
+  expect(host.querySelector("nav")).toBeNull();
+  expect(host.querySelector("h2")).toBeNull();
+  expect(host.querySelector("a")?.getAttribute("href")).toBe("/workspace");
+  expect(host.querySelector("a")?.textContent).toContain("开始记录");
+  expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("uses the exact existing context as the empty-state next action", async () => {
+  await act(async () => root.render(createElement(PersonMemoryContent, { personId, binding: "binding", entryCapability: "entry", initialItems: [],
+    contexts: [{ id: sessionId, display_label: "共同项目", last_activity_at: "2026-10-27T00:00:00Z" }], returnSessionId: sessionId })));
+  expect(host.querySelector("a")?.getAttribute("href")).toBe(`/workspace?person=${personId}&context=${sessionId}&session=${sessionId}`);
+  expect(host.querySelector("a")?.textContent).toContain("去相关对话");
+});
+
+it("returns focus to the empty-state action when the last page has no ordinary memory", async () => {
+  await mount([], true);
+  button("继续加载记忆").focus();
+  fetcher.mockResolvedValueOnce(Response.json({ person_id: personId, items: [], has_more: false, next_cursor: null }));
+  await click("继续加载记忆");
+  expect(host.querySelector("[data-memory-load-more]")).toBeNull();
+  expect(host.querySelector("nav")).toBeNull();
+  expect(document.activeElement).toBe(host.querySelector("[data-memory-empty-action]"));
+});

@@ -2572,5 +2572,9 @@
   "工具返回的图片无法保存或显示；请查看结果与来源。工具不会重新执行。": "The image returned by the tool could not be saved or displayed. Check the result and source. The tool will not run again.",
   "工具已返回图片结果。": "The tool returned an image.",
   "图片格式无效。": "Invalid image format.",
-  "图片内容过大。": "The image is too large."
+  "图片内容过大。": "The image is too large.",
+  "还没有关于这个人的记忆。": "No memories about this person yet.",
+  "开始记录": "Start a note",
+  "去相关对话": "Go to related conversation",
+  "编辑头像": "Edit avatar"
 }

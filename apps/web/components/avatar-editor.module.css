@@ -66,3 +66,6 @@
 .localData summary { min-height: 44px; padding: 11px 0; cursor: pointer; }
 .settings h2 { font-size: 15px; }
 .settings p { font-size: 13px; }
+
+.trigger[data-appearance="text"] { color: var(--muted-strong); border-radius: 5px; font: inherit; font-size: 12px; margin-left: auto; padding: 0 8px; white-space: nowrap; }
+.trigger[data-appearance="text"]:hover { color: var(--ink); background: var(--surface-muted); }

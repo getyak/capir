@@ -79,7 +79,7 @@ describe("saved Person destination", () => {
   it("puts relationship context and saved memory before biography in the document reading order", async () => {
     const html = await render();
     expect(html.indexOf('id="person-contexts"')).toBeLessThan(html.indexOf('id="person-memory-accepted"'));
-    expect(html.indexOf('id="person-memory-accepted"')).toBeLessThan(html.indexOf('id="person-basic-fields"'));
+    expect(html).not.toContain('id="person-basic-fields"');
   });
 
   it("keeps one complete name in the header and retains the profile in the reference column", async () => {
@@ -125,7 +125,7 @@ describe("saved Person destination", () => {
   it("does not invent a profile when the directory entry is missing", async () => {
     loadPersonMemory.mockResolvedValue({ person: null, proposals: [], items: [] });
     const html = await render();
-    expect(html).toContain("暂时没有");
+    expect(html).toContain("人物目录暂时没有这个人的条目。");
     expect(html).not.toContain("陈知远");
   });
 
@@ -156,7 +156,7 @@ describe("saved Person destination", () => {
   });
   it("does not manufacture structured biography from accepted Memory or research", async () => {
     loadPersonMemory.mockResolvedValue({ ...fixture(), basicFields: [], contactPoints: [], items: [{ id: "memory", scope: "person", display_text: "对方提到在某公司工作", statement_kind: "source_statement", speaker: "对方" }] });
-    const html = await render(); expect(html).toContain("还没有已核对的基础信息"); expect(html).toContain("对方提到在某公司工作");
+    const html = await render(); expect(html).not.toContain('id="person-basic-fields"'); expect(html).toContain("对方提到在某公司工作");
     expect(html).not.toContain("<dt>公司</dt>"); expect(html).not.toContain("最近往来");
   });
 });
@@ -173,7 +173,8 @@ it.each([
   loadPersonMemory.mockResolvedValue({ ...data, person: { ...data.person, profile: { headline: "用户的原始标题", summary: "用户补充的中文简介", provenance_kind: "user_authored", updated_at: "2026-10-12T00:00:00Z" } } });
   const page = await PersonMemoryPage({ params: Promise.resolve({ id: personId }), searchParams: Promise.resolve({ session: sessionId, directory_query: "陈" }) });
   const html = renderToStaticMarkup(<LocaleProvider locale={locale as LocaleTag}>{page}</LocaleProvider>);
-  for (const text of [back, contexts, basic, biography, "陈知远", "读书会认识", "用户的原始标题", "用户补充的中文简介", "我们通过读书会认识"]) expect(html).toContain(text);
+  for (const text of [back, contexts, biography, "陈知远", "读书会认识", "用户的原始标题", "用户补充的中文简介", "我们通过读书会认识"]) expect(html).toContain(text);
+  expect(html).not.toContain(basic);
   expect(html).toContain(`/workspace?person=${personId}&amp;context=${contextId}&amp;session=${sessionId}`);
   expect(mint).toHaveBeenCalledWith(expect.anything(), { purpose: "people", personId });
 });
@@ -185,4 +186,32 @@ it("localizes an unavailable Person without presenting failed reads as empty mem
   expect(html).toContain("Cannot read this person&#x27;s memory; cached or example content will not be substituted.");
   expect(html).toContain('role="alert"');
   expect(html).not.toContain("No confirmed memories yet");
+});
+
+it("keeps a successful empty Person to one sentence and an existing new-conversation entry", async () => {
+  const data = fixture();
+  loadPersonMemory.mockResolvedValue({ ...data, person: { ...data.person, contexts: [] }, items: [],
+    basicFields: [{ field: "display_name", value: "陈知远" }], contactPoints: [] });
+  const html = await render();
+  expect(html).toContain("还没有关于这个人的记忆。");
+  expect(html).toContain('href="/workspace"');
+  expect(html).toContain("开始记录");
+  for (const text of ['id="person-contexts"', 'id="person-basic-fields"', '<aside', 'id="person-memory-accepted"', "记忆阅读方式", "0 条", "选择已有情境", "还没有关系情境"]) expect(html).not.toContain(text);
+});
+
+it("keeps real context links without introductory instructions", async () => {
+  const html = await render();
+  expect(html).toContain("读书会认识");
+  expect(html).not.toContain("选择已有情境，继续相关对话。");
+});
+
+it("keeps a profile-only reference column without an empty basic-information heading", async () => {
+  const data = fixture();
+  loadPersonMemory.mockResolvedValue({ ...data, person: { ...data.person,
+    profile: { headline: null, summary: "用户补充的原话", provenance_kind: "user_authored", updated_at: "2026-10-12T00:00:00Z" } } });
+  const html = await render();
+  expect(html).toContain("<aside");
+  expect(html).toContain("用户补充的原话");
+  expect(html).toContain("你补充的");
+  expect(html).not.toContain('id="person-basic-fields"');
 });

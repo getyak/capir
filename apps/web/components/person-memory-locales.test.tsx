@@ -55,3 +55,18 @@ it("localizes failed pagination without calling unreadable memory empty or chang
   expect(host.textContent).not.toContain("No confirmed memories yet");
   expect(fetcher).toHaveBeenCalledWith(expect.stringContaining("cursor=signed-next"), expect.objectContaining({ cache: "no-store", headers: { "x-memory-entry-capability": "entry", "x-workspace-session": "binding" } }));
 });
+
+it.each([
+  ["zh-CN", "还没有关于这个人的记忆。", "开始记录"],
+  ["en", "No memories about this person yet.", "Start a note"],
+  ["zh-TW", "還沒有關於這個人的記憶。", "開始記錄"],
+  ["ja", "この人についての記憶はまだありません。", "記録を始める"],
+  ["ko", "아직 이 사람에 대한 기억이 없어요.", "기록 시작"],
+] as const)("keeps a short localized empty state in %s", async (locale, sentence, action) => {
+  await mount(locale, []);
+  expect(host.querySelector("p")?.textContent).toBe(sentence);
+  expect(host.querySelector("a")?.textContent).toContain(action);
+  expect(host.querySelector("a")?.getAttribute("href")).toBe("/workspace");
+  expect(host.querySelector("nav")).toBeNull();
+  expect(fetcher).not.toHaveBeenCalled();
+});
