@@ -428,7 +428,7 @@ test("resolved production repairs are recorded in the lockfile", () => {
   assert.deepEqual(resolvedVersions("ip-address"), ["10.7.4"]);
   assert.deepEqual(resolvedVersions("fast-uri"), ["3.1.9", "4.2.3"]);
   assert.deepEqual(resolvedVersions("body-parser"), ["2.4.0"]);
-  assert.deepEqual(resolvedVersions("undici"), ["6.29.1", "8.12.2"]);
+  assert.deepEqual(resolvedVersions("undici"), ["6.29.1", "8.12.3"]);
   assert.deepEqual(resolvedVersions("source-map-js"), ["1.2.2"]);
   assert.ok(lock.includes("\n  mammoth@1.13.0:"));
 });
@@ -440,7 +440,7 @@ test("the unused mammoth CLI argparse/sprintf-js graph is gone and the SDK pin h
   assert.doesNotMatch(lock, /\n {4}sprintf-js: /);
   assert.match(workspace, /"mammoth@1\.13\.0>argparse": "-"/);
   assert.match(lock, /mammoth@1\.13\.0>argparse: '-'/);
-  assert.deepEqual(resolvedVersions("@anthropic-ai/claude-agent-sdk"), ["0.3.287"]);
+  assert.deepEqual(resolvedVersions("@anthropic-ai/claude-agent-sdk"), ["0.3.310"]);
   assert.doesNotMatch(lock, /0\.3\.241/);
   assert.doesNotMatch(workspace, /^ *- .*0\.3\.241/m);
   assert.ok(workspace.includes("opik@2.2.45"));
