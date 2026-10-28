@@ -52,6 +52,19 @@ describe("people directory states", () => {
     expect(html).toContain('name="session"');
     expect(html).toContain('value="session-a"');
   });
+  it("uses real identity and source details rather than a repeated completeness checklist", () => {
+    const plain = { ...person, identity_matches: [], capture_count: 0, confirmed_identity_count: 0, contexts: [] };
+    const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, people: [plain] }));
+    expect(html).toContain("林知遥");
+    expect(html).not.toContain("身份待补充");
+    expect(html).not.toContain("暂无已确认的来源");
+    const sourced = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props,
+      people: [{ ...plain, contexts: person.contexts, capture_count: 2 }] }));
+    expect(sourced).toContain("来源 2");
+    expect(sourced).toContain("项目沟通");
+    expect(sourced).not.toContain("已确认线索 0");
+    expect(sourced).not.toContain("已确认的联系方式");
+  });
   it("uses only the confirmed avatar URL without referring the private page", () => {
     const html = renderToStaticMarkup(createElement(PeopleDirectoryApp, { ...props, people: [{ ...person, avatar: {
       url: "https://example.test/avatar.png", source_profile_url: "https://example.test/profile",

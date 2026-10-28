@@ -47,6 +47,17 @@ beforeEach(() => {
 });
 
 describe("saved Person destination", () => {
+  it("keeps the source conversation directly reachable alongside the directory return", async () => {
+    const html = await render(personId, sessionId, "陈");
+    expect(html).toContain(`href="/workspace/sessions/${sessionId}"`);
+    expect(html).toContain("返回对话");
+    expect(html).toContain(`/workspace/people?query=%E9%99%88&amp;session=${sessionId}#person-${personId}`);
+    const withoutSource = await render(personId, "");
+    expect(withoutSource).not.toContain("返回对话");
+    const unsafeSource = await render(personId, "unsafe-return");
+    expect(unsafeSource).not.toContain("unsafe-return");
+    expect(unsafeSource).not.toContain("返回对话");
+  });
   it.each(["loaded", "invalid", "unavailable"])("preserves the directory search through the %s destination without adding it to relationship authority", async (state) => {
     if (state === "unavailable") loadPersonMemory.mockRejectedValue(new Error("unavailable"));
     const html = await render(state === "invalid" ? "bad" : personId, sessionId, "  林 & 陈  ");

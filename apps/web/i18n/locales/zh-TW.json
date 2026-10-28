@@ -2621,6 +2621,7 @@
   "execution.tool.profile": "公開資料搜尋已回傳",
   "execution.tool.other": "操作已回傳",
   "conversation.image.viewNamed": "檢視原圖 {index}：{name}",
+  "来源 {count}": "來源 {count}",
   "对话不可用": "對話無法開啟",
   "无法读取这段对话。": "無法讀取這段對話。",
   "登录已过期，请重新登录后查看这段对话。": "登入已過期，請重新登入後查看這段對話。",
