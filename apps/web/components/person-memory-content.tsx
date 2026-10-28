@@ -168,20 +168,30 @@ export function PersonMemoryContent({ personId, binding, entryCapability, initia
         </div> : groups.map(group =>
           <article className={styles.scopeGroup} key={group.scope}>
             <h3 className={styles.scopeTitle}>{t(MEMORY_SCOPE_LABELS[group.scope])}</h3>
-            <ul className={styles.memoryList}>{group.items.map(item => <li className={styles.memoryItem} data-memory-item={item.id} tabIndex={-1} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}>
-              {edit?.itemId === item.id ? editor : <>
-                <div className={styles.memoryLine}><p className={styles.memoryText}>{item.display_text}</p>
-                  {canEditMemory(item) ? <button className={styles.editButton} data-memory-edit={item.id} disabled={Boolean(edit) || controller.loadingMore}
-                    aria-label={t("修改记忆：{text}", { text: item.display_text })} type="button" onClick={() => controller.begin(item)}>
-                    <PencilSimple size={15} aria-hidden="true" /><span>{t("修改")}</span>
-                  </button> : null}</div>
-                <div className={styles.memoryKind}><span>{memoryAttribution(item, locale)}</span><MemoryTime item={item} />{contextLink(item)}</div>
-              </>}
-              <details className={styles.evidence}><summary>{t("查看依据")} <CaretDown size={12} aria-hidden="true" /></summary>
-                {item.original_display_text && item.display_text !== item.original_display_text ? <div className={styles.original}><span>{t("修改前保存的原句")}</span><p>{item.original_display_text}</p></div> : null}
-                <SourceExcerpts item={item} />
-              </details>
-            </li>)}</ul>
+            <ul className={styles.memoryList}>{group.items.map(item => {
+              const context = contexts.find(entry => entry.id === item.relationship_context_id);
+              const hasRetainedSources = memorySources(item).length > 0;
+              return <li className={styles.memoryItem} data-memory-item={item.id} tabIndex={-1} data-conflict-group={item.conflict_group_id ?? undefined} key={item.id}>
+                {edit?.itemId === item.id ? editor : <div className={styles.memoryLine}><p className={styles.memoryText}>{item.display_text}</p>
+                    {canEditMemory(item) ? <button className={styles.editButton} data-memory-edit={item.id} disabled={Boolean(edit) || controller.loadingMore}
+                      aria-label={t("修改记忆：{text}", { text: item.display_text })} type="button" onClick={() => controller.begin(item)}>
+                      <PencilSimple size={15} aria-hidden="true" /><span>{t("修改")}</span>
+                    </button> : null}</div>}
+                <details className={styles.evidence}>
+                  <summary>
+                    <span className={styles.memoryKind}>
+                      <span>{memoryAttribution(item, locale)}</span>{" "}<MemoryTime item={item} />
+                      {context ? <>{" "}<span className={styles.memoryContextName}>{context.display_label ?? t("关系情境")}</span></> : null}
+                      {!hasRetainedSources ? <>{" "}<span>{t("来源摘录未保留或已不可用。")}</span></> : null}
+                    </span>{" "}
+                    <span className={styles.evidenceAction}>{t("查看依据")} <CaretDown size={12} aria-hidden="true" /></span>
+                  </summary>
+                  {edit?.itemId === item.id ? null : contextLink(item)}
+                  {item.original_display_text && item.display_text !== item.original_display_text ? <div className={styles.original}><span>{t("修改前保存的原句")}</span><p>{item.original_display_text}</p></div> : null}
+                  <SourceExcerpts item={item} />
+                </details>
+              </li>;
+            })}</ul>
           </article>)}
       </> : mode === "reading" ? <div className={styles.reading}>
         <p className={styles.layerHelp}>{t("按已确认记忆整理的阅读视图，不新增事实。修改请回到逐条记忆。")}</p>

@@ -288,3 +288,79 @@ it("returns focus to the empty-state action when the last page has no ordinary m
   expect(host.querySelector("nav")).toBeNull();
   expect(document.activeElement).toBe(host.querySelector("[data-memory-empty-action]"));
 });
+
+describe("compact confirmed-Memory provenance", () => {
+  const contextId = "22222222-2222-4222-8222-222222222222";
+  async function mountProvenance(item = memory({ relationship_context_id: contextId })) {
+    await act(async () => root.render(createElement(PersonMemoryContent, {
+      personId, binding: "binding", entryCapability: "entry", initialItems: [item], returnSessionId: sessionId,
+      contexts: [{ id: contextId, display_label: "共同项目", last_activity_at: "2026-10-27T00:00:00Z" }],
+    })));
+  }
+  function disclosure() { return host.querySelector<HTMLDetailsElement>("[data-memory-item='old'] > details")!; }
+
+  it("keeps attribution, source-bound time and a plain context in one native disclosure without nested actions", async () => {
+    await mountProvenance();
+    const details = disclosure();
+    const summary = details.querySelector("summary")!;
+    expect(details.firstElementChild).toBe(summary);
+    expect(details.open).toBe(false);
+    for (const text of ["来源陈述 · 对方", "来源中的计划 · 相对时间见来源（结果待核对）", "共同项目", "查看依据"]) expect(summary.textContent).toContain(text);
+    expect(summary.querySelector("a, button, input, textarea, [role='button'], [role='link']")).toBeNull();
+    expect(summary.hasAttribute("aria-expanded")).toBe(false); // Native details owns expansion.
+    const edit = host.querySelector<HTMLButtonElement>("[data-memory-edit='old']")!;
+    expect(details.contains(edit)).toBe(false);
+    expect(edit.getAttribute("aria-label")).toBe(`修改记忆：${memory().display_text}`);
+    const context = details.querySelector<HTMLAnchorElement>(`a[href='/workspace?person=${personId}&context=${contextId}&session=${sessionId}']`)!;
+    expect(context).not.toBeNull(); expect(summary.contains(context)).toBe(false);
+    expect(context.textContent).toBe("共同项目");
+    expect(details.querySelector("blockquote")?.textContent).toBe(memory().evidence_refs[0]!.excerpt);
+    expect(details.querySelector(`a[href='/workspace/sessions/${sessionId}']`)).not.toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ time_status: "unknown" as const, valid_time: null }, "时间未知"],
+    [{ time_status: "past" as const, valid_time: null }, "历史记录"],
+    [{ time_status: "future" as const, valid_time: "2026-01-12T00:00:00Z" }, "来源中的计划 · 2026年1月12日（结果待核对）"],
+  ] as const)("does not fold away uncertainty, historical plans, edits or conflicts: %s", async (time, label) => {
+    await mountProvenance(memory({ relationship_context_id: contextId, ...time, display_text: "对方说改为下季度", conflict_group_id: contextId }));
+    const details = disclosure(); const summary = details.querySelector("summary")!;
+    expect(details.open).toBe(false);
+    for (const text of [label, "来源陈述 · 对方", "用户修改", "存在冲突 · 待核对", "共同项目"]) expect(summary.textContent).toContain(text);
+    expect(summary.textContent).not.toContain("未来计划");
+    expect(details.textContent).toContain("修改前保存的原句");
+    expect(details.textContent).toContain(memory().original_display_text);
+  });
+
+  it("retracts raw excerpts and source navigation on refresh while retaining the saved memory and context", async () => {
+    const item = memory({ relationship_context_id: contextId, can_edit: false });
+    await mountProvenance(item);
+    const details = disclosure(); details.open = true;
+    await mountProvenance({ ...item, evidence_retained: false });
+    expect(disclosure()).toBe(details); expect(details.open).toBe(true);
+    expect(host.textContent).toContain(item.display_text);
+    expect(details.querySelector("summary")?.textContent).toContain("来源摘录未保留或已不可用。");
+    expect(host.textContent).not.toContain(item.evidence_refs[0]!.excerpt);
+    expect(details.querySelector("blockquote")).toBeNull();
+    expect(details.querySelector(`a[href='/workspace/sessions/${sessionId}']`)).toBeNull();
+    expect(details.querySelector(`a[href='/workspace?person=${personId}&context=${contextId}&session=${sessionId}']`)).not.toBeNull();
+    expect(host.querySelector("[data-memory-edit]")).toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("preserves native disclosure state and committed provenance through edit cancellation", async () => {
+    await mountProvenance();
+    const details = disclosure(); details.open = true;
+    await click("修改"); await draft("尚未保存的修改");
+    expect(disclosure()).toBe(details); expect(details.open).toBe(true);
+    expect(details.querySelector("summary")?.textContent).toContain("来源陈述 · 对方");
+    expect(details.querySelector("summary")?.textContent).not.toContain("尚未保存的修改");
+    expect(details.querySelector(`a[href='/workspace?person=${personId}&context=${contextId}&session=${sessionId}']`)).toBeNull();
+    await click("取消");
+    expect(disclosure()).toBe(details); expect(details.open).toBe(true);
+    expect(document.activeElement).toBe(host.querySelector("[data-memory-edit='old']"));
+    expect(details.querySelector(`a[href='/workspace?person=${personId}&context=${contextId}&session=${sessionId}']`)).not.toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
