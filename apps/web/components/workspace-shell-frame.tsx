@@ -26,21 +26,36 @@ function subscribeViewport(notify: () => void) {
 }
 
 /** The work surface owns its header; a test banner can precede it in the stage. */
-function restoreHeader(root: HTMLElement): HTMLElement | null {
+function visibleInShell(candidate: HTMLElement, root: HTMLElement): boolean {
+  for (let element: HTMLElement | null = candidate; element && element !== root; element = element.parentElement) {
+    const style = window.getComputedStyle(element);
+    if (element.hidden || element.inert || element.getAttribute("aria-hidden") === "true"
+      || style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
+
+type RestoreHost = { element: HTMLElement; fallback: boolean };
+
+function restoreTarget(root: HTMLElement): RestoreHost | null {
+  if (document.documentElement.dataset.desktopSurface === "settings") return null;
+  const review = root.querySelector<HTMLElement>(`.${styles.stage} > .review-workspace`);
+  if (review && visibleInShell(review, root)) return null;
   const candidates = [
     ...root.querySelectorAll<HTMLElement>("[data-conversation-canvas] > header"),
     ...root.querySelectorAll<HTMLElement>(".context-workspace .context-topbar"),
     ...root.querySelectorAll<HTMLElement>(`.${styles.routeHeader}`),
   ];
-  return candidates.find(candidate => {
-    for (let element: HTMLElement | null = candidate; element && element !== root; element = element.parentElement) {
-      const style = window.getComputedStyle(element);
-      if (element.hidden || element.inert || element.getAttribute("aria-hidden") === "true"
-        || style.display === "none" || style.visibility === "hidden") return false;
-    }
-    return true;
-  }) ?? null;
+  const header = candidates.find(candidate => visibleInShell(candidate, root));
+  if (header) return { element: header, fallback: false };
+  // Session loading and failure pages have no header. Give restoration its own
+  // normal-flow chrome row before the stage instead of covering its banner.
+  const workspace = root.querySelector<HTMLElement>(`.${styles.workspace}`);
+  return workspace && visibleInShell(workspace, root) ? { element: workspace, fallback: true } : null;
 }
+
+const sameRestoreHost = (left: RestoreHost | null, right: RestoreHost | null) =>
+  left?.element === right?.element && left?.fallback === right?.fallback;
 
 /** Local presentation only; Session and account state remain server-owned. */
 export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
@@ -48,7 +63,7 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
   const locale = useLocale();
   const { layout, setLayout } = useWorkspaceSidebarLayout();
   const [preview, setPreview] = useState<SidebarLayout | null>(null);
-  const [restoreHost, setRestoreHost] = useState<HTMLElement | null>(null);
+  const [restoreHost, setRestoreHost] = useState<RestoreHost | null>(null);
   const mobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
   const viewportWidth = useSyncExternalStore(subscribeViewport, () => window.innerWidth, () => 1024);
   const shell = useRef<HTMLDivElement>(null);
@@ -76,8 +91,8 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
       return;
     }
     const update = () => {
-      const next = restoreHeader(root);
-      setRestoreHost(previous => previous === next ? previous : next);
+      const next = restoreTarget(root);
+      setRestoreHost(previous => sameRestoreHost(previous, next) ? previous : next);
     };
     update();
     // Route and admission transitions can replace chrome without changing the
@@ -126,6 +141,21 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
     setLayout(next);
   }
 
+  const restoreButton = <button
+    aria-controls={sidebarId}
+    aria-expanded={false}
+    aria-label={t("显示侧边栏")}
+    className={styles.sidebarRestore}
+    onClick={() => {
+      restoreFocus.current = true;
+      setLayout({ ...layout, hidden: false, collapsed: false });
+    }}
+    type="button"
+  >
+    <SidebarSimple aria-hidden="true" size={19} />
+    <span aria-hidden="true" className={styles.sidebarRestoreLabel}>{t("显示侧边栏")}</span>
+  </button>;
+
   return (
     <div
       className={`ts-workspace-theme quiet-workspace ${styles.shell}`}
@@ -142,20 +172,8 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
       </aside>
       {children}
       {hidden && preview === null && restoreHost ? createPortal(
-        <button
-          aria-controls={sidebarId}
-          aria-expanded={false}
-          aria-label={t("显示侧边栏")}
-          className={styles.sidebarRestore}
-          onClick={() => {
-            restoreFocus.current = true;
-            setLayout({ ...layout, hidden: false, collapsed: false });
-          }}
-          type="button"
-        >
-          <SidebarSimple aria-hidden="true" size={19} />
-          <span aria-hidden="true" className={styles.sidebarRestoreLabel}>{t("显示侧边栏")}</span>
-        </button>, restoreHost,
+        restoreHost.fallback ? <div className={styles.sidebarRestoreFallback} data-sidebar-restore-fallback>{restoreButton}</div> : restoreButton,
+        restoreHost.element,
       ) : null}
       <div
         aria-controls={sidebarId}
