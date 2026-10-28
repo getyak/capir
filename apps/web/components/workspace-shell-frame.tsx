@@ -36,6 +36,7 @@ function visibleInShell(candidate: HTMLElement, root: HTMLElement): boolean {
 }
 
 type RestoreHost = { element: HTMLElement; fallback: boolean };
+type RestoreFocusRequest = { source: Element | null; shell: HTMLElement; sidebar: HTMLElement; chrome: HTMLElement; route: string };
 
 function restoreTarget(root: HTMLElement): RestoreHost | null {
   if (document.documentElement.dataset.desktopSurface === "settings") return null;
@@ -68,7 +69,7 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
   const viewportWidth = useSyncExternalStore(subscribeViewport, () => window.innerWidth, () => 1024);
   const shell = useRef<HTMLDivElement>(null);
   const sidebarElement = useRef<HTMLElement>(null);
-  const restoreFocus = useRef(false);
+  const restoreFocus = useRef<RestoreFocusRequest | null>(null);
   const drag = useRef<{ pointerId: number; startX: number; startWidth: number; initial: SidebarLayout; next: SidebarLayout } | null>(null);
   const sidebarId = useId();
   const current = preview ?? layout;
@@ -77,12 +78,62 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
   const width = current.hidden ? 0 : current.collapsed ? 72 : Math.min(availableWidth, current.width);
 
   useLayoutEffect(() => {
-    if (hidden || !restoreFocus.current) return;
-    restoreFocus.current = false;
-    const toggle = sidebarElement.current?.querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")
-      ?? sidebarElement.current?.querySelector<HTMLButtonElement>("button");
-    toggle?.focus({ preventScroll: true });
-  }, [hidden]);
+    if (hidden || mobile) {
+      restoreFocus.current = null;
+      return;
+    }
+    const request = restoreFocus.current;
+    if (!request) return;
+    const toggle = request.sidebar.querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")
+      ?? request.sidebar.querySelector<HTMLButtonElement>("button");
+    let frame: number;
+    let attempts = 0;
+    let cancelled = false;
+    const cleanup = () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", cancel, true);
+      document.removeEventListener("focusin", userFocus, true);
+      window.removeEventListener("blur", cancel);
+    };
+    const cancel = () => {
+      if (restoreFocus.current === request) restoreFocus.current = null;
+      cleanup();
+    };
+    const userFocus = (event: FocusEvent) => {
+      if (event.target !== toggle && event.target !== request.source) cancel();
+    };
+    const focus = () => {
+      if (cancelled) return;
+      const active = document.activeElement;
+      const moved = active && active !== document.body && active !== document.documentElement
+        && active !== request.source && active !== toggle && active.isConnected;
+      // Request identity, route and DOM owners fence delayed focus to this
+      // explicit restore. A later user choice always owns focus instead.
+      if (restoreFocus.current !== request || shell.current !== request.shell || sidebarElement.current !== request.sidebar
+        || !request.chrome.isConnected || !request.sidebar.isConnected || !toggle?.isConnected
+        || `${window.location.pathname}${window.location.search}` !== request.route || !document.hasFocus() || moved) {
+        cancel();
+        return;
+      }
+      if (!request.sidebar.inert && !toggle.disabled && visibleInShell(toggle, request.shell)) {
+        toggle.focus({ preventScroll: true });
+      }
+      if (cancelled) return;
+      if (document.activeElement === toggle || ++attempts >= 3) {
+        cancel();
+      } else {
+        frame = window.requestAnimationFrame(focus);
+      }
+    };
+    // The browser must first apply the inert/visibility update. A rejected
+    // focus call remains pending until actual focus readback or the bound.
+    frame = window.requestAnimationFrame(focus);
+    document.addEventListener("pointerdown", cancel, true);
+    document.addEventListener("focusin", userFocus, true);
+    window.addEventListener("blur", cancel);
+    return cleanup;
+  }, [hidden, mobile]);
 
   useLayoutEffect(() => {
     const root = shell.current;
@@ -147,7 +198,10 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
     aria-label={t("显示侧边栏")}
     className={styles.sidebarRestore}
     onClick={() => {
-      restoreFocus.current = true;
+      if (shell.current && sidebarElement.current && restoreHost) restoreFocus.current = {
+        source: document.activeElement, shell: shell.current, sidebar: sidebarElement.current, chrome: restoreHost.element,
+        route: `${window.location.pathname}${window.location.search}`,
+      };
       setLayout({ ...layout, hidden: false, collapsed: false });
     }}
     type="button"

@@ -1,0 +1,47 @@
+.main {
+  margin: 0 auto;
+  max-width: 1040px;
+  padding: 40px 40px 72px;
+  width: 100%;
+}
+
+.recovery { max-width: 560px; }
+.title {
+  color: var(--ink);
+  font-size: var(--ts-type-title, 1.5rem);
+  font-weight: 500;
+  line-height: 1.4;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.message {
+  color: var(--muted-strong);
+  font-size: var(--ts-type-body, 0.9375rem);
+  line-height: var(--ts-leading-body, 1.667);
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.primary, .secondary {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  display: inline-flex;
+  font-size: var(--ts-type-nav, 0.875rem);
+  justify-content: center;
+  min-height: 44px;
+  padding: 8px 14px;
+  text-decoration: none;
+}
+.primary { background: var(--ink); color: var(--background); }
+.secondary { color: var(--ink); }
+.primary:hover { background: var(--muted-strong); }
+.secondary:hover { background: var(--surface-muted); }
+.primary:focus-visible, .secondary:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+@media (max-width: 760px) { .main { padding: 24px 20px 48px; } }
+@media (forced-colors: active) {
+  .primary { background: ButtonFace; border-color: ButtonText; color: ButtonText; }
+  .secondary { color: LinkText; }
+  .primary:focus-visible, .secondary:focus-visible { outline-color: Highlight; }
+}
