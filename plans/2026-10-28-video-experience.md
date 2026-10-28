@@ -56,12 +56,17 @@ their owning surfaces have evidence.
    checks, plus two rendered image-inspection directions.
 2. Completed: three implementation slices and two acceptance-driven follow-ups;
    focused tests and independent review. Preserve failed candidate evidence.
-3. Active: follow latest CI and merge linked PR467–471 sequentially. PR467 has
-   merged; GET291/292/293/295 remain in progress until deployed acceptance.
-4. Build/deploy affected resident Web from clean committed source, verify live
-   revision and changed behavior. Backend deploy only if backend is changed.
-5. Read back Linear completion only after acceptance, stop the isolated test run,
-   preserve sanitized proof and archive this worktree only when no longer active.
+3. Completed: PR467–471 merged sequentially after their required checks. Their
+   common main680 Web-only tree has passed its own CI and Security gates.
+4. Deployed: clean main680 Web build R5LKb1vyrPYj7giWU2hig; the live HTML,
+   process source and scoped existing-native-window readback match. Sidebar
+   restoration/focus, retrieval and existing Memory/source return passed there.
+   The separate GET-298 plan owns its backend/queue follow-up and pending gates.
+5. Active: complete VA17 provenance layout, rendered/live acceptance and the
+   remaining isolated AI checks within the current authorization boundary. Only
+   then complete/read back Linear, verify test-run cleanup and archive inactive
+   worktrees. Native readback does not establish image working-phase behavior,
+   fresh contact receipts, new Memory save or full device/accessibility coverage.
 
 ## Ownership
 
@@ -106,3 +111,46 @@ Linear readback and isolated-run cleanup remain pending. Report these separately
 from host checks. The transient native black rectangle and URL tooltip are not
 proven fixed; physical keyboard, full VoiceOver, Safari and real iPhone are not
 covered by browser emulation. No release or cross-surface result is implied.
+
+
+## VA17 follow-up: compact confirmed-Memory provenance (GET-293)
+
+The parent accepted direction A on 2026-10-29: keep the original statement and
+44px Edit control, then share one native disclosure row between attribution,
+source-bound time, the plain context label and View evidence. The exact context
+link moves inside the existing evidence disclosure; its Person/context/return
+Session parameters and original edit-time visibility are retained. The summary
+contains no nested links or buttons. Long metadata wraps in normal flow instead
+of clipping, shrinking text, overlapping targets or using absolute positioning.
+
+This is a Web-only follow-up on `codex/get-293-memory-provenance`, based on
+`origin/main` at `680bb6cc`. It does not alter the independent GET-298 branch or its
+ongoing iOS gates. The existing Person SSR page reuses PersonMemoryContent; there
+is no second confirmed-Memory renderer to synchronize.
+
+Focused tests were written before the product change. The parent's red run
+reported six expected failures and 29 skipped cases in 2.26s; the failures all
+concerned the new compact-summary contract. Sanitized evidence is in the task's
+`video-review/runtime/get293-density-red-tests.log`. The component/CSS change
+passed 77 cases across four relevant suites after implementation. Web typecheck,
+scoped ESLint and docs/architecture checks also passed; independent source review
+found no confirmed P0/P1/P2. Matching-content rendered comparison and deployed
+native acceptance remain pending. No additional model or Memory write was made.
+
+The existing attribution/time projections, SourceExcerpts, memorySources
+retention gate, edit permission/controller, original statement, conflict labels,
+pagination and focus owner remain unchanged. Unknown time, historical plans,
+user edits and conflicts stay in the collapsed summary. Missing retained source
+excerpts are also explicit there; opening it still cannot recover removed raw
+text or source-session links. Body typography and each native control's minimum
+44px target remain intact.
+
+For the matching-content comparison, reuse the existing synthetic Person with
+its two confirmed memories. Compare deployed `main680` with the candidate on the
+same URL, account, locale, theme, viewport (including 1123×864), zoom, scroll
+position and loaded fonts. Confirm the same Memory IDs/content before comparing
+row and summary bounds, body font/line-height, Edit/context targets and exact
+open evidence. Reject the comparison if data changed. No production demo route,
+new dependency or additional model/write is needed. Candidate screenshots are
+not pure-live acceptance; the parent owns clean-source deployment, narrow/dark/
+zoom/native-AX checks and the final live evidence.
