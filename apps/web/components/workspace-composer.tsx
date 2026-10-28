@@ -95,6 +95,8 @@ export type WorkspaceComposerProps = {
   /** Workspace Sessions binding used for the `@` directory, only while open. */
   binding: string | null;
   onValueChange: (value: string) => void;
+  /** Explicit current-message draft scope; ordinary @ remains a text reference. */
+  onPrepareMemoryDraft?: (target: import("@/lib/conversation-memory-draft-target").ComposerMemoryDraftTarget) => void;
   onSubmit: () => void;
   /** Marked text remains provisional until the input method commits it. */
   onComposingChange?: (composing: boolean) => void;
@@ -135,6 +137,7 @@ export function WorkspaceComposer({
   describedBy,
   binding,
   onValueChange,
+  onPrepareMemoryDraft,
   onSubmit,
   onComposingChange,
   onNavigate,
@@ -919,7 +922,8 @@ export function WorkspaceComposer({
       {visibleMentions.length > 0 ? <div className={styles.selectedReferences} role="group" aria-label={t("已选择的文字引用")}>
         {[...new Map(visibleMentions.map(mention => [mention.person.id, mention])).values()].map(mention => {
           const person = referencePeople.find(person => person.id === mention.person.id)!;
-          return <ComposerPersonReference key={person.id} person={person} disabled={disabled || readOnly} />;
+          return <ComposerPersonReference key={person.id} person={person} disabled={disabled || readOnly}
+            onPrepareMemoryDraft={onPrepareMemoryDraft ? () => { onPrepareMemoryDraft({ person_id: person.id, label: person.label, start: mention.start, end: mention.end, text: mention.text }); textarea.current?.focus({ preventScroll: true }); } : undefined} />;
         })}
       </div> : null}
 

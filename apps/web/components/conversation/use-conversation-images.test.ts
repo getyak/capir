@@ -702,3 +702,26 @@ it("does not let an old backing verification paint the replacement account", asy
   expect(chat.attachmentDraftRecoveryNeeded).toBe(false);
   expect(chat.error).toBe("");
 });
+
+it("keeps a targeted message and its selected images in the composer instead of silently sending without scope", async () => {
+  await act(async () => { await chat.addFiles([imageFile("kept.png")]); chat.changeDraft("@Lin authored note"); });
+  await act(async () => { expect(await chat.submit({ expectedDraft: "@Lin authored note", memoryDraftTarget: { person_id: "11111111-1111-4111-8111-111111111111" } })).toBe(false); });
+  expect(chat.draft).toBe("@Lin authored note");
+  expect(chat.attachments).toHaveLength(1);
+  expect(chat.error).toBe("composer.memoryDraft.textOnly");
+  expect(queuePosts()).toHaveLength(0);
+});
+
+it("does not clear same-text newer composer intent selected while an earlier image put waits", async () => {
+  await act(async () => { await chat.addFiles([imageFile()]); chat.changeDraft("@Lin @Other authored note"); });
+  const originalPut = memory.store.put;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  memory.store.put = async (...args) => { if (!args[0].endsWith(CONVERSATION_IMAGE_DRAFT)) await held; return originalPut(...args); };
+  let current = true, pending!: Promise<boolean>;
+  await act(async () => { pending = chat.submit({ expectedDraft: chat.draft, canClearDraft: () => current }); });
+  await act(async () => { current = false; release(); expect(await pending).toBe(true); });
+  expect(chat.draft).toBe("@Lin @Other authored note");
+  expect(chat.messages[0]).not.toHaveProperty("memoryDraftTarget");
+  expect(chat.attachments).toHaveLength(0);
+});

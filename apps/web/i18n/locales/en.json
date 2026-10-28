@@ -2620,5 +2620,17 @@
   "execution.tool.connection": "Connection request returned",
   "execution.tool.profile": "Public profile search returned",
   "execution.tool.other": "Operation returned",
-  "conversation.image.viewNamed": "View original {index}: {name}"
+  "conversation.image.viewNamed": "View original {index}: {name}",
+  "composer.memoryDraft.prepare": "Prepare a Memory draft for this person",
+  "composer.memoryDraft.selection": "Memory draft target for this message",
+  "composer.memoryDraft.target": "Memory draft · {person}",
+  "composer.memoryDraft.boundary": "Uses only this message’s text. You review it before saving.",
+  "composer.memoryDraft.textRequired": "Add the text to organize after the person reference.",
+  "composer.memoryDraft.textOnly": "Memory drafts use text only. Send images separately; your text and images are kept.",
+  "composer.memoryDraft.remove": "Remove this message’s Memory draft target",
+  "composer.memoryDraft.selectedPerson": "Selected person",
+  "composer.memoryDraft.unavailable": "This message’s person target could not be confirmed. The message is kept. Remove it, then select the person again and send.",
+  "composer.memoryDraft.notStaged": "The Memory draft was not prepared. The message is kept. Retry or remove it.",
+  "composer.memoryDraft.unconfirmed": "This message’s person target is not confirmed. Its content and target are kept. Check delivery before retrying.",
+  "composer.memoryDraft.serviceUnavailable": "This send was not accepted. Your content and person target are kept. Try again later."
 }

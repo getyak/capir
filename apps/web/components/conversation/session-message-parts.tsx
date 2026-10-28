@@ -1,9 +1,11 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { sameConversationMemoryDraftTarget } from "@/lib/conversation-memory-draft-target";
 import { MessagePrimitive } from "@assistant-ui/react";
 import type {
   ConversationImageManifest,
+  ConversationMemoryDraftTarget,
   ConversationQueueEntry,
   ConversationQueuePreview,
   MemoryProposalItem,
@@ -45,6 +47,11 @@ function queueControlsPart(messageId: string): SessionDataPart {
   // than its array slot when steering adds or removes an execution record.
   return { id: `queue-controls:${messageId}`, type: "data", name: "talent-signal.queue-controls", data: { messageId } };
 }
+function memoryDraftTargetPart(label?: string, unconfirmed = false, messageId?: string): SessionDataPart {
+  // This historical marker is display only; the opaque identity is not prose
+  // and is never replayed as authority for another Run.
+  return { type: "data", name: "talent-signal.memory-draft-target", data: { label, unconfirmed, messageId } };
+}
 export type SessionTextPart = { type: "text"; text: string };
 export type SessionProjectedMessage = {
   id: string;
@@ -59,6 +66,8 @@ export type SessionHandoffRow = {
   messageId: string;
   objective: string;
   images?: readonly ConversationImageManifest[];
+  memoryDraftTarget?: ConversationMemoryDraftTarget;
+  memoryDraftTargetLabel?: string;
   createdAt: string;
   previewText?: string;
 };
@@ -121,12 +130,15 @@ export function sessionMessages(input: {
   milestonesByMessage?: Readonly<Record<string, readonly ConversationExecutionMilestone[]>>;
   queued?: readonly ConversationQueueEntry[];
   handoff?: readonly SessionHandoffRow[];
+  localMemoryTargets?: Record<string, { target: ConversationMemoryDraftTarget; label?: string }>;
 }): SessionProjectedMessage[] {
   const messages: SessionProjectedMessage[] = [];
   const committed = new Set(input.turns.flatMap(turn => sessionHumanMessages(turn).map(message => message.id)));
   for (const turn of input.turns) {
     for (const human of sessionHumanMessages(turn)) {
     const userContent: SessionProjectedMessage["content"] = [];
+    const localTarget = input.localMemoryTargets?.[human.id];
+    if (human.memoryDraftTarget || localTarget) userContent.push(memoryDraftTargetPart(localTarget?.label, Boolean(localTarget && !sameConversationMemoryDraftTarget(localTarget.target, human.memoryDraftTarget)), human.id));
     if (human.objective) userContent.push({ type: "text", text: human.objective });
     if (human.images?.length) userContent.push({
       type: "data", name: "talent-signal.user-images",
@@ -220,6 +232,8 @@ export function sessionMessages(input: {
   const groups: Array<{ at: number; messages: SessionProjectedMessage[] }> = [];
   if (active && !committed.has(active.message_id)) {
     const userContent: SessionProjectedMessage["content"] = [];
+    const localTarget = input.localMemoryTargets?.[active.message_id];
+    if (active.memory_draft_target || localTarget) userContent.push(memoryDraftTargetPart(localTarget?.label, Boolean(localTarget && !sameConversationMemoryDraftTarget(localTarget.target, active.memory_draft_target)), active.message_id));
     if (active.objective) userContent.push({ type: "text", text: active.objective });
     if (active.images?.length) userContent.push({
       type: "data", name: "talent-signal.user-images",
@@ -254,6 +268,8 @@ export function sessionMessages(input: {
     if (committed.has(entry.message_id) || entry.message_id === active?.message_id) continue;
     const content: SessionProjectedMessage["content"] = [];
     if (entry.objective) content.push({ type: "text", text: entry.objective });
+    const localTarget = input.localMemoryTargets?.[entry.message_id];
+    if (entry.memory_draft_target || localTarget) content.push(memoryDraftTargetPart(localTarget?.label, Boolean(localTarget && !sameConversationMemoryDraftTarget(localTarget.target, entry.memory_draft_target)), entry.message_id));
     if (entry.images?.length) content.push({ type: "data", name: "talent-signal.user-images", data: { messageId: entry.message_id, images: entry.images, local: false } });
     const pair: SessionProjectedMessage[] = [];
     if (!entry.host_result) pair.push({ id: `${entry.message_id}:user`, role: "user", content, createdAt: new Date(entry.created_at) });
@@ -279,6 +295,7 @@ export function sessionMessages(input: {
   for (const row of input.handoff ?? []) {
     if (committed.has(row.messageId) || row.messageId === active?.message_id) continue;
     const userContent: SessionProjectedMessage["content"] = [];
+    if (row.memoryDraftTarget) userContent.push(memoryDraftTargetPart(row.memoryDraftTargetLabel));
     if (row.objective) userContent.push({ type: "text", text: row.objective });
     if (row.images?.length) userContent.push({ type: "data", name: "talent-signal.user-images", data: { messageId: row.messageId, images: row.images, local: true } });
     groups.push({
@@ -310,6 +327,7 @@ type RenderContext = {
   /** Observed work state per message, for the readback/handoff rows. */
   workByMessageId?: Record<string, ConversationWorkStatus>;
   recoveryActions?: (messageId: string) => ReactNode;
+  memoryDraftRecovery?: (messageId: string) => ReactNode;
   queueActions?: (messageId: string) => ReactNode;
   onDecisionState?: (key: string, state: DecisionState) => void;
   onCardComment?: (item: MemoryProposalItem) => void;
@@ -400,6 +418,7 @@ function SessionExecutionRecord({ data }: { data: Record<string, unknown> }) {
 function renderSessionData(name: string, raw: unknown, context: RenderContext, t: TFunction) {
   const data = dataRecord(raw);
   if (!data) return <span>{t("这项内容暂时无法显示。")}</span>;
+  if (name === "talent-signal.memory-draft-target") return <div className={styles.memoryDraftMarker} data-memory-draft-target><span>{t("composer.memoryDraft.target", { person: typeof data.label === "string" && data.label.trim() ? data.label : t("composer.memoryDraft.selectedPerson") })}</span>{data.unconfirmed ? <><p role="status">{t("composer.memoryDraft.unconfirmed")}</p>{typeof data.messageId === "string" ? <div className={styles.recoveryActions}>{context.memoryDraftRecovery?.(data.messageId)}</div> : null}</> : null}</div>;
   if (name === "talent-signal.queue-controls" && typeof data.messageId === "string") return context.queueActions?.(data.messageId) ?? null;
   if (name === "talent-signal.user-images" && Array.isArray(data.images) && typeof data.messageId === "string") {
     // A local outbox row reads its bytes from the local store; canonical rows

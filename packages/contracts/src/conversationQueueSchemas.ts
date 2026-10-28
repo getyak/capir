@@ -15,6 +15,10 @@ const id = Type.String({ format: "uuid" });
 const stamp = Type.String({ format: "date-time" });
 const bounded = (maxLength: number) => Type.String({ minLength: 1, maxLength });
 
+/** Explicit current-message Memory draft target, not identity/recall authority. */
+export const ConversationMemoryDraftTargetSchema = Type.Object({ person_id: id }, obj);
+export type ConversationMemoryDraftTarget = Static<typeof ConversationMemoryDraftTargetSchema>;
+
 export const ConversationQueueEntryStatusSchema = Type.Union([
   Type.Literal("queued"),
   Type.Literal("running"),
@@ -85,6 +89,7 @@ export const ConversationQueueEntrySchema = Type.Object(
     status: ConversationQueueEntryStatusSchema,
     // Empty only for an images-only message; the client renders a placeholder.
     objective: Type.String({ maxLength: 1_000 }),
+    memory_draft_target: Type.Optional(ConversationMemoryDraftTargetSchema),
     // Canonical redacted host result provenance for transcript projection.
     // This output field carries no client authority to admit a continuation.
     host_result: Type.Optional(McpHumanResultSchema),
@@ -156,6 +161,7 @@ export const ConversationQueueAdmitRequestSchema = Type.Object(
     message_id: id,
     // Empty is only admissible together with at least one image.
     objective: Type.String({ maxLength: 1_000 }),
+    memory_draft_target: Type.Optional(ConversationMemoryDraftTargetSchema),
     time_zone: Type.Optional(bounded(100)),
     images: Type.Optional(
       Type.Array(ConversationImageUploadSchema, { maxItems: 10 }),
@@ -173,6 +179,7 @@ export type ConversationQueueAdmitRequest = Static<
 
 export const ConversationQueueAdmitResponseSchema = Type.Object(
   {
+    memory_draft_target: Type.Optional(ConversationMemoryDraftTargetSchema),
     contract_version: Type.Literal(CONTRACT_VERSION),
     session_id: id,
     message_id: id,

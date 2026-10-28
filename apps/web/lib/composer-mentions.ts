@@ -3,7 +3,7 @@ import type { SidebarPerson } from "./workspace-sidebar";
 /** Disposable presentation spans created only by an explicit directory choice. */
 export type ComposerMention = { start: number; end: number; text: string; person: SidebarPerson };
 
-export function reconcileComposerMentions(previous: string, next: string, mentions: readonly ComposerMention[]): ComposerMention[] {
+export function reconcileComposerSpans<T extends { start: number; end: number; text: string }>(previous: string, next: string, mentions: readonly T[]): T[] {
   if (!next) return [];
   if (previous === next) return [...mentions];
   let start = 0;
@@ -21,4 +21,8 @@ export function reconcileComposerMentions(previous: string, next: string, mentio
     const shifted = mention.start >= oldEnd ? { ...mention, start: mention.start + delta, end: mention.end + delta } : mention;
     return next.slice(shifted.start, shifted.end) === shifted.text ? [shifted] : [];
   });
+}
+
+export function reconcileComposerMentions(previous: string, next: string, mentions: readonly ComposerMention[]): ComposerMention[] {
+  return reconcileComposerSpans(previous, next, mentions);
 }

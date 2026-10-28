@@ -553,5 +553,17 @@
   "execution.tool.connection": "连接请求已返回",
   "execution.tool.profile": "公开资料搜索已返回",
   "execution.tool.other": "操作已返回",
-  "conversation.image.viewNamed": "查看原图 {index}：{name}"
+  "conversation.image.viewNamed": "查看原图 {index}：{name}",
+  "composer.memoryDraft.prepare": "为此人整理记忆草稿",
+  "composer.memoryDraft.selection": "本条消息的记忆草稿目标",
+  "composer.memoryDraft.target": "记忆草稿 · {person}",
+  "composer.memoryDraft.boundary": "仅用本条文字整理，保存前由你审核。",
+  "composer.memoryDraft.textRequired": "请在人物引用后补充需要整理的文字。",
+  "composer.memoryDraft.textOnly": "记忆草稿仅使用文字，请将图片分开发送。文字和图片均已保留。",
+  "composer.memoryDraft.remove": "取消本条消息的记忆草稿目标",
+  "composer.memoryDraft.selectedPerson": "已选定的人物",
+  "composer.memoryDraft.unavailable": "无法确认这条消息的人物目标，消息已保留。请移除后重新选择人物发送。",
+  "composer.memoryDraft.notStaged": "记忆草稿尚未生成，消息已保留。可重试或移除。",
+  "composer.memoryDraft.unconfirmed": "这条消息的人物目标尚未确认，内容和目标已保留。请核对后重试。",
+  "composer.memoryDraft.serviceUnavailable": "本次发送未被接收。内容和人物目标已保留，请稍后重试。"
 }

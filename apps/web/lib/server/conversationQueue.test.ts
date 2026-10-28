@@ -112,3 +112,38 @@ it("recovers signed exact-Session authority after owner-authorized queue read", 
   const unsigned=await conversationQueueRoute(request(),sid,"read");
   expect(unsigned.headers.get("x-memory-entry-capability")).toBeNull();
 });
+
+it("forwards the typed message target unchanged without persisting it as Session scope", async () => {
+  const memory_draft_target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  f.get.mockRejectedValueOnce(new TalentSignalHttpError(404, "NOT_FOUND", "missing", null));
+  expect((await conversationQueueRoute(request({ ...input, memory_draft_target }), sid, "admit")).status).toBe(202);
+  expect(f.admit).toHaveBeenCalledWith(expect.objectContaining({ objective: "synthetic", memory_draft_target }), expect.any(AbortSignal));
+  expect(f.save.mock.calls[0][1].payload).toMatchObject({ scopeKind: "unresolved_intent", personDisplayLabel: "" });
+  expect(f.save.mock.calls[0][1].payload).not.toHaveProperty("memoryDraftTarget");
+});
+it("rejects malformed, empty-text and image-bearing explicit targets before any Session creation or admission", async () => {
+  const memory_draft_target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  for (const extra of [{ memory_draft_target: { ...memory_draft_target, recall: true } }, { memory_draft_target, objective: "", images: [{ attachment_id: mid }] }, { memory_draft_target, images: [{ attachment_id: mid }] }]) {
+    expect((await conversationQueueRoute(request({ ...input, ...extra }), sid, "admit")).status).toBe(422);
+  }
+  expect(f.get).not.toHaveBeenCalled(); expect(f.save).not.toHaveBeenCalled(); expect(f.admit).not.toHaveBeenCalled();
+});
+
+it("requires an explicit target on the dedicated path and returns its conditional receipt", async () => {
+  expect((await conversationQueueRoute(request(input), sid, "admit-memory-draft")).status).toBe(422);
+  expect(f.admit).not.toHaveBeenCalled();
+  const memory_draft_target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  f.admit.mockResolvedValue({ message_id: mid, memory_draft_target });
+  const response = await conversationQueueRoute(request({ ...input, memory_draft_target }), sid, "admit-memory-draft");
+  expect(response.status).toBe(202); expect((await response.json()).memory_draft_target).toEqual(memory_draft_target);
+});
+
+it("keeps an unsupported dedicated admission definitively refused without falling back to ordinary admission", async () => {
+  const memory_draft_target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  f.admit.mockRejectedValue(new TalentSignalHttpError(404, "NOT_FOUND", "synthetic legacy route diagnostic", null));
+  const response = await conversationQueueRoute(request({ ...input, memory_draft_target }), sid, "admit-memory-draft");
+  expect(response.status).toBe(404);
+  expect(await response.json()).toEqual({ code: "MEMORY_DRAFT_TARGET_UNSUPPORTED", message: "composer.memoryDraft.serviceUnavailable" });
+  expect(f.admit).toHaveBeenCalledOnce();
+  expect(f.admit.mock.calls[0][0].memory_draft_target).toEqual(memory_draft_target);
+});

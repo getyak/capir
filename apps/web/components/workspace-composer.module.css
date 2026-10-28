@@ -437,3 +437,7 @@
   font-size: 15px;
   pointer-events: none;
 }
+
+.referenceAction { display: flex; align-items: center; min-height: 44px; width: 100%; margin-top: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; text-align: start; cursor: pointer; }
+.referenceAction:hover { background: var(--surface-raised, var(--surface)); }
+.referenceAction:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

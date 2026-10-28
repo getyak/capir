@@ -219,3 +219,66 @@ it("uses a refreshed SSR entry capability for the next send",async()=>{
   await act(async()=>chat.changeDraft("use the refreshed entry"));await act(async()=>{await chat.submit();});
   expect(fetcher.mock.calls.find(call=>call[1]?.method==="POST")?.[1].headers["x-memory-entry-capability"]).toBe("new-rendered-authority");
 });
+
+it("captures the explicit target with the immutable text, restores it, and retries the same target rather than the new draft", async () => {
+  const target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  const original = "@Lin Synthetic authored note";
+  fetcher.mockRejectedValue(new Error("lost receipt"));
+  await act(async () => chat.changeDraft(original));
+  await act(async () => { expect(await chat.submit({ expectedDraft: original, memoryDraftTarget: target, memoryDraftTargetLabel: "Lin" })).toBe(true); });
+  const first = JSON.parse(fetcher.mock.calls.find(([, init]) => init?.method === "POST")![1].body);
+  expect(first.memory_draft_target).toEqual(target);
+  expect(first.objective).toBe(original);
+  expect(first).not.toHaveProperty("humanIdentityBinding");
+  expect(first).not.toHaveProperty("memoryDraftTargetLabel");
+  await act(async () => chat.changeDraft("@Other different unfinished note"));
+  await act(async () => root.unmount()); root = createRoot(mount);
+  await act(async () => root.render(createElement(Probe, {}))); await flush();
+  expect(chat.messages[0]).toMatchObject({ memoryDraftTarget: target, memoryDraftTargetLabel: "Lin", objective: original, delivery: "unknown" });
+  expect(chat.draft).toBe("@Other different unfinished note");
+  fetcher.mockImplementation((_url, init) => Promise.resolve(init?.method === "POST" ? Response.json({ memory_draft_target: target }, { status: 202 }) : Response.json({}, { status: 404 })));
+  await act(async () => chat.retryDelivery(chat.messages[0])); await flush();
+  const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+  expect(posts).toHaveLength(2);
+  const retried = JSON.parse(posts[1][1].body);
+  expect(retried).toEqual(first);
+  expect(chat.draft).toBe("@Other different unfinished note");
+});
+
+it("refuses stale target snapshots or target with empty text and never grants scope to ordinary @ text", async () => {
+  const target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  await act(async () => chat.changeDraft("current text"));
+  await act(async () => { expect(await chat.submit({ expectedDraft: "old text", memoryDraftTarget: target })).toBe(false); });
+  await act(async () => chat.changeDraft(""));
+  await act(async () => { expect(await chat.submit({ expectedDraft: "", memoryDraftTarget: target })).toBe(false); });
+  expect(fetcher).not.toHaveBeenCalled();
+  fetcher.mockResolvedValue(Response.json({}, { status: 202 }));
+  await act(async () => chat.changeDraft("@Lin ordinary reference"));
+  await act(async () => { expect(await chat.submit()).toBe(true); });
+  expect(JSON.parse(fetcher.mock.calls.find(([, init]) => init?.method === "POST")![1].body)).not.toHaveProperty("memory_draft_target");
+});
+
+it("keeps a missing target echo unconfirmed and refuses to resend over a same-ID unbound receipt", async () => {
+  const target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  fetcher.mockResolvedValue(Response.json({}, { status: 202 }));
+  await act(async () => chat.changeDraft("@Lin current authored text"));
+  await act(async () => { await chat.submit({ expectedDraft: chat.draft, memoryDraftTarget: target, memoryDraftTargetLabel: "Lin" }); });
+  expect(chat.messages[0]).toMatchObject({ delivery: "unknown", memoryDraftTarget: target, error: "composer.memoryDraft.unconfirmed" });
+  const original = chat.messages[0];
+  const snapshot = { contract_version: "2026-08-24.10", session_id: sid, revision: 1, paused: false, preview: null, active: null, queued: [{ queue_entry_id: original.id, message_id: original.id, sequence: 1, status: "queued", objective: original.objective, revision: 1, created_at: original.createdAt, updated_at: original.createdAt, run_id: null, stage: null, cancel_requested: false, failure_code: null }] };
+  fetcher.mockImplementation(url => Promise.resolve(String(url).endsWith("/conversation-queue") ? Response.json(snapshot) : Response.json({}, { status: 404 })));
+  await act(async () => chat.retryDelivery(chat.messages[0]));
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  expect(readConversationMessages("owner", sid)[0]).toMatchObject({ id: original.id, memoryDraftTarget: target, delivery: "unknown" });
+});
+
+it("treats a missing dedicated Web route as a retained rejection, never an unknown delivery or ordinary fallback", async () => {
+  const target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  fetcher.mockResolvedValue(Response.json({}, { status: 404 }));
+  await act(async () => chat.changeDraft("@Lin authored note"));
+  await act(async () => { await chat.submit({ expectedDraft: chat.draft, memoryDraftTarget: target, memoryDraftTargetLabel: "Lin" }); });
+  expect(chat.messages[0]).toMatchObject({ memoryDraftTarget: target, delivery: "rejected", receiptUncertain: false, error: "composer.memoryDraft.serviceUnavailable" });
+  const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+  expect(posts).toHaveLength(1); expect(String(posts[0][0])).toMatch(/\/conversation-queue\/memory-draft$/u);
+  expect(readConversationMessages("owner", sid)[0].memoryDraftTarget).toEqual(target);
+});

@@ -579,3 +579,15 @@ it("does not resurrect an old Home editor after live Session A → B → A, and 
   expect(editForm()).toBeNull();
   expect(document.activeElement).toBe(editButton());
 });
+
+it("keeps the fixed Memory draft target visible while editing only its queued text", async () => {
+  await renderConversation();
+  await act(async () => { emit?.(frame("snapshot", snapshot(7, [queuedEntry("@Lin original text", { memory_draft_target: { person_id: "22222222-2222-4222-8222-222222222222" } })]))); });
+  await flush();
+  await act(async () => editButton()!.click());
+  expect(editField()?.value).toBe("@Lin original text");
+  expect(mount?.textContent).toContain("记忆草稿 · 已选定的人物");
+  expect(mount?.textContent).not.toContain("22222222-2222-4222-8222-222222222222");
+  await typeInEditor("@Lin edited authored text");
+  expect(mount?.textContent).toContain("记忆草稿 · 已选定的人物");
+});

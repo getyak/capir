@@ -11,15 +11,16 @@ import { WorkspaceComposer } from "./workspace-composer";
 let root: Root | null = null, host: HTMLDivElement;
 let changeDraft: (v: string) => void, changeBinding: (v: string) => void;
 const submit = vi.fn();
+const prepareMemoryDraft = vi.fn();
 function Harness() {
   const [value, setValue] = useState("@陈"), [binding, setBinding] = useState("account-one");
   useEffect(() => { changeDraft = setValue; changeBinding = setBinding; }, []);
   return <WorkspaceComposer id="editor" label="消息" value={value} maxLength={1000} placeholder="输入" variant="home" layout="inline"
-    canSubmit binding={binding} onValueChange={setValue} onSubmit={submit} onNavigate={() => {}} />;
+    canSubmit binding={binding} onValueChange={setValue} onPrepareMemoryDraft={prepareMemoryDraft} onSubmit={submit} onNavigate={() => {}} />;
 }
 beforeEach(async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  fixture.failed = false; submit.mockClear();
+  fixture.failed = false; submit.mockClear(); prepareMemoryDraft.mockClear();
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => root!.render(<Harness />));
   await act(async () => { const input = host.querySelector("textarea")!; input.setSelectionRange(2, 2); input.focus(); });
@@ -103,4 +104,18 @@ it("keeps a touch-opened preview visible after the finger leaves the trigger", a
     await act(async () => vi.advanceTimersByTime(250));
     expect(document.querySelector('[aria-label="陈曦 的简要资料"]')).not.toBeNull();
   } finally { vi.useRealTimers(); }
+});
+
+it("requires a separate explicit action to select the exact referenced Person for a Memory draft", async () => {
+  await select(1);
+  expect(prepareMemoryDraft).not.toHaveBeenCalled();
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="查看 陈曦 的引用信息"]')!.click());
+  const action = [...document.querySelectorAll("button")].find(button => button.textContent === "为此人整理记忆草稿")!;
+  expect(action).toBeDefined();
+  await act(async () => action.click());
+  expect(prepareMemoryDraft).toHaveBeenCalledOnce();
+  expect(prepareMemoryDraft).toHaveBeenCalledWith({ person_id: "person-two", label: "陈曦", start: 0, end: "@陈曦（研究交流）".length, text: "@陈曦（研究交流）" });
+  expect(host.querySelector("textarea")!.value).toBe("@陈曦（研究交流） ");
+  expect(submit).not.toHaveBeenCalled();
+  expect(document.querySelector('[aria-label="陈曦 的简要资料"]')).toBeNull();
 });
