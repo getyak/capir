@@ -12,6 +12,8 @@ let host: HTMLDivElement;
 let mobile = false;
 let mediaListeners: Set<() => void>;
 let captures: Set<number>;
+let frames: Map<number, FrameRequestCallback>;
+let nextFrame: number;
 const edge = () => host.querySelector<HTMLDivElement>('[role="separator"]')!;
 const sidebar = () => host.querySelector('aside')!;
 const width = () => Number(edge().getAttribute("aria-valuenow"));
@@ -42,12 +44,25 @@ async function pointer(type: string, clientX: number, options: PointerEventInit 
 async function key(value: string) {
   await act(async () => edge().dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true })));
 }
+async function paint() {
+  await act(async () => {
+    const current = [...frames.values()];
+    frames.clear();
+    current.forEach(callback => callback(performance.now()));
+  });
+}
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   window.localStorage.clear();
+  window.history.replaceState(null, "", "/workspace");
   mobile = false;
   mediaListeners = new Set();
   captures = new Set();
+  frames = new Map();
+  nextFrame = 0;
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => { frames.set(++nextFrame, callback); return nextFrame; });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(frame => { frames.delete(frame); });
   vi.spyOn(window, "matchMedia").mockImplementation(() => ({
     get matches() { return mobile; },
     addEventListener: (_: string, listener: () => void) => mediaListeners.add(listener),
@@ -149,6 +164,7 @@ describe("desktop sidebar split", () => {
     expect(restore.getAttribute("aria-expanded")).toBe("false");
     restore.focus();
     await act(async () => restore.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await paint();
     expect(width()).toBe(252);
     expect(saved()).toEqual({ width: 252, hidden: false, collapsed: false });
     expect(sidebar().hasAttribute("inert")).toBe(false);
@@ -206,6 +222,7 @@ describe("desktop sidebar split", () => {
     expect(host.querySelector(`.${styles.stage}`)?.contains(fallback)).toBe(false);
     expect(host.querySelector('aside[aria-label="Test workspace"]')?.contains(restore)).toBe(false);
     await act(async () => restore.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await paint();
     expect(width()).toBe(236);
     expect(host.querySelector("[data-sidebar-restore-fallback]")).toBeNull();
     expect(document.activeElement).toBe(sidebar().querySelector("[data-sidebar-collapse-toggle]"));
@@ -223,6 +240,81 @@ describe("desktop sidebar split", () => {
     expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
       .toBe(host.querySelector("[data-sidebar-restore-fallback]"));
     expect(saved().hidden).toBe(true);
+  });
+
+  it("retries a focus request rejected while the browser applies the restored inert state", async () => {
+    await render();
+    await key("Home");
+    const toggle = sidebar().querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")!;
+    const actualFocus = toggle.focus.bind(toggle);
+    const focus = vi.spyOn(toggle, "focus").mockImplementationOnce(() => {}).mockImplementation(actualFocus);
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(focus).not.toHaveBeenCalled();
+    await paint();
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).not.toBe(toggle);
+    await paint();
+    expect(document.activeElement).toBe(toggle);
+    await paint();
+    expect(focus).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not take focus back from a later user choice", async () => {
+    await render();
+    await key("Home");
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    const other = document.createElement("button");
+    other.textContent = "Continue working";
+    host.append(other);
+    other.focus();
+    await paint();
+    expect(document.activeElement).toBe(other);
+    expect(frames.size).toBe(0);
+  });
+
+  it("cancels deferred restoration when the sidebar is hidden again", async () => {
+    await render();
+    await key("Home");
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await key("Home");
+    await paint();
+    expect(sidebar().inert).toBe(true);
+    expect(document.activeElement).not.toBe(sidebar().querySelector("[data-sidebar-collapse-toggle]"));
+    expect(frames.size).toBe(0);
+  });
+
+  it.each(["route", "pointer", "blur", "mobile"] as const)("cancels a deferred request after a later %s change", async change => {
+    await render();
+    await key("Home");
+    const toggle = sidebar().querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")!;
+    const focus = vi.spyOn(toggle, "focus");
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    if (change === "route") window.history.pushState(null, "", "/workspace/sessions/another");
+    if (change === "pointer") document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    if (change === "blur") window.dispatchEvent(new Event("blur"));
+    if (change === "mobile") {
+      mobile = true;
+      await act(async () => mediaListeners.forEach(listener => listener()));
+    }
+    await paint();
+    expect(focus).not.toHaveBeenCalled();
+    expect(frames.size).toBe(0);
+  });
+
+  it("bounds native focus rejection to three frames", async () => {
+    await render();
+    await key("Home");
+    const toggle = sidebar().querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")!;
+    const focus = vi.spyOn(toggle, "focus").mockImplementation(() => {});
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    for (let count = 0; count < 4; count++) await paint();
+    expect(focus).toHaveBeenCalledTimes(3);
+    expect(frames.size).toBe(0);
   });
 
   it("does not add fallback chrome to the independent review surface", async () => {

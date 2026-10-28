@@ -2621,5 +2621,9 @@
   "execution.tool.profile": "Public profile search returned",
   "execution.tool.other": "Operation returned",
   "conversation.image.viewNamed": "View original {index}: {name}",
-  "来源 {count}": "Sources {count}"
+  "来源 {count}": "Sources {count}",
+  "对话不可用": "Conversation unavailable",
+  "无法读取这段对话。": "This conversation could not be loaded.",
+  "登录已过期，请重新登录后查看这段对话。": "Your session expired. Sign in again to view this conversation.",
+  "返回对话列表": "Back to conversations"
 }
