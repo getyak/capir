@@ -11,7 +11,7 @@ it.each(["/workspace/people", "/workspace/people/person-a"])("lets %s own its vi
   route.pathname = pathname;
   const html = renderToStaticMarkup(<WorkspaceRouteHeader />);
   expect(html).toContain("<header");
-  expect(html).toContain('aria-hidden="true"');
+  expect(html).not.toContain('aria-hidden="true"');
   expect(html).not.toContain("<strong");
   expect(html).not.toContain("人物");
 });

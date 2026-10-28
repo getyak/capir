@@ -40,7 +40,7 @@ export function WorkspaceRouteHeader() {
   const pageOwnsTitle = pathname === "/workspace/people" || /^\/workspace\/people\/[^/]+$/u.test(pathname);
 
   return (
-    <header className={styles.routeHeader} aria-hidden={pageOwnsTitle || undefined}>
+    <header className={styles.routeHeader}>
       {!pageOwnsTitle ? <div className={styles.crumb}>
         <strong>{t(isWorkspaceHomePath(pathname) ? "新对话" : label)}</strong>
       </div> : null}
