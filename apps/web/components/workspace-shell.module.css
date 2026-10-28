@@ -2089,6 +2089,20 @@
 }
 
 /* A quiet, reversible desktop split: the edge remains reachable when hidden. */
+.sidebarRestoreFallback {
+  align-items: center;
+  background: var(--background);
+  display: flex;
+  flex: 0 0 auto;
+  min-height: 58px;
+  order: -1;
+  padding: 7px 14px;
+}
+.sidebarRestoreFallback > .sidebarRestore { left: auto; position: relative; top: auto; transform: none; }
+:global(html[data-desktop-surface="workspace"][data-desktop-titlebar="unified"]) .sidebarRestoreFallback {
+  min-height: 44px;
+  padding-block: 0;
+}
 .sidebarRestore {
   align-items: center;
   background: var(--background);
@@ -2162,10 +2176,13 @@
 .shell[data-sidebar-compact="true"] .railRow .railControl { flex: 1 1 0; min-width: 28px; }
 .shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: none; }
 :global(html[data-desktop-surface="settings"]) .sidebarResizeHandle,
+:global(html[data-desktop-surface="settings"]) .sidebarRestoreFallback,
 :global(html[data-desktop-surface="settings"]) .sidebarRestore,
 .shell:has(.stage > :global(.review-workspace)) > .sidebarResizeHandle,
+.shell:has(.stage > :global(.review-workspace)) .sidebarRestoreFallback,
 .shell:has(.stage > :global(.review-workspace)) .sidebarRestore { display: none; }
 @media (max-width: 760px) {
+  .sidebarRestoreFallback { display: none; }
   .sidebarRestore { display: none; }
   .sidebarResizeHandle { display: none; }
   .shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: inline; }
@@ -2178,7 +2195,7 @@
   .railIconLink[aria-current="location"] { background:Highlight; color:HighlightText; forced-color-adjust:none; }
   .railControl:focus-visible, .railSessionAvatar:focus-visible, .railIconLink:focus-visible,
   .railRetry:focus-visible, .railSessionTitle a:focus-visible { outline-color:Highlight; }
-  .sidebarRestore, .sidebarRestoreLabel { background:Canvas; color:CanvasText; }
+  .sidebarRestoreFallback, .sidebarRestore, .sidebarRestoreLabel { background:Canvas; color:CanvasText; }
   .sidebarRestore:hover { background:Highlight; color:HighlightText; }
   .sidebarRestore:focus-visible { outline-color:Highlight; }
   .sessionRowMenuPopover, .railSessionTitle,

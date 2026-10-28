@@ -17,16 +17,18 @@ const sidebar = () => host.querySelector('aside')!;
 const width = () => Number(edge().getAttribute("aria-valuenow"));
 const saved = () => JSON.parse(window.localStorage.getItem(SIDEBAR_LAYOUT_KEY)!);
 
-async function render(surface: "route" | "conversation" | "legacy" = "route") {
+async function render(surface: "route" | "conversation" | "legacy" | "error" | "loading" = "route") {
   await act(async () => root.render(
     <WorkspaceShellFrame sidebar={<button data-sidebar-collapse-toggle>Account</button>}>
       <div className={styles.workspace}>
-        {surface !== "conversation" ? <header className={styles.routeHeader} style={surface === "legacy" ? { display: "none" } : undefined}>Workspace</header> : null}
+        {surface === "route" || surface === "legacy" ? <header className={styles.routeHeader} style={surface === "legacy" ? { display: "none" } : undefined}>Workspace</header> : null}
         <div className={styles.stage}>
           <aside aria-label="Test workspace">Synthetic data ready</aside>
           {surface === "conversation" ? <main data-conversation-canvas><header>Conversation</header></main>
             : surface === "legacy" ? <div className="context-workspace"><main><header className="context-topbar">Relationship</header></main></div>
-              : <main>People</main>}
+              : surface === "error" ? <section role="alert">Session unavailable</section>
+                : surface === "loading" ? <section role="status">Loading Session</section>
+                  : <main>People</main>}
         </div>
       </div>
     </WorkspaceShellFrame>,
@@ -193,6 +195,45 @@ describe("desktop sidebar split", () => {
     await key("Home");
     expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
       .toBe(host.querySelector(".context-topbar"));
+  });
+
+  it.each(["error", "loading"] as const)("keeps restoration in a separate chrome row on a headerless %s page", async surface => {
+    await render(surface);
+    await key("Home");
+    const fallback = host.querySelector("[data-sidebar-restore-fallback]")!;
+    const restore = fallback.querySelector<HTMLButtonElement>('button[aria-label="显示侧边栏"]')!;
+    expect(fallback.parentElement).toBe(host.querySelector(`.${styles.workspace}`));
+    expect(host.querySelector(`.${styles.stage}`)?.contains(fallback)).toBe(false);
+    expect(host.querySelector('aside[aria-label="Test workspace"]')?.contains(restore)).toBe(false);
+    await act(async () => restore.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(width()).toBe(236);
+    expect(host.querySelector("[data-sidebar-restore-fallback]")).toBeNull();
+    expect(document.activeElement).toBe(sidebar().querySelector("[data-sidebar-collapse-toggle]"));
+  });
+
+  it("moves between headerless recovery and actual chrome while the saved sidebar remains hidden", async () => {
+    await render("error");
+    await key("Home");
+    await render("conversation");
+    expect(host.querySelector("[data-sidebar-restore-fallback]")).toBeNull();
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
+      .toBe(host.querySelector("[data-conversation-canvas] > header"));
+    await render("loading");
+    expect(host.querySelectorAll('button[aria-label="显示侧边栏"]')).toHaveLength(1);
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
+      .toBe(host.querySelector("[data-sidebar-restore-fallback]"));
+    expect(saved().hidden).toBe(true);
+  });
+
+  it("does not add fallback chrome to the independent review surface", async () => {
+    await act(async () => root.render(
+      <WorkspaceShellFrame sidebar={<button data-sidebar-collapse-toggle>Account</button>}>
+        <div className={styles.workspace}><div className={styles.stage}><main className="review-workspace">Review</main></div></div>
+      </WorkspaceShellFrame>,
+    ));
+    await key("Home");
+    expect(host.querySelector("[data-sidebar-restore-fallback]")).toBeNull();
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).toBeNull();
   });
 
   it("honors the old compact-rail preference and can drag it back to full width", async () => {
