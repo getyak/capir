@@ -22,7 +22,12 @@ export function avatarHash(id: string): number {
 }
 
 export function avatarInitials(label: string): string {
-  const name = label.trim().normalize("NFC");
+  // Display annotations are not part of the recognition name. Otherwise every
+  // person labelled “姓名（测试）” gets the same “试” avatar. This is presentation
+  // only; the saved label and identity authority remain untouched.
+  const name = label.trim().normalize("NFC")
+    .replace(/(?:\s*(?:\([^()]*\)|（[^（）]*）))+\s*$/u, "")
+    .trim();
   if (!name || /[@/:\d]/u.test(name) || /^(未知联系人|未命名|未知|联系人|人物|unknown|unnamed|anonymous)$/iu.test(name)) return "";
   const han = name.match(/\p{Script=Han}/gu);
   if (han?.length) return han.at(-1)!;

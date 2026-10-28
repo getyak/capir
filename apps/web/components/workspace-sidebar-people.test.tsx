@@ -166,6 +166,7 @@ describe("contextual People directory", () => {
     await type("  abc  ");
     expect(links()).toHaveLength(1);
     expect(links()[0].getAttribute("href")).toBe("/workspace/people/person-199?directory_query=abc");
+    expect(links()[0].querySelector("small")?.textContent).toBe("ＡＢＣ 合作");
     expect(mocks.remember).toHaveBeenLastCalledWith("/workspace/people?query=abc");
     await type("隐藏目录人物");
     expect(links()).toHaveLength(0);

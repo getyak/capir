@@ -6,6 +6,7 @@ import { DotsThree } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useRef, useState, type ReactNode } from "react";
 import type { MemoryItemOutcome } from "./use-memory-review";
+import { validReturnSessionId, withReturnSession } from "../session-return-navigation";
 import { SourceImageButton, type SourceImage } from "./source-image-button";
 import styles from "./memory-review.module.css";
 
@@ -15,6 +16,7 @@ type Props = {
   sourceExcerpt: string;
   sourceImage?: SourceImage | null;
   sourceUnavailable?: boolean;
+  sourceSessionId?: string | null;
   status: "pending" | "ambiguous";
   busy: boolean;
   outcome?: MemoryItemOutcome | null;
@@ -27,7 +29,7 @@ type Props = {
   comparison?: ReactNode;
 };
 
-export function ContactDecisionCard({ displayLabel, relationshipContext, sourceExcerpt, sourceImage, sourceUnavailable = false, status, busy,
+export function ContactDecisionCard({ displayLabel, relationshipContext, sourceExcerpt, sourceImage, sourceUnavailable = false, sourceSessionId, status, busy,
   outcome, onAdd, onCorrectName, onPass, onCompare, onCheck, onUndo, comparison }: Props) {
   const t = useT();
   const [editing, setEditing] = useState(false);
@@ -52,7 +54,7 @@ export function ContactDecisionCard({ displayLabel, relationshipContext, sourceE
     </div> : null}
     {sourceUnavailable ? <p className={styles.actionReceipt} role="alert">{t("来源已失效，不能继续添加。")}</p>
       : outcome?.kind === "committed" ? <div className={styles.actionReceipt} role="status">{t("已添加联系人")}
-      {createdId ? <Link href={`/workspace/people/${createdId}`}>{t("查看人物")}</Link> : null}
+      {createdId ? <Link href={withReturnSession(`/workspace/people/${createdId}`, validReturnSessionId(sourceSessionId))}>{t("查看人物")}</Link> : null}
       {onUndo && outcome.receipt?.undo?.allowed ? <button type="button" onClick={onUndo}>{t("撤销")}</button> : null}
     </div> : outcome?.kind === "skipped" ? <p className={styles.actionReceipt} role="status">{t("本次未添加")}</p>
       : outcome?.kind === "undone" ? <p className={styles.actionReceipt} role="status">{outcome.receipt?.undo_contact_outcome === "retained" ? t("已撤销这次添加；联系人因后续记录保留") : t("已撤销这次添加")}</p>

@@ -33,7 +33,7 @@ export function PeopleDirectoryApp({
         <div className={styles.page}>
           <header className={styles.pageHeading}>
             <div>
-              <h1>{t("人物")}</h1>
+              <h1>{t("人物目录")}</h1>
               <p>
                 {error
                   ? t("目录暂时不可用；已保存的联系人资料不会改变。")

@@ -28,6 +28,7 @@ it.each([
 });
 it("localizes empty, filtered-empty and bounded results without claiming an exhaustive result", () => {
   const empty = render("en");
+  expect(empty).toContain("<h1>People directory</h1>");
   expect(empty).toContain("People: 0"); expect(empty).toContain("No people yet");
   expect(empty).toContain("Start with a chat or an introduction to organize your first contact.");
   const filtered = render("en", { query: "林", returnSessionId: session });

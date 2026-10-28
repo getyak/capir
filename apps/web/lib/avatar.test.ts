@@ -20,6 +20,10 @@ describe("recognizable avatar fallbacks", () => {
     ["John Smith", "JS"], ["John Michael Smith", "JS"], ["Ada", "A"],
     [" Élodie Martin ", "ÉM"], ["", ""], ["+86 138-0013-8000", ""],
     ["john@example.com", ""], ["未知联系人", ""], ["👋", ""],
+    ["陆星（测试）", "星"], ["江岚 (测试)", "岚"], ["李 小明（合作方）（测试）", "明"],
+    ["Ada (Demo)", "A"], ["John Smith（测试）", "JS"], [" Élodie Martin (partner) ", "ÉM"],
+    ["김민수 (테스트)", "김"], ["（测试）", ""], [" (Demo) ", ""],
+    ["未知联系人（测试）", ""], ["john@example.com (Demo)", ""], ["13800138000（测试）", ""],
   ])("derives a name, never identifier text: %s", (name, expected) => {
     expect(avatarInitials(name)).toBe(expected);
   });

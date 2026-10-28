@@ -52,9 +52,12 @@ their owning surfaces have evidence.
 
 ## Sequence
 
-1. Active: finish evidence audit and implement the three non-overlapping slices.
-2. Run focused tests and rendered comparison; fix verified regressions.
-3. Independent review; create one linked PR per task, follow latest CI and merge.
+1. Completed: full video audit, 18 visible requirements and eight reproduction
+   checks, plus two rendered image-inspection directions.
+2. Completed: three implementation slices and two acceptance-driven follow-ups;
+   focused tests and independent review. Preserve failed candidate evidence.
+3. Active: follow latest CI and merge linked PR467–471 sequentially. PR467 has
+   merged; GET291/292/293/295 remain in progress until deployed acceptance.
 4. Build/deploy affected resident Web from clean committed source, verify live
    revision and changed behavior. Backend deploy only if backend is changed.
 5. Read back Linear completion only after acceptance, stop the isolated test run,
@@ -76,5 +79,30 @@ the video; missing Memory is an unresolved continuity question, not proven loss.
 
 ## Verification and delivery
 
-Pending. Report local checks, CI, merge, Web deployment, native WebKit and real-device
-acceptance independently. No release or cross-surface result is implied by tests.
+The first candidate exposed a restore button covering the test banner, missing
+restoration on headerless failure pages, running-phase image clipping and
+fresh-window contact-receipt loss. These are presentation failures, not evidence
+of lost contacts or permission to auto-confirm Memory. Fixes preserve one image,
+source-relative reading intent, canonical operation-view scope and visible undo
+failure/unknown states. Fresh-context receipt/Person/source return now passes.
+
+Candidate V2 at c3e04c1e / chWRm0bixqfn6fbBUoW3Q passed the real working-phase
+first-open image bounds and did not follow new output to the tail. Its fixed
+scrollTop assertion and first close-anchor sample remain failed/inconclusive;
+a separate completed-state click sample restores the exact source anchor and
+focus. Candidate transport routed finite UI/API requests to port4324 while the
+unchanged resident SSE stayed direct, so this is not deployed acceptance.
+
+V2 also exposed restoration leaving focus on BODY despite a visible enabled
+sidebar toggle. GET292 now defers restoration within three frames, reads actual
+focus and cancels on a newer user choice, navigation, owner loss or re-hide.
+Session failure recovery now has localized, readable chrome. Focus/error/i18n
+tests (66) and independent review passed; real-surface retest is still required.
+REVIEW.md owns the reusable focus-readback criterion; executable tests own retry
+and cancellation behavior. Do not copy the incident into always-on guidance.
+
+Final clean release build, pure live Web/native/restart acceptance, latest CI,
+Linear readback and isolated-run cleanup remain pending. Report these separately
+from host checks. The transient native black rectangle and URL tooltip are not
+proven fixed; physical keyboard, full VoiceOver, Safari and real iPhone are not
+covered by browser emulation. No release or cross-surface result is implied.

@@ -565,5 +565,10 @@
   "composer.memoryDraft.unavailable": "无法确认这条消息的人物目标，消息已保留。请移除后重新选择人物发送。",
   "composer.memoryDraft.notStaged": "记忆草稿尚未生成，消息已保留。可重试或移除。",
   "composer.memoryDraft.unconfirmed": "这条消息的人物目标尚未确认，内容和目标已保留。请核对后重试。",
-  "composer.memoryDraft.serviceUnavailable": "本次发送未被接收。内容和人物目标已保留，请稍后重试。"
+  "composer.memoryDraft.serviceUnavailable": "本次发送未被接收。内容和人物目标已保留，请稍后重试。",
+  "来源 {count}": "来源 {count}",
+  "对话不可用": "对话不可用",
+  "无法读取这段对话。": "无法读取这段对话。",
+  "登录已过期，请重新登录后查看这段对话。": "登录已过期，请重新登录后查看这段对话。",
+  "返回对话列表": "返回对话列表"
 }

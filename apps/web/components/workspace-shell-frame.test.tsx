@@ -5,21 +5,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_LAYOUT_KEY } from "@/lib/workspace-sidebar-layout";
 import { WORKSPACE_RAIL_COLLAPSED_KEY } from "@/lib/workspace-navigation";
 import { WorkspaceShellFrame } from "./workspace-shell-frame";
+import styles from "./workspace-shell.module.css";
 
 let root: Root;
 let host: HTMLDivElement;
 let mobile = false;
 let mediaListeners: Set<() => void>;
 let captures: Set<number>;
+let frames: Map<number, FrameRequestCallback>;
+let nextFrame: number;
 const edge = () => host.querySelector<HTMLDivElement>('[role="separator"]')!;
 const sidebar = () => host.querySelector('aside')!;
 const width = () => Number(edge().getAttribute("aria-valuenow"));
 const saved = () => JSON.parse(window.localStorage.getItem(SIDEBAR_LAYOUT_KEY)!);
 
-async function render() {
+async function render(surface: "route" | "conversation" | "legacy" | "error" | "loading" = "route") {
   await act(async () => root.render(
-    <WorkspaceShellFrame sidebar={<button>Account</button>}>
-      <main>Conversation</main>
+    <WorkspaceShellFrame sidebar={<button data-sidebar-collapse-toggle>Account</button>}>
+      <div className={styles.workspace}>
+        {surface === "route" || surface === "legacy" ? <header className={styles.routeHeader} style={surface === "legacy" ? { display: "none" } : undefined}>Workspace</header> : null}
+        <div className={styles.stage}>
+          <aside aria-label="Test workspace">Synthetic data ready</aside>
+          {surface === "conversation" ? <main data-conversation-canvas><header>Conversation</header></main>
+            : surface === "legacy" ? <div className="context-workspace"><main><header className="context-topbar">Relationship</header></main></div>
+              : surface === "error" ? <section role="alert">Session unavailable</section>
+                : surface === "loading" ? <section role="status">Loading Session</section>
+                  : <main>People</main>}
+        </div>
+      </div>
     </WorkspaceShellFrame>,
   ));
 }
@@ -31,12 +44,25 @@ async function pointer(type: string, clientX: number, options: PointerEventInit 
 async function key(value: string) {
   await act(async () => edge().dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true })));
 }
+async function paint() {
+  await act(async () => {
+    const current = [...frames.values()];
+    frames.clear();
+    current.forEach(callback => callback(performance.now()));
+  });
+}
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   window.localStorage.clear();
+  window.history.replaceState(null, "", "/workspace");
   mobile = false;
   mediaListeners = new Set();
   captures = new Set();
+  frames = new Map();
+  nextFrame = 0;
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => { frames.set(++nextFrame, callback); return nextFrame; });
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation(frame => { frames.delete(frame); });
   vi.spyOn(window, "matchMedia").mockImplementation(() => ({
     get matches() { return mobile; },
     addEventListener: (_: string, listener: () => void) => mediaListeners.add(listener),
@@ -128,6 +154,180 @@ describe("desktop sidebar split", () => {
     await key("ArrowLeft"); expect(width()).toBe(0);
   });
 
+  it("offers a visible restore control and returns focus to the expanded sidebar without changing its saved width", async () => {
+    await render();
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).toBeNull();
+    await key("ArrowRight");
+    await key("Home");
+    const restore = host.querySelector<HTMLButtonElement>('button[aria-label="显示侧边栏"]')!;
+    expect(restore.getAttribute("aria-controls")).toBe(sidebar().id);
+    expect(restore.getAttribute("aria-expanded")).toBe("false");
+    restore.focus();
+    await act(async () => restore.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await paint();
+    expect(width()).toBe(252);
+    expect(saved()).toEqual({ width: 252, hidden: false, collapsed: false });
+    expect(sidebar().hasAttribute("inert")).toBe(false);
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).toBeNull();
+    expect(document.activeElement).toBe(sidebar().querySelector("[data-sidebar-collapse-toggle]"));
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render();
+    expect(width()).toBe(252);
+  });
+
+  it.each(["route", "conversation", "legacy"] as const)("places restoration in the actual %s header instead of over a preceding test banner", async surface => {
+    await render(surface);
+    await key("Home");
+    const restore = host.querySelector<HTMLButtonElement>('button[aria-label="显示侧边栏"]')!;
+    const expected = surface === "conversation" ? "[data-conversation-canvas] > header"
+      : surface === "legacy" ? ".context-topbar" : `.${styles.routeHeader}`;
+    expect(restore.parentElement).toBe(host.querySelector(expected));
+    expect(host.querySelector('aside[aria-label="Test workspace"]')?.contains(restore)).toBe(false);
+    expect(restore.closest(`.${styles.shell}`)).toBe(host.firstElementChild);
+  });
+
+  it("follows a replaced working header while the saved sidebar remains hidden", async () => {
+    await render("legacy");
+    await key("Home");
+    const initial = host.querySelector('button[aria-label="显示侧边栏"]')!;
+    expect(initial.parentElement?.className).toBe("context-topbar");
+    await render("conversation");
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
+      .toBe(host.querySelector("[data-conversation-canvas] > header"));
+    expect(host.querySelectorAll('button[aria-label="显示侧边栏"]')).toHaveLength(1);
+    expect(saved().hidden).toBe(true);
+  });
+
+  it("ignores an inactive header beneath an aria-hidden ancestor", async () => {
+    await act(async () => root.render(
+      <WorkspaceShellFrame sidebar={<button data-sidebar-collapse-toggle>Account</button>}>
+        <div className={styles.workspace}>
+          <section aria-hidden="true"><main data-conversation-canvas><header>Inactive Session</header></main></section>
+          <div className={styles.stage}><div className="context-workspace"><header className="context-topbar">Current relationship</header></div></div>
+        </div>
+      </WorkspaceShellFrame>,
+    ));
+    await key("Home");
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
+      .toBe(host.querySelector(".context-topbar"));
+  });
+
+  it.each(["error", "loading"] as const)("keeps restoration in a separate chrome row on a headerless %s page", async surface => {
+    await render(surface);
+    await key("Home");
+    const fallback = host.querySelector("[data-sidebar-restore-fallback]")!;
+    const restore = fallback.querySelector<HTMLButtonElement>('button[aria-label="显示侧边栏"]')!;
+    expect(fallback.parentElement).toBe(host.querySelector(`.${styles.workspace}`));
+    expect(host.querySelector(`.${styles.stage}`)?.contains(fallback)).toBe(false);
+    expect(host.querySelector('aside[aria-label="Test workspace"]')?.contains(restore)).toBe(false);
+    await act(async () => restore.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await paint();
+    expect(width()).toBe(236);
+    expect(host.querySelector("[data-sidebar-restore-fallback]")).toBeNull();
+    expect(document.activeElement).toBe(sidebar().querySelector("[data-sidebar-collapse-toggle]"));
+  });
+
+  it("moves between headerless recovery and actual chrome while the saved sidebar remains hidden", async () => {
+    await render("error");
+    await key("Home");
+    await render("conversation");
+    expect(host.querySelector("[data-sidebar-restore-fallback]")).toBeNull();
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
+      .toBe(host.querySelector("[data-conversation-canvas] > header"));
+    await render("loading");
+    expect(host.querySelectorAll('button[aria-label="显示侧边栏"]')).toHaveLength(1);
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
+      .toBe(host.querySelector("[data-sidebar-restore-fallback]"));
+    expect(saved().hidden).toBe(true);
+  });
+
+  it("retries a focus request rejected while the browser applies the restored inert state", async () => {
+    await render();
+    await key("Home");
+    const toggle = sidebar().querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")!;
+    const actualFocus = toggle.focus.bind(toggle);
+    const focus = vi.spyOn(toggle, "focus").mockImplementationOnce(() => {}).mockImplementation(actualFocus);
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(focus).not.toHaveBeenCalled();
+    await paint();
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).not.toBe(toggle);
+    await paint();
+    expect(document.activeElement).toBe(toggle);
+    await paint();
+    expect(focus).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not take focus back from a later user choice", async () => {
+    await render();
+    await key("Home");
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    const other = document.createElement("button");
+    other.textContent = "Continue working";
+    host.append(other);
+    other.focus();
+    await paint();
+    expect(document.activeElement).toBe(other);
+    expect(frames.size).toBe(0);
+  });
+
+  it("cancels deferred restoration when the sidebar is hidden again", async () => {
+    await render();
+    await key("Home");
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await key("Home");
+    await paint();
+    expect(sidebar().inert).toBe(true);
+    expect(document.activeElement).not.toBe(sidebar().querySelector("[data-sidebar-collapse-toggle]"));
+    expect(frames.size).toBe(0);
+  });
+
+  it.each(["route", "pointer", "blur", "mobile"] as const)("cancels a deferred request after a later %s change", async change => {
+    await render();
+    await key("Home");
+    const toggle = sidebar().querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")!;
+    const focus = vi.spyOn(toggle, "focus");
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    if (change === "route") window.history.pushState(null, "", "/workspace/sessions/another");
+    if (change === "pointer") document.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    if (change === "blur") window.dispatchEvent(new Event("blur"));
+    if (change === "mobile") {
+      mobile = true;
+      await act(async () => mediaListeners.forEach(listener => listener()));
+    }
+    await paint();
+    expect(focus).not.toHaveBeenCalled();
+    expect(frames.size).toBe(0);
+  });
+
+  it("bounds native focus rejection to three frames", async () => {
+    await render();
+    await key("Home");
+    const toggle = sidebar().querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")!;
+    const focus = vi.spyOn(toggle, "focus").mockImplementation(() => {});
+    await act(async () => host.querySelector('button[aria-label="显示侧边栏"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    for (let count = 0; count < 4; count++) await paint();
+    expect(focus).toHaveBeenCalledTimes(3);
+    expect(frames.size).toBe(0);
+  });
+
+  it("does not add fallback chrome to the independent review surface", async () => {
+    await act(async () => root.render(
+      <WorkspaceShellFrame sidebar={<button data-sidebar-collapse-toggle>Account</button>}>
+        <div className={styles.workspace}><div className={styles.stage}><main className="review-workspace">Review</main></div></div>
+      </WorkspaceShellFrame>,
+    ));
+    await key("Home");
+    expect(host.querySelector("[data-sidebar-restore-fallback]")).toBeNull();
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).toBeNull();
+  });
+
   it("honors the old compact-rail preference and can drag it back to full width", async () => {
     window.localStorage.setItem(WORKSPACE_RAIL_COLLAPSED_KEY, "true");
     await render(); expect(width()).toBe(72);
@@ -148,11 +348,13 @@ describe("desktop sidebar split", () => {
 
   it("keeps mobile navigation available after a desktop hide, including viewport changes", async () => {
     await render(); await key("Home");
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).not.toBeNull();
     mobile = true;
     await act(async () => mediaListeners.forEach(listener => listener()));
     expect(sidebar().hasAttribute("inert")).toBe(false);
     expect(sidebar().hasAttribute("aria-hidden")).toBe(false);
     expect(host.firstElementChild?.getAttribute("data-sidebar-hidden")).toBe("false");
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).toBeNull();
     mobile = false;
     await act(async () => mediaListeners.forEach(listener => listener()));
     expect(sidebar().hasAttribute("inert")).toBe(true);

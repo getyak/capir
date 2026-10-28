@@ -13,6 +13,7 @@ import { memoryDate } from "@/lib/person-memory-projection";
 import { peopleDirectoryHref, personDirectoryEntryId, personMemoryHref, readPeopleDirectoryQuery } from "@/components/people-directory-navigation";
 import {
   validReturnSessionId,
+  sessionReturnHref,
   withReturnSession,
 } from "@/components/session-return-navigation";
 import {
@@ -159,9 +160,12 @@ export default async function PersonMemoryPage({
         <Link className={styles.backLink} href={personEntryHref}>
           <ArrowLeft aria-hidden="true" size={15} />{t("返回人物目录")}
         </Link>
+        {returnSessionId ? <Link className={styles.backLink} href={sessionReturnHref(returnSessionId)!}>
+          <ArrowLeft aria-hidden="true" size={15} />{t("返回对话")}
+        </Link> : null}
       </div>
       <header className={styles.identity}>
-        <PersonDirectoryAvatar id={person?.id ?? id} size={18} shape="circle"
+        <PersonDirectoryAvatar id={person?.id ?? id} size={28} shape="circle"
           label={person?.display_label ?? t("人物")} url={person?.avatar?.url ?? null} />
         <div className={styles.identityText}>
           <h1 title={person?.display_label ?? t("人物")}>{person?.display_label ?? t("人物")}</h1>

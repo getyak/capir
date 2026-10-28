@@ -2,7 +2,7 @@
 import { act, createElement, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryProposalItem, MemoryReviewView } from "@talent-signal/contracts";
+import type { MemoryProposalItem, MemoryReceipt, MemoryReviewView, MemoryScopedOperationView } from "@talent-signal/contracts";
 
 import {
   createDraftState,
@@ -11,6 +11,7 @@ import {
   visibleItems,
 } from "@/lib/memory-review-draft";
 import { useMemoryReview, type MemoryReviewController } from "./use-memory-review";
+import { SessionMemoryCards } from "./memory-item-card";
 
 const fetcher = vi.hoisted(() => vi.fn());
 vi.mock("../workspace-session-request", () => ({
@@ -19,6 +20,30 @@ vi.mock("../workspace-session-request", () => ({
 
 const SCOPE = "11111111-1111-4111-8111-111111111111";
 const PROPOSAL = "22222222-2222-4222-8222-222222222222";
+const OPERATION = "66666666-6666-4666-8666-666666666666";
+const PERSON = "33333333-3333-4333-8333-333333333333";
+const SOURCE_SESSION = "77777777-7777-4777-8777-777777777777";
+
+// The actual scoped-operation producer returns a complete canonical receipt,
+// including when no Memory item was written by a contact-only decision.
+function scopedContactView(overrides: Partial<MemoryScopedOperationView> = {}): MemoryScopedOperationView {
+  const receipt: MemoryReceipt = {
+    contract_version: "2026-08-24.10", commit_id: SCOPE, operation_key: OPERATION,
+    proposal_id: PROPOSAL, proposal_revision: 1, status: "applied", contact_decision: "new",
+    created_person_id: PERSON, person_display_label: "林海（测试）", created_relationship_context_id: null,
+    undo_contact_outcome: null, undo_context_outcome: null,
+    item_count: 0, applied_item_count: 0, created_item_ids: [], updated_item_ids: [],
+    skipped_item_ids: [], kept_old_item_ids: [], decisions: [],
+    undo: { token: "88888888-8888-4888-8888-888888888888", allowed: true, limits: [] },
+    projection_status: "pending", created_at: "2026-10-28T16:34:16.387Z", undone_at: null,
+  };
+  return {
+    contract_version: "2026-08-24.10", operation_key: OPERATION, commit_id: SCOPE, commit_revision: 1,
+    state: "applied", purpose: "chat", person_id: null, relationship_context_id: null,
+    source_session_id: SOURCE_SESSION, visible_effect_count: 0, visible_receipt: receipt,
+    undo: { allowed: true, limits: [] }, ...overrides,
+  };
+}
 
 function item(id: string, scope: MemoryProposalItem["scope"]): MemoryProposalItem {
   const text = `记忆 ${id}`;
@@ -81,17 +106,18 @@ let controller: MemoryReviewController;
 let root: Root;
 let mount: HTMLDivElement;
 
-function Probe({ capability = "test-capability", binding = "binding-1" }: { capability?: string; binding?: string }) {
+function Probe({ capability = "test-capability", binding = "binding-1", sessionId, showCards = false }: { capability?: string; binding?: string; sessionId?: string; showCards?: boolean }) {
   const current = useMemoryReview({
     binding,
     proposal: { proposal_id: PROPOSAL, revision: 1 },
     purpose: "chat",
     entryCapability: capability,
+    sessionId,
   });
   useLayoutEffect(() => {
     controller = current;
   });
-  return null;
+  return showCards ? createElement(SessionMemoryCards, { controller: current, sourceSessionId: sessionId }) : null;
 }
 
 async function flush() {
@@ -122,6 +148,136 @@ afterEach(async () => {
 });
 
 describe("shared Memory review controller", () => {
+  it("restores a processed contact from a fresh entry and keeps its source-return link", async () => {
+    expect(window.sessionStorage.length).toBe(0);
+    await act(async () => root.render(createElement(Probe, { sessionId: SOURCE_SESSION, showCards: true })));
+    const view = scopedContactView();
+    fetcher.mockResolvedValueOnce(Response.json({ error: { code: "MEMORY_REVIEW_PROCESSED", details: { operation_key: OPERATION } } }, { status: 409 }));
+    fetcher.mockResolvedValueOnce(Response.json(view));
+    await act(async () => { await controller.open(); });
+    expect(controller.review).toBeNull();
+    expect(controller.phase).toBe("receipt");
+    expect(controller.receipt).toEqual(view.visible_receipt);
+    expect(controller.contactOutcome).toEqual({ kind: "committed", receipt: view.visible_receipt, operationKey: OPERATION });
+    expect(mount.querySelector(`a[href="/workspace/people/${PERSON}?session=${SOURCE_SESSION}"]`)?.textContent).toBe("查看人物");
+    expect(mount.textContent).not.toContain("这次内容已处理。");
+    expect(fetcher.mock.calls.map(([path]) => path)).toEqual([
+      `/api/memory/proposals/${PROPOSAL}/reviews`, `/api/memory/operation-views/${OPERATION}?purpose=chat`,
+    ]);
+    const stored = window.sessionStorage.getItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`)!;
+    expect(stored).toContain(OPERATION);
+    expect(stored).not.toContain(PERSON);
+    expect(stored).not.toContain("林海");
+    expect(stored).not.toContain(view.visible_receipt!.undo.token);
+  });
+
+  it.each([
+    ["preflight", "无法核对联系人保存结果，本次尚未撤销。"],
+    ["blocked", "联系人已有后续记录，不能从这里撤销。"],
+    ["rejected", "保存后的内容已变化，本次未撤销。请先查看最新记录。"],
+    ["lost-response", "正在核对联系人撤销结果…"],
+  ] as const)("shows actual recovered-contact undo feedback after %s", async (failure, message) => {
+    await act(async () => root.render(createElement(Probe, { sessionId: SOURCE_SESSION, showCards: true })));
+    fetcher.mockResolvedValueOnce(Response.json({ code: "MEMORY_REVIEW_PROCESSED", details: { operation_key: OPERATION } }, { status: 409 }));
+    fetcher.mockResolvedValueOnce(Response.json(scopedContactView()));
+    await act(async () => { await controller.open(); });
+    if (failure === "preflight") fetcher.mockResolvedValueOnce(Response.json({}, { status: 503 }));
+    else if (failure === "blocked") {
+      const blocked = scopedContactView({ undo: { allowed: false, limits: ["Subsequent records retain the contact."] } });
+      blocked.visible_receipt!.undo = { ...blocked.visible_receipt!.undo, allowed: false };
+      fetcher.mockResolvedValueOnce(Response.json(blocked));
+    }
+    else {
+      fetcher.mockResolvedValueOnce(Response.json(scopedContactView()));
+      if (failure === "rejected") fetcher.mockResolvedValueOnce(Response.json({ code: "MEMORY_UNDO_BLOCKED" }, { status: 409 }));
+      else fetcher.mockRejectedValueOnce(new Error("lost undo response"));
+    }
+    const undo = [...mount.querySelectorAll("button")].find(button => button.textContent === "撤销")!;
+    await act(async () => { undo.click(); });
+    expect(controller.contactOutcome?.kind).toBe(failure === "lost-response" ? "undo_unknown" : "committed");
+    const feedback = [...mount.querySelectorAll(failure === "lost-response" ? '[role="status"]' : '[role="alert"]')]
+      .find(element => element.textContent === message);
+    expect(feedback).toBeTruthy();
+    expect(mount.textContent).not.toContain("已撤销本次添加");
+    expect(mount.textContent).not.toContain("已撤销这次添加");
+    const writes = fetcher.mock.calls.filter(([path]) => String(path).endsWith("/undo"));
+    expect(writes).toHaveLength(failure === "preflight" || failure === "blocked" ? 0 : 1);
+  });
+
+  it.each(["retained", "reclaimed"] as const)("recovers an undone contact as %s without restoring a reclaimed destination", async undoOutcome => {
+    await act(async () => root.render(createElement(Probe, { sessionId: SOURCE_SESSION, showCards: true })));
+    const view = scopedContactView({ state: "undone", undo: { allowed: false, limits: [] } });
+    view.visible_receipt = { ...view.visible_receipt!, status: "undone", undo_contact_outcome: undoOutcome,
+      undo: { ...view.visible_receipt!.undo, allowed: false }, undone_at: "2026-10-28T17:00:00Z" };
+    fetcher.mockResolvedValueOnce(Response.json({ code: "MEMORY_REVIEW_PROCESSED", details: { operation_key: OPERATION } }, { status: 409 }));
+    fetcher.mockResolvedValueOnce(Response.json(view));
+    await act(async () => { await controller.open(); });
+    expect(controller.phase).toBe("undone");
+    expect(controller.contactOutcome?.kind).toBe("undone");
+    expect(controller.canUndo).toBe(false);
+    expect(Boolean(mount.querySelector(`a[href="/workspace/people/${PERSON}?session=${SOURCE_SESSION}"]`))).toBe(undoOutcome === "retained");
+    expect(mount.textContent).toContain(undoOutcome === "retained" ? "联系人因后续记录保留" : "已撤销本次添加");
+  });
+
+  it("keeps a recovered contact undo unknown across reload until canonical compensation readback", async () => {
+    window.sessionStorage.setItem(`get40:memory-locator:binding-1:${PROPOSAL}:chat`, JSON.stringify({
+      version: 1, binding: "binding-1", proposal_id: PROPOSAL, purpose: "chat",
+      person_id: null, relationship_context_id: null, operation_key: OPERATION,
+      undo_key: null, contact_undo_key: "99999999-9999-4999-8999-999999999999",
+    }));
+    await act(async () => root.render(createElement(Probe, { sessionId: SOURCE_SESSION, showCards: true })));
+    fetcher.mockResolvedValueOnce(Response.json(scopedContactView()));
+    await act(async () => { await controller.open(); });
+    expect(controller.phase).toBe("unknown");
+    expect(controller.contactOutcome?.kind).toBe("undo_unknown");
+    expect(mount.querySelector("a")).toBeNull();
+    expect(mount.textContent).toContain("撤销结果待核对");
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each(["operation", "receipt-operation", "proposal", "purpose", "person", "context", "session", "status"])("refuses a recovered result with a mismatched %s", async mismatch => {
+    await act(async () => root.render(createElement(Probe, { sessionId: SOURCE_SESSION, showCards: true })));
+    const view = scopedContactView();
+    const other = "99999999-9999-4999-8999-999999999999";
+    if (mismatch === "operation") view.operation_key = other;
+    if (mismatch === "receipt-operation") view.visible_receipt!.operation_key = other;
+    if (mismatch === "proposal") view.visible_receipt!.proposal_id = other;
+    if (mismatch === "purpose") view.purpose = "people";
+    if (mismatch === "person") view.person_id = other;
+    if (mismatch === "context") view.relationship_context_id = other;
+    if (mismatch === "session") view.source_session_id = other;
+    if (mismatch === "status") view.visible_receipt!.status = "undone";
+    fetcher.mockResolvedValueOnce(Response.json({ code: "MEMORY_REVIEW_PROCESSED", details: { operation_key: OPERATION } }, { status: 409 }));
+    fetcher.mockResolvedValueOnce(Response.json(view));
+    await act(async () => { await controller.open(); });
+    expect(controller.phase).toBe("unknown");
+    expect(controller.receipt).toBeNull();
+    expect(controller.contactOutcome).toBeNull();
+    expect(mount.querySelector("a")).toBeNull();
+    expect(controller.canUndo).toBe(false);
+  });
+
+  it.each(["pending", "unavailable", "scope_mismatch", "source_revoked", "applied"] as const)("does not turn a %s readback without a receipt into contact success", async state => {
+    const view = scopedContactView({ state, visible_receipt: null, undo: { allowed: false, limits: [] } });
+    fetcher.mockResolvedValueOnce(Response.json({ code: "MEMORY_REVIEW_PROCESSED", details: { operation_key: OPERATION } }, { status: 409 }));
+    fetcher.mockResolvedValueOnce(Response.json(view));
+    await act(async () => { await controller.open(); });
+    expect(controller.phase).toBe(state === "source_revoked" ? "error" : "unknown");
+    expect(controller.receipt).toBeNull();
+    expect(controller.contactOutcome).toBeNull();
+  });
+
+  it("rejects a malformed scoped result rather than manufacturing its missing receipt fields", async () => {
+    const view = scopedContactView();
+    const receiptWithoutUndo = { ...view.visible_receipt!, undo: undefined };
+    fetcher.mockResolvedValueOnce(Response.json({ code: "MEMORY_REVIEW_PROCESSED", details: { operation_key: OPERATION } }, { status: 409 }));
+    fetcher.mockResolvedValueOnce(Response.json({ ...view, visible_receipt: receiptWithoutUndo }));
+    await act(async () => { await controller.open(); });
+    expect(controller.phase).toBe("unknown");
+    expect(controller.receipt).toBeNull();
+    expect(controller.contactOutcome).toBeNull();
+  });
+
   it("ends gracefully when an already processed proposal has no visible receipt",async()=>{
     fetcher.mockResolvedValueOnce(Response.json({code:"MEMORY_REVIEW_PROCESSED",details:{operation_key:null}},{status:409}));
     await act(async()=>{await controller.open();});
@@ -610,31 +766,11 @@ describe("shared Memory review controller", () => {
         return Promise.reject(new Error("network"));
       }
       if (path.includes("/operation-views/")) {
+        const operationKey = path.split("/operation-views/")[1]!.split("?")[0]!;
+        const view = scopedContactView({ operation_key: operationKey });
+        view.visible_receipt = { ...view.visible_receipt!, operation_key: operationKey };
         return Promise.resolve(
-          Response.json({
-            state: "applied",
-            visible_effect_count: 0,
-            undo: { allowed: true, limits: [] },
-            visible_receipt: {
-              contract_version: "2026-08-24.10",
-              commit_id: SCOPE,
-              operation_key: "op-lost",
-              proposal_id: PROPOSAL,
-              proposal_revision: 1,
-              status: "applied",
-              contact_decision: "new",
-              item_count: 0,
-              applied_item_count: 0,
-              created_item_ids: [],
-              updated_item_ids: [],
-              skipped_item_ids: [],
-              kept_old_item_ids: [],
-              decisions: [],
-              undo: { token: "u", allowed: true, limits: [] },
-              projection_status: "not_required",
-              created_at: new Date().toISOString(),
-            },
-          }),
+          Response.json(view),
         );
       }
       return Promise.resolve(Response.json({ review: opened }));
@@ -756,38 +892,24 @@ describe("shared Memory review controller", () => {
         purpose: "chat",
         person_id: null,
         relationship_context_id: null,
-        operation_key: "op-1",
+        operation_key: OPERATION,
         undo_key: null,
       }),
     );
     fetcher.mockReset();
     fetcher.mockImplementation((path: string) => {
-      if (path.includes("/operation-views/op-1")) {
+      if (path.includes(`/operation-views/${OPERATION}`)) {
+        const view = scopedContactView({ visible_effect_count: 3 });
+        const ids = [
+          "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        ];
+        view.visible_receipt = { ...view.visible_receipt!, contact_decision: "existing", created_person_id: null,
+          item_count: 3, applied_item_count: 3, created_item_ids: ids,
+          decisions: ids.map(proposalItemId => ({ proposal_item_id: proposalItemId, decision: "accept", memory_item_id: proposalItemId })) };
         return Promise.resolve(
-          Response.json({
-            state: "applied",
-            visible_effect_count: 3,
-            undo: { allowed: true, limits: [] },
-            visible_receipt: {
-              contract_version: "2026-08-24.10",
-              commit_id: SCOPE,
-              operation_key: "op-1",
-              proposal_id: PROPOSAL,
-              proposal_revision: 1,
-              status: "applied",
-              contact_decision: "new",
-              item_count: 3,
-              applied_item_count: 3,
-              created_item_ids: [],
-              updated_item_ids: [],
-              skipped_item_ids: [],
-              kept_old_item_ids: [],
-              decisions: [],
-              undo: { token: "u", allowed: true, limits: [] },
-              projection_status: "not_required",
-              created_at: new Date().toISOString(),
-            },
-          }),
+          Response.json(view),
         );
       }
       return Promise.resolve(Response.json({ capability: "cap" }));
@@ -797,6 +919,7 @@ describe("shared Memory review controller", () => {
     });
     expect(controller.phase).toBe("receipt");
     expect(controller.receipt?.applied_item_count).toBe(3);
+    expect(controller.contactOutcome).toBeNull();
     expect(
       fetcher.mock.calls.some(([path]) => String(path).includes("/reviews")),
     ).toBe(false);

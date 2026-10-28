@@ -1,11 +1,11 @@
 /* Relationship context and governed Memory lead; biography is supporting reference. */
 .main { --workspace-title-size: 1.5rem; --workspace-section-size: 1rem; --workspace-meta-size: .8125rem; margin: 0 auto; max-width: 1120px; padding: 20px 40px 80px; }
-.pageNavigation { margin-bottom: 14px; }
+.pageNavigation { align-items: center; display: flex; flex-wrap: wrap; gap: 4px 16px; margin-bottom: 14px; }
 .backLink { align-items: center; color: var(--muted-strong); display: inline-flex; font-size: var(--workspace-meta-size); gap: 7px; min-height: 44px; padding: 0 4px; text-decoration: none; }
 .backLink:hover { color: var(--ink); }
-.identity { align-items: center; display: flex; gap: 8px; min-height: 44px; padding: 0 0 12px; }
-.identityText { min-width: 0; }
-.identityText h1 { font-size: var(--workspace-object-size); font-weight: 500; line-height: 1.4; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.identity { align-items: center; display: flex; gap: 12px; min-height: 44px; padding: 0 0 12px; }
+.identityText { flex: 1 1 auto; min-width: 0; }
+.identityText h1 { font-size: var(--workspace-object-size); font-weight: 500; line-height: 1.4; margin: 0; overflow-wrap: anywhere; }
 .identityNote { color: var(--muted-strong); font-size: var(--workspace-body-size); line-height: 1.6; margin: 0 0 20px; overflow-wrap: anywhere; }
 .columns { display: grid; gap: 44px; grid-template-columns: minmax(0, 1fr) minmax(200px, 256px); margin-top: 26px; }
 .contextColumn, .memoryColumn { min-width: 0; }
