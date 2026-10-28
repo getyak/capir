@@ -619,9 +619,18 @@ function ChangePersonPanel({
 }
 
 export function MemoryReviewCard(props: MemoryReviewCardProps) {
+  // A review controller owns one entry's asynchronous work. Proposal identity
+  // or target changes remount it so a late readback cannot populate another
+  // card; revision/capability refreshes preserve that entry's draft and rebase.
+  const entryKey = JSON.stringify([
+    props.binding, props.proposal.proposal_id, props.purpose,
+    props.personId ?? null, props.contextId ?? null, props.sessionId ?? null,
+    props.pursuit?.pursuitId ?? null, props.pursuit?.roleId ?? null,
+    props.pursuit?.evidenceFragmentId ?? null,
+  ]);
   return props.purpose === "chat"
-    ? <SessionChatMemoryReviewCard {...props}/>
-    : <LegacyMemoryReviewCard {...props}/>;
+    ? <SessionChatMemoryReviewCard key={entryKey} {...props}/>
+    : <LegacyMemoryReviewCard key={entryKey} {...props}/>;
 }
 
 function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
