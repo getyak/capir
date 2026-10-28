@@ -52,10 +52,13 @@
 .editButton { align-items: center; background: transparent; border: 0; border-radius: 5px; color: var(--muted); cursor: pointer; display: inline-flex; flex: 0 0 auto; font: inherit; font-size: var(--workspace-meta-size); gap: 5px; justify-content: center; min-height: 44px; min-width: 44px; padding: 0 6px; }
 .editButton:hover { background: var(--surface-muted); color: var(--ink); }
 .editButton:disabled { opacity: .45; cursor: default; }
-.memoryKind { align-items: baseline; color: var(--muted); display: flex; flex-wrap: wrap; font-size: var(--workspace-meta-size); gap: 2px 10px; line-height: 1.6; margin-top: 1px; }
+.memoryKind { align-items: baseline; color: var(--muted); display: flex; flex: 1 1 18rem; flex-wrap: wrap; font-size: var(--workspace-meta-size); gap: 2px 10px; line-height: 1.6; min-width: 0; overflow-wrap: anywhere; }
+.memoryContextName { color: var(--muted-strong); }
 .memoryContext { align-items: center; color: var(--muted-strong); display: inline-flex; min-height: 44px; text-decoration: underline; text-underline-offset: 3px; }
 .evidence { font-size: var(--workspace-meta-size); }
-.evidence > summary { align-items: center; color: var(--muted); cursor: pointer; display: flex; gap: 4px; min-height: 44px; width: fit-content; }
+/* One native target shares the provenance row; expanded evidence stays in normal flow. */
+.evidence > summary { align-items: center; color: var(--muted); cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 12px; min-height: 44px; width: 100%; }
+.evidenceAction { align-items: center; display: inline-flex; flex: 0 0 auto; gap: 4px; line-height: 1.6; margin-inline-start: auto; }
 .evidence[open] > summary { color: var(--ink); }
 .evidence[open] > summary svg { transform: rotate(180deg); }
 .sourcesList { display: grid; gap: 16px; list-style: none; margin: 4px 0 12px; padding: 0; }
