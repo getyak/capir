@@ -446,9 +446,10 @@ test("the unused mammoth CLI argparse/sprintf-js graph is gone and the SDK pin h
   assert.ok(workspace.includes("opik@2.2.45"));
 });
 
-test("overrides and audit policy: existing qs override kept, no audit suppression", () => {
-  assert.match(workspace, /"qs@6\.15\.3": "6\.16\.0"/);
-  assert.match(lock, /qs@6\.15\.3: 6\.16\.0/);
+test("overrides and audit policy: qs is patched, no audit suppression", () => {
+  assert.match(workspace, /"qs@6\.15\.3": "6\.16\.1"/);
+  assert.match(lock, /qs@6\.15\.3: 6\.16\.1/);
+  assert.deepEqual(resolvedVersions("qs"), ["6.16.1"]);
   assert.doesNotMatch(workspace, /audit\.(ignore|ignorePrune)|auditIgnore/i);
   assert.ok(!rootManifest.pnpm || !("audit" in rootManifest.pnpm));
 });

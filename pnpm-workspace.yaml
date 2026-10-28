@@ -32,7 +32,8 @@ overrides:
   # https://github.com/advisories/GHSA-68fv-2mgg-jv7q
   "source-map-js@^1": "1.2.2"
   # https://github.com/ljharb/qs/security/advisories/GHSA-4mjr-xmp4-gh2g
-  "qs@6.15.3": "6.16.0"
+  # https://github.com/advisories/GHSA-6pq8-jhm2-2vcw
+  "qs@6.15.3": "6.16.1"
   # GHSA-hp3w-g68c-fv3c (sprintf-js, via argparse): sprintf-js@1.1.4 does not
   # exist on npm. argparse is only reachable through mammoth's unused CLI
   # entrypoint (bin/mammoth); the product calls mammoth.extractRawText from

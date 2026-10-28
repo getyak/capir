@@ -27,7 +27,27 @@ const undiciEntry = dependencyEntry("apps/web", [
   "@assistant-ui/react", "assistant-cloud", "ai", "@ai-sdk/provider-utils", "undici",
 ]);
 const bodyParserEntry = dependencyEntry("apps/agent", [...mcp, "express", "body-parser"]);
+const qsEntry = dependencyEntry("apps/agent", [...mcp, "express", "qs"]);
 const require = createRequire(import.meta.url);
+
+// GHSA-6pq8-jhm2-2vcw: bind the probe to Express's actual SDK dependency,
+// rather than another (already patched) qs installation in the store.
+test("MCP Express qs survives comma arrays with non-callable toString elements", () => {
+  const qs = require(qsEntry);
+  const inputs = [
+    qs.parse("a[0][toString]=x", { allowPrototypes: true }),
+    JSON.parse('{"a":[{"toString":"x"}]}'),
+    qs.parse("a[0][b]=c", { plainObjects: true }),
+  ];
+  for (const encodeValuesOnly of [false, true]) {
+    const options = { arrayFormat: "comma", encodeValuesOnly };
+    for (const input of inputs) {
+      assert.equal(qs.stringify(input, options), "a=%5Bobject%20Object%5D");
+    }
+    assert.equal(qs.stringify({ a: ["one", "two"] }, options),
+      encodeValuesOnly ? "a=one,two" : "a=one%2Ctwo");
+  }
+});
 
 // Exercise the real AJV/fast-uri and serializer graph through its Backend importer.
 // https://fastify.dev/docs/latest/Reference/Validation-and-Serialization/
