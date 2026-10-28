@@ -47,7 +47,8 @@ import styles from "./workspace-shell.module.css";
  *
  * The expanded rail is one horizontal row of five controls — today,
  * conversation, people, meetings, scoped global search. The selected control
- * borrows label space within one fixed pair; distant destinations stay put. Route identity
+ * receives the remaining label space after the inactive pair's two symbols.
+ * Compact widths keep the named icon controls. Route identity
  * and hrefs live in `@/lib/workspace-navigation`; this file owns only
  * presentation. Generic icons use existing Phosphor components — the earlier
  * component map's `app/icon.tsx` match for "icon" is a false positive
@@ -265,6 +266,7 @@ export function WorkspaceShellNav({
             aria-label={t("nav.collapse")}
             aria-pressed={false}
             className={styles.iconButton}
+            data-sidebar-collapse-toggle
             onClick={() => setCollapsed(true)}
             ref={collapseToggle}
             title={t("nav.collapse")}

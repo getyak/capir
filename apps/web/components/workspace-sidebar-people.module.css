@@ -8,6 +8,8 @@
 .headingRow {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
   justify-content: space-between;
   min-width: 0;
   padding: 0 8px;
@@ -15,6 +17,7 @@
 
 .heading {
   color: var(--muted);
+  flex: 1 1 auto;
   font-size: var(--workspace-meta-size, 0.8125rem);
   font-weight: 500;
   line-height: 1.5;
@@ -84,7 +87,7 @@
   min-height: 44px;
   padding: 0;
   transition: background-color var(--workspace-transition-duration, 180ms) var(--ease-out);
-  width: 30px;
+  width: 44px;
 }
 
 .searchControl:hover:not(:disabled),
@@ -178,6 +181,7 @@
 }
 
 .allPeople {
+  flex: 0 0 auto;
   font-size: var(--workspace-meta-size, 0.8125rem);
 }
 

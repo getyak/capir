@@ -2620,5 +2620,9 @@
   "execution.tool.connection": "接続リクエストの応答が返りました",
   "execution.tool.profile": "公開プロフィール検索の応答が返りました",
   "execution.tool.other": "操作の応答が返りました",
-  "conversation.image.viewNamed": "元の画像 {index} を表示：{name}"
+  "conversation.image.viewNamed": "元の画像 {index} を表示：{name}",
+  "对话不可用": "会話を開けません",
+  "无法读取这段对话。": "この会話を読み込めませんでした。",
+  "登录已过期，请重新登录后查看这段对话。": "ログインの有効期限が切れました。もう一度ログインして、この会話を確認してください。",
+  "返回对话列表": "会話一覧に戻る"
 }

@@ -1,6 +1,8 @@
 "use client";
 
-import { useId, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { SidebarSimple } from "@phosphor-icons/react";
+import { useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   SIDEBAR_HIDE_THRESHOLD,
   SIDEBAR_MAX_WIDTH,
@@ -23,21 +25,133 @@ function subscribeViewport(notify: () => void) {
   return () => window.removeEventListener("resize", notify);
 }
 
+/** The work surface owns its header; a test banner can precede it in the stage. */
+function visibleInShell(candidate: HTMLElement, root: HTMLElement): boolean {
+  for (let element: HTMLElement | null = candidate; element && element !== root; element = element.parentElement) {
+    const style = window.getComputedStyle(element);
+    if (element.hidden || element.inert || element.getAttribute("aria-hidden") === "true"
+      || style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
+
+type RestoreHost = { element: HTMLElement; fallback: boolean };
+type RestoreFocusRequest = { source: Element | null; shell: HTMLElement; sidebar: HTMLElement; chrome: HTMLElement; route: string };
+
+function restoreTarget(root: HTMLElement): RestoreHost | null {
+  if (document.documentElement.dataset.desktopSurface === "settings") return null;
+  const review = root.querySelector<HTMLElement>(`.${styles.stage} > .review-workspace`);
+  if (review && visibleInShell(review, root)) return null;
+  const candidates = [
+    ...root.querySelectorAll<HTMLElement>("[data-conversation-canvas] > header"),
+    ...root.querySelectorAll<HTMLElement>(".context-workspace .context-topbar"),
+    ...root.querySelectorAll<HTMLElement>(`.${styles.routeHeader}`),
+  ];
+  const header = candidates.find(candidate => visibleInShell(candidate, root));
+  if (header) return { element: header, fallback: false };
+  // Session loading and failure pages have no header. Give restoration its own
+  // normal-flow chrome row before the stage instead of covering its banner.
+  const workspace = root.querySelector<HTMLElement>(`.${styles.workspace}`);
+  return workspace && visibleInShell(workspace, root) ? { element: workspace, fallback: true } : null;
+}
+
+const sameRestoreHost = (left: RestoreHost | null, right: RestoreHost | null) =>
+  left?.element === right?.element && left?.fallback === right?.fallback;
+
 /** Local presentation only; Session and account state remain server-owned. */
 export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
   const t = useT();
   const locale = useLocale();
   const { layout, setLayout } = useWorkspaceSidebarLayout();
   const [preview, setPreview] = useState<SidebarLayout | null>(null);
+  const [restoreHost, setRestoreHost] = useState<RestoreHost | null>(null);
   const mobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
   const viewportWidth = useSyncExternalStore(subscribeViewport, () => window.innerWidth, () => 1024);
   const shell = useRef<HTMLDivElement>(null);
+  const sidebarElement = useRef<HTMLElement>(null);
+  const restoreFocus = useRef<RestoreFocusRequest | null>(null);
   const drag = useRef<{ pointerId: number; startX: number; startWidth: number; initial: SidebarLayout; next: SidebarLayout } | null>(null);
   const sidebarId = useId();
   const current = preview ?? layout;
   const hidden = !mobile && current.hidden;
   const availableWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, viewportWidth - 360));
   const width = current.hidden ? 0 : current.collapsed ? 72 : Math.min(availableWidth, current.width);
+
+  useLayoutEffect(() => {
+    if (hidden || mobile) {
+      restoreFocus.current = null;
+      return;
+    }
+    const request = restoreFocus.current;
+    if (!request) return;
+    const toggle = request.sidebar.querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")
+      ?? request.sidebar.querySelector<HTMLButtonElement>("button");
+    let frame: number;
+    let attempts = 0;
+    let cancelled = false;
+    const cleanup = () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", cancel, true);
+      document.removeEventListener("focusin", userFocus, true);
+      window.removeEventListener("blur", cancel);
+    };
+    const cancel = () => {
+      if (restoreFocus.current === request) restoreFocus.current = null;
+      cleanup();
+    };
+    const userFocus = (event: FocusEvent) => {
+      if (event.target !== toggle && event.target !== request.source) cancel();
+    };
+    const focus = () => {
+      if (cancelled) return;
+      const active = document.activeElement;
+      const moved = active && active !== document.body && active !== document.documentElement
+        && active !== request.source && active !== toggle && active.isConnected;
+      // Request identity, route and DOM owners fence delayed focus to this
+      // explicit restore. A later user choice always owns focus instead.
+      if (restoreFocus.current !== request || shell.current !== request.shell || sidebarElement.current !== request.sidebar
+        || !request.chrome.isConnected || !request.sidebar.isConnected || !toggle?.isConnected
+        || `${window.location.pathname}${window.location.search}` !== request.route || !document.hasFocus() || moved) {
+        cancel();
+        return;
+      }
+      if (!request.sidebar.inert && !toggle.disabled && visibleInShell(toggle, request.shell)) {
+        toggle.focus({ preventScroll: true });
+      }
+      if (cancelled) return;
+      if (document.activeElement === toggle || ++attempts >= 3) {
+        cancel();
+      } else {
+        frame = window.requestAnimationFrame(focus);
+      }
+    };
+    // The browser must first apply the inert/visibility update. A rejected
+    // focus call remains pending until actual focus readback or the bound.
+    frame = window.requestAnimationFrame(focus);
+    document.addEventListener("pointerdown", cancel, true);
+    document.addEventListener("focusin", userFocus, true);
+    window.addEventListener("blur", cancel);
+    return cleanup;
+  }, [hidden, mobile]);
+
+  useLayoutEffect(() => {
+    const root = shell.current;
+    if (!hidden || !root) {
+      setRestoreHost(null);
+      return;
+    }
+    const update = () => {
+      const next = restoreTarget(root);
+      setRestoreHost(previous => sameRestoreHost(previous, next) ? previous : next);
+    };
+    update();
+    // Route and admission transitions can replace chrome without changing the
+    // saved sidebar preference. Observe presentation structure, not page data.
+    const observer = new MutationObserver(update);
+    observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden", "inert", "aria-hidden", "style"] });
+    return () => observer.disconnect();
+  }, [hidden]);
 
   function maxWidth() {
     return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, (shell.current?.clientWidth || window.innerWidth) - 360));
@@ -78,6 +192,24 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
     setLayout(next);
   }
 
+  const restoreButton = <button
+    aria-controls={sidebarId}
+    aria-expanded={false}
+    aria-label={t("显示侧边栏")}
+    className={styles.sidebarRestore}
+    onClick={() => {
+      if (shell.current && sidebarElement.current && restoreHost) restoreFocus.current = {
+        source: document.activeElement, shell: shell.current, sidebar: sidebarElement.current, chrome: restoreHost.element,
+        route: `${window.location.pathname}${window.location.search}`,
+      };
+      setLayout({ ...layout, hidden: false, collapsed: false });
+    }}
+    type="button"
+  >
+    <SidebarSimple aria-hidden="true" size={19} />
+    <span aria-hidden="true" className={styles.sidebarRestoreLabel}>{t("显示侧边栏")}</span>
+  </button>;
+
   return (
     <div
       className={`ts-workspace-theme quiet-workspace ${styles.shell}`}
@@ -89,10 +221,14 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
       ref={shell}
       style={{ "--workspace-sidebar-width": `${width}px` } as CSSProperties}
     >
-      <aside aria-hidden={hidden || undefined} aria-label={t("capri 工作台")} className={styles.sidebar} id={sidebarId} inert={hidden}>
+      <aside aria-hidden={hidden || undefined} aria-label={t("capri 工作台")} className={styles.sidebar} id={sidebarId} inert={hidden} ref={sidebarElement}>
         <WorkspaceSidebarPresentation value={current}>{sidebar}</WorkspaceSidebarPresentation>
       </aside>
       {children}
+      {hidden && preview === null && restoreHost ? createPortal(
+        restoreHost.fallback ? <div className={styles.sidebarRestoreFallback} data-sidebar-restore-fallback>{restoreButton}</div> : restoreButton,
+        restoreHost.element,
+      ) : null}
       <div
         aria-controls={sidebarId}
         aria-label={hidden ? t("显示侧边栏") : t("调整侧边栏宽度")}

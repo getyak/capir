@@ -203,7 +203,9 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
                   <PersonDirectoryAvatar id={person.id} label={person.label} url={person.avatarUrl} size={18} />
                   <span className={styles.identity}>
                     <strong>{person.label}</strong>
-                    <small>{person.contexts[0]?.label ?? t("联系人")}</small>
+                    <small>{(filter ? person.contexts.find(context =>
+                      context.label.normalize("NFKC").toLocaleLowerCase().includes(filter))?.label : undefined)
+                      ?? person.contexts[0]?.label ?? t("联系人")}</small>
                   </span>
                 </Link>
                 <ListOrderMenu control={order.control(person.id)} label={person.label} />
