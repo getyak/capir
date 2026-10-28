@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { ScriptedAgentProvider, type AgentProvider, type AgentToolResult } from "@talent-signal/agent";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { AuthContext } from "./auth.js";
 import { admitConversationQueueEntry, mutateConversationQueueEntry } from "./conversationQueueAdmission.js";
 import { claimNextConversationQueueEntry, finalizeConversationQueueEntry, readConversationQueueSnapshot,
@@ -33,6 +33,13 @@ beforeAll(async () => {
   expect((await pool.query("SELECT current_database() AS name")).rows[0]?.name).toBe(new URL(url!).pathname.slice(1));
 });
 afterAll(async () => { await pool?.end(); });
+const cleanupFailures: unknown[] = [];
+afterEach(() => {
+  const errors = cleanupFailures.splice(0);
+  // A hook failure is reported alongside a failing test body, rather than
+  // replacing its assertion error from inside a finally block.
+  if (errors.length) throw new AggregateError(errors, "GET-298 synthetic fixture cleanup failed");
+});
 
 async function fixture() {
   const accountId = randomUUID(), userId = randomUUID(), sessionId = randomUUID(), personId = randomUUID();
@@ -51,14 +58,20 @@ async function fixture() {
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 async function removeFixture(f: Fixture) {
+  try {
   const tables = (await pool!.query<{ table_name: string }>(
     "SELECT table_name FROM lab_test_workspace_table_manifest WHERE scope='account' ORDER BY table_name",
-  )).rows.map(row => row.table_name);
+  )).rows.map(row => row.table_name).filter(table => table !== "harness_source_generations");
   const targets = [...tables, "sessions"];
   await pool!.query(`WITH ${targets.map((table, i) => `d${i} AS (DELETE FROM "${table}" WHERE account_id=$1 RETURNING 1)`).join(",")}
     SELECT ${targets.map((_, i) => `(SELECT count(*) FROM d${i})`).join("+")}`, [f.accountId]);
   await pool!.query("DELETE FROM users WHERE account_id=$1", [f.accountId]);
+  // Deletes from source tables invalidate the harness and upsert its account
+  // generation. Remove that control-plane row only after those triggers and
+  // user cleanup have finished; deleting it in the same CTE lets it reappear.
+  await pool!.query("DELETE FROM harness_source_generations WHERE account_id=$1", [f.accountId]);
   await pool!.query("DELETE FROM accounts WHERE id=$1", [f.accountId]);
+  } catch (error) { cleanupFailures.push(error); }
 }
 const text = "Lin prefers written agendas before meetings. Prepare a Memory draft for review.";
 async function admit(f: Fixture, overrides: Record<string, unknown> = {}) {
