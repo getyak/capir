@@ -545,7 +545,7 @@ export async function loadWorkspaceSession(
   if (!isWorkspaceSessionId(sessionId)) {
     throw new TalentSignalHttpError(400, "agent_session_invalid", "对话标识无效。", null);
   }
-  const response = await (await client()).getAgentSession(sessionId);
+  const response = await (await client()).getAgentSession(sessionId, undefined, { includeMemoryDraftTargets: true });
   if (!matchesTypeBox(AgentSessionResponseSchema, response)) {
     throw new TalentSignalHttpError(
       502,

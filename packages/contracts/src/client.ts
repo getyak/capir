@@ -1363,8 +1363,11 @@ export class TalentSignalClient {
     return this.request("/v1/agent/preferences", { method: "PUT", body: request });
   }
 
-  getAgentSession(id: string, signal?: AbortSignal): Promise<AgentSessionResponse> {
-    return this.request(`/v1/agent-sessions/${encodeURIComponent(id)}`, { method: "GET", ...(signal ? { signal } : {}) });
+  getAgentSession(id: string, signal?: AbortSignal, options?: { includeMemoryDraftTargets?: boolean }): Promise<AgentSessionResponse> {
+    return this.request(`/v1/agent-sessions/${encodeURIComponent(id)}`, { method: "GET",
+      // Display-only negotiation keeps legacy strict DTO readers compatible.
+      ...(options?.includeMemoryDraftTargets ? { headers: { "x-conversation-memory-draft-target": "1" } } : {}),
+      ...(signal ? { signal } : {}) });
   }
 
   saveAgentSession(id: string, request: AgentSessionMutationRequest, signal?: AbortSignal): Promise<AgentSessionResponse> {
@@ -1376,7 +1379,7 @@ export class TalentSignalClient {
   }
 
   admitConversationQueueEntry(request: ConversationQueueAdmitRequest, signal?: AbortSignal): Promise<ConversationQueueAdmitResponse> {
-    return this.request(`/v1/agent-sessions/${encodeURIComponent(request.session_id)}/conversation-queue`, { method: "POST", body: request, ...(signal ? { signal } : {}) });
+    return this.request(`/v1/agent-sessions/${encodeURIComponent(request.session_id)}/conversation-queue${request.memory_draft_target ? "/memory-draft" : ""}`, { method: "POST", body: request, ...(signal ? { signal } : {}) });
   }
 
   getConversationQueue(sessionId: string, signal?: AbortSignal): Promise<ConversationQueueSnapshot> {

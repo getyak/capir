@@ -239,3 +239,27 @@ it("preserves host result identity without projecting internal continuation as a
   expect(restored.map(message => message.role)).toEqual(["assistant"]);
   expect(JSON.stringify(restored)).not.toContain(base.objective);
 });
+
+it("keeps the selected Memory draft intention visible through queue, handoff and canonical history without exposing IDs", () => {
+  const target = { person_id: "11111111-1111-4111-8111-111111111111" };
+  const canonical = { ...turn(), memoryDraftTarget: target };
+  const entry = { queue_entry_id: MESSAGE, message_id: MESSAGE, sequence: 1, status: "queued", objective: canonical.objective, created_at: canonical.createdAt, updated_at: canonical.createdAt, revision: 1, run_id: null, stage: null, cancel_requested: false, failure_code: null, memory_draft_target: target } as ConversationQueueEntry;
+  for (const projected of [
+    sessionMessages({ turns: [canonical], active: null, preview: null }),
+    sessionMessages({ turns: [], active: entry, preview: null }),
+    sessionMessages({ turns: [], active: null, queued: [entry], preview: null }),
+    sessionMessages({ turns: [], active: null, preview: null, handoff: [{ messageId: MESSAGE, objective: canonical.objective, createdAt: canonical.createdAt, memoryDraftTarget: target, memoryDraftTargetLabel: "Lin" }] }),
+  ]) {
+    const marker = projected[0].content.find(part => part.type === "data" && part.name === "talent-signal.memory-draft-target");
+    expect(marker).toBeDefined();
+    expect(JSON.stringify(marker)).not.toContain(target.person_id);
+  }
+});
+
+it("shows the original target as unconfirmed when a same-ID server message lost that scope", () => {
+  const canonical = turn();
+  const messages = sessionMessages({ turns: [canonical], active: null, preview: null, localMemoryTargets: { [MESSAGE]: { target: { person_id: "11111111-1111-4111-8111-111111111111" }, label: "Lin" } } });
+  const marker = messages[0].content.find(part => part.type === "data" && part.name === "talent-signal.memory-draft-target");
+  expect(marker).toMatchObject({ data: { label: "Lin", unconfirmed: true } });
+  expect(JSON.stringify(marker)).not.toContain("11111111-1111-4111-8111-111111111111");
+});

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { subscribeWorkspaceRefresh, workspaceRefreshGeneration } from "@/lib/workspace-refresh";
 import type {
   ConversationImageManifest,
+  ConversationMemoryDraftTarget,
   ConversationImageUpload,
   ConversationQueueEntry,
   ConversationQueueMutationRequest,
@@ -31,6 +32,8 @@ import {
 import { clearConversationImageStore } from "@/lib/conversation-image-lifecycle";
 import { forgetSessionOrganization } from "@/lib/workspace-session-organization";
 import { sameConversationImages, unresolvedConversationCount } from "./conversation-feedback";
+
+import { isConversationMemoryDraftTarget, memoryDraftFailureKey, sameConversationMemoryDraftTarget } from "@/lib/conversation-memory-draft-target";
 
 const UNVERIFIED_IMAGE_DRAFT = "这批图片未添加。无法确认原有图片有完整的本机副本，离开或刷新可能丢失。请保留此页并重试保存。";
 
@@ -150,7 +153,7 @@ export function useConversation(options: Options) {
     if (!id) return;
     const settled = new Set((history?.turns ?? []).flatMap(sessionHumanMessages).filter(human => {
       const message = local.current.find(item => item.id === human.id);
-      return Boolean(message) && sameConversationImages(message?.images, human.images);
+      return Boolean(message) && sameConversationImages(message?.images, human.images) && sameConversationMemoryDraftTarget(message?.memoryDraftTarget, human.memoryDraftTarget);
     }).map(human => human.id));
     const remaining = local.current.filter(message => { if (!settled.has(message.id)) return true; removeConversationMessage(scope, id, message.id); void removeConversationImages(scope, id, message.id); return false; });
     if (remaining.length !== local.current.length) storeMessages(remaining);
@@ -314,7 +317,9 @@ export function useConversation(options: Options) {
       // The same-ID server row is the authoritative receipt for a lost POST
       // response: reconcile the unknown delivery without any resend.
       const message = local.current.find(item => item.id === entry.message_id);
-      if (message?.delivery === "unknown") updateMessage(entry.message_id, { delivery: "accepted", error: undefined });
+      if (message?.memoryDraftTarget && !sameConversationMemoryDraftTarget(message.memoryDraftTarget, entry.memory_draft_target)) {
+        updateMessage(entry.message_id, { delivery: "unknown", receiptUncertain: true, error: "composer.memoryDraft.unconfirmed" });
+      } else if (message?.delivery === "unknown") updateMessage(entry.message_id, { delivery: "accepted", error: undefined });
     }
     // Observe the completed-event handoff: the active slot can empty before the
     // canonical history read succeeds. Remember the outcome so the surface can
@@ -363,12 +368,17 @@ export function useConversation(options: Options) {
         }
         updateMessage(message.id, { delivery: "sending", receiptUncertain: true, error: undefined });
         try {
-          const response = await request(queueUrl, { method: "POST", body: JSON.stringify({ session_id: id, message_id: message.id, idempotency_key: `web-queue:${message.id}`, objective: message.objective, time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(uploads && uploads.length ? { images: uploads } : {}) }) });
+          const response = await request(`${queueUrl}${message.memoryDraftTarget ? "/memory-draft" : ""}`, { method: "POST", body: JSON.stringify({ session_id: id, message_id: message.id, idempotency_key: `web-queue:${message.id}`, objective: message.objective, ...(message.memoryDraftTarget ? { memory_draft_target: message.memoryDraftTarget } : {}), time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(uploads && uploads.length ? { images: uploads } : {}) }) });
           const admission = await response.json();
           if (!controller || controller.signal.aborted || lifecycle.current !== controller) break;
           if (typeof admission.memory_entry_capability === "string") {
             entryCapabilityRef.current = admission.memory_entry_capability;
             setEntryCapability(admission.memory_entry_capability);
+          }
+          if (message.memoryDraftTarget && !sameConversationMemoryDraftTarget(message.memoryDraftTarget, admission.memory_draft_target)) {
+            updateMessage(message.id, { delivery: "unknown", receiptUncertain: true, error: "composer.memoryDraft.unconfirmed" });
+            setServerExists(true); didAdmit = true;
+            break;
           }
           // Accepted only means the server committed the same message identity.
           // Keep the local preview until canonical history reconciles it, so the
@@ -383,7 +393,7 @@ export function useConversation(options: Options) {
               ? "图片发送遇到服务器错误，尚未确认送达。原图已保留，请核对并重试。"
               : "图片发送连接中断，尚未确认送达。原图已保留，请核对并重试。"
             : "送达结果尚未确认，可核对并重试。";
-          updateMessage(message.id, { delivery: definitive ? "rejected" : "unknown", receiptUncertain: !definitive, error: definitive ? caught.message : failure });
+          updateMessage(message.id, { delivery: definitive ? "rejected" : "unknown", receiptUncertain: !definitive, error: definitive ? memoryDraftFailureKey(caught.code) ?? (message.memoryDraftTarget && caught.status === 404 ? "composer.memoryDraft.serviceUnavailable" : caught.message) : failure });
           if (!controller || controller.signal.aborted) break;
           refuse(caught);
           break;
@@ -682,11 +692,17 @@ export function useConversation(options: Options) {
     } finally { removal.count -= 1; }
   }
 
-  async function submit(): Promise<boolean> {
+  async function submit(intent?: { expectedDraft: string; memoryDraftTarget?: ConversationMemoryDraftTarget; memoryDraftTargetLabel?: string; canClearDraft?: () => boolean }): Promise<boolean> {
+    // Snapshot explicit scope before any durable put. It can never come from a
+    // future composer selection, Session binding, or a retry's live draft.
+    if (intent && (intent.expectedDraft !== draftRef.current || (intent.memoryDraftTarget !== undefined && (!isConversationMemoryDraftTarget(intent.memoryDraftTarget) || !draftRef.current.trim())))) return false;
+    const capturedTarget = intent?.memoryDraftTarget ? { person_id: intent.memoryDraftTarget.person_id } : undefined;
+    const capturedTargetLabel = intent?.memoryDraftTargetLabel?.slice(0, 200);
     if (attachmentReadFailed.current || submitLock.current || restoringAttachments.current || (pendingAttachmentRemovals.current.owner === lifecycle.current && pendingAttachmentRemovals.current.count > 0)) return false;
     const objective = draftRef.current.trim();
     const capturedDraftValue = draftRef.current;
     const capturedAttachments = attachmentsRef.current.slice();
+    if (capturedTarget && capturedAttachments.length) { setError("composer.memoryDraft.textOnly"); return false; }
     if (!ready || !id || unavailable || preparingRef.current || (!objective && capturedAttachments.length === 0) || capturedDraftValue.length > 1000 || unresolvedConversationCount(local.current, snapshotRef.current) >= 50) return false;
     const controller = lifecycle.current;
     if (!controller) return false;
@@ -704,12 +720,12 @@ export function useConversation(options: Options) {
         if (!durable) { setError("图片无法安全保存在本机，草稿和图片仍在输入框中。请恢复存储后重试。"); return false; }
       }
       const lastCreated = local.current.at(-1)?.createdAt;
-      const message: LocalMessage = { id: messageId, objective, ...(manifests.length > 0 ? { images: manifests } : {}), createdAt: new Date(Math.max(Date.now(), lastCreated ? Date.parse(lastCreated) + 1 : 0)).toISOString(), delivery: "pending", receiptUncertain: false, expiresAt: expiry() };
+      const message: LocalMessage = { id: messageId, objective, ...(capturedTarget ? { memoryDraftTarget: capturedTarget, memoryDraftTargetLabel: capturedTargetLabel } : {}), ...(manifests.length > 0 ? { images: manifests } : {}), createdAt: new Date(Math.max(Date.now(), lastCreated ? Date.parse(lastCreated) + 1 : 0)).toISOString(), delivery: "pending", receiptUncertain: false, expiresAt: expiry() };
       if (!writeConversationMessage(scope, id, message)) { await removeConversationImages(scope, id, messageId); setError("无法保存发送状态，内容仍在输入框中。请恢复浏览器存储后重试。"); return false; }
       if (!stillCurrent(controller)) { removeConversationMessage(scope, id, messageId); await removeConversationImages(scope, id, messageId); return false; }
       // Only clear the exact captured draft. Text typed while the put awaited
       // is newer intent and must survive.
-      if (draftRef.current === capturedDraftValue) {
+      if (draftRef.current === capturedDraftValue && (!intent?.canClearDraft || intent.canClearDraft())) {
         const stamp = new Date().toISOString();
         if (writeConversationDraft(scope, id, { value: "", updatedAt: stamp, expiresAt: expiry(), writer: writer.current })) {
           draftStamp.current = stamp; draftRef.current = ""; setDraft("");
@@ -749,22 +765,25 @@ export function useConversation(options: Options) {
     const controller = lifecycle.current;
     if (!stillCurrent(controller)) return;
     let confirmed = false;
+    let observedReceipt: ConversationQueueSnapshot | null = null;
     try {
       const response = await request(queueUrl);
       if (!stillCurrent(controller)) return;
       const next = await response.json() as ConversationQueueSnapshot;
       if (!stillCurrent(controller)) return;
+      observedReceipt = next;
       commitSnapshot(next);
       const owns = (source: ConversationQueueSnapshot | null | undefined) => Boolean(
-        source?.active?.message_id === message.id
-        || (source?.queued ?? []).some(item => item.message_id === message.id),
+        (source?.active?.message_id === message.id && sameConversationMemoryDraftTarget(message.memoryDraftTarget, source.active.memory_draft_target))
+        || (source?.queued ?? []).some(item => item.message_id === message.id && sameConversationMemoryDraftTarget(message.memoryDraftTarget, item.memory_draft_target)),
       );
       confirmed = owns(next) || owns(snapshotRef.current)
-        || Boolean((detailRef.current?.turns ?? []).some(turn => turn.id === message.id));
+        || Boolean((detailRef.current?.turns ?? []).flatMap(sessionHumanMessages).some(turn => turn.id === message.id && sameConversationMemoryDraftTarget(message.memoryDraftTarget, turn.memoryDraftTarget)));
       if (confirmed) { setServerExists(true); pendingHandoff.current = id; handoffWhenSettled(); }
       await refreshDetail();
       if (!stillCurrent(controller)) return;
-      confirmed ||= Boolean(detailRef.current?.turns.some(turn => turn.id === message.id));
+      confirmed ||= Boolean(detailRef.current?.turns.flatMap(sessionHumanMessages).some(turn => turn.id === message.id && sameConversationMemoryDraftTarget(message.memoryDraftTarget, turn.memoryDraftTarget)));
+
     }
     catch (caught) {
       // An aborted or delayed old owner must neither clear the new account's
@@ -782,6 +801,15 @@ export function useConversation(options: Options) {
       }
     }
     if (!stillCurrent(controller) || confirmed) return;
+    if (message.memoryDraftTarget && (
+      [observedReceipt?.active, ...(observedReceipt?.queued ?? []), snapshotRef.current?.active, ...(snapshotRef.current?.queued ?? [])].some(entry => entry?.message_id === message.id)
+      || detailRef.current?.turns.flatMap(sessionHumanMessages).some(turn => turn.id === message.id)
+    )) {
+      // A same-ID receipt with another scope is not absence. Keep the exact
+      // intention and never retry it as a new or unbound message.
+      updateMessage(message.id, { delivery: "unknown", receiptUncertain: true, error: "composer.memoryDraft.unconfirmed" });
+      return;
+    }
     if (local.current.some(item => item.id === message.id)) updateMessage(message.id, { delivery: "pending", receiptUncertain: message.receiptUncertain ?? message.delivery === "unknown", error: undefined });
   }
   function discardRejectedDelivery(messageId: string) {

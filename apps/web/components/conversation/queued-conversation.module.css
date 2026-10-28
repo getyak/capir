@@ -290,3 +290,12 @@
   .taskSlot { grid-column:1 / -1; grid-row:2; justify-self:center; width:auto; max-width:100%; }
   .taskSlot:empty { display:none; }
 }
+
+.memoryDraftSelection { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 4px 8px; padding: 0 4px 0 10px; border-inline-start: 2px solid var(--accent); font-size: .8125rem; line-height: 1.5; }
+.memoryDraftSelection > div { min-width: 0; overflow-wrap: anywhere; }
+.memoryDraftSelection small { display: block; color: var(--muted); font-size: .75rem; }
+.memoryDraftSelection button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; flex: 0 0 auto; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.memoryDraftSelection button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.memoryDraftMarker { display: block; margin: 4px 0; color: var(--muted); font-size: .75rem; line-height: 1.5; }
+
+.memoryDraftMarker p { margin: 4px 0 0; }

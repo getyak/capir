@@ -1,11 +1,13 @@
 /** Small, expiring delivery outbox. Each immutable message has its own key so tabs cannot overwrite each other. */
-import type { ConversationImageManifest } from "@talent-signal/contracts";
+import type { ConversationImageManifest, ConversationMemoryDraftTarget } from "@talent-signal/contracts";
+
+import { isConversationMemoryDraftTarget } from "./conversation-memory-draft-target";
 
 const PREFIX = "talent-signal:conversation:v1:";
 const DAY = 86_400_000;
 const uuid = /^[0-9a-f-]{36}$/iu;
 export type Delivery = "pending" | "sending" | "unknown" | "accepted" | "rejected";
-export type LocalMessage = { id: string; objective: string; images?: ConversationImageManifest[]; createdAt: string; delivery: Delivery; expiresAt: number; error?: string; receiptUncertain?: boolean };
+export type LocalMessage = { id: string; objective: string; images?: ConversationImageManifest[]; memoryDraftTarget?: ConversationMemoryDraftTarget; memoryDraftTargetLabel?: string; createdAt: string; delivery: Delivery; expiresAt: number; error?: string; receiptUncertain?: boolean };
 export type LocalDraft = { value: string; updatedAt: string; expiresAt: number; writer: string };
 function storage(): Storage | null { try { return typeof window === "undefined" ? null : window.localStorage; } catch { return null; } }
 function key(scope: string, session: string, suffix: string) { return `${PREFIX}${scope}:${session}:${suffix}`; }
@@ -40,7 +42,10 @@ export function readConversationMessages(scope: string, session: string, target 
         ["image/png", "image/jpeg", "image/webp"].includes(image.media_type) &&
         Number.isInteger(image.byte_size) && image.byte_size > 0 && image.byte_size <= 10_000_000 &&
         /^[a-f0-9]{64}$/u.test(image.content_hash)));
-      if (!entry || !uuid.test(entry.id) || typeof entry.objective !== "string" || entry.objective.length > 1000 || (!entry.objective.trim() && !(entry.images?.length)) || !imagesValid || !Number.isFinite(Date.parse(entry.createdAt)) || !["pending", "sending", "unknown", "accepted", "rejected"].includes(entry.delivery) || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= Date.now() || entry.expiresAt > Date.now() + DAY) { target.removeItem(entryKey); continue; }
+      // A damaged explicit scope must never silently become an unbound send.
+      const targetValid = entry?.memoryDraftTarget === undefined || (isConversationMemoryDraftTarget(entry.memoryDraftTarget) && typeof entry.objective === "string" && Boolean(entry.objective.trim()));
+      const labelValid = entry?.memoryDraftTargetLabel === undefined || (typeof entry.memoryDraftTargetLabel === "string" && entry.memoryDraftTargetLabel.length <= 200);
+      if (!entry || !targetValid || !labelValid || !uuid.test(entry.id) || typeof entry.objective !== "string" || entry.objective.length > 1000 || (!entry.objective.trim() && !(entry.images?.length)) || !imagesValid || !Number.isFinite(Date.parse(entry.createdAt)) || !["pending", "sending", "unknown", "accepted", "rejected"].includes(entry.delivery) || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= Date.now() || entry.expiresAt > Date.now() + DAY) { target.removeItem(entryKey); continue; }
       entries.push(entry);
     }
   } catch { /* Keep the valid rows already read. */ }

@@ -112,6 +112,7 @@ function displayBlocks(blocks: ChatResponseBlock[]) {
 type QueueTurn = {
   id: string;
   objective: string;
+  memoryDraftTarget?: import("@talent-signal/contracts").ConversationMemoryDraftTarget;
   images?: ConversationImageManifest[];
   /** Delivered steering messages folded before this turn's one response. */
   steeredMessages?: ConversationQueueSteeredMessage[];
@@ -146,11 +147,13 @@ function queueTurn(
   fold: {
     steered?: readonly ConversationQueueSteeredMessage[];
     execution?: ConversationQueueExecutionRecord;
+    memoryDraftTarget?: import("@talent-signal/contracts").ConversationMemoryDraftTarget;
   } = {},
 ): QueueTurn {
   return {
     id: messageId,
     objective,
+    ...(fold.memoryDraftTarget ? { memoryDraftTarget: fold.memoryDraftTarget } : {}),
     ...(images.length > 0 ? { images: [...images] } : {}),
     ...(fold.steered && fold.steered.length > 0 ? { steeredMessages: [...fold.steered] } : {}),
     createdAt: acceptedAt,
@@ -288,6 +291,7 @@ export async function persistConversationQueueCompletion(
     objective: string;
     acceptedAt: string;
     images: ConversationImageManifest[];
+    memoryDraftTarget?: import("@talent-signal/contracts").ConversationMemoryDraftTarget;
     result: ConversationQueueExecutionResult;
   },
 ): Promise<void> {
@@ -340,6 +344,7 @@ export async function persistConversationQueueCompletion(
       ...(hostResult ? { hostResult } : {}),
     }, input.images, {
       steered: fold.delivered,
+      ...(input.memoryDraftTarget ? { memoryDraftTarget: input.memoryDraftTarget } : {}),
       ...(input.result.execution ? { execution: input.result.execution } : {}),
     }),
     { title: body.session_title ?? null, updatedAt: body.created_at },
@@ -369,6 +374,7 @@ export async function persistConversationQueueCancellation(
     acceptedAt: string;
     images: ConversationImageManifest[];
     partialText: string;
+    memoryDraftTarget?: import("@talent-signal/contracts").ConversationMemoryDraftTarget;
     stoppedAt: string;
     execution?: ConversationQueueExecutionRecord;
   },
@@ -415,7 +421,7 @@ export async function persistConversationQueueCancellation(
       disposition: "answer",
       blocks: [block],
       createdAt: input.stoppedAt,
-    }, input.images, { steered: fold.delivered, ...(input.execution ? { execution: input.execution } : {}) }),
+    }, input.images, { steered: fold.delivered, ...(input.memoryDraftTarget ? { memoryDraftTarget: input.memoryDraftTarget } : {}), ...(input.execution ? { execution: input.execution } : {}) }),
     { title: null, updatedAt: input.stoppedAt },
   );
 }

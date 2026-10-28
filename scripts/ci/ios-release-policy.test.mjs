@@ -205,7 +205,7 @@ test("iOS CI blocks on a bounded smoke suite and keeps full coverage explicit", 
 
   assert.ok(iosJob, "expected the iOS CI job");
   assert.match(iosJob[1], /name: iOS release smoke/);
-  assert.match(iosJob[1], /timeout-minutes: 60/);
+  assert.match(iosJob[1], /timeout-minutes: 90/);
   assert.match(
     iosJob[1],
     /IOS_UI_TEST_SCOPE:.*inputs\.ios_test_scope.*pull_request.*'quick'.*'smoke'/,

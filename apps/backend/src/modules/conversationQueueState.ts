@@ -32,6 +32,7 @@ const ACTIVE_STATUSES: ConversationQueueEntryStatus[] = [
 
 export interface ConversationQueueEntryRow {
   host_result: unknown;
+  memory_draft_target_person_id?: string | null;
   account_id: string;
   session_id: string;
   id: string;
@@ -93,6 +94,7 @@ export class ConversationQueueLeaseLostError extends Error {
 
 export interface ClaimedConversationQueueEntry {
   accountId: string;
+  memoryDraftTarget?: { person_id: string } | null;
   /** Host-only typed MCP human result; never a user-authored claim. */
   hostResult: import("@talent-signal/contracts").McpHumanResult | null;
   sessionId: string;
@@ -134,6 +136,7 @@ function toEntry(
     status: row.status,
     objective: row.objective ?? "",
     ...(row.host_result ? { host_result: row.host_result as McpHumanResult } : {}),
+    ...(row.memory_draft_target_person_id ? { memory_draft_target: { person_id: row.memory_draft_target_person_id } } : {}),
     ...(images && images.length > 0 ? { images } : {}),
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
@@ -143,7 +146,7 @@ function toEntry(
     stage: row.stage,
     cancel_requested: row.cancel_requested,
     failure_code: row.failure_code,
-    accepts_steering: row.status === "running" && !row.cancel_requested && row.steer_closed_at === null && row.result === null,
+    accepts_steering: row.status === "running" && !row.memory_draft_target_person_id && !row.cancel_requested && row.steer_closed_at === null && row.result === null,
     ...(row.steer_group_entry_id
       ? {
           steer_delivered: row.steer_state === "delivered",
@@ -333,6 +336,7 @@ export async function claimNextConversationQueueEntry(
       await client.query<ConversationQueueEntryRow>(
         `UPDATE conversation_queue_entries
          SET status='running', run_id=$3, lease_owner=$4, lease_generation=$5,
+             memory_draft_target_claim_revision=memory_draft_target_claim_revision+1,
              lease_expires_at=now()+($6::int * interval '1 millisecond'),
              attempt=attempt+1, revision=revision+1, claimed_at=now(), updated_at=now(), cancel_requested=false, cancel_auto_continue=false, steer_closed_at=CASE WHEN $7::boolean THEN NULL ELSE now() END
          WHERE account_id=$1 AND id=$2 AND status='queued'
@@ -344,7 +348,7 @@ export async function claimNextConversationQueueEntry(
           input.workerId,
           generation,
           CONVERSATION_QUEUE_LEASE_MS,
-          input.acceptsSteering === true,
+          input.acceptsSteering === true && !next.memory_draft_target_person_id,
         ],
       )
     ).rows[0];
@@ -352,6 +356,7 @@ export async function claimNextConversationQueueEntry(
     await bumpConversationQueueState(client, input.accountId, input.sessionId);
     return {
       accountId: updated.account_id,
+      memoryDraftTarget: updated.memory_draft_target_person_id ? { person_id: updated.memory_draft_target_person_id } : null,
       hostResult: updated.host_result
         ? (updated.host_result as import("@talent-signal/contracts").McpHumanResult)
         : null,
@@ -500,6 +505,7 @@ export async function readConversationQueueSteeringLeader(
       `SELECT id, run_id FROM conversation_queue_entries
        WHERE account_id=$1 AND session_id=$2 AND status='running'
          AND cancel_requested=false AND result IS NULL AND steer_closed_at IS NULL
+         AND memory_draft_target_person_id IS NULL
        LIMIT 1`,
       [accountId, sessionId],
     )
@@ -518,7 +524,7 @@ export async function openConversationQueueSteeringIntake(
     await lockConversationQueueSession(client, fence.sessionId);
     const opened = await client.query(
       `UPDATE conversation_queue_entries SET steer_closed_at=NULL, revision=revision+1, updated_at=now()
-       WHERE ${fencePredicate(1)} AND result IS NULL`, fenceValues(fence),
+       WHERE ${fencePredicate(1)} AND result IS NULL AND memory_draft_target_person_id IS NULL`, fenceValues(fence),
     );
     if (opened.rowCount !== 1) throw new ConversationQueueLeaseLostError();
     await bumpConversationQueueState(client, fence.accountId, fence.sessionId);
@@ -739,7 +745,7 @@ export async function finalizeConversationQueueEntry(
   const outcome = await inTransaction(pool, async (client) => {
     const scrub = input.status === "completed" || input.status === "cancelled";
     const resultClause = input.keepResult ? "result=result" : "result=NULL, result_recorded_at=NULL";
-    const objectiveClause = scrub ? "objective=NULL," : "";
+    const objectiveClause = scrub ? "objective=NULL,memory_draft_target_person_id=NULL," : "";
     const predicate =
       input.status === "cancelled" ? fencePredicateAllowCancel(1) : fencePredicate(1);
     // One statement: lock the fenced row, clear the prioritize auto-continue
@@ -790,7 +796,7 @@ export async function finalizeConversationQueueEntry(
     if (input.status === "completed" || input.status === "cancelled") {
       await client.query(
         `UPDATE conversation_queue_entries
-         SET status=$3, content_state='scrubbed', objective=NULL, stage=NULL, failure_code=NULL,
+         SET status=$3, content_state='scrubbed', objective=NULL, memory_draft_target_person_id=NULL, stage=NULL, failure_code=NULL,
              steer_group_entry_id=NULL, steer_state='awaiting', steer_delivered_at=NULL,
              completed_at=now(), updated_at=now(), revision=revision+1
          WHERE account_id=$1 AND steer_group_entry_id=$2 AND steer_state='delivered'`,
@@ -864,6 +870,7 @@ export async function reclaimStaleConversationQueueEntry(
       await client.query<ConversationQueueEntryRow>(
         `UPDATE conversation_queue_entries
          SET lease_owner=$3, lease_generation=lease_generation+1,
+             memory_draft_target_claim_revision=memory_draft_target_claim_revision+1,
              lease_expires_at=now()+($4::int * interval '1 millisecond'), updated_at=now()
          WHERE account_id=$1 AND id=$2 AND status='running'
            AND (lease_expires_at IS NULL OR lease_expires_at<=now())
@@ -875,6 +882,7 @@ export async function reclaimStaleConversationQueueEntry(
     await bumpConversationQueueState(client, input.accountId, input.sessionId);
     return {
       accountId: updated.account_id,
+      memoryDraftTarget: updated.memory_draft_target_person_id ? { person_id: updated.memory_draft_target_person_id } : null,
       hostResult: updated.host_result
         ? (updated.host_result as import("@talent-signal/contracts").McpHumanResult)
         : null,

@@ -1,6 +1,6 @@
 import { Type, type Static, type TSchema } from "@sinclair/typebox";
 import { CONTRACT_VERSION } from "./constants.js";
-import { ConversationImageManifestSchema } from "./conversationQueueSchemas.js";
+import { ConversationImageManifestSchema, ConversationMemoryDraftTargetSchema } from "./conversationQueueSchemas.js";
 import { McpHumanResultSchema } from "./mcpInteractionSchemas.js";
 
 const obj = { additionalProperties: false } as const;
@@ -247,6 +247,8 @@ export const AgentSessionPayloadSchema = Type.Object(
         {
           id,
           objective: text(12000),
+          // Historical display only; never restores a later Run's authority.
+          memoryDraftTarget: Type.Optional(ConversationMemoryDraftTargetSchema),
           response,
           images: Type.Optional(
             Type.Array(ConversationImageManifestSchema, { maxItems: 10 }),

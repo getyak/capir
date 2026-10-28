@@ -10,7 +10,7 @@ import { useT } from "./locale-provider";
 import styles from "./workspace-composer.module.css";
 
 /** Directory-only preview: no Memory fetch, identity binding or model request. */
-export function ComposerPersonReference({ person, disabled = false }: { person: SidebarPerson; disabled?: boolean }) {
+export function ComposerPersonReference({ person, disabled = false, onPrepareMemoryDraft }: { person: SidebarPerson; disabled?: boolean; onPrepareMemoryDraft?: () => void }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -40,7 +40,8 @@ export function ComposerPersonReference({ person, disabled = false }: { person: 
         <strong>{person.label}</strong></div>
       <p>{person.contexts.length ? person.contexts.map(context => context.label).join(" · ") : t("暂无关系情境")}</p>
       <small>{t("已加入文字引用；不会自动绑定身份或读取人物记忆。")}</small>
-      <Link href={`/workspace/people/${encodeURIComponent(person.id)}`}>{t("查看人物档案")}</Link>
+      {onPrepareMemoryDraft ? <button type="button" className={styles.referenceAction} onClick={() => { restoreFocus.current = false; onPrepareMemoryDraft(); setOpen(false); }}>{t("composer.memoryDraft.prepare")}</button> : null}
+      <Link prefetch={false} href={`/workspace/people/${encodeURIComponent(person.id)}`}>{t("查看人物档案")}</Link>
     </PopoverContent>
   </Popover>;
 }

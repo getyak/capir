@@ -42,7 +42,7 @@ if (!FormatRegistry.Has("date-time"))
   );
 
 /**
- * Narrow, non-mutating body validation for the mutation union.
+ * Narrow, non-mutating validation for mutations and explicit-target admission.
  *
  * Fastify's default Ajv uses `removeAdditional`, which mutates an `anyOf`
  * union branch before later branches are checked; the first `edit` branch then
@@ -52,18 +52,23 @@ if (!FormatRegistry.Has("date-time"))
  */
 function conversationQueueValidatorCompiler(
   app: FastifyInstance,
+  memoryDraftAdmission = false,
 ): FastifySchemaCompiler<FastifySchema> {
   return (routeSchema) => {
     const schemaID = (routeSchema.schema as { $id?: string } | undefined)?.$id;
-    if (routeSchema.httpPart === "body" && schemaID === "ConversationQueueMutationRequest") {
+    // The admission schema has no $id. Select it explicitly for the dedicated
+    // route instead of falling through to Ajv's mutating default.
+    if (routeSchema.httpPart === "body" && (schemaID === "ConversationQueueMutationRequest" || memoryDraftAdmission)) {
+      const schema = schemaID === "ConversationQueueMutationRequest"
+        ? ConversationQueueMutationRequestSchema : ConversationQueueAdmitRequestSchema;
       return (data) =>
-        Value.Check(ConversationQueueMutationRequestSchema, data)
+        Value.Check(schema, data)
           ? { value: data }
           : {
               error: new ApiError(
                 400,
-                "CONVERSATION_QUEUE_MUTATION_INVALID",
-                "The queue mutation does not match its bounded contract.",
+                schemaID === "ConversationQueueMutationRequest" ? "CONVERSATION_QUEUE_MUTATION_INVALID" : "MEMORY_DRAFT_TARGET_ADMISSION_INVALID",
+                "The queue request does not match its bounded contract.",
               ),
             };
     }
@@ -81,6 +86,7 @@ export function registerConversationQueueRoutes(
   const streams = new Set<() => void>();
   app.addHook("preClose", async () => { for (const close of streams) close(); });
   const mutationValidatorCompiler = conversationQueueValidatorCompiler(app);
+  const memoryDraftValidatorCompiler = conversationQueueValidatorCompiler(app, true);
   const common = {
     preHandler: authenticate,
     schema: { security: [{ bearerSession: [] }], tags: ["agent-sessions"] },
@@ -90,10 +96,14 @@ export function registerConversationQueueRoutes(
     { additionalProperties: false },
   );
 
+  // The separate path fails closed against an older API whose Ajv would
+  // otherwise strip the unknown target field and admit ordinary chat.
+  for (const memoryDraft of [false, true]) {
   app.post<{ Params: { id: string }; Body: ConversationQueueAdmitRequest }>(
-    "/v1/agent-sessions/:id/conversation-queue",
+    `/v1/agent-sessions/:id/conversation-queue${memoryDraft ? "/memory-draft" : ""}`,
     {
       ...common,
+      ...(memoryDraft ? { validatorCompiler: memoryDraftValidatorCompiler } : {}),
       bodyLimit: 40_100_000,
       schema: {
         ...common.schema,
@@ -122,6 +132,12 @@ export function registerConversationQueueRoutes(
           "Host tool results are written by the governed host path and cannot be submitted by a client.",
         );
       }
+      if (memoryDraft && !request.body.memory_draft_target) {
+        throw new ApiError(422, "MEMORY_DRAFT_TARGET_REQUIRED", "Select the Person for this message's Memory draft.");
+      }
+      if (!memoryDraft && request.body.memory_draft_target) {
+        throw new ApiError(422, "MEMORY_DRAFT_TARGET_ENDPOINT_REQUIRED", "Use the explicit Memory draft admission endpoint.");
+      }
       const result = await admitConversationQueueEntry(
         pool,
         request.auth,
@@ -141,6 +157,7 @@ export function registerConversationQueueRoutes(
         .send(result.response);
     },
   );
+  }
 
   app.get<{ Params: { id: string } }>(
     "/v1/agent-sessions/:id/conversation-queue",

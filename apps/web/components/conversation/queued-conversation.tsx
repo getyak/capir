@@ -4,6 +4,7 @@ import { ArrowDown, ArrowUp, DotsThree, PencilSimple, Trash, X } from "@phosphor
 import { useRouter } from "next/navigation";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ThreadPrimitive } from "@assistant-ui/react";
+import { isConversationMemoryDraftTarget, memoryDraftHasAuthoredText, memoryDraftFailureKey, reconcileMemoryDraftTarget, type ComposerMemoryDraftTarget } from "@/lib/conversation-memory-draft-target";
 import { conversationHome } from "@/lib/conversation-local";
 import {
   conversationRunKeyAction,
@@ -60,7 +61,7 @@ export function displayText(objective: string, images: readonly ConversationImag
  * boundary; raw provider or backend errors never reach this text.
  */
 export function queueFailureText(code: string | null, hasImages: boolean, t?: TFunction): string {
-  const key = code === "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED" || code === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED"
+  const key = memoryDraftFailureKey(code) ?? (code === "MODEL_RUN_TOKEN_BUDGET_EXHAUSTED" || code === "CLAUDE_HARNESS_TOKEN_BUDGET_EXHAUSTED"
     ? hasImages
       ? "图片分析已达到本次处理的 token 预算，原图已保留。可重试或移除。"
       : "本次处理已达到 token 预算，消息已保留。可重试或移除。"
@@ -68,7 +69,7 @@ export function queueFailureText(code: string | null, hasImages: boolean, t?: TF
       ? hasImages
         ? "图片分析超时，原图已保留。可重试；反复失败时请移除并重新发送较小的图片。"
         : "本次处理超时，消息已保留。可重试。"
-      : "上次未完成，请重试或移除";
+      : "上次未完成，请重试或移除");
   return t ? t(key) : key;
 }
 
@@ -243,6 +244,31 @@ export function QueuedConversation(props: Props) {
   const readbackOwner = useMemo(() => Symbol(`${composerScope}:${id ?? "unresolved"}`), [composerScope, id]);
   const inspection = useConversationInspectionOwner({ owner: readbackOwner, viewportRef: viewport,
     followsLatestRef: follows, userScrollRef: userScroll, reading, onAwayChange: setAway });
+  const draftIntentVersion = useRef(0);
+  const [memoryTargetState, setMemoryTargetState] = useState<{ owner: symbol; value: string; choice: symbol; target: ComposerMemoryDraftTarget } | null>(null);
+  // Only our native editor's edits can preserve a selected span. A replaced
+  // draft or account/Session owner loses the unsent intention immediately.
+  const memoryTarget = memoryTargetState?.owner === composerOwner && memoryTargetState.value === chat.draft && !chat.unavailable ? memoryTargetState.target : null;
+  if (memoryTargetState && !memoryTarget) setMemoryTargetState(null);
+  // Committed external draft/scope changes also supersede an older Send.
+  // Keep this fence in the commit phase; speculative renders must not mutate
+  // a ref, and an A -> B -> A draft round trip still advances the generation.
+  useLayoutEffect(() => { draftIntentVersion.current += 1; }, [composerOwner, chat.draft, chat.unavailable]);
+  function changeDraft(value: string) {
+    draftIntentVersion.current += 1;
+    setMemoryTargetState(current => {
+      if (!current || current.owner !== composerOwner || current.value !== chat.draft) return null;
+      const target = reconcileMemoryDraftTarget(current.value, value, current.target);
+      return target ? { ...current, value, target } : null;
+    });
+    chat.changeDraft(value);
+  }
+  function prepareMemoryDraft(target: ComposerMemoryDraftTarget) {
+    if (!isConversationMemoryDraftTarget({ person_id: target.person_id }) || chat.draft.slice(target.start, target.end) !== target.text || chat.unavailable) return;
+    draftIntentVersion.current += 1;
+    setMemoryTargetState({ owner: composerOwner, value: chat.draft, choice: Symbol("memory-draft-target"), target });
+  }
+
   const composingRef = useRef<{ owner: symbol | null; value: boolean }>({ owner: composerOwner, value: false });
   const [composition, setComposition] = useState({ owner: composerOwner, value: false });
   useLayoutEffect(() => {
@@ -326,8 +352,8 @@ export function QueuedConversation(props: Props) {
     if (composer instanceof HTMLTextAreaElement && composer.isConnected && !composer.disabled) composer.focus({ preventScroll: true });
   }, [queued, readbackOwner]);
   const imageCount = chat.attachments.length;
-  const canSend = !composing && chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && chat.draft.trim().length <= 1000 && unresolvedConversationCount(chat.messages, chat.snapshot) < 50;
-  const acceptsSteering = Boolean(active?.accepts_steering && !active.cancel_requested);
+  const canSend = !composing && chat.ready && !chat.unavailable && !chat.preparing && !chat.submitting && Boolean(chat.draft.trim() || imageCount) && (!memoryTarget || (!imageCount && memoryDraftHasAuthoredText(chat.draft, memoryTarget))) && chat.draft.trim().length <= 1000 && unresolvedConversationCount(chat.messages, chat.snapshot) < 50;
+  const acceptsSteering = Boolean(active?.accepts_steering && !active.cancel_requested && !memoryTarget);
   const activeVisible = active && !turns.some(turn => turn.id === active.message_id);
   const paused = chat.snapshot?.paused ?? false;
   const hasContent = Boolean(turns.length || chat.messages.length || active || queued.length || Object.keys(chat.handoffEntries).length);
@@ -361,20 +387,23 @@ export function QueuedConversation(props: Props) {
       // The observed server entry owns edits and source timestamps, even when
       // the user reopened this run without any local outbox row.
       const local = messages.get(entry.message_id);
-      messages.set(entry.message_id, { ...local, id: entry.message_id, objective: entry.objective, images: entry.images, createdAt: entry.created_at, delivery: "accepted", expiresAt: local?.expiresAt ?? Date.parse(chat.detail?.expires_at ?? ""), receiptUncertain: false, previewText: chat.handoffPreviews[entry.message_id]?.text });
+      messages.set(entry.message_id, { ...local, id: entry.message_id, objective: entry.objective, images: entry.images, memoryDraftTarget: entry.memory_draft_target, createdAt: entry.created_at, delivery: "accepted", expiresAt: local?.expiresAt ?? Date.parse(chat.detail?.expires_at ?? ""), receiptUncertain: false, previewText: chat.handoffPreviews[entry.message_id]?.text });
     }
     return [...messages.values()].filter(message => !representedIds.has(message.id));
   }, [chat.messages, chat.handoffEntries, chat.handoffPreviews, chat.detail?.expires_at, representedIds]);
   const projectedMessages = useMemo(() => sessionMessages({
     turns, active: activeVisible ? active : null, preview: forming, milestones, queued, milestonesByMessage: milestoneRecords,
+    localMemoryTargets: Object.fromEntries(chat.messages.filter(message => message.memoryDraftTarget).map(message => [message.id, { target: message.memoryDraftTarget!, label: message.memoryDraftTargetLabel }])),
     handoff: outboxRows.map((message) => ({
       messageId: message.id,
       objective: message.objective,
       images: message.images,
+      memoryDraftTarget: message.memoryDraftTarget,
+      memoryDraftTargetLabel: message.memoryDraftTargetLabel,
       createdAt: message.createdAt,
       previewText: message.previewText,
     })),
-  }), [turns, activeVisible, active, forming, milestones, queued, milestoneRecords, outboxRows]);
+  }), [turns, activeVisible, active, forming, milestones, queued, milestoneRecords, outboxRows, chat.messages]);
   const workByMessageId = useMemo(() => {
     const map: Record<string, ConversationWorkStatus> = {};
     const compute = (messageId: string, delivery: LocalMessage["delivery"], error: string | undefined, hasImages: boolean, entry: ConversationQueueEntry | null, entrySlot: "active" | "queued" | null) => {
@@ -533,6 +562,10 @@ export function QueuedConversation(props: Props) {
   }
   const renderContext = {
     queueActions: renderQueueActions,
+    memoryDraftRecovery: (messageId: string) => {
+      const message = chat.messages.find(item => item.id === messageId && item.memoryDraftTarget);
+      return message ? <button disabled={chat.checkingDeliveries.includes(messageId)} onClick={() => { if (refreshScope.current === readbackOwner) void chat.retryDelivery(message); }}>{t(chat.checkingDeliveries.includes(messageId) ? "conversation.recovery.checking" : "conversation.recovery.check")}</button> : null;
+    },
     binding: props.chatBinding,
     meetingBinding: props.detailBinding,
     entryCapability: chat.entryCapability ?? props.entryCapability ?? null,
@@ -577,11 +610,24 @@ export function QueuedConversation(props: Props) {
   }, [chat.ready, chat.unavailable, props.initialDetail]);
   function latest() { inspection.release(); reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
   async function send() {
-    if (composingRef.current.owner === composerOwner && composingRef.current.value) return;
-    // Durable image admission may await IndexedDB. A later source inspection,
-    // close, or manual reading intent must win over this earlier Send.
-    const sameIntent = inspection.captureIntent();
-    if (await chat.submit() && sameIntent()) { inspection.release(); reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); }
+    if (!canSend || (composingRef.current.owner === composerOwner && composingRef.current.value)) return;
+    // Reading and draft intent are independent. A later inspection/close or
+    // manual read must prevent following; a later draft/target choice must
+    // prevent clearing that newer composition after the durable put.
+    const sameReadingIntent = inspection.captureIntent();
+    const captured = memoryTarget ? memoryTargetState : null;
+    const intentVersion = draftIntentVersion.current;
+    const accepted = await chat.submit({ expectedDraft: chat.draft,
+      ...(captured ? { memoryDraftTarget: { person_id: captured.target.person_id }, memoryDraftTargetLabel: captured.target.label } : {}),
+      canClearDraft: () => draftIntentVersion.current === intentVersion });
+    if (accepted) {
+      // A later explicit selection (including A -> clear -> A) owns its own
+      // token; finishing this durable put cannot clear that newer intention.
+      if (captured) setMemoryTargetState(current => current?.choice === captured.choice ? null : current);
+      if (sameReadingIntent()) {
+        inspection.release(); reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember();
+      }
+    }
   }
   function navigate(href: string) {
     if (chat.attachmentDraftUnsafe && !window.confirm(t("图片尚未保存在本机，离开可能丢失。仍要离开吗？"))) return;
@@ -684,8 +730,14 @@ export function QueuedConversation(props: Props) {
       }}>{t("使用本机已保存的图片")}</button>}
       {chat.preparing && <p className={styles.composerImageHint} role="status">{t("conversation.images.preparing")}</p>}
       {chat.submitting && <p className={styles.composerImageHint} role="status">{t("conversation.images.sending")}</p>}
+      {memoryTarget ? <div className={styles.memoryDraftSelection} role="group" aria-label={t("composer.memoryDraft.selection")}>
+        <div><span>{t("composer.memoryDraft.target", { person: memoryTarget.label })}</span><small>{t("composer.memoryDraft.boundary")}</small>
+          {imageCount ? <small role="status">{t("composer.memoryDraft.textOnly")}</small> : null}
+          {!memoryDraftHasAuthoredText(chat.draft, memoryTarget) ? <small role="status">{t("composer.memoryDraft.textRequired")}</small> : null}</div>
+        <button type="button" aria-label={t("composer.memoryDraft.remove")} onClick={() => { draftIntentVersion.current += 1; setMemoryTargetState(null); document.getElementById("queued-conversation-composer")?.focus({ preventScroll: true }); }}><X size={16} aria-hidden="true"/></button>
+      </div> : null}
       <div className={styles.composer}>
-        <WorkspaceComposer key={composerScope} id="queued-conversation-composer" viewKey={id} label={t("conversation.composer.label")} value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? t("conversation.composer.steerPlaceholder") : t("conversation.composer.queuePlaceholder") : paused ? t("conversation.composer.pausedPlaceholder") : imageCount ? t("conversation.composer.imagesPlaceholder") : t("conversation.composer.defaultPlaceholder")} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={chat.changeDraft} onSubmit={() => void send()} onComposingChange={composingChanged} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
+        <WorkspaceComposer key={composerScope} id="queued-conversation-composer" viewKey={id} label={t("conversation.composer.label")} value={chat.draft} maxLength={1000} variant="home" layout="inline" rows={1} placeholder={active ? acceptsSteering ? t("conversation.composer.steerPlaceholder") : t("conversation.composer.queuePlaceholder") : paused ? t("conversation.composer.pausedPlaceholder") : imageCount ? t("conversation.composer.imagesPlaceholder") : t("conversation.composer.defaultPlaceholder")} canSubmit={canSend} disabled={!chat.ready || chat.unavailable} binding={props.detailBinding} onValueChange={changeDraft} onPrepareMemoryDraft={prepareMemoryDraft} onSubmit={() => void send()} onComposingChange={composingChanged} onNavigate={navigate} onFiles={files => void chat.addFiles(files)}
           footerEnd={<div className={styles.sendActions}><button type="button" className={styles.send} data-send-mode={acceptsSteering ? "steer" : active || queued.length || paused ? "queue" : "send"} aria-label={acceptsSteering ? t("conversation.send.steerAction") : active || queued.length || paused ? t("conversation.send.queueAction") : t("conversation.send.label")} title={acceptsSteering ? t("conversation.send.steerAction") : active || paused ? t("conversation.send.queueAction") : t("conversation.send.title")} disabled={!canSend} onClick={() => void send()}>{(active || queued.length || paused) && <span>{acceptsSteering ? t("conversation.send.steer") : t("conversation.send.queue")}</span>}<ArrowUp size={20} aria-hidden="true" weight="bold"/></button></div>}/>
       </div>
       {!hasContent && <div className={styles.starters} aria-label={t("conversation.starters.label")}>{[t("conversation.starters.help"), t("conversation.starters.prepare")].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
