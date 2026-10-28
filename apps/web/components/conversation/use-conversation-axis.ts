@@ -2,8 +2,8 @@
 
 import { useLayoutEffect, type RefObject } from "react";
 
-/** Keep floating composer menus outside a scroller while sharing its gutter. */
-export function useConversationAxis(viewport: RefObject<HTMLElement | null>) {
+/** Share the actual scroll viewport's gutter and inspection height. */
+export function useConversationAxis(viewport: RefObject<HTMLElement | null>, surfaceKey?: string) {
   useLayoutEffect(() => {
     const node = viewport.current;
     const canvas = node?.closest<HTMLElement>("[data-conversation-canvas]");
@@ -13,6 +13,8 @@ export function useConversationAxis(viewport: RefObject<HTMLElement | null>) {
       const borders = (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.borderRightWidth) || 0);
       const inset = Math.max(0, node.offsetWidth - node.clientWidth - borders);
       canvas.style.setProperty("--conversation-scrollbar-inset", `${inset}px`);
+      if (node.clientHeight > 0) canvas.style.setProperty("--conversation-viewport-height", `${node.clientHeight}px`);
+      else canvas.style.removeProperty("--conversation-viewport-height");
     };
     update();
     const observer = new ResizeObserver(update);
@@ -20,6 +22,7 @@ export function useConversationAxis(viewport: RefObject<HTMLElement | null>) {
     return () => {
       observer.disconnect();
       canvas.style.removeProperty("--conversation-scrollbar-inset");
+      canvas.style.removeProperty("--conversation-viewport-height");
     };
-  }, [viewport]);
+  }, [viewport, surfaceKey]);
 }

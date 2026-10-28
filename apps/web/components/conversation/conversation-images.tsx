@@ -10,6 +10,7 @@ import { useT } from "../locale-provider";
 import { loadConversationImages } from "@/lib/conversation-image-store";
 import styles from "./queued-conversation.module.css";
 import imageStyles from "./conversation-images.module.css";
+import { useConversationInspection } from "./conversation-inspection";
 
 type Props = {
   sessionId: string;
@@ -61,6 +62,8 @@ function LoadedConversationImageStrip({
   onRetry,
 }: Props & { onRetry: () => void }) {
   const t = useT();
+  const inspection = useConversationInspection();
+  const inspectionLease = useRef<ReturnType<NonNullable<typeof inspection>["begin"]>>(null);
   const [urls, setUrls] = useState<Array<string | null>>(() => images.map(() => null));
   const [failed, setFailed] = useState<boolean[]>(() => images.map(() => false));
   const [expanded, setExpanded] = useState(false);
@@ -176,14 +179,23 @@ function LoadedConversationImageStrip({
     if (!open) return;
     measure();
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+    const stage = stageRef.current;
+    const observer = stage && typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    if (stage) observer?.observe(stage);
+    return () => { window.removeEventListener("resize", measure); observer?.disconnect(); };
   }, [open, index, measure]);
 
   useLayoutEffect(() => {
     if (open) {
-      previewRef.current?.focus({ preventScroll: true });
+      const preview = previewRef.current;
+      if (preview) {
+        inspectionLease.current?.reveal(preview);
+        preview.focus({ preventScroll: true });
+      }
     } else if (restoreFocus.current) {
       restoreFocus.current = false;
+      inspectionLease.current?.restore();
+      inspectionLease.current = null;
       const trigger = triggerRef.current;
       // Restore after React has revealed the source strip again. The exact
       // thumbnail may have failed decoding or moved into the folded range.
@@ -192,11 +204,18 @@ function LoadedConversationImageStrip({
     }
   }, [open, expanded, images.length]);
 
+  useLayoutEffect(() => () => {
+    inspectionLease.current?.dispose();
+    inspectionLease.current = null;
+  }, [inspection]);
+
   if (images.length === 0) return null;
   const anyFailed = failed.some(Boolean);
   const layout = images.length === 1 ? "single" : expanded ? "expanded" : "folded";
 
   const openAt = (position: number, trigger: HTMLButtonElement) => {
+    inspectionLease.current?.dispose();
+    inspectionLease.current = stripRef.current ? inspection?.begin(stripRef.current) ?? null : null;
     triggerRef.current = trigger;
     triggerPosition.current = position;
     setIndex(position);
@@ -335,7 +354,7 @@ function LoadedConversationImageStrip({
                   <X aria-hidden size={17} />
                 </button>
             </div>
-            <div aria-label={t(zoom === "actual" ? "conversation.image.previewActual" : "conversation.image.preview")} className={styles.imageStage} data-zoom={zoom} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
+            <div aria-label={t(zoom === "actual" ? "conversation.image.previewActual" : "conversation.image.preview")} className={`${styles.imageStage} ${imageStyles.stage}`} data-zoom={zoom} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
               {urls[index] ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img

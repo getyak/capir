@@ -22,6 +22,7 @@ import { SessionSendTime } from "./session-execution-card";
 import { useConversation } from "./use-conversation";
 import { useConversationAxis } from "./use-conversation-axis";
 import { useConversationReadingPosition } from "./use-conversation-reading-position";
+import { ConversationInspectionContext, useConversationInspectionOwner } from "./conversation-inspection";
 import { usePreviewPacing } from "./use-preview-pacing";
 import { useRunMilestones } from "./use-run-milestones";
 import { sessionHumanMessages, sessionMessages, SessionAssistantMessage, SessionUserMessage } from "./session-message-parts";
@@ -208,7 +209,8 @@ export function QueuedConversation(props: Props) {
   const editReturn = useRef<QueueEditOperation | null>(null);
   const queueFocus = useRef<{ owner: symbol; messageId: string; section: HTMLElement; focusOwned: boolean } | null>(null);
   const viewport = useRef<HTMLDivElement>(null); const content = useRef<HTMLDivElement>(null); const follows = useRef(true); const userScroll = useRef(false);
-  useConversationAxis(viewport);
+  const runtimeKey = `${props.chatBinding}:${id ?? "draft"}`;
+  useConversationAxis(viewport, runtimeKey);
   const reading = useConversationReadingPosition({ viewportRef: viewport, contentRef: content, followsLatestRef: follows, onAwayChange: setAway,
     scope: props.scope, sessionId: id, binding: props.detailBinding, ready: chat.ready, unavailable: chat.unavailable,
     expiresAt: chat.detail?.expires_at ?? props.initialDetail?.expires_at });
@@ -239,6 +241,8 @@ export function QueuedConversation(props: Props) {
   // Readback and queue edits belong to the actual live Session, while Home
   // deliberately retains its stable IME owner during local ID resolution.
   const readbackOwner = useMemo(() => Symbol(`${composerScope}:${id ?? "unresolved"}`), [composerScope, id]);
+  const inspection = useConversationInspectionOwner({ owner: readbackOwner, viewportRef: viewport,
+    followsLatestRef: follows, userScrollRef: userScroll, reading, onAwayChange: setAway });
   const composingRef = useRef<{ owner: symbol | null; value: boolean }>({ owner: composerOwner, value: false });
   const [composition, setComposition] = useState({ owner: composerOwner, value: false });
   useLayoutEffect(() => {
@@ -558,9 +562,9 @@ export function QueuedConversation(props: Props) {
   };
   useEffect(() => {
     const node = content.current; const scroll = viewport.current; if (!node || !scroll) return;
-    const observer = new ResizeObserver(() => { if (reading.restoring.current) reading.restore(); else if (follows.current) scroll.scrollTop = scroll.scrollHeight; else setAway(true); });
+    const observer = new ResizeObserver(() => { if (reading.restoring.current) reading.restore(); else if (follows.current && !inspection.active()) scroll.scrollTop = scroll.scrollHeight; else setAway(!conversationNearBottom(scroll)); });
     observer.observe(node); observer.observe(scroll); return () => observer.disconnect();
-  }, [reading]);
+  }, [reading, inspection]);
   useEffect(() => { if (chat.ready && chat.draft && props.initialDetail) document.getElementById("queued-conversation-composer")?.focus({ preventScroll: true }); /* Restore focus only at initial hydration. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.ready]);
@@ -571,8 +575,14 @@ export function QueuedConversation(props: Props) {
     focusRequested.current = false;
     composer.focus({ preventScroll: true });
   }, [chat.ready, chat.unavailable, props.initialDetail]);
-  function latest() { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
-  async function send() { if (composingRef.current.owner === composerOwner && composingRef.current.value) return; if (await chat.submit()) { reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); } }
+  function latest() { inspection.release(); reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); viewport.current?.scrollTo({ top: viewport.current.scrollHeight, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); reading.remember(); }
+  async function send() {
+    if (composingRef.current.owner === composerOwner && composingRef.current.value) return;
+    // Durable image admission may await IndexedDB. A later source inspection,
+    // close, or manual reading intent must win over this earlier Send.
+    const sameIntent = inspection.captureIntent();
+    if (await chat.submit() && sameIntent()) { inspection.release(); reading.cancelRestore(); userScroll.current = false; follows.current = true; setAway(false); reading.remember(); }
+  }
   function navigate(href: string) {
     if (chat.attachmentDraftUnsafe && !window.confirm(t("图片尚未保存在本机，离开可能丢失。仍要离开吗？"))) return;
     navigating.current = true; router.push(href);
@@ -628,6 +638,7 @@ export function QueuedConversation(props: Props) {
   return <SessionTaskProvider observation={chat.taskObservation} connection={chat.connection} mutating={chat.mutating}
     onStop={runId => void chat.mutate({ kind: "stop", run_id: runId })} onContinue={() => void chat.mutate({ kind: "continue" })}
     onRetry={queueEntryId => void retryEntry(queueEntryId)} recoveryActions={renderContext.recoveryActions}>
+  <ConversationInspectionContext.Provider value={inspection.controller}>
   <main id="main-content" tabIndex={-1} className={styles.canvas} aria-label={t("conversation.canvas.label")} data-conversation-canvas data-empty={!hasContent} onKeyDown={handleCanvasKeyDown}>
     {admitted && <header className={styles.header}>
       <div className={styles.headingText}><h1 title={chat.detail?.title || t("conversation.new")}>{chat.detail?.title || t("conversation.new")}</h1></div>
@@ -642,9 +653,9 @@ export function QueuedConversation(props: Props) {
       {props.meetingReadFailed && <p>{t("conversation.detail.meetingsFailed")}</p>}
       {!chat.unavailable && (confirmDelete ? <div className={styles.confirm}><p>{t("conversation.detail.deleteConfirm")}</p><button onClick={() => void remove()}>{t("conversation.detail.deleteConfirmAction")}</button><button onClick={() => setConfirmDelete(false)}>{t("conversation.detail.deleteKeep")}</button></div> : <button className={styles.textButton} onClick={() => setConfirmDelete(true)}><Trash size={16}/>{t("conversation.detail.delete")}</button>)}
     </div></details></header>}
-    <SessionRuntime key={`${props.chatBinding}:${id ?? "draft"}`} messages={projectedMessages} running={Boolean(activeVisible)}>
+    <SessionRuntime key={runtimeKey} messages={projectedMessages} running={Boolean(activeVisible)}>
     <ThreadPrimitive.Root className={styles.runtimeRoot} data-session-runtime>
-    <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} scrollToBottomOnRunStart={false} className={styles.transcript} ref={viewport} role="region" aria-label={t("conversation.transcript.label")} tabIndex={0} onWheel={event => { reading.cancelRestore(); userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { reading.cancelRestore(); userScroll.current = true; }} onPointerDown={() => { reading.cancelRestore(); userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) { reading.cancelRestore(); userScroll.current = true; } if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (!reading.restoring.current && viewport.current && userScroll.current) { follows.current = conversationNearBottom(viewport.current); setAway(!follows.current); reading.remember(); } }}>
+    <ThreadPrimitive.Viewport autoScroll={false} scrollToBottomOnInitialize={false} scrollToBottomOnThreadSwitch={false} scrollToBottomOnRunStart={false} className={styles.transcript} ref={viewport} role="region" aria-label={t("conversation.transcript.label")} tabIndex={0} onWheel={event => { inspection.noteReadingIntent(); reading.cancelRestore(); userScroll.current = true; if (event.deltaY < 0) follows.current = false; }} onTouchStart={() => { inspection.noteReadingIntent(); reading.cancelRestore(); userScroll.current = true; }} onPointerDown={() => { inspection.noteReadingIntent(); reading.cancelRestore(); userScroll.current = true; }} onKeyDown={event => { if (["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"].includes(event.key)) { inspection.noteReadingIntent(); reading.cancelRestore(); userScroll.current = true; } if (["PageUp", "Home", "ArrowUp"].includes(event.key)) follows.current = false; }} onScroll={() => { if (!reading.restoring.current && viewport.current && userScroll.current) { const near = conversationNearBottom(viewport.current); follows.current = !inspection.active() && near; setAway(!near); reading.remember(); } }}>
       <div className={styles.content} ref={content}>
         {!hasContent && <div className={styles.welcome}><span className={styles.welcomeMark} aria-hidden="true"/><div><h2>{t("conversation.welcome.title")}</h2><p>{t("conversation.welcome.body")}</p></div></div>}
         <ThreadPrimitive.Messages>{({ message }) => message.role === "user"
@@ -680,5 +691,5 @@ export function QueuedConversation(props: Props) {
       {!hasContent && <div className={styles.starters} aria-label={t("conversation.starters.label")}>{[t("conversation.starters.help"), t("conversation.starters.prepare")].map(text => <button key={text} onClick={() => { chat.changeDraft(text); document.getElementById("queued-conversation-composer")?.focus(); }}>{text}<ArrowUp size={13} aria-hidden="true"/></button>)}</div>}
       <div className={styles.footer}><span role="status" aria-live="polite" aria-atomic="true">{chat.unavailable ? t("conversation.status.unavailable") : chat.connection === "reconnecting" && hasContent && !active && !queued.length ? t("conversation.status.reconnecting") : ""}</span><span>{t("conversation.footer.keys")}</span></div>
     </div>
-  </main></SessionTaskProvider>;
+  </main></ConversationInspectionContext.Provider></SessionTaskProvider>;
 }
