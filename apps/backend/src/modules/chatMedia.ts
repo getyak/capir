@@ -10,9 +10,11 @@ import type { Pool, PoolClient } from "pg";
 import { inTransaction } from "../database/pool.js";
 import { ApiError } from "../lib/apiError.js";
 import { appendAudit } from "../lib/audit.js";
+import { sha256 } from "../lib/hash.js";
 import { invalidateMemoriesForArtifactIds } from "./memoryReviewRecall.js";
-import { lockLabMediaWorkspace, trackedLabMediaPut } from "./labWorkspaceAccess.js";
+import { lockLabMediaWorkspace } from "./labWorkspaceAccess.js";
 import type { AuthContext } from "./auth.js";
+import { terminalChatMediaWriteRejection } from "./chatMediaStorage.js";
 import type {
   ChatMediaStorage,
   StoredChatMedia,
@@ -42,6 +44,9 @@ interface ChatMediaRow {
   object_key: string;
   status: ChatMediaAsset["status"];
   created_at: Date;
+  upload_state?: "idle" | "writing" | "unknown";
+  upload_attempt_id?: string | null;
+  upload_storage_scope?: string | null;
 }
 
 function asset(row: ChatMediaRow): ChatMediaAsset {
@@ -71,7 +76,8 @@ async function mediaRow(
   const result = await client.query<ChatMediaRow>(
     `SELECT id, subject_id, assignment_id, created_by_user_id,
        idempotency_key, file_name, media_type, byte_size, width, height,
-       storage_provider, object_key, status, created_at
+       storage_provider, object_key, status, created_at,
+       upload_state, upload_attempt_id, upload_storage_scope
      FROM chat_media_assets
      WHERE account_id = $1 AND id = $2
      ${lock ? "FOR UPDATE" : ""}`,
@@ -208,6 +214,69 @@ export async function createChatMediaAsset(
   });
 }
 
+function unsettledUpload(): ApiError {
+  return new ApiError(503, "CHAT_MEDIA_WRITE_UNSETTLED", "The image upload has not finished. Its storage result must be reconciled before retrying or deleting.");
+}
+
+function assertMediaStorageOwner(row: ChatMediaRow, accountId: string): void {
+  if (row.object_key !== `${accountId}/${row.subject_id}/${row.id}`) {
+    throw new ApiError(503, "CHAT_MEDIA_STORAGE_OWNER_MISMATCH", "The image storage key does not match its recorded owner.");
+  }
+}
+
+async function settleCompletedUpload(
+  client: PoolClient, auth: AuthContext, storage: ChatMediaStorage, row: ChatMediaRow, cancelLocal = false,
+): Promise<boolean> {
+  assertMediaStorageOwner(row, auth.accountId);
+  if (!row.upload_state || row.upload_state === "idle") return true;
+  if (row.storage_provider !== storage.provider || !storage.verifyUpload ||
+      !row.upload_attempt_id || !row.upload_storage_scope || row.upload_storage_scope !== storage.labScopeID) return false;
+  let complete: boolean;
+  let receiptType = `${storage.provider}_complete_attempt.v1`;
+  try {
+    complete = await storage.verifyUpload(row.object_key, row.upload_attempt_id, row.byte_size, row.media_type);
+    if (!complete && cancelLocal && storage.provider === "local" && storage.reconcileUpload) {
+      const terminal = await storage.reconcileUpload(row.object_key, row.upload_attempt_id, row.byte_size, row.media_type);
+      complete = terminal !== null;
+      if (terminal === "cancelled") receiptType = "local_cancelled_attempt.v1";
+    }
+  } catch {
+    throw new ApiError(503, "CHAT_MEDIA_RECONCILIATION_FAILED", "The image upload's storage receipt could not be checked.");
+  }
+  if (!complete) return false;
+  const receipt = sha256(JSON.stringify([receiptType, row.upload_storage_scope,
+    row.upload_attempt_id, row.byte_size, row.media_type]));
+  await client.query(`UPDATE chat_media_assets SET upload_state='idle',status='failed',
+    failure_reason=$3,upload_settlement_receipt=$4,updated_at=now()
+    WHERE account_id=$1 AND id=$2 AND upload_attempt_id=$5`,
+  [auth.accountId, row.id, CHAT_MEDIA_STORAGE_FAILURE_REASON, receipt, row.upload_attempt_id]);
+  await client.query(`UPDATE lab_test_workspace_media_writes SET state='settled',settled_at=now()
+    WHERE id=$1 AND media_id=$2`, [row.upload_attempt_id, row.id]);
+  await appendAudit(client, { accountId: auth.accountId, actorUserId: auth.userId },
+    "chat_media.upload_reconciled", "chat_media_asset", row.id,
+    { receipt_type: receiptType, receipt_sha256: receipt });
+  row.upload_state = "idle";
+  row.status = "failed";
+  return true;
+}
+
+/** Operator/user retry readback; never reads image bytes or deletes objects. */
+export async function reconcileChatMediaUpload(
+  pool: Pool, auth: AuthContext, storage: ChatMediaStorage, mediaId: string, expectedAttemptId?: string, options: { cancelLocal?: boolean } = {},
+): Promise<{ id: string; status: "settled" | "unresolved" }> {
+  return inTransaction(pool, async client => {
+    if (auth.userKind === "lab_human") await lockLabMediaWorkspace(client, auth, storage);
+    const row = await mediaRow(client, auth.accountId, mediaId, true);
+    if (row.created_by_user_id !== auth.userId) {
+      throw new ApiError(403, "CHAT_MEDIA_UPLOAD_DENIED", "Only the uploader can reconcile this image upload.");
+    }
+    if (expectedAttemptId && row.upload_attempt_id !== expectedAttemptId) {
+      throw new ApiError(409, "CHAT_MEDIA_ATTEMPT_CHANGED", "The image upload attempt changed; inspect its current receipt before recovery.");
+    }
+    return { id: mediaId, status: await settleCompletedUpload(client, auth, storage, row, options.cancelLocal) ? "settled" : "unresolved" };
+  });
+}
+
 export async function uploadChatMediaContent(
   pool: Pool,
   auth: AuthContext,
@@ -216,70 +285,94 @@ export async function uploadChatMediaContent(
   body: Uint8Array,
   contentType: string,
 ): Promise<ChatMediaAsset> {
-  const perform = async (query: Pick<Pool,"query"> | PoolClient,
-    finish: (operation:(client:PoolClient)=>Promise<ChatMediaAsset>)=>Promise<ChatMediaAsset>,
-    workspaceId?:string):Promise<ChatMediaAsset> => {
-  const row = await mediaRow(query, auth.accountId, mediaId);
-  if (row.created_by_user_id !== auth.userId) {
-    throw new ApiError(403, "CHAT_MEDIA_UPLOAD_DENIED", "Only the uploader can finish this image upload.");
-  }
-  if (row.status === "ready") return asset(row);
-  if (row.status === "deleted") {
-    throw new ApiError(410, "CHAT_MEDIA_DELETED", "The image upload was deleted.");
-  }
-  if (row.storage_provider !== storage.provider) {
-    throw new ApiError(503, "CHAT_MEDIA_STORAGE_CHANGED", "The configured media storage no longer matches this upload.");
-  }
-  if (contentType.toLowerCase() !== row.media_type || body.byteLength !== row.byte_size) {
-    throw new ApiError(
-      422,
-      "CHAT_MEDIA_CONTENT_MISMATCH",
-      "The uploaded image bytes do not match the reviewed file metadata.",
-    );
-  }
+  // Admission commits before PUT, so other processes and crash recovery see
+  // the same unfinished operation. No process-local lock or elapsed-time lease.
+  const admitted = await inTransaction(pool, async (client) => {
+    const workspaceId = auth.userKind === "lab_human"
+      ? await lockLabMediaWorkspace(client, auth, storage) : undefined;
+    const row = await mediaRow(client, auth.accountId, mediaId, true);
+    if (row.created_by_user_id !== auth.userId) {
+      throw new ApiError(403, "CHAT_MEDIA_UPLOAD_DENIED", "Only the uploader can finish this image upload.");
+    }
+    if (row.status === "ready") return { row, attemptId: null };
+    if (row.status === "deleted") {
+      throw new ApiError(410, "CHAT_MEDIA_DELETED", "The image upload was deleted.");
+    }
+    if (row.storage_provider !== storage.provider ||
+        (row.upload_storage_scope && row.upload_storage_scope !== storage.labScopeID)) {
+      throw new ApiError(503, "CHAT_MEDIA_STORAGE_CHANGED", "The configured media storage no longer matches this upload.");
+    }
+    if (!await settleCompletedUpload(client, auth, storage, row)) throw unsettledUpload();
+    if (storage.provider === "s3" && !storage.labScopeID) {
+      throw new ApiError(503, "CHAT_MEDIA_STORAGE_SCOPE_REQUIRED", "The image storage must identify its scope before accepting uploads.");
+    }
+    if (contentType.toLowerCase() !== row.media_type || body.byteLength !== row.byte_size) {
+      throw new ApiError(422, "CHAT_MEDIA_CONTENT_MISMATCH", "The uploaded image bytes do not match the reviewed file metadata.");
+    }
+    if (workspaceId) {
+      const previous = await client.query(
+        "SELECT 1 FROM lab_test_workspace_media_writes WHERE media_id=$1 AND state<>'settled' LIMIT 1", [mediaId]);
+      if (previous.rowCount) throw unsettledUpload();
+    }
+    const attemptId = randomUUID();
+    if (storage.reserveUpload) await storage.reserveUpload(row.object_key, attemptId, row.byte_size, row.media_type);
+    await client.query(`UPDATE chat_media_assets SET upload_state='writing',upload_attempt_id=$3,
+      upload_started_at=now(),upload_storage_scope=$4,upload_settlement_receipt=NULL,updated_at=now()
+      WHERE account_id=$1 AND id=$2`, [auth.accountId, mediaId, attemptId, storage.labScopeID ?? null]);
+    if (workspaceId) {
+      await client.query(`INSERT INTO lab_test_workspace_media_writes(id,workspace_id,media_id)
+        VALUES ($1,$2,$3)`, [attemptId, workspaceId, mediaId]);
+    }
+    return { row, attemptId, workspaceId };
+  });
+  if (!admitted.attemptId) return asset(admitted.row);
+
+  let failed = false;
+  let terminalFailure: ReturnType<typeof terminalChatMediaWriteRejection> = null;
   try {
-    if(workspaceId)await trackedLabMediaPut(pool,workspaceId,mediaId,storage,row.object_key,body,row.media_type);
-    else await storage.put(row.object_key, body, row.media_type);
-  } catch {
-    await query.query(
-      `UPDATE chat_media_assets
-       SET status = 'failed', failure_reason = $3, updated_at = now()
-       WHERE account_id = $1 AND id = $2 AND status <> 'deleted'`,
-      [
-        auth.accountId,
-        mediaId,
-        CHAT_MEDIA_STORAGE_FAILURE_REASON,
-      ],
-    );
-    throw new ApiError(503, "CHAT_MEDIA_STORAGE_FAILED", "The image could not be stored. Retry keeps the same upload identity.");
+    await storage.put(admitted.row.object_key, body, admitted.row.media_type, admitted.attemptId);
+  } catch (error) {
+    failed = true;
+    terminalFailure = terminalChatMediaWriteRejection(error, storage, admitted.attemptId);
   }
-  return finish(async (client) => {
+  // A rejected remote promise does not establish that S3 stopped accepting
+  // bytes. Keep that attempt fenced until a matching terminal receipt exists.
+  const state = failed && storage.provider === "s3" && !terminalFailure ? "unknown" : "idle";
+  if (admitted.workspaceId) {
+    await pool.query(`UPDATE lab_test_workspace_media_writes SET state=$2,
+      settled_at=CASE WHEN $2='settled' THEN now() ELSE NULL END,settlement_receipt=$3 WHERE id=$1`,
+    [admitted.attemptId, state === "unknown" ? "unknown" : "settled", terminalFailure?.sha256 ?? null]);
+  }
+  const completed = await inTransaction(pool, async (client) => {
+    const current = await mediaRow(client, auth.accountId, mediaId, true);
+    if (current.upload_attempt_id !== admitted.attemptId || current.upload_state !== "writing") {
+      throw unsettledUpload();
+    }
     const updated = await client.query<ChatMediaRow>(
       `UPDATE chat_media_assets
-       SET status = 'ready', failure_reason = NULL, updated_at = now()
-       WHERE account_id = $1 AND id = $2 AND status IN ('pending', 'failed')
-       RETURNING id, subject_id, assignment_id, created_by_user_id,
-         idempotency_key, file_name, media_type, byte_size, width, height,
-         storage_provider, object_key, status, created_at`,
-      [auth.accountId, mediaId],
+       SET status = $3, failure_reason = $4, upload_state = $5, upload_settlement_receipt = $7, updated_at = now()
+       WHERE account_id = $1 AND id = $2 AND upload_attempt_id = $6
+       RETURNING *`,
+      [auth.accountId, mediaId, failed ? "failed" : "ready",
+        failed ? CHAT_MEDIA_STORAGE_FAILURE_REASON : null, state, admitted.attemptId, terminalFailure?.sha256 ?? null],
     );
-    const ready = updated.rows[0] ?? (await mediaRow(client, auth.accountId, mediaId, true));
-    await appendAudit(
-      client,
-      { accountId: auth.accountId, actorUserId: auth.userId },
-      "chat_media.uploaded",
-      "chat_media_asset",
-      mediaId,
-      { byte_size: row.byte_size, storage_provider: row.storage_provider },
-    );
-    return asset(ready);
+    if (!failed) {
+      await appendAudit(client, { accountId: auth.accountId, actorUserId: auth.userId },
+        "chat_media.uploaded", "chat_media_asset", mediaId,
+        { byte_size: admitted.row.byte_size, storage_provider: storage.provider });
+    }
+    if (terminalFailure) {
+      await appendAudit(client, { accountId: auth.accountId, actorUserId: auth.userId },
+        "chat_media.upload_rejected", "chat_media_asset", mediaId,
+        { receipt_type: terminalFailure.type, receipt_sha256: terminalFailure.sha256,
+          code: terminalFailure.code, http_status: terminalFailure.status });
+    }
+    return asset(updated.rows[0]!);
   });
-  };
-  if(auth.userKind==="lab_human")return inTransaction(pool,async client=>{
-    const workspaceId=await lockLabMediaWorkspace(client,auth,storage);
-    return perform(client,operation=>operation(client),workspaceId);
-  });
-  return perform(pool,operation=>inTransaction(pool,operation));
+  if (failed) {
+    throw new ApiError(503, "CHAT_MEDIA_STORAGE_FAILED", "The image could not be stored. Retry keeps the same upload identity.");
+  }
+  return completed;
 }
 
 export async function getChatMediaContent(
@@ -289,13 +382,14 @@ export async function getChatMediaContent(
   mediaId: string,
 ): Promise<StoredChatMedia> {
   const row = await mediaRow(pool, auth.accountId, mediaId);
+  assertMediaStorageOwner(row, auth.accountId);
   if (row.status !== "ready") {
     throw new ApiError(404, "CHAT_MEDIA_UNAVAILABLE", "The Chat image is not available.");
   }
   if (row.storage_provider !== storage.provider) {
     throw new ApiError(503, "CHAT_MEDIA_STORAGE_CHANGED", "The configured media storage no longer matches this image.");
   }
-  return storage.get(row.object_key, row.media_type);
+  return storage.get(row.object_key, row.media_type, row.upload_attempt_id ?? undefined);
 }
 
 export async function deleteChatMediaAsset(
@@ -305,11 +399,20 @@ export async function deleteChatMediaAsset(
   mediaId: string,
 ): Promise<ChatMediaDeleteResponse> {
   return inTransaction(pool, async (client) => {
+    if (auth.userKind === "lab_human") await lockLabMediaWorkspace(client, auth, storage);
     const row = await mediaRow(client, auth.accountId, mediaId, true);
     if (row.created_by_user_id !== auth.userId) {
       throw new ApiError(403, "CHAT_MEDIA_DELETE_DENIED", "Only the uploader can remove this unsubmitted image.");
     }
+    if (!await settleCompletedUpload(client, auth, storage, row)) throw unsettledUpload();
+    const unresolvedLabWrite = await client.query(
+      "SELECT 1 FROM lab_test_workspace_media_writes WHERE media_id=$1 AND state<>'settled' LIMIT 1", [mediaId]);
+    if (unresolvedLabWrite.rowCount) throw unsettledUpload();
     if (row.status === "deleted") return { id: mediaId, status: "deleted" };
+    if (row.storage_provider !== storage.provider ||
+        (row.upload_storage_scope && row.upload_storage_scope !== storage.labScopeID)) {
+      throw new ApiError(503, "CHAT_MEDIA_STORAGE_CHANGED", "Restore this image's storage before deleting it.");
+    }
     const binding = await client.query(
       `SELECT 1 FROM context_manifest_media
        WHERE account_id = $1 AND media_id = $2`,

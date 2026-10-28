@@ -28,7 +28,7 @@ function readyRow(overrides: Record<string, unknown> = {}) {
     width: null,
     height: null,
     storage_provider: "local",
-    object_key: "account/person/media",
+    object_key: `${accountId}/${personId}/${mediaId}`,
     status: "ready",
     created_at: new Date("2026-08-27T10:00:00.000Z"),
     ...overrides,
@@ -99,7 +99,7 @@ describe("Chat media upload failure diagnostics", () => {
       width: null,
       height: null,
       storage_provider: "local",
-      object_key: "account/person/media",
+      object_key: `${accountId}/${personId}/${mediaId}`,
       status: "pending",
       created_at: new Date("2026-08-27T10:00:00.000Z"),
       ...overrides,
@@ -113,10 +113,12 @@ describe("Chat media upload failure diagnostics", () => {
       cause: new Error("SECRET_CAUSE_CANARY"),
     });
     const calls: Array<{ sql: string; params: unknown[] }> = [];
+    const row = uploadRow() as ReturnType<typeof uploadRow> & { upload_state?: string; upload_attempt_id?: string; failure_reason?: unknown };
     const query = vi.fn(async (sql: string, params: unknown[] = []) => {
       calls.push({ sql, params });
-      if (sql.includes("SELECT")) return { rows: [uploadRow()], rowCount: 1 };
-      return { rows: [], rowCount: 0 };
+      if (sql.includes("upload_state='writing'")) { row.upload_state = "writing"; row.upload_attempt_id = params[2] as string; }
+      if (sql.includes("SET status = $3")) { row.status = params[2] as string; row.failure_reason = params[3]; row.upload_state = params[4] as string; }
+      return { rows: sql.includes("SELECT") || sql.includes("RETURNING *") ? [{ ...row }] : [], rowCount: 1 };
     });
     const put = vi.fn(async () => { throw failure; });
     const storage = {
@@ -128,7 +130,7 @@ describe("Chat media upload failure diagnostics", () => {
 
     await expect(
       uploadChatMediaContent(
-        { query } as unknown as Pool,
+        { query, connect: async () => ({ query, release() {} }) } as unknown as Pool,
         auth,
         storage,
         mediaId,
@@ -153,30 +155,20 @@ describe("Chat media upload failure diagnostics", () => {
     ]) {
       expect(serialized).not.toContain(canary);
     }
-    const failureWrite = calls.find((call) => call.sql.includes("SET status = 'failed'"));
-    expect(failureWrite?.params).toEqual([
-      accountId,
-      mediaId,
-      CHAT_MEDIA_STORAGE_FAILURE_REASON,
-    ]);
-    expect(CHAT_MEDIA_STORAGE_FAILURE_REASON).toBe("CHAT_MEDIA_STORAGE_FAILED");
+    expect(row.status).toBe("failed");
+    expect(row.upload_state).toBe("idle");
+    expect(row.failure_reason).toBe(CHAT_MEDIA_STORAGE_FAILURE_REASON);
   });
 
   it("keeps the same upload identity and clears the fixed failure on retry", async () => {
     const calls: Array<{ sql: string; params: unknown[] }> = [];
     let attempt = 0;
+    const row = uploadRow() as ReturnType<typeof uploadRow> & { upload_state?: string; upload_attempt_id?: string; failure_reason?: unknown };
     const respond = (sql: string, params: unknown[]) => {
       calls.push({ sql, params });
-      if (sql.includes("SELECT")) {
-        return {
-          rows: [uploadRow({ status: attempt === 0 ? "pending" : "failed" })],
-          rowCount: 1,
-        };
-      }
-      if (sql.includes("SET status = 'ready'")) {
-        return { rows: [uploadRow({ status: "ready" })], rowCount: 1 };
-      }
-      return { rows: [], rowCount: 0 };
+      if (sql.includes("upload_state='writing'")) { row.upload_state = "writing"; row.upload_attempt_id = params[2] as string; }
+      if (sql.includes("SET status = $3")) { row.status = params[2] as string; row.failure_reason = params[3]; row.upload_state = params[4] as string; }
+      return { rows: sql.includes("SELECT") || sql.includes("RETURNING *") ? [{ ...row }] : [], rowCount: 1 };
     };
     const query = vi.fn(async (sql: string, params: unknown[] = []) => respond(sql, params));
     const client = {
@@ -211,10 +203,9 @@ describe("Chat media upload failure diagnostics", () => {
     // The retry reuses the exact staged upload: no new asset is inserted and
     // the ready transition clears the failure reason on the same row.
     expect(calls.some((call) => call.sql.includes("INSERT INTO chat_media_assets"))).toBe(false);
-    const readyWrite = calls.find((call) => call.sql.includes("SET status = 'ready'"));
-    expect(readyWrite?.sql).toContain("failure_reason = NULL");
-    expect(readyWrite?.sql).toContain("status IN ('pending', 'failed')");
-    expect(readyWrite?.params).toEqual([accountId, mediaId]);
+    expect(row.status).toBe("ready");
+    expect(row.upload_state).toBe("idle");
+    expect(row.failure_reason).toBeNull();
     expect(JSON.stringify(calls)).not.toContain("CANARY");
   });
 });

@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, DeleteObjectsCommand, ListObjectVersionsCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, ListObjectVersionsCommand, S3Client } from "@aws-sdk/client-s3";
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -19,7 +19,7 @@ function fixture() {
     assignment_id: "30000000-0000-4000-8000-000000000001",
     created_by_user_id: auth.userId,
     storage_provider: "s3",
-    object_key: "synthetic/account/image",
+    object_key: `${auth.accountId}/20000000-0000-4000-8000-000000000001/50000000-0000-4000-8000-000000000001`,
     status: "ready",
   };
   const query = vi.fn(async (sql: string) => {
@@ -44,6 +44,10 @@ describe("unsubmitted Chat media permanent deletion", () => {
     const markers = [{ Key: row.object_key, VersionId: "old-marker" }];
     vi.spyOn(S3Client.prototype, "send").mockImplementation(async command => {
       if (command instanceof ListObjectVersionsCommand) return { Versions: [...versions], DeleteMarkers: [...markers] } as never;
+      if (command instanceof HeadObjectCommand) {
+        if (versions.some(value => value.Key === row.object_key)) return {} as never;
+        throw { $metadata: { httpStatusCode: 404 } };
+      }
       if (command instanceof DeleteObjectCommand) {
         markers.push({ Key: row.object_key, VersionId: "new-marker" });
         return {} as never;

@@ -1,8 +1,11 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectsCommand, HeadObjectCommand, ListObjectVersionsCommand, S3Client } from "@aws-sdk/client-s3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -14,6 +17,7 @@ const directories: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -51,7 +55,10 @@ describe("S3 Chat media storage", () => {
       {},
       { Versions: [], DeleteMarkers: [] },
     ];
-    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async () => responses.shift() as never);
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async command => {
+      if (command instanceof HeadObjectCommand) throw { $metadata: { httpStatusCode: 404 } };
+      return responses.shift() as never;
+    });
     const storage = new S3ChatMediaStorage("private-chat-media", {
       endpoint: "https://s3.example.test", forcePathStyle: true, region: "test-1",
     });
@@ -62,6 +69,95 @@ describe("S3 Chat media storage", () => {
       { Key: "account/person/media", VersionId: "v1" },
     ]);
   });
+
+  it("purges more than twenty pages of versions and markers before acknowledging completion", async () => {
+    const key = "account/person/media";
+    let versions = Array.from({ length: 21_001 }, (_, index) => ({ Key: key, VersionId: `v${index}` }));
+    const sibling = { Key: `${key}-sibling`, VersionId: "keep" };
+    vi.spyOn(S3Client.prototype, "send").mockImplementation(async command => {
+      if (command instanceof ListObjectVersionsCommand) {
+        const offset = command.input.VersionIdMarker
+          ? versions.findIndex(version => version.VersionId === command.input.VersionIdMarker) + 1 : 0;
+        const page = versions.slice(offset, offset + 1000);
+        return { Versions: [...page, sibling], IsTruncated: offset + 1000 < versions.length,
+          NextKeyMarker: key, NextVersionIdMarker: page.at(-1)?.VersionId } as never;
+      }
+      if (command instanceof HeadObjectCommand) throw { $metadata: { httpStatusCode: 404 } };
+      if (command instanceof DeleteObjectsCommand) {
+        const deleted = new Set(command.input.Delete?.Objects?.map(value => value.VersionId));
+        expect(command.input.Delete?.Objects?.every(value => value.Key === key)).toBe(true);
+        versions = versions.filter(value => !deleted.has(value.VersionId));
+        return {} as never;
+      }
+      throw new Error("Unexpected storage command");
+    });
+    const storage = new S3ChatMediaStorage("synthetic-private", { forcePathStyle: true, region: "test-1" });
+    await storage.purge(key);
+    expect(versions).toEqual([]);
+  });
+
+  it("fails closed on truncated listing without continuation instead of recording deletion", async () => {
+    const send = vi.spyOn(S3Client.prototype, "send").mockResolvedValue({
+      IsTruncated: true, Versions: [], DeleteMarkers: [],
+    } as never);
+    const storage = new S3ChatMediaStorage("synthetic-private", { forcePathStyle: true, region: "test-1" });
+    await expect(storage.purge("account/person/media")).rejects.toThrow("pagination");
+    expect(send.mock.calls.every(([command]) => command instanceof ListObjectVersionsCommand)).toBe(true);
+  });
+
+
+  it("attaches a unique upload attempt to PUT and requires its complete matching HEAD receipt", async () => {
+    let head = { Metadata: { "capir-upload-attempt": "attempt-1" }, ContentLength: 3, ContentType: "image/png" };
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async command =>
+      command instanceof HeadObjectCommand ? head as never : {} as never);
+    const storage = new S3ChatMediaStorage("synthetic-private", { forcePathStyle: true, region: "test-1" });
+    await storage.put("account/person/media", new Uint8Array([1, 2, 3]), "image/png", "attempt-1");
+    expect((send.mock.calls[0]?.[0] as { input: unknown }).input).toMatchObject({
+      Metadata: { "capir-upload-attempt": "attempt-1" },
+    });
+    await expect(storage.verifyUpload("account/person/media", "attempt-1", 3, "image/png")).resolves.toBe(true);
+    head = { ...head, Metadata: { "capir-upload-attempt": "another-attempt" } };
+    await expect(storage.verifyUpload("account/person/media", "attempt-1", 3, "image/png")).resolves.toBe(false);
+    head = { ...head, Metadata: { "capir-upload-attempt": "attempt-1" }, ContentLength: 2 };
+    await expect(storage.verifyUpload("account/person/media", "attempt-1", 3, "image/png")).resolves.toBe(false);
+  });
+
+
+  it("sends only one external PUT even when S3 returns a retryable response", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "synthetic-only");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "synthetic-only");
+    vi.stubEnv("AWS_SESSION_TOKEN", "synthetic-only");
+    vi.stubEnv("AWS_PROFILE", undefined);
+    vi.stubEnv("AWS_DEFAULT_PROFILE", undefined);
+    vi.stubEnv("AWS_MAX_ATTEMPTS", "3");
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests++; response.writeHead(503, { "Content-Type": "application/xml" });
+      response.end("<Error><Code>SlowDown</Code></Error>");
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const storage = new S3ChatMediaStorage("synthetic", { region: "test-1", forcePathStyle: true,
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });
+      await expect(storage.put("synthetic/key", new Uint8Array([1]), "image/png", "synthetic-attempt")).rejects.toBeDefined();
+      expect(requests).toBe(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  }, 15_000);
+
+
+  it("does not acknowledge an empty version listing while HEAD still finds a current object", async () => {
+    vi.spyOn(S3Client.prototype, "send").mockImplementation(async command => {
+      if (command instanceof ListObjectVersionsCommand) return { Versions: [], DeleteMarkers: [] } as never;
+      if (command instanceof HeadObjectCommand) return { ContentLength: 1 } as never;
+      throw new Error("Unexpected storage command");
+    });
+    const storage = new S3ChatMediaStorage("synthetic", { region: "test-1", forcePathStyle: true });
+    await expect(storage.purge("account/person/media")).rejects.toThrow("remains");
+  });
+
 });
 
 describe("local Chat media storage", () => {
@@ -90,4 +186,38 @@ describe("local Chat media storage", () => {
       "escaped its configured directory",
     );
   });
+
+  it("atomically cancels a local commit capability so a delayed writer cannot recreate the object", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "capir-local-capability-")); directories.push(directory);
+    const storage = new LocalChatMediaStorage(directory), attempt = randomUUID(), key = "account/person/media";
+    await storage.reserveUpload(key, attempt, 1, "image/png");
+    await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBe("cancelled");
+    await expect(storage.put(key, new Uint8Array([1]), "image/png", attempt)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(storage.verifyUpload(key, attempt, 1, "image/png")).resolves.toBe(false);
+    await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBe("cancelled");
+    await storage.delete(key);
+    expect(await storage.existsForLab(key)).toBe(false);
+  });
+
+
+  it("does not trust an attempt receipt replaced by a symlink to another file", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "capir-local-receipt-link-")); directories.push(directory);
+    const storage = new LocalChatMediaStorage(directory), attempt = randomUUID(), key = "account/person/media";
+    await storage.reserveUpload(key, attempt, 1, "image/png");
+    const relative = (await readdir(directory, { recursive: true })).find(file => file.endsWith("receipt.json"))!;
+    const receipt = join(directory, relative), elsewhere = join(directory, "foreign-receipt.json");
+    await rename(receipt, elsewhere); await symlink(elsewhere, receipt);
+    await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBeNull();
+  });
+
+  it("rejects oversized local metadata without treating it as a terminal receipt", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "capir-local-receipt-size-")); directories.push(directory);
+    const storage = new LocalChatMediaStorage(directory), attempt = randomUUID(), key = "account/person/media";
+    await storage.reserveUpload(key, attempt, 1, "image/png");
+    const relative = (await readdir(directory, { recursive: true })).find(file => file.endsWith("receipt.json"))!;
+    await writeFile(join(directory, relative), JSON.stringify({ version: "local-media-attempt.v1", attempt_id: attempt,
+      byte_size: 1, content_type: "image/png" }) + " ".repeat(8192));
+    await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBeNull();
+  });
+
 });
