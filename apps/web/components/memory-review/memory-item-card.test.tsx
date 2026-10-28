@@ -2,8 +2,9 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryProposalItem } from "@talent-signal/contracts";
-import { MemoryItemCard } from "./memory-item-card";
+import type { MemoryProposalItem, MemoryReceipt } from "@talent-signal/contracts";
+import { MemoryItemCard, SessionMemoryCards } from "./memory-item-card";
+import type { MemoryItemOutcome, MemoryReviewController } from "./use-memory-review";
 import { LocaleProvider } from "../locale-provider";
 
 const item: MemoryProposalItem = {
@@ -36,6 +37,22 @@ let mount: HTMLDivElement;
 let root: Root;
 const decide = vi.fn();
 
+const contactReceipt: MemoryReceipt = {
+  contract_version: "2026-08-24.10", commit_id: "11111111-1111-4111-8111-111111111111",
+  operation_key: "22222222-2222-4222-8222-222222222222", proposal_id: "33333333-3333-4333-8333-333333333333",
+  proposal_revision: 1, status: "applied", contact_decision: "new",
+  created_person_id: "44444444-4444-4444-8444-444444444444", person_display_label: "林海（测试）",
+  item_count: 0, applied_item_count: 0, created_item_ids: [], updated_item_ids: [],
+  skipped_item_ids: [], kept_old_item_ids: [], decisions: [],
+  undo: { token: "55555555-5555-4555-8555-555555555555", allowed: true, limits: [] },
+  projection_status: "pending", created_at: "2026-10-28T16:34:16.387Z",
+};
+
+function recoveredController(kind: MemoryItemOutcome["kind"], receipt: MemoryReceipt = contactReceipt) {
+  return { review: null, phase: "receipt", itemOutcomes: {}, contactOutcome: { kind, receipt, operationKey: receipt.operation_key },
+    frozen: false, reconciling: false, undoContact: vi.fn(async () => true), checkContact: vi.fn(async () => undefined) } as unknown as MemoryReviewController;
+}
+
 function button(label: string): HTMLButtonElement {
   const found = [...mount.querySelectorAll("button")].find((element) => element.textContent?.includes(label));
   if (!found) throw new Error(`Missing button: ${label}`);
@@ -56,6 +73,39 @@ afterEach(async () => {
 });
 
 describe("Session Memory item card", () => {
+  it("keeps the recovered contact action tied to its canonical receipt and source Session", async () => {
+    const controller = recoveredController("committed");
+    const sessionId = "66666666-6666-4666-8666-666666666666";
+    await act(async () => root.render(<SessionMemoryCards controller={controller} sourceSessionId={sessionId} />));
+    expect(mount.querySelector("a")?.getAttribute("href")).toBe(`/workspace/people/${contactReceipt.created_person_id}?session=${sessionId}`);
+    await act(async () => button("撤销").click());
+    expect(controller.undoContact).toHaveBeenCalledOnce();
+    await act(async () => root.render(<SessionMemoryCards controller={controller} sourceSessionId="not-a-session" />));
+    expect(mount.querySelector("a")?.getAttribute("href")).toBe(`/workspace/people/${contactReceipt.created_person_id}`);
+  });
+
+  it("does not label a mixed Memory batch as a contact-only undo", async () => {
+    const controller = recoveredController("committed", { ...contactReceipt, item_count: 1, applied_item_count: 1 });
+    await act(async () => root.render(<SessionMemoryCards controller={controller} />));
+    expect(mount.querySelector("a")).not.toBeNull();
+    expect([...mount.querySelectorAll("button")].some(element => element.textContent === "撤销")).toBe(false);
+  });
+
+  it.each(["unknown", "undo_unknown", "unavailable"] as const)("does not offer a stale contact destination for %s recovery", async kind => {
+    const controller = recoveredController(kind);
+    await act(async () => root.render(<SessionMemoryCards controller={controller} />));
+    expect(mount.querySelector("a")).toBeNull();
+    expect(mount.textContent).not.toContain("已添加");
+    if (kind === "unavailable") {
+      expect(mount.textContent).not.toContain(contactReceipt.person_display_label);
+      expect(mount.textContent).toContain("来源已失效");
+    } else {
+      expect(mount.textContent).toContain(kind === "undo_unknown" ? "撤销结果待核对" : "结果待核对");
+      await act(async () => button("核对结果").click());
+      expect(controller.checkContact).toHaveBeenCalledOnce();
+    }
+  });
+
   it("localizes decisions and unknown receipts without rewriting the evidence", async () => {
     await act(async () => root.render(<LocaleProvider locale="en"><MemoryItemCard
       item={item} personLabel="林岚" busy={false} onDecide={decide}

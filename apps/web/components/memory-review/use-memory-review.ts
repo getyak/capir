@@ -14,6 +14,7 @@ import type {
   MemoryScopedOperationView,
   MemorySurface,
 } from "@talent-signal/contracts";
+import { MemoryScopedOperationViewSchema } from "@talent-signal/contracts";
 
 import {
   buildDraftRequest,
@@ -21,6 +22,7 @@ import {
   type MemoryReviewDraftState,
 } from "@/lib/memory-review-draft";
 import { workspaceSessionFetch } from "@/components/workspace-session-request";
+import { matchesTypeBox } from "@/lib/typebox-validation";
 
 export type MemoryReviewPurpose = MemorySurface;
 
@@ -321,7 +323,7 @@ export function useMemoryReview(options: {
       setReconciling(true);
       try {
         const response = await request(
-          `/api/memory/operation-views/${operationKey}?purpose=${purpose}${
+          `/api/memory/operation-views/${encodeURIComponent(operationKey)}?purpose=${purpose}${
             personId ? `&person_id=${personId}` : ""
           }${contextId ? `&relationship_context_id=${contextId}` : ""}`,
           { method: "GET" },
@@ -340,12 +342,47 @@ export function useMemoryReview(options: {
           setNotice(t("正在确认保存结果…"));
           return;
         }
-        const view = (await response.json()) as MemoryScopedOperationView;
-        if (view.state === "applied" || view.state === "undone") {
-          setReceipt(view.visible_receipt ?? null);
+        const payload: unknown = await response.json();
+        if (previousBinding.current !== binding) return;
+        // A terminal proposal can supply an operation locator in a fresh tab,
+        // but that locator is not a receipt. Recover only the current entry's
+        // canonical projection, never a locally inferred contact or success.
+        if (!matchesTypeBox(MemoryScopedOperationViewSchema, payload)) {
+          setNotice(t("正在确认保存结果…"));
+          return;
+        }
+        const view = payload as MemoryScopedOperationView;
+        const visibleReceipt = view.visible_receipt;
+        if (view.operation_key !== operationKey || view.purpose !== purpose
+          || (view.person_id ?? null) !== personId
+          || (view.relationship_context_id ?? null) !== contextId
+          || (sessionId && view.source_session_id !== sessionId)
+          || (visibleReceipt && (visibleReceipt.operation_key !== operationKey
+            || visibleReceipt.proposal_id !== proposalId
+            || ((view.state === "applied" || view.state === "undone") && visibleReceipt.status !== view.state)))) {
+          setNotice(t("正在确认保存结果…"));
+          return;
+        }
+        if ((view.state === "applied" || view.state === "undone") && visibleReceipt) {
+          setReceipt(visibleReceipt);
+          if (visibleReceipt.contact_decision === "new" && visibleReceipt.created_person_id) {
+            // A saved compensation key is uncertainty, never proof of undo.
+            // Keep a lost contact undo pending until canonical readback says
+            // it is undone; reloading must not reinstate an active link.
+            const current = key ? readLocator(key) : null;
+            if (view.state === "applied" && current?.contact_undo_key) {
+              setContactOutcome({ kind: "undo_unknown", receipt: visibleReceipt, operationKey });
+              setNotice(t("正在核对联系人撤销结果…"));
+              return;
+            }
+            setContactOutcome({ kind: view.state === "undone" ? "undone" : "committed", receipt: visibleReceipt, operationKey });
+            if (view.state === "undone" && current && key) writeLocator(key, { ...current, contact_undo_key: null });
+          }
           setPhase(view.state === "undone" ? "undone" : "receipt");
           setNotice(null);
         } else if (view.state === "source_revoked") {
+          setReceipt(null);
+          setContactOutcome(null);
           setError(t("来源已失效，这些内容不能保存。"));
           setPhase("error");
           setNotice(null);
@@ -358,7 +395,7 @@ export function useMemoryReview(options: {
         setReconciling(false);
       }
     },
-    [t, binding, request, purpose, personId, contextId],
+    [t, binding, request, purpose, personId, contextId, proposalId, sessionId, key],
   );
 
   const reconcileItemKey = useCallback(async (itemId: string, operationKey: string): Promise<void> => {

@@ -123,11 +123,24 @@ export function SessionMemoryCards({ controller, onComment, onCompare, compariso
   const review = controller.review;
   if (!review) {
     const recovered = Object.entries(controller.itemOutcomes).filter((entry) => Boolean(entry[1].snapshot));
+    const contact = controller.contactOutcome;
+    const contactUndone = contact?.kind === "undone";
+    const contactUnknown = contact?.kind === "unknown" || contact?.kind === "undo_unknown";
+    const contactUnavailable = contact?.kind === "unavailable";
+    const contactVisible = contact?.kind === "committed"
+      || (contactUndone && contact.receipt?.undo_contact_outcome === "retained");
     if (recovered.length || controller.contactOutcome?.receipt) return <div className={styles.actionStack} data-memory-review aria-label={t("会话中的操作回执")}>
-      {controller.contactOutcome?.receipt ? <section className={styles.actionCard} role="status">
-        <div className={styles.actionHead}><span>{t("联系人")}</span><span>{controller.contactOutcome.kind === "undone" ? t("已撤销") : t("已处理")}</span></div>
-        <p>{controller.contactOutcome.receipt.person_display_label ?? t("联系人")} · {controller.contactOutcome.kind === "undone" ? t("已撤销本次添加") : t("已添加")}</p>
-        {controller.contactOutcome.receipt.created_person_id ? <a href={withReturnSession(`/workspace/people/${controller.contactOutcome.receipt.created_person_id}`, validReturnSessionId(sourceSessionId))}>{t("查看人物")}</a> : null}
+      {controller.error ? <p className={styles.warning} role="alert">{controller.error}</p> : null}
+      {controller.notice ? <p className={styles.message} role="status">{controller.notice}</p> : null}
+      {contact?.receipt ? <section className={styles.actionCard} role="status">
+        <div className={styles.actionHead}><span>{t("联系人")}</span><span>{contactUnavailable ? t("不可用") : contactUndone ? t("已撤销") : contactUnknown ? t("待核对") : t("已处理")}</span></div>
+        <p>{contactUnavailable ? t("来源已失效，不能继续添加。") : <>{contact.receipt.person_display_label ?? t("联系人")} · {contactUndone
+          ? contact.receipt.undo_contact_outcome === "retained" ? t("已撤销这次添加；联系人因后续记录保留") : t("已撤销本次添加")
+          : contactUnknown ? t(contact.kind === "undo_unknown" ? "撤销结果待核对" : "结果待核对") : contact.kind === "skipped" ? t("本次未添加") : t("已添加")}</>}</p>
+        {contactVisible && contact.receipt.created_person_id ? <a href={withReturnSession(`/workspace/people/${contact.receipt.created_person_id}`, validReturnSessionId(sourceSessionId))}>{t("查看人物")}</a> : null}
+        {contact.kind === "committed" && contact.receipt.item_count === 0 && contact.receipt.undo?.allowed
+          ? <button type="button" disabled={controller.frozen} onClick={() => void controller.undoContact()}>{t("撤销")}</button> : null}
+        {contactUnknown ? <button type="button" disabled={controller.reconciling} onClick={() => void controller.checkContact()}>{t("核对结果")}</button> : null}
       </section> : null}
       {recovered.map(([itemId, outcome]) => <MemoryItemCard key={itemId} item={outcome.snapshot!}
         personLabel={outcome.personLabel ?? null} busy locked outcome={outcome}

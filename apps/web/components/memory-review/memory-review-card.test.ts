@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryProposalItem, MemoryReviewView } from "@talent-signal/contracts";
+import type { MemoryProposalItem, MemoryReviewView, MemoryScopedOperationView } from "@talent-signal/contracts";
 
 import { MemoryReviewCard } from "./memory-review-card";
 
@@ -14,6 +14,24 @@ vi.mock("../workspace-session-request", () => ({
 const SCOPE = "11111111-1111-4111-8111-111111111111";
 const PROPOSAL = "22222222-2222-4222-8222-222222222222";
 const SOURCE_SESSION = "44444444-4444-4444-8444-444444444444";
+
+function contactOperationView(proposalId: string, operationKey: string, personId: string, label: string): MemoryScopedOperationView {
+  return {
+    contract_version: "2026-08-24.10", operation_key: operationKey, commit_id: SCOPE, commit_revision: 1,
+    state: "applied", purpose: "chat", person_id: null, relationship_context_id: null,
+    source_session_id: SOURCE_SESSION, visible_effect_count: 0,
+    visible_receipt: {
+      contract_version: "2026-08-24.10", commit_id: SCOPE, operation_key: operationKey,
+      proposal_id: proposalId, proposal_revision: 1, status: "applied", contact_decision: "new",
+      created_person_id: personId, person_display_label: label,
+      item_count: 0, applied_item_count: 0, created_item_ids: [], updated_item_ids: [],
+      skipped_item_ids: [], kept_old_item_ids: [], decisions: [],
+      undo: { token: "88888888-8888-4888-8888-888888888888", allowed: true, limits: [] },
+      projection_status: "pending", created_at: "2026-10-28T16:34:16.387Z",
+    },
+    undo: { allowed: true, limits: [] },
+  };
+}
 
 function item(id: string, scope: MemoryProposalItem["scope"], text: string): MemoryProposalItem {
   return {
@@ -118,6 +136,68 @@ function clickByText(text: string) {
 }
 
 describe("shared Memory review card", () => {
+  it("keeps a late operation readback on its original proposal when the same card position changes proposal", async () => {
+    const nextProposal = "99999999-9999-4999-8999-999999999999";
+    const oldOperation = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const nextOperation = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const oldPerson = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const nextPerson = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    let finishOld!: (response: Response) => void;
+    const oldReadback = new Promise<Response>(resolve => { finishOld = resolve; });
+    fetcher.mockReset();
+    fetcher.mockImplementation((path: string) => {
+      if (path.endsWith(`/proposals/${PROPOSAL}/reviews`)) return Promise.resolve(Response.json({ code: "MEMORY_REVIEW_PROCESSED", details: { operation_key: oldOperation } }, { status: 409 }));
+      if (path.endsWith(`/proposals/${nextProposal}/reviews`)) return Promise.resolve(Response.json({ code: "MEMORY_REVIEW_PROCESSED", details: { operation_key: nextOperation } }, { status: 409 }));
+      if (path.includes(`/operation-views/${oldOperation}?`)) return oldReadback;
+      if (path.includes(`/operation-views/${nextOperation}?`)) return Promise.resolve(Response.json(contactOperationView(nextProposal, nextOperation, nextPerson, "新提案联系人")));
+      return Promise.reject(new Error("Unexpected review request"));
+    });
+    const renderProposal = async (proposalId: string) => {
+      await act(async () => root.render(createElement(MemoryReviewCard, {
+        key: "same-card-position", binding: "binding-1", purpose: "chat", sessionId: SOURCE_SESSION,
+        entryCapability: "current-entry", proposal: { proposal_id: proposalId, revision: 1 },
+      })));
+      await flush();
+    };
+    await renderProposal(PROPOSAL);
+    expect(fetcher.mock.calls.some(([path]) => String(path).includes(`/operation-views/${oldOperation}?`))).toBe(true);
+    await renderProposal(nextProposal);
+    expect(mount.textContent).toContain("新提案联系人");
+    await act(async () => { finishOld(Response.json(contactOperationView(PROPOSAL, oldOperation, oldPerson, "旧提案联系人"))); });
+    await flush();
+    expect(mount.textContent).toContain("新提案联系人");
+    expect(mount.textContent).not.toContain("旧提案联系人");
+    expect(mount.querySelector(`a[href="/workspace/people/${nextPerson}?session=${SOURCE_SESSION}"]`)).not.toBeNull();
+    expect(mount.querySelector(`a[href*="${oldPerson}"]`)).toBeNull();
+  });
+
+  it("preserves an in-card edit across same-proposal objects, revisions and capability refreshes", async () => {
+    fetcher.mockReset();
+    fetcher.mockResolvedValue(Response.json({ review_credential: "current-review", review: review() }));
+    const renderRevision = async (revision: number, entryCapability: string) => {
+      await act(async () => root.render(createElement(MemoryReviewCard, {
+        key: "same-draft-position", binding: "binding-1", purpose: "chat", entryCapability,
+        proposal: { proposal_id: PROPOSAL, revision },
+      })));
+      await flush();
+    };
+    await renderRevision(1, "entry-1");
+    const first = mount.querySelector('[data-memory-item-card="self-1"]')!;
+    const edit = [...first.querySelectorAll("button")].find(button => button.textContent === "改一下")!;
+    await act(async () => { edit.click(); });
+    const textarea = first.querySelector("textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "保留我正在修改的草稿");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await renderRevision(1, "entry-2");
+    expect(mount.querySelector("textarea")?.value).toBe("保留我正在修改的草稿");
+    expect(fetcher).toHaveBeenCalledOnce();
+    fetcher.mockResolvedValue(Response.json({ review_credential: "revised-review", review: { ...review(), proposal_revision: 2 } }));
+    await renderRevision(2, "entry-3");
+    expect(mount.querySelector("textarea")?.value).toBe("保留我正在修改的草稿");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
   it("hides source-derived contact and Memory text when the source is withdrawn", async () => {
     fetcher.mockResolvedValue(Response.json({ review_credential: "cred-revoked", review: {
       ...review(), source_status: "unavailable",
