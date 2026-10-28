@@ -2,6 +2,7 @@
 
 import { SidebarSimple } from "@phosphor-icons/react";
 import { useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   SIDEBAR_HIDE_THRESHOLD,
   SIDEBAR_MAX_WIDTH,
@@ -24,12 +25,30 @@ function subscribeViewport(notify: () => void) {
   return () => window.removeEventListener("resize", notify);
 }
 
+/** The work surface owns its header; a test banner can precede it in the stage. */
+function restoreHeader(root: HTMLElement): HTMLElement | null {
+  const candidates = [
+    ...root.querySelectorAll<HTMLElement>("[data-conversation-canvas] > header"),
+    ...root.querySelectorAll<HTMLElement>(".context-workspace .context-topbar"),
+    ...root.querySelectorAll<HTMLElement>(`.${styles.routeHeader}`),
+  ];
+  return candidates.find(candidate => {
+    for (let element: HTMLElement | null = candidate; element && element !== root; element = element.parentElement) {
+      const style = window.getComputedStyle(element);
+      if (element.hidden || element.inert || element.getAttribute("aria-hidden") === "true"
+        || style.display === "none" || style.visibility === "hidden") return false;
+    }
+    return true;
+  }) ?? null;
+}
+
 /** Local presentation only; Session and account state remain server-owned. */
 export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode; children: ReactNode }) {
   const t = useT();
   const locale = useLocale();
   const { layout, setLayout } = useWorkspaceSidebarLayout();
   const [preview, setPreview] = useState<SidebarLayout | null>(null);
+  const [restoreHost, setRestoreHost] = useState<HTMLElement | null>(null);
   const mobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
   const viewportWidth = useSyncExternalStore(subscribeViewport, () => window.innerWidth, () => 1024);
   const shell = useRef<HTMLDivElement>(null);
@@ -48,6 +67,24 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
     const toggle = sidebarElement.current?.querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")
       ?? sidebarElement.current?.querySelector<HTMLButtonElement>("button");
     toggle?.focus({ preventScroll: true });
+  }, [hidden]);
+
+  useLayoutEffect(() => {
+    const root = shell.current;
+    if (!hidden || !root) {
+      setRestoreHost(null);
+      return;
+    }
+    const update = () => {
+      const next = restoreHeader(root);
+      setRestoreHost(previous => previous === next ? previous : next);
+    };
+    update();
+    // Route and admission transitions can replace chrome without changing the
+    // saved sidebar preference. Observe presentation structure, not page data.
+    const observer = new MutationObserver(update);
+    observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "hidden", "inert", "aria-hidden", "style"] });
+    return () => observer.disconnect();
   }, [hidden]);
 
   function maxWidth() {
@@ -104,7 +141,7 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
         <WorkspaceSidebarPresentation value={current}>{sidebar}</WorkspaceSidebarPresentation>
       </aside>
       {children}
-      {hidden && preview === null ? (
+      {hidden && preview === null && restoreHost ? createPortal(
         <button
           aria-controls={sidebarId}
           aria-expanded={false}
@@ -118,7 +155,7 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
         >
           <SidebarSimple aria-hidden="true" size={19} />
           <span aria-hidden="true" className={styles.sidebarRestoreLabel}>{t("显示侧边栏")}</span>
-        </button>
+        </button>, restoreHost,
       ) : null}
       <div
         aria-controls={sidebarId}
