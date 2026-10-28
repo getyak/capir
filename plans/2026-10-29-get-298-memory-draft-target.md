@@ -8,9 +8,9 @@ The choice does not verify real-world identity, bind the persistent Session, rea
 
 ## Current evidence
 
-A bounded isolated browser run selected one existing directory Person and sent a complete authored Memory request. Canonical readback preserved the text but had no target binding; a new contact-only proposal instead referenced an older image. The old full POST field set was not retained. Source inspection confirms the composer currently keeps mention IDs only in presentation state and admits only objective/images. Sanitized run evidence remains outside the repository in the task's video-review artifact directory.
+A bounded isolated browser run selected one existing directory Person and sent a complete authored Memory request. Canonical readback preserved the text but had no target binding; a new contact-only proposal instead referenced an older image. The old full POST field set was not retained. Source inspection of that baseline confirmed mention IDs stayed in presentation state while admission carried only objective/images. Sanitized run evidence remains outside the repository in the task's video-review artifact directory.
 
-Base: `234c24a3`, the latest fetched `origin/main` when this worktree was created. Other accepted UI work is being delivered independently. Preserve concurrent edits.
+Base: `234c24a3`, the latest fetched `origin/main` when this worktree was created. The accepted UI stack through `680bb6cc` is now integrated by merge `747e7168`; preserve concurrent work.
 
 ## Shared contract and ownership
 
@@ -27,7 +27,7 @@ Base: `234c24a3`, the latest fetched `origin/main` when this worktree was create
 
 1. Complete: freeze the shared wire and implement the explicit, reversible frontend choice with five locales.
 2. Complete: preserve target/text snapshots through durable writes, retries, reload and same-message receipt readback; clear cancelled/edited/account-changed choices without clearing later intent.
-3. Active: finish host/database integration proofs and preserve both PR #470 inspection-reading intent and this draft-clear intent when combining branches. Independent feature review reported no remaining confirmed P0/P1/P2 findings.
+3. Complete: host/database integration proofs and the main integration preserve both PR #470 inspection-reading intent and this draft-clear intent. Independent full-feature and merge reviews reported no remaining confirmed P0/P1/P2 findings.
 4. Pending: clean committed-source resident deployment and isolated browser/AI acceptance, including the exact proposal target/current text, human save, destination reload, and no Person/Memory prefetch when opening the reference popover. Keep local checks, CI, merge, deployment and native/device evidence separate.
 
 ## Verification
@@ -42,7 +42,7 @@ The final frontend checks passed on the frozen source, with a single test worker
 - `pnpm --filter @talent-signal/web exec tsc6 --noEmit`: passed.
 - `pnpm --filter @talent-signal/web lint`: passed.
 - `git diff --check`: passed.
-- `pnpm docs:check`: documentation and wiki checks passed; the combined architecture gate is blocked by one backend-owned unfrozen migration-manifest entry. The parent must freeze the reviewed migration and rerun the gate before merge.
+- The initial `pnpm docs:check` reached the intended unfrozen-migration gate. After independent review and real PostgreSQL checks, the parent verified the previous 114 names/order/SQL were unchanged and froze the appended migration. All documentation, wiki, architecture and diagram checks then passed at 115 migrations.
 
 Final sanitized log (mode 0600): `/Users/cubxxw/.codex/visualizations/2026/10/28/01a18337-fc2e-79e0-8deb-d92f1f7eae3d/video-review/runtime/get298-frontend-final-check.log`.
 
@@ -51,6 +51,33 @@ Unsupported dedicated routes remain definitive retained rejections, distinct fro
 New Web historical reads opt into `x-conversation-memory-draft-target: 1`; older strict AgentSession readers receive their legacy DTO. This is display-only negotiation. Backend preservation of canonical targets across older readers/writers is owned and verified separately from the frontend checks.
 
 The existing reference popover's explicit Person-profile link sets `prefetch={false}`. Installed Next code otherwise enables viewport/hover/touch prefetch, and the destination reads Person Memory. The narrow navigation-contract regression preserves explicit click-through; actual network verification remains pending.
+
+The isolated PostgreSQL suite passed all 15 cases through the real admission,
+claim/reclaim, producer, completion, review and source-redaction path with a
+scripted provider. Direct producer staging before canonical source persistence
+remains unreviewable; the completed Runner case establishes the usable review.
+Earlier cleanup and legacy-scrub fixture failures are retained separately.
+Latest source/legacy-reader checks passed 36 cases, backend impact checks passed
+106 cases and backend typecheck passed. Thirteen migration-boundary tests and
+the complete documentation gate passed without changing released SQL.
+
+After integrating main, five combined image/inspection/target suites passed all
+44 cases. Full Web typecheck, lint and documentation gates passed. The merge
+review separately checked both Send-intent fences and a value-preserving
+three-way merge of all five locale catalogs. CI now includes the real target
+PostgreSQL suite in its own disposable database; current PR CI remains required.
+
+## Deployment and rollback boundary
+
+Deploy the two affected Node API residents before publishing the new Web entry,
+preserving their independent databases, configuration and shared IPC volumes.
+The database fence prevents an old worker from claiming or reclaiming a targeted
+entry as ordinary work, and legacy source scrubbing clears the target. Quiesce
+the new entry and drain or withdraw targeted pending work with the new code
+before an old-backend rollback. A real old backend can still omit the historical
+display marker on Session writes; old-client/new-backend preservation does not
+prove that rollback case. Retain that limitation, recovery evidence and current
+data; do not roll the database backward.
 
 ## Remaining evidence boundaries
 
