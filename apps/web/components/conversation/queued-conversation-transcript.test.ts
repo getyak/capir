@@ -267,3 +267,85 @@ it("respects upward reader intent before the native scroll event and next resize
   expect(viewport.scrollTop).toBe(50);
   expect([...document.querySelectorAll("button")].some(button => button.textContent?.includes("回到最新"))).toBe(true);
 });
+
+it("pauses a replying run's follow before source inspection resizes content and restores its reading anchor", async () => {
+  // Controlled layout checks the actual queue runtime's ownership. Painted
+  // first-open bounds remain a separate browser acceptance requirement.
+  const observers: Array<{ callback: ResizeObserverCallback; targets: Set<Element> }> = [];
+  vi.stubGlobal("ResizeObserver", class {
+    record: { callback: ResizeObserverCallback; targets: Set<Element> };
+    constructor(callback: ResizeObserverCallback) { this.record = { callback, targets: new Set() }; observers.push(this.record); }
+    observe(node: Element) { this.record.targets.add(node); }
+    disconnect() { this.record.targets.clear(); }
+  });
+  vi.stubGlobal("matchMedia", () => ({ matches: true, addEventListener() {}, removeEventListener() {} }));
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:source-inspection-test");
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  const withImage = { ...snapshot, active: { ...snapshot.active, objective: "", stage: "answer", images: [{
+    attachment_id: "77777777-7777-4777-8777-777777777777", file_name: "source.png",
+    media_type: "image/png", byte_size: 8, content_hash: "a".repeat(64),
+  }] }, preview: { ...snapshot.preview, stage: "answer" } };
+  fetcher.mockImplementation((url: string) => {
+    if (String(url).endsWith("/stream")) return Promise.resolve(new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify(withImage)}\n\n`));
+    } })));
+    if (String(url).endsWith("/conversation-queue")) return Promise.resolve(Response.json(withImage));
+    if (String(url).includes("/conversation-images/")) return Promise.resolve(new Response(new Blob([new Uint8Array(8)], { type: "image/png" })));
+    return Promise.resolve(Response.json({ detail: initialDetail }));
+  });
+  await act(async () => root?.render(createElement(QueuedConversation, { chatBinding: "chat-binding", detailBinding: "detail-binding", scope: SCOPE, initialDetail })));
+  await flush();
+  const viewport = document.querySelector<HTMLElement>('[role="region"][aria-label="对话记录"]')!;
+  let height = 1000;
+  let top = 700;
+  Object.defineProperties(viewport, {
+    scrollHeight: { get: () => height, configurable: true }, clientHeight: { value: 300, configurable: true },
+    scrollTop: { get: () => top, set: (value: number) => { top = Math.max(0, Math.min(value, height - 300)); }, configurable: true },
+  });
+  vi.spyOn(viewport, "scrollTo").mockImplementation((options?: ScrollToOptions | number) => { viewport.scrollTop = typeof options === "number" ? options : options?.top ?? 0; });
+  const nativeRect = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this === viewport) return new DOMRect(0, 100, 600, 300);
+    if (this.hasAttribute("data-message-evidence")) return new DOMRect(0, 100 + 760 - top, 540, this.hasAttribute("data-preview-open") ? 280 : 200);
+    if (this.hasAttribute("data-evidence-preview")) return new DOMRect(0, 100 + 760 - top, 540, 280);
+    return nativeRect.call(this);
+  });
+  const resized = new Set([viewport, viewport.firstElementChild!]);
+  const resize = async () => act(async () => {
+    for (const observer of observers.filter(record => [...record.targets].some(target => resized.has(target)))) observer.callback([], {} as ResizeObserver);
+  });
+  const source = document.querySelector<HTMLButtonElement>(`[data-message-evidence='${ACTIVE_ID}'] button[title='查看原图 1']`)!;
+  expect(source).not.toBeNull();
+  height = 1080;
+  await act(async () => source.click());
+  const preview = document.querySelector<HTMLElement>("[data-evidence-preview]")!;
+  expect(preview).not.toBeNull();
+  expect(top).toBe(748); // One nearest-bound adjustment after the viewer mounts.
+  await resize();
+  expect(top).toBe(748); // The still-running run may not steal it back to 780.
+
+  // A near-bottom scroll event during inspection must not silently re-arm
+  // following before the next observed output/content resize.
+  await act(async () => {
+    viewport.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    viewport.scrollTop = 780;
+    viewport.dispatchEvent(new Event("scroll"));
+  });
+  height = 1380;
+  await resize();
+  expect(top).toBe(780);
+  height = 1300;
+  await act(async () => preview.querySelector<HTMLButtonElement>('[aria-label="关闭原图"]')!.click());
+  expect(top).toBe(700);
+  expect(document.activeElement).toBe(source);
+  height = 1600;
+  await resize();
+  expect(top).toBe(700);
+
+  const latest = [...document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.includes("回到最新"))!;
+  await act(async () => latest.click());
+  expect(top).toBe(1300);
+  height = 1800;
+  await resize();
+  expect(top).toBe(1500); // Only the explicit Latest action resumes following.
+});
