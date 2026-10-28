@@ -13,6 +13,7 @@ vi.mock("../workspace-session-request", () => ({
 
 const SCOPE = "11111111-1111-4111-8111-111111111111";
 const PROPOSAL = "22222222-2222-4222-8222-222222222222";
+const SOURCE_SESSION = "44444444-4444-4444-8444-444444444444";
 
 function item(id: string, scope: MemoryProposalItem["scope"], text: string): MemoryProposalItem {
   return {
@@ -201,7 +202,21 @@ describe("shared Memory review card", () => {
     expect(clickByText("更多建议")).toBeTruthy();
   });
   it("adds the contact in its card and leaves Memory decisions separate", async () => {
+    fetcher.mockImplementation(() => Promise.resolve(Response.json({
+      review_credential: "cred-source-review",
+      review: { ...review(), source_session_id: SOURCE_SESSION },
+    })));
+    await act(async () => root.render(createElement(MemoryReviewCard, {
+      key: "source-return",
+      binding: "binding-1",
+      proposal: { proposal_id: PROPOSAL, revision: 1 },
+      purpose: "chat",
+      sessionId: SOURCE_SESSION,
+      entryCapability: "source-entry-capability-fixture",
+    })));
+    await flush();
     const fresh = { ...review(), contact_decision: "existing" as const, contact_status: "resolved" as const,
+      source_session_id: SOURCE_SESSION,
       person_id: "33333333-3333-4333-8333-333333333333", proposal_revision: 2 };
     fetcher.mockImplementation((path: string) => String(path).endsWith("/contact-decisions")
       ? Promise.resolve(Response.json({ replayed: false,
@@ -212,6 +227,7 @@ describe("shared Memory review card", () => {
     await flush();
     const contact = document.querySelector("[data-contact-decision-card]")!;
     expect(contact.textContent).toContain("已添加联系人");
+    expect(contact.querySelector("a")?.getAttribute("href")).toBe(`/workspace/people/${fresh.person_id}?session=${SOURCE_SESSION}`);
     expect(document.querySelector('[data-memory-item-card="self-1"] button')?.textContent).toContain("记住");
     const call = fetcher.mock.calls.find(([path]) => String(path).endsWith("/contact-decisions")) as [string, RequestInit];
     expect(JSON.parse(call[1].body as string)).not.toHaveProperty("selected_item_ids");

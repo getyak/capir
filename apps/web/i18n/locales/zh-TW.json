@@ -2620,5 +2620,6 @@
   "execution.tool.connection": "連線請求已回傳",
   "execution.tool.profile": "公開資料搜尋已回傳",
   "execution.tool.other": "操作已回傳",
-  "conversation.image.viewNamed": "檢視原圖 {index}：{name}"
+  "conversation.image.viewNamed": "檢視原圖 {index}：{name}",
+  "来源 {count}": "來源 {count}"
 }

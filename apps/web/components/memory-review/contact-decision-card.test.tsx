@@ -35,6 +35,24 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); mount.remove(); vi.unstubAllGlobals(); });
 
 describe("Session contact decision card", () => {
+  it.each(["11111111-1111-4111-8111-111111111111", "not-a-session"])("preserves only a valid source Session after creating a person: %s", async sourceSessionId => {
+    const personId = "33333333-3333-4333-8333-333333333333";
+    await act(async () => render("pending", {
+      sourceSessionId,
+      outcome: { kind: "committed", operationKey: "contact-result", receipt: {
+        contract_version: "2026-08-24.10", commit_id: "contact-commit", operation_key: "contact-result",
+        proposal_id: "contact-proposal", proposal_revision: 1, status: "applied", contact_decision: "new",
+        created_person_id: personId, item_count: 0, applied_item_count: 0,
+        created_item_ids: [], updated_item_ids: [], skipped_item_ids: [], kept_old_item_ids: [], decisions: [],
+        undo: { token: "contact-undo", allowed: true, limits: [] }, projection_status: "not_required",
+        created_at: "2026-10-28T16:00:00.000Z",
+      } },
+    }));
+    const href = mount.querySelector("a")?.getAttribute("href");
+    expect(href).toBe(`/workspace/people/${personId}${sourceSessionId.startsWith("1111") ? `?session=${sourceSessionId}` : ""}`);
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it("shows identity and evidence with one primary action and secondary disclosure", async () => {
     await act(async () => render());
     expect(mount.textContent).toContain("陈宇");

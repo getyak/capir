@@ -2620,5 +2620,6 @@
   "execution.tool.connection": "Connection request returned",
   "execution.tool.profile": "Public profile search returned",
   "execution.tool.other": "Operation returned",
-  "conversation.image.viewNamed": "View original {index}: {name}"
+  "conversation.image.viewNamed": "View original {index}: {name}",
+  "来源 {count}": "Sources {count}"
 }

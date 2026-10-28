@@ -553,5 +553,6 @@
   "execution.tool.connection": "连接请求已返回",
   "execution.tool.profile": "公开资料搜索已返回",
   "execution.tool.other": "操作已返回",
-  "conversation.image.viewNamed": "查看原图 {index}：{name}"
+  "conversation.image.viewNamed": "查看原图 {index}：{name}",
+  "来源 {count}": "来源 {count}"
 }

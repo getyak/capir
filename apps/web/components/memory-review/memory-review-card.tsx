@@ -15,6 +15,7 @@ import type {
 } from "@talent-signal/contracts";
 
 import { workspaceSessionFetch } from "@/components/workspace-session-request";
+import { validReturnSessionId, withReturnSession } from "../session-return-navigation";
 
 import {
   buildCommitDraft,
@@ -641,6 +642,7 @@ function SessionChatMemoryReviewCard(props: MemoryReviewCardProps) {
   const openReview = controller.open;
   useEffect(() => { void openReview(); }, [openReview, props.binding, props.proposal.proposal_id, props.proposal.revision]);
   return <SessionMemoryCards controller={controller} onComment={props.onCommentItem}
+    sourceSessionId={props.sessionId}
     sourceImageContext={props.binding && props.sessionId && props.sourceMessageId ? {
       binding: props.binding, sessionId: props.sessionId, messageId: props.sourceMessageId,
       images: props.sourceImages ?? [],
@@ -737,7 +739,7 @@ function LegacyMemoryReviewCard(props: MemoryReviewCardProps) {
       <section className={styles.card} role="status">
         <p className={styles.receipt}>{summary}</p>
         {(controller.phase !== "undone" || receipt?.undo_contact_outcome === "retained") && receipt?.created_person_id ? (
-          <Link className={styles.textButton} href={`/workspace/people/${receipt.created_person_id}`}>{t("查看人物")}</Link>
+          <Link className={styles.textButton} href={withReturnSession(`/workspace/people/${receipt.created_person_id}`, validReturnSessionId(review?.source_session_id ?? props.sessionId))}>{t("查看人物")}</Link>
         ) : null}
         {controller.phase === "undone" && receipt?.undo_contact_outcome === "retained" ? (
           <p className={styles.message}>{t("记忆已撤销；联系人已有后续记录，已为你保留。")}</p>

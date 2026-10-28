@@ -2620,5 +2620,6 @@
   "execution.tool.connection": "연결 요청 응답이 도착했습니다",
   "execution.tool.profile": "공개 프로필 검색 응답이 도착했습니다",
   "execution.tool.other": "작업 응답이 도착했습니다",
-  "conversation.image.viewNamed": "원본 이미지 {index} 보기: {name}"
+  "conversation.image.viewNamed": "원본 이미지 {index} 보기: {name}",
+  "来源 {count}": "출처 {count}"
 }

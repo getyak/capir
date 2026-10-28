@@ -26,7 +26,9 @@ export function WorkspacePrivacyEntry({ mobile = false }: { mobile?: boolean }) 
 /**
  * The 58px route header. It states where the user is for directory surfaces.
  * A Session detail supplies all of its context in its own compact header, so
- * this shell header returns nothing there instead of repeating a crumb.
+ * this shell header returns nothing there instead of repeating a crumb. People
+ * pages own their visible heading; retain the shell's native-chrome space
+ * without repeating a generic Person label above that heading.
  */
 export function WorkspaceRouteHeader() {
   const t = useT();
@@ -35,12 +37,13 @@ export function WorkspaceRouteHeader() {
   if (SESSION_DETAIL.test(pathname)) return null;
 
   const label = workspaceRouteLabel(pathname);
+  const pageOwnsTitle = pathname === "/workspace/people" || /^\/workspace\/people\/[^/]+$/u.test(pathname);
 
   return (
-    <header className={styles.routeHeader}>
-      <div className={styles.crumb}>
+    <header className={styles.routeHeader} aria-hidden={pageOwnsTitle || undefined}>
+      {!pageOwnsTitle ? <div className={styles.crumb}>
         <strong>{t(isWorkspaceHomePath(pathname) ? "新对话" : label)}</strong>
-      </div>
+      </div> : null}
       <WorkspacePrivacyEntry />
     </header>
   );

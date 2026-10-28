@@ -2,6 +2,7 @@
 
 import { useT, type TFunction } from "@/components/locale-provider";
 import { useState, type ReactNode } from "react";
+import { validReturnSessionId, withReturnSession } from "../session-return-navigation";
 import type { ConversationImageManifest, MemoryDecision, MemoryProposalItem, MemorySourceLocator } from "@talent-signal/contracts";
 import type { MemoryItemOutcome } from "./use-memory-review";
 import { SourceImageButton, type SourceImage } from "./source-image-button";
@@ -108,13 +109,14 @@ function sourceImageFor(locator: MemorySourceLocator, context?: SourceImageConte
   };
 }
 
-export function SessionMemoryCards({ controller, onComment, onCompare, comparison, sourceImageContext, sourceText }: {
+export function SessionMemoryCards({ controller, onComment, onCompare, comparison, sourceImageContext, sourceText, sourceSessionId }: {
   controller: MemoryReviewController;
   onComment?: (item: MemoryProposalItem) => void;
   onCompare?: () => void;
   comparison?: ReactNode;
   sourceImageContext?: SourceImageContext;
   sourceText?: string;
+  sourceSessionId?: string | null;
 }) {
   const t = useT();
   const [showAll, setShowAll] = useState(false);
@@ -125,7 +127,7 @@ export function SessionMemoryCards({ controller, onComment, onCompare, compariso
       {controller.contactOutcome?.receipt ? <section className={styles.actionCard} role="status">
         <div className={styles.actionHead}><span>{t("联系人")}</span><span>{controller.contactOutcome.kind === "undone" ? t("已撤销") : t("已处理")}</span></div>
         <p>{controller.contactOutcome.receipt.person_display_label ?? t("联系人")} · {controller.contactOutcome.kind === "undone" ? t("已撤销本次添加") : t("已添加")}</p>
-        {controller.contactOutcome.receipt.created_person_id ? <a href={`/workspace/people/${controller.contactOutcome.receipt.created_person_id}`}>{t("查看人物")}</a> : null}
+        {controller.contactOutcome.receipt.created_person_id ? <a href={withReturnSession(`/workspace/people/${controller.contactOutcome.receipt.created_person_id}`, validReturnSessionId(sourceSessionId))}>{t("查看人物")}</a> : null}
       </section> : null}
       {recovered.map(([itemId, outcome]) => <MemoryItemCard key={itemId} item={outcome.snapshot!}
         personLabel={outcome.personLabel ?? null} busy locked outcome={outcome}
@@ -159,6 +161,7 @@ export function SessionMemoryCards({ controller, onComment, onCompare, compariso
       displayLabel={controller.contactOutcome?.receipt?.person_display_label ?? review.person_display_label ?? t("联系人")}
       relationshipContext={review.relationship_display_label ?? ""}
       sourceExcerpt={contactSource}
+      sourceSessionId={review.source_session_id ?? sourceSessionId}
       sourceUnavailable={review.source_status === "unavailable"}
       sourceImage={sourceImageFor(contactItem?.source_locator ?? (imageContext?.images.length === 1
         ? { kind: "image_region", artifact_id: `conversation-image-${imageContext.messageId}-0-${imageContext.images[0]!.attachment_id}`, image_index: 0 }

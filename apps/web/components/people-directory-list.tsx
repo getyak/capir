@@ -54,12 +54,15 @@ function personChange(person: PersonDirectoryItem, t: TFunction) {
     return t("{count} 个关系情境", { count: person.contexts.length });
   }
   if (person.capture_count > 0) {
+    if (person.confirmed_identity_count === 0) {
+      return t("来源 {count}", { count: person.capture_count });
+    }
     return t("来源 {capture} · 已确认线索 {confirmed}", {
       capture: person.capture_count,
       confirmed: person.confirmed_identity_count,
     });
   }
-  return t("暂无已确认的来源");
+  return null;
 }
 
 function PersonRow({ person, query, returnSessionId }: { person: PersonDirectoryItem; query: string; returnSessionId: string | null }) {
@@ -67,6 +70,8 @@ function PersonRow({ person, query, returnSessionId }: { person: PersonDirectory
   const locale = useLocale();
   const match = person.identity_matches[0];
   const context = person.contexts[0];
+  const identityLabel = match ? identityMatchLabel(match, t) : person.profile?.headline;
+  const changeLabel = personChange(person, t);
   return <>
     <div className={styles.rowAvatar}><AvatarEditor id={person.id} label={person.display_label} url={person.avatar?.url} size={40} /></div>
     <Link
@@ -77,16 +82,14 @@ function PersonRow({ person, query, returnSessionId }: { person: PersonDirectory
       <span className={styles.personIdentity}>
         <span className={styles.personName}>
           <strong>{person.display_label}</strong>
-          <small>
-            {match ? identityMatchLabel(match, t) : person.profile?.headline ?? t("身份待补充")}
-          </small>
+          {identityLabel ? <small>{identityLabel}</small> : null}
         </span>
       </span>
       <span className={styles.personChange}>
         <span className={styles.contextLabel}>
           {context?.display_label ?? t("没有活跃情境")}
         </span>
-        <small>{personChange(person, t)}</small>
+        {changeLabel ? <small>{changeLabel}</small> : null}
       </span>
       <span className={styles.personMeta}>
         <time dateTime={person.last_activity_at}>
