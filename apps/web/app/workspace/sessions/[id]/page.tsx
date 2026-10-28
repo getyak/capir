@@ -12,6 +12,8 @@ import {
   isBackendSessionExpiredError,
 } from "@/lib/backend-session";
 import { readBackendSessionClaims } from "@/lib/server/backendAuth";
+import { translate } from "@/lib/i18n";
+import { getMarketingLocale } from "@/lib/server/marketing-locale";
 import {
   isWorkspaceSessionId,
   loadWorkspaceSession,
@@ -20,13 +22,14 @@ import {
   workspaceSessionsBinding,
   type WorkspaceSessionDetailWire,
 } from "@/lib/server/workspaceSessions";
+import styles from "./session-recovery.module.css";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
-  robots: { follow: false, index: false },
-  title: "对话 · capri",
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const locale = await getMarketingLocale();
+  return { robots: { follow: false, index: false }, title: translate(locale, "对话") };
+}
 
 export default async function SessionDetailPage({
   params,
@@ -51,6 +54,9 @@ export default async function SessionDetailPage({
     );
   }
 
+  const locale = await getMarketingLocale();
+  const t = (key: string) => translate(locale, key);
+
   let detail: WorkspaceSessionDetailWire | null = null;
   let error: string | null = null;
   let sessionRecoveryHref: string | null = null;
@@ -59,24 +65,28 @@ export default async function SessionDetailPage({
   } catch (caught) {
     if (isBackendSessionExpiredError(caught)) {
       sessionRecoveryHref = backendSessionRecoveryHref(`/workspace/sessions/${id}`);
-      error = "登录已过期，请重新登录后查看这段对话。";
+      error = t("登录已过期，请重新登录后查看这段对话。");
     } else {
-      error = "无法读取这段对话；系统不会用缓存或示例内容代替。";
+      error = t("无法读取这段对话。");
     }
   }
 
   if (!detail) {
     return (
-      <section aria-labelledby="session-unavailable" className="workspace-section">
-        <h1 id="session-unavailable">对话不可用</h1>
-        <p role="alert">{error}</p>
-        {sessionRecoveryHref ? (
-          <a href={sessionRecoveryHref}>重新登录</a>
-        ) : null}
-        <p>
-          <Link href="/workspace/sessions">返回对话列表</Link>
-        </p>
-      </section>
+      <main className={styles.main} id="main-content" tabIndex={-1}>
+        <section aria-labelledby="session-unavailable" className={styles.recovery}>
+          <h1 className={styles.title} id="session-unavailable">{t("对话不可用")}</h1>
+          <p className={styles.message} role="alert">{error}</p>
+          <div className={styles.actions}>
+            {sessionRecoveryHref ? (
+              <a className={styles.primary} href={sessionRecoveryHref}>{t("重新登录")}</a>
+            ) : null}
+            <Link className={sessionRecoveryHref ? styles.secondary : styles.primary} href="/workspace/sessions">
+              {t("返回对话列表")}
+            </Link>
+          </div>
+        </section>
+      </main>
     );
   }
 
