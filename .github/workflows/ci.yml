@@ -555,8 +555,10 @@ jobs:
     if: needs.changes.outputs.ios == 'true'
     runs-on: macos-26
     # Main/manual retain release and accessibility coverage; PRs compile only
-    # Debug and run the quick set. Keep room for full diagnostic runs.
-    timeout-minutes: 60
+    # Debug and run the quick set. Run 40751023321 attempt 1 spent ~13m45
+    # on setup/build, ~2m on units and 43m25 on 19/23 isolated UI journeys.
+    # Keep every journey/assertion; allow the remaining four and bounded retries.
+    timeout-minutes: 90
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -597,6 +599,15 @@ jobs:
         with:
           name: ios-navigation-evidence-${{ github.run_id }}
           path: build/ios/navigation-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Preserve recovered Simulator failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ios-infra-failures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/ios/TestResults.parts/infra-failures
           if-no-files-found: ignore
           retention-days: 7
 

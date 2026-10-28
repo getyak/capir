@@ -508,6 +508,7 @@ preserve_ios_results() {
 
 is_retryable_simulator_failure() {
   local result_path="$1"
+  local selector="$2"
   local attachment_dir=""
   [ -d "$result_path" ] || return 1
   if xcrun xcresulttool get test-results summary \
@@ -517,6 +518,18 @@ is_retryable_simulator_failure() {
       result = JSON.parse(STDIN.read)
       failures = result.fetch("testFailures", [])
       only_failure = failures.length == 1 ? failures.first : {}
+      ui_selector = ARGV.fetch(0, "").match(/\ATalentSignalUITests\/[A-Za-z0-9_]+\/(test[A-Za-z0-9_]+)\z/)
+      failure_text = only_failure.fetch("failureText", "")
+      # Run 40751023321 attempt 2: one selected UI case was refused before
+      # app launch. Do not turn generic launch errors or assertions into retries.
+      launch_busy = ui_selector &&
+        result["totalTestCount"] == 1 && result["failedTests"] == 1 &&
+        result["passedTests"] == 0 && result["skippedTests"] == 0 &&
+        failures.length == 1 && only_failure["testName"] == ui_selector[1] + "()" &&
+        failure_text.start_with?("Failed to get launch progress for <XCUIApplicationImpl: ") &&
+        failure_text.include?(" com.talentsignal.app at ") &&
+        failure_text.include?(">: Simulator device failed to launch com.talentsignal.app.") &&
+        failure_text.include?("The request was denied by service delegate (SBMainWorkspace) for reason: Busy (\"Application failed preflight checks\").")
       bootstrap_failure = result.fetch("passedTests", 0).zero? &&
         result.fetch("skippedTests", 0).zero? &&
         only_failure.fetch("testName", "").include?("UITests-Runner encountered an error") &&
@@ -529,8 +542,8 @@ is_retryable_simulator_failure() {
       accessibility_audit_timeout = failures.length == 1 &&
         only_failure.fetch("failureText", "").include?("com.apple.xcode.xctest.accessibilityAudit") &&
         only_failure.fetch("failureText", "").include?("Audit failed to complete in time")
-      exit((bootstrap_failure || query_timeout || accessibility_audit_timeout) ? 0 : 1)
-    '; then
+      exit((bootstrap_failure || launch_busy || query_timeout || accessibility_audit_timeout) ? 0 : 1)
+    ' "$selector"; then
     return 0
   fi
 
@@ -577,7 +590,7 @@ run_ios_test_part() {
   echo "iOS stage: $selector"
   if xcodebuild "${part_arguments[@]}" test-without-building; then
     :
-  elif is_retryable_simulator_failure "$part_path"; then
+  elif is_retryable_simulator_failure "$part_path" "$selector"; then
     local infra_failure_dir="$ios_result_parts_dir/infra-failures"
     mkdir -p "$infra_failure_dir"
     mv "$part_path" "$infra_failure_dir/$(basename "$part_path")"

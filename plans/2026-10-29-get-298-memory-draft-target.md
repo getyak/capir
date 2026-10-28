@@ -86,3 +86,35 @@ The parent owns database integration, CI, clean-source deployments, resource che
 ### Import experiment fixture compatibility (2026-10-29)
 
 The source-bound cold ARM64 OCI build for d5e3e6c2 passed. Its optional capped import job stopped before starting the nested engine: Python 3.12 adds an empty AST `type_params` field, changing the immutable log-gate fingerprint. Normalize only that empty field in the fixture, explicitly reject nonempty generic parameters, and preserve the original fingerprint and production gate. All 80 synthetic deployment fixtures passed on Python 3.12.14; independent review found no remaining issue. A new exact-source CI/image experiment is required; the earlier failure is not an import or capacity result.
+
+### Final main integration and measured CI recovery (2026-10-29)
+
+Main PR #473 adds the independently reviewed Memory disclosure density change.
+Its component/CSS/tests/plan merge is separate from the Memory-target admission
+and does not alter that authority boundary. Main `055c19c0` is integrated before
+the next GET-298 head pipeline.
+
+CI run `40751023321` attempt 1 exceeded its 60-minute limit after setup/build
+(~13m45), unit tests (~2m), and 19 of 23 isolated UI journeys (~43m25).
+The single same-source rerun then failed in the first UI case at `app.launch()`,
+with exactly one failed test, no pass or skip, and the recorded
+`SBMainWorkspace` Busy / application preflight refusal. It did not reach a
+product assertion. No third unchanged rerun is used.
+
+Recognize only that full launch-error signature bound to the selected UI method
+and explicit 1/0/1/0 counts. Reuse the existing one-recovery limit and identical
+journey arguments. Preserve the first native result in a separately uploaded
+`infra-failures` artifact even if recovery succeeds; a second failure still
+fails the job. Unit failures, ordinary assertions, crashes, missing apps,
+different methods/apps/services, mixed results, skips and missing counts remain
+failures. Keep all 23 journeys and every assertion, with a measured 90-minute
+job budget. Ten host orchestration tests pass using fake Xcode/platform tools;
+no local Simulator or build is started. The earlier interrupted-result upload
+race is still an unverified limitation, not a claimed fix.
+
+The machine's disk-pressure pause remains active. Heavy local builds and
+service activation wait for an evidence-backed resource recovery; cloud CI
+and lightweight source/orchestration checks may continue. The prepared
+`acc37eea` OCI/Web artifacts belong only to that old head and must not be
+relabeled as this final integration. Final source-bound build, current required
+gates, clean committed deployments and real-surface acceptance remain pending.
