@@ -1,0 +1,9 @@
+.completed > summary { color: var(--muted); width: fit-content; max-width: 100%; }
+.diagnostics { margin-top: 8px; }
+.diagnostics > summary { align-items: center; cursor: pointer; display: flex; gap: 8px; list-style: none; min-height: 44px; width: fit-content; }
+.diagnostics > summary::-webkit-details-marker { display: none; }
+.diagnostics > summary::after { content: "›"; }
+.diagnostics[open] > summary::after { transform: rotate(90deg); }
+.diagnostics > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.diagnostics code { font: inherit; overflow-wrap: anywhere; }
+@media (forced-colors: active) { .completed > summary { color: CanvasText; } .diagnostics > summary:focus-visible { outline-color: Highlight; } }

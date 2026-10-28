@@ -11,7 +11,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import type { ConversationImageManifest } from "@talent-signal/contracts";
+import type { ConversationImageManifest, LocaleTag } from "@talent-signal/contracts";
 
 const fetcher = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
@@ -35,6 +35,7 @@ import {
 import type { SessionDetail } from "../session-workbench/session-detail-state";
 import { ConversationImageStrip } from "./conversation-images";
 import { QueuedConversation } from "./queued-conversation";
+import { LocaleProvider } from "../locale-provider";
 import styles from "./queued-conversation.module.css";
 
 const SESSION = "33333333-3333-4333-8333-333333333333";
@@ -89,6 +90,7 @@ async function renderStrip(props: {
   images: ConversationImageManifest[];
   local?: boolean;
   onKeyDown?: () => void;
+  locale?: LocaleTag;
 }): Promise<void> {
   mount = document.createElement("div");
   document.body.append(mount);
@@ -102,14 +104,15 @@ async function renderStrip(props: {
       scope: "a".repeat(64),
       sessionId: SESSION,
     });
-    root?.render(props.onKeyDown ? createElement("div", { onKeyDown: props.onKeyDown }, strip) : strip);
+    const content = props.onKeyDown ? createElement("div", { onKeyDown: props.onKeyDown }, strip) : strip;
+    root?.render(props.locale ? <LocaleProvider locale={props.locale}>{content}</LocaleProvider> : content);
   });
   await flush();
 }
 
 function button(label: string): HTMLButtonElement {
   const found = [...document.querySelectorAll("button")].find((node) => node.getAttribute("aria-label") === label
-    || node.textContent === label);
+    || node.getAttribute("title") === label || node.textContent === label);
   expect(found, `missing button ${label}`).toBeTruthy();
   return found as HTMLButtonElement;
 }
@@ -190,6 +193,51 @@ it("keeps original inspection inside its exact message without a modal or detach
   expect(document.querySelector("[role='dialog']")).toBeNull();
   expect(preview?.parentElement).toBe(evidence);
   expect(trigger.getAttribute("aria-controls")).toBe(preview?.id);
+});
+
+it("replaces the thumbnail presentation while inspecting an original and reveals it before restoring focus", async () => {
+  await renderStrip({ images: [imageManifest(0, "source.png")] });
+  const trigger = mount!.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!;
+  trigger.focus();
+  await act(async () => trigger.click());
+  const thumbnails = trigger.closest<HTMLElement>("[hidden]");
+  expect(thumbnails).not.toBeNull();
+  expect(thumbnails?.hidden).toBe(true);
+  expect(dialog().closest("[hidden]")).toBeNull();
+  expect([...mount!.querySelectorAll("img")].filter(image => !image.closest("[hidden]"))).toEqual([dialogImage()]);
+  await act(async () => button("关闭原图").click());
+  expect(thumbnails?.hidden).toBe(false);
+  expect(document.activeElement).toBe(trigger);
+});
+
+it("returns focus to owned recovery when the inspected thumbnail no longer exists", async () => {
+  await renderStrip({ images: [imageManifest(0)] });
+  const trigger = mount!.querySelector<HTMLButtonElement>("button[title='查看原图 1']")!;
+  await act(async () => trigger.click());
+  await act(async () => dialogImage().dispatchEvent(new window.Event("error")));
+  expect(trigger.isConnected).toBe(false);
+  await act(async () => button("关闭原图").click());
+  expect(document.querySelector("[data-evidence-preview]")).toBeNull();
+  const recovery = button("重新读取图片");
+  expect(recovery.closest("[hidden]")).toBeNull();
+  expect(document.activeElement).toBe(recovery);
+});
+
+it.each([
+  ["en", "View original 1", "Close original", "Download original", "Fit"],
+  ["zh-TW", "檢視原圖 1", "關閉原圖", "下載原圖", "符合視窗"],
+  ["ja", "元の画像 1 を表示", "元の画像を閉じる", "元の画像をダウンロード", "画面に合わせる"],
+  ["ko", "원본 이미지 1 보기", "원본 닫기", "원본 다운로드", "창에 맞춤"],
+] as const)("uses %s for attachment controls while preserving the source filename", async (locale, view, close, download, fit) => {
+  await renderStrip({ images: [imageManifest(0, "原始截图.png")], locale });
+  await act(async () => button(view).click());
+  expect(dialogImage().alt).toBe("原始截图.png");
+  expect(button(view).getAttribute("aria-label")).toContain("原始截图.png");
+  expect(button(close)).toBeTruthy();
+  expect(button(download)).toBeTruthy();
+  expect(dialog().textContent).toContain(fit);
+  expect(dialog().textContent).not.toContain("conversation.image.");
+  if (locale !== "zh-TW") expect(dialog().querySelector(`.${styles.imageToolbar}`)?.textContent).not.toContain("适应");
 });
 
 it("folds multiple sent images into aligned cells with a count and explicit expand/collapse", async () => {

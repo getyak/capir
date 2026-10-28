@@ -140,9 +140,8 @@ export function SessionTaskRecord({ messageId, standalone = false }: { messageId
   if (!context?.task || context.task.messageId !== messageId) return null;
   const { task, recordId, bindRecord, observation, mutating, onContinue, onRetry, recoveryActions, owned } = context;
   const phase = task.work.phase;
-  const content = <div ref={bindRecord} id={recordId} className={styles.panel} data-session-task-record={messageId}>
-        <p>{t(task.work.text)}</p>
-        <p>{t("conversation.task.boundary")}</p>
+  const content = <div ref={bindRecord} id={recordId} className={phase === "running" ? undefined : styles.panel} data-session-task-record={messageId}>
+        {phase !== "running" ? <p>{t(task.work.text)}</p> : null}
         <div className={styles.actions}>
           {phase === "paused" && !observation.snapshot?.active && observation.snapshot?.queued.every(entry => entry.status === "queued") && <button type="button" disabled={mutating} onClick={() => owned(onContinue)}>{t("conversation.queue.continue")}</button>}
           {phase === "failed" && task.entry && <button type="button" disabled={mutating} onClick={() => owned(() => onRetry(task.entry!.queue_entry_id))}>{t("conversation.queue.retry")}</button>}

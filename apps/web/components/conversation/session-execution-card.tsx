@@ -15,7 +15,9 @@ import { useLocale, useT } from "../locale-provider";
 import type { LocaleTag } from "@talent-signal/contracts";
 import { ConversationResponse } from "../conversation-response";
 import styles from "./queued-conversation.module.css";
+import executionStyles from "./session-execution-card.module.css";
 import { ProcessingLabel } from "./processing-label";
+import { executionToolLabelKey } from "./session-execution-tool-labels";
 
 function clock(iso: string | null | undefined, locale: LocaleTag): string {
   if (!iso) return "";
@@ -71,7 +73,7 @@ export function SessionExecutionCard({
   const elapsedMs = conversationElapsedMs({ startedAt, nowMs, endedAt });
   const stageLabel = conversationStageLabel(stage, locale);
   return (
-    <details className={styles.execution} data-phase={phase} data-run-stage={stage ?? undefined} data-live={live ? "true" : undefined} open={defaultOpen} onKeyDown={event => {
+    <details className={`${styles.execution} ${phase === "completed" ? executionStyles.completed : ""}`} data-phase={phase} data-run-stage={stage ?? undefined} data-live={live ? "true" : undefined} open={defaultOpen} onKeyDown={event => {
       if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
       // An older inspected record can remain open after a new run takes over.
       // Closing that record must never reach the canvas shortcut for Stop.
@@ -81,23 +83,22 @@ export function SessionExecutionCard({
     }}>
       <summary className={styles.executionSummary} title={live ? stageLabel ?? undefined : undefined}>
         {live && !statusInHeader ? <span className={styles.workingName}>{siteConfig.name}</span> : null}
-        {live && statusInHeader ? <span>{t("conversation.task.record")}</span> : <span className={styles.executionState} role={live ? "status" : undefined}><ProcessingLabel animated={phase === "running" && live}>{phase === "running" && live ? t("正在处理") : conversationExecutionPhaseLabel(phase, locale)}</ProcessingLabel></span>}
+        {phase === "completed" || (live && statusInHeader) ? <span>{t("conversation.task.record")}</span> : <span className={styles.executionState} role={live ? "status" : undefined}><ProcessingLabel animated={phase === "running" && live}>{phase === "running" && live ? t("正在处理") : conversationExecutionPhaseLabel(phase, locale)}</ProcessingLabel></span>}
       </summary>
       <div className={styles.executionDetail}>
-        {completedTools.length > 0 ? <p>{t("execution.tools.count", { count: completedTools.length })}</p> : null}
         <p className={styles.executionElapsed} data-elapsed-ms={elapsedMs}>{t(phase === "queued" ? "已等待" : timingBasis === "receipt" ? "记录跨度" : "用时")} {conversationElapsedLabel(elapsedMs, locale)}</p>
         {stageLabel && live ? <p>{stageLabel}</p> : null}
         {failureCode ? <p className={styles.executionFailure}>{t("execution.failureCode", { code: failureCode })}</p> : null}
-        {completedTools.length > 0 ? <ol className={styles.executionMilestones} aria-label={t("工具完成记录")}>
+        {completedTools.length > 0 ? <ol className={styles.executionMilestones} aria-label={t("execution.activity")} data-tool-activity>
           {completedTools.map((tool, index) => <li key={`${index}:${tool.completed_at}`}>
-            <span>{tool.name}</span><time dateTime={tool.completed_at}>{clock(tool.completed_at, locale)}</time>
+            <span>{t(executionToolLabelKey(tool.name))}</span><time dateTime={tool.completed_at}>{clock(tool.completed_at, locale)}</time>
           </li>)}
         </ol> : null}
         {milestones.length > 0 ? (
           <ol className={styles.executionMilestones}>
             {milestones.map((milestone) => (
               <li key={`${milestone.stage}:${milestone.observedAt}`}>
-                <span>{conversationStageLabel(milestone.stage, locale) ?? milestone.label}</span>
+                <span>{conversationStageLabel(milestone.stage, locale) ?? t("execution.stage.other")}</span>
                 <time dateTime={milestone.observedAt}>{clock(milestone.observedAt, locale)}</time>
               </li>
             ))}
@@ -108,6 +109,18 @@ export function SessionExecutionCard({
           {t(timingBasis === "receipt" ? "消息接收" : "开始")} {clock(startedAt, locale) || t("未记录")}
           {endedAt ? ` · ${t(timingBasis === "receipt" ? "结果记录" : "结束")} ${clock(endedAt, locale) || t("未记录")}` : live ? ` · ${t("仍在进行")}` : ""}
         </p>
+        {completedTools.length > 0 || milestones.some(milestone => !conversationStageLabel(milestone.stage, locale)) ? <details className={executionStyles.diagnostics} data-run-diagnostics>
+          <summary>{t("execution.diagnostics")}</summary>
+          {completedTools.length > 0 ? <>
+            <p>{t("execution.tools.count", { count: completedTools.length })}</p>
+            <ol className={styles.executionMilestones} aria-label={t("工具完成记录")}>
+              {completedTools.map((tool, index) => <li key={`${index}:${tool.completed_at}`}>
+                <code>{tool.name}</code><time dateTime={tool.completed_at}>{clock(tool.completed_at, locale)}</time>
+              </li>)}
+            </ol>
+          </> : null}
+          {milestones.filter(milestone => !conversationStageLabel(milestone.stage, locale)).map(milestone => <p key={`${milestone.stage}:${milestone.observedAt}`}><code>{milestone.stage}</code> · <time dateTime={milestone.observedAt}>{clock(milestone.observedAt, locale)}</time></p>)}
+        </details> : null}
         {children}
       </div>
     </details>
