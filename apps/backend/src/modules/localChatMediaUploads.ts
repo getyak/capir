@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { sha256 } from "../lib/hash.js";
@@ -12,16 +13,30 @@ export class LocalChatMediaUploads {
   }
   private async matches(path: string, id: string, size: number, type: string) {
     try {
-      const file = resolve(path, "receipt.json"), info = await stat(file);
-      if (!info.isFile() || info.size > 4096) return false;
-      const receipt = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
-      return receipt.version === "local-media-attempt.v1" && receipt.attempt_id === id &&
-        receipt.byte_size === size && receipt.content_type === type;
+      // Check and read the same non-symlink descriptor. Even if its pathname
+      // is replaced or the file grows, no different/unbounded file is read.
+      const handle = await open(resolve(path, "receipt.json"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      try {
+        const info = await handle.stat();
+        if (!info.isFile() || info.size > 4096) return false;
+        const bytes = Buffer.alloc(4097);
+        let used = 0;
+        while (used < bytes.length) {
+          const { bytesRead } = await handle.read(bytes, used, bytes.length - used, used);
+          if (bytesRead === 0) break;
+          used += bytesRead;
+        }
+        if (used > 4096) return false;
+        const receipt = JSON.parse(bytes.subarray(0, used).toString("utf8")) as Record<string, unknown>;
+        return receipt.version === "local-media-attempt.v1" && receipt.attempt_id === id &&
+          receipt.byte_size === size && receipt.content_type === type;
+      } finally { await handle.close(); }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return false;
+      if (["ENOENT", "ELOOP"].includes((error as NodeJS.ErrnoException).code ?? "") || error instanceof SyntaxError) return false;
       throw error;
     }
   }
+
   async reserve(key: string, id: string, size: number, type: string) {
     await mkdir(this.base(key), { recursive: true, mode: 0o700 });
     for (const state of ["committed", "cancelled"] as const) {

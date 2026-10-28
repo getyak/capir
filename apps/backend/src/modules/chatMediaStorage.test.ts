@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -197,6 +197,27 @@ describe("local Chat media storage", () => {
     await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBe("cancelled");
     await storage.delete(key);
     expect(await storage.existsForLab(key)).toBe(false);
+  });
+
+
+  it("does not trust an attempt receipt replaced by a symlink to another file", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "capir-local-receipt-link-")); directories.push(directory);
+    const storage = new LocalChatMediaStorage(directory), attempt = randomUUID(), key = "account/person/media";
+    await storage.reserveUpload(key, attempt, 1, "image/png");
+    const relative = (await readdir(directory, { recursive: true })).find(file => file.endsWith("receipt.json"))!;
+    const receipt = join(directory, relative), elsewhere = join(directory, "foreign-receipt.json");
+    await rename(receipt, elsewhere); await symlink(elsewhere, receipt);
+    await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBeNull();
+  });
+
+  it("rejects oversized local metadata without treating it as a terminal receipt", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "capir-local-receipt-size-")); directories.push(directory);
+    const storage = new LocalChatMediaStorage(directory), attempt = randomUUID(), key = "account/person/media";
+    await storage.reserveUpload(key, attempt, 1, "image/png");
+    const relative = (await readdir(directory, { recursive: true })).find(file => file.endsWith("receipt.json"))!;
+    await writeFile(join(directory, relative), JSON.stringify({ version: "local-media-attempt.v1", attempt_id: attempt,
+      byte_size: 1, content_type: "image/png" }) + " ".repeat(8192));
+    await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBeNull();
   });
 
 });
