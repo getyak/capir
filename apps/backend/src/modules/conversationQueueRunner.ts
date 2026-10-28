@@ -15,6 +15,7 @@ import {
 } from "./conversationQueueSteering.js";
 import { executeUnscopedChatTask } from "./unscopedChat.js";
 import { isWorkspaceConversationAgentProvider } from "./workspaceConversationAgent.js";
+import { ApiError } from "../lib/apiError.js";
 import {
   CONVERSATION_QUEUE_MAX_CONCURRENT_RUNS,
   ConversationQueueLeaseLostError,
@@ -405,6 +406,7 @@ export class ConversationQueueRunner {
         objective: claimed.objective,
         acceptedAt: claimed.acceptedAt,
         images: result.images ?? [],
+        ...(claimed.memoryDraftTarget ? { memoryDraftTarget: claimed.memoryDraftTarget } : {}),
         result,
       });
       const finalized = await finalizeConversationQueueEntry(this.options.pool, {
@@ -538,7 +540,7 @@ export class ConversationQueueRunner {
     const promise = (async () => {
       const monitor = await beginQueueRunMonitoring(this.options.pool, claimed, this.options.logger);
       return monitor.capture(async () => {
-      let entryImages: Awaited<ReturnType<typeof readConversationRunImages>>["images"] = [];
+      let entryImages: ConversationImageManifest[] = [];
       try {
         const selection = this.options.selectProvider
           ? await this.options.selectProvider(this.options.pool, {
@@ -551,21 +553,26 @@ export class ConversationQueueRunner {
           await this.finalizeRetained(fence, "MODEL_PROVIDER_UNAVAILABLE", { auth, claimed, partialText: "" });
           return;
         }
-        const runImageContext = await readConversationRunImages(
+        // A selected-person draft admits current authored text only. Retain
+        // attachment metadata for the conversation without exposing any image
+        // bytes (including historical images) to this independent Run.
+        const runImageContext = claimed.memoryDraftTarget ? { images: [], omitted: 0 } : await readConversationRunImages(
           this.options.pool,
           claimed.accountId,
           claimed.sessionId,
           claimed.entryId,
         );
-        entryImages = runImageContext.images.filter(
+        entryImages = claimed.memoryDraftTarget
+          ? (await readConversationMessageImageManifests(this.options.pool, claimed.accountId, [claimed.entryId])).get(claimed.entryId) ?? []
+          : runImageContext.images.filter(
           (image) => image.messageId === claimed.messageId,
-        );
+        ).map(image => image.manifest);
         // GET-128 steering: an agent-provider Run that actually consumes
         // steering input receives messages accepted while it works, delivered
         // at tool-safe points into THIS task. Any other provider closes intake
         // at once so later messages are honestly the next task from admission
         // time, never silently waiting for a dispatch that can never happen.
-        const steeringCapable = isWorkspaceConversationAgentProvider(selection.provider)
+        const steeringCapable = !claimed.memoryDraftTarget && isWorkspaceConversationAgentProvider(selection.provider)
           && selection.provider.inputCapabilities?.steering === true;
         const steeringSource = createConversationQueueSteeringSource({
           pool: this.options.pool,
@@ -608,6 +615,7 @@ export class ConversationQueueRunner {
             sessionId: claimed.sessionId,
           },
           hostResult: claimed.hostResult,
+          ...(claimed.memoryDraftTarget ? { memoryDraftTarget: claimed.memoryDraftTarget } : {}),
           taskID: claimed.runId,
           request: {
             idempotency_key: `conversation-queue:${claimed.entryId}`,
@@ -671,7 +679,7 @@ export class ConversationQueueRunner {
         if (controller.signal.aborted) {
           const reason = (controller.signal.reason as RunAbort | undefined)?.code ?? "ABORTED";
           if (reason === "USER_CANCELLED") {
-            await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages.map((image) => image.manifest), completedTools);
+            await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages, completedTools);
           } else {
             await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : reason === "LEASE_LOST" ? "LEASE_LOST" : "SOURCE_REVOKED", { auth, claimed, partialText: previewText, completedTools });
           }
@@ -689,7 +697,7 @@ export class ConversationQueueRunner {
         }
         const result = serializedResult(
           execution,
-          entryImages.map((image) => image.manifest),
+          entryImages,
           { claimedAt: claimed.claimedAt },
         );
         await recordConversationQueueResult(this.options.pool, fence, result);
@@ -702,7 +710,7 @@ export class ConversationQueueRunner {
           try {
             const owned = await assertConversationQueueOwnedClaim(this.options.pool, fence, { allowCancelRequested: true });
             if (owned.cancelRequested) await this.finalizeCancelled(auth, claimed, fence, previewText,
-              entryImages.map(image => image.manifest), completedTools);
+              entryImages, completedTools);
           } catch { /* A stale/revoked claim never gains cancellation authority. */ }
           return;
         }
@@ -711,11 +719,14 @@ export class ConversationQueueRunner {
           "conversation queue run failed",
         );
         if (reason === "USER_CANCELLED") {
-          await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages.map((image) => image.manifest), completedTools).catch(() => undefined);
+          await this.finalizeCancelled(auth, claimed, fence, previewText, entryImages, completedTools).catch(() => undefined);
         } else if (revocationCode === "SOURCE_REVOKED" || reason === "SOURCE_REVOKED") {
           await this.finalizeRetained(fence, "SOURCE_REVOKED", { auth, claimed, partialText: previewText, completedTools }).catch(() => undefined);
         } else {
-          await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : "RUN_FAILED", { auth, claimed, partialText: previewText, completedTools }).catch(() => undefined);
+          const draftFailure = error instanceof ApiError && error.code === "MEMORY_SOURCE_REVOKED" ? "SOURCE_REVOKED"
+            : error instanceof ApiError && ["MEMORY_DRAFT_TARGET_UNAVAILABLE", "MEMORY_DRAFT_TARGET_ADMISSION_REQUIRED", "MEMORY_DRAFT_TARGET_NOT_STAGED"].includes(error.code)
+              ? error.code : null;
+          await this.finalizeRetained(fence, reason === "RUNNER_SHUTDOWN" ? "RUNNER_SHUTDOWN" : draftFailure ?? "RUN_FAILED", { auth, claimed, partialText: previewText, completedTools }).catch(() => undefined);
         }
       } finally {
         previewClosed = true;
@@ -749,6 +760,7 @@ export class ConversationQueueRunner {
         objective: claimed.objective,
         acceptedAt: claimed.acceptedAt,
         images,
+        ...(claimed.memoryDraftTarget ? { memoryDraftTarget: claimed.memoryDraftTarget } : {}),
         partialText,
         stoppedAt: new Date().toISOString(),
         execution: { started_at: claimed.claimedAt, completed_at: new Date().toISOString(), tools },
@@ -807,6 +819,7 @@ export class ConversationQueueRunner {
         objective: stop.claimed.objective,
         acceptedAt: stop.claimed.acceptedAt,
         images,
+        ...(stop.claimed.memoryDraftTarget ? { memoryDraftTarget: stop.claimed.memoryDraftTarget } : {}),
         partialText: stop.partialText,
         stoppedAt: new Date().toISOString(),
         execution: { started_at: stop.claimed.claimedAt, completed_at: new Date().toISOString(), tools: stop.completedTools ?? [] },

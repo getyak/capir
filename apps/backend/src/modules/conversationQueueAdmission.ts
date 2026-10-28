@@ -33,6 +33,7 @@ import {
   readConversationQueueSteeringLeader,
 } from "./conversationQueueState.js";
 import { publishConversationQueueChanged, publishConversationQueueStop } from "./conversationQueueLive.js";
+import { assertActiveMemoryDraftTarget } from "./memoryDraftTarget.js";
 
 export const CONVERSATION_QUEUE_OPERATION_SCOPE = "conversation_queue_admit";
 
@@ -59,6 +60,7 @@ function admitReceipt(
     revision: row.revision,
     snapshot_revision: state.revision,
     accepted_at: row.created_at.toISOString(),
+    ...(row.memory_draft_target_person_id ? { memory_draft_target: { person_id: row.memory_draft_target_person_id } } : {}),
     ...(row.steer_group_entry_id && steerRunId ? { steers_run_id: steerRunId } : {}),
   };
 }
@@ -72,6 +74,13 @@ export async function admitConversationQueueEntry(
     const expiresAt = await assertSessionForChat(client, auth, request.session_id);
     const uploads = request.images ?? [];
     const objective = request.objective.trim();
+    const memoryDraftTarget = request.memory_draft_target ?? null;
+    if (memoryDraftTarget && (!objective || request.host_result)) {
+      throw new ApiError(422, "MEMORY_DRAFT_TARGET_TEXT_REQUIRED", "A Memory draft target requires this message's authored text and cannot be attached to a host result.");
+    }
+    if (memoryDraftTarget && uploads.length > 0) {
+      throw new ApiError(422, "MEMORY_DRAFT_TARGET_TEXT_ONLY", "Send this selected-person Memory draft as text only. Send images in a separate message.");
+    }
     if (!objective && uploads.length === 0) {
       throw new ApiError(
         422,
@@ -101,6 +110,7 @@ export async function admitConversationQueueEntry(
         // Only extend the hashed identity for a real image batch so a
         // pre-deployment text-only receipt keeps its original hash.
         ...(imagesHash ? { images_hash: imagesHash } : {}),
+        ...(memoryDraftTarget ? { memory_draft_target: memoryDraftTarget } : {}),
       },
     );
     if (idempotency.replay) {
@@ -125,7 +135,8 @@ export async function admitConversationQueueEntry(
       if (
         existing.idempotency_key !== request.idempotency_key ||
         existing.objective !== request.objective ||
-        (existing.images_hash ?? null) !== imagesHash
+        (existing.images_hash ?? null) !== imagesHash ||
+        (existing.memory_draft_target_person_id ?? null) !== (memoryDraftTarget?.person_id ?? null)
       ) {
         throw new ApiError(
           409,
@@ -143,6 +154,7 @@ export async function admitConversationQueueEntry(
       await completeIdempotency(client, idempotency, 202, response);
       return { response, replayed: true };
     }
+    if (memoryDraftTarget) await assertActiveMemoryDraftTarget(client, auth, memoryDraftTarget.person_id);
     const queueDepth = (
       await client.query<{ count: string }>(
         `SELECT count(*) AS count FROM conversation_queue_entries
@@ -171,7 +183,7 @@ export async function admitConversationQueueEntry(
     // attaches to a live steering leader: the human-message steering feed
     // would drop or fabricate its typed result metadata. Ordinary user
     // steering is unchanged.
-    const leader = request.host_result
+    const leader = request.host_result || memoryDraftTarget
       ? null
       : await readConversationQueueSteeringLeader(
           client,
@@ -182,8 +194,8 @@ export async function admitConversationQueueEntry(
       await client.query<ConversationQueueEntryRow>(
         `INSERT INTO conversation_queue_entries(
            account_id,session_id,id,message_id,created_by_user_id,auth_session_id,sequence,status,content_state,
-           objective,time_zone,idempotency_key,revision,expires_at,images_hash,steer_group_entry_id,host_result
-         ) VALUES($1,$2,$3,$4,$5,$6,$7,'queued','retained',$8,$9,$10,1,$11,$12,$13,$14::jsonb)
+           objective,time_zone,idempotency_key,revision,expires_at,images_hash,steer_group_entry_id,host_result,memory_draft_target_person_id
+         ) VALUES($1,$2,$3,$4,$5,$6,$7,'queued','retained',$8,$9,$10,1,$11,$12,$13,$14::jsonb,$15)
          RETURNING *`,
         [
           auth.accountId,
@@ -202,6 +214,7 @@ export async function admitConversationQueueEntry(
           imagesHash,
           leader?.entryId ?? null,
           request.host_result ? JSON.stringify(request.host_result).slice(0, 4096) : null,
+          memoryDraftTarget?.person_id ?? null,
         ],
       )
     ).rows[0]!;
@@ -347,6 +360,9 @@ async function applyMutation(
     );
   }
   if (request.kind === "edit") {
+    if (row.memory_draft_target_person_id && !request.objective.trim()) {
+      throw new ApiError(422, "MEMORY_DRAFT_TARGET_TEXT_REQUIRED", "A Memory draft target requires authored text.");
+    }
     if (row.host_result != null) {
       throw new ApiError(
         409,
@@ -371,6 +387,7 @@ async function applyMutation(
         "This message already steered the running task and can no longer be edited.",
       );
     }
+    if (row.memory_draft_target_person_id) await assertActiveMemoryDraftTarget(client, auth, row.memory_draft_target_person_id);
     await client.query(
       "UPDATE conversation_queue_entries SET objective=$3, updated_at=now(), revision=revision+1 WHERE account_id=$1 AND id=$2",
       [auth.accountId, row.id, request.objective],
@@ -491,6 +508,7 @@ async function applyMutation(
       "Only a failed or interrupted message can be retried explicitly.",
     );
   }
+  if (row.memory_draft_target_person_id) await assertActiveMemoryDraftTarget(client, auth, row.memory_draft_target_person_id);
   const leaderId = row.steer_group_entry_id ?? row.id;
   const leaderRow = (
     await client.query<{ result: unknown }>(

@@ -131,6 +131,8 @@ export async function executeUnscopedChatTask(input: {
   hostResult?: import("@talent-signal/contracts").McpHumanResult | null;
   /** Live queue run claim; the only host staging authority. */
   hostAuthority?: import("./mcpInteractions.js").McpStagingAuthority;
+  /** Host queue admission for this message's review-only Person draft. */
+  memoryDraftTarget?: import("@talent-signal/contracts").ConversationMemoryDraftTarget | null;
   provider: RemoteChatAnswerProviding | null;
   database?: DatabaseClient;
   probePool?: Pool;
@@ -153,6 +155,10 @@ export async function executeUnscopedChatTask(input: {
   onToolCompletion?: (receipt: import("@talent-signal/agent").HarnessToolCompletion) => void;
 }): Promise<UnscopedChatExecution> {
   const taskID = input.taskID ?? randomUUID();
+  if (input.memoryDraftTarget && (!input.provider || !input.database || !input.auth
+    || !isWorkspaceConversationAgentProvider(input.provider))) {
+    throw new ApiError(409, "MEMORY_DRAFT_TARGET_NOT_STAGED", "The selected-person Memory draft requires its admitted Agent run. Retry this message.");
+  }
   const calendarContext = calendarDraftContextForRequest(taskID, input.request.time_zone, input.referenceTime ?? input.createdAt ?? new Date());
   let observation: RuntimeObservationContext | undefined;
   // Ephemeral contact reads also need authority, even without an observation
@@ -167,14 +173,14 @@ export async function executeUnscopedChatTask(input: {
   const assertCurrent = input.provider?.providerId === "claude-agent-sdk" && input.database && input.auth
     ? await createHarnessSourceGuard(input.database, input.auth, input.request.session_id, sources, input.probePool ?? input.database) : undefined;
   // Scope failures must escape before provider fallbacks; they are not model errors.
-  const responsePreference = assertCurrent && input.database && input.auth
+  const responsePreference = !input.memoryDraftTarget && assertCurrent && input.database && input.auth
     ? await loadAgentResponsePreference(input.database, input.auth) : undefined;
-  const sessionConversation = input.request.session_id && input.database && input.auth
+  const sessionConversation = !input.memoryDraftTarget && input.request.session_id && input.database && input.auth
     ? await readAgentSessionConversation(
         input.database, input.auth, input.request.session_id,
         { personId: null, relationshipContextId: null },
       )
-    : { hasRecordedTurns: false, messages: [] };
+    : { hasRecordedTurns: Boolean(input.memoryDraftTarget), messages: [] };
   const conversationHistory = boundedConversationHistory(sessionConversation.messages, input.request.message_id);
   const sessionTitleRequested = !sessionConversation.hasRecordedTurns
     && !sessionConversation.sources?.length;
@@ -183,7 +189,7 @@ export async function executeUnscopedChatTask(input: {
       screenshotTaskIDs: sessionConversation.sources?.map((source) => source.taskID) ?? [] }) : undefined;
   if (sessionConversation.unavailableScreenshotContext && !sessionConversation.sources?.length)
     throw new ApiError(409, "AGENT_SESSION_CONTEXT_UNAVAILABLE", "The screenshot summary is not currently available. Review its current task before continuing from it.");
-  const continuation = input.provider?.providerId === "claude-agent-sdk" && observation?.source_refs?.kind === "product"
+  const continuation = !input.memoryDraftTarget && input.provider?.providerId === "claude-agent-sdk" && observation?.source_refs?.kind === "product"
     ? input.continuation?.(sources) : undefined;
   let providerResult: RemoteChatAnswerResult | null = null;
   let proposedSessionTitle: string | null = null;
@@ -242,6 +248,7 @@ export async function executeUnscopedChatTask(input: {
         const execution = await executeWorkspaceConversationAgent({
           ...(input.hostResult ? { hostResult: input.hostResult } : {}),
           ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}),
+          ...(input.memoryDraftTarget ? { memoryDraftTarget: input.memoryDraftTarget } : {}),
           database: input.database,
           auth: input.auth,
           objective: effectiveObjective,
@@ -307,6 +314,10 @@ export async function executeUnscopedChatTask(input: {
         remoteStatus = "completed";
       }
     } catch (error) {
+      if (input.memoryDraftTarget) {
+        if (error instanceof ApiError || input.signal?.aborted) throw error;
+        throw new ApiError(409, "MEMORY_DRAFT_TARGET_NOT_STAGED", "The selected-person Memory draft was not prepared. Retry this message without changing its target.");
+      }
       remoteDiagnostics = conversationRunDiagnostics(error);
       await recordProductEvent("conversation.model.failure", "context", undefined, undefined, remoteDiagnostics, { failed: true });
       if (input.provider.providerId === "claude-agent-sdk") {
