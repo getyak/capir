@@ -1969,7 +1969,10 @@
 .brandMark { height:20px; width:20px; }
 .brandActions .iconButton { height:36px; width:36px; }
 .railRow { align-items:center; display:flex; gap:2px; }
-.railPair { display:flex; flex:1 1 0; min-width:0; align-items:center; }
+.railPair { display:flex; flex:0 0 64px; min-width:0; align-items:center; }
+/* The inactive pair needs only its two symbols. Give the selected destination
+   the remaining reading space before truncating its name. */
+.railPair:has(.railControl[data-selected="true"]) { flex:1 1 0; }
 .railPair .railControl { flex:1 1 0; min-width:32px; overflow:hidden; }
 .railPair .railControl[data-selected="true"] { flex:0 0 calc(100% - 32px); gap:4px; }
 .railRow > button { flex:0 0 32px; }
@@ -2086,6 +2089,45 @@
 }
 
 /* A quiet, reversible desktop split: the edge remains reachable when hidden. */
+.sidebarRestore {
+  align-items: center;
+  background: var(--background);
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted-strong);
+  cursor: pointer;
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  left: 14px;
+  padding: 0;
+  position: absolute;
+  top: 7px;
+  width: 44px;
+  z-index: 42;
+}
+.sidebarRestore:hover { background: var(--surface-muted); color: var(--ink); }
+.sidebarRestore:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.sidebarRestoreLabel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  font-size: var(--workspace-meta-size, 0.8125rem);
+  left: 0;
+  padding: 6px 9px;
+  pointer-events: none;
+  position: absolute;
+  top: calc(100% + 5px);
+  visibility: hidden;
+  white-space: nowrap;
+}
+.sidebarRestore:is(:hover, :focus-visible) .sidebarRestoreLabel { visibility: visible; }
+.shell:has([data-conversation-canvas]) .sidebarRestore { top: 12px; }
+.shell[data-sidebar-hidden="true"] .routeHeader .crumb { margin-left: 44px; }
+:global(html[data-desktop-surface="workspace"][data-desktop-titlebar="unified"]) .shell:has([data-conversation-canvas]) .sidebarRestore {
+  top: max(0px, calc((68px - var(--workspace-native-titlebar-height, 0px) - 44px) / 2));
+}
 .sidebarResizeHandle {
   bottom: 0;
   cursor: col-resize;
@@ -2122,8 +2164,11 @@
 .shell[data-sidebar-compact="true"] .railRow .railControl { flex: 1 1 0; min-width: 28px; }
 .shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: none; }
 :global(html[data-desktop-surface="settings"]) .sidebarResizeHandle,
-.shell:has(.stage > :global(.review-workspace)) > .sidebarResizeHandle { display: none; }
+:global(html[data-desktop-surface="settings"]) .sidebarRestore,
+.shell:has(.stage > :global(.review-workspace)) > .sidebarResizeHandle,
+.shell:has(.stage > :global(.review-workspace)) > .sidebarRestore { display: none; }
 @media (max-width: 760px) {
+  .sidebarRestore { display: none; }
   .sidebarResizeHandle { display: none; }
   .shell[data-sidebar-compact="true"] .railRow .railControlLabel { display: inline; }
 }
@@ -2135,6 +2180,9 @@
   .railIconLink[aria-current="location"] { background:Highlight; color:HighlightText; forced-color-adjust:none; }
   .railControl:focus-visible, .railSessionAvatar:focus-visible, .railIconLink:focus-visible,
   .railRetry:focus-visible, .railSessionTitle a:focus-visible { outline-color:Highlight; }
+  .sidebarRestore, .sidebarRestoreLabel { background:Canvas; color:CanvasText; }
+  .sidebarRestore:hover { background:Highlight; color:HighlightText; }
+  .sidebarRestore:focus-visible { outline-color:Highlight; }
   .sessionRowMenuPopover, .railSessionTitle,
   :global(html[data-desktop-surface="workspace"]) .sessionRowMenuPopover { background:Canvas; color:CanvasText; border:1px solid CanvasText; backdrop-filter:none; -webkit-backdrop-filter:none; }
   .sessionRowMenuPopover button:disabled { cursor: default; opacity: 0.45; }

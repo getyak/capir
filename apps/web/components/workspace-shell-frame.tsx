@@ -1,6 +1,7 @@
 "use client";
 
-import { useId, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { SidebarSimple } from "@phosphor-icons/react";
+import { useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import {
   SIDEBAR_HIDE_THRESHOLD,
   SIDEBAR_MAX_WIDTH,
@@ -32,12 +33,22 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
   const mobile = useSyncExternalStore(subscribeMobile, mobileSnapshot, () => false);
   const viewportWidth = useSyncExternalStore(subscribeViewport, () => window.innerWidth, () => 1024);
   const shell = useRef<HTMLDivElement>(null);
+  const sidebarElement = useRef<HTMLElement>(null);
+  const restoreFocus = useRef(false);
   const drag = useRef<{ pointerId: number; startX: number; startWidth: number; initial: SidebarLayout; next: SidebarLayout } | null>(null);
   const sidebarId = useId();
   const current = preview ?? layout;
   const hidden = !mobile && current.hidden;
   const availableWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, viewportWidth - 360));
   const width = current.hidden ? 0 : current.collapsed ? 72 : Math.min(availableWidth, current.width);
+
+  useLayoutEffect(() => {
+    if (hidden || !restoreFocus.current) return;
+    restoreFocus.current = false;
+    const toggle = sidebarElement.current?.querySelector<HTMLButtonElement>("[data-sidebar-collapse-toggle]")
+      ?? sidebarElement.current?.querySelector<HTMLButtonElement>("button");
+    toggle?.focus({ preventScroll: true });
+  }, [hidden]);
 
   function maxWidth() {
     return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, (shell.current?.clientWidth || window.innerWidth) - 360));
@@ -89,10 +100,26 @@ export function WorkspaceShellFrame({ sidebar, children }: { sidebar: ReactNode;
       ref={shell}
       style={{ "--workspace-sidebar-width": `${width}px` } as CSSProperties}
     >
-      <aside aria-hidden={hidden || undefined} aria-label={t("capri 工作台")} className={styles.sidebar} id={sidebarId} inert={hidden}>
+      <aside aria-hidden={hidden || undefined} aria-label={t("capri 工作台")} className={styles.sidebar} id={sidebarId} inert={hidden} ref={sidebarElement}>
         <WorkspaceSidebarPresentation value={current}>{sidebar}</WorkspaceSidebarPresentation>
       </aside>
       {children}
+      {hidden && preview === null ? (
+        <button
+          aria-controls={sidebarId}
+          aria-expanded={false}
+          aria-label={t("显示侧边栏")}
+          className={styles.sidebarRestore}
+          onClick={() => {
+            restoreFocus.current = true;
+            setLayout({ ...layout, hidden: false, collapsed: false });
+          }}
+          type="button"
+        >
+          <SidebarSimple aria-hidden="true" size={19} />
+          <span aria-hidden="true" className={styles.sidebarRestoreLabel}>{t("显示侧边栏")}</span>
+        </button>
+      ) : null}
       <div
         aria-controls={sidebarId}
         aria-label={hidden ? t("显示侧边栏") : t("调整侧边栏宽度")}

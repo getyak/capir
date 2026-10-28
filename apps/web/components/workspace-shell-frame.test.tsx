@@ -18,7 +18,7 @@ const saved = () => JSON.parse(window.localStorage.getItem(SIDEBAR_LAYOUT_KEY)!)
 
 async function render() {
   await act(async () => root.render(
-    <WorkspaceShellFrame sidebar={<button>Account</button>}>
+    <WorkspaceShellFrame sidebar={<button data-sidebar-collapse-toggle>Account</button>}>
       <main>Conversation</main>
     </WorkspaceShellFrame>,
   ));
@@ -128,6 +128,27 @@ describe("desktop sidebar split", () => {
     await key("ArrowLeft"); expect(width()).toBe(0);
   });
 
+  it("offers a visible restore control and returns focus to the expanded sidebar without changing its saved width", async () => {
+    await render();
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).toBeNull();
+    await key("ArrowRight");
+    await key("Home");
+    const restore = host.querySelector<HTMLButtonElement>('button[aria-label="显示侧边栏"]')!;
+    expect(restore.getAttribute("aria-controls")).toBe(sidebar().id);
+    expect(restore.getAttribute("aria-expanded")).toBe("false");
+    restore.focus();
+    await act(async () => restore.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(width()).toBe(252);
+    expect(saved()).toEqual({ width: 252, hidden: false, collapsed: false });
+    expect(sidebar().hasAttribute("inert")).toBe(false);
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).toBeNull();
+    expect(document.activeElement).toBe(sidebar().querySelector("[data-sidebar-collapse-toggle]"));
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render();
+    expect(width()).toBe(252);
+  });
+
   it("honors the old compact-rail preference and can drag it back to full width", async () => {
     window.localStorage.setItem(WORKSPACE_RAIL_COLLAPSED_KEY, "true");
     await render(); expect(width()).toBe(72);
@@ -148,11 +169,13 @@ describe("desktop sidebar split", () => {
 
   it("keeps mobile navigation available after a desktop hide, including viewport changes", async () => {
     await render(); await key("Home");
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).not.toBeNull();
     mobile = true;
     await act(async () => mediaListeners.forEach(listener => listener()));
     expect(sidebar().hasAttribute("inert")).toBe(false);
     expect(sidebar().hasAttribute("aria-hidden")).toBe(false);
     expect(host.firstElementChild?.getAttribute("data-sidebar-hidden")).toBe("false");
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')).toBeNull();
     mobile = false;
     await act(async () => mediaListeners.forEach(listener => listener()));
     expect(sidebar().hasAttribute("inert")).toBe(true);
