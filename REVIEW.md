@@ -59,6 +59,8 @@ why.
 For framework-managed interaction, trace the branch selected by the actual
 runtime configuration before relying on source behavior; verify focus and
 scroll on the real surface rather than assuming another available branch runs.
+Read back the active element after focus restoration: a visible target or a
+completed `focus()` call does not establish that the browser accepted focus.
 
 For browser focus, scroll, and motion checks, allow the actual user-triggered
 transition to settle within a bounded observation window before judging final
