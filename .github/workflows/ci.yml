@@ -423,6 +423,15 @@ jobs:
           DATABASE_URL="$CAPIR_TEST_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
           pnpm --filter @talent-signal/backend exec vitest run --no-file-parallelism --maxWorkers=1 src/modules/capirAuth.integration.test.ts src/modules/capirTests.integration.test.ts src/modules/capirTestClient.test.ts
 
+      - name: Verify message-scoped Memory draft targets with PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
+          GET_298_TEST_DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/talent_signal_get298_ci
+        run: |
+          pnpm --filter @talent-signal/backend exec node --input-type=module -e "import { Pool } from 'pg'; const pool = new Pool({connectionString:process.env.DATABASE_URL}); try { await pool.query('CREATE DATABASE talent_signal_get298_ci'); } finally { await pool.end(); }"
+          DATABASE_URL="$GET_298_TEST_DATABASE_URL" pnpm --filter @talent-signal/backend migrate
+          pnpm --filter @talent-signal/backend exec vitest run --maxWorkers=1 src/modules/memoryDraftTarget.integration.test.ts
+
       - name: Exercise saved regression lifecycle with a synthetic provider
         env:
           DATABASE_URL: postgresql://postgres:lab-ci-only@127.0.0.1:5432/lab_regression_ci
