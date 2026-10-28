@@ -96,7 +96,8 @@ function provider(f: Fixture, claim: Pick<ClaimedConversationQueueEntry, "messag
 }
 function execute(f: Fixture, c: ClaimedConversationQueueEntry, p = provider(f, c)) {
   return executeWorkspaceConversationAgent({ database: pool!, auth: f.auth, sessionID: f.sessionId, messageID: c.messageId,
-    runID: c.runId, objective: c.objective, sourceText: c.objective, memoryDraftTarget: c.memoryDraftTarget,
+    runID: c.runId, objective: c.objective, sourceText: c.objective,
+    ...(c.memoryDraftTarget ? { memoryDraftTarget: c.memoryDraftTarget } : {}),
     hostAuthority: { fence: c, sessionId: c.sessionId, messageId: c.messageId }, provider: p });
 }
 
@@ -206,8 +207,10 @@ suite("GET-298 isolated durable target and real Memory producer", () => {
       };
       await expect(executeWorkspaceConversationAgent({ database: pool!, auth: f.auth, sessionID: f.sessionId,
         messageID: c.messageId, runID: c.runId, objective: c.objective, sourceText: c.objective,
-        memoryDraftTarget: c.memoryDraftTarget, hostAuthority: { fence: c, sessionId: c.sessionId, messageId: c.messageId },
-        provider: { id: scripted.id, model: scripted.model, sdkVersion: scripted.sdkVersion, run },
+        ...(c.memoryDraftTarget ? { memoryDraftTarget: c.memoryDraftTarget } : {}),
+        hostAuthority: { fence: c, sessionId: c.sessionId, messageId: c.messageId },
+        provider: { id: scripted.id, model: scripted.model, sdkVersion: scripted.sdkVersion,
+          inputCapabilities: scripted.inputCapabilities, run },
       })).rejects.toThrow();
       expect((await pool!.query("SELECT count(*)::int AS count FROM memory_proposals WHERE account_id=$1", [f.accountId])).rows[0]?.count).toBe(0);
     } finally { await removeFixture(f); }

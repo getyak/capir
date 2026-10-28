@@ -1987,7 +1987,8 @@ export async function executeWorkspaceConversationAgent(input: {
   const targetRequest = input.memoryDraftTarget ? {
     personID: input.memoryDraftTarget.person_id, messageID: rootMessageID,
     sessionID: input.sessionID ?? null, runID: input.runID ?? null,
-    sourceText: input.sourceText ?? input.objective, hostAuthority: input.hostAuthority,
+    sourceText: input.sourceText ?? input.objective,
+    ...(input.hostAuthority ? { hostAuthority: input.hostAuthority } : {}),
   } : null;
   const memoryDraftTarget = targetRequest
     ? await withDatabaseTransaction(client => authorizeMemoryDraftTarget(client, input.auth, targetRequest)) : null;
@@ -2185,9 +2186,12 @@ export async function executeWorkspaceConversationAgent(input: {
           },
           authority,
         );
-        if (memoryDraftTarget && (staged.proposal.person_id !== memoryDraftTarget.personID
-          || staged.proposal.contact_status !== "resolved" || staged.proposal.item_count < 1)) {
-          throw new ApiError(409, "MEMORY_DRAFT_TARGET_SCOPE_MISMATCH", "The staging receipt did not match this message's selected person.");
+        if (memoryDraftTarget) {
+          if (!staged) throw new ApiError(409, "MEMORY_DRAFT_TARGET_NOT_STAGED", "There was no material selected-person draft to stage.");
+          if (staged.proposal.person_id !== memoryDraftTarget.personID
+            || staged.proposal.contact_status !== "resolved" || staged.proposal.item_count < 1) {
+            throw new ApiError(409, "MEMORY_DRAFT_TARGET_SCOPE_MISMATCH", "The staging receipt did not match this message's selected person.");
+          }
         }
         if (isolated) await client.query("RELEASE SAVEPOINT memory_review_stage");
       } catch {

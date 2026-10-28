@@ -8,7 +8,7 @@ import {
   assertConversationQueueOwnedClaim,
 } from "./conversationQueueState.js";
 import type { McpStagingAuthority } from "./mcpInteractions.js";
-import type { MemoryProposalCandidate } from "@talent-signal/contracts";
+import type { MemoryProposalCandidateInput } from "@talent-signal/agent";
 
 /** Host-only staging scope. It is never a HumanIdentityBinding or recall grant. */
 export interface MemoryDraftTargetAdmission {
@@ -22,7 +22,7 @@ export function memoryDraftProposalViolation(target: MemoryDraftTargetAdmission,
   personID: string | null;
   contextID: string | null;
   contactDecision: "existing" | "new" | "none";
-  items: readonly Pick<MemoryProposalCandidate, "scope" | "subject_id" | "relationship_context_id" | "dependence_kind" | "source_locator">[];
+  items: readonly Pick<MemoryProposalCandidateInput, "scope" | "subject_id" | "relationship_context_id" | "dependence_kind" | "source_locator">[];
 }): "MEMORY_DRAFT_TARGET_SCOPE_MISMATCH" | "MEMORY_DRAFT_TARGET_SOURCE_MISMATCH" | null {
   if (input.personID !== target.personID || input.contextID !== null || input.contactDecision !== "existing"
     || input.items.length === 0 || input.items.some(item => item.scope !== "person"
