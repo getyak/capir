@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import rateLimit from "@fastify/rate-limit";
-import { FormatRegistry } from "@sinclair/typebox";
+import { CloneType, FormatRegistry } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import { AgentSessionRecordSchema, CONTRACT_VERSION, type AgentSessionRecord } from "@talent-signal/contracts";
 import type { Pool } from "pg";
@@ -19,7 +19,8 @@ const personID = "22222222-2222-4222-8222-222222222222";
 const messageID = "33333333-3333-4333-8333-333333333333";
 const stamp = "2026-10-29T00:00:00.000Z";
 const headerName = "x-conversation-memory-draft-target";
-const legacyRecord = structuredClone(AgentSessionRecordSchema);
+// Schema clones must retain TypeBox's symbol-keyed Kind/Optional metadata.
+const legacyRecord = CloneType(AgentSessionRecordSchema);
 delete (legacyRecord.properties.payload.anyOf[0].properties.turns.items.properties as Record<string, unknown>).memoryDraftTarget;
 FormatRegistry.Set("uuid", value => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value));
 FormatRegistry.Set("date-time", value => Number.isFinite(Date.parse(value)));
