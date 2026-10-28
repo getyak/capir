@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -185,4 +186,17 @@ describe("local Chat media storage", () => {
       "escaped its configured directory",
     );
   });
+
+  it("atomically cancels a local commit capability so a delayed writer cannot recreate the object", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "capir-local-capability-")); directories.push(directory);
+    const storage = new LocalChatMediaStorage(directory), attempt = randomUUID(), key = "account/person/media";
+    await storage.reserveUpload(key, attempt, 1, "image/png");
+    await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBe("cancelled");
+    await expect(storage.put(key, new Uint8Array([1]), "image/png", attempt)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(storage.verifyUpload(key, attempt, 1, "image/png")).resolves.toBe(false);
+    await expect(storage.reconcileUpload(key, attempt, 1, "image/png")).resolves.toBe("cancelled");
+    await storage.delete(key);
+    expect(await storage.existsForLab(key)).toBe(false);
+  });
+
 });

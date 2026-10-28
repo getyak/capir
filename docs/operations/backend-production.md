@@ -99,7 +99,7 @@ metadata is unusable and should be quarantined rather than exposed.
 ### Interrupted Chat media uploads and historical deletion inventory
 
 Chat uploads commit a database-owned attempt before dispatching one PUT. Byte operations reject a stored key that differs from its exact account/person/media ownership path. Concurrent
-uploads and deletion share the account-scoped media row lock. A remote error or a
+uploads and deletion share the account-scoped media row lock. An ambiguous remote error or a
 process interruption leaves the attempt unresolved; elapsed time never proves that
 a remote writer stopped. No deletion receipt is issued while an attempt remains
 unresolved. Local settled failures can retry the original media identity.
@@ -108,6 +108,12 @@ Each S3 PUT carries `capir-upload-attempt` metadata and uses a single SDK attemp
 A retry can settle the database fence only when HEAD from the same recorded store
 returns that exact attempt, complete byte count, and content type. This relies on
 [S3's complete-object PUT semantics](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html).
+A single SDK response with a server request ID, the same attempt/store, and an
+allowlisted authentication rejection is terminal without an object. Its hashed
+receipt is retained and the original media identity can retry after credentials
+are repaired; transport failures, 5xx, and opaque errors stay unresolved. See
+[S3 error responses](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/ErrorResponses.html).
+
 HEAD never reads pixels. A matching receipt makes the object retryable or deletable;
 it does not mark the original interrupted upload successful or add an uploaded audit.
 The old handler rechecks its exact attempt before changing state, so it cannot
@@ -118,6 +124,8 @@ From the affected committed backend release, use its existing protected environm
 ```sh
 node apps/backend/dist/operations/chatMediaMaintenance.js inventory
 node apps/backend/dist/operations/chatMediaMaintenance.js reconcile \
+  --account ACCOUNT_UUID --media MEDIA_UUID --attempt ATTEMPT_UUID
+node apps/backend/dist/operations/chatMediaMaintenance.js cancel-local \
   --account ACCOUNT_UUID --media MEDIA_UUID --attempt ATTEMPT_UUID
 ```
 
@@ -132,13 +140,33 @@ store contains matching versions. Restore the old deployment's protected store
 mapping and review it before claiming these are the old bytes. A failed listing
 remains unknown, never zero residue.
 
-`reconcile` checks one explicit attempt and can settle its database fence; it never
+`reconcile` checks one explicit completed attempt and can settle its database fence; it never
 purges an object. A missing/mismatched HEAD receipt returns `unresolved` (exit 2).
 Do not clear the fence from age, a restarted server, 404 alone, or an empty listing.
 If the provider rejected a request without creating an object, retain the fence
 until an operator reviews a terminal provider receipt tied to that exact attempt
 and store. This tool deliberately has no force-clear flag. For a closing Lab workspace, the same command settles only the existing control write receipt and leaves the closed account data gate intact; workspace cleanup still owns its subsequent purge. Failed provider receipt
 checks return a fixed diagnostic without retaining transport exceptions.
+
+Local Chat uploads reserve one private attempt directory before dispatch. The
+body is written and synced inside it, then the entire directory (including its
+metadata receipt) is atomically renamed to an immutable committed attempt.
+Canonical readback selects the current attempt from the media row; legacy local
+objects with no attempt continue to read from their original path. The normal
+delete removes every staged, committed, and cancelled attempt of that exact key,
+as well as its legacy file.
+
+A completed local receipt can settle an interrupted upload automatically. When
+there is no completed receipt, `cancel-local` is an explicit operator recovery:
+it atomically renames that exact pending directory away from the writer's commit
+path. Commit and cancellation compete for the same source directory; the loser
+cannot recreate it. A late writer therefore cannot commit after recovery. This
+changes only the local attempt's commit capability and database fence; it keeps
+staged bytes protected until ordinary replacement/deletion. It does not infer
+process death from a PID or elapsed time, reopen a closed Lab account, or act on
+another attempt/store. Missing or damaged receipts remain unresolved. Keep the
+new local-storage reader when rolling back other code; older readers do not
+understand newly committed attempt directories.
 
 Before any historical permanent cleanup, freeze and review the exact candidate
 fingerprints, store mapping, trusted deletion events, version/marker counts, and

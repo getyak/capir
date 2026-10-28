@@ -45,3 +45,12 @@ Files: dedicated media-maintenance module/CLI and tests; `docs/operations/backen
 - Local install completed; the unrelated Darwin provider executable's large optional download timed out. This is not native-provider or deployment verification.
 - The user subsequently requested PR-only delivery while the resident backend Mac is offline. Keep the PR open, do not merge/deploy, and report historical production inventory and live behavior as blocked by that unavailable host.
 - External evidence: `/Users/xiongxinwei/.codex/artifacts/online-remediation-20261028/capir-data-handoff.md`. No production object bytes were read or permanently deleted.
+
+
+## Independent review fixes
+
+Root reviewed `683b21de` and found two important recovery gaps. Both were reproduced before changes:
+
+- R1: a real HTTP S3 `403 AccessDenied` reply left `upload_state=unknown` indefinitely. The adapter now recognizes only a typed, single-request, same-store/attempt, allowlisted authentication rejection with a server request ID, retains a content-free terminal receipt, and leaves that identity retryable. The actual HTTP refusal/retry/delete regression passes; a real 5xx response with the same error name still stays unknown.
+- R2: a local process killed before or after PUT could never leave `writing`. A local attempt now reserves a private directory and atomically commits that whole directory with a metadata receipt. Completed receipts recover automatically. Explicit `cancel-local` atomically moves an uncommitted capability so even a delayed writer cannot commit it later; bytes stay protected for ordinary scoped deletion. Both SIGKILL cases and late-writer cancellation now pass. Existing local files remain readable.
+- Review fixes are isolated in a separate commit. Focused media checks pass 40/40; backend build passes; the complete single-worker backend regression passes 1,329 tests, with 718 suite-gated skips and zero failures. Built cancel-local CLI recovery, retry, and deletion readback passed on disposable data. Current-head GitHub CI remains pending. The resident Mac remains offline, so no merge, deployment, real historical inventory, or real object cleanup is performed.

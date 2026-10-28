@@ -1,14 +1,19 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { fork } from "node:child_process";
 import { once } from "node:events";
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthContext } from "./auth.js";
 import { createChatMediaAsset, deleteChatMediaAsset, getChatMediaContent, reconcileChatMediaUpload, uploadChatMediaContent } from "./chatMedia.js";
 import { inspectDeletedChatMedia, reconcileStoppedLabUpload } from "./chatMediaMaintenance.js";
-import type { ChatMediaStorage } from "./chatMediaStorage.js";
+import { LocalChatMediaStorage, S3ChatMediaStorage, type ChatMediaStorage } from "./chatMediaStorage.js";
 
 const databaseURL = process.env.CHAT_MEDIA_TEST_DATABASE_URL;
 if (databaseURL && !["localhost", "127.0.0.1"].includes(new URL(databaseURL).hostname)) {
@@ -16,6 +21,7 @@ if (databaseURL && !["localhost", "127.0.0.1"].includes(new URL(databaseURL).hos
 }
 const pool = databaseURL ? new Pool({ connectionString: databaseURL, max: 3 }) : null;
 const secondPool = databaseURL ? new Pool({ connectionString: databaseURL, max: 3 }) : null;
+afterEach(() => vi.unstubAllEnvs());
 afterAll(async () => { await Promise.all([pool?.end(), secondPool?.end()]); });
 
 function deferred() {
@@ -297,5 +303,95 @@ describe.skipIf(!pool)("Chat media upload/delete lifecycle", () => {
     await expect(getChatMediaContent(secondPool!, auth, storage, media.id)).rejects.toMatchObject({ code: "CHAT_MEDIA_STORAGE_OWNER_MISMATCH" });
     expect(storageCalls).toBe(0);
   });
+
+
+  it.each([[403, "AccessDenied"], [400, "ExpiredToken"]] as const)("retries or deletes after a trusted terminal S3 receipt (%s/%s)", async (status, code) => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "synthetic-only"); vi.stubEnv("AWS_SECRET_ACCESS_KEY", "synthetic-only");
+    vi.stubEnv("AWS_SESSION_TOKEN", "synthetic-only"); vi.stubEnv("AWS_PROFILE", undefined); vi.stubEnv("AWS_DEFAULT_PROFILE", undefined);
+    let allowed = false, puts = 0;
+    const server = createServer((request, response) => {
+      request.resume();
+      if (request.method === "PUT") {
+        puts++;
+        response.writeHead(allowed ? 200 : status, { "Content-Type": "application/xml", "x-amz-request-id": `synthetic-request-${puts}` });
+        response.end(allowed ? "" : `<Error><Code>${code}</Code><Message>PRIVATE_REJECTION_CANARY</Message></Error>`);
+      } else if (request.method === "HEAD") { response.writeHead(404); response.end(); }
+      else { response.writeHead(200, { "Content-Type": "application/xml" }); response.end('<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated></ListVersionsResult>'); }
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const storage = new S3ChatMediaStorage("synthetic", { region: "test-1", forcePathStyle: true,
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });
+      const deleted = await fixture(storage);
+      await expect(uploadChatMediaContent(pool!, deleted.auth, storage, deleted.media.id, new Uint8Array([1]), "image/png"))
+        .rejects.toMatchObject({ code: "CHAT_MEDIA_STORAGE_FAILED" });
+      const failed = (await pool!.query("SELECT upload_state,upload_settlement_receipt,failure_reason FROM chat_media_assets WHERE id=$1", [deleted.media.id])).rows[0];
+      expect(failed.upload_state).toBe("idle");
+      expect(failed.upload_settlement_receipt).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.stringify(failed)).not.toContain("PRIVATE_REJECTION_CANARY");
+      await expect(deleteChatMediaAsset(secondPool!, deleted.auth, storage, deleted.media.id)).resolves.toMatchObject({ status: "deleted" });
+      const retry = await fixture(storage);
+      await expect(uploadChatMediaContent(pool!, retry.auth, storage, retry.media.id, new Uint8Array([1]), "image/png"))
+        .rejects.toMatchObject({ code: "CHAT_MEDIA_STORAGE_FAILED" });
+      allowed = true;
+      await expect(uploadChatMediaContent(secondPool!, retry.auth, storage, retry.media.id, new Uint8Array([1]), "image/png"))
+        .resolves.toMatchObject({ id: retry.media.id, status: "ready" });
+      expect(puts).toBe(3);
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  }, 30_000);
+
+
+  it.each(["after_put", "before_put"] as const)("recovers local %s interruption from a killed writer without an elapsed-time lease", async phase => {
+    const directory = await mkdtemp(join(tmpdir(), "capir-local-crash-"));
+    const storage = new LocalChatMediaStorage(directory);
+    const { auth, media } = await fixture(storage);
+    const child = fork(new URL("./testSupport/chatMediaUploadCrash.mjs", import.meta.url), {
+      execArgv: ["--import", createRequire(import.meta.url).resolve("tsx")],
+      env: { ...process.env, DATABASE_URL: databaseURL!, CHAT_MEDIA_CRASH_CASE: JSON.stringify({ auth, mediaId: media.id, localDirectory: directory, phase }) },
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const message = await Promise.race([
+        once(child, "message").then(([value]) => value as { attemptId: string }),
+        once(child, "exit").then(() => { throw new Error("Local writer exited before its checkpoint"); }),
+        new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("Local writer checkpoint timed out")), 20_000); }),
+      ]);
+      const exited = once(child, "exit"); child.kill("SIGKILL"); await exited;
+      await expect(reconcileChatMediaUpload(secondPool!, auth, storage, media.id, message.attemptId,
+        { cancelLocal: phase === "before_put" })).resolves.toMatchObject({ status: "settled" });
+      await expect(uploadChatMediaContent(secondPool!, auth, storage, media.id, new Uint8Array([1]), "image/png"))
+        .resolves.toMatchObject({ id: media.id, status: "ready" });
+      const key = (await pool!.query("SELECT object_key FROM chat_media_assets WHERE id=$1", [media.id])).rows[0].object_key as string;
+      expect(Array.from((await getChatMediaContent(pool!, auth, storage, media.id)).body)).toEqual([1]);
+      await deleteChatMediaAsset(pool!, auth, storage, media.id);
+      expect(await storage.existsForLab(key)).toBe(false);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (child.exitCode === null && child.signalCode === null) { const exited = once(child, "exit"); child.kill("SIGKILL"); await exited; }
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+
+  it("keeps a retryable S3 5xx response unresolved even if its error name resembles a terminal refusal", async () => {
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "synthetic-only"); vi.stubEnv("AWS_SECRET_ACCESS_KEY", "synthetic-only");
+    vi.stubEnv("AWS_SESSION_TOKEN", "synthetic-only"); vi.stubEnv("AWS_PROFILE", undefined); vi.stubEnv("AWS_DEFAULT_PROFILE", undefined);
+    const server = createServer((request, response) => {
+      request.resume(); response.writeHead(request.method === "PUT" ? 503 : 404,
+        { "Content-Type": "application/xml", "x-amz-request-id": "synthetic-ambiguous-response" });
+      response.end(request.method === "PUT" ? "<Error><Code>AccessDenied</Code></Error>" : "");
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const storage = new S3ChatMediaStorage("synthetic", { region: "test-1", forcePathStyle: true,
+        endpoint: `http://127.0.0.1:${(server.address() as AddressInfo).port}` });
+      const { auth, media } = await fixture(storage);
+      await expect(uploadChatMediaContent(pool!, auth, storage, media.id, new Uint8Array([1]), "image/png"))
+        .rejects.toMatchObject({ code: "CHAT_MEDIA_STORAGE_FAILED" });
+      expect((await pool!.query("SELECT upload_state FROM chat_media_assets WHERE id=$1", [media.id])).rows[0].upload_state).toBe("unknown");
+      await expect(deleteChatMediaAsset(secondPool!, auth, storage, media.id)).rejects.toMatchObject({ code: "CHAT_MEDIA_WRITE_UNSETTLED" });
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  }, 30_000);
 
 });

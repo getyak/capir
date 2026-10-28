@@ -70,7 +70,7 @@ export async function inspectDeletedChatMedia(pool: Pool, storage: ChatMediaStor
 
 /** Operator-only recovery of the control receipt after Lab's data write gate closes. */
 export async function reconcileStoppedLabUpload(
-  pool: Pool, storage: ChatMediaStorage, accountId: string, mediaId: string, attemptId: string,
+  pool: Pool, storage: ChatMediaStorage, accountId: string, mediaId: string, attemptId: string, options: { cancelLocal?: boolean } = {},
 ): Promise<{ status: "workspace_cleanup_ready" | "unresolved" }> {
   return inTransaction(pool, async client => {
     // Keep the canonical workspace -> media lock order. Do not reopen or write
@@ -83,16 +83,23 @@ export async function reconcileStoppedLabUpload(
       `SELECT object_key,subject_id,byte_size,media_type,upload_attempt_id,upload_storage_scope,storage_provider
        FROM chat_media_assets WHERE account_id=$1 AND id=$2 FOR UPDATE`, [accountId, mediaId])).rows[0];
     if (!workspace || !row || row.upload_attempt_id !== attemptId ||
-        row.object_key !== `${accountId}/${row.subject_id}/${mediaId}` || row.storage_provider !== "s3" ||
-        storage.provider !== "s3" || !storage.verifyUpload || !storage.labScopeID ||
+        row.object_key !== `${accountId}/${row.subject_id}/${mediaId}` || row.storage_provider !== storage.provider ||
+        !storage.verifyUpload || !storage.labScopeID ||
         row.upload_storage_scope !== storage.labScopeID || workspace.media_scope_hash !== storage.labScopeID) {
       throw new Error("CHAT_MEDIA_RECOVERY_SCOPE_CHANGED");
     }
     const write = (await client.query("SELECT 1 FROM lab_test_workspace_media_writes WHERE workspace_id=$1 AND media_id=$2 AND id=$3 FOR UPDATE",
       [workspace.id, mediaId, attemptId])).rows[0];
     if (!write) throw new Error("CHAT_MEDIA_RECOVERY_SCOPE_CHANGED");
-    if (!await storage.verifyUpload(row.object_key, attemptId, row.byte_size, row.media_type)) return { status: "unresolved" };
-    const receipt = sha256(JSON.stringify(["s3_head_complete_attempt.v1", storage.labScopeID, attemptId, row.byte_size, row.media_type]));
+    let complete = await storage.verifyUpload(row.object_key, attemptId, row.byte_size, row.media_type);
+    let receiptType = `${storage.provider}_complete_attempt.v1`;
+    if (!complete && options.cancelLocal && storage.provider === "local" && storage.reconcileUpload) {
+      const terminal = await storage.reconcileUpload(row.object_key, attemptId, row.byte_size, row.media_type);
+      complete = terminal !== null;
+      if (terminal === "cancelled") receiptType = "local_cancelled_attempt.v1";
+    }
+    if (!complete) return { status: "unresolved" };
+    const receipt = sha256(JSON.stringify([receiptType, storage.labScopeID, attemptId, row.byte_size, row.media_type]));
     await client.query(`UPDATE lab_test_workspace_media_writes SET state='settled',settled_at=now(),settlement_receipt=$4
       WHERE workspace_id=$1 AND media_id=$2 AND id=$3`, [workspace.id, mediaId, attemptId, receipt]);
     return { status: "workspace_cleanup_ready" };
