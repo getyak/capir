@@ -6,8 +6,10 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import type { ConversationImageManifest } from "@talent-signal/contracts";
 
 import { workspaceSessionFetch } from "../workspace-session-request";
+import { useT } from "../locale-provider";
 import { loadConversationImages } from "@/lib/conversation-image-store";
 import styles from "./queued-conversation.module.css";
+import imageStyles from "./conversation-images.module.css";
 
 type Props = {
   sessionId: string;
@@ -58,6 +60,7 @@ function LoadedConversationImageStrip({
   compact = false,
   onRetry,
 }: Props & { onRetry: () => void }) {
+  const t = useT();
   const [urls, setUrls] = useState<Array<string | null>>(() => images.map(() => null));
   const [failed, setFailed] = useState<boolean[]>(() => images.map(() => false));
   const [expanded, setExpanded] = useState(false);
@@ -76,6 +79,7 @@ function LoadedConversationImageStrip({
   const stripRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLElement | null>(null);
   const previewId = useId();
+  const restoreFocus = useRef(false);
   const keys = imageKey(images);
 
   const markFailed = (position: number) => {
@@ -176,8 +180,17 @@ function LoadedConversationImageStrip({
   }, [open, index, measure]);
 
   useLayoutEffect(() => {
-    if (open) previewRef.current?.focus({ preventScroll: true });
-  }, [open]);
+    if (open) {
+      previewRef.current?.focus({ preventScroll: true });
+    } else if (restoreFocus.current) {
+      restoreFocus.current = false;
+      const trigger = triggerRef.current;
+      // Restore after React has revealed the source strip again. The exact
+      // thumbnail may have failed decoding or moved into the folded range.
+      const visible = trigger?.isConnected && (expanded || images.length === 1 || triggerPosition.current < 3);
+      (visible ? trigger : expandRef.current ?? stripRef.current?.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true });
+    }
+  }, [open, expanded, images.length]);
 
   if (images.length === 0) return null;
   const anyFailed = failed.some(Boolean);
@@ -193,12 +206,8 @@ function LoadedConversationImageStrip({
   };
   const step = (delta: number) => setIndex((current) => (current + delta + images.length) % images.length);
   const close = () => {
+    restoreFocus.current = true;
     setOpen(false);
-    const trigger = triggerRef.current;
-    // Collapsing the grid can hide the original trigger while preview remains
-    // open; a decode failure can remove it. Return to a visible owned control.
-    const visible = trigger?.isConnected && (expanded || images.length === 1 || triggerPosition.current < 3);
-    (visible ? trigger : expandRef.current ?? stripRef.current?.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true });
   };
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.defaultPrevented || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
@@ -236,97 +245,101 @@ function LoadedConversationImageStrip({
     anchor.remove();
   };
 
-  const zoomLabel = zoom === "actual" ? "100%" : fitPercent === null ? "适应" : `${fitPercent}%`;
+  const zoomLabel = zoom === "actual" ? "100%" : fitPercent === null ? t("conversation.image.fit") : `${fitPercent}%`;
   const zoomDescription = zoom === "actual"
-    ? "缩放 100%（原始大小），点击切换为适应窗口"
-    : "缩放 适应窗口，点击切换为原始 100%";
+    ? t("conversation.image.zoomActual")
+    : t("conversation.image.zoomFit");
   const shown = images[index];
 
   return (
     <div className={styles.images} data-message-evidence={messageId} data-compact={compact ? "true" : undefined} data-layout={layout} data-preview-open={open || undefined} ref={stripRef}>
-      {images.length === 1 && <div className={styles.imageSourceLabel}>{images[0].file_name}</div>}
-      <ul className={styles.imageList} aria-label={`消息中的 ${images.length} 张图片`}>
-        {images.map((image, position) => (
-          <li className={styles.imageItem} key={image.attachment_id}>
-            {urls[position] ? (
-              <button
-                className={styles.imageButton}
-                aria-controls={open ? previewId : undefined}
-                aria-expanded={open && index === position}
-                onClick={(event) => openAt(position, event.currentTarget)}
-                title={`查看原图 ${position + 1}`}
-                type="button"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt={image.file_name} onError={() => markFailed(position)} src={urls[position]!} />
-              </button>
-            ) : (
-              <span
-                className={styles.imagePlaceholder}
-                data-error={failed[position] ? "true" : undefined}
-                role="status"
-              >
-                {failed[position] ? "图片暂时无法读取" : "正在读取图片…"}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {images.length > 1 ? (
-        <div className={styles.imageStripActions}>
-          <span className={styles.imageTotal}>{images.length} 张图片</span>
-          <button
-            ref={expandRef}
-            aria-expanded={expanded}
-            className={styles.imageExpand}
-            onClick={() => setExpanded((value) => !value)}
-            type="button"
-          >
-            {expanded ? "收起图片" : "展开图片"}
+      {/* Inspection replaces the thumbnail presentation in this message;
+          displaying both repeats the same source and pushes the answer away. */}
+      <div className={imageStyles.thumbnails} hidden={open}>
+        <ul className={styles.imageList} aria-label={t("conversation.image.messageLabel", { count: images.length })}>
+          {images.map((image, position) => (
+            <li className={styles.imageItem} key={image.attachment_id}>
+              {urls[position] ? (
+                <button
+                  className={styles.imageButton}
+                  aria-controls={open ? previewId : undefined}
+                  aria-expanded={open && index === position}
+                  onClick={(event) => openAt(position, event.currentTarget)}
+                  title={t("conversation.image.view", { index: position + 1 })}
+                  aria-label={t("conversation.image.viewNamed", { index: position + 1, name: image.file_name })}
+                  type="button"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img alt={image.file_name} onError={() => markFailed(position)} src={urls[position]!} />
+                </button>
+              ) : (
+                <span
+                  className={styles.imagePlaceholder}
+                  data-error={failed[position] ? "true" : undefined}
+                  role="status"
+                >
+                  {t(failed[position] ? "conversation.image.unavailable" : "conversation.image.loading")}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+        {images.length > 1 ? (
+          <div className={styles.imageStripActions}>
+            <span className={styles.imageTotal}>{t("conversation.image.count", { count: images.length })}</span>
+            <button
+              ref={expandRef}
+              aria-expanded={expanded}
+              className={styles.imageExpand}
+              onClick={() => setExpanded((value) => !value)}
+              type="button"
+            >
+              {t(expanded ? "conversation.image.collapse" : "conversation.image.expand")}
+            </button>
+          </div>
+        ) : null}
+        {anyFailed ? (
+          <button className={styles.imageRetry} onClick={onRetry} type="button">
+            {t("conversation.image.reloadAll")}
           </button>
-        </div>
-      ) : null}
-      {anyFailed ? (
-        <button className={styles.imageRetry} onClick={onRetry} type="button">
-          重新读取图片
-        </button>
-      ) : null}
+        ) : null}
+      </div>
       {open && <section
             aria-labelledby={`${previewId}-name`}
             id={previewId}
             data-evidence-preview
             ref={previewRef}
             tabIndex={-1}
-            className={styles.imageDialog}
+            className={`${styles.imageDialog} ${imageStyles.preview}`}
             onKeyDown={onKeyDown}
           >
             <div className={styles.imageMeta}>
-              <h3 id={`${previewId}-name`} className={styles.imageFileName}>{shown?.file_name ?? "原图"}</h3>
-              <span className={styles.imagePosition}>{index + 1} / {images.length}</span>
+              <h3 id={`${previewId}-name`} className={styles.imageFileName}>{shown?.file_name ?? t("conversation.image.original")}</h3>
+              {images.length > 1 ? <span className={styles.imagePosition}>{index + 1} / {images.length}</span> : null}
             </div>
-            <div className={styles.imageToolbar}>
+            <div className={`${styles.imageToolbar} ${imageStyles.toolbar}`}>
               {images.length > 1 && <>
-                <button aria-label="上一张图片" className={styles.imageNav} onClick={() => step(-1)} type="button"><CaretLeft aria-hidden size={18}/></button>
-                <button aria-label="下一张图片" className={styles.imageNav} onClick={() => step(1)} type="button"><CaretRight aria-hidden size={18}/></button>
+                <button aria-label={t("conversation.image.previous")} className={styles.imageNav} onClick={() => step(-1)} type="button"><CaretLeft aria-hidden size={18}/></button>
+                <button aria-label={t("conversation.image.next")} className={styles.imageNav} onClick={() => step(1)} type="button"><CaretRight aria-hidden size={18}/></button>
               </>}
               <button aria-label={zoomDescription} className={styles.imageZoom} onClick={() => setZoom((value) => (value === "actual" ? "fit" : "actual"))} type="button">
                 {zoomLabel}
               </button>
-              <button aria-label="在新标签页打开原图" className={styles.imageControl} disabled={!urls[index]} onClick={openOriginal} type="button">
+              <button aria-label={t("conversation.image.openTab")} className={styles.imageControl} disabled={!urls[index]} onClick={openOriginal} type="button">
                 <ArrowSquareOut aria-hidden size={16} />
               </button>
-              <button aria-label="下载原图" className={styles.imageControl} disabled={!urls[index]} onClick={downloadOriginal} type="button">
+              <button aria-label={t("conversation.image.download")} className={styles.imageControl} disabled={!urls[index]} onClick={downloadOriginal} type="button">
                 <DownloadSimple aria-hidden size={16} />
               </button>
-                <button aria-label="关闭原图" className={styles.imageClose} onClick={close} type="button">
+                <button aria-label={t("conversation.image.close")} className={styles.imageClose} onClick={close} type="button">
                   <X aria-hidden size={17} />
                 </button>
             </div>
-            <div aria-label={zoom === "actual" ? "原图预览，使用方向键滚动" : "原图预览"} className={styles.imageStage} data-zoom={zoom} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
+            <div aria-label={t(zoom === "actual" ? "conversation.image.previewActual" : "conversation.image.preview")} className={styles.imageStage} data-zoom={zoom} ref={stageRef} role="region" tabIndex={zoom === "actual" ? 0 : -1}>
               {urls[index] ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  alt={shown?.file_name ?? `原图 ${index + 1}`}
+                  alt={shown?.file_name ?? t("conversation.image.originalAt", { index: index + 1 })}
                   data-zoom={zoom}
                   onError={() => markFailed(index)}
                   onLoad={measure}
@@ -335,10 +348,10 @@ function LoadedConversationImageStrip({
                 />
               ) : (
                 <div className={styles.imageDialogMessage} role="status">
-                  <p>{failed[index] ? "这张图片暂时无法读取。" : "正在读取图片…"}</p>
+                  <p>{t(failed[index] ? "conversation.image.unavailableSentence" : "conversation.image.loading")}</p>
                   {failed[index] ? (
                     <button className={styles.imageRetryInline} onClick={() => retryOne(index)} type="button">
-                      重新读取
+                      {t("conversation.image.reload")}
                     </button>
                   ) : null}
                 </div>

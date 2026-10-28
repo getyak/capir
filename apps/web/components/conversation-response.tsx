@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CaretUp } from "@phosphor-icons/react";
 
 import {
   extractiveReadingPreview,
@@ -168,11 +169,12 @@ function FoldableResponse({
         <button
           aria-controls={fullTextId}
           aria-expanded={!folded}
+          aria-label={t(folded ? "response.expand" : "response.collapse")}
           className={styles.foldToggle}
           onClick={() => setFolded((value) => !value)}
           type="button"
         >
-          {t(folded ? "response.expand" : "response.collapse")}
+          {folded ? t("response.expand") : <CaretUp aria-hidden size={16}/>}
         </button>
       </div>
     </div>

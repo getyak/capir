@@ -103,6 +103,18 @@ it("anchors header inspection to the current message execution record inside the
   expect(document.querySelector("[data-slot='popover-content']")).toBeNull();
   expect(actions()).toEqual([]);
 });
+it("keeps requested activity details free of repeated working labels and fixed reassurance", async () => {
+  await render(); await emit(snapshot(2, entry())); await open();
+  const record = host.querySelector<HTMLElement>("[data-session-task-record]")!;
+  const disclosure = record.closest("details")!;
+  expect(disclosure.querySelector("summary")?.textContent).toBe("Activity details");
+  expect(record.querySelector("p")).toBeNull();
+  expect(disclosure.querySelector("[data-elapsed-ms]")).not.toBeNull();
+  expect(disclosure.textContent).toContain("Reading the related records");
+  expect(disclosure.textContent).not.toContain("Replies, decisions and external actions");
+  expect(stopButtons()).toHaveLength(1);
+  expect(actions()).toEqual([]);
+});
 it("stops only through the deliberate control and never continues the stopped queue", async () => {
   await render(); await emit(snapshot(2, entry())); await open();
   const stop = [...document.querySelectorAll<HTMLButtonElement>("[data-session-task-capsule] button")].find(button => button.textContent === "Stop");

@@ -64,7 +64,6 @@
   "lib/server/workspaceSessions.ts": 21,
   "app/capir/authorize/page.tsx": 20,
   "components/composer-document.tsx": 20,
-  "components/conversation/conversation-images.tsx": 20,
   "components/person-context-panel.tsx": 20,
   "components/session-workbench/session-directory.tsx": 20,
   "components/workspace-footer.tsx": 20,

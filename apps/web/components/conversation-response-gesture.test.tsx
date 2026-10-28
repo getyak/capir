@@ -90,14 +90,17 @@ describe("long-answer pinch fold", () => {
     const fold = surface();
     expect(fold.getAttribute("aria-label")).toBe(label);
     const toggle = fold.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
-    expect(toggle.textContent).toBe(collapse);
+    expect(toggle.getAttribute("aria-label")).toBe(collapse);
+    expect(toggle.textContent).toBe("");
+    expect(toggle.querySelector("svg")).not.toBeNull();
     expect(fold.textContent).toContain("陈宇负责设计协作。");
     act(() => toggle.click());
     expect(toggle.textContent).toBe(expand);
     expect(fold.textContent).toContain(preview);
     expect(fold.textContent).toContain("陈宇负责设计协作。");
     act(() => toggle.click());
-    expect(toggle.textContent).toBe(collapse);
+    expect(toggle.getAttribute("aria-label")).toBe(collapse);
+    expect(toggle.textContent).toBe("");
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
   it("keeps long code-only responses visible without an empty fold", () => {
@@ -169,7 +172,8 @@ describe("long-answer pinch fold", () => {
     const toggle = fold.querySelector<HTMLButtonElement>("button[aria-expanded]");
     expect(toggle).not.toBeNull();
     expect(toggle!.getAttribute("aria-expanded")).toBe("true");
-    expect(toggle!.textContent).toBe("收起");
+    expect(toggle!.getAttribute("aria-label")).toBe("收起");
+    expect(toggle!.textContent).toBe("");
 
     act(() => toggle!.click());
     expect(fold.dataset.folded).toBe("true");

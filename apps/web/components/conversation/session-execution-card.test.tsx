@@ -5,6 +5,61 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SessionExecutionCard, SessionRunUpdate, SessionSendTime } from "./session-execution-card";
 
 describe("in-place execution card", () => {
+  it.each([
+    ["en", "Memory request returned", "Technical details"],
+    ["zh-CN", "记忆请求已返回", "技术详情"],
+    ["zh-TW", "記憶請求已回傳", "技術詳情"],
+    ["ja", "メモリへのリクエストが返りました", "技術的な詳細"],
+    ["ko", "메모리 요청 응답이 도착했습니다", "기술 세부 정보"],
+  ] as const)("describes returned Memory requests in %s without claiming a prepared or saved review", (locale, label, diagnostics) => {
+    const html = renderToStaticMarkup(<LocaleProvider locale={locale}><SessionExecutionCard phase="running"
+      stage={null} startedAt="2026-10-01T01:00:00Z" milestones={[]}
+      completedTools={[{ name: "memory_review", completed_at: "2026-10-01T01:00:03Z" }]}/></LocaleProvider>);
+    const activity = html.match(/<ol\b[^>]*data-tool-activity[^>]*>([\s\S]*?)<\/ol>/u)![1];
+    expect(activity).toContain(label);
+    expect(activity).not.toContain("memory_review");
+    const technical = html.match(/<details\b[^>]*data-run-diagnostics[^>]*>([\s\S]*?)<\/details>/u)![0];
+    expect(technical).toContain(diagnostics);
+    expect(technical).toContain("<code>memory_review</code>");
+    expect(technical).not.toMatch(/<details\b[^>]*\bopen=/u);
+    expect(activity).not.toMatch(/prepared|saved|confirmed/iu);
+  });
+
+  it("keeps an unknown tool neutral and preserves its original diagnostic name", () => {
+    for (const name of ["future_private_operation", "constructor"]) {
+      const html = renderToStaticMarkup(<LocaleProvider locale="en"><SessionExecutionCard phase="failed"
+        failureCode="MODEL_RUN_TIMEOUT" stage={null} startedAt="2026-10-01T01:00:00Z"
+        endedAt="2026-10-01T01:00:08Z" milestones={[]}
+        completedTools={[{ name, completed_at: "2026-10-01T01:00:03Z" }]}/></LocaleProvider>);
+      const activity = html.match(/<ol\b[^>]*data-tool-activity[^>]*>([\s\S]*?)<\/ol>/u)![1];
+      expect(activity).toContain("Operation returned");
+      expect(activity).not.toContain(name);
+      expect(html).toContain(`<code>${name}</code>`);
+      expect(html).toContain("MODEL_RUN_TIMEOUT");
+      expect(html).toContain('data-phase="failed"');
+    }
+  });
+
+  it("names ordinary completed history as quiet activity details while retaining pending review state", () => {
+    const record = (phase: "completed" | "waiting-review") => renderToStaticMarkup(<LocaleProvider locale="en"><SessionExecutionCard
+      phase={phase} stage={null} startedAt="2026-10-01T01:00:00Z" endedAt="2026-10-01T01:00:08Z" milestones={[]}/></LocaleProvider>);
+    const completed = record("completed");
+    expect(completed.match(/<summary\b/g)).toHaveLength(1);
+    expect(completed).toContain("Activity details");
+    expect(completed).not.toContain("Finished");
+    expect(completed).not.toContain('open=""');
+    expect(record("waiting-review")).toContain("Ready for your review");
+  });
+
+  it("keeps unrecognized stage names in diagnostics rather than presenting an enum as progress", () => {
+    const html = renderToStaticMarkup(<LocaleProvider locale="en"><SessionExecutionCard phase="running"
+      stage={null} startedAt="2026-10-01T01:00:00Z"
+      milestones={[{ stage: "future_stage", label: "future_stage", observedAt: "2026-10-01T01:00:01Z" }]}/></LocaleProvider>);
+    expect(html).toContain("Processing update");
+    expect(html).toContain("<code>future_stage</code>");
+    expect(html.slice(0, html.indexOf("data-run-diagnostics"))).not.toContain("future_stage");
+  });
+
   it.each(["queued", "running", "stopping", "waiting-review", "review-unknown", "completed", "failed", "interrupted"] as const)("keeps %s diagnostics behind the inline disclosure", phase => {
     const html = renderToStaticMarkup(<LocaleProvider locale="en"><SessionExecutionCard
       phase={phase} stage={null} startedAt="2026-10-01T01:00:00Z"
