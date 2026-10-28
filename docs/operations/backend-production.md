@@ -96,6 +96,75 @@ analytics, logs, or support bundles. Database restore without the matching
 object-store version is incomplete; object restore without its account-scoped
 metadata is unusable and should be quarantined rather than exposed.
 
+### Interrupted Chat media uploads and historical deletion inventory
+
+Chat uploads commit a database-owned attempt before dispatching one PUT. Concurrent
+uploads and deletion share the account-scoped media row lock. A remote error or a
+process interruption leaves the attempt unresolved; elapsed time never proves that
+a remote writer stopped. No deletion receipt is issued while an attempt remains
+unresolved. Local settled failures can retry the original media identity.
+
+Each S3 PUT carries `capir-upload-attempt` metadata and uses a single SDK attempt.
+A retry can settle the database fence only when HEAD from the same recorded store
+returns that exact attempt, complete byte count, and content type. This relies on
+[S3's complete-object PUT semantics](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html).
+HEAD never reads pixels. A matching receipt makes the object retryable or deletable;
+it does not mark the original interrupted upload successful or add an uploaded audit.
+The old handler rechecks its exact attempt before changing state, so it cannot
+restore a deleted row or overwrite a newer attempt's outcome.
+
+From the affected committed backend release, use its existing protected environment:
+
+```sh
+node apps/backend/dist/operations/chatMediaMaintenance.js inventory
+node apps/backend/dist/operations/chatMediaMaintenance.js reconcile \
+  --account ACCOUNT_UUID --media MEDIA_UUID --attempt ATTEMPT_UUID
+```
+
+`inventory` opens a read-only, repeatable-read transaction and prints only object
+and owner fingerprints, counts, scope hash, and closed blocker codes. It considers
+at most 1,000 deletion tombstones and reports truncation. Only a row's exact owner
+key with an uploader-authored deletion audit from that same transaction is eligible
+for a version listing; live, submitted, cross-owner, or unresolved media is excluded.
+It lists versions and delete markers from the configured store without GET or DELETE.
+Legacy rows lacking a store fingerprint remain blocked for cleanup even when that
+store contains matching versions. Restore the old deployment's protected store
+mapping and review it before claiming these are the old bytes. A failed listing
+remains unknown, never zero residue.
+
+`reconcile` checks one explicit attempt and can settle its database fence; it never
+purges an object. A missing/mismatched HEAD receipt returns `unresolved` (exit 2).
+Do not clear the fence from age, a restarted server, 404 alone, or an empty listing.
+If the provider rejected a request without creating an object, retain the fence
+until an operator reviews a terminal provider receipt tied to that exact attempt
+and store. This tool deliberately has no force-clear flag. For a closing Lab workspace, the same command settles only the existing control write receipt and leaves the closed account data gate intact; workspace cleanup still owns its subsequent purge. Failed provider receipt
+checks return a fixed diagnostic without retaining transport exceptions.
+
+Before any historical permanent cleanup, freeze and review the exact candidate
+fingerprints, store mapping, trusted deletion events, version/marker counts, and
+scope hash. Obtain explicit approval for that frozen scope. Recheck canonical
+bindings, ownership, all outstanding writes, and the unchanged store immediately
+before each exact-key purge. Do not infer deletion intent from a bucket listing,
+expand into active media, change versioning/retention, or delete an entire prefix.
+No historical apply command is supplied here. Permanent version deletion cannot
+be undone by a database rollback; failures must retain the candidate for retry,
+with a new full version/marker readback before recording completion.
+
+The adapter follows both S3 pagination markers and snapshots a complete exact-key
+inventory before deleting batches of at most 1,000. A repeated/missing cursor,
+more than 1,000 listing pages, a batch error, or bytes still present after bounded
+verification fails closed. Prefix siblings are never deletion targets. See
+[ListObjectVersions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectVersions.html).
+
+During rollout, drain all previous API processes before accepting new media
+requests; an old process does not know the new database fence. Inventory existing
+unresolved/tombstoned media afterward. The additive migration is compatible with
+older reads, but rolling the runtime back would reopen the race, so do not resume
+old upload/delete handlers as an operational rollback. Keep affected media writes
+paused while diagnosing a failed activation. Deployment and live readback remain
+required separately from local and CI evidence.
+
+
 ## Updates and rollback
 
 Record the deployed commit before every update. Pull only fast-forward `main`,
