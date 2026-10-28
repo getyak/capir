@@ -120,6 +120,7 @@ function normalizeSessionIdentifiers(
       payload.inheritedScreenshotTaskIDs.map(canonicalID);
   for (const turn of payload.turns) {
     turn.id = canonicalID(turn.id);
+    if (turn.memoryDraftTarget) turn.memoryDraftTarget.person_id = canonicalID(turn.memoryDraftTarget.person_id);
     for (const message of turn.steeredMessages ?? []) message.id = canonicalID(message.id);
     for (const key of [
       "taskID",
@@ -197,7 +198,7 @@ function preserveExecutionProvenance(
   for (const turn of payload.turns) {
     const before = previous?.turns.find((candidate) => sameID(candidate.id, turn.id));
     if (!before && queueMessageID && sameID(turn.id, queueMessageID)) continue;
-    if (before && (before.steeredMessages !== undefined || before.response.execution !== undefined
+    if (before && (before.steeredMessages !== undefined || before.memoryDraftTarget !== undefined || before.response.execution !== undefined
       || before.response.mcpInteraction !== undefined || before.response.hostResult !== undefined)
       && !sameImmutableTurn(before, turn)) {
       throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
@@ -218,14 +219,16 @@ function preserveExecutionProvenance(
           turn.response[collection] = structuredClone(stored);
       }
     }
-    // Server-issued execution, steering and MCP provenance are immutable to
+    // Server-issued execution, Memory draft display targets, steering and MCP provenance are immutable to
     // clients: a legacy save that omits a stored reference restores it (the
     // card survives), and a client can never create or change one — including
     // host-only human results and forged or wrong-turn request references.
-    for (const field of ["steeredMessages", "execution", "mcpInteraction", "hostResult"] as const) {
+    for (const field of ["steeredMessages", "memoryDraftTarget", "execution", "mcpInteraction", "hostResult"] as const) {
       const current = field === "steeredMessages" ? turn.steeredMessages
+        : field === "memoryDraftTarget" ? turn.memoryDraftTarget
         : (turn.response as Record<string, unknown>)[field];
       const stored = field === "steeredMessages" ? before?.steeredMessages
+        : field === "memoryDraftTarget" ? before?.memoryDraftTarget
         : (before?.response as Record<string, unknown> | undefined)?.[field];
       if (current !== undefined && digestValue(current) !== digestValue(stored ?? null)) {
         throw new ApiError(409, "AGENT_SESSION_EXECUTION_PROVENANCE_CHANGED",
@@ -233,6 +236,7 @@ function preserveExecutionProvenance(
       }
       if (stored !== undefined && current === undefined) {
         if (field === "steeredMessages") turn.steeredMessages = structuredClone(before!.steeredMessages!);
+        else if (field === "memoryDraftTarget") turn.memoryDraftTarget = structuredClone(before!.memoryDraftTarget!);
         else (turn.response as Record<string, unknown>)[field] = structuredClone(stored);
       }
     }

@@ -8,6 +8,7 @@ import {
   CONTRACT_VERSION,
   type AgentSessionMutationRequest,
   type AgentSessionDeleteRequest,
+  type AgentSessionRecord,
 } from "@talent-signal/contracts";
 import type { FastifyInstance, preHandlerHookHandler } from "fastify";
 import type { Pool } from "pg";
@@ -19,6 +20,31 @@ import {
   mutateAgentSession,
   runAgentSessionRetentionSweep,
 } from "./agentSessions.js";
+
+/** Reader negotiation changes historical display only, never canonical state or execution scope. */
+function sessionForReader(session: AgentSessionRecord, includeMemoryDraftTargets: boolean): AgentSessionRecord {
+  if (includeMemoryDraftTargets || !session.payload || !session.payload.turns.some(turn => turn.memoryDraftTarget !== undefined)) return session;
+  const copy = structuredClone(session);
+  for (const turn of copy.payload!.turns) delete turn.memoryDraftTarget;
+  return copy;
+}
+
+async function readerSession(read: () => Promise<AgentSessionRecord>, includeMemoryDraftTargets: boolean) {
+  try {
+    return sessionForReader(await read(), includeMemoryDraftTargets);
+  } catch (error) {
+    // Conflict/deletion readback carries the same Session DTO as a success.
+    // Keep that recovery path compatible with strict legacy readers too.
+    if (!includeMemoryDraftTargets && error instanceof ApiError && error.details && typeof error.details === "object"
+      && "session" in error.details && error.details.session && typeof error.details.session === "object"
+      && "payload" in error.details.session) {
+      throw new ApiError(error.statusCode, error.code, error.message, { ...error.details,
+        session: sessionForReader(error.details.session as AgentSessionRecord, false) });
+    }
+    throw error;
+  }
+}
+
 export function registerAgentSessionRoutes(
   app: FastifyInstance,
   pool: Pool,
@@ -80,12 +106,14 @@ export function registerAgentSessionRoutes(
     },
     async (request, reply) => {
       reply.header("cache-control", "no-store");
-      return listAgentSessions(
+      const result = await listAgentSessions(
         pool,
         request.auth,
         request.query.after,
         Number(request.query.limit ?? 50),
       );
+      return { ...result, sessions: result.sessions.map(session => sessionForReader(session,
+        request.headers["x-conversation-memory-draft-target"] === "1")) };
     },
   );
   app.get<{ Params: { id: string } }>(
@@ -105,7 +133,8 @@ export function registerAgentSessionRoutes(
       reply.header("cache-control", "no-store");
       return {
         contract_version: CONTRACT_VERSION,
-        session: await getAgentSession(pool, request.auth, request.params.id),
+        session: await readerSession(() => getAgentSession(pool, request.auth, request.params.id),
+          request.headers["x-conversation-memory-draft-target"] === "1"),
       };
     },
   );
@@ -128,12 +157,12 @@ export function registerAgentSessionRoutes(
       reply.header("cache-control", "no-store");
       return {
         contract_version: CONTRACT_VERSION,
-        session: await mutateAgentSession(
+        session: await readerSession(() => mutateAgentSession(
           pool,
           request.auth,
           request.params.id,
           request.body,
-        ),
+        ), request.headers["x-conversation-memory-draft-target"] === "1"),
       };
     },
   );
@@ -155,13 +184,13 @@ export function registerAgentSessionRoutes(
       reply.header("cache-control", "no-store");
       return {
         contract_version: CONTRACT_VERSION,
-        session: await mutateAgentSession(
+        session: await readerSession(() => mutateAgentSession(
           pool,
           request.auth,
           request.params.id,
           request.body,
           true,
-        ),
+        ), request.headers["x-conversation-memory-draft-target"] === "1"),
       };
     },
   );
