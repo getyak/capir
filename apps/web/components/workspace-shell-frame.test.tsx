@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_LAYOUT_KEY } from "@/lib/workspace-sidebar-layout";
 import { WORKSPACE_RAIL_COLLAPSED_KEY } from "@/lib/workspace-navigation";
 import { WorkspaceShellFrame } from "./workspace-shell-frame";
+import styles from "./workspace-shell.module.css";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -16,10 +17,18 @@ const sidebar = () => host.querySelector('aside')!;
 const width = () => Number(edge().getAttribute("aria-valuenow"));
 const saved = () => JSON.parse(window.localStorage.getItem(SIDEBAR_LAYOUT_KEY)!);
 
-async function render() {
+async function render(surface: "route" | "conversation" | "legacy" = "route") {
   await act(async () => root.render(
     <WorkspaceShellFrame sidebar={<button data-sidebar-collapse-toggle>Account</button>}>
-      <main>Conversation</main>
+      <div className={styles.workspace}>
+        {surface !== "conversation" ? <header className={styles.routeHeader} style={surface === "legacy" ? { display: "none" } : undefined}>Workspace</header> : null}
+        <div className={styles.stage}>
+          <aside aria-label="Test workspace">Synthetic data ready</aside>
+          {surface === "conversation" ? <main data-conversation-canvas><header>Conversation</header></main>
+            : surface === "legacy" ? <div className="context-workspace"><main><header className="context-topbar">Relationship</header></main></div>
+              : <main>People</main>}
+        </div>
+      </div>
     </WorkspaceShellFrame>,
   ));
 }
@@ -147,6 +156,43 @@ describe("desktop sidebar split", () => {
     root = createRoot(host);
     await render();
     expect(width()).toBe(252);
+  });
+
+  it.each(["route", "conversation", "legacy"] as const)("places restoration in the actual %s header instead of over a preceding test banner", async surface => {
+    await render(surface);
+    await key("Home");
+    const restore = host.querySelector<HTMLButtonElement>('button[aria-label="显示侧边栏"]')!;
+    const expected = surface === "conversation" ? "[data-conversation-canvas] > header"
+      : surface === "legacy" ? ".context-topbar" : `.${styles.routeHeader}`;
+    expect(restore.parentElement).toBe(host.querySelector(expected));
+    expect(host.querySelector('aside[aria-label="Test workspace"]')?.contains(restore)).toBe(false);
+    expect(restore.closest(`.${styles.shell}`)).toBe(host.firstElementChild);
+  });
+
+  it("follows a replaced working header while the saved sidebar remains hidden", async () => {
+    await render("legacy");
+    await key("Home");
+    const initial = host.querySelector('button[aria-label="显示侧边栏"]')!;
+    expect(initial.parentElement?.className).toBe("context-topbar");
+    await render("conversation");
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
+      .toBe(host.querySelector("[data-conversation-canvas] > header"));
+    expect(host.querySelectorAll('button[aria-label="显示侧边栏"]')).toHaveLength(1);
+    expect(saved().hidden).toBe(true);
+  });
+
+  it("ignores an inactive header beneath an aria-hidden ancestor", async () => {
+    await act(async () => root.render(
+      <WorkspaceShellFrame sidebar={<button data-sidebar-collapse-toggle>Account</button>}>
+        <div className={styles.workspace}>
+          <section aria-hidden="true"><main data-conversation-canvas><header>Inactive Session</header></main></section>
+          <div className={styles.stage}><div className="context-workspace"><header className="context-topbar">Current relationship</header></div></div>
+        </div>
+      </WorkspaceShellFrame>,
+    ));
+    await key("Home");
+    expect(host.querySelector('button[aria-label="显示侧边栏"]')?.parentElement)
+      .toBe(host.querySelector(".context-topbar"));
   });
 
   it("honors the old compact-rail preference and can drag it back to full width", async () => {

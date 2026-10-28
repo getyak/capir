@@ -2102,7 +2102,8 @@
   left: 14px;
   padding: 0;
   position: absolute;
-  top: 7px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 44px;
   z-index: 42;
 }
@@ -2123,11 +2124,8 @@
   white-space: nowrap;
 }
 .sidebarRestore:is(:hover, :focus-visible) .sidebarRestoreLabel { visibility: visible; }
-.shell:has([data-conversation-canvas]) .sidebarRestore { top: 12px; }
-.shell[data-sidebar-hidden="true"] .routeHeader .crumb { margin-left: 44px; }
-:global(html[data-desktop-surface="workspace"][data-desktop-titlebar="unified"]) .shell:has([data-conversation-canvas]) .sidebarRestore {
-  top: max(0px, calc((68px - var(--workspace-native-titlebar-height, 0px) - 44px) / 2));
-}
+.routeHeader:has(> .sidebarRestore) .crumb { margin-left: 44px; }
+:global(.context-topbar):has(> .sidebarRestore) > div:first-child { padding-left: 44px; }
 .sidebarResizeHandle {
   bottom: 0;
   cursor: col-resize;
@@ -2166,7 +2164,7 @@
 :global(html[data-desktop-surface="settings"]) .sidebarResizeHandle,
 :global(html[data-desktop-surface="settings"]) .sidebarRestore,
 .shell:has(.stage > :global(.review-workspace)) > .sidebarResizeHandle,
-.shell:has(.stage > :global(.review-workspace)) > .sidebarRestore { display: none; }
+.shell:has(.stage > :global(.review-workspace)) .sidebarRestore { display: none; }
 @media (max-width: 760px) {
   .sidebarRestore { display: none; }
   .sidebarResizeHandle { display: none; }
