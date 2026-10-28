@@ -82,3 +82,7 @@ data; do not roll the database backward.
 ## Remaining evidence boundaries
 
 The parent owns database integration, CI, clean-source deployments, resource checks and isolated browser/model acceptance. No local component test establishes a saved Memory or a production outcome. No native or physical-device acceptance is claimed. This work does not weaken the image excerpt/source gate or widen historical image-read authority.
+
+### Import experiment fixture compatibility (2026-10-29)
+
+The source-bound cold ARM64 OCI build for d5e3e6c2 passed. Its optional capped import job stopped before starting the nested engine: Python 3.12 adds an empty AST `type_params` field, changing the immutable log-gate fingerprint. Normalize only that empty field in the fixture, explicitly reject nonempty generic parameters, and preserve the original fingerprint and production gate. All 80 synthetic deployment fixtures passed on Python 3.12.14; independent review found no remaining issue. A new exact-source CI/image experiment is required; the earlier failure is not an import or capacity result.

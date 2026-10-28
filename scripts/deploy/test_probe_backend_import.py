@@ -33,6 +33,13 @@ class ProbeTests(unittest.TestCase):
         source = Path(probe.__file__).read_text()
         function = next(node for node in ast.parse(source).body
                         if isinstance(node, ast.FunctionDef) and node.name == 'validate_logs')
+        # Python 3.12 adds an empty type_params field to function/class ASTs.
+        # Preserve the original gate fingerprint across that schema change;
+        # actual generic parameters must still fail this immutable baseline.
+        for node in ast.walk(function):
+            if 'type_params' in node._fields:
+                self.assertEqual(node.type_params, [])
+                node._fields = tuple(field for field in node._fields if field != 'type_params')
         self.assertEqual(hashlib.sha256(ast.dump(function, include_attributes=False).encode()).hexdigest(),
                          '5759bd7e2f3f225b6d313b56a8fd091fe6fe7ad57395618ef1582488ed8e9eb4')
 
