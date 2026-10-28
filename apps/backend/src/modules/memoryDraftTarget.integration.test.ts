@@ -101,7 +101,7 @@ function execute(f: Fixture, c: ClaimedConversationQueueEntry, p = provider(f, c
 }
 
 suite("GET-298 isolated durable target and real Memory producer", () => {
-  it("round-trips a text-only pending proposal to the exact Person and current message without saving facts", async () => {
+  it("stages the exact Person/current text while keeping review unavailable before canonical source persistence", async () => {
     const f = await fixture();
     try {
       await admit(f);
@@ -114,9 +114,16 @@ suite("GET-298 isolated durable target and real Memory producer", () => {
       const stored = (await pool!.query("SELECT target_person_id,source_message_id,source_task_id,contact_decision FROM memory_proposals WHERE account_id=$1 AND id=$2",
         [f.accountId, result.memoryProposal!.proposal_id])).rows[0];
       expect(stored).toEqual({ target_person_id: f.personId, source_message_id: c.messageId, source_task_id: c.runId, contact_decision: "existing" });
+      const stagedItems = (await pool!.query("SELECT scope,subject_id,source_excerpt FROM memory_proposal_items WHERE account_id=$1 AND proposal_id=$2",
+        [f.accountId, result.memoryProposal!.proposal_id])).rows;
+      expect(stagedItems).toEqual([{ scope: "person", subject_id: f.personId,
+        source_excerpt: "Lin prefers written agendas before meetings" }]);
+      // Calling the real producer directly does not complete the queue or
+      // persist its human turn. The read boundary must not treat the temporary
+      // Run source as a durable readable Session source. The Runner test below
+      // proves that the same producer's item opens after canonical completion.
       const review = await openMemoryReview(pool!, f.auth, result.memoryProposal!.proposal_id, { purpose: "chat", session_id: f.sessionId });
-      expect(review.review.items).toHaveLength(1);
-      expect(review.review.items[0]).toMatchObject({ scope: "person", source_excerpt: "Lin prefers written agendas before meetings" });
+      expect(review.review).toMatchObject({ items: [], source_status: "unavailable", source_unavailable_visible_item_count: 1 });
       expect((await pool!.query("SELECT count(*)::int AS count FROM memory_items WHERE account_id=$1", [f.accountId])).rows[0]?.count).toBe(0);
       expect((await pool!.query("SELECT count(*)::int AS count FROM subjects WHERE account_id=$1", [f.accountId])).rows[0]?.count).toBe(1);
     } finally { await removeFixture(f); }
@@ -255,7 +262,13 @@ suite("GET-298 isolated durable target and real Memory producer", () => {
       expect(recovered?.memoryDraftTarget).toEqual({ person_id: f.personId });
       expect((await pool!.query("SELECT memory_draft_target_claim_revision FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
         [f.accountId, c.entryId])).rows[0]?.memory_draft_target_claim_revision).toBe(2);
-      await pool!.query("UPDATE conversation_queue_entries SET status='cancelled',content_state='scrubbed',objective=NULL WHERE account_id=$1 AND id=$2", [f.accountId, c.entryId]);
+      // These are the complete pre-GET-298 terminal scrub fields. In
+      // particular a non-running row must release its lease and cancellation
+      // state; omitting that would violate the pre-existing queue lifecycle.
+      await pool!.query(`UPDATE conversation_queue_entries SET status='cancelled',content_state='scrubbed',objective=NULL,
+        stage=NULL,result=NULL,result_recorded_at=NULL,lease_owner=NULL,lease_expires_at=NULL,cancel_requested=false,
+        cancel_auto_continue=false,failure_code=NULL,completed_at=now(),updated_at=now(),revision=revision+1
+        WHERE account_id=$1 AND id=$2`, [f.accountId, c.entryId]);
       expect((await pool!.query("SELECT memory_draft_target_person_id,objective FROM conversation_queue_entries WHERE account_id=$1 AND id=$2",
         [f.accountId, c.entryId])).rows[0]).toEqual({ memory_draft_target_person_id: null, objective: null });
     } finally { await removeFixture(f); }
