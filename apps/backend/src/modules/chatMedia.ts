@@ -217,9 +217,16 @@ function unsettledUpload(): ApiError {
   return new ApiError(503, "CHAT_MEDIA_WRITE_UNSETTLED", "The image upload has not finished. Its storage result must be reconciled before retrying or deleting.");
 }
 
+function assertMediaStorageOwner(row: ChatMediaRow, accountId: string): void {
+  if (row.object_key !== `${accountId}/${row.subject_id}/${row.id}`) {
+    throw new ApiError(503, "CHAT_MEDIA_STORAGE_OWNER_MISMATCH", "The image storage key does not match its recorded owner.");
+  }
+}
+
 async function settleCompletedUpload(
   client: PoolClient, auth: AuthContext, storage: ChatMediaStorage, row: ChatMediaRow,
 ): Promise<boolean> {
+  assertMediaStorageOwner(row, auth.accountId);
   if (!row.upload_state || row.upload_state === "idle") return true;
   if (storage.provider !== "s3" || row.storage_provider !== "s3" || !storage.verifyUpload ||
       !row.upload_attempt_id || !row.upload_storage_scope || row.upload_storage_scope !== storage.labScopeID) return false;
@@ -359,6 +366,7 @@ export async function getChatMediaContent(
   mediaId: string,
 ): Promise<StoredChatMedia> {
   const row = await mediaRow(pool, auth.accountId, mediaId);
+  assertMediaStorageOwner(row, auth.accountId);
   if (row.status !== "ready") {
     throw new ApiError(404, "CHAT_MEDIA_UNAVAILABLE", "The Chat image is not available.");
   }

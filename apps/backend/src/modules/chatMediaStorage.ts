@@ -140,12 +140,22 @@ export class S3ChatMediaStorage implements ChatMediaStorage {
 
   async purgeForLab(objectKey: string): Promise<void> { await this.purge(objectKey); }
 
+  private async assertObjectAbsent(objectKey: string): Promise<void> {
+    try {
+      await this.client.send(new HeadObjectCommand({ Bucket: this.bucket, Key: objectKey }));
+    } catch (error) {
+      if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return;
+      throw error;
+    }
+    throw new Error("Media object remains after version cleanup.");
+  }
+
   async purge(objectKey: string): Promise<void> {
     // Freeze a complete listing before deleting, so continuation never relies
     // on a version marker that this operation has already removed.
     for (let pass = 0; pass < 3; pass++) {
       const { objects } = await this.exactVersions(objectKey);
-      if (objects.length === 0) return;
+      if (objects.length === 0) { await this.assertObjectAbsent(objectKey); return; }
       for (let offset = 0; offset < objects.length; offset += 1000) {
         const result = await this.client.send(new DeleteObjectsCommand({
           Bucket: this.bucket, Delete: { Objects: objects.slice(offset, offset + 1000), Quiet: true },
@@ -153,7 +163,7 @@ export class S3ChatMediaStorage implements ChatMediaStorage {
         if (result.Errors?.length) throw new Error("Some media versions could not be deleted.");
       }
     }
-    if ((await this.exactVersions(objectKey)).objects.length === 0) return;
+    if ((await this.exactVersions(objectKey)).objects.length === 0) { await this.assertObjectAbsent(objectKey); return; }
     throw new Error("Media version cleanup remains incomplete.");
   }
 

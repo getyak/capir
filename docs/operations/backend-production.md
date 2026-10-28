@@ -98,7 +98,7 @@ metadata is unusable and should be quarantined rather than exposed.
 
 ### Interrupted Chat media uploads and historical deletion inventory
 
-Chat uploads commit a database-owned attempt before dispatching one PUT. Concurrent
+Chat uploads commit a database-owned attempt before dispatching one PUT. Byte operations reject a stored key that differs from its exact account/person/media ownership path. Concurrent
 uploads and deletion share the account-scoped media row lock. A remote error or a
 process interruption leaves the attempt unresolved; elapsed time never proves that
 a remote writer stopped. No deletion receipt is issued while an attempt remains
@@ -153,7 +153,7 @@ with a new full version/marker readback before recording completion.
 The adapter follows both S3 pagination markers and snapshots a complete exact-key
 inventory before deleting batches of at most 1,000. A repeated/missing cursor,
 more than 1,000 listing pages, a batch error, or bytes still present after bounded
-verification fails closed. Prefix siblings are never deletion targets. See
+verification fails closed. Successful purge requires a fresh empty version/marker inventory and HEAD 404. Prefix siblings are never deletion targets. See
 [ListObjectVersions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectVersions.html).
 
 During rollout, drain all previous API processes before accepting new media

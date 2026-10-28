@@ -54,7 +54,10 @@ describe("S3 Chat media storage", () => {
       {},
       { Versions: [], DeleteMarkers: [] },
     ];
-    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async () => responses.shift() as never);
+    const send = vi.spyOn(S3Client.prototype, "send").mockImplementation(async command => {
+      if (command instanceof HeadObjectCommand) throw { $metadata: { httpStatusCode: 404 } };
+      return responses.shift() as never;
+    });
     const storage = new S3ChatMediaStorage("private-chat-media", {
       endpoint: "https://s3.example.test", forcePathStyle: true, region: "test-1",
     });
@@ -78,6 +81,7 @@ describe("S3 Chat media storage", () => {
         return { Versions: [...page, sibling], IsTruncated: offset + 1000 < versions.length,
           NextKeyMarker: key, NextVersionIdMarker: page.at(-1)?.VersionId } as never;
       }
+      if (command instanceof HeadObjectCommand) throw { $metadata: { httpStatusCode: 404 } };
       if (command instanceof DeleteObjectsCommand) {
         const deleted = new Set(command.input.Delete?.Objects?.map(value => value.VersionId));
         expect(command.input.Delete?.Objects?.every(value => value.Key === key)).toBe(true);
@@ -121,6 +125,9 @@ describe("S3 Chat media storage", () => {
   it("sends only one external PUT even when S3 returns a retryable response", async () => {
     vi.stubEnv("AWS_ACCESS_KEY_ID", "synthetic-only");
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "synthetic-only");
+    vi.stubEnv("AWS_SESSION_TOKEN", "synthetic-only");
+    vi.stubEnv("AWS_PROFILE", undefined);
+    vi.stubEnv("AWS_DEFAULT_PROFILE", undefined);
     vi.stubEnv("AWS_MAX_ATTEMPTS", "3");
     let requests = 0;
     const server = createServer((_request, response) => {
@@ -138,6 +145,17 @@ describe("S3 Chat media storage", () => {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     }
   }, 15_000);
+
+
+  it("does not acknowledge an empty version listing while HEAD still finds a current object", async () => {
+    vi.spyOn(S3Client.prototype, "send").mockImplementation(async command => {
+      if (command instanceof ListObjectVersionsCommand) return { Versions: [], DeleteMarkers: [] } as never;
+      if (command instanceof HeadObjectCommand) return { ContentLength: 1 } as never;
+      throw new Error("Unexpected storage command");
+    });
+    const storage = new S3ChatMediaStorage("synthetic", { region: "test-1", forcePathStyle: true });
+    await expect(storage.purge("account/person/media")).rejects.toThrow("remains");
+  });
 
 });
 

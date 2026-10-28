@@ -20,7 +20,7 @@ Files: `apps/backend/src/modules/chatMedia.ts`, `chatMediaStorage.ts`, `labWorks
 - [x] Commit upload admission before external PUT, recheck exact attempt on completion, reject unresolved attempts and provider drift, and keep deletion idempotent only after purge succeeds.
 - [x] Add exact S3 attempt metadata and single-attempt transport; reconcile only a matching full-size/type HEAD receipt from the same store. Unknown or absent receipts cannot be cleared by age.
 - [x] Cover simultaneous clients, deletion first, upload first, late bytes, retry, duplicate, uploader/account isolation, scope changes, and process recovery using a disposable PostgreSQL database and controlled object storage.
-- [ ] Verify exact-key pagination through every version and delete marker. Retain bounded fail-closed behavior for broken pagination or incomplete delete responses.
+- [x] Verify exact-key pagination through every version and delete marker. Retain bounded fail-closed behavior for broken pagination or incomplete delete responses.
 
 ## Task 2: Read-only historical inventory and recovery playbook
 
@@ -36,9 +36,12 @@ Files: dedicated media-maintenance module/CLI and tests; `docs/operations/backen
 
 - RED: real PostgreSQL race returns `deleted` while PUT is blocked; writer-process termination reproduction also returns a false deletion receipt on main.
 - RED: 21,001-version purge exceeds the old 20-pass limit; truncated empty listing falsely succeeds; missing PUT attempt metadata; default SDK issues three requests on retryable S3 errors.
-- GREEN: current dependency installation, 31 focused tests (including real database/child-process interruption), dependency builds and backend typecheck passed. A separately built maintenance CLI runs help and a synthetic metadata-only inventory.
+- GREEN: current dependency installation, 34 focused tests (including real database/child-process interruption), dependency builds and backend typecheck passed. A separately built maintenance CLI runs help and a synthetic metadata-only inventory.
 - Repository documentation and architecture checks pass after appending migration 110 and advancing only the reviewed frozen manifest count/digest. Boundary checker tests: 13/13.
-- Full single-worker backend suite is running; independent review and GitHub CI remain pending.
+- First full backend suite: 1,320 passed / 718 skipped. A subsequent run had two unchanged Person detail tests exceed their 5-second timeout; their untouched focused rerun passes 3/3. Both results are retained. Final full-suite run is pending after the HEAD readback and exact-owner-key strengthening; independent root review and GitHub CI are pending.
+- Added authenticated HTTP evidence: POST stage, blocked PUT, DELETE 503, completed PUT, DELETE 200, GET 404. A corrupted cross-owner key now fails before PUT/GET/DELETE touches storage.
+- CI's first repository-policy failure identified the crash fixture's new credential-shaped variable. The child now explicitly receives the already-owned `DATABASE_URL` for the disposable database; the existing policy test passes unchanged.
+- Built CLI synthetic S3 dry-run: 57 tombstones considered, 11 exact trusted keys listed, 11 synthetic versions and 11 synthetic delete markers, zero write requests; output contains no raw UUID/key. These are disposable fixtures, not production counts.
 - Local install completed; the unrelated Darwin provider executable's large optional download timed out. This is not native-provider or deployment verification.
 - The user subsequently requested PR-only delivery while the resident backend Mac is offline. Keep the PR open, do not merge/deploy, and report historical production inventory and live behavior as blocked by that unavailable host.
 - External evidence: `/Users/xiongxinwei/.codex/artifacts/online-remediation-20261028/capir-data-handoff.md`. No production object bytes were read or permanently deleted.

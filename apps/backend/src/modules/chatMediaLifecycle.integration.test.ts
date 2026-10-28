@@ -6,7 +6,7 @@ import { Pool } from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 
 import type { AuthContext } from "./auth.js";
-import { createChatMediaAsset, deleteChatMediaAsset, reconcileChatMediaUpload, uploadChatMediaContent } from "./chatMedia.js";
+import { createChatMediaAsset, deleteChatMediaAsset, getChatMediaContent, reconcileChatMediaUpload, uploadChatMediaContent } from "./chatMedia.js";
 import { inspectDeletedChatMedia, reconcileStoppedLabUpload } from "./chatMediaMaintenance.js";
 import type { ChatMediaStorage } from "./chatMediaStorage.js";
 
@@ -211,7 +211,7 @@ describe.skipIf(!pool)("Chat media upload/delete lifecycle", () => {
     const { auth, media } = await fixture(storage);
     const child = fork(new URL("./testSupport/chatMediaUploadCrash.mjs", import.meta.url), {
       execArgv: ["--import", createRequire(import.meta.url).resolve("tsx")],
-      env: { ...process.env, CHAT_MEDIA_CRASH_CASE: JSON.stringify({ auth, mediaId: media.id }) },
+      env: { ...process.env, DATABASE_URL: databaseURL!, CHAT_MEDIA_CRASH_CASE: JSON.stringify({ auth, mediaId: media.id }) },
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -237,5 +237,65 @@ describe.skipIf(!pool)("Chat media upload/delete lifecycle", () => {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     }
   }, 30_000);
+
+
+  it("enforces the fence through authenticated HTTP upload/delete routes", async () => {
+    const { buildApp } = await import("../app.js");
+    const started = deferred(), finish = deferred();
+    let present = false;
+    const storage: ChatMediaStorage = { provider: "local", async put() { started.resolve(); await finish.promise; present = true; },
+      async delete() { present = false; }, async get() { return { body: new Uint8Array([1]), contentType: "image/png" }; } };
+    const { auth, media } = await fixture(storage);
+    const scope = (await pool!.query("SELECT subject_id,assignment_id FROM chat_media_assets WHERE id=$1", [media.id])).rows[0];
+    const app = await buildApp({ pool: pool!, chatMediaStorage: storage,
+      config: { databaseUrl: databaseURL!, host: "127.0.0.1", port: 0, allowedOrigins: [], appleSignInAudiences: [],
+        appleSignInEnabled: false, passwordAuthEnabled: false, passwordRegistrationEnabled: false, simulatedAuthEnabled: true,
+        internalLabEnabled: false, retentionSweepIntervalMs: 60_000, sessionTtlSeconds: 3600 },
+      remoteChatProvider: null, privateConversationProvider: null, personResearchProvider: null, screenshotContact: null,
+      conversationQueueWorkerEnabled: false, labJobWorkerEnabled: false,
+    });
+    try {
+      const login = await app.inject({ method: "POST", url: "/v1/auth/simulated-login", payload: {
+        account_slug: `media-${auth.accountId}`, user_email: `${auth.userId}@example.test`, client_label: "synthetic-media-proof",
+      } });
+      expect(login.statusCode).toBe(200);
+      const authorization = `Bearer ${login.json().access_token}`;
+      const staged = await app.inject({ method: "POST", url: "/v1/chat/media", headers: { authorization }, payload: {
+        person_id: scope.subject_id, relationship_context_id: scope.assignment_id, idempotency_key: randomUUID(),
+        file_name: "synthetic.png", media_type: "image/png", byte_size: 1,
+      } });
+      expect(staged.statusCode).toBe(201);
+      const id = staged.json().id as string;
+      expect((await app.inject({ method: "DELETE", url: `/v1/chat/media/${id}` })).statusCode).toBe(401);
+      const uploading = app.inject({ method: "PUT", url: `/v1/chat/media/${id}/content`,
+        headers: { authorization, "content-type": "image/png" }, payload: Buffer.from([1]) }).then(response => response);
+      await started.promise;
+      try {
+        const deleting = await app.inject({ method: "DELETE", url: `/v1/chat/media/${id}`, headers: { authorization } });
+        expect(deleting.statusCode).toBe(503);
+        expect(deleting.json().error.code).toBe("CHAT_MEDIA_WRITE_UNSETTLED");
+      } finally { finish.resolve(); }
+      expect((await uploading).statusCode).toBe(200);
+      expect((await app.inject({ method: "DELETE", url: `/v1/chat/media/${id}`, headers: { authorization } })).statusCode).toBe(200);
+      expect(present).toBe(false);
+      expect((await app.inject({ method: "GET", url: `/v1/chat/media/${id}/content`, headers: { authorization } })).statusCode).toBe(404);
+    } finally { finish.resolve(); await app.close(); }
+  }, 60_000);
+
+
+  it("rejects a corrupted cross-owner object key before upload, read or deletion reaches storage", async () => {
+    let storageCalls = 0;
+    const storage: ChatMediaStorage = { provider: "local", async put() { storageCalls++; }, async delete() { storageCalls++; },
+      async get() { storageCalls++; return { body: new Uint8Array([1]), contentType: "image/png" }; } };
+    const { auth, media } = await fixture(storage);
+    const other = await fixture(storage);
+    await pool!.query("UPDATE chat_media_assets SET object_key=$2 WHERE id=$1", [media.id, `${other.auth.accountId}/another-person/${media.id}`]);
+    await expect(uploadChatMediaContent(secondPool!, auth, storage, media.id, new Uint8Array([1]), "image/png"))
+      .rejects.toMatchObject({ code: "CHAT_MEDIA_STORAGE_OWNER_MISMATCH" });
+    await expect(deleteChatMediaAsset(secondPool!, auth, storage, media.id)).rejects.toMatchObject({ code: "CHAT_MEDIA_STORAGE_OWNER_MISMATCH" });
+    await pool!.query("UPDATE chat_media_assets SET status='ready' WHERE id=$1", [media.id]);
+    await expect(getChatMediaContent(secondPool!, auth, storage, media.id)).rejects.toMatchObject({ code: "CHAT_MEDIA_STORAGE_OWNER_MISMATCH" });
+    expect(storageCalls).toBe(0);
+  });
 
 });

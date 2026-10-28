@@ -2,7 +2,7 @@ import { Pool } from "pg";
 import { uploadChatMediaContent } from "../chatMedia.js";
 
 const fixture = JSON.parse(process.env.CHAT_MEDIA_CRASH_CASE);
-const database = new URL(process.env.CHAT_MEDIA_TEST_DATABASE_URL);
+const database = new URL(process.env.DATABASE_URL);
 if (!["127.0.0.1", "localhost"].includes(database.hostname)) throw new Error("Disposable database required");
 const pool = new Pool({ connectionString: database.href });
 const storage = {
