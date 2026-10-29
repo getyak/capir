@@ -21,6 +21,7 @@ import {
   revokeMcpClientGrant,
 } from "./mcpGrants.js";
 import { loadMcpEncryptionKey } from "./mcpSecurity.js";
+import { createWorkspaceMcpConnections } from "./mcpAgentTools.js";
 
 /**
  * Synthetic integration coverage. Uses an isolated PostgreSQL database and a
@@ -79,17 +80,21 @@ if (!encryptionKey) throw new Error("synthetic key");
 const publicOrigin = "https://app.example.test";
 const servers: http.Server[] = [];
 
-async function startSyntheticMcpServer(): Promise<{
+async function startSyntheticMcpServer(paginatedTools?: Record<string, unknown>[]): Promise<{
   origin: string;
   close: () => Promise<void>;
+  methods: string[];
 }> {
+  const methods: string[] = [];
   const server = http.createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
       id?: number;
       method: string;
+      params?: { cursor?: string };
     };
+    methods.push(body.method);
     if (body.method === "initialize") {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
@@ -115,7 +120,10 @@ async function startSyntheticMcpServer(): Promise<{
       JSON.stringify({
         id: body.id,
         jsonrpc: "2.0",
-        result: {
+        result: paginatedTools ? {
+          tools: body.params?.cursor === "synthetic-page-2" ? paginatedTools.slice(30) : paginatedTools.slice(0, 30),
+          ...(body.params?.cursor ? {} : { nextCursor: "synthetic-page-2" }),
+        } : {
           tools: [
             { annotations: { readOnlyHint: true }, description: "one", name: "one" },
           ],
@@ -127,6 +135,7 @@ async function startSyntheticMcpServer(): Promise<{
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
   return {
+    methods,
     close: () =>
       new Promise<void>((resolve) => server.close(() => resolve())),
     origin: `http://127.0.0.1:${port}`,
@@ -254,6 +263,35 @@ afterAll(async () => {
 });
 
 describe.skipIf(!pool)("MCP extensions persistence", () => {
+  it("discovers tool 40 through real paginated HTTP, persists it, and reads its complete schema", async () => {
+    const schema = { type: "object", properties: { max_tokens: { type: "integer", enum: [128, 256] },
+      prompt: { type: "string", description: "Long schema annotation. ".repeat(220) } }, required: ["prompt"] };
+    const server = await startSyntheticMcpServer(Array.from({ length: 40 }, (_, index) => ({
+      name: `tool_${index + 1}`, description: `Synthetic tool ${index + 1}`, inputSchema: schema,
+    })));
+    const dependencies = { allowedOrigins: [server.origin], encryptionKey,
+      resolver: async () => [{ address: "127.0.0.1", family: 4 }] };
+    const created = await createMcpConnection(pool!, auth, {
+      friendly_name: "Paginated discovery fixture", server_url: `${server.origin}/mcp`, idempotency_key: randomUUID() }, dependencies);
+    const adapter = createWorkspaceMcpConnections({ pool: pool!, auth, sessionID: null,
+      messageID: randomUUID(), dependencies });
+    const connected = await adapter.handle({ operation: "connect", connection_id: created.connection.id });
+    expect(connected).toMatchObject({ ok: true, data: { tools_count: 40, tools_complete: false, next_tool_offset: 30 } });
+    expect(server.methods).toEqual(["initialize", "notifications/initialized", "tools/list", "tools/list"]);
+    const next = await adapter.handle({ operation: "list", connection_id: created.connection.id, tool_offset: 30 });
+    expect(next).toMatchObject({ ok: true, data: { connections: [{ tools_complete: true, next_tool_offset: null,
+      tools: expect.arrayContaining([expect.objectContaining({ name: "tool_40" })]) }] } });
+    const read = await adapter.handle({ operation: "read_tool", connection_id: created.connection.id, tool_name: "tool_40" });
+    expect(read.ok).toBe(true);
+    const schemaText = (read.data as { tool: { input_schema: string } }).tool.input_schema;
+    expect(schemaText.length).toBeGreaterThan(4_000);
+    expect(JSON.parse(schemaText)).toEqual(schema);
+    const foreign = createWorkspaceMcpConnections({ pool: pool!, auth: other, sessionID: null, messageID: randomUUID(), dependencies });
+    expect(await foreign.handle({ operation: "read_tool", connection_id: created.connection.id, tool_name: "tool_40" }))
+      .toMatchObject({ ok: false, error: { code: "MCP_CALL_TARGET_NOT_FOUND" } });
+    expect(server.methods).not.toContain("tools/call");
+  });
+
   it("stores connections per account without ever returning the credential", async () => {
     const created = await createMcpConnection(
       pool!,

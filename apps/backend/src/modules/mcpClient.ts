@@ -448,6 +448,9 @@ export async function performMcpToolCall(
       if (!Array.isArray(result?.tools)) {
         return toolCallFailure("MCP_RESPONSE_INVALID", false);
       }
+      if (result.nextCursor !== undefined && typeof result.nextCursor !== "string") {
+        return toolCallFailure("MCP_RESPONSE_INVALID", false);
+      }
       for (const raw of result.tools) {
         const tool = normalizeTool(raw, input.bearerSecret);
         if (tool?.name === input.toolName) found = true;
@@ -665,6 +668,7 @@ export async function performMcpHandshake(
         | { nextCursor?: unknown; tools?: unknown }
         | undefined;
       if (!Array.isArray(result?.tools)) return failure("MCP_RESPONSE_INVALID");
+      if (result.nextCursor !== undefined && typeof result.nextCursor !== "string") return failure("MCP_RESPONSE_INVALID");
       const listed = result.tools;
       for (const raw of listed) {
         const tool = normalizeTool(raw, input.bearerSecret);

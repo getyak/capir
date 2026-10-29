@@ -3,11 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Pool } from "pg";
 import type { McpConnection } from "@talent-signal/contracts";
 import { createWorkspaceMcpConnections } from "./mcpAgentTools.js";
-import { listMcpConnections } from "./mcpConnections.js";
+import { connectMcpConnection, listMcpConnections } from "./mcpConnections.js";
 import { listMcpInteractions } from "./mcpInteractions.js";
 
 vi.mock("./mcpConnections.js", async original => ({
-  ...await original<typeof import("./mcpConnections.js")>(), listMcpConnections: vi.fn(),
+  ...await original<typeof import("./mcpConnections.js")>(), listMcpConnections: vi.fn(), connectMcpConnection: vi.fn(),
 }));
 vi.mock("./mcpInteractions.js", async original => ({
   ...await original<typeof import("./mcpInteractions.js")>(), listMcpInteractions: vi.fn(),
@@ -57,6 +57,117 @@ describe("workspace MCP discovery projection", () => {
     const data = result.data as { tool: { input_schema: string }; connection_revision: number };
     expect(JSON.parse(data.tool.input_schema)).toEqual(schema);
     expect(data.connection_revision).toBe(4);
+  });
+
+  it("reports omitted tools after connecting and can page to the last tool", async () => {
+    vi.mocked(connectMcpConnection).mockResolvedValue({ connection } as never);
+    const current = adapter();
+    const connected = await current.handle({ operation: "connect", connection_id: connectionId });
+    expect(connected.data).toMatchObject({
+      tools_count: 40, tools_complete: false, next_tool_offset: 30, connection_revision: 4,
+    });
+    expect((connected.data as { tools: unknown[] }).tools).toHaveLength(30);
+    const remaining = await current.handle({ operation: "list", connection_id: connectionId,
+      tool_offset: (connected.data as { next_tool_offset: number }).next_tool_offset });
+    expect(remaining.data).toMatchObject({ connections: [{ tools_complete: true,
+      tools: expect.arrayContaining([expect.objectContaining({ name: "generate_image" })]) }] });
+  });
+
+  it("preserves token and credential property schemas while redacting sensitive annotations", async () => {
+    const original = { type: "object", properties: {
+      max_tokens: { type: "integer", minimum: 1, enum: [128, 256] },
+      api_key: { type: "string", default: "synthetic-private-default" },
+      nested: { type: "object", properties: { secret: { type: "string", examples: ["private-example"] } } },
+    }, required: ["max_tokens", "api_key"], additionalProperties: false };
+    vi.mocked(listMcpConnections).mockResolvedValue({ connections: [{ ...connection,
+      tools: [{ ...tools[0], input_schema: JSON.stringify(original) }] }] } as never);
+    const result = await adapter().handle({ operation: "read_tool", connection_id: connectionId, tool_name: tools[0]!.name });
+    expect(result.ok).toBe(true);
+    expect(JSON.parse((result.data as { tool: { input_schema: string } }).tool.input_schema)).toEqual({
+      ...original, properties: { ...original.properties,
+        api_key: { type: "string", default: "[redacted]" },
+        nested: { type: "object", properties: { secret: { type: "string", examples: ["[redacted]"] } } },
+      },
+    });
+  });
+
+  it.each(["{broken", "null", '"not a schema"'])("does not call an invalid schema complete: %s", async input_schema => {
+    vi.mocked(listMcpConnections).mockResolvedValue({ connections: [{ ...connection,
+      tools: [{ ...tools[0], input_schema }] }] } as never);
+    expect(await adapter().handle({ operation: "read_tool", connection_id: connectionId, tool_name: tools[0]!.name }))
+      .toMatchObject({ ok: false, error: { code: "MCP_TOOL_SCHEMA_UNAVAILABLE" } });
+  });
+
+  it("keeps definition names and references, including inert __proto__ properties", async () => {
+    const original = JSON.parse('{"type":"object","properties":{"api_key":{"$ref":"#/$defs/credential"},"__proto__":{"type":"string"}},"$defs":{"credential":{"type":"string"}},"required":["api_key","__proto__"]}');
+    vi.mocked(listMcpConnections).mockResolvedValue({ connections: [{ ...connection,
+      tools: [{ ...tools[0], input_schema: JSON.stringify(original) }] }] } as never);
+    const result = await adapter().handle({ operation: "read_tool", connection_id: connectionId, tool_name: tools[0]!.name });
+    expect(result.ok).toBe(true);
+    expect(JSON.parse((result.data as { tool: { input_schema: string } }).tool.input_schema)).toEqual(original);
+  });
+
+  it("refuses a sensitive literal constraint rather than inventing different valid arguments", async () => {
+    vi.mocked(listMcpConnections).mockResolvedValue({ connections: [{ ...connection,
+      tools: [{ ...tools[0], input_schema: JSON.stringify({ type: "object",
+        properties: { api_key: { type: "string", const: "synthetic-private-literal" } } }) }] }] } as never);
+    const result = await adapter().handle({ operation: "read_tool", connection_id: connectionId, tool_name: tools[0]!.name });
+    expect(result).toMatchObject({ ok: false, error: { code: "MCP_TOOL_SCHEMA_UNAVAILABLE" } });
+    expect(JSON.stringify(result)).not.toContain("synthetic-private-literal");
+  });
+
+  it.each(["accessToken", "clientSecret", "api_key"])("redacts all annotation shapes under %s", async field => {
+    const original = { type: "object", properties: { [field]: { type: "string", description: "private-short-value",
+      default: { value: "private-short-value" }, example: 123456, examples: [{ value: "private-short-value" }, 123456] } } };
+    vi.mocked(listMcpConnections).mockResolvedValue({ connections: [{ ...connection,
+      tools: [{ ...tools[0], input_schema: JSON.stringify(original) }] }] } as never);
+    const result = await adapter().handle({ operation: "read_tool", connection_id: connectionId, tool_name: tools[0]!.name });
+    expect(result.ok).toBe(true);
+    const projected = JSON.parse((result.data as { tool: { input_schema: string } }).tool.input_schema);
+    expect(projected.properties[field]).toEqual({ type: "string", description: "[redacted]", default: "[redacted]",
+      example: "[redacted]", examples: ["[redacted]", "[redacted]"] });
+    expect(JSON.stringify(result)).not.toContain("private-short-value");
+    expect(JSON.stringify(result)).not.toContain("123456");
+  });
+
+  it.each([false, true])("propagates credential sensitivity through local references (literal=%s)", async literal => {
+    const original = { type: "object", properties: { api_key: { $ref: "#/$defs/Value" } },
+      $defs: { Value: { type: "string", ...(literal ? { const: "private-short-value" } : { default: "private-short-value" }) } } };
+    vi.mocked(listMcpConnections).mockResolvedValue({ connections: [{ ...connection,
+      tools: [{ ...tools[0], input_schema: JSON.stringify(original) }] }] } as never);
+    const result = await adapter().handle({ operation: "read_tool", connection_id: connectionId, tool_name: tools[0]!.name });
+    if (literal) expect(result).toMatchObject({ ok: false, error: { code: "MCP_TOOL_SCHEMA_UNAVAILABLE" } });
+    else {
+      expect(result.ok).toBe(true);
+      expect(JSON.parse((result.data as { tool: { input_schema: string } }).tool.input_schema).$defs.Value)
+        .toEqual({ type: "string", default: "[redacted]" });
+    }
+    expect(JSON.stringify(result)).not.toContain("private-short-value");
+  });
+
+  it("treats object-valued constraints as literal data and preserves safe values", async () => {
+    const original = { type: "object", properties: { payload: { type: "object", const: { max_tokens: 128 },
+      enum: [{ max_tokens: 128 }, { max_tokens: 256 }] } } };
+    vi.mocked(listMcpConnections).mockResolvedValue({ connections: [{ ...connection,
+      tools: [{ ...tools[0], input_schema: JSON.stringify(original) }] }] } as never);
+    const result = await adapter().handle({ operation: "read_tool", connection_id: connectionId, tool_name: tools[0]!.name });
+    expect(result.ok).toBe(true);
+    expect(JSON.parse((result.data as { tool: { input_schema: string } }).tool.input_schema)).toEqual(original);
+  });
+
+  it.each(["const", "default"])("handles nested camelCase credentials in %s as data", async keyword => {
+    const original = { type: "object", properties: { payload: { type: "object", additionalProperties: true,
+      [keyword]: { accessToken: "private-short-value" } } } };
+    vi.mocked(listMcpConnections).mockResolvedValue({ connections: [{ ...connection,
+      tools: [{ ...tools[0], input_schema: JSON.stringify(original) }] }] } as never);
+    const result = await adapter().handle({ operation: "read_tool", connection_id: connectionId, tool_name: tools[0]!.name });
+    if (keyword === "const") expect(result).toMatchObject({ ok: false, error: { code: "MCP_TOOL_SCHEMA_UNAVAILABLE" } });
+    else {
+      expect(result.ok).toBe(true);
+      expect(JSON.parse((result.data as { tool: { input_schema: string } }).tool.input_schema).properties.payload.default)
+        .toEqual({ accessToken: "[redacted]" });
+    }
+    expect(JSON.stringify(result)).not.toContain("private-short-value");
   });
 
   it.each(["disconnected", "unauthorized", "failed"])("does not offer a cached schema as callable after %s", async status => {

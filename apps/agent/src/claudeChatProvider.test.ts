@@ -614,6 +614,7 @@ describe("bounded tool context opt-in policy", () => {
   it("opts in with a deferred admitted catalog only for ordinary-text workspace conversation", async () => {
     const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
       expect(harnessRequest.toolDiscovery).toBe("bounded");
+      expect(JSON.parse(harnessRequest.context!).tool_context).toEqual({ mode: "bounded", reason: "ordinary_text", discovery_tool: "ToolSearch" });
       const essential = new Set(["read_response_preference", "memory_review_recall", "memory_review_propose", "mcp_connections"]);
       const deferred = harnessRequest.tools.filter(tool => !essential.has(tool.name));
       expect(deferred.map(tool => tool.name).sort()).toEqual(["contact_workspace_propose_create", "contact_workspace_propose_update",
@@ -633,6 +634,7 @@ describe("bounded tool context opt-in policy", () => {
     const bytes = Buffer.from([137, 80, 78, 71, 1, 2, 3, 4]);
     const execute = vi.fn(async (_configuration: unknown, harnessRequest: ClaudeHarnessRequest) => {
       expect(harnessRequest.toolDiscovery).toBeUndefined();
+      expect(JSON.parse(harnessRequest.context!).tool_context).toEqual({ mode: "eager", reason: kind === "json" ? "json_output" : "image_input", discovery_tool: null });
       for (const tool of harnessRequest.tools) expect(tool.alwaysLoad ?? false).toBe(true);
       return { ...outcome, text: kind === "json" ? '{"outcome":"no_action","reason_code":"x","reason":"x","missing_evidence_refs":[]}' : outcome.text };
     });
