@@ -1,12 +1,20 @@
 import XCTest
+import UIKit
 
 @MainActor
 final class LabDisplayUITests: XCTestCase {
-    private func launch(accessibility: Bool = false) -> XCUIApplication {
+    override func setUpWithError() throws { continueAfterFailure = false }
+
+    private func launch(accessibility: Bool = false, unreadFixture: String? = nil, headerFixture: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["--preview-workspace", "-talent-signal.interface-language", "en", "-talent-signal.display.appearance", "light"]
-        if accessibility { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        app.launchArguments = ["--preview-workspace", "-talent-signal.interface-language", "en", "-talent-signal.display.appearance", "light",
+                               "-talent-signal.display.text-size", "system"]
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", accessibility
+            ? UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue : UIContentSizeCategory.large.rawValue]
         app.launchEnvironment["TS_IOS_UI_TEST_DISPLAY_PROBE"] = "true"
+        app.launchEnvironment["TS_IOS_UI_TEST_PREVIEW_WORKSPACE"] = "true"
+        app.launchEnvironment["TS_IOS_UI_TEST_TODAY_UNREAD"] = unreadFixture
+        if headerFixture { app.launchEnvironment["TS_IOS_UI_TEST_HEADER_GEOMETRY"] = "true" }
         app.launch()
         return app
     }
@@ -19,12 +27,16 @@ final class LabDisplayUITests: XCTestCase {
     }
     private func reveal(_ element: XCUIElement, _ app: XCUIApplication, above: Bool = false) {
         if element.isHittable { return }
+        // Scope swipes to the visible Form/ScrollView. A whole-screen downward
+        // gesture at AX sizes can dismiss the enclosing Lab sheet instead.
+        let surfaces = app.scrollViews.allElementsBoundByIndex + app.collectionViews.allElementsBoundByIndex
+        let surface = surfaces.last(where: { $0.isHittable }) ?? app
         for _ in 0..<18 {
             let targetIsAbove = element.exists && !element.frame.isEmpty ? element.frame.midY < app.frame.midY : above
-            if targetIsAbove { app.swipeDown() } else { app.swipeUp() }
+            if targetIsAbove { surface.swipeDown() } else { surface.swipeUp() }
             if element.isHittable { return }
         }
-        for _ in 0..<18 { if above { app.swipeUp() } else { app.swipeDown() }; if element.isHittable { return } }
+        for _ in 0..<18 { if above { surface.swipeUp() } else { surface.swipeDown() }; if element.isHittable { return } }
         XCTFail("Unreachable control: \(element.identifier)")
     }
     private func choose(_ identifier: String, _ value: String, _ app: XCUIApplication, above: Bool = false) {
@@ -90,6 +102,104 @@ final class LabDisplayUITests: XCTestCase {
         openPreview(app)
         XCTAssertTrue(app.descendants(matching: .any)["workspace-refresh-notice"].firstMatch.waitForExistence(timeout: 5))
         capture("lab-appearance-sessions-stale")
+    }
+
+    func testActualTodayUnreadRowKeepsContextCountAndExactSessionCallback() {
+        let app = launch(unreadFixture: "relationship")
+        openAppearance(app)
+        choose("lab-appearance-page", "Today", app)
+        openPreview(app)
+        let probe = app.descendants(matching: .any)["lab-preview-effective-display"].firstMatch
+        XCTAssertTrue(probe.waitForExistence(timeout: 5))
+        XCTAssertTrue((probe.value as? String)?.hasPrefix("en|light|large|") == true)
+        let row = app.buttons["today-unread-session"]
+        reveal(row, app)
+        XCTAssertTrue(row.label.contains("Alexandra Chen / 周琳"))
+        XCTAssertTrue(row.label.contains("Synthetic design collaboration / 跨地区设计协作"))
+        XCTAssertTrue(row.label.contains("1 more unread session"))
+        XCTAssertGreaterThanOrEqual(row.frame.height, 44)
+        capture("Actual Today unread row light context and count")
+        row.tap()
+        XCTAssertTrue(app.alerts.staticTexts["90000000-0000-4000-8000-000000000001"].waitForExistence(timeout: 5),
+                      "Two Sessions share a participant; activation must preserve the exact Session identity")
+        app.alerts.buttons.firstMatch.tap()
+        closePreview(app)
+    }
+
+    func testActualTodayIdentityReviewRowAtChineseDarkAX5KeepsPrivateDraftOut() {
+        let app = launch(accessibility: true, unreadFixture: "identity-review")
+        openAppearance(app)
+        choose("lab-appearance-page", "Today", app)
+        choose("lab-display-language", "简体中文", app)
+        choose("product-lab-theme", "Dark", app, above: true)
+        let motion = app.switches["lab-display-motion"]
+        reveal(motion, app)
+        if motion.value as? String != "1" {
+            // AX5 labels make the combined Switch row much wider than its
+            // native thumb. Activate the observed switch at the trailing end.
+            motion.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(motion.value as? String, "1")
+        openPreview(app)
+        app.assertEffectiveAccessibility5(identifier: "lab-preview-effective-display")
+        let probe = app.descendants(matching: .any)["lab-preview-effective-display"].firstMatch
+        XCTAssertTrue((probe.value as? String)?.hasPrefix("zh-Hans|dark|accessibility5|") == true)
+        XCTAssertEqual(probe.label, "effective-reduce-motion:on")
+        let row = app.buttons["today-unread-session"]
+        reveal(row, app)
+        XCTAssertTrue(row.label.contains("Unconfirmed synthetic identity"))
+        XCTAssertFalse(row.label.contains("PROTECTED_REVIEW_OBJECTIVE"))
+        XCTAssertFalse(row.label.contains("PROTECTED_REVIEW_DRAFT"))
+        XCTAssertFalse(row.label.contains("Synthetic design collaboration"))
+        XCTAssertGreaterThanOrEqual(row.frame.height, 44)
+        capture("Actual Today identity review row Chinese dark effective AX5")
+        row.tap()
+        XCTAssertTrue(app.alerts.staticTexts["90000000-0000-4000-8000-000000000001"].waitForExistence(timeout: 5))
+        app.alerts.buttons.firstMatch.tap()
+        closePreview(app)
+    }
+
+    func testActualHeaderSamplesZeroNarrowAndNormalWidthAndKeepsSelection() {
+        let app = launch(headerFixture: true)
+        openAppearance(app)
+        choose("lab-appearance-page", "Sessions", app)
+        openPreview(app)
+        let samples = app.staticTexts["header-geometry-samples"]
+        XCTAssertTrue(samples.waitForExistence(timeout: 5))
+        app.buttons["header-width-narrow"].tap()
+        waitForHeaderSamples(samples) { $0.contains { $0[0] > 0 && $0[0] < 96 } }
+        app.buttons["header-width-normal"].tap()
+        waitForHeaderSamples(samples) { $0.last.map { $0[0] >= 176 } == true }
+        let header = app.descendants(matching: .any)["header-geometry-fixture"].firstMatch
+        for destination in ["today", "sessions", "people", "meetings"] {
+            let button = header.buttons["archive-tab-\(destination)"]
+            XCTAssertGreaterThanOrEqual(button.frame.width + 0.001, 44)
+            XCTAssertGreaterThanOrEqual(button.frame.height + 0.001, 44)
+        }
+        header.buttons["archive-tab-sessions"].tap()
+        XCTAssertTrue(header.buttons["archive-tab-sessions"].isSelected)
+        capture("Actual header zero narrow normal numeric samples and native selection")
+        let value = (samples.value as? String) ?? samples.label
+        let receipt = XCTAttachment(string: value)
+        receipt.name = "Actual header numeric samples: input slot active compressed selected inactive"
+        receipt.lifetime = .keepAlways
+        add(receipt)
+        let rows = headerRows(value)
+        XCTAssertTrue(rows.contains { abs($0[0]) < 0.001 }, "The real header must receive the zero proposal")
+        XCTAssertTrue(rows.allSatisfy { $0.allSatisfy { $0.isFinite && $0 >= 0 } },
+                      "Actual geometry-derived fixed frames must be finite and nonnegative: \(value)")
+        closePreview(app)
+    }
+
+    private func headerRows(_ value: String) -> [[Double]] {
+        value.split(separator: ";").map { $0.split(separator: ",").compactMap { Double($0) } }.filter { $0.count == 6 }
+    }
+
+    private func waitForHeaderSamples(_ element: XCUIElement, predicate: @escaping ([[Double]]) -> Bool) {
+        let expected = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+            predicate(headerRows((element.value as? String) ?? element.label))
+        }, object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [expected], timeout: 5), .completed)
     }
     func testTemporaryAppDisplayRestoresAndPresetDoesNotAutoApply() {
         let app = launch()

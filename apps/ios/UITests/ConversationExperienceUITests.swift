@@ -63,6 +63,60 @@ final class ConversationExperienceUITests: XCTestCase {
         capture("Unavailable contact review retains its source and explicit recovery")
     }
 
+    func testActualReviewNoticeClosePreservesComposerDraftInLightMode() {
+        verifyActualReviewNoticeClose(accessibility: false)
+    }
+
+    func testActualReviewNoticeClosePreservesDraftAtChineseDarkEffectiveAX5() {
+        verifyActualReviewNoticeClose(accessibility: true)
+    }
+
+    private func verifyActualReviewNoticeClose(accessibility: Bool) {
+        app.launchEnvironment["TS_IOS_CONVERSATION_EXPERIENCE"] = "review-notice"
+        app.launchEnvironment["TS_IOS_UI_TEST_DISPLAY_PROBE"] = "true"
+        app.launchArguments += ["-talent-signal.display.text-size", "system"]
+        app.launchArguments += ["-UIPreferredContentSizeCategoryName", accessibility
+            ? UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue : UIContentSizeCategory.large.rawValue]
+        if accessibility {
+            app.launchArguments = ["--preview-workspace", "--reset-preview-agent", "--force-dark",
+                "-AppleInterfaceStyle", "Dark", "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN",
+                "-talent-signal.interface-language", "zh-Hans", "-talent-signal.display.text-size", "system",
+                "-UIAccessibilityReduceMotionEnabled", "YES",
+                "-UIPreferredContentSizeCategoryName", UIContentSizeCategory.accessibilityExtraExtraExtraLarge.rawValue]
+        }
+        openFixture()
+        let probe = element("ask-effective-display")
+        XCTAssertTrue(probe.waitForExistence(timeout: 5))
+        if accessibility {
+            app.assertEffectiveAccessibility5(identifier: "ask-effective-display")
+            XCTAssertTrue((probe.value as? String)?.hasPrefix("zh-Hans|dark|accessibility5|") == true)
+        } else {
+            XCTAssertTrue((probe.value as? String)?.contains("|light|large|") == true)
+        }
+        // The IME monitor shares the field's identifier but has no hit target.
+        // Enter and read the draft through the actual native text field.
+        let composer = app.textFields["ask-composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(composer.isEnabled)
+        let draft = "Keep this synthetic draft after closing the notice."
+        composer.tap()
+        composer.typeText(draft)
+        XCTAssertEqual(composer.value as? String, draft)
+        let close = app.buttons["ask-evidence-review-error-dismiss"]
+        reveal(close)
+        XCTAssertEqual(close.label, accessibility ? "关闭提示" : "Close notice")
+        XCTAssertGreaterThanOrEqual(close.frame.width + 0.001, 44)
+        XCTAssertGreaterThanOrEqual(close.frame.height + 0.001, 44)
+        XCTAssertTrue(element("ask-evidence-review-persistence-error").exists)
+        capture("Actual reviewPreparationError and contextual close notice")
+        close.tap()
+        XCTAssertTrue(element("ask-evidence-review-persistence-error").waitForNonExistence(timeout: 5))
+        XCTAssertEqual(composer.value as? String, draft,
+                       "The production notice callback may close the error, but must not replace the committed draft")
+        XCTAssertTrue(element("conversation-experience-fixture").exists)
+        capture("Actual notice dismissed while the exact synthetic draft remains")
+    }
+
     func testQueuedStatusNaturallyExpiresWithoutAnotherObservation() {
         app.launchEnvironment["TS_IOS_CONVERSATION_EXPERIENCE"] = "processing"
         app.launchEnvironment["TS_IOS_UI_TEST_PROGRESS_EXPIRY"] = "queued"

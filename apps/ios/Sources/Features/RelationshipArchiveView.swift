@@ -1317,11 +1317,45 @@ final class RelationshipPageMotion: ObservableObject {
     }
 }
 
+struct RelationshipHeaderDimensions: Equatable {
+    let availableWidth: CGFloat
+    let slotWidth: CGFloat
+    let activeWidth: CGFloat
+    let compressedWidth: CGFloat
+    var activeVisualWidth: CGFloat { max(0, activeWidth - 4) }
+
+    init(availableWidth: CGFloat, compact: Bool) {
+        // SwiftUI can measure a newly mounted or transitioning header at zero.
+        // Bound the proposal and every fixed frame before drawing the capsules.
+        let width = availableWidth.isFinite ? max(0, availableWidth) : 0
+        self.availableWidth = width
+        slotWidth = width / CGFloat(RelationshipArchivePage.allCases.count)
+        activeWidth = min(compact ? 96 : 104, max(0, slotWidth * 2 - 44))
+        compressedWidth = max(0, slotWidth * 2 - activeWidth)
+    }
+
+    static func inactiveVisualWidth(itemWidth: CGFloat) -> CGFloat {
+        guard itemWidth.isFinite else { return 0 }
+        return max(0, min(42, itemWidth - 2))
+    }
+
+#if DEBUG
+    var numericSample: String {
+        [availableWidth, slotWidth, activeWidth, compressedWidth, activeVisualWidth,
+         Self.inactiveVisualWidth(itemWidth: slotWidth)]
+            .map { String(format: "%.3f", Double($0)) }.joined(separator: ",")
+    }
+#endif
+}
+
 private struct RelationshipArchiveHeader: View {
     @Binding var selectedPage: RelationshipArchivePage
     @ObservedObject var motion: RelationshipPageMotion
     let onOpenCalendar: (RelationshipCalendarLaunchIntent) -> Void
     let onOpenAgentStudio: () -> Void
+#if DEBUG
+    var onGeometrySample: ((RelationshipHeaderDimensions) -> Void)? = nil
+#endif
     @Environment(\.appLanguage) private var appLanguage
     @Environment(\.talentSignalReduceMotion) private var reduceMotion
 
@@ -1350,16 +1384,13 @@ private struct RelationshipArchiveHeader: View {
 
                 GeometryReader { geometry in
                     let progress = reduceMotion ? CGFloat(selectedPage.pageIndex) : motion.progress
-                    let slotWidth = geometry.size.width
-                        / CGFloat(RelationshipArchivePage.allCases.count)
+                    let dimensions = RelationshipHeaderDimensions(availableWidth: geometry.size.width, compact: compact)
+                    let slotWidth = dimensions.slotWidth
                     // The four destinations begin as equal units. Selection
                     // borrows space from one adjacent unit, so the pair keeps
                     // its total width and distant destinations stay still.
-                    let activeWidth = min(
-                        compact ? 96 : 104,
-                        slotWidth * 2 - 44
-                    )
-                    let compressedWidth = slotWidth * 2 - activeWidth
+                    let activeWidth = dimensions.activeWidth
+                    let compressedWidth = dimensions.compressedWidth
                     let donorPage = adjacentDonor(for: selectedPage)
                     let itemWidths = RelationshipArchivePage.allCases.map { page in
                         if page == selectedPage { return activeWidth }
@@ -1379,7 +1410,7 @@ private struct RelationshipArchiveHeader: View {
                                     page,
                                     emphasis: emphasis,
                                     isSelected: isSelected,
-                                    activeVisualWidth: activeWidth - 4,
+                                    activeVisualWidth: dimensions.activeVisualWidth,
                                     itemWidth: itemWidth
                                 )
                                     .zIndex(isSelected ? 1 : 0)
@@ -1395,7 +1426,7 @@ private struct RelationshipArchiveHeader: View {
                                     page,
                                     emphasis: emphasis,
                                     isSelected: isSelected,
-                                    activeVisualWidth: activeWidth - 4,
+                                    activeVisualWidth: dimensions.activeVisualWidth,
                                     itemWidth: itemWidth
                                 )
                                     .zIndex(isSelected ? 1 : 0)
@@ -1409,6 +1440,11 @@ private struct RelationshipArchiveHeader: View {
                 }
                 .frame(height: 48)
                 .accessibilityElement(children: .contain)
+#if DEBUG
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                    onGeometrySample?(RelationshipHeaderDimensions(availableWidth: width, compact: compact))
+                }
+#endif
             }
             .padding(.horizontal, compact ? 16 : 24)
             .frame(height: 52)
@@ -1441,7 +1477,7 @@ private struct RelationshipArchiveHeader: View {
         activeVisualWidth: CGFloat,
         itemWidth: CGFloat
     ) -> some View {
-        let inactiveVisualWidth = min(42, itemWidth - 2)
+        let inactiveVisualWidth = RelationshipHeaderDimensions.inactiveVisualWidth(itemWidth: itemWidth)
         let capsuleWidth = isSelected ? activeVisualWidth : inactiveVisualWidth
 
         return Button {
@@ -1508,6 +1544,58 @@ private struct RelationshipArchiveHeader: View {
         return pages[donorIndex]
     }
 }
+
+#if DEBUG
+@MainActor
+struct RelationshipHeaderGeometryFixture: View {
+    @StateObject private var motion = RelationshipPageMotion()
+    @State private var selectedPage: RelationshipArchivePage = .today
+    @State private var requestedWidth: CGFloat? = 0
+    @State private var samples: [String] = []
+    @Environment(\.appLanguage) private var language
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(spacing: 16) {
+                    widthButton("0", label: "Zero width", identifier: "zero", width: 0)
+                    widthButton("64", label: "Narrow width", identifier: "narrow", width: 148)
+                    widthButton("Full", label: "Normal width", identifier: "normal", width: nil)
+                }
+                RelationshipArchiveHeader(selectedPage: $selectedPage, motion: motion,
+                    onOpenCalendar: { _ in }, onOpenAgentStudio: {}, onGeometrySample: { dimensions in
+                        let sample = dimensions.numericSample
+                        if samples.last != sample { samples = Array((samples + [sample]).suffix(8)) }
+                    })
+                    .frame(width: requestedWidth ?? geometry.size.width, height: 52)
+                Text(language.text("Geometry samples: input, slot, active, compressed, selected, inactive"))
+                    .font(.caption).foregroundStyle(Color.tsMutedInk)
+                Text(verbatim: samples.joined(separator: "\n"))
+                    .font(.caption.monospaced())
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("header-geometry-samples")
+                    .accessibilityValue(samples.joined(separator: ";"))
+                Spacer(minLength: 0)
+            }
+            .onChange(of: selectedPage) { page in
+                motion.update(from: [page.rawValue: .init(minX: 0, width: max(1, geometry.size.width))],
+                              layoutDirection: layoutDirection)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("header-geometry-fixture")
+    }
+
+    private func widthButton(_ title: String, label: String, identifier: String, width: CGFloat?) -> some View {
+        Button { requestedWidth = width } label: {
+            Text(verbatim: title).frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        }
+        .accessibilityLabel(language.text(label))
+        .accessibilityIdentifier("header-width-\(identifier)")
+    }
+}
+#endif
 
 private struct RelationshipNavigationButtonStyle: ButtonStyle {
     let reduceMotion: Bool

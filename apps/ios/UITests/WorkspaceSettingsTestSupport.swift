@@ -2,8 +2,8 @@ import XCTest
 
 @MainActor
 extension XCUIApplication {
-    func assertEffectiveAccessibility5(file: StaticString = #filePath, line: UInt = #line) {
-        let probe = descendants(matching: .any).matching(identifier: "lab-effective-display")
+    func assertEffectiveAccessibility5(identifier: String = "lab-effective-display", file: StaticString = #filePath, line: UInt = #line) {
+        let probe = descendants(matching: .any).matching(identifier: identifier)
         let display = probe.element
         XCTAssertTrue(display.waitForExistence(timeout: 8), file: file, line: line)
         XCTAssertEqual(probe.count, 1, "The effective display probe must be unambiguous.", file: file, line: line)

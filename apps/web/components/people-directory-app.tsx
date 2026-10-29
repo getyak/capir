@@ -4,12 +4,13 @@ import { useT } from "@/components/locale-provider";
 import type { PersonDirectoryItem } from "@talent-signal/contracts";
 import { AddressBook } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
+import { useId } from "react";
 
 import styles from "./people-directory-app.module.css";
 import { withReturnSession } from "./session-return-navigation";
 import { PeopleDirectoryList } from "./people-directory-list";
 import { WorkspaceDisconnectedState } from "./workspace-disconnected-state";
-import { PeopleDirectorySearch } from "./people-directory-search";
+import { PeopleDirectoryClearSearch, PeopleDirectorySearch, PeopleDirectorySearchProvider } from "./people-directory-search";
 
 type Props = {
   error: string | null;
@@ -17,6 +18,7 @@ type Props = {
   query: string;
   returnSessionId: string | null;
   sessionRecoveryHref: string | null;
+  queryInvalid?: boolean;
 };
 
 export function PeopleDirectoryApp({
@@ -25,9 +27,12 @@ export function PeopleDirectoryApp({
   query,
   returnSessionId,
   sessionRecoveryHref,
+  queryInvalid = false,
 }: Props) {
   const t = useT();
+  const resultsId = useId();
   return (
+    <PeopleDirectorySearchProvider query={query} resultVersion={people} returnSessionId={returnSessionId}>
     <div className={styles.shell}>
       <main className={styles.main} id="main-content" tabIndex={-1}>
         <div className={styles.page}>
@@ -35,7 +40,7 @@ export function PeopleDirectoryApp({
             <div>
               <h1>{t("人物目录")}</h1>
               <p>
-                {error
+                {error && !queryInvalid
                   ? t("目录暂时不可用；已保存的联系人资料不会改变。")
                   : t("每段关系保留自己的上下文。")}
                 {returnSessionId
@@ -53,13 +58,16 @@ export function PeopleDirectoryApp({
           </header>
 
           <div className={styles.listTools}>
-            <PeopleDirectorySearch query={query} returnSessionId={returnSessionId} />
-            <span aria-live="polite">{error ? t("暂不可用") : people.length === 200
+            <PeopleDirectorySearch query={query} returnSessionId={returnSessionId} resultsId={resultsId} />
+            <span className={styles.resultSummary} id={resultsId} aria-live="polite">
+              {query ? <span className={styles.resultQuery} data-results-query>{t("搜索“{query}”", { query })}</span> : null}
+              <span>{error ? queryInvalid ? t("搜索条件无效") : t("暂不可用") : people.length === 200
               ? t(query ? "当前显示前 200 位匹配人物" : "当前显示前 200 位人物")
               : t(query ? "{count} 位匹配人物" : "{count} 位人物", { count: people.length })}</span>
+            </span>
           </div>
 
-          {error ? (
+          {error && queryInvalid ? <p className={styles.searchError} role="alert">{error}</p> : error ? (
             <div className={styles.disconnectedState}>
               <WorkspaceDisconnectedState
                 description={t(error)}
@@ -92,9 +100,7 @@ export function PeopleDirectoryApp({
                 </p>
               </div>
               {query ? (
-                <Link
-                  href={withReturnSession("/workspace/people", returnSessionId)}
-                >{t("清除搜索")}</Link>
+                <PeopleDirectoryClearSearch />
               ) : (
                 <Link
                   href={withReturnSession("/workspace?surface=desk&intent=create-contact", returnSessionId)}
@@ -114,5 +120,6 @@ export function PeopleDirectoryApp({
         </div>
       </main>
     </div>
+    </PeopleDirectorySearchProvider>
   );
 }

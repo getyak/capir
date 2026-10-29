@@ -33818,6 +33818,86 @@
           }
         }
       }
+    },
+    "Synthetic notice: your review could not be prepared. Your draft is unchanged.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Synthetic notice: your review could not be prepared. Your draft is unchanged."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合成提示：未能准备审阅内容，草稿保持不变。"
+          }
+        }
+      }
+    },
+    "Zero width": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zero width"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "零宽度"
+          }
+        }
+      }
+    },
+    "Narrow width": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Narrow width"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "窄宽度"
+          }
+        }
+      }
+    },
+    "Normal width": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Normal width"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正常宽度"
+          }
+        }
+      }
+    },
+    "Geometry samples: input, slot, active, compressed, selected, inactive": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geometry samples: input, slot, active, compressed, selected, inactive"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "布局样本：输入、分栏、选中、相邻、选中外观、未选外观"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
