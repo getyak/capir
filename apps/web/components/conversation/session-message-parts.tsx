@@ -66,6 +66,8 @@ export type SessionHandoffRow = {
   messageId: string;
   objective: string;
   images?: readonly ConversationImageManifest[];
+  /** A retained server receipt keeps its protected server byte source. */
+  imageSource?: "local" | "server";
   memoryDraftTarget?: ConversationMemoryDraftTarget;
   memoryDraftTargetLabel?: string;
   createdAt: string;
@@ -297,7 +299,7 @@ export function sessionMessages(input: {
     const userContent: SessionProjectedMessage["content"] = [];
     if (row.memoryDraftTarget) userContent.push(memoryDraftTargetPart(row.memoryDraftTargetLabel));
     if (row.objective) userContent.push({ type: "text", text: row.objective });
-    if (row.images?.length) userContent.push({ type: "data", name: "talent-signal.user-images", data: { messageId: row.messageId, images: row.images, local: true } });
+    if (row.images?.length) userContent.push({ type: "data", name: "talent-signal.user-images", data: { messageId: row.messageId, images: row.images, local: row.imageSource !== "server" } });
     groups.push({
       at: Date.parse(row.createdAt) || 0,
       messages: [
