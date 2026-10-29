@@ -166,7 +166,8 @@
 }
 
 .retry,
-.allPeople {
+.allPeople,
+.organize {
   align-items: center;
   background: transparent;
   border: 0;
@@ -183,12 +184,30 @@
 .allPeople {
   flex: 0 0 auto;
   font-size: var(--workspace-meta-size, 0.8125rem);
+  text-decoration: none;
+}
+
+.allPeople:hover { text-decoration: underline; }
+
+.organize {
+  border-radius: 5px;
+  flex: 0 0 auto;
+  font-size: var(--workspace-meta-size, 0.8125rem);
+  padding: 0 4px;
+  text-decoration: none;
+}
+
+.organize:hover,
+.organize[aria-pressed="true"] {
+  background: var(--hover, color-mix(in srgb, var(--ink) 7%, transparent));
+  color: var(--ink);
 }
 
 .searchControl:focus-visible,
 .person:focus-visible,
 .retry:focus-visible,
-.allPeople:focus-visible {
+.allPeople:focus-visible,
+.organize:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -213,3 +232,11 @@
 
 .orderedPerson { align-items: center; display: flex; min-width: 0; position: relative; }
 .orderedPerson .person { flex: 1 1 auto; min-width: 0; }
+.orderedPerson > button { position: absolute; inset-inline-end: 0; }
+.orderedPerson:has(:focus-visible) .person,
+.orderedPerson[data-order-organizing="true"] .person,
+.orderedPerson[data-order-dragging="true"] .person,
+.orderedPerson:has(> button[data-state="open"]) .person { padding-inline-end: 44px; }
+@media (hover: hover) {
+  .orderedPerson:hover .person { padding-inline-end: 44px; }
+}

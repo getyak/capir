@@ -45,10 +45,9 @@ import styles from "./workspace-shell.module.css";
 /**
  * Shared sidebar: 236px by default / 72px collapsed; saved widths remain local.
  *
- * The expanded rail is one horizontal row of five controls — today,
- * conversation, people, meetings, scoped global search. The selected control
- * receives the remaining label space after the inactive pair's two symbols.
- * Compact widths keep the named icon controls. Route identity
+ * Expanded navigation names today, conversation, people and meetings with
+ * quiet text. Search sits beside the brand utilities. The deliberately
+ * collapsed rail retains named icon controls. Route identity
  * and hrefs live in `@/lib/workspace-navigation`; this file owns only
  * presentation. Generic icons use existing Phosphor components — the earlier
  * component map's `app/icon.tsx` match for "icon" is a false positive
@@ -262,6 +261,7 @@ export function WorkspaceShellNav({
           <span className={styles.brandName}>capri</span>
         </Link>
         <div className={styles.brandActions}>
+          <WorkspaceGlobalSearchDialog binding={binding} label={t(RAIL_SEARCH_KEY)} />
           <button
             aria-label={t("nav.collapse")}
             aria-pressed={false}
@@ -284,7 +284,6 @@ export function WorkspaceShellNav({
               key={control} route={workspaceRailRoute(control)!} />)}
           </div>
         ))}
-        <WorkspaceGlobalSearchDialog binding={binding} label={t(RAIL_SEARCH_KEY)} presentation="rail" />
       </nav>
 
       {/* Both presentations share the primary destination order. Compose and

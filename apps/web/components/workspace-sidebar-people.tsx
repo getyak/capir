@@ -52,6 +52,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
   const rememberNavigationHref = browseHref !== undefined && browse ? browse.remember : rememberRouteHref;
   const [search, setSearch] = useState({ query, draft: query, committedDraft: query });
   const [composing, setComposing] = useState(false);
+  const [organizing, setOrganizing] = useState(false);
   const composingInput = useRef(false);
   const enterFromIme = useRef(false);
   const input = useRef<HTMLInputElement>(null);
@@ -87,8 +88,20 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
   return (
     <section aria-label={t("人物目录")} className={styles.directory}>
       <header className={styles.headingRow}>
-        <h2 className={styles.heading}>{t("人物目录")}</h2>
-        {binding ? <Link className={styles.allPeople} href={peopleDirectoryHref(search.committedDraft, returnSessionId)} onClick={() => rememberDirectory()} prefetch={false} scroll={false}>{t("查看全部人物")}</Link> : null}
+        <h2 className={styles.heading}>
+          {binding ? <Link aria-label={`${t("人物目录")} · ${t("查看全部人物")}`} className={styles.allPeople} href={peopleDirectoryHref(search.committedDraft, returnSessionId)} onClick={() => rememberDirectory()} prefetch={false} scroll={false}>{t("人物目录")}</Link> : t("人物目录")}
+        </h2>
+        {binding && !loading && !failed && people.length > 1 ? (
+          <button
+            aria-label={organizing ? `${t("listOrder.done")} · ${t("listOrder.organizePeople")}` : t("listOrder.organizePeople")}
+            aria-pressed={organizing}
+            className={styles.organize}
+            onClick={() => setOrganizing(current => !current)}
+            type="button"
+          >
+            {t(organizing ? "listOrder.done" : "listOrder.organize")}
+          </button>
+        ) : null}
       </header>
       {binding ? (
         <Form
@@ -191,7 +204,7 @@ function PeopleDirectory({ binding, browseHref }: { binding: string | null; brow
         <nav aria-label={t("侧栏人物")}>
           <ul className={styles.list}>
             {order.ordered.map(person => (
-              <li {...order.rowProps(person.id)} className={`${order.rowProps(person.id).className} ${styles.orderedPerson}`} key={person.id}>
+              <li key={person.id} {...order.rowProps(person.id)} data-order-controls="quiet" data-order-organizing={organizing ? "true" : undefined} className={`${order.rowProps(person.id).className} ${styles.orderedPerson}`}>
                 <Link
                   aria-current={selectedId === person.id ? "page" : undefined}
                   className={styles.person}
