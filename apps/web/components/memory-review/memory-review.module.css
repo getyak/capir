@@ -605,21 +605,28 @@
   }
 }
 
-/* Session decisions keep the source, change and action in one readable card. */
-.actionCard { max-width:620px; margin:12px 0; padding:16px 18px; border:1px solid var(--line-soft); border-radius:14px; background:var(--surface); color:var(--ink); }
+/* One review seam keeps source, change and action together without nested cards. */
+.actionCard { max-width:620px; margin:0; padding:20px 0; border:0; border-top:1px solid var(--line-soft); border-radius:0; background:transparent; color:var(--ink); }
 .actionHead { display:flex; justify-content:space-between; gap:12px; color:var(--muted); font-size: var(--ts-type-meta, 0.8125rem); line-height: var(--ts-leading-meta, 1.5); flex-wrap: wrap; }
 .actionHead span:last-child { flex:none; }
-.actionChange { margin:13px 0 10px; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; }
-.actionChange > span:first-child { color:var(--muted); }
+.actionChange { display:grid; gap:12px; margin:12px 0; font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; }
+.actionValue { display:grid; gap:2px; min-width:0; }
+.actionValue dt { color:var(--muted); font-size:var(--ts-type-meta, 0.8125rem); line-height:var(--ts-leading-meta, 1.5); }
+.actionValue dd { margin:0; }
+.actionValue:first-child dd { color:var(--muted-strong,var(--ink)); }
 .actionChange strong { font-weight:600; }
-.actionSource { margin:0 0 14px; padding:9px 11px; border-radius:8px; background:var(--surface-muted,#f5f4ef); }
-.actionSource blockquote { margin:0; color:var(--muted); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; white-space:pre-wrap; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
-.actionSource blockquote[data-expanded="true"] { display:block; }
+.actionSource { margin:0 0 12px; padding:0 0 0 12px; border-inline-start:1px solid var(--line); border-radius:0; background:transparent; }
+.actionSource blockquote { margin:0; color:var(--muted-strong,var(--ink)); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; white-space:pre-wrap; }
+.actionSource blockquote[data-collapsed="true"] { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
 .actionSource button { margin-top:5px; padding:4px 0; border:0; background:none; color:var(--ink); font:inherit; font-size: var(--ts-type-nav, 0.875rem); cursor:pointer; min-height: 44px; }
 .actionButtons,.actionEdit > div,.actionReceipt { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
-.actionButtons button,.actionEdit button,.actionReceipt button { min-height: 44px; padding:7px 11px; border:1px solid var(--line-soft); border-radius:9px; background:var(--surface); color:var(--ink); font:inherit; font-size: var(--ts-type-nav, 0.875rem); cursor:pointer; }
+.actionButtons button,.actionEdit button,.actionReceipt button { min-height:44px; padding:7px 11px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--ink); font:inherit; font-size:var(--ts-type-nav, 0.875rem); cursor:pointer; transition:background 180ms var(--ease-out,ease); }
+.actionButtons button:hover:not(:disabled),.actionEdit button:hover:not(:disabled),.actionReceipt button:hover:not(:disabled) { background:var(--surface-muted); }
+.actionButtons button:active:not(:disabled),.actionEdit button:active:not(:disabled),.actionReceipt button:active:not(:disabled) { background:var(--surface-selected,var(--surface-muted)); }
 .actionButtons button:disabled,.actionEdit button:disabled { opacity:.45; cursor:default; }
 .actionButtons .actionPrimary,.actionEdit button[type="submit"] { border-color:var(--ink); background:var(--ink); color:var(--surface); }
+.actionButtons .actionPrimary:hover:not(:disabled),.actionEdit button[type="submit"]:hover:not(:disabled) { background:var(--muted-strong,var(--ink)); }
+.actionButtons .actionPrimary:active:not(:disabled),.actionEdit button[type="submit"]:active:not(:disabled) { background:var(--ink); }
 .actionButtons .actionComment { margin-left:auto; border-color:transparent; color:var(--muted); }
 .actionEdit { display:grid; gap:8px; }
 .actionEdit label { font-size: var(--ts-type-meta, 0.8125rem); color:var(--muted); }
@@ -627,12 +634,14 @@
 .actionReceipt { min-height:38px; color:var(--ink); font-size: var(--ts-type-body, 0.9375rem); line-height: var(--ts-leading-body, 1.667); overflow-wrap: anywhere; }
 .actionReceipt button { min-height: 44px; margin-left:auto; font-size: var(--ts-type-nav, 0.875rem); }
 .actionHint { margin:0; font-size: var(--ts-type-meta, 0.8125rem); color:var(--muted); }
-@media(max-width:640px) { .actionCard { padding:14px; } .actionButtons .actionComment { margin-left:0; } }
+@media(max-width:640px) { .actionCard { padding:18px 0; } .actionButtons .actionComment { margin-left:0; } }
 .actionStack { display:grid; justify-items:stretch; gap:2px; width:min(100%,620px); }
 .actionStack .actionCard { width:100%; box-sizing:border-box; }
 .actionStack > .actionHint { margin:5px 0 8px; }
 .actionMore { border:0; background:none; color:var(--muted); font:inherit; font-size: var(--ts-type-nav, 0.875rem); min-height: 44px; padding:5px 2px; cursor:pointer; }
 .actionMore:hover { color:var(--ink); }
+.actionCard :is(button,textarea):focus-visible,.actionMore:focus-visible { outline:2px solid var(--focus,var(--ink)); outline-offset:3px; }
+@media(prefers-reduced-motion:reduce) { .actionCard button { transition:none; } }
 .contactDecisionCard { min-width:0; }
 .contactDecisionIdentity { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
 .contactDecisionIdentity strong { min-width:0; overflow-wrap:anywhere; font-size:var(--ts-type-body, 0.9375rem); line-height:1.4; font-weight:600; }

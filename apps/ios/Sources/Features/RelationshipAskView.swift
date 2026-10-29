@@ -1414,19 +1414,26 @@ struct RelationshipAskView: View {
                     }
 
                     if let reviewPreparationError {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "exclamationmark.shield")
-                                .foregroundStyle(Color.tsVermilion)
-                                .accessibilityHidden(true)
-                            Text(reviewPreparationError)
-                                .font(.caption)
-                                .foregroundStyle(Color.tsInk)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 8)
-                            Button(appLanguage.text("Dismiss", zhHans: "关闭")) {
-                                self.reviewPreparationError = nil
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "exclamationmark.shield")
+                                    .foregroundStyle(Color.tsVermilion)
+                                    .accessibilityHidden(true)
+                                Text(reviewPreparationError)
+                                    .modifier(ConversationReadingStyle())
+                                    .foregroundStyle(Color.tsInk)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            .font(.caption.weight(.semibold))
+                            Button {
+                                self.reviewPreparationError = nil
+                            } label: {
+                                Text(appLanguage.text("Dismiss"))
+                                    .font(.subheadline.weight(.medium))
+                                    .frame(minWidth: 44, minHeight: 44)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("ask-evidence-review-error-dismiss")
                         }
                         .padding(14)
                         .background(Color.tsCanvas, in: RoundedRectangle(cornerRadius: 14))
@@ -1563,7 +1570,7 @@ struct RelationshipAskView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.tsInk)
                     Text(message)
-                        .font(.caption)
+                        .modifier(ConversationReadingStyle())
                         .foregroundStyle(Color.tsMutedInk)
                         .fixedSize(horizontal: false, vertical: true)
                 }

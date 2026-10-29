@@ -136,6 +136,59 @@ describe("Session Memory item card", () => {
     expect(decide).toHaveBeenCalledWith(item.id, "accept");
   });
 
+  it("names the old memory and proposed change separately for nonvisual review", async () => {
+    await act(async () => root.render(<MemoryItemCard item={item} personLabel="林岚" busy={false} onDecide={decide} />));
+    const comparison = mount.querySelector("dl")!;
+    expect(comparison).not.toBeNull();
+    expect([...comparison.querySelectorAll("dt")].map(node => node.textContent)).toEqual(["原记忆", "建议更新"]);
+    expect([...comparison.querySelectorAll("dd")].map(node => node.textContent)).toEqual([item.previous_text, item.display_text]);
+  });
+
+  it("lets assistive technology expand and inspect the complete long source", async () => {
+    const source = "第一行。\n第二行。\n" + "保留用于判断的原句。".repeat(20);
+    await act(async () => root.render(<MemoryItemCard item={{ ...item, source_excerpt: source }} personLabel="林岚" busy={false} onDecide={decide} />));
+    const expand = button("展开原句");
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    const sourceId = expand.getAttribute("aria-controls")!;
+    expect(document.getElementById(sourceId)?.textContent).toBe(source);
+    await act(async () => expand.click());
+    expect(expand.getAttribute("aria-expanded")).toBe("true");
+    expect(expand.textContent).toBe("收起原句");
+    expect(document.getElementById(sourceId)?.textContent).toBe(source);
+  });
+
+  it("focuses the inline edit and restores its exact trigger after cancellation", async () => {
+    await act(async () => root.render(<MemoryItemCard item={item} personLabel="林岚" busy={false} onDecide={decide} />));
+    await act(async () => { button("改一下").focus(); button("改一下").click(); });
+    expect(document.activeElement).toBe(mount.querySelector("textarea"));
+    await act(async () => button("取消").click());
+    expect(mount.querySelector("textarea")).toBeNull();
+    expect(document.activeElement).toBe(button("改一下"));
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it("keeps IME candidate Escape and Save local to the edit until text is committed", async () => {
+    const escaped = vi.fn();
+    await act(async () => root.render(<div onKeyDown={escaped}><MemoryItemCard item={item} personLabel="林岚" busy={false} onDecide={decide} /></div>));
+    await act(async () => button("改一下").click());
+    const editor = mount.querySelector("textarea")!;
+    await act(async () => {
+      editor.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      button("保存修改").click();
+    });
+    expect(mount.querySelector("textarea")).toBe(editor);
+    expect(decide).not.toHaveBeenCalled();
+    expect(escaped).not.toHaveBeenCalled();
+    await act(async () => editor.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => editor.dispatchEvent(escape));
+    expect(escape.defaultPrevented).toBe(true);
+    expect(mount.querySelector("textarea")).toBeNull();
+    expect(document.activeElement).toBe(button("改一下"));
+    expect(escaped).not.toHaveBeenCalled();
+  });
+
   it("removes old decision buttons when the source is unavailable", async () => {
     await act(async () => root.render(createElement(MemoryItemCard, {
       item, personLabel: "林岚", busy: false, locked: true, onDecide: decide,
