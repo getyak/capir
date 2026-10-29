@@ -384,12 +384,14 @@ export function QueuedConversation(props: Props) {
     ...(activeMessageId ? [activeMessageId] : []),
   ]), [settledIds, queued, activeMessageId]);
   const outboxRows = useMemo(() => {
-    const messages = new Map<string, LocalMessage & { previewText?: string }>(chat.messages.map(message => [message.id, message]));
+    const messages = new Map<string, LocalMessage & { previewText?: string; imageSource: "local" | "server" }>(
+      chat.messages.map(message => [message.id, { ...message, imageSource: "local" }]),
+    );
     for (const entry of Object.values(chat.handoffEntries)) {
       // The observed server entry owns edits and source timestamps, even when
       // the user reopened this run without any local outbox row.
       const local = messages.get(entry.message_id);
-      messages.set(entry.message_id, { ...local, id: entry.message_id, objective: entry.objective, images: entry.images, memoryDraftTarget: entry.memory_draft_target, createdAt: entry.created_at, delivery: "accepted", expiresAt: local?.expiresAt ?? Date.parse(chat.detail?.expires_at ?? ""), receiptUncertain: false, previewText: chat.handoffPreviews[entry.message_id]?.text });
+      messages.set(entry.message_id, { ...local, id: entry.message_id, objective: entry.objective, images: entry.images, imageSource: "server", memoryDraftTarget: entry.memory_draft_target, createdAt: entry.created_at, delivery: "accepted", expiresAt: local?.expiresAt ?? Date.parse(chat.detail?.expires_at ?? ""), receiptUncertain: false, previewText: chat.handoffPreviews[entry.message_id]?.text });
     }
     return [...messages.values()].filter(message => !representedIds.has(message.id));
   }, [chat.messages, chat.handoffEntries, chat.handoffPreviews, chat.detail?.expires_at, representedIds]);
@@ -400,6 +402,7 @@ export function QueuedConversation(props: Props) {
       messageId: message.id,
       objective: message.objective,
       images: message.images,
+      imageSource: message.imageSource,
       memoryDraftTarget: message.memoryDraftTarget,
       memoryDraftTargetLabel: message.memoryDraftTargetLabel,
       createdAt: message.createdAt,
