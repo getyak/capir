@@ -5,11 +5,11 @@ import SwiftUI
 /// Navigation material remains owned by AppKit; these are opaque content/control colors.
 enum TSBrand {
     static let canvas = adaptive(
-        light: NSColor(srgbRed: 0.988235, green: 0.984314, blue: 0.968627, alpha: 1),
+        light: NSColor(srgbRed: 0.988235, green: 0.988235, blue: 0.984314, alpha: 1),
         dark: NSColor(srgbRed: 0.090196, green: 0.094118, blue: 0.086275, alpha: 1)
     )
     static let sidebar = adaptive(
-        light: NSColor(srgbRed: 0.956863, green: 0.952941, blue: 0.937255, alpha: 1),
+        light: NSColor(srgbRed: 0.968627, green: 0.968627, blue: 0.960784, alpha: 1),
         dark: NSColor(srgbRed: 0.125490, green: 0.129412, blue: 0.117647, alpha: 1)
     )
     static let surface = adaptive(
@@ -25,7 +25,7 @@ enum TSBrand {
         dark: NSColor(srgbRed: 0.949020, green: 0.941176, blue: 0.913725, alpha: 1)
     )
     static let secondaryInk = adaptive(
-        light: NSColor(srgbRed: 0.415686, green: 0.403922, blue: 0.372549, alpha: 1),
+        light: NSColor(srgbRed: 0.403922, green: 0.403922, blue: 0.380392, alpha: 1),
         dark: NSColor(srgbRed: 0.698039, green: 0.686275, blue: 0.647059, alpha: 1)
     )
     static let seam = adaptive(
@@ -45,11 +45,11 @@ enum TSBrand {
         dark: NSColor(srgbRed: 0.104, green: 0.196, blue: 0.172, alpha: 1)
     )
     static let hairline = adaptive(
-        light: NSColor(srgbRed: 0.886275, green: 0.878431, blue: 0.847059, alpha: 1),
+        light: NSColor(srgbRed: 0.905882, green: 0.905882, blue: 0.886275, alpha: 1),
         dark: NSColor(srgbRed: 0.231373, green: 0.239216, blue: 0.207843, alpha: 1)
     )
     static let selection = adaptive(
-        light: NSColor(srgbRed: 0.909804, green: 0.901961, blue: 0.874510, alpha: 1),
+        light: NSColor(srgbRed: 0.925490, green: 0.925490, blue: 0.909804, alpha: 1),
         dark: NSColor(srgbRed: 0.203922, green: 0.211765, blue: 0.180392, alpha: 1)
     )
     static let fixtureTint = adaptive(

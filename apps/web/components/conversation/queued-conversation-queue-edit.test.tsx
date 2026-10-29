@@ -212,10 +212,10 @@ it("returns focus to the same row's Edit button after an explicit cancel", async
 it("keeps the first accepted waiting message once in the transcript and its management out of the composer dock", async () => {
   await renderWithQueuedEntry();
   expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
-  const controls = document.querySelector<HTMLElement>('[aria-label="可控补充"]')!;
+  const controls = document.querySelector<HTMLElement>('[aria-label="待处理消息"]')!;
   expect(controls.closest('[role="region"]')?.getAttribute("aria-label")).toBe("对话记录");
   expect(controls.textContent).not.toContain("接下来");
-  expect(mount!.querySelector(`.${styles.dock} [aria-label="可控补充"]`)).toBeNull();
+  expect(mount!.querySelector(`.${styles.dock} [aria-label="待处理消息"]`)).toBeNull();
   expect(mount!.querySelector('[data-session-task-capsule][data-phase="queued"]')).not.toBeNull();
   expect(mount!.textContent).toContain("排队等待处理");
   expect(mount!.textContent).toContain("已等待");
@@ -246,7 +246,7 @@ it("keeps subsequent waiting and failed messages once with inline controls and t
   await flush();
   expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
   expect(mount!.textContent!.split("后续失败原文").length - 1).toBe(1);
-  const groups = [...mount!.querySelectorAll('[aria-label="可控补充"]')];
+  const groups = [...mount!.querySelectorAll('[aria-label="待处理消息"]')];
   expect(groups).toHaveLength(2);
   expect(groups.every(group => group.closest('[role="region"]'))).toBe(true);
   expect(groups[0]!.querySelector('[aria-label="编辑第 1 条待处理消息"]')).not.toBeNull();
@@ -302,7 +302,7 @@ it("keeps supported steering delivery visible with locked controls and no invent
   const steer = (overrides = {}) => queuedEntry("待编辑的原位消息", { sequence: 2, steers_run_id: run, steer_state: "dispatching", ...overrides });
   await act(async () => emit?.(frame("snapshot", snapshot(6, [steer()], active)))); await flush();
   expect(mount!.textContent!.split("待编辑的原位消息").length - 1).toBe(1);
-  const controls = document.querySelector<HTMLElement>('[aria-label="可控补充"]')!;
+  const controls = document.querySelector<HTMLElement>('[aria-label="待处理消息"]')!;
   expect(controls.closest('[role="region"]')).not.toBeNull();
   expect(controls.closest('[role="article"]')).not.toBeNull();
   expect(controls.closest('[role="article"]')!.querySelector('details[data-phase]')).toBeNull();
@@ -311,7 +311,7 @@ it("keeps supported steering delivery visible with locked controls and no invent
   expect(editButton()?.disabled).toBe(true);
   expect(document.querySelector<HTMLButtonElement>('[aria-label="移除第 1 条待处理消息"]')?.disabled).toBe(true);
   await act(async () => emit?.(frame("snapshot", snapshot(7, [steer({ steer_state: "delivered", steer_delivered: true })], active)))); await flush();
-  expect(document.querySelector('[aria-label="可控补充"]')).toBe(controls);
+  expect(document.querySelector('[aria-label="待处理消息"]')).toBe(controls);
   expect(editButton()?.disabled).toBe(true);
   expect(postedMutations()).toEqual([]);
 });
