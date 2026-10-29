@@ -20,7 +20,10 @@ Latest main removed the old SessionSourceHeading. Attach markers to current read
 - [x] Recover helper and boundary tests; minimally wire accepted Link navigation and settled titles.
 - [x] Verify late destination, same route, modified/new-tab, user focus, timeout, expiry, account replacement, navigation and cleanup; rerun neighboring search/workbench tests and narrow lint.
 - [x] Record exact local checks and remaining gates; prepare the audit handoff for local commit.
-- [ ] Parent independent review before any push/PR; locked-dependency full checks and real framework/browser acceptance.
+- [x] Complete independent review and fix the confirmed reopen/close-animation focus race before pushing.
+- [x] Reconcile the branch with latest main, preserving the unrelated People search hydration fix from PR #487.
+- [ ] Pass latest-head locked-dependency CI and real compiled framework/browser acceptance.
+- [ ] Deploy the affected resident Web from clean committed source and verify its live revision and changed behavior; retain the existing backend and Web rollback release.
 
 ## Decisions and constraints
 
@@ -71,3 +74,13 @@ The final single-worker neighboring regression run passes 170 tests across the
 same twelve files, with no failures or skips. Narrow lint and the four existing
 documentation/boundary scripts pass. Earlier full-Web typecheck and compiled
 browser/deployment limitations still apply; this follow-up does not claim them.
+
+The second independent review passed 24 focused cases, including real Radix
+Presence exit/reopen behavior, cancellation of an active handoff and a late
+old heading. It found no remaining blocking issue. Parent then fetched main
+`085fd6e779b2f241150cc880e9dbba2edaf398ef` and merged it normally into
+`6ace2fbc9b9e6c7805d21e9817ec61012b90b711`. PR #487 changed only unrelated
+People search hydration files, with no overlap against this recovery's source
+paths. The 170-test and 24-test evidence belongs to the reviewed pre-merge
+source revision; this reconciliation does not claim those commands were rerun
+on the merge commit. Latest-head CI and compiled browser checks remain gates.
