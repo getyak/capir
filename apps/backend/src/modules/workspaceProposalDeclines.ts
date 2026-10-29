@@ -74,6 +74,16 @@ function inlineRefusalEmphasis(note: string): string {
 // Only a fully understood effect list is removed before this global check.
 const globalDecline = /(?:仅供|只供)(?:分析|参考)|(?:只|仅仅?)(?:需要|要|想|帮我|请|做)?(?:分析|解释|描述|总结|翻译|看看|看一下)|(?:不要|不用|别|不必|不需要|无需|不许|禁止|请勿)[^，,。；;!?！？\n]{0,12}(?:保存|记录|记住|建档|归档|添加|创建|更新|操作|行动)|(?:不做|不进行)[^，,。；;!?！？\n]{0,8}(?:操作|更改|动作|行动)|(?:^|\s)不(?:保存|记录|记住|建档|归档|添加|创建|更新|操作|行动)(?:$|\s)|\b(?:no[\s_-]+(?:actions?|sav(?:e|ing)|proposals?)|analysis[\s_-]+only|(?:just|only)\s+(?:analy[sz]e|describe|explain|summari[sz]e|translate)|(?:do\s+not|don['’]t|never|no\s+need\s+to)\s+(?:(?:make|take|perform)\s+(?:any\s+)?(?:actions?|changes?)|do\s+anything|save|record|remember|store|archive|create|add|update))\b/iu;
 
+/** Host-created contact cards require an authored contact request when a
+ * separate Memory refusal would otherwise be read as an invitation to help. */
+export function authoredContactDraftRequested(texts: readonly string[]): boolean {
+  const request = /(?:准备|创建|新建|添加|建立|起草|prepare|create|add|draft|review)[^，,。；;!?！？\n]{0,36}(?:联系人|人物|contacts?)[^，,。；;!?！？\n]{0,18}(?:草稿|建议|待确认|审核|review|draft)|(?:联系人|人物|contacts?)[^，,。；;!?！？\n]{0,18}(?:草稿|建议|待确认|审核|review|draft)[^，,。；;!?！？\n]{0,24}(?:准备|创建|新建|添加|建立|起草|prepare|create|add|draft|review)/iu;
+  return texts.some(text => {
+    const policy = proposalDeclines([text]);
+    return !policy.global && !policy.contact && request.test(authoredProposalText(text));
+  });
+}
+
 function targets(text: string): { effects: Effect[]; complete: boolean } {
   const effects: Effect[] = [];
   let rest = text.trim();

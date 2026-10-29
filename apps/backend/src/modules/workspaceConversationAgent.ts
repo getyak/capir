@@ -1,6 +1,6 @@
 import { measureLabServerStage, measureLabServerStageSync } from "../lib/labDiagnostics.js";
 import { workspaceConversationTimeoutMs } from "./workspaceConversationBudget.js";
-import { authoredProposalText as authoredNote, proposalDeclines } from "./workspaceProposalDeclines.js";
+import { authoredContactDraftRequested, authoredProposalText as authoredNote, proposalDeclines } from "./workspaceProposalDeclines.js";
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalizeSessionTitle } from "./sessionTitles.js";
 import { authorizeMemoryDraftTarget, memoryDraftProposalViolation, type MemoryDraftTargetAdmission } from "./memoryDraftTarget.js";
@@ -1662,7 +1662,8 @@ export async function executeWorkspaceConversationAgentCore(input: {
     // Preparing an optional review card does not create a person or grant
     // identity authority. The staging service still detects namesakes and
     // checks the live source before any later human commit.
-    if (!memoryDraftTarget && !refusedMixedProposal && !runState.memoryProposal && !runState.proposal && input.memory && !declinedContact()) {
+    if (!memoryDraftTarget && !refusedMixedProposal && !runState.memoryProposal && !runState.proposal && input.memory && !declinedContact()
+      && (!declinedMemory() || authoredContactDraftRequested(sourceTexts()))) {
       const counterparty = await defaultCounterparty();
       if (counterparty) {
         abort.signal.throwIfAborted();

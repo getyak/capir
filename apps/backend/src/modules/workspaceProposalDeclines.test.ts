@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { proposalDeclines } from "./workspaceProposalDeclines.js";
+import { authoredContactDraftRequested, proposalDeclines } from "./workspaceProposalDeclines.js";
 
 describe("formatted authored proposal refusals", () => {
+  it.each([
+    ["为林海准备一个待我确认的新联系人草稿。不要保存 Memory。", true],
+    ["不要保存 Memory，请准备联系人草稿。", true],
+    ["Do not save Memory. Prepare a contact draft for review.", true],
+    ["不要保存记忆，先给结论。", false],
+    ["Do not save anything; just explain the image.", false],
+    ["不要创建联系人草稿。", false],
+    ["引用：`请准备联系人草稿`。不要保存 Memory。", false],
+  ] as const)("requires an authored contact-draft request before host staging: %s", (text, expected) => {
+    expect(authoredContactDraftRequested([text])).toBe(expected);
+  });
+
   it.each([
     "不要 `保存` Memory，请准备联系人草稿。",
     "Do not `save` Memory. Prepare a contact draft for review.",

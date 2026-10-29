@@ -45,11 +45,17 @@ broader timeouts, synthetic-data exceptions or direct database writes.
 1. Completed: parent verified four expected failures through the governed
    Agent seam before production edits, then verified the two additional
    inline-format refusal RED groups before their fixes.
-2. **Active:** Verify the scoped policy change and retained conservative
-   refusals. Parent serializes backend/repository checks and independent
-   evidence-safety review; current code is not released on a prior passing run.
-3. Create one linked PR with this issue's English title, repair latest applicable
-   CI, update to merged main, review and merge after gates pass.
+2. Completed locally: verify scoped refusal behavior and conservative
+   fallback. The latest parent run passed 260 relevant backend tests and backend
+   TypeScript; docs/architecture check passed. Independent final review is being
+   requested for the corrective host-fallback guard.
+3. Active: linked PR #483 was opened from commit e21a9d22. Its first exact-head
+   CI correctly caught a regression: a Memory-only refusal could permit an
+   automatic host contact card even without a contact request. The corrective
+   code now gates that host fallback on an authored contact-draft request when
+   Memory is declined. The former Vercel preview attempt was rate-limited for
+   24 hours. Reverify, commit/push the correction and wait on exact-head CI,
+   Security, and latest-main rebase before merge.
 4. From clean committed source deploy every affected resident service under the
    operations contract; verify runtime revision, dependencies, source/recovery
    pair, keeper, IPC and readiness. Reuse compatible artifacts; no rollback of
